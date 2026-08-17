@@ -418,7 +418,11 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     # near-duplicate merge pass (_merge_similar_concepts_via_api), and the
     # mastery-line backfill's never-taken use_api block (mastery is
     # authored by Settle and repaired by Polish).
-    assert len(generation_calls) == 39
+    # 37 after Slice 3 removed the legacy assessment author's review-triggered
+    # and anti-monotony regeneration calls. The recorded cell decision is now
+    # kernel-owned; question generation authors once and fails closed on an
+    # incomplete batch instead of running a second semantic retry lane.
+    assert len(generation_calls) == 37
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls
@@ -429,10 +433,10 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     assert set(generation_purposes) <= set(EXPECTED_REASONING_POLICY)
 
     workbooks._vendor()
-    from gpt_writer import GPTWriter
+    import gpt_writer
 
     workbook_tree = ast.parse(
-        Path(__import__("gpt_writer").__file__).read_text(encoding="utf-8")
+        Path(gpt_writer.__file__).read_text(encoding="utf-8")
     )
     workbook_calls = [
         node

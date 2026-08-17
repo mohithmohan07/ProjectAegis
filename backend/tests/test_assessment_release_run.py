@@ -8,7 +8,6 @@ runs offline exactly as wired for live use.
 from __future__ import annotations
 
 import copy
-import json
 from collections import Counter
 from pathlib import Path
 
@@ -16,18 +15,15 @@ import pytest
 
 from app import models
 from app.bulk_import import assessment_workbook as aw
+from app.services import assessment_release as rel
 from app.services import assessment_release_run as run
+from app.services import assessment_release_snapshot as release_snapshot
 from app.services import assessment_release_service as svc
+from app.services import build_concepts_release
 from app.services.phase3 import kernel
 
 OWNER = "local:default"
 ENVELOPE_SHA256 = "e" * 64
-
-
-def _accepting_critic(system, user):
-    payload = json.loads(user)
-    return {"verdict": "accept",
-            "proposal_sha256": payload["proposal_sha256"], "feedback": []}
 
 
 def _decision_context(store=None):
@@ -47,6 +43,23 @@ def _chapter_with_concepts(db):
 
 
 def _make_job(db, chapter) -> models.UploadJob:
+    inventory = {
+        "items": [
+            {
+                "qid": "QINV-0001",
+                "source_kind": "exercise",
+                "source_label": "Exercise 1(1)",
+                "raw_task": "Which of these is a solid?",
+                "options": ["Cube", "Circle"],
+            },
+            {
+                "qid": "QINV-0002",
+                "source_kind": "exercise",
+                "source_label": "Exercise 1(2)",
+                "raw_task": "Explain why a cube is a solid.",
+            },
+        ],
+    }
     job = models.UploadJob(
         owner_sub=OWNER,
         module="build_concepts",
@@ -56,27 +69,37 @@ def _make_job(db, chapter) -> models.UploadJob:
         status="generated",
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
-        question_inventory={
-            "items": [
-                {
-                    "qid": "QINV-0001",
-                    "source_kind": "exercise",
-                    "source_label": "Exercise 1(1)",
-                    "raw_task": "Which of these is a solid?",
-                    "options": ["Cube", "Circle"],
-                },
-                {
-                    "qid": "QINV-0002",
-                    "source_kind": "exercise",
-                    "source_label": "Exercise 1(2)",
-                    "raw_task": "Explain why a cube is a solid.",
-                },
-            ],
-        },
+        question_inventory=inventory,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
+    build_concepts_release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=[
+            {
+                "topic": "Shapes",
+                "concept_title": "Solid Shapes",
+                "concept_details": (
+                    "Solid shapes occupy space in three dimensions; cubes "
+                    "are examples."
+                ),
+                "keywords": "solid, cube, three dimensions",
+            },
+            {
+                "topic": "Shapes",
+                "concept_title": "Plane Shapes",
+                "concept_details": (
+                    "Plane shapes are flat, two-dimensional figures."
+                ),
+                "keywords": "plane, flat, two dimensions",
+            },
+        ],
+        inventory=inventory,
+        reason="recorded Output-01 fixture",
+    )
     return job
 
 
@@ -84,32 +107,31 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
     """Scripted authority pairs for every stage."""
     calls = calls if calls is not None else {}
     qa_payloads = qa_payloads if qa_payloads is not None else []
-    first_concept = sorted(
-        (c for t in chapter.topics for c in t.concepts),
-        key=lambda c: c.id)[0]
-
     def record(stage, payload):
         calls.setdefault(stage, []).append(copy.deepcopy(payload))
 
-    def cell_author(system, user):
-        atom = json.loads(user.split("\n\nYOUR PREVIOUS")[0])["source_atom"]
+    def cell_author(payload):
+        record("cells", payload)
+        atom = payload["source_atom"]
         objective = bool(atom.get("options"))
         return {
+            "source_qid": atom["source_qid"],
             "sheet_kind": "objective" if objective else "descriptive",
             "question_category": (
                 "Multiple Choice Question" if objective else "Long Answer"),
             "cognitive_skill": "Remember" if objective else "Understand",
             "difficulty": "Less" if objective else "Moderate",
             "marks": 1 if objective else 3,
-            "reason": "scripted",
+            "rationale": "scripted from the complete source atom",
         }
 
-    def materialize_author(system, user):
-        payload = json.loads(user.split("\n\nYOUR PREVIOUS")[0])
+    def materialize_author(payload):
+        record("materialize", payload)
         cell = payload["blueprint_cell"]
         atom = payload["source_atom"]
         if cell["sheet_kind"] == "objective":
             return {
+                "candidate_id": payload["candidate_id"],
                 "question": atom["normalized_public_text"],
                 "answer_restriction": "Specific",
                 "restriction_reason": "one closed choice",
@@ -123,8 +145,10 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
                 "sub_questions": [],
                 "answer_explanation": "A cube is three-dimensional.",
                 "requires_visual": False,
+                "rationale": "preserves the source question and answer",
             }
         return {
+            "candidate_id": payload["candidate_id"],
             "question": atom["normalized_public_text"],
             "answer_restriction": "Open",
             "restriction_reason": "several valid explanations",
@@ -136,12 +160,17 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "sub_questions": [],
             "answer_explanation": "",
             "requires_visual": False,
+            "rationale": "preserves the constructed-response obligation",
         }
 
-    def router(system, user):
-        return {"concept_id": first_concept.id,
-                "evidence": "teaches solids", "reason": "scripted",
-                "confidence": "high"}
+    def router(payload):
+        record("route", payload)
+        return {
+            "candidate_id": payload["candidate"]["candidate_id"],
+            "concept_key": payload["candidate_concepts"][0]["concept_key"],
+            "evidence": "the released description teaches solid shapes",
+            "rationale": "the assessment concerns cubes as solid shapes",
+        }
 
     def level_author(payload):
         record("level", payload)
@@ -192,14 +221,14 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
     return {
-        "cells": (cell_author, _accepting_critic),
-        "materialize": (materialize_author, _accepting_critic),
-        "route": (router, _accepting_critic),
+        "cells": (cell_author, verified_critic),
+        "materialize": (materialize_author, verified_critic),
+        "route": (router, verified_critic),
         "level": (level_author, verified_critic),
         "cluster": (cluster_author, verified_critic),
         "describe": (describe_author, verified_critic),
         "qa": (qa_reviewer, verified_critic),
-    }, first_concept
+    }, "Solid Shapes"
 
 
 def test_full_pipeline_publishes_a_ready_release(db):
@@ -207,7 +236,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
     job = _make_job(db, chapter)
     calls = {}
     qa_payloads = []
-    authorities, first_concept = _authorities(
+    authorities, first_concept_name = _authorities(
         db, chapter, calls=calls, qa_payloads=qa_payloads)
 
     release = run.run_release_for_job(
@@ -252,10 +281,15 @@ def test_full_pipeline_publishes_a_ready_release(db):
     assert len(payload["source_atoms"]) == 2
     assert len(payload["blueprint_cells"]) == 2
     assert all(p["group_key"] for p in payload["placements"])
-    # Everything belongs to the first concept's home.
+    # Everything belongs to the first immutable release concept's home.
     assert all(
-        p["concept_id"] == first_concept.id
+        p["concept_id"] == p["concept_key"]
+        and str(p["concept_key"]).startswith("release:")
         for p in payload["placements"])
+    assert payload["source_concept_release_sha256"]
+    assert payload["concept_snapshot"]["source_concept_release_sha256"] == (
+        payload["source_concept_release_sha256"]
+    )
 
     assert {
         (
@@ -292,7 +326,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
     assert all(group["group_type"] == "Advanced" for group in occupied)
     assert all(
         group["group_name"] == group["group_display_name"]
-        == f"{first_concept.concept_display_name} — Advanced"
+        == f"{first_concept_name} — Advanced"
         for group in occupied
     )
     for candidate in payload["candidates"]:
@@ -307,6 +341,15 @@ def test_full_pipeline_publishes_a_ready_release(db):
         assert authority["policy_version"] == "assessment-level-1"
         assert "created_at" not in authority
         assert "provider" not in authority
+        assert candidate["_aegis_assessment_cell_verdict"]["authority"][
+            "policy_version"
+        ] == "assessment-cell-1"
+        assert candidate["_aegis_assessment_materialization"]["authority"][
+            "policy_version"
+        ] == "assessment-materialize-1"
+        assert candidate["_aegis_assessment_route"]["authority"][
+            "policy_version"
+        ] == "assessment-route-1"
     for group in occupied:
         assert group["_aegis_assessment_variant_cluster"]["authority"][
             "policy_version"] == "assessment-variant-cluster-1"
@@ -328,6 +371,270 @@ def test_full_pipeline_publishes_a_ready_release(db):
         siblings == occupied_keys - {group_key}
         for group_key, siblings in sibling_map.items()
     )
+
+
+def test_output02_is_stable_after_every_mutable_job_and_chapter_input_changes(
+    db,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    staged = build_concepts_release.release_payload(job)
+    assert staged is not None
+    bridge_before = release_snapshot.build(db, job, staged)
+    bridge_bytes = rel.canonical_json(bridge_before).encode("utf-8")
+
+    calls = {}
+    authorities, _ = _authorities(db, chapter, calls=calls)
+    store = kernel.DecisionStore()
+    first = run.run_release_for_job(
+        db,
+        job.id,
+        owner_sub=OWNER,
+        authorities=authorities,
+        **_decision_context(store),
+    )
+    first_call_counts = {
+        stage: len(payloads) for stage, payloads in calls.items()
+    }
+
+    mutable_concept = sorted(
+        (concept for topic in chapter.topics for concept in topic.concepts),
+        key=lambda concept: concept.id,
+    )[0]
+    original_concept = (
+        mutable_concept.concept_title,
+        mutable_concept.concept_display_name,
+        mutable_concept.concept_details,
+    )
+    original_job = {
+        "learning_kind": job.learning_kind,
+        "source_book": job.source_book,
+        "filename": job.filename,
+        "mmd_text": job.mmd_text,
+        "question_inventory": copy.deepcopy(job.question_inventory),
+    }
+    original_chapter = {
+        field: getattr(chapter, field)
+        for field in (
+            "board",
+            "grade",
+            "subject",
+            "unit",
+            "chapter_title",
+            "chapter_code",
+            "chapter_display_name",
+            "chapter_description",
+            "chapter_duration",
+            "pre_topics",
+            "post_topics",
+        )
+    }
+    mutable_concept.concept_title = "MUTATED DATABASE CONCEPT"
+    mutable_concept.concept_display_name = "MUTATED DATABASE DISPLAY"
+    mutable_concept.concept_details = "MUTATED DATABASE TEACHING CONTENT"
+    durable_inventory = copy.deepcopy(job.question_inventory or {})
+    durable_inventory["items"] = [{
+        "qid": "QINV-MUTATED",
+        "source_kind": "exercise",
+        "raw_task": "A mutable question that must never enter Output 02.",
+    }]
+    job.question_inventory = durable_inventory
+    job.learning_kind = "pre"
+    job.source_book = "MUTATED SOURCE BOOK"
+    job.filename = "mutated-source.mmd"
+    job.mmd_text = "# Mutated source that was never staged"
+    chapter.board = "MUTATED BOARD"
+    chapter.grade = "MUTATED GRADE"
+    chapter.subject = "MUTATED SUBJECT"
+    chapter.unit = "MUTATED UNIT"
+    chapter.chapter_title = "MUTATED CHAPTER"
+    chapter.chapter_code = "MUTATED-CODE"
+    chapter.chapter_display_name = "MUTATED DISPLAY"
+    chapter.chapter_description = "MUTATED DESCRIPTION"
+    chapter.chapter_duration = "999 minutes"
+    chapter.pre_topics = "MUTATED PRE TOPICS"
+    chapter.post_topics = "MUTATED POST TOPICS"
+    db.commit()
+
+    try:
+        staged_after = build_concepts_release.release_payload(job)
+        assert staged_after is not None
+        bridge_after = release_snapshot.build(db, job, staged_after)
+        assert rel.canonical_json(bridge_after).encode("utf-8") == bridge_bytes
+
+        second = run.run_release_for_job(
+            db,
+            job.id,
+            owner_sub=OWNER,
+            authorities=authorities,
+            **_decision_context(store),
+        )
+        assert {
+            stage: len(payloads) for stage, payloads in calls.items()
+        } == first_call_counts
+        assert rel.canonical_json(second.payload) == rel.canonical_json(
+            first.payload
+        )
+        assert second.payload["source_concept_release_sha256"] == (
+            first.payload["source_concept_release_sha256"]
+        )
+        assert second.payload["source_atoms"] == first.payload["source_atoms"]
+        assert all(
+            atom["source_document_hash"]
+            == staged["source_document_hash"]
+            for atom in second.payload["source_atoms"]
+        )
+    finally:
+        (
+            mutable_concept.concept_title,
+            mutable_concept.concept_display_name,
+            mutable_concept.concept_details,
+        ) = original_concept
+        for field, value in original_job.items():
+            setattr(job, field, value)
+        for field, value in original_chapter.items():
+            setattr(chapter, field, value)
+        db.commit()
+
+    assert {
+        candidate["question"] for candidate in second.payload["candidates"]
+    } == {
+        "Which of these is a solid?",
+        "Explain why a cube is a solid.",
+    }
+    routed_concepts = calls["route"][0]["candidate_concepts"]
+    assert [row["concept_title"] for row in routed_concepts] == [
+        "Solid Shapes",
+        "Plane Shapes",
+    ]
+    assert all(
+        "MUTATED DATABASE" not in str(row)
+        for row in routed_concepts
+    )
+
+
+def test_route_provider_receives_complete_staged_type_case_and_analysis_evidence(
+    db,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    payload = build_concepts_release.release_payload(job)
+    assert payload is not None
+
+    first_record = payload["records"][0]
+    first_record["concept_details"] = (
+        "Description: Solid-shape teaching. // Types: Type 01: Visual "
+        "classification — identify a solid from its defining properties. "
+        "Case 01: Use a supplied cube. Example: Which of these is a solid? "
+        "// Misconception/ Error Analysis: A learner may confuse a square "
+        "with a cube."
+    )
+    first_record["_aegis_release_type_case_routes"] = [{
+        "type_id": "TYPE-0001",
+        "type_definition": "Identify a solid from defining properties.",
+        "case_id": "CASE-0001",
+        "case_definition": "Use a supplied cube.",
+        "source_question_id": "QINV-0001",
+        "source_start": 400,
+    }]
+    first_record["_aegis_analysis_allotments"] = [{
+        "analysis_id": "LA-0001",
+        "analysis": "Learners may confuse two- and three-dimensional form.",
+        "source_order": 7,
+    }]
+    first_record["_phase32_source_order"] = 3
+    payload["mined_types"] = {
+        "placement_certifications": {
+            "hosts": {
+                "QINV-0001": {
+                    "basis": "critic_verified",
+                    "concept": "Solid Shapes",
+                    "page_hint": 12,
+                },
+            },
+        },
+        "types": [{
+            "type_id": "TYPE-0001",
+            "type_title": "Visual classification",
+            "type_definition": "Identify a solid from defining properties.",
+            "case_prompts": [{
+                "case_id": "CASE-0001",
+                "case_definition": "Use a supplied cube.",
+                "source_question_ids": ["QINV-0001"],
+                "source_end": 500,
+            }],
+        }],
+    }
+    payload["type_case_rows"] = [{
+        "row_kind": "case",
+        "type_id": "TYPE-0001",
+        "type_title": "Visual classification",
+        "type_definition": "Identify a solid from defining properties.",
+        "case_id": "CASE-0001",
+        "case_definition": "Use a supplied cube.",
+        "qids": ["QINV-0001"],
+        "example_number": 1,
+        "row_number": 9,
+    }]
+    durable = copy.deepcopy(job.question_inventory or {})
+    durable[build_concepts_release.RELEASE_KEY] = payload
+    job.question_inventory = durable
+    db.commit()
+
+    calls = {}
+    authorities, _ = _authorities(db, chapter, calls=calls)
+    released = run.run_release_for_job(
+        db,
+        job.id,
+        owner_sub=OWNER,
+        authorities=authorities,
+        **_decision_context(),
+    )
+
+    route_payload = next(
+        row for row in calls["route"]
+        if row["candidate"]["source_atom_ids"] == ["QINV-0001"]
+    )
+    concept = route_payload["candidate_concepts"][0]
+    assert "Types: Type 01" in concept["teaching_description"]
+    assert "Misconception/ Error Analysis" in concept["concept_details"]
+    assert concept["released_record"][
+        "_aegis_release_type_case_routes"
+    ][0]["case_definition"] == "Use a supplied cube."
+    assert concept["released_record"][
+        "_aegis_analysis_allotments"
+    ][0]["analysis_id"] == "LA-0001"
+
+    route_evidence = route_payload["candidate"]["route_evidence"]
+    assert route_evidence["basis"] == "critic_verified"
+    assert route_evidence["mined_types"][0]["type_id"] == "TYPE-0001"
+    assert route_evidence["type_case_rows"][0]["case_id"] == "CASE-0001"
+    assert released.payload["source_concept_release_sha256"] == (
+        release_snapshot.source_release_sha256(payload)
+    )
+
+    forbidden = {
+        "bbox", "example_number", "page", "page_hint", "position",
+        "printer_page", "row", "row_index", "row_number", "source_end",
+        "source_order", "source_page", "source_paper_number", "source_start",
+        "_phase32_segment_order", "_phase32_source_order",
+    }
+
+    def evidence_keys(value):
+        if isinstance(value, dict):
+            return set(value) | {
+                key
+                for nested in value.values()
+                for key in evidence_keys(nested)
+            }
+        if isinstance(value, list):
+            return {
+                key for nested in value for key in evidence_keys(nested)
+            }
+        return set()
+
+    assert not forbidden.intersection(evidence_keys(concept))
+    assert not forbidden.intersection(evidence_keys(route_evidence))
 
 
 def test_multi_member_family_keeps_each_candidate_exactly_once(db):
@@ -452,11 +759,14 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         **_decision_context(kernel.DecisionStore(store_directory)),
     )
     expected_counts = {
+        "cells": 2,
+        "materialize": 2,
+        "route": 2,
         "level": 2,
         "cluster": 1,
         "describe": 2,
         "qa": 2,
-        "critic": 7,
+        "critic": 13,
     }
     assert {key: len(calls.get(key, [])) for key in expected_counts} == (
         expected_counts
@@ -473,12 +783,19 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         )
         for candidate in first.payload["candidates"]
     }
-    levels_path = tmp_path / "source.phase3-assessment-levels.json"
-    groups_path = tmp_path / "source.phase3-assessment-groups.json"
-    assert levels_path.is_file()
-    assert groups_path.is_file()
-    snapshot_bytes = (levels_path.read_bytes(), groups_path.read_bytes())
-    assert b"created_at" not in snapshot_bytes[0] + snapshot_bytes[1]
+    snapshot_paths = [
+        tmp_path / filename
+        for filename in (
+            "source.phase3-assessment-cells.json",
+            "source.phase3-assessment-materializations.json",
+            "source.phase3-assessment-routes.json",
+            "source.phase3-assessment-levels.json",
+            "source.phase3-assessment-groups.json",
+        )
+    ]
+    assert all(path.is_file() for path in snapshot_paths)
+    snapshot_bytes = tuple(path.read_bytes() for path in snapshot_paths)
+    assert b"created_at" not in b"".join(snapshot_bytes)
 
     second = run.run_release_for_job(
         db,
@@ -491,8 +808,9 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
     assert {key: len(calls.get(key, [])) for key in expected_counts} == (
         expected_counts
     )
-    assert snapshot_bytes == (
-        levels_path.read_bytes(), groups_path.read_bytes())
+    assert snapshot_bytes == tuple(
+        path.read_bytes() for path in snapshot_paths
+    )
     assert {
         candidate["candidate_id"]: candidate[
             "_aegis_assessment_level_verdict"]
@@ -506,27 +824,36 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
     } == first_text
 
 
-def test_unroutable_candidate_blocks_upload_but_publishes(db):
+def test_route_critic_dissent_publishes_with_review_warning(db):
     chapter = _chapter_with_concepts(db)
     job = _make_job(db, chapter)
     authorities, _ = _authorities(db, chapter)
 
-    def rejecting_critic(system, user):
-        payload = json.loads(user)
-        return {"verdict": "reject",
-                "proposal_sha256": payload["proposal_sha256"],
-                "feedback": ["the concept does not teach this"]}
+    def dissenting_critic(_payload):
+        return {
+            "verdict": "dissent",
+            "confidence": 0.9,
+            "issues": ["the selected concept deserves reviewer attention"],
+        }
 
-    authorities["route"] = (authorities["route"][0], rejecting_critic)
+    authorities["route"] = (authorities["route"][0], dissenting_critic)
     release = run.run_release_for_job(
         db, job.id, owner_sub=OWNER, authorities=authorities,
         **_decision_context())
 
-    assert (release.diagnostics or {}).get("readiness") == svc.BLOCKED
+    assert (release.diagnostics or {}).get("readiness") == (
+        svc.RELEASED_WITH_WARNINGS
+    )
+    assert all(
+        placement.get("concept_key")
+        for placement in release.payload["placements"]
+    )
+    assert all(
+        "assessment_route_review" in candidate.get("flags", [])
+        for candidate in release.payload["candidates"]
+    )
     directory = Path(release.publication["directory"])
     assert (directory / svc.MASTER_FILENAME).is_file()  # downloads survive
-    with pytest.raises(svc.UploadRefused, match="blocked"):
-        svc.upload_master_to_database(db, release, owner_sub=OWNER)
 
 
 def test_job_without_inventory_is_refused(db):
@@ -539,6 +866,18 @@ def test_job_without_inventory_is_refused(db):
     )
     db.add(job)
     db.commit()
+    build_concepts_release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=[{
+            "topic": "Shapes",
+            "concept_title": "Solid Shapes",
+            "concept_details": "Solid shapes occupy three dimensions.",
+        }],
+        inventory={},
+        reason="empty inventory fixture",
+    )
     with pytest.raises(run.ReleaseRunError, match="no question/task"):
         run.run_release_for_job(db, job.id, owner_sub=OWNER)
 
@@ -570,3 +909,29 @@ def test_zero_loss_across_the_whole_run(db):
         for candidate_id in group.get("member_candidate_ids") or []
     ]
     assert Counter(grouped_ids) == Counter(candidate_ids)
+
+
+def test_explicit_subjective_cell_is_rejected_before_materialization():
+    atom = {"source_qid": "QINV-0001"}
+    subjective_cell = {
+        "cell_id": "CELL-subjective",
+        "sheet_kind": "subjective",
+        "question_category": "Short Answer",
+        "cognitive_skill": "Understand",
+        "difficulty": "Moderate",
+        "marks": 2,
+        "count": 1,
+        "appears_in": ["Pre/Post-Worksheet/Test"],
+        "source_policy": "reuse",
+    }
+
+    with pytest.raises(ValueError, match="sheet_kind"):
+        run._bind_explicit_cells(
+            [atom],
+            [subjective_cell],
+            profile={
+                "appears_in": "Pre/Post-Worksheet/Test",
+                "allow_subjective_rows": True,
+            },
+            concept_keys=set(),
+        )

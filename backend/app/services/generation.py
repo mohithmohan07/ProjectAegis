@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -18,6 +19,7 @@ import threading
 import unicodedata
 from collections import Counter
 from datetime import datetime, timezone
+from typing import Callable
 
 from aegis_pipeline.openai_policy import (
     OpenAIPurpose,
@@ -45,6 +47,7 @@ from .semantic_recovery import (
 )
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
 from . import assessment_prompts as _assessment_prompts_registration  # noqa: F401
+del _assessment_prompts_registration
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9]")
 _MATH_SUBJECTS = {"Mathematics", "Physics", "Chemistry"}
@@ -138,10 +141,6 @@ def _descriptive_answers(concept: models.Concept, marks: float) -> tuple[list[di
     return answers, sub
 
 
-def _default_marks(kind: str) -> float:
-    return {"objective": 1, "subjective": 3, "descriptive": 5}[kind]
-
-
 # Varied question stems per cognitive skill (anti-monotony: rotated per
 # question index so a batch never repeats one opening pattern). {t} = concept
 # title, {d} = short concept description.
@@ -217,7 +216,7 @@ _RUBRIC_POINTS = {
 
 
 def _stem_for(skill: str, difficulty: str, concept: models.Concept, idx: int) -> str:
-    stems = _DRY_STEMS.get(skill, _DRY_STEMS["Understand"])
+    stems = _DRY_STEMS[skill]
     details = (concept.concept_details or "").split("//")[0]
     details = details.replace("Description:", "").strip()[:140] or concept.concept_title
     if not details.endswith((".", "?", "!")):
@@ -232,7 +231,7 @@ def _stem_for(skill: str, difficulty: str, concept: models.Concept, idx: int) ->
 
 def _rubric_points(marks: float, difficulty: str, concept: models.Concept) -> list[str]:
     n = max(int(marks), 1)
-    pool = _RUBRIC_POINTS.get(difficulty, _RUBRIC_POINTS["Moderate"])
+    pool = _RUBRIC_POINTS[difficulty]
     return [pool[i % len(pool)].format(t=concept.concept_title) for i in range(n)]
 
 
@@ -260,20 +259,38 @@ def generate_questions_for_concept(
     difficulty: str,
     category: str,
     count: int,
+    marks: float | None = None,
+    question_duration: float | None = None,
+    math_keyboard: str | None = None,
     start_index: int = 1,
     live: bool | None = None,
     appears_in: str = "",
 ) -> list[dict]:
     """Return ``count`` question dicts for one concept under one blueprint cell."""
     use_live = config.use_live_generation() if live is None else live
+    if not use_live:
+        config.require_generation_live()
+    if question_type not in _SHEET_KINDS:
+        raise ValueError(f"unknown recorded question_type {question_type!r}")
+    if cognitive_skill not in bi.COGNITIVE_SKILLS:
+        raise ValueError(
+            f"unknown recorded cognitive skill {cognitive_skill!r}")
+    if difficulty not in bi.DIFFICULTY_LEVELS:
+        raise ValueError(f"unknown recorded difficulty {difficulty!r}")
+    if not str(category or "").strip():
+        raise ValueError("question_category must be recorded before generation")
+    marks = _positive_recorded_number(marks, "marks")
+    question_duration = _positive_recorded_number(
+        question_duration, "question_duration")
+    math_keyboard = _recorded_math_keyboard(math_keyboard, question_type)
     if use_live:
         return _live_questions_for_concept(
             concept, question_type=question_type, cognitive_skill=cognitive_skill,
             difficulty=difficulty, category=category, count=count,
-            start_index=start_index, appears_in=appears_in,
+            marks=marks, question_duration=question_duration,
+            math_keyboard=math_keyboard, start_index=start_index,
+            appears_in=appears_in,
         )
-    config.require_generation_live()
-    marks = _default_marks(question_type)
     out: list[dict] = []
     details = (concept.concept_details or "").split("//")[0].strip()[:160]
     for i in range(count):
@@ -293,6 +310,8 @@ def generate_questions_for_concept(
             "question_source": bi.QUESTION_SOURCE_DEFAULT,
             "level_of_difficulty": difficulty,
             "marks": marks,
+            "question_duration": question_duration,
+            "math_keyboard": math_keyboard,
             "question": question_text,
             "question_appears_in": appears_in,
             # Plain-text question (+ concept context) for the AI evaluator.
@@ -331,8 +350,6 @@ def generate_questions_for_concept(
                  "weightage": "1", "placeholder": "answer"}
                 for n, point in enumerate(_rubric_points(marks, difficulty, concept))
             ]
-            record["math_keyboard"] = "Yes" if concept.topic.chapter.subject in {
-                "Mathematics", "Physics", "Chemistry"} else ""
         else:  # descriptive
             # display_answer = clean model answer; answer_content = rubric points.
             record["display_answer"] = model_answer
@@ -360,14 +377,13 @@ def generate_questions_for_concept(
 def _live_questions_for_concept(
     concept: models.Concept, *, question_type: str, cognitive_skill: str,
     difficulty: str, category: str, count: int, start_index: int,
+    marks: float, question_duration: float, math_keyboard: str,
     appears_in: str = "",
 ) -> list[dict]:
-    """Live generation: modular prompt assembly + review/repair before accept."""
-    import json as _json
+    """Live generation: one author call with exact blueprint-cell coverage."""
     from . import assessment_prompts as ap
 
     chapter = concept.topic.chapter
-    marks = _default_marks(question_type)
     system = ap.build_prompt(
         question_type=question_type, difficulty=difficulty, skill=cognitive_skill,
         subject=chapter.subject, grade=chapter.grade, board=chapter.board,
@@ -407,13 +423,15 @@ def _live_questions_for_concept(
             rec = {
                 "sheet_kind": question_type,
                 "question_label": question_label(concept, start_index + n),
-                "question_category": row.get("question_category") or category,
-                "cognitive_skills": bi.normalize_cognitive_skills(
-                    row.get("cognitive_skills") or cognitive_skill),
+                "question_category": category,
+                "cognitive_skills": cognitive_skill,
                 "question_source": bi.QUESTION_SOURCE_DEFAULT,
-                "level_of_difficulty": bi.normalize_difficulty(
-                    row.get("level_of_difficulty") or difficulty),
-                "marks": float(row.get("marks") or marks),
+                "level_of_difficulty": difficulty,
+                # The blueprint-cell kernel owns these three semantic values.
+                # Model output cannot silently replace or default them.
+                "marks": marks,
+                "question_duration": question_duration,
+                "math_keyboard": math_keyboard,
                 "question": row.get("question", ""),
                 "question_appears_in": appears_in,
                 "question_text": (row.get("question_text", "").strip()
@@ -427,41 +445,20 @@ def _live_questions_for_concept(
             records.append(rec)
         return records
 
-    records = _parse(_openai_json(
-        system, user, purpose="assessment_generation"))
-    # Deterministic review; one repair round for failing questions.
-    failing = {i: ap.review_question(r) for i, r in enumerate(records)}
-    failing = {i: p for i, p in failing.items() if p}
-    if failing or len(records) < count:
-        feedback = "; ".join(
-            f"question {i + 1}: {', '.join(p)}" for i, p in failing.items())
-        retry = _openai_json(
-            system,
-            user + "\n\nREVIEW FEEDBACK — regenerate the FULL batch fixing these "
-            f"problems and keep everything else compliant: {feedback or 'wrong count'}",
-            purpose="assessment_generation",
+    authored = _openai_json(system, user, purpose="assessment_generation")
+    raw_questions = authored.get("questions") if isinstance(authored, dict) else None
+    if not isinstance(raw_questions, list) or len(raw_questions) != count:
+        raise RuntimeError(
+            "assessment generation did not fulfill the exact blueprint cell "
+            f"count ({len(raw_questions) if isinstance(raw_questions, list) else 0}"
+            f"/{count}); refusing partial persistence"
         )
-        retry_records = _parse(retry)
-        if retry_records:
-            for i, r in enumerate(retry_records):
-                if i < len(records) and (i in failing or len(records) < count):
-                    records[i] = r
-            if len(retry_records) > len(records):
-                records = retry_records[:count]
-    # Anti-monotony: regenerate once if the batch repeats one stem too much.
-    report = ap.stem_monotony_report([r["question"] for r in records])
-    if report["monotonous"]:
-        varied = _openai_json(
-            system,
-            user + "\n\nThe previous batch was too repetitive (opening "
-            f"'{report['worst']}' used {report['worst_count']}x). Regenerate "
-            "with clearly varied framings/patterns per question.",
-            purpose="assessment_generation",
+    records = _parse(authored)
+    if len(records) != count:
+        raise RuntimeError(
+            "assessment generation lost a blueprint-cell obligation while "
+            "normalizing the recorded author response"
         )
-        varied_records = _parse(varied)
-        if varied_records and not ap.stem_monotony_report(
-                [r["question"] for r in varied_records])["monotonous"]:
-            records = varied_records[:count]
     return records
 
 
@@ -474,13 +471,38 @@ def _live_questions_for_concept(
 _SHEET_KINDS = ("objective", "subjective", "descriptive")
 
 
-def _default_category_for(kind: str) -> str:
-    return {"objective": "Multiple Choice Question",
-            "subjective": "Short Answer",
-            "descriptive": "Long Answer"}.get(kind, "Multiple Choice Question")
+def _positive_recorded_number(value: object, field: str) -> float:
+    """Validate a recorded positive finite number without manufacturing it."""
+
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a recorded finite positive number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{field} must be a recorded finite positive number") from None
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{field} must be a recorded finite positive number")
+    return number
 
 
-def _normalize_sheet_kind(value: str, default: str = "objective") -> str:
+def _recorded_math_keyboard(value: object, question_type: str) -> str:
+    """Validate the recorded keyboard contract for a generated question."""
+
+    recorded = str(value or "").strip()
+    if question_type in {"subjective", "descriptive"}:
+        if recorded not in {"Yes", "No"}:
+            raise ValueError(
+                "math_keyboard must be a recorded Yes/No value for "
+                f"{question_type} questions"
+            )
+        return recorded
+    if recorded and recorded not in {"Yes", "No"}:
+        raise ValueError("math_keyboard must be blank, Yes, or No")
+    return recorded
+
+
+def _normalize_sheet_kind(value: str) -> str:
     v = (value or "").strip().lower()
     if v in _SHEET_KINDS:
         return v
@@ -489,7 +511,24 @@ def _normalize_sheet_kind(value: str, default: str = "objective") -> str:
                "short answer": "subjective", "short": "subjective",
                "long answer": "descriptive", "long": "descriptive",
                "essay": "descriptive"}
-    return aliases.get(v, default)
+    normalized = aliases.get(v)
+    if normalized is None:
+        raise ValueError(
+            "sheet_kind must be a recorded objective, subjective, or "
+            f"descriptive value (got {value!r})"
+        )
+    return normalized
+
+
+def _offline_assessment_identification_authority():
+    """Production has no local semantic author for uploaded questions.
+
+    Tests may replace this seam with an explicit fixture authority.  Returning
+    ``None`` here is deliberate: a dry production request must fail closed
+    instead of manufacturing type, category, axes, marks, or timing.
+    """
+
+    return None
 
 
 def identify_questions_from_mmd(
@@ -509,49 +548,34 @@ def identify_questions_from_mmd(
             textbook_mode=textbook_mode,
         )
     config.require_generation_live()
-    # Dry: split the MMD body into question-like chunks. Dry mode can't truly
-    # classify, so "auto" falls back to objective for a deterministic stub.
-    effective = "objective" if question_type == "auto" else question_type
-    chunks = [c.strip() for c in re.split(r"\n\s*\n+", mmd_text) if c.strip()]
-    chunks = [c for c in chunks if not c.startswith("#")] or ["(no question content detected)"]
-
-    # Shared-context handling: when a question references surrounding context
-    # ("based on the above passage", "from the conversation", "refer to the
-    # diagram"...), the preceding block is attached into question_text so the
-    # AI evaluator receives the full context.
-    context_triggers = re.compile(
-        r"based on the (above|following)|from the (conversation|passage|dialogue)|"
-        r"refer(ring)? to the (diagram|table|figure|graph)|using the table|"
-        r"according to the (case study|passage)|answer the following",
-        re.IGNORECASE,
-    )
-    records: list[dict] = []
-    prev_chunk = ""
-    for i, chunk in enumerate(chunks[:25], start=1):
-        q_text = bi.to_plain_text(chunk[:400])
-        if prev_chunk and context_triggers.search(chunk):
-            q_text = f"Context: {bi.to_plain_text(prev_chunk[:600])}\n\n{q_text}"
-        rec = {
-            "sheet_kind": effective,
-            "question_category": _default_category_for(effective),
-            "cognitive_skills": "Understand",
-            "question_source": bi.QUESTION_SOURCE_DEFAULT,
-            "level_of_difficulty": "Moderate",
-            "marks": _default_marks(effective),
-            "question": chunk[:400],
-            "question_text": q_text,
-            "answer_explanation": "",
-            "answers": [],
-            "sub_questions": [],
-            "origin": "upload",
-        }
-        prev_chunk = chunk
-        if upload_type in {"questions_and_answers", "textbook"} and effective == "objective":
-            rec["answers"] = [
-                {"answer_type": "Phrases", "answer_content": "Extracted option",
-                 "correct_answer": "Yes", "answer_weightage": "1"},
-            ]
-        records.append(rec)
+    authority = _offline_assessment_identification_authority()
+    if authority is None:
+        raise config.LiveRequiredError(
+            "Uploaded assessment identification requires a live semantic "
+            "authority; no local type, category, axis, marks, duration, or "
+            "keyboard defaults are permitted."
+        )
+    authored = authority({
+        "mmd_text": mmd_text,
+        "upload_type": upload_type,
+        "question_type": question_type,
+        "textbook_mode": textbook_mode,
+    })
+    rows = authored.get("questions") if isinstance(authored, dict) else authored
+    if not isinstance(rows, list):
+        raise RuntimeError(
+            "offline assessment identification authority returned no rows")
+    auto = question_type == "auto"
+    records = [
+        record
+        for row in rows
+        if (record := _identify_row_to_record(
+            row, auto=auto, question_type=question_type)) is not None
+    ]
+    if not records:
+        raise RuntimeError(
+            "offline assessment identification authority returned no questions"
+        )
     return records
 
 
@@ -696,19 +720,32 @@ def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dic
         return None
     kind = (_normalize_sheet_kind(row.get("sheet_kind") or row.get("question_type"))
             if auto else question_type)
-    try:
-        marks = float(row.get("marks") or _default_marks(kind))
-    except (TypeError, ValueError):
-        marks = _default_marks(kind)
+    category = str(row.get("question_category") or "").strip()
+    if not category:
+        raise ValueError("identified question has no recorded question_category")
+    skill = bi.normalize_cognitive_skills(row.get("cognitive_skills") or "")
+    if skill not in bi.COGNITIVE_SKILLS:
+        raise ValueError(
+            "identified question has no valid recorded cognitive_skills")
+    difficulty = bi.normalize_difficulty(
+        row.get("level_of_difficulty") or "")
+    if difficulty not in bi.DIFFICULTY_LEVELS:
+        raise ValueError(
+            "identified question has no valid recorded level_of_difficulty")
+    marks = _positive_recorded_number(row.get("marks"), "marks")
+    duration = _positive_recorded_number(
+        row.get("question_duration"), "question_duration")
+    math_keyboard = _recorded_math_keyboard(
+        row.get("math_keyboard"), kind)
     return {
         "sheet_kind": kind,
-        "question_category": row.get("question_category") or _default_category_for(kind),
-        "cognitive_skills": bi.normalize_cognitive_skills(
-            row.get("cognitive_skills") or "Understand") or "Understand",
+        "question_category": category,
+        "cognitive_skills": skill,
         "question_source": bi.QUESTION_SOURCE_DEFAULT,
-        "level_of_difficulty": bi.normalize_difficulty(
-            row.get("level_of_difficulty") or "Moderate") or "Moderate",
+        "level_of_difficulty": difficulty,
         "marks": marks,
+        "question_duration": duration,
+        "math_keyboard": math_keyboard,
         "question": question,
         "question_appears_in": "",
         "question_text": (str(row.get("question_text", "")).strip()
@@ -716,7 +753,10 @@ def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dic
         "display_answer": row.get("display_answer", ""),
         "answer_explanation": row.get("answer_explanation", ""),
         "answers": _coerce_answers(row.get("answers", []), kind),
-        "sub_questions": row.get("sub_questions") or [] if kind == "descriptive" else [],
+        "sub_questions": (
+            row.get("sub_questions") or []
+            if kind == "descriptive" else []
+        ),
         "origin": "upload",
     }
 
@@ -739,6 +779,13 @@ def _live_identify_questions_from_mmd(
         if auto else
         f"Return EVERY {question_type} question in this section as specified "
         "above, as a JSON object with a \"questions\" array."
+    )
+    tail += (
+        " Every question must also contain a nonempty question_category, one "
+        "exact standard cognitive_skills value, one exact standard "
+        "level_of_difficulty value, finite positive marks, finite positive "
+        "question_duration, and math_keyboard='Yes' or 'No' for subjective "
+        "and descriptive questions (blank is allowed only for objective)."
     )
     chunks = _split_mmd_into_chunks(mmd_text)
     progress.log(
@@ -766,11 +813,12 @@ def _live_identify_questions_from_mmd(
             records.append(rec)
             added += 1
             if len(records) >= _IDENTIFY_SAFETY_CAP:
-                break
+                raise RuntimeError(
+                    "uploaded question identification reached its safety cap "
+                    f"of {_IDENTIFY_SAFETY_CAP}; refusing a truncated success "
+                    "because source-question coverage is not proven complete"
+                )
         progress.log(f"  chunk {i}/{len(chunks)}: {added} new questions")
-        if len(records) >= _IDENTIFY_SAFETY_CAP:
-            progress.log("Reached safety cap; stopping.", level="warn")
-            break
     if not records:
         raise RuntimeError("live question identification returned no questions")
     progress.set_progress(1.0, label="Question identification complete")
@@ -7316,8 +7364,6 @@ def _assign_chapter_wide_inventory_topics_via_api(
 def _extract_question_task_inventory_via_api(
     *, meta: dict, sections: list[dict], records: list[dict] | None = None,
 ) -> dict:
-    import json as _json
-
     def sanitized_items(data: dict, chunk: dict) -> list[dict]:
         return [
             _sanitize_inventory_item(
@@ -15199,7 +15245,7 @@ def _normalize_activity_hubs_at_final_boundary(
     inventory: dict | None,
     mined_types: dict | None,
     *,
-    meta: GenerationMetadata | None = None,
+    meta: dict | None = None,
 ) -> list[dict]:
     """Resolve certified-host drift before rebuilding canonical Hub notes.
 

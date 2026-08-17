@@ -16,6 +16,9 @@ mapping -> append-only write).
 """
 from __future__ import annotations
 
+import copy
+import json
+import math
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -26,12 +29,38 @@ from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import workbook_sync
 from . import (
-    assessment_blueprint, assessment_grouping, auth, directory, generation,
-    mmd, post_generation, progress, uploads,
+    assessment_blueprint, assessment_grouping, assessment_release,
+    assessment_routing, auth, directory, generation, mmd, post_generation,
+    progress, uploads,
+)
+from .phase3 import kernel
+
+
+_LEGACY_CELL_MARK_POLICY_VERSION = "assessment-legacy-cell-contract-1"
+
+_LEGACY_CELL_MARK_SYSTEM = (
+    "You are the Aegis legacy blueprint-cell marks author. The user has "
+    "explicitly selected the sheet kind, question category, cognitive skill, "
+    "difficulty, count, and assessment purpose for ONE concept-scoped cell. "
+    "Decide the positive finite marks per question that make that requested "
+    "response contract realistic for the supplied grade, subject, concept "
+    "teaching description, and axes. Also decide a positive finite duration "
+    "and whether a Subjective/Descriptive response needs the math keyboard. "
+    "Do not infer any value from sheet kind, use a default, or alter a "
+    "selected axis. Objective cells use an empty math_keyboard because that "
+    "column is not part of their sheet contract. Return ONLY strict JSON: "
+    '{"cell_id":"","marks":1,"question_duration":2,'
+    '"math_keyboard":"Yes|No|","rationale":"evidence-bound reason"}'
 )
 
-# A blueprint's difficulty selects which concept group a question lands in.
-DIFFICULTY_TO_GROUP = {"Less": "Basic", "Moderate": "Intermediate", "High": "Advanced"}
+_LEGACY_CELL_MARK_CRITIC_SYSTEM = (
+    "You are the independent advisory critic for one legacy blueprint-cell "
+    "cell-contract verdict. Audit whether the proposed marks, duration, and "
+    "keyboard requirement fit the complete concept and explicitly selected "
+    "response contract. Do not replace, gate, or "
+    "default the verdict; dissent ships as review evidence. Return ONLY strict "
+    'JSON: {"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -131,19 +160,50 @@ def add_batch(
         if question_type not in {"objective", "subjective", "descriptive"}:
             raise ValueError(
                 "question_type must be objective | subjective | descriptive")
-        purposes = [p for p in (appears_in or []) if p in bi.APPEARS_IN]
+        if not cognitive_skills:
+            raise ValueError("select at least one cognitive skill")
+        if not difficulty_levels:
+            raise ValueError("select at least one difficulty level")
+        if not categories or not all(str(value).strip() for value in categories):
+            raise ValueError("select at least one question category")
+        if int(num_questions) < 1:
+            raise ValueError("num_questions must be at least 1")
+        invalid_purposes = [
+            purpose for purpose in (appears_in or [])
+            if purpose not in bi.APPEARS_IN
+        ]
+        if invalid_purposes:
+            raise ValueError(
+                f"unknown appears_in values: {invalid_purposes!r}"
+            )
+        purposes = list(appears_in or [])
+        normalized_skills = [
+            bi.normalize_cognitive_skills(value)
+            for value in cognitive_skills
+        ]
+        normalized_difficulties = [
+            bi.normalize_difficulty(value)
+            for value in difficulty_levels
+        ]
+        if any(value not in bi.COGNITIVE_SKILLS for value in normalized_skills):
+            raise ValueError(
+                f"cognitive_skills must be chosen from {bi.COGNITIVE_SKILLS}"
+            )
+        if any(
+            value not in bi.DIFFICULTY_LEVELS
+            for value in normalized_difficulties
+        ):
+            raise ValueError(
+                f"difficulty_levels must be chosen from {bi.DIFFICULTY_LEVELS}"
+            )
         batch = models.BlueprintBatch(
             session_id=session_id,
             # Old gerund forms normalize to standard action-verb values.
-            cognitive_skills=[
-                bi.normalize_cognitive_skills(s) for s in cognitive_skills
-            ] or ["Understand"],
-            difficulty_levels=[
-                bi.normalize_difficulty(d) for d in difficulty_levels
-            ] or ["Moderate"],
-            categories=categories or ["Multiple Choice Question"],
+            cognitive_skills=normalized_skills,
+            difficulty_levels=normalized_difficulties,
+            categories=[str(value).strip() for value in categories],
             question_type=question_type,
-            num_questions=max(int(num_questions), 1),
+            num_questions=int(num_questions),
             appears_in=purposes,
         )
         db.add(batch)
@@ -152,16 +212,57 @@ def add_batch(
         return batch
 
 
-def _group_for(db: Session, concept: models.Concept, difficulty: str) -> models.Group:
-    """Pick (or lazily create) the concept group a question of this difficulty lands in."""
-    g_type = DIFFICULTY_TO_GROUP.get(difficulty, "Intermediate")
-    for g in concept.groups:
-        if g.group_type == g_type:
-            return g
+def _legacy_machine_id(concept: models.Concept) -> str:
+    """Use the same machine base as this lane's question labels."""
+
+    return generation.question_label(concept, 1).rsplit(" Q", 1)[0]
+
+
+def _group_for_recorded_tier(
+    db: Session, concept: models.Concept, tier: str,
+) -> models.Group:
+    """Persist a recorded tier without guessing a same-tier variant family.
+
+    The level verdict is semantic authority.  This helper only validates its
+    enum, projects Q12's friendly name, and performs unambiguous database
+    identity bookkeeping.  More than one existing group in the tier means a
+    variant-family verdict is required; choosing the first would silently
+    overwrite that decision, so the legacy writer refuses the placement.
+    """
+
+    if tier not in assessment_grouping.TIER_CODES:
+        raise ValueError(
+            "recorded assessment tier must be Basic, Intermediate, or "
+            f"Advanced (got {tier!r})"
+        )
     visible_name = assessment_grouping.friendly_group_name(
-        concept.concept_display_name, g_type)
+        concept.concept_display_name, tier)
+    matches = [group for group in concept.groups if group.group_type == tier]
+    if len(matches) > 1:
+        raise ValueError(
+            f"concept {concept.id} has multiple {tier} variant groups; "
+            "the legacy append lane cannot choose one without a recorded "
+            "variant-family verdict"
+        )
+    if matches:
+        group = matches[0]
+        sequence = int(group.group_sequence or 1)
+        if not str(group.group_key or "").strip():
+            group.group_key = assessment_grouping.group_key_for(
+                _legacy_machine_id(concept), tier, sequence
+            )
+        group.group_sequence = sequence
+        group.group_name = visible_name
+        group.group_display_name = visible_name
+        return group
+
+    sequence = 1
     group = models.Group(
-        concept_id=concept.id, group_type=g_type,
+        concept_id=concept.id,
+        group_type=tier,
+        group_key=assessment_grouping.group_key_for(
+            _legacy_machine_id(concept), tier, sequence),
+        group_sequence=sequence,
         group_name=visible_name,
         group_display_name=visible_name,
         group_status="Active",
@@ -170,6 +271,295 @@ def _group_for(db: Session, concept: models.Concept, difficulty: str) -> models.
     db.flush()
     concept.groups.append(group)
     return group
+
+
+def _legacy_candidate(candidate_id: str, record: dict) -> dict:
+    """Full legacy evidence, with canonical aliases for shared MES passes."""
+
+    candidate = copy.deepcopy(record)
+    candidate.update({
+        "candidate_id": candidate_id,
+        "cognitive_skill": (
+            record.get("cognitive_skill")
+            or record.get("cognitive_skills")
+        ),
+        "difficulty": (
+            record.get("difficulty")
+            or record.get("level_of_difficulty")
+        ),
+    })
+    return candidate
+
+
+def _legacy_concept(concept: models.Concept) -> dict:
+    concept_key = f"db:{concept.id}"
+    return {
+        "concept_key": concept_key,
+        "concept_id": concept_key,
+        "concept_machine_id": _legacy_machine_id(concept),
+        "concept_title": concept.concept_title,
+        "concept_display_name": concept.concept_display_name,
+        "description": concept.concept_details,
+        "teaching_description": concept.concept_details,
+        "concept_details": concept.concept_details,
+    }
+
+
+def _legacy_level_metadata(concepts: list[models.Concept]) -> dict:
+    chapters = [concept.topic.chapter for concept in concepts]
+    return {
+        "subjects": sorted({str(chapter.subject or "") for chapter in chapters}),
+        "boards": sorted({str(chapter.board or "") for chapter in chapters}),
+        "grades": sorted({str(chapter.grade or "") for chapter in chapters}),
+        "chapters": sorted({
+            str(chapter.chapter_title or "") for chapter in chapters
+        }),
+    }
+
+
+def _legacy_cell_mark_authorities() -> tuple[
+    kernel.Provider | None, kernel.Critic | None, kernel.Provider | None,
+]:
+    """Production delegates cell-mark authorship to live kernel authorities."""
+
+    return None, None, None
+
+
+def _live_legacy_cell_mark(payload: dict) -> dict:
+    return generation._openai_json(
+        _LEGACY_CELL_MARK_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        purpose="concept_mapping",
+    )
+
+
+def _live_legacy_cell_mark_critic(payload: dict) -> dict:
+    return generation._openai_json(
+        _LEGACY_CELL_MARK_CRITIC_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
+
+
+def _legacy_cell_mark_checker(
+    cell_id: str, sheet_kind: str,
+) -> kernel.Checker:
+    """Mechanics only: identity, finite positive numeric shape, rationale."""
+
+    def check(response: dict) -> list[str]:
+        if not isinstance(response, dict):
+            return ["response is not an object"]
+        defects: list[str] = []
+        if str(response.get("cell_id") or "") != cell_id:
+            defects.append(f"cell_id must echo {cell_id!r}")
+        marks = response.get("marks")
+        if isinstance(marks, bool):
+            defects.append("marks must be numeric")
+        else:
+            try:
+                numeric = float(marks)
+                if not math.isfinite(numeric) or numeric <= 0:
+                    defects.append("marks must be finite and positive")
+            except (TypeError, ValueError):
+                defects.append("marks must be numeric")
+        duration = response.get("question_duration")
+        if isinstance(duration, bool):
+            defects.append("question_duration must be numeric")
+        else:
+            try:
+                numeric_duration = float(duration)
+                if (
+                    not math.isfinite(numeric_duration)
+                    or numeric_duration <= 0
+                ):
+                    defects.append(
+                        "question_duration must be finite and positive")
+            except (TypeError, ValueError):
+                defects.append("question_duration must be numeric")
+        keyboard = str(response.get("math_keyboard") or "").strip()
+        if sheet_kind in {"subjective", "descriptive"}:
+            if keyboard not in {"Yes", "No"}:
+                defects.append(
+                    "math_keyboard must be Yes or No for non-objective cells")
+        elif keyboard:
+            defects.append("math_keyboard must be blank for objective cells")
+        if not str(response.get("rationale") or "").strip():
+            defects.append("response has no rationale")
+        return defects
+
+    return check
+
+
+def _recorded_cell_marks(
+    cells: list[dict],
+    *,
+    concepts_by_id: dict[int, models.Concept],
+    meta: dict,
+    envelope_sha256: str,
+    store: kernel.DecisionStore,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    fixer: kernel.Provider | None = None,
+) -> dict[str, dict]:
+    """Author one cached marks verdict for every legacy blueprint cell."""
+
+    if not cells:
+        return {}
+    if provider is None and critic is None and fixer is None:
+        provider, critic, fixer = _legacy_cell_mark_authorities()
+    if provider is None:
+        from .phase3 import envelope as envelope_mod
+        from .phase3 import fixer as fixer_mod
+
+        envelope_mod.require_live_api()
+        provider = _live_legacy_cell_mark
+        critic = critic or _live_legacy_cell_mark_critic
+        fixer = fixer or fixer_mod.live_fixer
+
+    prepared: list[tuple[str, dict, dict]] = []
+    seen: set[str] = set()
+    for cell in cells:
+        cell_id = str(cell.get("cell_id") or "").strip()
+        if not cell_id or cell_id in seen:
+            raise ValueError(
+                "legacy blueprint cells require unique nonempty cell_id values"
+            )
+        seen.add(cell_id)
+        concept_id = cell.get("concept_id")
+        concept = concepts_by_id.get(concept_id)
+        if concept is None:
+            raise ValueError(
+                f"legacy blueprint cell {cell_id!r} has no scoped concept"
+            )
+        # Materialize ORM evidence before worker threads; no worker may lazily
+        # query through the request Session.
+        prepared.append((cell_id, cell, _legacy_concept(concept)))
+
+    def decide_one(unit: tuple[str, dict, dict]) -> tuple[str, dict]:
+        cell_id, cell, concept_payload = unit
+        blueprint_cell = {
+            key: cell.get(key)
+            for key in (
+                "cell_id", "sheet_kind", "question_category",
+                "cognitive_skill", "difficulty", "count", "appears_in",
+                "concept_id", "source_policy",
+            )
+        }
+        payload = {
+            "stage": "assessment.legacy-cell-mark",
+            "rules": _LEGACY_CELL_MARK_SYSTEM,
+            "critic_rules": _LEGACY_CELL_MARK_CRITIC_SYSTEM,
+            "metadata": dict(meta),
+            "blueprint_cell": blueprint_cell,
+            "concept": copy.deepcopy(concept_payload),
+        }
+        decision = kernel.decide(
+            kind="assessment.cell",
+            unit_id=cell_id,
+            envelope_sha256=envelope_sha256,
+            payload=payload,
+            provider=provider,
+            checker=_legacy_cell_mark_checker(
+                cell_id, str(cell.get("sheet_kind") or "")),
+            critic=critic,
+            store=store,
+            policy_version=_LEGACY_CELL_MARK_POLICY_VERSION,
+            fixer=fixer,
+        )
+        response = dict(decision["response"])
+        review_flags = [
+            str(flag) for flag in decision.get("review_flags") or []
+            if str(flag).strip()
+        ]
+        return cell_id, {
+            "marks": float(response["marks"]),
+            "question_duration": float(response["question_duration"]),
+            "math_keyboard": str(response.get("math_keyboard") or ""),
+            "rationale": str(response.get("rationale") or ""),
+            "flags": review_flags,
+            "authority": {
+                "decision_key": str(decision.get("key") or ""),
+                "policy_version": str(decision.get("policy_version") or ""),
+                "review_flags": review_flags,
+                "fixer": bool(decision.get("fixer")),
+            },
+        }
+
+    rows = kernel.parallel_map_in_order(
+        prepared,
+        decide_one,
+        max_workers=config.phase3_decision_workers(),
+    )
+    return dict(rows)
+
+
+def _legacy_level_authorities() -> tuple[
+    kernel.Provider | None, kernel.Critic | None, kernel.Provider | None,
+]:
+    """Leave semantic authority to the grouping kernel in production.
+
+    Tests that exercise the offline legacy workflow inject an explicit fixture
+    authority at this seam; there is no local production verdict or fallback.
+    """
+
+    return None, None, None
+
+
+def _legacy_decision_store(kind: str, identity: int) -> kernel.DecisionStore:
+    return kernel.DecisionStore(
+        config.DATA_DIR
+        / "assessment-decisions"
+        / str(kind)
+        / str(int(identity))
+    )
+
+
+def _recorded_tiers(
+    units: list[tuple[str, dict, models.Concept]],
+    *,
+    envelope_sha256: str,
+    store: kernel.DecisionStore,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    fixer: kernel.Provider | None = None,
+) -> dict[str, str]:
+    """Run the shared level pass and bind every candidate exactly once."""
+
+    if not units:
+        return {}
+    concepts = [concept for _candidate_id, _record, concept in units]
+    if provider is None and critic is None and fixer is None:
+        provider, critic, fixer = _legacy_level_authorities()
+    decisions = assessment_grouping.decide_levels(
+        [
+            {
+                "candidate": _legacy_candidate(candidate_id, record),
+                "concept": _legacy_concept(concept),
+            }
+            for candidate_id, record, concept in units
+        ],
+        meta=_legacy_level_metadata(concepts),
+        envelope_sha256=envelope_sha256,
+        provider=provider,
+        critic=critic,
+        store=store,
+        fixer=fixer,
+    )
+    expected = [candidate_id for candidate_id, _record, _concept in units]
+    decided: dict[str, str] = {}
+    for decision in decisions:
+        candidate_id = str(decision.get("candidate_id") or "")
+        if candidate_id in decided:
+            raise ValueError(
+                f"recorded level verdict repeated candidate {candidate_id!r}"
+            )
+        decided[candidate_id] = str(decision.get("tier") or "")
+    if set(decided) != set(expected) or len(decided) != len(expected):
+        raise ValueError(
+            "recorded level verdict coverage mismatch: "
+            f"expected={expected!r}, decided={sorted(decided)!r}"
+        )
+    return decided
 
 
 def generate(
@@ -208,11 +598,30 @@ def _generate_session(
     cells = assessment_blueprint.compile_cells_from_batches(
         session.batches,
         concepts=concepts,
-        default_marks={
-            kind: generation._default_marks(kind)
-            for kind in ("objective", "subjective", "descriptive")
-        },
     )
+    prompt_concepts_by_id = {concept.id: concept for concept in concepts}
+    session_envelope_sha256 = assessment_release.sha256_json({
+        "kind": "legacy-assessment-session",
+        "session_id": session_id,
+        "owner_sub": owner_sub,
+        "scope_type": session.scope_type,
+        "scope_ids": list(session.scope_ids or []),
+        "blueprint_cells": cells,
+        "concepts": [_legacy_concept(concept) for concept in concepts],
+    })
+    decision_store = _legacy_decision_store("sessions", session_id)
+    cell_contract_by_id = _recorded_cell_marks(
+        cells,
+        concepts_by_id=prompt_concepts_by_id,
+        meta=_legacy_level_metadata(concepts),
+        envelope_sha256=session_envelope_sha256,
+        store=decision_store,
+    )
+    for cell in cells:
+        contract = cell_contract_by_id[cell["cell_id"]]
+        cell["marks"] = contract["marks"]
+        cell["question_duration"] = contract["question_duration"]
+        cell["math_keyboard"] = contract["math_keyboard"]
     assessment_blueprint.validate_cells(cells)
     cell_totals = assessment_blueprint.totals(cells)
     progress.log(
@@ -226,8 +635,7 @@ def _generate_session(
     # labels are reserved from freshly loaded database state under the shared
     # finalization lock below.
     prompt_indices: dict[int, int] = {c.id: 1 for c in concepts}
-    generated_batches: list[tuple[int, str, str, list[dict]]] = []
-    prompt_concepts_by_id = {c.id: c for c in concepts}
+    generated_batches: list[tuple[int, str, list[tuple[str, dict]]]] = []
     for done, cell in enumerate(cells):
         concept = prompt_concepts_by_id[cell["concept_id"]]
         progress.step(
@@ -241,12 +649,39 @@ def _generate_session(
             difficulty=cell["difficulty"],
             category=cell["question_category"],
             count=cell["count"],
+            marks=cell["marks"],
+            question_duration=cell["question_duration"],
+            math_keyboard=cell["math_keyboard"],
             start_index=prompt_indices[concept.id],
             appears_in=", ".join(cell["appears_in"]),
         )
+        if len(records) != int(cell["count"]):
+            raise RuntimeError(
+                f"blueprint cell {cell['cell_id']} required {cell['count']} "
+                f"questions but its recorded author returned {len(records)}; "
+                "refusing partial persistence"
+            )
         prompt_indices[concept.id] += len(records)
+        identified_records = [
+            (
+                f"LEGACY-SESSION-{session_id}-{cell['cell_id']}-{index:04d}",
+                record,
+            )
+            for index, record in enumerate(records, start=1)
+        ]
         generated_batches.append(
-            (cell["concept_id"], cell["difficulty"], cell["cell_id"], records))
+            (cell["concept_id"], cell["cell_id"], identified_records))
+
+    level_units = [
+        (candidate_id, record, prompt_concepts_by_id[concept_id])
+        for concept_id, _cell_id, identified_records in generated_batches
+        for candidate_id, record in identified_records
+    ]
+    recorded_tier_by_candidate = _recorded_tiers(
+        level_units,
+        envelope_sha256=session_envelope_sha256,
+        store=decision_store,
+    )
 
     progress.step("Tagging & column mapping", value=0.9)
     # Refresh counter state and reserve final labels while holding the same
@@ -270,7 +705,7 @@ def _generate_session(
         concepts_by_id = {concept.id: concept for concept in refreshed_concepts}
         if any(
             concept_id not in concepts_by_id
-            for concept_id, _difficulty, _cell_id, _records in generated_batches
+            for concept_id, _cell_id, _records in generated_batches
         ):
             raise ValueError(
                 "scope selection changed while questions were generated"
@@ -284,10 +719,11 @@ def _generate_session(
             for concept in refreshed_concepts
         }
         created_ids: list[int] = []
-        for concept_id, difficulty, cell_id, records in generated_batches:
+        for concept_id, cell_id, identified_records in generated_batches:
             concept = concepts_by_id[concept_id]
-            group = _group_for(db, concept, difficulty)
-            for generated_record in records:
+            for candidate_id, generated_record in identified_records:
+                group = _group_for_recorded_tier(
+                    db, concept, recorded_tier_by_candidate[candidate_id])
                 record = dict(generated_record)
                 record["question_label"] = generation.question_label(
                     concept, counters[concept_id]
@@ -334,18 +770,40 @@ def _generate_session(
 
 
 def _question_kwargs(rec: dict) -> dict:
+    sheet_kind = str(rec.get("sheet_kind") or "").strip()
+    if sheet_kind not in {"objective", "subjective", "descriptive"}:
+        raise ValueError("question record has no valid recorded sheet_kind")
+    category = str(rec.get("question_category") or "").strip()
+    if not category:
+        raise ValueError("question record has no recorded question_category")
+    cognitive_skill = bi.normalize_cognitive_skills(
+        rec.get("cognitive_skills") or "")
+    if cognitive_skill not in bi.COGNITIVE_SKILLS:
+        raise ValueError(
+            "question record has no valid recorded cognitive_skills")
+    difficulty = bi.normalize_difficulty(
+        rec.get("level_of_difficulty") or "")
+    if difficulty not in bi.DIFFICULTY_LEVELS:
+        raise ValueError(
+            "question record has no valid recorded level_of_difficulty")
+    marks = generation._positive_recorded_number(rec.get("marks"), "marks")
+    duration = generation._positive_recorded_number(
+        rec.get("question_duration"), "question_duration")
+    math_keyboard = generation._recorded_math_keyboard(
+        rec.get("math_keyboard"), sheet_kind)
     return {
-        "sheet_kind": rec["sheet_kind"],
+        "sheet_kind": sheet_kind,
         "question_label": rec.get("question_label", ""),
-        "question_category": rec.get("question_category", ""),
-        "cognitive_skills": rec.get("cognitive_skills", ""),
+        "question_category": category,
+        "cognitive_skills": cognitive_skill,
         "question_source": rec.get("question_source", ""),
-        "level_of_difficulty": rec.get("level_of_difficulty", ""),
-        "math_keyboard": rec.get("math_keyboard", ""),
+        "level_of_difficulty": difficulty,
+        "question_duration": duration,
+        "math_keyboard": math_keyboard,
         "question": rec.get("question", ""),
         "question_text": rec.get("question_text", ""),
         "question_appears_in": rec.get("question_appears_in", ""),
-        "marks": rec.get("marks", 1.0),
+        "marks": marks,
         "display_answer": rec.get("display_answer", ""),
         "answer_explanation": rec.get("answer_explanation", ""),
         "answers": rec.get("answers", []),
@@ -358,79 +816,59 @@ def _question_kwargs(rec: dict) -> dict:
 # Path B — From Upload
 # --------------------------------------------------------------------------- #
 
+def _legacy_route_authorities() -> tuple[
+    kernel.Provider | None, kernel.Critic | None, kernel.Provider | None,
+]:
+    """Production delegates every real routing choice to shared authorities."""
+
+    return None, None, None
+
+
 def _route_uploaded_questions(
-    records: list[dict], concepts: list[models.Concept],
-) -> tuple[list[int], str]:
-    """Home-concept position for every identified question.
+    records: list[dict],
+    concepts: list[models.Concept],
+    *,
+    candidate_ids: list[str],
+    meta: dict,
+    envelope_sha256: str,
+    source_concept_release_sha256: str,
+    store: kernel.DecisionStore,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    fixer: kernel.Provider | None = None,
+) -> list[dict]:
+    """Route every uploaded question through the shared decide-once pass."""
 
-    Returns (indices into ``concepts``, routing basis). A sole-concept scope
-    is mechanical — one candidate is not a decision. Live multi-concept
-    routing is a model judgment against each concept's teaching content:
-    never round-robin, never the first concept, never title overlap. The
-    full release router with its independent critic and Type/Case evidence
-    lands with the release pipeline; this bounded call already removes
-    arithmetic placement from the live path. Dry (non-live) runs keep a
-    deterministic fixture spread, labeled as such — a test harness, not a
-    pedagogical decision.
-    """
-    if not records:
-        return [], "empty"
-    if len(concepts) == 1:
-        return [0] * len(records), "sole_scope_concept"
-    if not config.use_live_generation():
-        return [i % len(concepts) for i in range(len(records))], "dry_fixture"
-
-    import json as _json
-
-    payload = {
-        "questions": [
-            {
-                "index": i,
-                "question": rec.get("question", ""),
-                "display_answer": rec.get("display_answer", ""),
-            }
-            for i, rec in enumerate(records)
-        ],
-        "concepts": [
-            {
-                "concept_id": c.id,
-                "concept_title": c.concept_title,
-                "teaching_description": (c.concept_details or "")[:2_000],
-            }
-            for c in concepts
-        ],
-    }
-    system = (
-        "Route each uploaded assessment question to the ONE concept whose "
-        "teaching content it assesses. Judge by the question and its answer "
-        "against each concept's description — never by position, title "
-        "overlap, or spreading questions evenly across concepts.\n"
-        'Return ONLY strict JSON: {"placements":[{"index":0,'
-        '"concept_id":0}]} with every question index exactly once.'
+    if len(candidate_ids) != len(records):
+        raise ValueError(
+            "upload routing candidate identity coverage does not match records")
+    if provider is None and critic is None and fixer is None:
+        provider, critic, fixer = _legacy_route_authorities()
+    candidates = [
+        _legacy_candidate(candidate_id, record)
+        for candidate_id, record in zip(candidate_ids, records)
+    ]
+    result = assessment_routing.route_candidates(
+        candidates,
+        [_legacy_concept(concept) for concept in concepts],
+        meta=meta,
+        envelope_sha256=envelope_sha256,
+        source_concept_release_sha256=source_concept_release_sha256,
+        provider=provider,
+        critic=critic,
+        store=store,
+        fixer=fixer,
     )
-    data = generation._openai_json(
-        system, _json.dumps(payload, ensure_ascii=False),
-        purpose="concept_mapping")
-    position_by_concept_id = {c.id: pos for pos, c in enumerate(concepts)}
-    routed: dict[int, int] = {}
-    for placement in (data or {}).get("placements") or []:
-        if not isinstance(placement, dict):
-            continue
-        index = placement.get("index")
-        concept_id = placement.get("concept_id")
-        if (
-            isinstance(index, int)
-            and 0 <= index < len(records)
-            and concept_id in position_by_concept_id
-            and index not in routed
-        ):
-            routed[index] = position_by_concept_id[concept_id]
-    if len(routed) != len(records):
-        raise RuntimeError(
-            "upload routing did not positively place every question "
-            f"({len(routed)}/{len(records)}); stopping instead of guessing"
-        )
-    return [routed[i] for i in range(len(records))], "api_router_v0"
+    placements = list(result.get("placements") or [])
+    known_keys = {_legacy_concept(concept)["concept_key"] for concept in concepts}
+    for placement in placements:
+        concept_key = placement.get("concept_key")
+        if concept_key not in known_keys:
+            raise ValueError(
+                "upload routing returned no known home concept for candidate "
+                f"{placement.get('candidate_id')!r}"
+            )
+    return placements
 
 
 def create_upload_job(
@@ -536,10 +974,72 @@ def generate_from_upload(
         job.mmd_text, upload_type=job.upload_type, question_type=question_type,
         textbook_mode=job.textbook_mode,
     )
-    # Routing happens outside the workbook lock (it may call the model) and
-    # binds by concept id, so a scope change is detected after the lock.
-    route_positions, route_basis = _route_uploaded_questions(records, concepts)
-    routed_concept_ids = [concepts[pos].id for pos in route_positions]
+    if job.source_book:
+        records = [
+            {**record, "question_source": job.source_book}
+            for record in records
+        ]
+    candidate_ids = [
+        f"LEGACY-UPLOAD-{job.id}-{index:04d}"
+        for index in range(1, len(records) + 1)
+    ]
+    candidate_payloads = [
+        _legacy_candidate(candidate_id, record)
+        for candidate_id, record in zip(candidate_ids, records)
+    ]
+    concept_payloads = [_legacy_concept(concept) for concept in concepts]
+    source_concept_release_sha256 = assessment_release.sha256_json(
+        concept_payloads)
+    upload_envelope_sha256 = assessment_release.sha256_json({
+        "kind": "legacy-assessment-upload",
+        "job_id": job.id,
+        "owner_sub": job.owner_sub,
+        "upload_type": job.upload_type,
+        "textbook_mode": job.textbook_mode,
+        "question_type": question_type,
+        "source_book": job.source_book,
+        "source_mmd": job.mmd_text,
+        "scope_type": job.deposit_scope_type,
+        "scope_ids": list(job.deposit_scope_ids or []),
+        "candidates": candidate_payloads,
+        "concepts": concept_payloads,
+    })
+    decision_store = _legacy_decision_store("uploads", job.id)
+    # Routing happens outside the workbook lock (it may call the model). Every
+    # real multi-concept choice is one cached assessment.route verdict; a sole
+    # concept is the shared router's mechanical no-choice case.
+    placements = _route_uploaded_questions(
+        records,
+        concepts,
+        candidate_ids=candidate_ids,
+        meta=_legacy_level_metadata(concepts),
+        envelope_sha256=upload_envelope_sha256,
+        source_concept_release_sha256=source_concept_release_sha256,
+        store=decision_store,
+    )
+    concept_by_key = {
+        payload["concept_key"]: concept
+        for payload, concept in zip(concept_payloads, concepts)
+    }
+    routed_concepts = [
+        concept_by_key[str(placement["concept_key"])]
+        for placement in placements
+    ]
+    routed_concept_ids = [concept.id for concept in routed_concepts]
+    placement_by_candidate = {
+        str(placement["candidate_id"]): placement
+        for placement in placements
+    }
+    level_units = [
+        (candidate_id, record, concept)
+        for candidate_id, record, concept in zip(
+            candidate_ids, records, routed_concepts)
+    ]
+    recorded_tier_by_candidate = _recorded_tiers(
+        level_units,
+        envelope_sha256=upload_envelope_sha256,
+        store=decision_store,
+    )
     progress.step("Depositing & tagging questions", value=0.85)
 
     # The duplicate query, database writes, and workbook publication are one
@@ -585,28 +1085,41 @@ def generate_from_upload(
         # decided above (model judgment in live mode; mechanical only for a
         # sole-concept scope) — never round-robin arithmetic on a live path.
         for i, rec in enumerate(records):
-            if job.source_book:
-                rec["question_source"] = job.source_book
+            candidate_id = candidate_ids[i]
+            concept = concepts_by_id[routed_concept_ids[i]]
             norm = bi.normalize_question_text(rec.get("question", ""))
             dup = existing_by_text.get(norm) if norm else None
             if dup is not None:
+                if dup.group.concept_id != concept.id:
+                    raise ValueError(
+                        "an uploaded duplicate is already persisted under a "
+                        "different routed home concept; refusing to relocate "
+                        "or silently overwrite its semantic placement"
+                    )
                 dup.question_source = bi.merge_sources(
                     dup.question_source, rec.get("question_source", "")
                 )
                 merged_ids.append(dup.id)
                 continue
-            concept = concepts_by_id[routed_concept_ids[i]]
             rec.setdefault(
                 "question_label",
                 generation.question_label(concept, counters[concept.id]),
             )
             counters[concept.id] += 1
-            group = _group_for(
-                db, concept, rec.get("level_of_difficulty", "Moderate")
+            group = _group_for_recorded_tier(
+                db, concept, recorded_tier_by_candidate[candidate_id]
             )
+            placement = placement_by_candidate[candidate_id]
             q = models.Question(
                 group_id=group.id,
-                route_audit={"basis": route_basis},
+                route_audit={
+                    "concept_key": placement["concept_key"],
+                    "basis": placement["basis"],
+                    "evidence": placement["evidence"],
+                    "rationale": placement["rationale"],
+                    "flags": list(placement.get("flags") or []),
+                    "authority": dict(placement.get("authority") or {}),
+                },
                 **_question_kwargs(rec),
             )
             db.add(q)

@@ -1,158 +1,392 @@
 """Exact home-concept routing (MES spec §6 Stage 7, §5.4).
 
-Every MES question belongs to exactly one canonical home concept. The
-router is a model judgment made from the full question, its answer
-evidence, the source provenance, and every candidate concept's teaching
-description — verified by an independent read-only critic bound to the
-exact proposal by SHA-256.
+Every assessment candidate belongs to exactly one released concept.  A real
+choice is one recorded ``assessment.route`` decision made through the Phase-3
+kernel: mechanical response defects receive bounded corrections, the critic
+is advisory, and an immutable decision-store entry makes resume free.
 
-What the router must never do is deterministic placement arithmetic:
-round-robin, first/last concept, title overlap, even spreading, automatic
-duplication, or Culmination as a dumping ground. The only mechanical
-routes are a blueprint cell's explicit concept constraint and a
-sole-candidate scope — configurations with nothing to decide.
-
-For Objective questions the router sees the correct answer as topical
-evidence and never the distractors (spec Stage 7): that filter is
-mechanical evidence selection, applied before any model call.
+The only no-spend routes are mechanical.  An explicit blueprint constraint
+that names a released concept, or a scope containing exactly one concept,
+leaves nothing for a model to decide.  Objective routing carries the correct
+answer as topical evidence and never carries distractors.
 """
 from __future__ import annotations
 
+import copy
 import json
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
+from .. import config
 from . import assessment_release as rel
+from .phase3 import kernel
 
-MAX_ATTEMPTS = 3
+ROUTE_POLICY_VERSION = "assessment-route-1"
 
 ROUTER_SYSTEM = (
-    "You are the Aegis assessment router. Choose the ONE concept whose "
-    "teaching content this question assesses — its canonical home. Judge "
-    "by the complete question, its answer evidence, and the source "
-    "provenance against each candidate concept's teaching description.\n"
-    "Never route by position, list order, title overlap, or spreading "
-    "questions evenly. Never pick a Culmination concept unless the "
-    "question is genuine cross-concept synthesis entailed by that "
-    "Culmination's own description — Culmination is not a fallback for "
-    "uncertainty.\n"
+    "You are the Aegis assessment router. Choose the ONE released concept "
+    "whose teaching content this question assesses: its canonical home. "
+    "Judge from the complete question, expected answer or rubric, source "
+    "and routing evidence, assets, and every candidate concept's released "
+    "teaching description.\n"
+    "Never route by position, list order, title overlap, topic proximity, "
+    "difficulty, quotas, or spreading questions evenly. A concept marked "
+    "upstream as Culmination is not a fallback: choose it only when its own "
+    "released description teaches the genuine cross-concept synthesis the "
+    "question assesses.\n"
     "Return ONLY strict JSON:\n"
-    '{"concept_id":0,"evidence":"the decisive teaching content","reason":'
-    '"one sentence","confidence":"high|medium|low"}'
+    '{"candidate_id":"","concept_key":"","evidence":"decisive released '
+    'teaching content","rationale":"evidence-bound reason"}'
 )
 
 ROUTE_CRITIC_SYSTEM = (
-    "You are the independent Aegis routing critic. You are READ-ONLY: you "
-    "verify one proposed home-concept placement against the question, its "
-    "answer evidence, and every candidate concept description. Reject a "
-    "placement whose concept does not actually teach what the question "
-    "assesses, a Culmination placement that is not genuine synthesis, or "
-    "evidence that relies on title overlap rather than teaching content.\n"
+    "You are the independent advisory critic for one Aegis home-concept "
+    "route. Audit the proposed route against the complete question, answer "
+    "or rubric, source and routing evidence, assets, and every released "
+    "candidate concept description. Flag a concept that does not teach what "
+    "the question assesses, a Culmination route that is not genuine "
+    "synthesis, or reasoning based on names, ordering, difficulty, quotas, "
+    "or spreading. Do not revise or gate the route. Your dissent is advisory: "
+    "the proposed route stands and your concerns ship for review. State your "
+    "honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"accept","proposal_sha256":"","feedback":[]} or '
-    '{"verdict":"reject","proposal_sha256":"","feedback":["evidence-bound '
-    'reason ..."]}\n'
-    "proposal_sha256 MUST echo the exact hash you were given."
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
 )
 
 
-def routing_answer_evidence(candidate: Mapping) -> dict:
-    """Mechanical evidence filter: Objective routing ignores distractors."""
-    if str(candidate.get("sheet_kind") or "") == "objective":
+class RoutingError(ValueError):
+    """A routing input or exact-coverage invariant was violated."""
+
+
+_PRINT_POSITION_FIELDS = frozenset({
+    "bbox",
+    "example_number",
+    "page",
+    "page_hint",
+    "position",
+    "printer_page",
+    "row",
+    "row_index",
+    "row_number",
+    "source_end",
+    "source_order",
+    "source_page",
+    "source_paper_number",
+    "source_start",
+    "_phase32_segment_order",
+    "_phase32_source_order",
+})
+
+
+def _content_evidence(value: Any) -> Any:
+    """Deep-copy semantic evidence while removing printer coordinates."""
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _content_evidence(raw)
+            for key, raw in value.items()
+            if str(key) not in _PRINT_POSITION_FIELDS
+        }
+    if isinstance(value, list):
+        return [_content_evidence(raw) for raw in value]
+    if isinstance(value, tuple):
+        return [_content_evidence(raw) for raw in value]
+    return copy.deepcopy(value)
+
+
+def routing_answer_evidence(candidate: Mapping) -> dict[str, Any]:
+    """Project complete answer evidence, filtering Objective distractors.
+
+    Objective options have one purpose in routing: the correct answer is
+    topical evidence.  Descriptive questions instead carry every authored
+    answer, rubric, marking instruction, and sub-question without summaries
+    or truncation.
+    """
+
+    if str(candidate.get("sheet_kind") or "").strip().lower() == "objective":
         correct = [
-            str(a.get("answer_content") or "")
-            for a in candidate.get("answers") or []
-            if isinstance(a, Mapping)
-            and rel.is_correct_option(a.get("correct_answer"))
+            str(answer.get("answer_content") or answer.get("answer") or "")
+            for answer in candidate.get("answers") or []
+            if isinstance(answer, Mapping)
+            and rel.is_correct_option(answer.get("correct_answer"))
         ]
-        return {"correct_answer": [c for c in correct if c]}
+        return {"correct_answer": [text for text in correct if text]}
     return {
-        "display_answer": str(candidate.get("display_answer") or ""),
-        "answers": [
-            str(a.get("answer_content") or a.get("answer") or "")
-            for a in candidate.get("answers") or []
-            if isinstance(a, Mapping)
-        ],
-        "sub_questions": [
-            {
-                "text": str(s.get("text") or ""),
-                "marks": s.get("marks"),
-            }
-            for s in candidate.get("sub_questions") or []
-            if isinstance(s, Mapping)
-        ],
+        "display_answer": copy.deepcopy(candidate.get("display_answer")),
+        "answers": copy.deepcopy(candidate.get("answers")),
+        "rubric": copy.deepcopy(candidate.get("rubric")),
+        "marking_scheme": copy.deepcopy(candidate.get("marking_scheme")),
+        "sub_questions": copy.deepcopy(candidate.get("sub_questions")),
+        "answer_explanation": copy.deepcopy(
+            candidate.get("answer_explanation")
+        ),
+        "answer_evidence": copy.deepcopy(candidate.get("answer_evidence")),
     }
 
 
-def _concept_payload(concepts: list[Mapping]) -> list[dict]:
+def _candidate_payload(candidate: Mapping) -> dict[str, Any]:
+    """Carry the candidate's semantic routing evidence without position.
+
+    Printer/page/order coordinates are deliberately absent.  For Objective
+    rows, answer-bearing fields are represented only by
+    :func:`routing_answer_evidence`, so an option distractor cannot become a
+    concept-routing hint.
+    """
+
+    objective = (
+        str(candidate.get("sheet_kind") or "").strip().lower() == "objective"
+    )
+    payload = {
+        "candidate_id": str(candidate.get("candidate_id") or "").strip(),
+        "question": copy.deepcopy(candidate.get("question")),
+        "question_text": copy.deepcopy(candidate.get("question_text")),
+        "sheet_kind": copy.deepcopy(candidate.get("sheet_kind")),
+        "question_category": copy.deepcopy(
+            candidate.get("question_category")
+        ),
+        "cognitive_skill": copy.deepcopy(candidate.get("cognitive_skill")),
+        "difficulty": copy.deepcopy(candidate.get("difficulty")),
+        "marks": copy.deepcopy(candidate.get("marks")),
+        "answer_restriction": copy.deepcopy(
+            candidate.get("answer_restriction")
+        ),
+        "restriction_reason": copy.deepcopy(
+            candidate.get("restriction_reason")
+        ),
+        "answer_evidence": routing_answer_evidence(candidate),
+        "requires_visual": bool(candidate.get("requires_visual")),
+        "assets": copy.deepcopy(candidate.get("assets")),
+        "image_manifest": copy.deepcopy(candidate.get("image_manifest")),
+        "image_urls": copy.deepcopy(candidate.get("image_urls")),
+        "images": copy.deepcopy(candidate.get("images")),
+        "tables": copy.deepcopy(candidate.get("tables")),
+        "content_objects": copy.deepcopy(candidate.get("content_objects")),
+        "source_atom_ids": copy.deepcopy(candidate.get("source_atom_ids")),
+        "source_qid": copy.deepcopy(candidate.get("source_qid")),
+        "source_document_hash": copy.deepcopy(
+            candidate.get("source_document_hash")
+        ),
+        "source_kind": copy.deepcopy(candidate.get("source_kind")),
+        "source_evidence": copy.deepcopy(candidate.get("source_evidence")),
+        "shared_context": copy.deepcopy(candidate.get("shared_context")),
+        "source_context": copy.deepcopy(candidate.get("source_context")),
+        "route_evidence": copy.deepcopy(candidate.get("route_evidence")),
+        "blueprint_cell_id": copy.deepcopy(
+            candidate.get("blueprint_cell_id")
+        ),
+        "assessment_gist": copy.deepcopy(candidate.get("assessment_gist")),
+    }
+    if not objective:
+        # These rich public/source forms can contain a rendered option list
+        # for Objective rows.  The stem already rides above, so include the
+        # forms only where they cannot re-introduce distractors.
+        payload.update({
+            "question_display": copy.deepcopy(
+                candidate.get("question_display")
+            ),
+            "raw_text": copy.deepcopy(candidate.get("raw_text")),
+            "normalized_public_text": copy.deepcopy(
+                candidate.get("normalized_public_text")
+            ),
+            "options": copy.deepcopy(candidate.get("options")),
+        })
+    return _content_evidence(payload)
+
+
+def _concept_payload(concepts: list[Mapping]) -> list[dict[str, Any]]:
+    """Carry complete released semantic evidence without position proxies.
+
+    ``is_culmination`` is copied only when the staged release supplies it;
+    this module never infers culmination status from a title or position.
+    """
+
+    rows: list[dict[str, Any]] = []
+    for concept in concepts:
+        row = _content_evidence(dict(concept))
+        row["concept_key"] = str(concept.get("concept_key") or "").strip()
+        # Preserve the established wire shape without manufacturing meaning.
+        row.setdefault("concept_display_name", None)
+        row.setdefault("concept_title", None)
+        row.setdefault("description", None)
+        row.setdefault("teaching_description", None)
+        row.setdefault("concept_description", None)
+        row.setdefault("concept_details", None)
+        row.setdefault("is_culmination", None)
+        rows.append(row)
+    return rows
+
+
+def _candidate_id(candidate: Mapping, *, position: int | None = None) -> str:
+    if not isinstance(candidate, Mapping):
+        where = f" {position}" if position is not None else ""
+        raise RoutingError(f"routing candidate{where} is not an object")
+    candidate_id = str(candidate.get("candidate_id") or "").strip()
+    if not candidate_id:
+        where = f" {position}" if position is not None else ""
+        raise RoutingError(f"routing candidate{where} has no candidate_id")
+    return candidate_id
+
+
+def _concept_keys(concepts: list[Mapping]) -> list[str]:
+    keys: list[str] = []
+    for position, concept in enumerate(concepts, start=1):
+        if not isinstance(concept, Mapping):
+            raise RoutingError(f"routing concept {position} is not an object")
+        raw_key = concept.get("concept_key")
+        if not isinstance(raw_key, str) or not raw_key.strip():
+            raise RoutingError(
+                f"routing concept {position} has no string concept_key"
+            )
+        keys.append(raw_key.strip())
+    if len(keys) != len(set(keys)):
+        raise RoutingError("routing concepts repeat a concept_key")
+    return keys
+
+
+def _envelope_hash(value: str) -> str:
+    envelope_sha = str(value or "").strip()
+    if not envelope_sha:
+        raise RoutingError("assessment routing requires an envelope hash")
+    return envelope_sha
+
+
+def _constraint(candidate: Mapping) -> str | None:
+    """Return an explicit release-key constraint, including legacy alias."""
+
+    raw_key = candidate.get("blueprint_concept_key")
+    raw_alias = candidate.get("blueprint_concept_id")
+    key = str(raw_key).strip() if raw_key is not None else ""
+    alias = str(raw_alias).strip() if raw_alias is not None else ""
+    if key and alias and key != alias:
+        raise RoutingError(
+            "blueprint_concept_key and blueprint_concept_id disagree"
+        )
+    return key or alias or None
+
+
+def _review_flags(decision: Mapping[str, Any]) -> list[str]:
     return [
-        {
-            "concept_id": c.get("concept_id"),
-            "concept_title": str(c.get("concept_title") or ""),
-            "teaching_description": str(
-                c.get("teaching_description") or "")[:2_000],
-            "is_culmination": bool(c.get("is_culmination")),
-        }
-        for c in concepts
+        str(flag)
+        for flag in decision.get("review_flags") or []
+        if str(flag).strip()
     ]
 
 
-def _router_user(
-    candidate: Mapping, concepts: list[Mapping], meta: Mapping,
-    feedback: list[str],
-) -> str:
-    payload = {
-        "metadata": dict(meta),
-        "question": str(candidate.get("question") or ""),
-        "question_text": str(candidate.get("question_text") or ""),
-        "answer_evidence": routing_answer_evidence(candidate),
-        "source_evidence": str(candidate.get("source_evidence") or ""),
-        "route_evidence": candidate.get("route_evidence") or {},
-        "blueprint": {
-            "sheet_kind": candidate.get("sheet_kind"),
-            "question_category": candidate.get("question_category"),
-            "cognitive_skill": candidate.get("cognitive_skill"),
-            "difficulty": candidate.get("difficulty"),
-            "marks": candidate.get("marks"),
-        },
-        "candidate_concepts": _concept_payload(concepts),
+def _decision_authority(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """Stable row-private audit; volatile provider/time fields never escape."""
+
+    return {
+        "decision_key": str(decision.get("key") or ""),
+        "policy_version": str(decision.get("policy_version") or ""),
+        "review_flags": _review_flags(decision),
+        "fixer": bool(decision.get("fixer")),
     }
-    body = json.dumps(payload, ensure_ascii=False)
-    if feedback:
-        body += (
-            "\n\nYOUR PREVIOUS PLACEMENT WAS REJECTED BY THE INDEPENDENT "
-            "CRITIC. Address every item, then return a fresh placement:\n- "
-            + "\n- ".join(feedback)
-        )
-    return body
+
+
+def _mechanical_authority(basis: str) -> dict[str, Any]:
+    return {
+        "decision_key": "",
+        "policy_version": ROUTE_POLICY_VERSION,
+        "review_flags": [],
+        "fixer": False,
+        "mechanical_basis": basis,
+    }
 
 
 def _placement(
     candidate: Mapping,
     *,
-    concept_id: Any,
+    concept_key: str | None,
     basis: str,
     evidence: str = "",
-    reason: str = "",
-    confidence: str = "",
+    rationale: str = "",
     flags: list[str] | None = None,
-    candidate_routes: list | None = None,
+    candidate_routes: list[str] | None = None,
     authority: Mapping | None = None,
-) -> dict:
-    """AssessmentPlacement record (spec §5.4); group_key lands with grouping."""
+) -> dict[str, Any]:
+    """Build one stable AssessmentPlacement record."""
+
+    # ``concept_id`` remains a compatibility alias, but it is never a second
+    # identity: it is mechanically identical to the released concept_key.
     return {
-        "candidate_id": str(candidate.get("candidate_id") or ""),
-        "concept_id": concept_id,
+        "candidate_id": str(candidate.get("candidate_id") or "").strip(),
+        "concept_key": concept_key,
+        "concept_id": concept_key,
         "group_key": "",
         "secondary_placements": [],
         "candidate_routes": list(candidate_routes or []),
-        "selected_route": concept_id,
+        "selected_route": concept_key,
         "basis": basis,
-        "evidence": evidence,
-        "reason": reason,
-        "confidence": confidence,
+        "evidence": str(evidence or ""),
+        "rationale": str(rationale or ""),
+        "reason": str(rationale or ""),
+        "confidence": "",
         "flags": list(flags or []),
         "authority": dict(authority or {}),
     }
+
+
+def _route_checker(candidate_id: str, route_keys: list[str]) -> kernel.Checker:
+    """Mechanics only: exact identity, one known route, required strings."""
+
+    known = set(route_keys)
+
+    def check(response: Mapping[str, Any]) -> list[str]:
+        if not isinstance(response, Mapping):
+            return ["response is not an object"]
+        defects: list[str] = []
+        response_candidate = response.get("candidate_id")
+        if not isinstance(response_candidate, str) or (
+            response_candidate != candidate_id
+        ):
+            defects.append(f"candidate_id must echo {candidate_id!r}")
+        concept_key = response.get("concept_key")
+        if not isinstance(concept_key, str) or concept_key not in known:
+            defects.append("concept_key must name one candidate concept exactly")
+        evidence = response.get("evidence")
+        if not isinstance(evidence, str) or not evidence.strip():
+            defects.append("response has no evidence")
+        rationale = response.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            defects.append("response has no rationale")
+        return defects
+
+    return check
+
+
+def _live_route(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        ROUTER_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        purpose="concept_mapping",
+    )
+
+
+def _live_route_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        ROUTE_CRITIC_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
+
+
+def _live_authorities(
+    provider: kernel.Provider | None,
+    critic: kernel.Critic | None,
+    fixer: kernel.Provider | None,
+) -> tuple[kernel.Provider, kernel.Critic | None, kernel.Provider | None]:
+    """Wire production authorities while preserving injected test seams."""
+
+    if provider is not None:
+        return provider, critic, fixer
+    from .phase3 import envelope as envelope_mod
+    from .phase3 import fixer as fixer_mod
+
+    envelope_mod.require_live_api()
+    return _live_route, critic or _live_route_critic, fixer or fixer_mod.live_fixer
 
 
 def route_candidate(
@@ -160,136 +394,110 @@ def route_candidate(
     concepts: list[Mapping],
     *,
     meta: Mapping,
-    router_call: Callable[..., dict] | None = None,
-    critic_call: Callable[..., dict] | None = None,
-    max_attempts: int = MAX_ATTEMPTS,
-) -> dict:
-    """One candidate -> one placement, routed or flagged. Never raises.
+    envelope_sha256: str,
+    source_concept_release_sha256: str = "",
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+) -> dict[str, Any]:
+    """Route one candidate by mechanics or one cached kernel decision."""
 
-    Mechanical routes first: a blueprint concept constraint or a
-    sole-candidate scope leaves nothing to decide. Everything else is a
-    model judgment with an independent critic; exhaustion or provider
-    failure ships a flagged placement preserving the best evidence.
-    """
-    route_ids = [c.get("concept_id") for c in concepts]
-    constrained = candidate.get("blueprint_concept_id")
-    if constrained is not None and constrained != "":
-        if constrained in route_ids:
-            return _placement(
-                candidate, concept_id=constrained,
-                basis="blueprint_constraint",
-                evidence="the blueprint cell names this concept",
-                candidate_routes=route_ids)
-        return _placement(
-            candidate, concept_id=None, basis="blueprint_constraint",
-            flags=["blueprint_concept_not_in_scope"],
-            candidate_routes=route_ids)
-    if len(concepts) == 1:
-        return _placement(
-            candidate, concept_id=route_ids[0], basis="sole_candidate",
-            evidence="the scope contains exactly one candidate concept",
-            candidate_routes=route_ids)
-    if not concepts:
-        return _placement(
-            candidate, concept_id=None, basis="no_candidates",
-            flags=["no_candidate_concepts"], candidate_routes=[])
-
-    if router_call is None or critic_call is None:
-        from . import generation
-
-        def _default_router(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_mapping")
-
-        def _default_critic(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_validation")
-
-        router_call = router_call or _default_router
-        critic_call = critic_call or _default_critic
-
-    attempts: list[dict] = []
-    feedback: list[str] = []
-    best: Mapping | None = None
-    for attempt in range(1, max(1, max_attempts) + 1):
-        try:
-            proposal = router_call(
-                ROUTER_SYSTEM, _router_user(candidate, concepts, meta, feedback))
-        except Exception as exc:  # noqa: BLE001 — never exception->placement
-            attempts.append({"attempt": attempt, "outcome": "router_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        if not isinstance(proposal, Mapping) or (
-            proposal.get("concept_id") not in route_ids
-        ):
-            attempts.append({
-                "attempt": attempt, "outcome": "invalid_route",
-                "proposed": (
-                    proposal.get("concept_id")
-                    if isinstance(proposal, Mapping) else None),
-            })
-            feedback = [
-                "the placement must name one candidate concept_id exactly"]
-            continue
-        best = proposal
-        sha = rel.sha256_json(dict(proposal))
-        try:
-            review = critic_call(
-                ROUTE_CRITIC_SYSTEM,
-                json.dumps({
-                    "proposal": dict(proposal),
-                    "proposal_sha256": sha,
-                    "question": str(candidate.get("question") or ""),
-                    "answer_evidence": routing_answer_evidence(candidate),
-                    "candidate_concepts": _concept_payload(concepts),
-                }, ensure_ascii=False))
-        except Exception as exc:  # noqa: BLE001
-            attempts.append({"attempt": attempt, "outcome": "critic_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        review = review if isinstance(review, Mapping) else {}
-        if str(review.get("proposal_sha256") or "") != sha:
-            attempts.append(
-                {"attempt": attempt, "outcome": "critic_unbound"})
-            feedback = ["the critic review did not bind to the placement"]
-            continue
-        if str(review.get("verdict") or "").strip().lower() == "accept":
+    candidate_id = _candidate_id(candidate)
+    route_keys = _concept_keys(concepts)
+    envelope_sha = _envelope_hash(envelope_sha256)
+    constrained = _constraint(candidate)
+    if constrained is not None:
+        if constrained in route_keys:
+            basis = "blueprint_constraint"
             return _placement(
                 candidate,
-                concept_id=proposal.get("concept_id"),
-                basis="api_router",
-                evidence=str(proposal.get("evidence") or ""),
-                reason=str(proposal.get("reason") or ""),
-                confidence=str(proposal.get("confidence") or ""),
-                candidate_routes=route_ids,
-                authority={
-                    "proposal_sha256": sha,
-                    "critic_reviewed_sha256": sha,
-                    "critic_response_sha256": rel.sha256_json(dict(review)),
-                    "attempts": attempts + [
-                        {"attempt": attempt, "outcome": "accepted"}],
-                })
-        route_feedback = [
-            str(f) for f in review.get("feedback") or [] if str(f).strip()
-        ]
-        attempts.append({"attempt": attempt, "outcome": "critic_rejected",
-                         "feedback": route_feedback})
-        feedback = route_feedback or ["rejected without usable feedback"]
+                concept_key=constrained,
+                basis=basis,
+                evidence="the blueprint cell names this released concept",
+                rationale="the explicit valid constraint leaves no choice",
+                candidate_routes=route_keys,
+                authority=_mechanical_authority(basis),
+            )
+        basis = "blueprint_constraint"
+        flag = "blueprint_concept_not_in_scope"
+        return _placement(
+            candidate,
+            concept_key=None,
+            basis=basis,
+            flags=[flag],
+            candidate_routes=route_keys,
+            authority={
+                **_mechanical_authority(basis),
+                "review_flags": [flag],
+            },
+        )
+    if len(route_keys) == 1:
+        basis = "sole_candidate"
+        return _placement(
+            candidate,
+            concept_key=route_keys[0],
+            basis=basis,
+            evidence="the released scope contains exactly one concept",
+            rationale="the sole-candidate scope leaves no choice",
+            candidate_routes=route_keys,
+            authority=_mechanical_authority(basis),
+        )
+    if not route_keys:
+        basis = "no_candidates"
+        flag = "no_candidate_concepts"
+        return _placement(
+            candidate,
+            concept_key=None,
+            basis=basis,
+            flags=[flag],
+            candidate_routes=[],
+            authority={
+                **_mechanical_authority(basis),
+                "review_flags": [flag],
+            },
+        )
 
+    source_release_sha = str(source_concept_release_sha256 or "").strip()
+    if not source_release_sha:
+        raise RoutingError(
+            "semantic multi-concept routing requires the sealed source "
+            "concept release hash"
+        )
+    provider, critic, fixer = _live_authorities(provider, critic, fixer)
+    decision_store = store or kernel.DecisionStore()
+    payload = {
+        "stage": "assessment.route",
+        "rules": ROUTER_SYSTEM,
+        "critic_rules": ROUTE_CRITIC_SYSTEM,
+        "metadata": copy.deepcopy(dict(meta)),
+        "source_concept_release_sha256": source_release_sha,
+        "candidate": _candidate_payload(candidate),
+        "candidate_concepts": _concept_payload(concepts),
+    }
+    decision = kernel.decide(
+        kind="assessment.route",
+        unit_id=candidate_id,
+        envelope_sha256=envelope_sha,
+        payload=payload,
+        provider=provider,
+        checker=_route_checker(candidate_id, route_keys),
+        critic=critic,
+        store=decision_store,
+        policy_version=ROUTE_POLICY_VERSION,
+        fixer=fixer,
+    )
+    response = copy.deepcopy(dict(decision["response"]))
+    flags = _review_flags(decision)
     return _placement(
         candidate,
-        concept_id=(
-            best.get("concept_id") if isinstance(best, Mapping) else None),
-        basis="unresolved",
-        evidence=str((best or {}).get("evidence") or ""),
-        reason=str((best or {}).get("reason") or ""),
-        confidence="low",
-        flags=["unresolved_routing"] + [
-            f"attempt_{entry['attempt']}:{entry['outcome']}"
-            for entry in attempts
-        ],
-        candidate_routes=route_ids,
-        authority={"attempts": attempts},
+        concept_key=str(response.get("concept_key") or ""),
+        basis="api_router",
+        evidence=str(response.get("evidence") or ""),
+        rationale=str(response.get("rationale") or ""),
+        flags=flags,
+        candidate_routes=route_keys,
+        authority=_decision_authority(decision),
     )
 
 
@@ -298,28 +506,60 @@ def route_candidates(
     concepts: list[Mapping],
     *,
     meta: Mapping,
-    router_call: Callable[..., dict] | None = None,
-    critic_call: Callable[..., dict] | None = None,
-    max_attempts: int = MAX_ATTEMPTS,
-) -> dict:
-    """Route every candidate; exactly one placement each (zero loss)."""
-    placements = [
-        route_candidate(
-            candidate, concepts, meta=meta,
-            router_call=router_call, critic_call=critic_call,
-            max_attempts=max_attempts)
-        for candidate in candidates
+    envelope_sha256: str,
+    source_concept_release_sha256: str = "",
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+) -> dict[str, Any]:
+    """Route every candidate with exact, ordered, duplicate-free coverage."""
+
+    expected_ids = [
+        _candidate_id(candidate, position=position)
+        for position, candidate in enumerate(candidates, start=1)
     ]
-    errors = rel.primary_placement_errors(placements)
-    if errors:
-        raise RuntimeError(
-            "routing produced duplicate primary placements: "
-            + "; ".join(errors))
+    if len(expected_ids) != len(set(expected_ids)):
+        raise RoutingError("routing candidates repeat a candidate_id")
+    _concept_keys(concepts)
+    envelope_sha = _envelope_hash(envelope_sha256)
+    if not candidates:
+        return {"placements": [], "routed": 0, "flagged": 0}
+
+    decision_store = store or kernel.DecisionStore()
+
+    def route_one(candidate: Mapping) -> dict[str, Any]:
+        return route_candidate(
+            candidate,
+            concepts,
+            meta=meta,
+            envelope_sha256=envelope_sha,
+            source_concept_release_sha256=source_concept_release_sha256,
+            provider=provider,
+            critic=critic,
+            store=decision_store,
+            fixer=fixer,
+        )
+
+    placements = kernel.parallel_map_in_order(
+        candidates,
+        route_one,
+        max_workers=config.phase3_decision_workers(),
+    )
+    returned_ids = [
+        str(placement.get("candidate_id") or "") for placement in placements
+    ]
+    if returned_ids != expected_ids or len(returned_ids) != len(set(returned_ids)):
+        missing = [value for value in expected_ids if value not in returned_ids]
+        unexpected = [value for value in returned_ids if value not in expected_ids]
+        raise RoutingError(
+            "routing did not preserve exact candidate coverage and order "
+            f"(missing={missing}, unexpected={unexpected})"
+        )
     return {
         "placements": placements,
         "routed": sum(
-            1 for p in placements
-            if p["concept_id"] is not None
-            and "unresolved_routing" not in p["flags"]),
-        "flagged": sum(1 for p in placements if p["flags"]),
+            1 for placement in placements if placement["concept_key"] is not None
+        ),
+        "flagged": sum(1 for placement in placements if placement["flags"]),
     }

@@ -1,4 +1,6 @@
 """MMD is chunked (never trimmed) so no content is lost on long chapters."""
+import pytest
+
 from app.services import generation as g
 
 
@@ -558,9 +560,21 @@ def test_identify_questions_live_merges_and_dedupes(monkeypatch):
     def fake_openai_json(system, user, **kw):
         calls["n"] += 1
         n = calls["n"]
+        def row(question):
+            return {
+                "question": question,
+                "sheet_kind": "objective",
+                "question_category": "Multiple Choice Question",
+                "cognitive_skills": "Understand",
+                "level_of_difficulty": "Moderate",
+                "marks": 1,
+                "question_duration": 2,
+                "math_keyboard": "",
+            }
+
         return {"questions": [
-            {"question": f"Unique question {n}?", "sheet_kind": "objective"},
-            {"question": "Shared duplicate question?", "sheet_kind": "objective"},
+            row(f"Unique question {n}?"),
+            row("Shared duplicate question?"),
         ]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai_json)
@@ -573,3 +587,31 @@ def test_identify_questions_live_merges_and_dedupes(monkeypatch):
     assert questions.count("Shared duplicate question?") == 1
     # Every chunk's unique question is present (no trimming/cap loss).
     assert sum(1 for q in questions if q.startswith("Unique question")) == calls["n"]
+
+
+def test_identify_questions_safety_cap_fails_closed(monkeypatch):
+    monkeypatch.setattr(g, "_IDENTIFY_SAFETY_CAP", 2)
+    monkeypatch.setattr(g, "_split_mmd_into_chunks", lambda _text: ["section"])
+
+    def row(question):
+        return {
+            "question": question,
+            "sheet_kind": "objective",
+            "question_category": "Multiple Choice Question",
+            "cognitive_skills": "Understand",
+            "level_of_difficulty": "Moderate",
+            "marks": 1,
+            "question_duration": 2,
+            "math_keyboard": "",
+        }
+
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: {
+            "questions": [row("Question one?"), row("Question two?")]
+        },
+    )
+    with pytest.raises(RuntimeError, match="refusing a truncated success"):
+        g._live_identify_questions_from_mmd(
+            "source", upload_type="questions", question_type="auto")

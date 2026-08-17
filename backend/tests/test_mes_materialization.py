@@ -1,337 +1,482 @@
-"""MES PR 3 — question/answer/rubric authority (spec §6 Stages 4–6, §14, §15).
-
-Author + read-only critic with proposal-hash binding, bounded repair,
-mechanical validation, integrity-checked cache, and zero-loss flagging.
-"""
+"""Recorded MES materialization decisions and their mechanical contract."""
 from __future__ import annotations
+
+import copy
 
 import pytest
 
 from app.services import assessment_materialization as am
+from app.services.phase3 import kernel
+
+ENVELOPE_SHA256 = "e" * 64
+META = {"subject": "Mathematics", "grade": "06"}
 
 
-@pytest.fixture(autouse=True)
-def _fresh_cache():
-    am.reset_cache()
-    yield
-    am.reset_cache()
-
-
-def _cell(**kw) -> dict:
+def _cell(**changes) -> dict:
     cell = {
-        "cell_id": "CELL-abc123", "sheet_kind": "objective",
-        "question_category": "MCQ", "cognitive_skill": "Remember",
-        "difficulty": "Less", "marks": 1.0, "count": 1,
-        "appears_in": ["Worksheet"], "concept_id": 7,
+        "cell_id": "CELL-abc123",
+        "sheet_kind": "objective",
+        "question_category": "MCQ",
+        "cognitive_skill": "Remember",
+        "difficulty": "Less",
+        "marks": 1.0,
+        "count": 1,
+        "appears_in": ["Pre/Post-Worksheet/Test"],
+        "concept_id": 7,
         "source_policy": "rewrite",
     }
-    cell.update(kw)
+    cell.update(changes)
     return cell
 
 
-def _atom(**kw) -> dict:
+def _atom(**changes) -> dict:
     atom = {
         "source_qid": "QINV-0003",
         "source_document_hash": "sha256:doc",
         "source_kind": "exercise",
         "raw_text": "Look at the figure and name the solid.",
-        "assets": [{"url": "https://x/a.png", "alt": "a cone", "order": 1,
-                    "sha256": "s1", "source_page": 3, "bbox": None}],
+        "normalized_public_text": "Name the solid shown.",
+        "shared_context": "Use the accompanying source illustration.",
+        "source_answer": "Cone",
+        "options": ["Cone", "Cube"],
+        "route_evidence": {"owner": "recorded source host"},
+        "assets": [{
+            "url": "https://x/a.png",
+            "alt": "a solid tapering to an apex",
+            "order": 1,
+            "sha256": "s1",
+            "source_page": 3,
+            "bbox": None,
+        }],
     }
-    atom.update(kw)
+    atom.update(changes)
     return atom
 
 
-def _good_proposal() -> dict:
-    return {
-        "question": "The illustration provided shows a solid. Name it.",
+def _objective_response(request: dict, **changes) -> dict:
+    response = {
+        "candidate_id": request["candidate_id"],
+        "question": "The illustration shows a solid. Name it.",
         "answer_restriction": "Specific",
-        "restriction_reason": "one exact solid name is required",
+        "restriction_reason": "The response has one bounded semantic target.",
         "display_answer": "",
         "answers": [
-            {"answer_type": "Phrases", "answer_content": "Cone",
-             "correct_answer": "1", "answer_weightage": "1"},
-            {"answer_type": "Phrases", "answer_content": "Cube",
-             "correct_answer": "0", "answer_weightage": "0"},
+            {
+                "answer_type": "Phrases",
+                "answer_content": "Cone",
+                "correct_answer": "Yes",
+                "answer_weightage": "1",
+            },
+            {
+                "answer_type": "Phrases",
+                "answer_content": "Cube",
+                "correct_answer": "No",
+                "answer_weightage": "0",
+            },
         ],
         "sub_questions": [],
-        "answer_explanation": "The curved face tapering to an apex is a cone.",
+        "answer_explanation": "The curved face tapers to an apex.",
         "requires_visual": True,
+        "rationale": "The item preserves the supplied visual identification.",
     }
+    response.update(changes)
+    return response
 
 
-def _accepting_critic(system, user):
-    import json
-
-    payload = json.loads(user)
-    return {"verdict": "accept",
-            "proposal_sha256": payload["proposal_sha256"], "feedback": []}
-
-
-META = {"subject": "Mathematics", "grade": "06"}
-
-
-# --------------------------------------------------------------------------- #
-# Accepted path
-# --------------------------------------------------------------------------- #
-
-def test_accepted_candidate_is_immutable_and_hash_bound():
-    candidate = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=lambda s, u: _good_proposal(),
-        critic_call=_accepting_critic,
-        use_cache=False,
-    )
-    assert candidate["assessment_eligibility"] == "accepted"
-    assert candidate["flags"] == []
-    assert candidate["blueprint_cell_id"] == "CELL-abc123"
-    # Blueprint fields come from the cell, not the model.
-    assert candidate["cognitive_skill"] == "Remember"
-    assert candidate["marks"] == 1.0
-    # question_text is a byte-exact copy of the rich question (spec §3.8).
-    assert candidate["question_text"] == candidate["question"]
-    # Assets ride along from the atom, ordered.
-    assert candidate["assets"][0]["order"] == 1
-    authority = candidate["authority"]
-    assert authority["proposal_sha256"] == authority["critic_reviewed_sha256"]
-    assert authority["attempts"][-1]["outcome"] == "accepted"
-
-
-def test_critic_is_read_only_wording_never_ships():
-    def meddling_critic(system, user):
-        import json
-
-        payload = json.loads(user)
-        return {
-            "verdict": "accept",
-            "proposal_sha256": payload["proposal_sha256"],
-            "feedback": [],
-            "question": "A rewritten question the critic tried to inject.",
-        }
-
-    candidate = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=lambda s, u: _good_proposal(),
-        critic_call=meddling_critic,
-        use_cache=False,
-    )
-    assert candidate["question"] == _good_proposal()["question"]
-
-
-# --------------------------------------------------------------------------- #
-# Mechanical validation and bounded repair
-# --------------------------------------------------------------------------- #
-
-def test_mechanical_defects_feed_the_repair_round():
-    bad = _good_proposal()
-    bad["answers"][1]["correct_answer"] = "1"  # two correct options
-    proposals = iter([bad, _good_proposal()])
-    prompts_seen = []
-
-    def author(system, user):
-        prompts_seen.append(user)
-        return next(proposals)
-
-    candidate = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=author, critic_call=_accepting_critic, use_cache=False,
-    )
-    assert candidate["assessment_eligibility"] == "accepted"
-    assert "exactly one correct option" in prompts_seen[1]
-
-
-def test_objective_restriction_and_weights_are_enforced():
-    open_objective = _good_proposal()
-    open_objective["answer_restriction"] = "Open"
-    defects = am.proposal_defects(open_objective, _cell())
-    assert any("always Specific" in d for d in defects)
-
-    wrong_weight = _good_proposal()
-    wrong_weight["answers"][0]["answer_weightage"] = "3"
-    defects = am.proposal_defects(wrong_weight, _cell())
-    assert any("!= marks" in d for d in defects)
-
-    unknown = _good_proposal()
-    unknown["answer_restriction"] = ""
-    defects = am.proposal_defects(unknown, _cell())
-    assert any("never defaulted" in d for d in defects)
-
-
-def test_descriptive_mark_arithmetic_is_exact():
-    cell = _cell(sheet_kind="descriptive", question_category="Long Answer",
-                 marks=5.0)
-    proposal = {
+def _descriptive_response(request: dict, **changes) -> dict:
+    response = {
+        "candidate_id": request["candidate_id"],
         "question": "Explain the water cycle with a labelled diagram.",
         "answer_restriction": "Open",
-        "restriction_reason": "several valid explanations earn credit",
-        "display_answer": "Evaporation, condensation, precipitation ...",
+        "restriction_reason": "Several complete explanations can earn credit.",
+        "display_answer": "Evaporation, condensation and precipitation.",
         "answers": [
-            {"answer_type": "Phrases", "answer_weightage": "2",
-             "answer_content": "evaporation and condensation explained"},
-            {"answer_type": "Phrases", "answer_weightage": "2",
-             "answer_content": "precipitation and collection explained"},
+            {
+                "answer_type": "Phrases",
+                "answer_weightage": "2",
+                "answer_content": "Evaporation and condensation explained.",
+            },
+            {
+                "answer_type": "Phrases",
+                "answer_weightage": "3",
+                "answer_content": "Precipitation and collection explained.",
+            },
         ],
-        "sub_questions": [
-            {"text": "Name the process of water vapour formation.",
-             "marks": "2", "keywords": []},
-            {"text": "Explain cloud formation.", "marks": "2",
-             "keywords": []},
-        ],
+        "sub_questions": [],
         "answer_explanation": "",
         "requires_visual": False,
+        "rationale": "The answer and rubric satisfy the fixed cell.",
     }
-    defects = am.proposal_defects(proposal, cell)
-    assert any("answer weightage sum 4 != marks 5" in d for d in defects)
-    assert any("subquestion marks sum 4 != parent marks 5" in d
-               for d in defects)
+    response.update(changes)
+    return response
 
 
-def test_capacities_are_enforced():
-    proposal = _good_proposal()
-    proposal["answers"] = proposal["answers"] * 4  # 8 options
-    defects = am.proposal_defects(proposal, _cell())
-    assert any("1..6 options" in d for d in defects)
+def _verified(_request: dict) -> dict:
+    return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
 
-# --------------------------------------------------------------------------- #
-# Critic binding and exhaustion
-# --------------------------------------------------------------------------- #
-
-def test_unbound_critic_review_certifies_nothing():
-    def unbound_critic(system, user):
-        return {"verdict": "accept", "proposal_sha256": "deadbeef",
-                "feedback": []}
-
-    candidate = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=lambda s, u: _good_proposal(),
-        critic_call=unbound_critic, max_attempts=2, use_cache=False,
-    )
-    assert candidate["assessment_eligibility"] == "flagged"
-    assert "unresolved_author_critic" in candidate["flags"]
-    outcomes = [a["outcome"] for a in candidate["authority"]["attempts"]]
-    assert outcomes == ["critic_unbound", "critic_unbound"]
+def _materialize(**overrides) -> dict:
+    arguments = {
+        "meta": META,
+        "context": {"chapter": "complete curricular context"},
+        "envelope_sha256": ENVELOPE_SHA256,
+        "provider": _objective_response,
+        "critic": _verified,
+        "store": kernel.DecisionStore(),
+    }
+    arguments.update(overrides)
+    return am.materialize_candidate(_atom(), _cell(), **arguments)
 
 
-def test_exhausted_repair_ships_flagged_best_candidate_not_nothing():
-    def rejecting_critic(system, user):
-        import json
+def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
+    seen = {}
 
-        payload = json.loads(user)
-        return {"verdict": "reject",
-                "proposal_sha256": payload["proposal_sha256"],
-                "feedback": ["the distractors are not same-family"]}
+    def provider(request):
+        seen.update(copy.deepcopy(request))
+        return _objective_response(request)
 
-    author_prompts = []
+    candidate = _materialize(provider=provider)
 
-    def author(system, user):
-        author_prompts.append(user)
-        return _good_proposal()
-
-    candidate = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=author, critic_call=rejecting_critic,
-        max_attempts=3, use_cache=False,
-    )
-    assert candidate["assessment_eligibility"] == "flagged"
-    # The best evidence-bound proposal ships; nothing disappears.
-    assert candidate["question"] == _good_proposal()["question"]
+    assert seen["stage"] == "assessment.materialize"
+    assert seen["source_atom"] == _atom()
+    assert seen["blueprint_cell"] == _cell()
+    assert seen["curricular_evidence"] == {
+        "chapter": "complete curricular context"
+    }
+    assert candidate["question_text"] == candidate["question"]
+    assert candidate["assets"] == _atom()["assets"]
     assert candidate["source_evidence"] == _atom()["raw_text"]
-    # The critic's evidence-bound feedback reached the next author round.
-    assert "not same-family" in author_prompts[1]
-    assert len(author_prompts) == 3
+    assert candidate["source_qid"] == _atom()["source_qid"]
+    assert candidate["source_document_hash"] == _atom()[
+        "source_document_hash"
+    ]
+    assert candidate["source_kind"] == _atom()["source_kind"]
+    assert candidate["shared_context"] == _atom()["shared_context"]
+    assert candidate["route_evidence"] == _atom()["route_evidence"]
+    assert candidate["source_context"]["source_answer"] == "Cone"
+    assert candidate["source_context"]["normalized_public_text"] == (
+        "Name the solid shown."
+    )
+    assert candidate["assessment_eligibility"] == "accepted"
+    audit = candidate["_aegis_assessment_materialization"]
+    assert audit["rationale"] == _objective_response(seen)["rationale"]
+    assert audit["flags"] == []
+    assert audit["authority"]["decision_key"]
+    assert audit["authority"]["policy_version"] == (
+        "assessment-materialize-1"
+    )
+    assert "created_at" not in audit["authority"]
+    assert "provider" not in audit["authority"]
 
 
-def test_provider_failure_is_never_acceptance():
-    def broken_author(system, user):
+def test_objective_open_is_mechanically_valid_and_never_defaulted():
+    candidate = _materialize(
+        provider=lambda request: _objective_response(
+            request,
+            answer_restriction="Open",
+            restriction_reason="Different valid representations earn credit.",
+        )
+    )
+
+    assert candidate["answer_restriction"] == "Open"
+    assert candidate["assessment_eligibility"] == "accepted"
+    assert "question_display" not in am.MATERIALIZE_SYSTEM
+    assert "always Specific" not in am.MATERIALIZE_SYSTEM
+
+
+def test_mechanical_defects_receive_one_bounded_correction_sequence():
+    calls = []
+
+    def provider(request):
+        calls.append(copy.deepcopy(request))
+        response = _objective_response(request)
+        if len(calls) == 1:
+            response["answers"][1]["correct_answer"] = "Yes"
+        return response
+
+    candidate = _materialize(provider=provider)
+
+    assert candidate["assessment_eligibility"] == "accepted"
+    assert len(calls) == 2
+    assert any(
+        "exactly one correct option" in defect
+        for defect in calls[1]["response_contract_feedback"]
+    )
+
+
+def test_critic_dissent_is_advisory_and_never_retries_authorship():
+    provider_calls = []
+    critic_calls = []
+
+    def provider(request):
+        provider_calls.append(copy.deepcopy(request))
+        return _objective_response(request)
+
+    def critic(request):
+        critic_calls.append(copy.deepcopy(request))
+        return {
+            "verdict": "dissent",
+            "confidence": 1.0,
+            "issues": ["The distractor family deserves human review."],
+        }
+
+    candidate = _materialize(provider=provider, critic=critic)
+
+    assert len(provider_calls) == len(critic_calls) == 1
+    assert critic_calls[0]["proposed_decision"] == _objective_response(
+        provider_calls[0]
+    )
+    assert candidate["assessment_eligibility"] == "flagged"
+    assert candidate["question"] == _objective_response(
+        provider_calls[0]
+    )["question"]
+    assert any("dissent" in flag for flag in candidate["flags"])
+    assert candidate["_aegis_assessment_materialization"]["flags"] == (
+        candidate["flags"]
+    )
+
+
+def test_fixer_corrects_a_block_once_and_the_intervention_is_flagged():
+    provider_calls = []
+    fixer_calls = []
+
+    def malformed(request):
+        provider_calls.append(copy.deepcopy(request))
+        return {"candidate_id": request["candidate_id"]}
+
+    def fixer(request):
+        fixer_calls.append(copy.deepcopy(request))
+        return _objective_response(request["original_payload"])
+
+    candidate = _materialize(provider=malformed, fixer=fixer)
+
+    assert len(provider_calls) == 3
+    assert len(fixer_calls) == 1
+    assert candidate["question_text"] == candidate["question"]
+    assert candidate["assessment_eligibility"] == "flagged"
+    authority = candidate["_aegis_assessment_materialization"]["authority"]
+    assert authority["fixer"] is True
+    assert any(flag.startswith("fixer:") for flag in candidate["flags"])
+
+
+def test_marking_arithmetic_never_ships_when_fixer_cannot_correct_it():
+    def wrong_weight(request):
+        response = _objective_response(request.get("original_payload", request))
+        response["answers"][0]["answer_weightage"] = "3"
+        return response
+
+    with pytest.raises(kernel.ContractError, match="weightage"):
+        _materialize(provider=wrong_weight, critic=None, fixer=wrong_weight)
+
+
+def test_malformed_numeric_marking_fields_are_mechanical_defects():
+    objective_cell = _cell()
+    objective_id = am._candidate_id(_atom(), objective_cell)
+    objective = _objective_response({"candidate_id": objective_id})
+    objective["answers"][1]["answer_weightage"] = "not-a-number"
+    assert "wrong option weightage must be zero" in am._proposal_defects(
+        objective, objective_cell, objective_id,
+    )
+
+    descriptive_cell = _cell(
+        sheet_kind="descriptive", question_category="Long Answer", marks=5.0,
+    )
+    descriptive_id = am._candidate_id(_atom(), descriptive_cell)
+    descriptive = _descriptive_response({"candidate_id": descriptive_id})
+    descriptive["answers"][0]["answer_weightage"] = "NaN"
+    descriptive["sub_questions"] = [{
+        "text": "Explain one stage.",
+        "marks": "infinite",
+        "keywords": [],
+    }]
+    defects = am._proposal_defects(
+        descriptive, descriptive_cell, descriptive_id,
+    )
+    assert "answer 1 weightage must be finite and numeric" in defects
+    assert "subquestion 1 marks must be finite and numeric" in defects
+
+
+def test_malformed_numeric_marking_reaches_the_fixer():
+    provider_calls = []
+    fixer_calls = []
+
+    def malformed(request):
+        provider_calls.append(copy.deepcopy(request))
+        response = _objective_response(request)
+        response["answers"][1]["answer_weightage"] = "not-a-number"
+        return response
+
+    def fixer(request):
+        fixer_calls.append(copy.deepcopy(request))
+        return _objective_response(request["original_payload"])
+
+    candidate = _materialize(provider=malformed, fixer=fixer)
+
+    assert len(provider_calls) == kernel.MAX_ATTEMPTS
+    assert len(fixer_calls) == 1
+    assert candidate["_aegis_assessment_materialization"]["authority"][
+        "fixer"
+    ] is True
+
+
+@pytest.mark.parametrize("marks", [float("nan"), float("inf"), "-Infinity"])
+def test_nonfinite_cell_marks_are_rejected_before_provider_spend(marks):
+    calls = []
+
+    def provider(request):
+        calls.append(request)
+        return _objective_response(request)
+
+    with pytest.raises(am.MaterializationError, match="marks"):
+        am.materialize_candidate(
+            _atom(),
+            _cell(marks=marks),
+            meta=META,
+            context={"chapter": "complete curricular context"},
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=provider,
+            store=kernel.DecisionStore(),
+        )
+    assert calls == []
+
+
+def test_provider_outage_is_genuine_impossibility_not_an_empty_candidate():
+    def unavailable(_request):
         raise RuntimeError("provider down")
 
-    candidate = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=broken_author, critic_call=_accepting_critic,
-        use_cache=False,
+    with pytest.raises(RuntimeError, match="provider down"):
+        _materialize(provider=unavailable, critic=None)
+
+
+def test_decide_once_replays_without_any_provider_critic_or_fixer_call():
+    store = kernel.DecisionStore()
+    calls = {"provider": 0, "critic": 0}
+
+    def provider(request):
+        calls["provider"] += 1
+        return _objective_response(request)
+
+    def critic(request):
+        calls["critic"] += 1
+        return _verified(request)
+
+    first = _materialize(provider=provider, critic=critic, store=store)
+
+    def forbidden(_request):
+        raise AssertionError("cached replay spent another provider call")
+
+    second = _materialize(
+        provider=forbidden,
+        critic=forbidden,
+        fixer=forbidden,
+        store=store,
     )
-    assert candidate["assessment_eligibility"] == "flagged"
-    assert candidate["question"] == ""
-    assert candidate["source_evidence"] == _atom()["raw_text"]
-    assert any("author_error" in flag for flag in candidate["flags"])
 
-
-# --------------------------------------------------------------------------- #
-# Cache (spec §15)
-# --------------------------------------------------------------------------- #
-
-def test_cache_reuses_only_integrity_checked_accepted_candidates():
-    calls = {"author": 0}
-
-    def author(system, user):
-        calls["author"] += 1
-        return _good_proposal()
-
-    first = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=author, critic_call=_accepting_critic)
-    second = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=author, critic_call=_accepting_critic)
-    assert calls["author"] == 1
     assert second == first
-
-    # A different blueprint cell is a different identity: no reuse.
-    am.materialize_candidate(
-        _atom(), _cell(cell_id="CELL-other", difficulty="High"), meta=META,
-        author_call=author, critic_call=_accepting_critic)
-    assert calls["author"] == 2
+    assert calls == {"provider": 1, "critic": 1}
+    assert len(store.keys()) == 1
 
 
-def test_corrupt_cache_record_is_rejected():
-    identity = am.cache_identity(_atom(), _cell(), META)
-    candidate = am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=lambda s, u: _good_proposal(),
-        critic_call=_accepting_critic)
-    assert am.load_cached_candidate(identity) is not None
-    path = am._cache_path(am._cache_key(identity))
-    tampered = path.read_text(encoding="utf-8").replace(
-        candidate["question"], "tampered wording")
-    path.write_text(tampered, encoding="utf-8")
-    am.reset_cache()
-    assert am.load_cached_candidate(identity) is None
+def test_changed_curricular_context_rekeys_the_decision():
+    store = kernel.DecisionStore()
+    contexts = []
+
+    def provider(request):
+        contexts.append(copy.deepcopy(request["curricular_evidence"]))
+        return _objective_response(request)
+
+    _materialize(provider=provider, critic=None, store=store, context="first")
+    _materialize(provider=provider, critic=None, store=store, context="second")
+
+    assert contexts == ["first", "second"]
+    assert len(store.keys()) == 2
 
 
-def test_flagged_candidates_are_never_cached():
-    identity = am.cache_identity(_atom(), _cell(), META)
-    am.materialize_candidate(
-        _atom(), _cell(), meta=META,
-        author_call=lambda s, u: (_ for _ in ()).throw(RuntimeError("down")),
-        critic_call=_accepting_critic)
-    assert am.load_cached_candidate(identity) is None
-
-
-# --------------------------------------------------------------------------- #
-# Zero-loss batch driver
-# --------------------------------------------------------------------------- #
-
-def test_every_obligation_yields_a_candidate():
+def test_batch_preserves_order_and_rejects_duplicate_candidate_identity(
+    monkeypatch,
+):
+    monkeypatch.setattr(am.config, "phase3_decision_workers", lambda: 4)
     pairs = [
-        (_atom(), _cell()),
-        (_atom(source_qid="QINV-0004", raw_text="Define a chord."),
-         _cell(cell_id="CELL-def456")),
+        (
+            _atom(source_qid=f"QINV-{index:04d}"),
+            _cell(cell_id=f"CELL-{index:04d}"),
+        )
+        for index in range(1, 4)
     ]
-    proposals = iter([_good_proposal()])
-
-    def flaky_author(system, user):
-        try:
-            return next(proposals)
-        except StopIteration:
-            raise RuntimeError("provider down")
 
     result = am.materialize_candidates(
-        pairs, meta=META,
-        author_call=flaky_author, critic_call=_accepting_critic,
-        use_cache=False,
+        pairs,
+        meta=META,
+        context={"chapter": "complete"},
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=_objective_response,
+        critic=_verified,
+        store=kernel.DecisionStore(),
     )
-    assert len(result["candidates"]) == 2
-    assert result["accepted"] == 1
-    assert result["flagged"] == 1
+
+    expected = [am._candidate_id(atom, cell) for atom, cell in pairs]
+    assert [row["candidate_id"] for row in result["candidates"]] == expected
+    assert result["accepted"] == 3
+    assert result["flagged"] == 0
     assert result["zero_loss"]["holds"]
+
+    calls = []
+
+    def should_not_run(request):
+        calls.append(request)
+        return _objective_response(request)
+
+    with pytest.raises(am.MaterializationError, match="repeat candidate_id"):
+        am.materialize_candidates(
+            [pairs[0], pairs[0]],
+            meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=should_not_run,
+        )
+    assert calls == []
+
+
+def test_nested_rich_text_and_descriptive_arithmetic_are_mechanical():
+    cell = _cell(
+        sheet_kind="descriptive", question_category="Long Answer", marks=5.0,
+    )
+    candidate_id = am._candidate_id(_atom(), cell)
+    request = {"candidate_id": candidate_id}
+    malformed = _descriptive_response(
+        request,
+        sub_questions=[{
+            "text": "Explain [Katex]x",
+            "marks": "4",
+            "keywords": [{
+                "answer_type": "Phrases",
+                "weightage": "4",
+                "keyword": "[Katex]y",
+            }],
+        }],
+    )
+
+    defects = am._proposal_defects(malformed, cell, candidate_id)
+
+    assert any("subquestion marks sum 4 != parent marks 5" in row for row in defects)
+    assert any(row.startswith("rich-text:") for row in defects)
+
+
+def test_malformed_nested_collections_report_defects_without_crashing():
+    cell = _cell()
+    candidate_id = am._candidate_id(_atom(), cell)
+    malformed = _objective_response({"candidate_id": candidate_id})
+    malformed["answers"] = 7
+    malformed["sub_questions"] = {"not": "an array"}
+
+    defects = am._proposal_defects(malformed, cell, candidate_id)
+
+    assert "answers must be an array" in defects
+    assert "sub_questions must be an array" in defects
+
+
+def test_bespoke_materialization_cache_and_retry_lane_are_retired():
+    assert not hasattr(am, "cache_identity")
+    assert not hasattr(am, "load_cached_candidate")
+    assert not hasattr(am, "store_cached_candidate")
+    assert not hasattr(am, "reset_cache")
+    assert not hasattr(am, "MAX_ATTEMPTS")

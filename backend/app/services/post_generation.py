@@ -14,6 +14,8 @@ The MES grouping engine (``assessment_grouping.py``) owns those verdicts.
 """
 from __future__ import annotations
 
+import math
+
 from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
@@ -33,12 +35,16 @@ def assessment_tagging(db: Session, questions: list[models.Question]) -> dict:
     for q in questions:
         touched_groups[q.group_id] = q.group
 
+    missing_keys = [
+        group.id for group in touched_groups.values()
+        if not str(group.group_key or "").strip()
+    ]
+    if missing_keys:
+        raise ValueError(
+            "post-generation requires recorded group_key identity; missing "
+            f"for group ids {missing_keys!r}"
+        )
     for group in touched_groups.values():
-        # Some legacy rows predate the dedicated identity column.  Preserve
-        # their existing placement identity before Q12 replaces the visible
-        # field; later calls then replay against the same internal key.
-        if not str(group.group_key or "").strip():
-            group.group_key = str(group.group_name or "")
         visible_name = assessment_grouping.friendly_group_name(
             group.concept.concept_display_name, group.group_type)
         group.group_name = visible_name
@@ -48,7 +54,41 @@ def assessment_tagging(db: Session, questions: list[models.Question]) -> dict:
 
 
 def column_mapping(db: Session, questions: list[models.Question]) -> int:
-    """Step 3: fill remaining canonical columns with consistent defaults."""
+    """Step 3: fill mechanical columns without inventing semantic values."""
+
+    # Cognitive skill and difficulty are authored upstream.  Missing values are
+    # a broken semantic hand-off, not blank cells this compatibility renderer
+    # may repair locally.  Validate the complete batch before mutating anything.
+    for question in questions:
+        if not bi.normalize_cognitive_skills(question.cognitive_skills):
+            raise ValueError(
+                f"question {question.question_label or question.id!r} has no "
+                "recorded cognitive-skill verdict"
+            )
+        if not str(question.level_of_difficulty or "").strip():
+            raise ValueError(
+                f"question {question.question_label or question.id!r} has no "
+                "recorded difficulty verdict"
+            )
+        try:
+            duration = float(question.question_duration)
+        except (TypeError, ValueError):
+            duration = float("nan")
+        if not math.isfinite(duration) or duration <= 0:
+            raise ValueError(
+                f"question {question.question_label or question.id!r} has no "
+                "recorded finite positive duration"
+            )
+        keyboard = str(question.math_keyboard or "").strip()
+        if (
+            question.sheet_kind in {"subjective", "descriptive"}
+            and keyboard not in {"Yes", "No"}
+        ):
+            raise ValueError(
+                f"question {question.question_label or question.id!r} has no "
+                "recorded Yes/No math-keyboard verdict"
+            )
+
     filled = 0
     for q in questions:
         changed = False
@@ -59,24 +99,14 @@ def column_mapping(db: Session, questions: list[models.Question]) -> int:
         if appears != q.question_appears_in:
             q.question_appears_in = appears
             changed = True
-        if not q.question_duration:
-            q.question_duration = max(q.marks, 1.0)
-            changed = True
-        skills = bi.normalize_cognitive_skills(q.cognitive_skills) or "Understand"
+        skills = bi.normalize_cognitive_skills(q.cognitive_skills)
         if skills != q.cognitive_skills:
             q.cognitive_skills = skills
-            changed = True
-        if not q.level_of_difficulty:
-            q.level_of_difficulty = "Moderate"
             changed = True
         # question_text: never blank when the question has content; backfill
         # with the plain-text question (the AI evaluator's context field).
         if not q.question_text and q.question:
             q.question_text = bi.to_plain_text(q.question)
-            changed = True
-        if q.sheet_kind in {"subjective", "descriptive"} and not q.math_keyboard:
-            q.math_keyboard = "Yes" if q.group.concept.topic.chapter.subject in {
-                "Mathematics", "Physics", "Chemistry"} else "No"
             changed = True
         filled += int(changed)
     db.commit()

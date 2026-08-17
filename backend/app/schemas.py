@@ -60,10 +60,10 @@ class CreateSessionRequest(BaseModel):
 
 
 class BlueprintBatchRequest(BaseModel):
-    cognitive_skills: list[str] = Field(default_factory=list)
-    difficulty_levels: list[str] = Field(default_factory=list)
-    categories: list[str] = Field(default_factory=list)
-    question_type: str = "objective"
+    cognitive_skills: list[str]
+    difficulty_levels: list[str]
+    categories: list[str]
+    question_type: str
     num_questions: int = 1
     appears_in: list[str] = Field(default_factory=list)
 

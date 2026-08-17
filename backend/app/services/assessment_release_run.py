@@ -21,71 +21,51 @@ chain.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
 from .. import models
+from . import assessment_blueprint
+from . import assessment_cells as cell_decisions
 from . import assessment_grouping as grouping
 from . import assessment_materialization as materialization
 from . import assessment_quality as quality
 from . import assessment_release as rel
+from . import assessment_release_snapshot as release_snapshot
 from . import assessment_release_service as release_service
 from . import assessment_routing as routing
 from . import assessment_source_inventory as source_inventory
 from . import assessment_profile
-from . import concept_refiner as cr
+from . import build_concepts_release
 from . import progress, uploads
 from .phase3 import envelope as phase3_envelope
 from .phase3 import kernel
 
-MAX_ATTEMPTS = 3
-
+_CELL_AUDIT_FIELD = "_aegis_assessment_cell_verdict"
+_MATERIALIZATION_AUDIT_FIELD = "_aegis_assessment_materialization"
+_ROUTE_AUDIT_FIELD = "_aegis_assessment_route"
 _LEVEL_AUDIT_FIELD = "_aegis_assessment_level_verdict"
 _CLUSTER_AUDIT_FIELD = "_aegis_assessment_variant_cluster"
 _DESCRIPTION_AUDIT_FIELD = "_aegis_assessment_group_description"
 _QUALITY_AUDIT_FIELD = "_aegis_assessment_group_quality"
 
+_CELL_WARNING = "assessment_cell_review"
+_MATERIALIZATION_WARNING = "assessment_materialization_review"
+_ROUTE_WARNING = "assessment_route_review"
 _LEVEL_WARNING = "assessment_level_review"
 _CLUSTER_WARNING = "assessment_variant_cluster_review"
 _DESCRIPTION_WARNING = "assessment_group_description_review"
 _QUALITY_WARNING = "assessment_group_quality_review"
 
+_CELLS_SNAPSHOT = "source.phase3-assessment-cells.json"
+_MATERIALIZATIONS_SNAPSHOT = "source.phase3-assessment-materializations.json"
+_ROUTES_SNAPSHOT = "source.phase3-assessment-routes.json"
 _LEVELS_SNAPSHOT = "source.phase3-assessment-levels.json"
 _GROUPS_SNAPSHOT = "source.phase3-assessment-groups.json"
-
-CELL_AUTHOR_SYSTEM = (
-    "You are the Aegis assessment-cell classifier. For ONE source task from "
-    "a textbook chapter, decide the blueprint cell it should fulfill when "
-    "reused as an assessment item: sheet kind, question category, cognitive "
-    "skill (Bloom), difficulty, and marks. Judge from the task's own text, "
-    "its answer evidence, and its source kind — never from its length, its "
-    "position, or its neighbours.\n"
-    "sheet_kind: objective (one closed correct choice/token) or descriptive "
-    "(constructed response). cognitive_skill: one of Remember, Understand, "
-    "Apply, Analyse, Evaluate, Create. difficulty: Less, Moderate, or High "
-    "— Bloom and difficulty are independent. marks: a realistic positive "
-    "integer for this grade.\n"
-    "Return ONLY strict JSON:\n"
-    '{"sheet_kind":"","question_category":"","cognitive_skill":"",'
-    '"difficulty":"","marks":1,"reason":""}'
-)
-
-CELL_CRITIC_SYSTEM = (
-    "You are the independent Aegis cell-classification critic. You are "
-    "READ-ONLY. Verify one proposed blueprint-cell classification against "
-    "the source task: reject a sheet kind, category, Bloom, difficulty, or "
-    "marks value the task itself does not support.\n"
-    "Return ONLY strict JSON:\n"
-    '{"verdict":"accept","proposal_sha256":"","feedback":[]} or '
-    '{"verdict":"reject","proposal_sha256":"","feedback":["evidence-bound '
-    'reason ..."]}\n'
-    "proposal_sha256 MUST echo the exact hash you were given."
-)
 
 
 class ReleaseRunError(ValueError):
@@ -215,15 +195,23 @@ def _decision_context(
     )
 
 
-def _concept_evidence(concept: models.Concept) -> dict[str, Any]:
-    concept_key = f"db:{concept.id}"
+def _concept_evidence(concept: Mapping[str, Any]) -> dict[str, Any]:
+    concept_key = str(concept.get("concept_key") or "")
     return {
         "concept_key": concept_key,
         "concept_id": concept_key,
         "concept_machine_id": _label_base(concept),
-        "concept_title": str(concept.concept_title or ""),
-        "concept_display_name": str(concept.concept_display_name or ""),
-        "teaching_description": str(concept.concept_details or ""),
+        "concept_title": str(concept.get("concept_title") or ""),
+        "concept_display_name": str(
+            concept.get("concept_display_name") or ""
+        ),
+        "teaching_description": str(
+            concept.get("teaching_description")
+            or concept.get("concept_details")
+            or ""
+        ),
+        "parent_concept": str(concept.get("parent_concept") or ""),
+        "keywords": str(concept.get("keywords") or ""),
     }
 
 
@@ -364,173 +352,205 @@ def _snapshot_groups(
     )
 
 
-# --------------------------------------------------------------------------- #
-# Stage: cell classification (sheet kind/category/Bloom/difficulty/marks
-# are semantic when no explicit blueprint fixes them — spec §4)
-# --------------------------------------------------------------------------- #
-
-def _cell_defects(proposal: Mapping, profile: Mapping) -> list[str]:
-    defects: list[str] = []
-    allowed_kinds = (
-        rel.SHEET_KINDS if not profile["allow_subjective_rows"]
-        else ("objective", "subjective", "descriptive"))
-    if proposal.get("sheet_kind") not in allowed_kinds:
-        defects.append(
-            f"sheet_kind must be one of {allowed_kinds} "
-            f"(got {proposal.get('sheet_kind')!r})")
-    if not str(proposal.get("question_category") or "").strip():
-        defects.append("missing question_category")
-    if proposal.get("cognitive_skill") not in bi.COGNITIVE_SKILLS:
-        defects.append(
-            f"cognitive_skill must be one of {bi.COGNITIVE_SKILLS} "
-            f"(got {proposal.get('cognitive_skill')!r})")
-    if proposal.get("difficulty") not in bi.DIFFICULTY_LEVELS:
-        defects.append(
-            f"difficulty must be one of {bi.DIFFICULTY_LEVELS} "
-            f"(got {proposal.get('difficulty')!r})")
-    try:
-        if float(proposal.get("marks") or 0) <= 0:
-            defects.append("marks must be positive")
-    except (TypeError, ValueError):
-        defects.append("marks not numeric")
-    return defects
-
-
-def author_cell_for_atom(
-    atom: Mapping,
+def _snapshot_cells(
+    directory: Path | None,
     *,
-    meta: Mapping,
-    profile: Mapping,
-    author_call: Callable[..., dict] | None = None,
-    critic_call: Callable[..., dict] | None = None,
-    max_attempts: int = MAX_ATTEMPTS,
-) -> dict:
-    """One source atom -> one reuse blueprint cell, classified or flagged."""
-    if author_call is None or critic_call is None:
-        from . import generation
-
-        def _default_author(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_mapping")
-
-        def _default_critic(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_validation")
-
-        author_call = author_call or _default_author
-        critic_call = critic_call or _default_critic
-
-    payload = {
-        "metadata": dict(meta),
-        "source_atom": {
-            "source_qid": atom.get("source_qid"),
-            "source_kind": atom.get("source_kind"),
-            "raw_text": atom.get("raw_text"),
-            "normalized_public_text": atom.get("normalized_public_text"),
-            "options": atom.get("options"),
-            "source_answer": atom.get("source_answer"),
-            "shared_context": atom.get("shared_context"),
+    envelope_sha256: str,
+    cells: list[Mapping],
+) -> None:
+    rows = [
+        {
+            "cell_id": str(cell.get("cell_id") or ""),
+            "accepted_source_qids": list(
+                cell.get("accepted_source_qids") or []
+            ),
+            "sheet_kind": str(cell.get("sheet_kind") or ""),
+            "question_category": str(
+                cell.get("question_category") or ""
+            ),
+            "cognitive_skill": str(cell.get("cognitive_skill") or ""),
+            "difficulty": str(cell.get("difficulty") or ""),
+            "marks": cell.get("marks"),
+            "flags": list(cell.get("flags") or []),
+            "audit": dict(cell.get(_CELL_AUDIT_FIELD) or {}),
+        }
+        for cell in cells
+    ]
+    _write_snapshot(
+        directory,
+        _CELLS_SNAPSHOT,
+        {
+            "envelope_sha256": envelope_sha256,
+            "cells": rows,
+            "cells_sha256": rel.sha256_json(rows),
         },
-    }
-    attempts: list[dict] = []
-    feedback: list[str] = []
-    best: Mapping | None = None
-    for attempt in range(1, max(1, max_attempts) + 1):
-        user = json.dumps(payload, ensure_ascii=False)
-        if feedback:
-            user += (
-                "\n\nYOUR PREVIOUS CLASSIFICATION WAS REJECTED. Address "
-                "every item, then return a fresh classification:\n- "
-                + "\n- ".join(feedback)
-            )
-        try:
-            proposal = author_call(CELL_AUTHOR_SYSTEM, user)
-        except Exception as exc:  # noqa: BLE001 — never exception->acceptance
-            attempts.append({"attempt": attempt, "outcome": "author_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        proposal = proposal if isinstance(proposal, Mapping) else {}
-        best = proposal
-        defects = _cell_defects(proposal, profile)
-        if defects:
-            attempts.append({"attempt": attempt, "outcome": "mechanical",
-                             "defects": defects})
-            feedback = defects
-            continue
-        sha = rel.sha256_json(dict(proposal))
-        try:
-            review = critic_call(
-                CELL_CRITIC_SYSTEM,
-                json.dumps({
-                    "proposal": dict(proposal),
-                    "proposal_sha256": sha,
-                    "source_atom": payload["source_atom"],
-                }, ensure_ascii=False))
-        except Exception as exc:  # noqa: BLE001
-            attempts.append({"attempt": attempt, "outcome": "critic_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        review = review if isinstance(review, Mapping) else {}
-        if str(review.get("proposal_sha256") or "") != sha:
-            attempts.append({"attempt": attempt, "outcome": "critic_unbound"})
-            feedback = ["the critic review did not bind to the proposal"]
-            continue
-        if str(review.get("verdict") or "").strip().lower() == "accept":
-            return {
-                "cell_id": "CELL-" + hashlib.sha256(
-                    f"reuse|{atom.get('source_qid')}|{sha}"
-                    .encode("utf-8")).hexdigest()[:16],
-                "sheet_kind": proposal["sheet_kind"],
-                "question_category": proposal["question_category"],
-                "cognitive_skill": proposal["cognitive_skill"],
-                "difficulty": proposal["difficulty"],
-                "marks": float(proposal["marks"]),
-                "count": 1,
-                "appears_in": [profile["appears_in"]],
-                "concept_id": None,
-                "source_policy": "reuse",
-                "accepted_source_qids": [str(atom.get("source_qid") or "")],
-                "flags": [],
-                "authority": {
-                    "proposal_sha256": sha,
-                    "critic_response_sha256": rel.sha256_json(dict(review)),
-                    "attempts": attempts + [
-                        {"attempt": attempt, "outcome": "accepted"}],
-                },
-            }
-        review_feedback = [
-            str(f) for f in review.get("feedback") or [] if str(f).strip()]
-        attempts.append({"attempt": attempt, "outcome": "critic_rejected",
-                         "feedback": review_feedback})
-        feedback = review_feedback or ["rejected without usable feedback"]
+    )
 
-    best = best or {}
-    return {
-        "cell_id": "CELL-" + hashlib.sha256(
-            f"reuse|{atom.get('source_qid')}|unresolved"
-            .encode("utf-8")).hexdigest()[:16],
-        "sheet_kind": str(best.get("sheet_kind") or ""),
-        "question_category": str(best.get("question_category") or ""),
-        "cognitive_skill": str(best.get("cognitive_skill") or ""),
-        "difficulty": str(best.get("difficulty") or ""),
-        "marks": best.get("marks"),
-        "count": 1,
-        "appears_in": [profile["appears_in"]],
-        "concept_id": None,
-        "source_policy": "reuse",
-        "accepted_source_qids": [str(atom.get("source_qid") or "")],
-        "flags": ["unresolved_cell_classification"],
-        "authority": {"attempts": attempts},
-    }
+
+def _snapshot_materializations(
+    directory: Path | None,
+    *,
+    envelope_sha256: str,
+    candidates: list[Mapping],
+) -> None:
+    rows = [
+        {
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "source_atom_ids": list(candidate.get("source_atom_ids") or []),
+            "blueprint_cell_id": str(
+                candidate.get("blueprint_cell_id") or ""
+            ),
+            "flags": list(candidate.get("flags") or []),
+            "audit": dict(
+                candidate.get(_MATERIALIZATION_AUDIT_FIELD) or {}
+            ),
+        }
+        for candidate in candidates
+    ]
+    _write_snapshot(
+        directory,
+        _MATERIALIZATIONS_SNAPSHOT,
+        {
+            "envelope_sha256": envelope_sha256,
+            "materializations": rows,
+            "materializations_sha256": rel.sha256_json(rows),
+        },
+    )
+
+
+def _snapshot_routes(
+    directory: Path | None,
+    *,
+    envelope_sha256: str,
+    source_concept_release_sha256: str,
+    placements: list[Mapping],
+) -> None:
+    rows = [
+        {
+            "candidate_id": str(placement.get("candidate_id") or ""),
+            "concept_key": placement.get("concept_key"),
+            "basis": str(placement.get("basis") or ""),
+            "evidence": str(placement.get("evidence") or ""),
+            "rationale": str(placement.get("rationale") or ""),
+            "flags": list(placement.get("flags") or []),
+            "authority": dict(placement.get("authority") or {}),
+        }
+        for placement in placements
+    ]
+    _write_snapshot(
+        directory,
+        _ROUTES_SNAPSHOT,
+        {
+            "envelope_sha256": envelope_sha256,
+            "source_concept_release_sha256": (
+                source_concept_release_sha256
+            ),
+            "placements": rows,
+            "placements_sha256": rel.sha256_json(rows),
+        },
+    )
+
+
+def _bind_explicit_cells(
+    atoms: list[Mapping],
+    blueprint_cells: list[Mapping],
+    *,
+    profile: Mapping,
+    concept_keys: set[str],
+) -> list[dict]:
+    """Mechanically bind an explicit one-to-one blueprint without spend."""
+
+    if len(blueprint_cells) != len(atoms):
+        raise ReleaseRunError(
+            f"blueprint provides {len(blueprint_cells)} cells for "
+            f"{len(atoms)} source atoms; reuse cells pair one-to-one"
+        )
+    cells = [dict(cell) for cell in blueprint_cells]
+    assessment_blueprint.validate_cells(
+        cells,
+        strict_profile=True,
+    )
+    # Slice 3 cannot widen the existing Output-02 wire.  A future profile may
+    # support Subjective only when materialization and publication do too.
+    allowed_kinds = tuple(rel.SHEET_KINDS)
+    defects: list[str] = []
+    appears_in = str(profile.get("appears_in") or "").strip()
+    if not appears_in:
+        defects.append("assessment profile has no appears_in value")
+    for position, (atom, cell) in enumerate(zip(atoms, cells), start=1):
+        cell_id = str(cell.get("cell_id") or "")
+        source_qid = str(atom.get("source_qid") or "")
+        if int(cell.get("count") or 0) != 1:
+            defects.append(f"{cell_id}: reuse count must equal 1")
+        if cell.get("sheet_kind") not in allowed_kinds:
+            defects.append(
+                f"{cell_id}: sheet_kind is not allowed by the profile"
+            )
+        if not str(cell.get("question_category") or "").strip():
+            defects.append(f"{cell_id}: missing question_category")
+        if cell.get("cognitive_skill") not in bi.COGNITIVE_SKILLS:
+            defects.append(f"{cell_id}: unknown cognitive_skill")
+        if cell.get("difficulty") not in bi.DIFFICULTY_LEVELS:
+            defects.append(f"{cell_id}: unknown difficulty")
+        accepted = [
+            str(value) for value in cell.get("accepted_source_qids") or []
+            if str(value).strip()
+        ]
+        if accepted and accepted != [source_qid]:
+            defects.append(
+                f"{cell_id}: source binding must be exactly {source_qid!r}"
+            )
+        cell["accepted_source_qids"] = [source_qid]
+        cell["appears_in"] = [appears_in]
+        constraint = cell.get("concept_key")
+        if constraint is None:
+            constraint = cell.get("concept_id")
+        if constraint is not None:
+            if not isinstance(constraint, str) or constraint not in concept_keys:
+                defects.append(
+                    f"{cell_id}: concept constraint must name one staged "
+                    "release concept key"
+                )
+            else:
+                cell["concept_key"] = constraint
+        authority = {
+            "decision_key": "",
+            "policy_version": cell_decisions.CELL_POLICY_VERSION,
+            "review_flags": [],
+            "mechanical_basis": "explicit_blueprint",
+        }
+        cell["source_policy"] = "reuse"
+        cell["flags"] = []
+        cell["authority"] = authority
+        cell[_CELL_AUDIT_FIELD] = {
+            "rationale": "explicit validated blueprint cell",
+            "flags": [],
+            "authority": authority,
+        }
+        if position > len(atoms):
+            defects.append(f"{cell_id}: has no source atom")
+    if defects:
+        raise ReleaseRunError(
+            "explicit assessment blueprint failed validation: "
+            + "; ".join(defects[:20])
+        )
+    return cells
 
 
 # --------------------------------------------------------------------------- #
 # Label reservation (spec §8.5): source order, append-only continuation
 # --------------------------------------------------------------------------- #
 
-def _label_base(concept: models.Concept) -> str:
-    match = release_service._TITLE_TAG_RE.search(concept.concept_title or "")
-    return match.group(1).strip() if match else f"C{concept.id}"
+def _label_base(concept: Mapping[str, Any]) -> str:
+    explicit = str(concept.get("concept_machine_id") or "").strip()
+    if explicit:
+        return explicit
+    match = release_service._TITLE_TAG_RE.search(
+        str(concept.get("concept_title") or "")
+    )
+    if match:
+        return match.group(1).strip()
+    raise ReleaseRunError("staged release concept has no machine identity")
 
 
 def _next_label_index(db: Session, base: str) -> int:
@@ -579,17 +599,26 @@ def run_release_for_job(
     profile = assessment_profile.resolve(profile)
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
-    inventory = job.question_inventory or {}
+    staged_release = build_concepts_release.release_payload(job)
+    if staged_release is None:
+        raise ReleaseRunError(
+            "this job has no staged Output-01 concept release; stage the "
+            "concept release before building Output 02"
+        )
+    try:
+        bridge = release_snapshot.build(db, job, staged_release)
+    except release_snapshot.SnapshotError as exc:
+        raise ReleaseRunError(str(exc)) from exc
+    inventory = bridge["question_task_inventory"]
     if not (inventory.get("items") or []):
         raise ReleaseRunError(
-            "this job has no question/task inventory; generate concepts "
-            "before building an assessment release")
-    if job.deposit_scope_type != "chapter" or not job.deposit_scope_ids:
-        raise ReleaseRunError("this job has no chapter deposit scope")
-    chapter_id = int(job.deposit_scope_ids[0])
-    chapter = db.get(models.Chapter, chapter_id)
-    if chapter is None:
-        raise ReleaseRunError("the job's chapter no longer exists")
+            "the staged Output-01 release has no question/task inventory"
+        )
+    chapter_id = int(bridge["snapshot"].get("target_chapter_id") or 0)
+    if not chapter_id:
+        raise ReleaseRunError(
+            "the staged Output-01 release has no target chapter identity"
+        )
 
     envelope_sha, store, snapshot_directory = _decision_context(
         job.id,
@@ -597,81 +626,151 @@ def run_release_for_job(
         decision_store=decision_store,
     )
 
-    meta = {
-        "subject": chapter.subject, "board": chapter.board,
-        "grade": chapter.grade, "chapter_title": chapter.chapter_title,
-    }
+    meta = dict(bridge["metadata"])
+    source_release_sha = str(
+        bridge["source_concept_release_sha256"]
+    )
+    concept_payload = list(bridge["concepts"])
+    concept_records_by_key = dict(bridge["concept_records_by_key"])
+    concept_keys = set(concept_records_by_key)
+    fixer = _authority_pair(authorities, "fixer")[0]
 
     # Stage 1-2 — freeze the lossless source inventory.
     progress.log("Assessment release: freezing the source inventory.")
     built = source_inventory.build_source_atoms(
         inventory,
-        source_document_hash="sha256:" + hashlib.sha256(
-            (job.mmd_text or "").encode("utf-8")).hexdigest(),
+        source_document_hash=str(bridge["source_document_hash"]),
     )
     atoms = built["atoms"]
 
-    # Stage 3 — explicit cells: provided blueprint, or per-atom
-    # classification under the author/critic authority.
+    # Stage 3 — explicit cells are a mechanically validated zero-spend path;
+    # otherwise each source atom receives one cached kernel verdict.
     if blueprint_cells is not None:
-        if len(blueprint_cells) != len(atoms):
-            raise ReleaseRunError(
-                f"blueprint provides {len(blueprint_cells)} cells for "
-                f"{len(atoms)} source atoms; reuse cells pair one-to-one")
-        cells = [dict(cell) for cell in blueprint_cells]
+        cells = _bind_explicit_cells(
+            atoms,
+            blueprint_cells,
+            profile=profile,
+            concept_keys=concept_keys,
+        )
     else:
         progress.log(
             f"Classifying {len(atoms)} source atom(s) into blueprint cells.")
-        author, critic = authorities.get("cells", (None, None))
-        cells = [
-            author_cell_for_atom(
-                atom, meta=meta, profile=profile,
-                author_call=author, critic_call=critic)
-            for atom in atoms
-        ]
+        cell_provider, cell_critic = _authority_pair(authorities, "cells")
+        cells = cell_decisions.decide_cells(
+            atoms,
+            meta=meta,
+            profile=profile,
+            envelope_sha256=envelope_sha,
+            provider=cell_provider,
+            critic=cell_critic,
+            store=store,
+            fixer=fixer,
+        )
+        for cell in cells:
+            cell[_CELL_AUDIT_FIELD] = {
+                "rationale": str(cell.get("rationale") or ""),
+                "flags": list(cell.get("flags") or []),
+                "authority": dict(cell.get("authority") or {}),
+            }
+    _snapshot_cells(
+        snapshot_directory,
+        envelope_sha256=envelope_sha,
+        cells=cells,
+    )
 
     # Stage 4-6 — materialize candidates (zero-loss inside).
     progress.log(f"Materializing {len(atoms)} assessment candidate(s).")
-    author, critic = authorities.get("materialize", (None, None))
+    materialize_provider, materialize_critic = _authority_pair(
+        authorities, "materialize"
+    )
     materialized = materialization.materialize_candidates(
         list(zip(atoms, cells)),
         meta=meta,
-        author_call=author, critic_call=critic,
+        context={
+            "source_concept_release_sha256": source_release_sha,
+            "released_hierarchy": bridge["snapshot"],
+        },
+        envelope_sha256=envelope_sha,
+        provider=materialize_provider,
+        critic=materialize_critic,
+        store=store,
+        fixer=fixer,
     )
     candidates = materialized["candidates"]
+    if len(candidates) != len(atoms) or len(candidates) != len(cells):
+        raise ReleaseRunError(
+            "assessment materialization did not preserve atom/cell cardinality"
+        )
     for candidate, atom, cell in zip(candidates, atoms, cells):
+        if candidate.get("source_atom_ids") != [atom.get("source_qid")] or (
+            str(candidate.get("blueprint_cell_id") or "")
+            != str(cell.get("cell_id") or "")
+        ):
+            raise ReleaseRunError(
+                "assessment materialization changed an obligation identity"
+            )
+        materialization_needs_review = _needs_review(candidate)
         candidate["route_evidence"] = atom.get("route_evidence") or {}
-        if cell.get("flags"):
-            candidate["flags"] = list(candidate.get("flags") or []) + [
-                "cell:" + flag for flag in cell["flags"]]
-
-    # Stage 7 — one home concept per candidate.
-    concepts = sorted(
-        (c for t in chapter.topics for c in t.concepts),
-        key=lambda c: (c.topic.source_order, c.topic_id, c.source_order, c.id),
+        candidate[_CELL_AUDIT_FIELD] = dict(
+            cell.get(_CELL_AUDIT_FIELD) or {}
+        )
+        if cell.get("concept_key"):
+            candidate["blueprint_concept_key"] = str(cell["concept_key"])
+        if _needs_review(cell):
+            _append_warning(candidate, _CELL_WARNING)
+        if materialization_needs_review:
+            _append_warning(candidate, _MATERIALIZATION_WARNING)
+    _snapshot_materializations(
+        snapshot_directory,
+        envelope_sha256=envelope_sha,
+        candidates=candidates,
     )
-    concept_payload = [
-        {
-            "concept_id": concept.id,
-            "concept_title": concept.concept_title,
-            "teaching_description": concept.concept_details,
-            "is_culmination": cr.is_culmination(concept.concept_title or ""),
-        }
-        for concept in concepts
-    ]
+
+    # Stage 7 — route only across the immutable staged Output-01 concepts.
     progress.log(
         f"Routing {len(candidates)} candidate(s) across "
         f"{len(concept_payload)} concept(s).")
-    author, critic = authorities.get("route", (None, None))
+    route_provider, route_critic = _authority_pair(authorities, "route")
     routed = routing.route_candidates(
-        candidates, concept_payload, meta=meta,
-        router_call=author, critic_call=critic,
+        candidates,
+        concept_payload,
+        meta=meta,
+        envelope_sha256=envelope_sha,
+        source_concept_release_sha256=source_release_sha,
+        provider=route_provider,
+        critic=route_critic,
+        store=store,
+        fixer=fixer,
     )
     placements = routed["placements"]
     placement_by_candidate = {
         p["candidate_id"]: p for p in placements
     }
-    concepts_by_id = {c.id: c for c in concepts}
+    if list(placement_by_candidate) != [
+        str(candidate.get("candidate_id") or "") for candidate in candidates
+    ]:
+        raise ReleaseRunError(
+            "assessment routing changed candidate coverage or order"
+        )
+    for candidate in candidates:
+        placement = placement_by_candidate[candidate["candidate_id"]]
+        route_audit = {
+            "concept_key": placement.get("concept_key"),
+            "basis": str(placement.get("basis") or ""),
+            "evidence": str(placement.get("evidence") or ""),
+            "rationale": str(placement.get("rationale") or ""),
+            "flags": list(placement.get("flags") or []),
+            "authority": dict(placement.get("authority") or {}),
+        }
+        candidate[_ROUTE_AUDIT_FIELD] = route_audit
+        if placement.get("flags"):
+            _append_warning(candidate, _ROUTE_WARNING)
+    _snapshot_routes(
+        snapshot_directory,
+        envelope_sha256=envelope_sha,
+        source_concept_release_sha256=source_release_sha,
+        placements=placements,
+    )
 
     # Stage 8 — a recorded level verdict for every valid routed candidate.
     # No blueprint label is executable tier logic. An unresolved home remains
@@ -680,33 +779,23 @@ def run_release_for_job(
     eligible: list[dict] = []
     for candidate in candidates:
         placement = placement_by_candidate.get(candidate["candidate_id"])
-        concept_id = placement.get("concept_id") if placement else None
-        if placement and placement.get("flags"):
-            candidate["flags"] = list(candidate.get("flags") or []) + [
-                "route:" + flag for flag in placement["flags"]]
-        if (
-            concept_id is None
-            or concept_id not in concepts_by_id
-            or placement.get("basis") == "unresolved"
-        ):
+        concept_key = placement.get("concept_key") if placement else None
+        if concept_key is None or concept_key not in concept_records_by_key:
             # An uncertified home is never grouped or labelled: the best
             # evidence-bound route stays visible on the placement record,
             # and the candidate rides the manifest's unplaced ledger,
             # blocking database upload (spec §14).
             continue
-        candidate["concept_key"] = f"db:{concept_id}"
+        candidate["concept_key"] = str(concept_key)
         eligible.append(candidate)
 
     level_provider, level_critic = _authority_pair(authorities, "level")
-    fixer = _authority_pair(authorities, "fixer")[0]
     level_rows = grouping.decide_levels(
         [
             {
                 "candidate": candidate,
                 "concept": _concept_evidence(
-                    concepts_by_id[
-                        int(str(candidate["concept_key"]).removeprefix("db:"))
-                    ]
+                    concept_records_by_key[str(candidate["concept_key"])]
                 ),
             }
             for candidate in eligible
@@ -749,7 +838,7 @@ def run_release_for_job(
             f"duplicates={sorted(duplicate_level_ids)}"
         )
 
-    buckets: dict[tuple[int, str], list[dict]] = {}
+    buckets: dict[tuple[str, str], list[dict]] = {}
     for candidate in eligible:
         candidate_id = str(candidate.get("candidate_id") or "")
         level = level_by_candidate[candidate_id]
@@ -771,8 +860,8 @@ def run_release_for_job(
         }
         if _needs_review(level):
             _append_warning(candidate, _LEVEL_WARNING)
-        concept_id = int(str(candidate["concept_key"]).removeprefix("db:"))
-        buckets.setdefault((concept_id, tier), []).append(candidate)
+        concept_key = str(candidate["concept_key"])
+        buckets.setdefault((concept_key, tier), []).append(candidate)
 
     _assert_learner_text_unchanged(learner_text_before, candidates)
     _snapshot_levels(
@@ -789,11 +878,11 @@ def run_release_for_job(
     tier_order = {tier: index for index, tier in enumerate(grouping.TIER_CODES)}
 
     groups: list[dict] = []
-    for (concept_id, tier), members in sorted(
+    for (concept_key, tier), members in sorted(
         buckets.items(),
         key=lambda item: (item[0][0], tier_order[item[0][1]]),
     ):
-        concept = concepts_by_id[concept_id]
+        concept = concept_records_by_key[concept_key]
         concept_evidence = _concept_evidence(concept)
         clustered = grouping.cluster_tier(
             members,
@@ -820,9 +909,9 @@ def run_release_for_job(
                     f"variant family names unknown candidates: {unknown}"
                 )
             record = grouping.group_record(
-                concept_id=f"db:{concept_id}",
+                concept_id=concept_key,
                 concept_machine_id=machine,
-                concept_name=concept.concept_display_name,
+                concept_name=str(concept.get("concept_display_name") or ""),
                 tier=tier,
                 sequence=sequence,
                 member_candidate_ids=member_ids,
@@ -830,7 +919,7 @@ def run_release_for_job(
                 flags=[],
                 authority=_stable_authority(clustered),
             )
-            record["concept_key"] = f"db:{concept_id}"
+            record["concept_key"] = concept_key
             record[_CLUSTER_AUDIT_FIELD] = {
                 "family": str(family.get("family") or ""),
                 "member_candidate_ids": member_ids,
@@ -901,8 +990,8 @@ def run_release_for_job(
         for candidate in eligible
     }
     for record in groups:
-        concept_id = int(str(record["concept_key"]).removeprefix("db:"))
-        concept = concepts_by_id[concept_id]
+        concept_key = str(record["concept_key"])
+        concept = concept_records_by_key[concept_key]
         family_members = [
             all_members_by_id[str(candidate_id)]
             for candidate_id in record.get("member_candidate_ids") or []
@@ -937,8 +1026,8 @@ def run_release_for_job(
     qa_provider, qa_critic = _authority_pair(authorities, "qa")
     quality_groups = [_group_evidence(group) for group in groups]
     for record in groups:
-        concept_id = int(str(record["concept_key"]).removeprefix("db:"))
-        concept = concepts_by_id[concept_id]
+        concept_key = str(record["concept_key"])
+        concept = concept_records_by_key[concept_key]
         family_members = [
             all_members_by_id[str(candidate_id)]
             for candidate_id in record.get("member_candidate_ids") or []
@@ -997,7 +1086,7 @@ def run_release_for_job(
         concept_key = str(candidate.get("concept_key") or "")
         if not concept_key:
             continue
-        concept = concepts_by_id[int(concept_key.removeprefix("db:"))]
+        concept = concept_records_by_key[concept_key]
         base = _label_base(concept)
         if base not in label_cursor:
             label_cursor[base] = _next_label_index(db, base)
@@ -1005,6 +1094,8 @@ def run_release_for_job(
         label_cursor[base] += 1
 
     payload = {
+        "source_concept_release_sha256": source_release_sha,
+        "concept_snapshot": bridge["snapshot"],
         "source_atoms": atoms,
         "blueprint_cells": cells,
         "candidates": candidates,

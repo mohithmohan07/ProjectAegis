@@ -13,6 +13,7 @@ stages — never here.
 from __future__ import annotations
 
 import hashlib
+import math
 from typing import Iterable, Mapping
 
 from . import assessment_release as rel
@@ -71,7 +72,11 @@ def compile_cells_from_batches(
                             "question_category": category,
                             "cognitive_skill": skill,
                             "difficulty": difficulty,
-                            "marks": marks_by_kind.get(kind, 1.0),
+                            # Marks are semantic. A caller either supplies a
+                            # recorded value or completes this cell through a
+                            # model decision before validation; the compiler
+                            # never invents one from sheet kind.
+                            "marks": marks_by_kind.get(kind),
                             "count": max(
                                 int(getattr(batch, "num_questions", 1) or 1),
                                 1),
@@ -110,8 +115,10 @@ def validate_cells(cells: list[dict], *, strict_profile: bool = False) -> None:
         except (TypeError, ValueError):
             errors.append(f"{cell_id}: count not an integer")
         try:
-            if float(cell.get("marks") or 0) <= 0:
-                errors.append(f"{cell_id}: marks must be positive")
+            marks = float(cell.get("marks"))
+            if not math.isfinite(marks) or marks <= 0:
+                errors.append(
+                    f"{cell_id}: marks must be finite and positive")
         except (TypeError, ValueError):
             errors.append(f"{cell_id}: marks not numeric")
     if errors:

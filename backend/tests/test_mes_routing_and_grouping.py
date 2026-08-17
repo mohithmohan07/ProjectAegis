@@ -1,8 +1,6 @@
 """MES PR 4 — routing, grouping, descriptions, QA, Tag New (spec §6–§8)."""
 from __future__ import annotations
 
-import json
-
 import pytest
 
 from app.services import assessment_grouping as ag
@@ -12,6 +10,7 @@ from app.services.phase3 import kernel
 
 META = {"subject": "Mathematics", "grade": "06"}
 ENVELOPE_SHA256 = "e" * 64
+SOURCE_RELEASE_SHA256 = "s" * 64
 
 
 def _candidate(candidate_id="CAND-1", **kw) -> dict:
@@ -40,11 +39,14 @@ def _candidate(candidate_id="CAND-1", **kw) -> dict:
 
 def _concepts() -> list[dict]:
     return [
-        {"concept_id": 1, "concept_title": "Solid Shapes",
+        {"concept_key": "release:1", "concept_id": "release:1",
+         "concept_title": "Solid Shapes",
          "teaching_description": "Cones, cubes, spheres and their faces."},
-        {"concept_id": 2, "concept_title": "Plane Figures",
+        {"concept_key": "release:2", "concept_id": "release:2",
+         "concept_title": "Plane Figures",
          "teaching_description": "Two-dimensional figures and their sides."},
-        {"concept_id": 9, "concept_title": "Culmination - Shapes",
+        {"concept_key": "release:9", "concept_id": "release:9",
+         "concept_title": "Culmination - Shapes",
          "teaching_description": "Cross-concept synthesis of every shape "
                                  "idea in the chapter.",
          "is_culmination": True},
@@ -66,12 +68,6 @@ def _verified_critic(payload):
     return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
 
-def _accepting_critic(system, user):
-    payload = json.loads(user)
-    return {"verdict": "accept",
-            "proposal_sha256": payload["proposal_sha256"], "feedback": []}
-
-
 # --------------------------------------------------------------------------- #
 # Routing (Stage 7)
 # --------------------------------------------------------------------------- #
@@ -81,61 +77,326 @@ def test_objective_routing_sees_the_correct_answer_never_distractors():
     assert evidence == {"correct_answer": ["Cone"]}
 
 
-def test_router_places_one_home_concept_with_bound_critic():
+def test_router_places_one_released_home_concept_through_kernel():
     seen = {}
 
-    def router(system, user):
-        seen["user"] = user
-        return {"concept_id": 1, "evidence": "faces of solids",
-                "reason": "asks about a cone", "confidence": "high"}
+    def provider(payload):
+        seen["payload"] = payload
+        return {
+            "candidate_id": "CAND-1",
+            "concept_key": "release:1",
+            "evidence": "faces of solids",
+            "rationale": "the question asks about a cone",
+        }
 
     placement = ar.route_candidate(
         _candidate(), _concepts(), meta=META,
-        router_call=router, critic_call=_accepting_critic)
-    assert placement["concept_id"] == 1
+        envelope_sha256=ENVELOPE_SHA256,
+        source_concept_release_sha256=SOURCE_RELEASE_SHA256,
+        provider=provider, critic=_verified_critic,
+        store=kernel.DecisionStore(), fixer=None)
+    assert placement["concept_key"] == "release:1"
+    assert placement["concept_id"] == placement["concept_key"]
     assert placement["basis"] == "api_router"
     assert placement["secondary_placements"] == []
-    # The router payload carried the correct answer, not the distractor.
-    assert "Cone" in seen["user"] and "Cube" not in seen["user"]
+    assert seen["payload"]["stage"] == "assessment.route"
+    assert seen["payload"]["source_concept_release_sha256"] == (
+        SOURCE_RELEASE_SHA256)
+    assert "Cone" in repr(seen["payload"])
+    assert "Cube" not in repr(seen["payload"])
+    assert placement["authority"]["policy_version"] == (
+        ar.ROUTE_POLICY_VERSION)
+    assert "created_at" not in placement["authority"]
+    assert "provider" not in placement["authority"]
     assert "Culmination is not a fallback" in ar.ROUTER_SYSTEM
 
 
-def test_blueprint_concept_constraint_routes_mechanically():
-    placement = ar.route_candidate(
-        _candidate(blueprint_concept_id=2), _concepts(), meta=META,
-        router_call=None, critic_call=None)
-    assert placement["concept_id"] == 2
-    assert placement["basis"] == "blueprint_constraint"
+def test_valid_constraint_and_sole_scope_are_mechanical_zero_spend():
+    def forbidden(_payload):
+        pytest.fail("a mechanical route must spend no authority call")
+
+    constrained = ar.route_candidate(
+        _candidate(blueprint_concept_key="release:2"),
+        _concepts(), meta=META, envelope_sha256=ENVELOPE_SHA256,
+        provider=forbidden, critic=forbidden,
+        store=kernel.DecisionStore(), fixer=forbidden)
+    sole = ar.route_candidate(
+        _candidate(), [_concepts()[0]], meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=forbidden, critic=forbidden,
+        store=kernel.DecisionStore(), fixer=forbidden)
+    assert constrained["concept_key"] == "release:2"
+    assert constrained["basis"] == "blueprint_constraint"
+    assert sole["concept_key"] == "release:1"
+    assert sole["basis"] == "sole_candidate"
 
 
-def test_unresolved_routing_ships_flagged_not_guessed():
-    def router(system, user):
-        return {"concept_id": 1, "evidence": "", "reason": "",
-                "confidence": "low"}
+def test_critic_dissent_is_advisory_and_the_route_stands():
+    calls = {"provider": 0, "critic": 0}
 
-    def rejecting_critic(system, user):
-        payload = json.loads(user)
-        return {"verdict": "reject",
-                "proposal_sha256": payload["proposal_sha256"],
-                "feedback": ["the concept does not teach this"]}
+    def provider(payload):
+        calls["provider"] += 1
+        return {
+            "candidate_id": payload["candidate"]["candidate_id"],
+            "concept_key": "release:1",
+            "evidence": "the released description teaches cone faces",
+            "rationale": "this question assesses that teaching",
+        }
+
+    def dissenting(payload):
+        calls["critic"] += 1
+        assert payload["proposed_decision"]["concept_key"] == "release:1"
+        return {
+            "verdict": "dissent",
+            "confidence": 0.91,
+            "issues": ["release:2 may be a stronger home"],
+        }
 
     placement = ar.route_candidate(
         _candidate(), _concepts(), meta=META,
-        router_call=router, critic_call=rejecting_critic, max_attempts=2)
-    assert "unresolved_routing" in placement["flags"]
-    assert placement["basis"] == "unresolved"
-    # Best evidence-bound route is preserved for review, marked low.
-    assert placement["concept_id"] == 1
-    assert placement["confidence"] == "low"
+        envelope_sha256=ENVELOPE_SHA256,
+        source_concept_release_sha256=SOURCE_RELEASE_SHA256,
+        provider=provider, critic=dissenting,
+        store=kernel.DecisionStore(), fixer=None)
+    assert calls == {"provider": 1, "critic": 1}
+    assert placement["concept_key"] == "release:1"
+    assert placement["basis"] == "api_router"
+    assert any("dissent" in flag for flag in placement["flags"])
+    assert any("stronger home" in flag for flag in placement["flags"])
+
+
+def test_route_payload_is_complete_untruncated_and_has_no_position_proxy():
+    long_description = "released-teaching-evidence-" * 300
+    long_source = "source-evidence-" * 300
+    rubric = [{"criterion": "Connect the face to the apex", "marks": 2}]
+    marking = {"steps": ["identify face", "explain taper"], "total": 2}
+    sub_questions = [{
+        "text": "Explain how the curved face tapers.",
+        "marks": 2,
+        "rubric": "Connect the face to the apex.",
+    }]
+    answers = [{
+        "answer_content": "The curved face narrows to the apex.",
+        "answer_weightage": 2,
+    }]
+    assets = [{
+        "url": "https://example.test/cone.png",
+        "alt": "A cone",
+        "source_page": 18,
+        "bbox": [10, 20, 30, 40],
+        "order": 1,
+    }]
+    seen = {}
+    concepts = _concepts()
+    concepts[0]["teaching_description"] = long_description
+    # A title alone must not manufacture a Culmination designation.
+    concepts[1]["concept_title"] = "Culmination in name only"
+
+    def provider(payload):
+        seen.update(payload)
+        return {
+            "candidate_id": "CAND-1",
+            "concept_key": "release:1",
+            "evidence": "the complete description teaches the taper",
+            "rationale": "the response explains that exact property",
+        }
+
+    ar.route_candidate(
+        _candidate(
+            sheet_kind="descriptive",
+            answers=answers,
+            display_answer="The curved face narrows to the apex.",
+            rubric=rubric,
+            marking_scheme=marking,
+            sub_questions=sub_questions,
+            answer_explanation="A full explanation.",
+            answer_evidence={"worked": "full solution"},
+            source_atom_ids=["QINV-1"],
+            source_kind="exercise",
+            source_evidence=long_source,
+            shared_context={"text": "Use the supplied solid."},
+            source_context={
+                "section": "Solid shapes", "page_hint": 18,
+            },
+            route_evidence={
+                "basis": "recorded",
+                "source_start": 120,
+                "nested": {"source_end": 180, "evidence": "full"},
+            },
+            assets=assets,
+            image_manifest=[{"asset_id": "IMG-1", "source_page": 18}],
+            image_urls=["https://example.test/cone.png"],
+            tables=[["property", "value"]],
+            content_objects=[{"kind": "diagram", "id": "IMG-1"}],
+            source_start=12,
+            source_order=4,
+            printer_page=18,
+        ),
+        concepts,
+        meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        source_concept_release_sha256=SOURCE_RELEASE_SHA256,
+        provider=provider,
+        critic=_verified_critic,
+        store=kernel.DecisionStore(),
+        fixer=None,
+    )
+
+    candidate_payload = seen["candidate"]
+    assert candidate_payload["answer_evidence"]["answers"] == answers
+    assert candidate_payload["answer_evidence"]["rubric"] == rubric
+    assert candidate_payload["answer_evidence"]["marking_scheme"] == marking
+    assert candidate_payload["answer_evidence"]["sub_questions"] == (
+        sub_questions)
+    assert candidate_payload["source_evidence"] == long_source
+    assert candidate_payload["shared_context"] == {
+        "text": "Use the supplied solid."}
+    assert candidate_payload["assets"] == [{
+        "url": "https://example.test/cone.png",
+        "alt": "A cone",
+        "order": 1,
+    }]
+    assert candidate_payload["image_manifest"] == [{"asset_id": "IMG-1"}]
+    assert candidate_payload["source_context"] == {"section": "Solid shapes"}
+    assert candidate_payload["route_evidence"] == {
+        "basis": "recorded", "nested": {"evidence": "full"},
+    }
+    assert assets[0]["source_page"] == 18  # caller evidence is not mutated
+    assert candidate_payload["tables"] == [["property", "value"]]
+    assert seen["candidate_concepts"][0]["teaching_description"] == (
+        long_description)
+    assert seen["candidate_concepts"][1]["is_culmination"] is None
+    assert "sub_question_count" not in candidate_payload
+    assert "source_start" not in candidate_payload
+    assert "source_order" not in candidate_payload
+    assert "printer_page" not in candidate_payload
+
+
+def test_route_decision_replays_and_source_release_hash_rekeys_it():
+    calls = {"provider": 0, "critic": 0}
+    store = kernel.DecisionStore()
+
+    def provider(payload):
+        calls["provider"] += 1
+        return {
+            "candidate_id": payload["candidate"]["candidate_id"],
+            "concept_key": "release:1",
+            "evidence": "recorded once",
+            "rationale": "recorded once",
+        }
+
+    def critic(payload):
+        calls["critic"] += 1
+        return _verified_critic(payload)
+
+    kwargs = dict(
+        meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        source_concept_release_sha256=SOURCE_RELEASE_SHA256,
+        provider=provider,
+        critic=critic,
+        store=store,
+        fixer=None,
+    )
+    first = ar.route_candidate(_candidate(), _concepts(), **kwargs)
+    replay = ar.route_candidate(_candidate(), _concepts(), **kwargs)
+    changed = ar.route_candidate(
+        _candidate(), _concepts(),
+        **{**kwargs, "source_concept_release_sha256": "t" * 64})
+
+    assert first == replay
+    assert first["authority"]["decision_key"] != (
+        changed["authority"]["decision_key"])
+    assert calls == {"provider": 2, "critic": 2}
+
+
+def test_route_contract_defects_reach_the_fixer():
+    calls = {"provider": 0, "fixer": 0}
+
+    def provider(_payload):
+        calls["provider"] += 1
+        return {"candidate_id": "wrong", "concept_key": "unknown"}
+
+    def fixer(payload):
+        calls["fixer"] += 1
+        assert payload["fixer"] is True
+        assert payload["contract"]["kind"] == "assessment.route"
+        return {
+            "candidate_id": "CAND-1",
+            "concept_key": "release:1",
+            "evidence": "the release teaches cone faces",
+            "rationale": "the question asks for that property",
+        }
+
+    placement = ar.route_candidate(
+        _candidate(), _concepts(), meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        source_concept_release_sha256=SOURCE_RELEASE_SHA256,
+        provider=provider, critic=_verified_critic,
+        store=kernel.DecisionStore(), fixer=fixer)
+
+    assert calls == {"provider": 3, "fixer": 1}
+    assert placement["concept_key"] == "release:1"
+    assert placement["authority"]["fixer"] is True
+    assert any(flag.startswith("fixer:") for flag in placement["flags"])
+
+
+def test_semantic_route_requires_a_sealed_source_release_hash_before_spend():
+    calls = []
+
+    def provider(payload):
+        calls.append(payload)
+        return {
+            "candidate_id": "CAND-1",
+            "concept_key": "release:1",
+            "evidence": "not reached",
+            "rationale": "not reached",
+        }
+
+    with pytest.raises(ar.RoutingError, match="source concept release hash"):
+        ar.route_candidate(
+            _candidate(), _concepts(), meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=provider,
+        )
+    assert calls == []
 
 
 def test_route_candidates_enforces_exactly_one_placement_each():
     result = ar.route_candidates(
         [_candidate("CAND-1"), _candidate("CAND-2")],
-        [_concepts()[0]], meta=META)
+        [_concepts()[0]], meta=META, envelope_sha256=ENVELOPE_SHA256)
     assert [p["basis"] for p in result["placements"]] == [
         "sole_candidate", "sole_candidate"]
+    assert [p["candidate_id"] for p in result["placements"]] == [
+        "CAND-1", "CAND-2"]
     assert result["routed"] == 2
+
+
+def test_route_candidates_rejects_duplicate_input_identities_before_spend():
+    def forbidden(_payload):
+        pytest.fail("invalid routing input must fail before provider spend")
+
+    with pytest.raises(ar.RoutingError, match="repeat a candidate_id"):
+        ar.route_candidates(
+            [_candidate("CAND-1"), _candidate("CAND-1")],
+            _concepts(), meta=META, envelope_sha256=ENVELOPE_SHA256,
+            provider=forbidden)
+    duplicate_concepts = [_concepts()[0], dict(_concepts()[0])]
+    with pytest.raises(ar.RoutingError, match="repeat a concept_key"):
+        ar.route_candidates(
+            [_candidate()], duplicate_concepts,
+            meta=META, envelope_sha256=ENVELOPE_SHA256,
+            provider=forbidden)
+
+
+def test_no_concept_scope_keeps_an_explicit_flagged_placement():
+    placement = ar.route_candidate(
+        _candidate(), [], meta=META, envelope_sha256=ENVELOPE_SHA256)
+    assert placement["candidate_id"] == "CAND-1"
+    assert placement["concept_key"] is None
+    assert placement["basis"] == "no_candidates"
+    assert placement["flags"] == ["no_candidate_concepts"]
 
 
 # --------------------------------------------------------------------------- #

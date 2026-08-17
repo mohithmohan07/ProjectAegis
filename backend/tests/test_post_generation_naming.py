@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
+
 from app import models
 from app.bulk_import import writer
 from app.services import build_assessments, post_generation
@@ -20,7 +22,9 @@ def test_legacy_group_creation_uses_explicit_display_name(db):
     db.add(concept)
     db.flush()
 
-    group = build_assessments._group_for(db, concept, "Less")
+    group = build_assessments._group_for_recorded_tier(
+        db, concept, "Basic"
+    )
 
     assert group.group_name == group.group_display_name == (
         f"Visible concept {token} — Basic"
@@ -78,3 +82,18 @@ def test_post_generation_only_synchronises_friendly_group_names(db, tmp_path):
     db.delete(question)
     db.delete(group)
     db.commit()
+
+
+def test_post_generation_refuses_visible_name_as_missing_identity(db):
+    concept = db.query(models.Concept).order_by(models.Concept.id).first()
+    group = models.Group(
+        concept_id=concept.id,
+        group_type="Basic",
+        group_key=" ",
+        group_name="Visible name is not an identity",
+    )
+    question = models.Question(group=group, question_label="MISSING-GROUP-KEY")
+
+    with pytest.raises(ValueError, match="recorded group_key identity"):
+        post_generation.assessment_tagging(db, [question])
+    assert group.group_key == " "

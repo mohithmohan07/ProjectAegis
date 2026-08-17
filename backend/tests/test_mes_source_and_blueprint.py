@@ -6,12 +6,15 @@ of live round-robin placement and the implicit Cartesian generation loop.
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from app import models
 from app.services import assessment_blueprint as bp
 from app.services import assessment_source_inventory as si
 from app.services import build_assessments
+from app.services.phase3 import kernel
 
 
 # --------------------------------------------------------------------------- #
@@ -161,6 +164,27 @@ def test_blueprint_validation_names_defects():
         bp.validate_cells(cells)
 
 
+@pytest.mark.parametrize(
+    "invalid_marks",
+    [
+        pytest.param(float("nan"), id="nan"),
+        pytest.param(float("inf"), id="positive-infinity"),
+        pytest.param(float("-inf"), id="negative-infinity"),
+    ],
+)
+def test_blueprint_validation_rejects_nonfinite_marks(invalid_marks: float):
+    cells = bp.compile_cells_from_batches(
+        [_Batch()], concepts=[_Concept(1)],
+        default_marks={"objective": 1.0},
+    )
+    cells[0]["marks"] = invalid_marks
+
+    with pytest.raises(
+        bp.BlueprintError, match="marks must be finite and positive"
+    ):
+        bp.validate_cells(cells)
+
+
 def test_strict_profile_rejects_subjective_cells():
     cells = bp.compile_cells_from_batches(
         [_Batch(question_type="subjective")], concepts=[_Concept(1)],
@@ -175,54 +199,99 @@ def test_strict_profile_rejects_subjective_cells():
 # Round-robin retirement (upload path)
 # --------------------------------------------------------------------------- #
 
-def test_sole_scope_placement_is_mechanical():
+def test_sole_scope_placement_is_mechanical(tmp_path):
     records = [{"question": "Q1"}, {"question": "Q2"}]
-    positions, basis = build_assessments._route_uploaded_questions(
-        records, [_Concept(7)])
-    assert positions == [0, 0]
-    assert basis == "sole_scope_concept"
+    forbidden = lambda _payload: pytest.fail("mechanical route spent authority")
+    placements = build_assessments._route_uploaded_questions(
+        records,
+        [_ModelConcept(7, "Tangents")],
+        candidate_ids=["UP-1", "UP-2"],
+        meta={"subject": "Mathematics"},
+        envelope_sha256="envelope",
+        source_concept_release_sha256="concept-release",
+        store=kernel.DecisionStore(tmp_path / "decisions"),
+        provider=forbidden,
+        critic=forbidden,
+        fixer=forbidden,
+    )
+    assert [placement["concept_key"] for placement in placements] == [
+        "db:7", "db:7"]
+    assert all(placement["basis"] == "sole_candidate" for placement in placements)
 
 
-def test_live_routing_is_a_model_judgment(monkeypatch):
-    monkeypatch.setattr(
-        build_assessments.config, "use_live_generation", lambda: True)
-    calls = {}
+def test_multi_concept_routing_is_a_kernel_judgment(tmp_path):
+    calls = []
 
-    def fake_openai(system, user, **kw):
-        calls["system"] = system
+    def provider(payload):
+        calls.append(payload)
         # Deliberately NOT round-robin: both questions belong to concept 22.
-        return {"placements": [
-            {"index": 0, "concept_id": 22},
-            {"index": 1, "concept_id": 22},
-        ]}
+        return {
+            "candidate_id": payload["candidate"]["candidate_id"],
+            "concept_key": "db:22",
+            "evidence": "The complete Chords description teaches this.",
+            "rationale": "Both candidates assess the same released concept.",
+        }
 
-    monkeypatch.setattr(
-        build_assessments.generation, "_openai_json", fake_openai)
+    critic = lambda _payload: {
+        "verdict": "verified", "confidence": 1.0, "issues": []}
     concepts = [_ModelConcept(21, "Tangents"), _ModelConcept(22, "Chords")]
-    positions, basis = build_assessments._route_uploaded_questions(
-        [{"question": "Q1"}, {"question": "Q2"}], concepts)
-    assert positions == [1, 1]
-    assert basis == "api_router_v0"
-    assert "never by position" in calls["system"]
+    placements = build_assessments._route_uploaded_questions(
+        [
+            {"question": "Q1", "question_text": "Full evidence one"},
+            {"question": "Q2", "question_text": "Full evidence two"},
+        ],
+        concepts,
+        candidate_ids=["UP-1", "UP-2"],
+        meta={"subject": "Mathematics"},
+        envelope_sha256="envelope",
+        source_concept_release_sha256="concept-release",
+        store=kernel.DecisionStore(tmp_path / "decisions"),
+        provider=provider,
+        critic=critic,
+    )
+    assert [placement["concept_key"] for placement in placements] == [
+        "db:22", "db:22"]
+    assert all(placement["basis"] == "api_router" for placement in placements)
+    assert [call["candidate"]["question_text"] for call in calls] == [
+        "Full evidence one", "Full evidence two"]
 
 
-def test_live_routing_fails_closed_on_partial_placement(monkeypatch):
-    monkeypatch.setattr(
-        build_assessments.config, "use_live_generation", lambda: True)
-    monkeypatch.setattr(
-        build_assessments.generation, "_openai_json",
-        lambda *a, **kw: {"placements": [{"index": 0, "concept_id": 21}]})
+def test_multi_concept_routing_requires_sealed_concept_snapshot(tmp_path):
     concepts = [_ModelConcept(21, "Tangents"), _ModelConcept(22, "Chords")]
-    with pytest.raises(RuntimeError, match="stopping instead of guessing"):
+    with pytest.raises(ValueError, match="sealed source concept release hash"):
         build_assessments._route_uploaded_questions(
-            [{"question": "Q1"}, {"question": "Q2"}], concepts)
+            [{"question": "Q1"}],
+            concepts,
+            candidate_ids=["UP-1"],
+            meta={"subject": "Mathematics"},
+            envelope_sha256="envelope",
+            source_concept_release_sha256="",
+            store=kernel.DecisionStore(tmp_path / "decisions"),
+            provider=lambda payload: payload,
+        )
 
 
 class _ModelConcept:
     def __init__(self, concept_id, title):
         self.id = concept_id
         self.concept_title = title
+        self.concept_display_name = title
         self.concept_details = f"Description: teaches {title}."
+        chapter = SimpleNamespace(
+            chapter_code="10CBMA_GEO",
+            chapter_title="Geometry",
+            subject="Mathematics",
+            board="CBSE",
+            grade="10",
+            topics=[],
+        )
+        topic = SimpleNamespace(
+            id=1,
+            topic_title="Circles",
+            chapter=chapter,
+        )
+        chapter.topics = [topic]
+        self.topic = topic
 
 
 # --------------------------------------------------------------------------- #
@@ -258,7 +327,6 @@ def test_the_generation_loop_no_longer_uses_itertools_product():
 
     source = Path(build_assessments.__file__).read_text(encoding="utf-8")
     assert "from itertools import product" not in source
-    # The only modulo placement left is the labeled dry-run fixture inside
-    # the router; live paths never reach it.
-    assert source.count("% len(concepts)") == 1
-    assert "dry_fixture" in source
+    assert "% len(concepts)" not in source
+    assert "dry_fixture" not in source
+    assert "assessment_routing.route_candidates" in source

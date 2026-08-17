@@ -256,6 +256,106 @@ def test_flagged_content_publishes_with_warnings_and_still_uploads(db):
     assert published.state == "uploaded"
 
 
+def test_staged_master_waits_for_exact_output01_publication(db):
+    chapter = _chapter_concept(db).topic.chapter
+    token = uuid.uuid4().hex[:12]
+    concept_key = f"release:{token}:0001"
+    machine_id = f"REL{token.upper()}C001"
+    concept_name = f"Staged concept {token}"
+    topic_title = f"Staged topic {token}"
+    label = f"STAGEDQ {token}"
+    payload = _payload(
+        concept_key,
+        machine_id,
+        concept_name,
+        label=label,
+    )
+    payload["concept_snapshot"] = {
+        "source_concept_release_sha256": "a" * 64,
+        "target_chapter_id": chapter.id,
+        "concept_provenance": [{
+            "concept_key": concept_key,
+            "release_row_identity": {"position": 1},
+        }],
+        "chapter": {
+            "chapter_title": chapter.chapter_title,
+            "chapter_display_name": chapter.chapter_display_name,
+            "pre_topics": chapter.pre_topics,
+            "post_topics": chapter.post_topics,
+            "chapter_description": chapter.chapter_description,
+        },
+        "topics": [{
+            "topic_title": topic_title,
+            "topic_display_name": topic_title,
+            "pre_post_learning": "Post",
+            "topic_concept_labels": "",
+            "related_topics": "",
+            "topic_description": "A staged topic description.",
+            "concepts": [{
+                "concept_key": concept_key,
+                "concept_machine_id": machine_id,
+                "concept_title": concept_name,
+                "concept_display_name": concept_name,
+                "parent_concept": "",
+                "concept_details": "Exact staged teaching content.",
+                "keywords": "staged, exact",
+                "related_concepts": "",
+                "digicards": "",
+                "concept_source": "fixture",
+            }],
+        }],
+    }
+    release = svc.create_release(
+        db,
+        chapter_id=chapter.id,
+        payload=payload,
+        owner_sub=OWNER,
+    )
+    published = svc.publish_release(db, release)
+
+    with pytest.raises(svc.UploadRefused, match="Output-01 identity"):
+        svc.upload_master_to_database(db, published, owner_sub=OWNER)
+    assert published.state == "ready_for_upload"
+
+    topic = models.Topic(
+        chapter_id=chapter.id,
+        topic_title=topic_title,
+        topic_display_name=topic_title,
+        pre_post_learning="Post",
+        topic_description="A staged topic description.",
+    )
+    concept = models.Concept(
+        topic=topic,
+        concept_title=concept_name,
+        concept_display_name=concept_name,
+        parent_concept="",
+        concept_details="Exact staged teaching content.",
+        keywords="staged, exact",
+        sources="fixture",
+    )
+    db.add(concept)
+    for tier in ag.TIER_CODES:
+        db.add(models.Group(
+            concept=concept,
+            group_type=tier,
+            group_key="",
+            group_name=f"{concept_name} — {tier}",
+            group_display_name=f"{concept_name} — {tier}",
+            group_status="Active",
+        ))
+    db.commit()
+
+    result = svc.upload_master_to_database(
+        db, published, owner_sub=OWNER
+    )
+    assert result["questions_created"] == 1
+    assert result["groups_created"] == 0
+    assert db.query(models.Group).filter_by(concept_id=concept.id).count() == 3
+    assert db.query(models.Question).filter_by(
+        question_label=label
+    ).one().group.concept_id == concept.id
+
+
 def test_unresolved_placement_blocks_upload_but_keeps_downloads(db, client):
     def orphan(payload):
         payload["candidates"][0]["group_key"] = "(unknown) BG01"

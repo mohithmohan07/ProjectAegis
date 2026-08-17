@@ -1,5 +1,8 @@
 import io
 
+import pytest
+
+from app import models
 from tests.conftest import convert_assessment_upload, stream_result
 
 
@@ -59,7 +62,7 @@ def test_generate_without_batches_is_rejected(client, first_concept):
     assert r.status_code == 400
 
 
-def test_upload_path_extract_and_deposit(client, first_chapter):
+def test_upload_path_extract_and_deposit(client, db, first_chapter):
     files = {"file": ("quiz.txt", io.BytesIO(
         b"What is a tangent line?\n\nDefine a chord.\n\nState the tangent-radius theorem."
     ), "text/plain")}
@@ -79,6 +82,18 @@ def test_upload_path_extract_and_deposit(client, first_chapter):
         f"/build-assessments/uploads/{job['id']}/generate",
         json={"question_type": "objective"}))
     assert result["created"] == 3
+    db.expire_all()
+    questions = [db.get(models.Question, qid) for qid in result["question_ids"]]
+    assert all(question.marks == 1.0 for question in questions)
+    assert all(question.question_duration == 2.0 for question in questions)
+    assert all(set(question.route_audit) == {
+        "concept_key", "basis", "evidence", "rationale", "flags", "authority"
+    } for question in questions)
+    assert all(
+        question.route_audit["authority"]["policy_version"]
+        == "assessment-route-1"
+        for question in questions
+    )
 
 
 def test_upload_textbook_mode(client):
@@ -125,13 +140,26 @@ def test_upload_invalid_question_type_rejected(client, first_chapter):
     assert r.status_code == 400
 
 
-def test_identify_auto_dry_falls_back_to_objective():
+def test_identify_auto_uses_explicit_fixture_authority():
     from app.services import generation as g
 
     recs = g.identify_questions_from_mmd(
         "# t\n\nQ1?\n\nQ2?", upload_type="questions",
         question_type="auto", live=False)
     assert recs and all(r["sheet_kind"] == "objective" for r in recs)
+    assert all(r["marks"] == 1.0 for r in recs)
+    assert all(r["question_duration"] == 2.0 for r in recs)
+
+
+def test_identify_dry_production_has_no_semantic_fallback(monkeypatch):
+    from app import config
+    from app.services import generation as g
+
+    monkeypatch.setattr(
+        g, "_offline_assessment_identification_authority", lambda: None)
+    with pytest.raises(config.LiveRequiredError, match="no local type"):
+        g.identify_questions_from_mmd(
+            "Q1?", upload_type="questions", question_type="auto", live=False)
 
 
 def test_normalize_sheet_kind():
@@ -141,5 +169,7 @@ def test_normalize_sheet_kind():
     assert g._normalize_sheet_kind("SUBJECTIVE") == "subjective"
     assert g._normalize_sheet_kind("mcq") == "objective"
     assert g._normalize_sheet_kind("long answer") == "descriptive"
-    assert g._normalize_sheet_kind("") == "objective"
-    assert g._normalize_sheet_kind("weird", default="descriptive") == "descriptive"
+    with pytest.raises(ValueError, match="recorded"):
+        g._normalize_sheet_kind("")
+    with pytest.raises(ValueError, match="recorded"):
+        g._normalize_sheet_kind("weird")

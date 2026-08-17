@@ -69,10 +69,14 @@ def upload_release_to_database(
     if not records:
         raise ValueError("the release contains no concept rows to upload")
 
-    pre_post = "Pre" if job.learning_kind == "pre" else "Post"
+    pre_post = (
+        "Pre"
+        if str(payload.get("learning_kind") or "").strip().lower() == "pre"
+        else "Post"
+    )
     source_book = (
-        str(job.source_book or "").strip()
-        or str(job.filename or "").strip()
+        str(payload.get("source_book") or "").strip()
+        or str(payload.get("filename") or "").strip()
         or "Released source"
     )
     created_ids: list[int] = []

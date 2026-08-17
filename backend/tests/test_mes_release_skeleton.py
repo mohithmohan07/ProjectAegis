@@ -131,7 +131,7 @@ def test_answer_restriction_is_never_silently_defaulted():
     assert any("answer_restriction" in e for e in missing)
     open_objective = rel.validate_candidate(
         dict(base, answer_restriction="Open"))
-    assert any("always Specific" in e for e in open_objective)
+    assert open_objective == []
     assert rel.validate_candidate(
         dict(base, answer_restriction="Specific")) == []
 

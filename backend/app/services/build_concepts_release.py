@@ -15,6 +15,7 @@ schema migration is required and checkpoint export retains the complete audit.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -65,6 +66,9 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # candidates/groups and stripped before concept-row database publication.
     # The assessment renderer has no visible slots for these records.
     "_aegis_assessment_level_verdict",
+    "_aegis_assessment_cell_verdict",
+    "_aegis_assessment_materialization",
+    "_aegis_assessment_route",
     "_aegis_assessment_variant_cluster",
     "_aegis_assessment_group_description",
     "_aegis_assessment_group_quality",
@@ -1010,6 +1014,37 @@ def _chapter_meta_for_release(
         return {}
 
 
+def _directory_metadata_for_release(
+    db: Session, target_chapter_id: int,
+) -> dict[str, Any]:
+    """Freeze the target Chapter fields later projections may consume.
+
+    Topic and Concept meaning comes from the released records. The Chapter is
+    only a directory anchor, but even that metadata must travel with the staged
+    Output-01 payload: rereading a mutable Chapter after staging would let the
+    same release seal produce different workbooks and model decisions.
+    """
+
+    if not target_chapter_id:
+        return {}
+    chapter = db.get(models.Chapter, int(target_chapter_id))
+    if chapter is None:
+        return {}
+    return {
+        "chapter_code": str(chapter.chapter_code or ""),
+        "board": str(chapter.board or ""),
+        "grade": str(chapter.grade or ""),
+        "subject": str(chapter.subject or ""),
+        "unit": str(chapter.unit or ""),
+        "chapter_title": str(chapter.chapter_title or ""),
+        "chapter_display_name": str(chapter.chapter_display_name or ""),
+        "chapter_description": str(chapter.chapter_description or ""),
+        "chapter_duration": str(chapter.chapter_duration or ""),
+        "pre_topics": str(chapter.pre_topics or ""),
+        "post_topics": str(chapter.post_topics or ""),
+    }
+
+
 def stage_release(
     db: Session,
     job: models.UploadJob,
@@ -1116,6 +1151,16 @@ def stage_release(
         or (job.deposit_scope_ids or [0])[0]
         or 0
     )
+    directory_metadata = _directory_metadata_for_release(db, target)
+    source_document_hash = "sha256:" + hashlib.sha256(
+        str(job.mmd_text or "").encode("utf-8")
+    ).hexdigest()
+    chapter_meta = _chapter_meta_for_release(
+        db,
+        target,
+        annotated,
+        pre_post="Pre" if job.learning_kind == "pre" else "Post",
+    )
     released_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "version": RELEASE_VERSION,
@@ -1129,7 +1174,9 @@ def stage_release(
         "learning_kind": job.learning_kind,
         "source_book": job.source_book,
         "filename": job.filename,
+        "source_document_hash": source_document_hash,
         "target_chapter_id": target,
+        "directory_metadata": _json_safe(directory_metadata),
         "target_identity": _json_safe(
             checkpoint_value.get("target_identity") or {}
         ),
@@ -1151,12 +1198,7 @@ def stage_release(
         "final_grounding_certificate": _json_safe(
             final_grounding_certificate or {}
         ),
-        "chapter_meta": _json_safe(_chapter_meta_for_release(
-            db,
-            target,
-            annotated,
-            pre_post="Pre" if job.learning_kind == "pre" else "Post",
-        )),
+        "chapter_meta": _json_safe(chapter_meta),
         # The Architect's assembled instruction set for this run
         # (docs/aegis-restructure.md §8.1): version, hash, authored slots,
         # and the critic's advisory flags, for the reviewer's audit. The

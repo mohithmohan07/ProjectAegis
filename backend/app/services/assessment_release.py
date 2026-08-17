@@ -165,8 +165,6 @@ def validate_candidate(candidate: Mapping) -> list[str]:
         errors.append(
             f"answer_restriction must be one of {ANSWER_RESTRICTIONS} "
             f"(got {restriction!r})")
-    elif candidate.get("sheet_kind") == "objective" and restriction != "Specific":
-        errors.append("objective questions are always Specific (spec §3.5)")
     return errors
 
 
