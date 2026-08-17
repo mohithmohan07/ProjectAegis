@@ -286,7 +286,41 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
         for entry in _concept_rows(snapshot)
     }
     groups = [dict(g) for g in snapshot.get("groups") or []]
-    groups_by_key = {str(g.get("group_key") or ""): g for g in groups}
+    groups_by_key: dict[str, dict] = {}
+    for group in groups:
+        group_key = str(group.get("group_key") or "")
+        if not group_key:
+            raise WorkbookRenderError("group_key must not be blank")
+        if group_key in groups_by_key:
+            raise WorkbookRenderError(
+                f"duplicate group_key {group_key!r}")
+        groups_by_key[group_key] = group
+    for group_key, group in groups_by_key.items():
+        concept_key = str(group.get("concept_key") or "")
+        concept_entry = concept_entries.get(concept_key)
+        if concept_entry is None:
+            raise WorkbookRenderError(
+                f"group {group_key!r} has unknown concept home "
+                f"{concept_key!r}")
+        concept_name = str(
+            concept_entry["concept"].get("concept_display_name") or ""
+        ).strip()
+        if not concept_name:
+            raise WorkbookRenderError(
+                f"group {group_key!r} home {concept_key!r} has no explicit "
+                "concept_display_name")
+        tier = str(group.get("group_type") or "")
+        if tier not in rel.GROUP_TYPES:
+            raise WorkbookRenderError(
+                f"group {group_key!r} has invalid group_type {tier!r}")
+        visible_name = f"{concept_name} — {tier}"
+        if (
+            str(group.get("group_name") or "") != visible_name
+            or str(group.get("group_display_name") or "") != visible_name
+        ):
+            raise WorkbookRenderError(
+                f"group {group_key!r} visible names must both equal "
+                f"{visible_name!r}")
     candidates = [dict(c) for c in snapshot.get("candidates") or []]
 
     # Complete ordered label aggregates (spec §8.4).
@@ -310,12 +344,31 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
                 "flags": list(candidate.get("flags") or []),
             })
             continue
+        group_concept_key = str(
+            groups_by_key[group_key].get("concept_key") or "")
+        if group_concept_key != concept_key:
+            identity = label or str(candidate.get("candidate_id") or "")
+            raise WorkbookRenderError(
+                f"{identity}: concept_key {concept_key!r} does not match "
+                f"group {group_key!r} home {group_concept_key!r}")
         concept_labels.setdefault(concept_key, []).append(label)
         group_labels.setdefault(group_key, []).append(label)
         placed.append(candidate)
 
     wb = _new_workbook()
     represented_groups: set[str] = set()
+    group_provenance: list[dict] = []
+
+    def _append_group_row(
+        sheet: str, group_key: str, record: Mapping[str, Any],
+    ) -> None:
+        ws = wb[sheet]
+        ws.append(_row_values(sheet, record))
+        group_provenance.append({
+            "sheet": sheet,
+            "row": ws.max_row,
+            "group_key": group_key,
+        })
 
     def _full_record(candidate: Mapping, sheet: str) -> dict:
         concept_key = str(candidate.get("concept_key") or "")
@@ -343,10 +396,11 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
                 "flags": list(candidate.get("flags") or []),
             })
             continue
-        ws = wb[sheet]
-        ws.append(_row_values(sheet, _full_record(candidate, sheet)))
+        group_key = str(candidate.get("group_key") or "")
+        _append_group_row(
+            sheet, group_key, _full_record(candidate, sheet))
         question_rows += 1
-        represented_groups.add(str(candidate.get("group_key") or ""))
+        represented_groups.add(group_key)
 
     # Group catalogue rows: every created group not otherwise represented by
     # a question row — required empty shells included — appears once on the
@@ -357,28 +411,19 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
         if group_key in represented_groups:
             continue
         concept_key = str(group.get("concept_key") or "")
-        entry = concept_entries.get(concept_key)
-        if entry is None:
-            unplaced.append({
-                "candidate_id": "",
-                "question_label": "",
-                "reason": (
-                    f"group {group_key} references unknown concept "
-                    f"{concept_key!r}"),
-                "flags": list(group.get("flags") or []),
-            })
-            continue
+        entry = concept_entries[concept_key]
         record = _bands_record(entry)
         record["concept_question_labels"] = ", ".join(
             concept_labels.get(concept_key, []))
         record.update(_group_record_fields(
             group, group_labels.get(group_key, [])))
-        wb["Objective"].append(_row_values("Objective", record))
+        _append_group_row("Objective", group_key, record)
 
     issues = {
         "unplaced": unplaced,
         "placed_questions": question_rows,
         "groups": len(groups),
+        "group_provenance": group_provenance,
     }
     return _workbook_bytes(wb), issues
 
@@ -397,14 +442,20 @@ def parse_workbook(data: bytes) -> dict:
         next(rows, ())  # band row
         header = [h for h in next(rows, ()) if h is not None]
         records = []
-        for row in rows:
+        row_numbers = []
+        for row_number, row in enumerate(rows, start=3):
             if row is None or not any(row):
                 continue
             records.append({
                 field: ("" if i >= len(row) or row[i] is None else row[i])
                 for i, field in enumerate(header)
             })
-        parsed["sheets"][name] = {"fields": header, "rows": records}
+            row_numbers.append(row_number)
+        parsed["sheets"][name] = {
+            "fields": header,
+            "rows": records,
+            "row_numbers": row_numbers,
+        }
     wb.close()
     return parsed
 
@@ -459,6 +510,7 @@ def validate_concept_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
 
 def validate_master_file(
     parsed: Mapping, snapshot: Mapping, profile: Mapping | str | None = None,
+    *, group_provenance: list[Mapping[str, Any]] | None = None,
 ) -> list[str]:
     profile = assessment_profile.resolve(profile)
     errors = _header_errors(parsed)
@@ -471,18 +523,145 @@ def validate_master_file(
             f"Subjective: profile {profile['name']!r} allows no data rows")
 
     groups = [dict(g) for g in snapshot.get("groups") or []]
-    expected_group_keys = {str(g.get("group_key") or "") for g in groups}
-    seen_group_names: set[str] = set()
+    groups_by_key: dict[str, dict] = {}
+    for group in groups:
+        group_key = str(group.get("group_key") or "")
+        if not group_key:
+            errors.append("snapshot contains a blank group_key")
+        elif group_key in groups_by_key:
+            errors.append(f"snapshot contains duplicate group_key {group_key!r}")
+        else:
+            groups_by_key[group_key] = group
+    expected_group_keys = set(groups_by_key)
+    keys_by_visible_name: dict[str, list[str]] = {}
+    for group_key, group in groups_by_key.items():
+        group_name = str(group.get("group_name") or "")
+        keys_by_visible_name.setdefault(group_name, []).append(group_key)
+
+    provenance_by_row: dict[tuple[str, int], str] = {}
+    if group_provenance is not None:
+        for n, item in enumerate(group_provenance, start=1):
+            sheet = str(item.get("sheet") or "")
+            try:
+                row_number = int(item.get("row"))
+            except (TypeError, ValueError):
+                errors.append(
+                    f"group provenance entry {n}: row must be an integer")
+                continue
+            group_key = str(item.get("group_key") or "")
+            coordinate = (sheet, row_number)
+            if sheet not in {"Objective", "Descriptive"} or row_number < 3:
+                errors.append(
+                    f"group provenance entry {n}: invalid coordinate "
+                    f"{coordinate!r}")
+                continue
+            if coordinate in provenance_by_row:
+                errors.append(
+                    f"group provenance repeats {sheet} row {row_number}")
+                continue
+            if group_key not in groups_by_key:
+                errors.append(
+                    f"group provenance {sheet} row {row_number}: unknown "
+                    f"group_key {group_key!r}")
+                continue
+            provenance_by_row[coordinate] = group_key
+
+    concept_entries = {
+        str(entry["concept"].get("concept_key") or ""): entry
+        for entry in _concept_rows(snapshot)
+    }
+    concept_keys = set(concept_entries)
+    expected_group_labels: dict[str, list[str]] = {}
+    for candidate in snapshot.get("candidates") or []:
+        concept_key = str(candidate.get("concept_key") or "")
+        group_key = str(candidate.get("group_key") or "")
+        label = str(candidate.get("question_label") or "")
+        if (
+            concept_key in concept_keys
+            and group_key in groups_by_key
+            and label
+        ):
+            group_concept_key = str(
+                groups_by_key[group_key].get("concept_key") or "")
+            if group_concept_key != concept_key:
+                errors.append(
+                    f"{label}: candidate concept_key {concept_key!r} does "
+                    f"not match group {group_key!r} home "
+                    f"{group_concept_key!r}")
+                continue
+            expected_group_labels.setdefault(group_key, []).append(label)
+
+    seen_group_keys: set[str] = set()
     seen_concepts: set[str] = set()
     question_rows = 0
     aggregate_by_group: dict[str, set[str]] = {}
+    visited_provenance: set[tuple[str, int]] = set()
     for name in ("Objective", "Descriptive"):
-        for i, row in enumerate(parsed["sheets"][name]["rows"], start=3):
+        sheet_rows = parsed["sheets"][name]["rows"]
+        row_numbers = parsed["sheets"][name].get("row_numbers")
+        if row_numbers is None:
+            row_numbers = list(range(3, 3 + len(sheet_rows)))
+        elif len(row_numbers) != len(sheet_rows):
+            errors.append(
+                f"{name}: read-back row number ledger differs from rows")
+            row_numbers = list(range(3, 3 + len(sheet_rows)))
+        for i, row in zip(row_numbers, sheet_rows):
             seen_concepts.add(str(row.get("concept_title") or ""))
             group_name = str(row.get("group_name") or "")
-            if group_name:
-                seen_group_names.add(group_name)
-                aggregate_by_group.setdefault(group_name, set()).add(
+            coordinate = (name, i)
+            group_key = provenance_by_row.get(coordinate, "")
+            if group_key:
+                visited_provenance.add(coordinate)
+            elif group_name and group_provenance is not None:
+                errors.append(
+                    f"{name} row {i}: group provenance is missing")
+            elif group_name:
+                matching_keys = keys_by_visible_name.get(group_name, [])
+                if len(matching_keys) == 1:
+                    group_key = matching_keys[0]
+                elif len(matching_keys) > 1:
+                    errors.append(
+                        f"{name} row {i}: group provenance required for "
+                        f"non-unique visible group name {group_name!r}")
+                else:
+                    errors.append(
+                        f"{name} row {i}: unknown group name {group_name!r}")
+            if group_key:
+                seen_group_keys.add(group_key)
+                expected_group = groups_by_key[group_key]
+                expected_name = str(expected_group.get("group_name") or "")
+                expected_display = str(
+                    expected_group.get("group_display_name") or "")
+                expected_type = str(expected_group.get("group_type") or "")
+                group_concept_key = str(
+                    expected_group.get("concept_key") or "")
+                concept_entry = concept_entries.get(group_concept_key)
+                if group_name != expected_name:
+                    errors.append(
+                        f"{name} row {i}: group_name {group_name!r} does "
+                        f"not match {group_key!r}")
+                if str(row.get("group_display_name") or "") != expected_display:
+                    errors.append(
+                        f"{name} row {i}: group_display_name does not "
+                        f"match {group_key!r}")
+                if str(row.get("group_type") or "") != expected_type:
+                    errors.append(
+                        f"{name} row {i}: group_type does not match "
+                        f"{group_key!r}")
+                if concept_entry is None:
+                    errors.append(
+                        f"{name} row {i}: {group_key!r} has unknown "
+                        f"concept home {group_concept_key!r}")
+                else:
+                    expected_concept_title = str(
+                        concept_entry["concept"].get("concept_title") or "")
+                    if str(row.get("concept_title") or "") != (
+                        expected_concept_title
+                    ):
+                        errors.append(
+                            f"{name} row {i}: concept home does not match "
+                            f"{group_key!r}")
+                aggregate_by_group.setdefault(group_key, set()).add(
                     str(row.get("group_question_labels") or ""))
             if str(row.get("chapter_duration") or "").strip():
                 errors.append(f"{name} row {i}: chapter_duration must be blank")
@@ -529,17 +708,26 @@ def validate_master_file(
     }
     for concept_title in sorted(expected_concepts - seen_concepts):
         errors.append(f"concept missing from Master: {concept_title!r}")
-    expected_group_names = {
-        str(g.get("group_name") or "") for g in groups
-    }
-    for group_name in sorted(expected_group_names - seen_group_names):
-        errors.append(f"group missing from Master: {group_name!r}")
-    del expected_group_keys
-    for group_name, aggregates in aggregate_by_group.items():
+    for group_key in sorted(expected_group_keys - seen_group_keys):
+        errors.append(f"group missing from Master: {group_key!r}")
+    for sheet, row_number in sorted(
+        set(provenance_by_row) - visited_provenance
+    ):
+        errors.append(
+            f"group provenance {sheet} row {row_number}: no read-back row")
+    for group_key, aggregates in aggregate_by_group.items():
         if len(aggregates) > 1:
             errors.append(
-                f"{group_name}: group_question_labels differs across "
+                f"{group_key}: group_question_labels differs across "
                 "repeated rows")
+            continue
+        actual_aggregate = next(iter(aggregates), "")
+        expected_aggregate = ", ".join(
+            expected_group_labels.get(group_key, []))
+        if actual_aggregate != expected_aggregate:
+            errors.append(
+                f"{group_key}: group_question_labels {actual_aggregate!r} "
+                f"!= {expected_aggregate!r}")
     return errors
 
 
@@ -559,7 +747,8 @@ def build_dual_output(
     concept_errors = validate_concept_file(
         parse_workbook(concepts_bytes), snapshot)
     master_errors = validate_master_file(
-        parse_workbook(master_bytes), snapshot, profile)
+        parse_workbook(master_bytes), snapshot, profile,
+        group_provenance=issues["group_provenance"])
     manifest = {
         "profile": profile["name"],
         "template_source": MANIFEST.get("source", ""),

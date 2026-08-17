@@ -89,6 +89,36 @@ def test_duplicate_group_identity_is_rejected_but_multiple_tiers_are_not():
     assert duplicates == [(1, "Basic", "(A) BG01")]
 
 
+def test_duplicate_group_key_is_rejected_globally_in_frozen_payload():
+    groups = [
+        {
+            "concept_id": 1,
+            "group_type": "Basic",
+            "group_key": "(A) BG01",
+            "group_sequence": 1,
+            "group_name": "Alpha — Basic",
+            "group_display_name": "Alpha — Basic",
+        },
+        {
+            "concept_id": 2,
+            "group_type": "Advanced",
+            "group_key": "(A) BG01",
+            "group_sequence": 1,
+            "group_name": "Beta — Advanced",
+            "group_display_name": "Beta — Advanced",
+        },
+    ]
+
+    assert rel.duplicate_group_identities(groups) == []
+    assert rel.duplicate_group_keys(groups) == ["(A) BG01"]
+    frozen = rel.freeze_payload({"groups": groups})
+    assert "duplicate group_key '(A) BG01'" in frozen["errors"]
+    assert not any(
+        error.startswith("duplicate group identity")
+        for error in frozen["errors"]
+    )
+
+
 def test_answer_restriction_is_never_silently_defaulted():
     base = {
         "candidate_id": "C1", "source_atom_ids": ["QINV-0001"],

@@ -1,9 +1,11 @@
 """Semantic groups: tiers, variant clustering, identity, and descriptions
 (MES spec §6 Stages 8–10, §7 Tag New / Rewrite Full, §8 group contract).
 
-Mechanical here: the difficulty→tier map, machine Group IDs, tier
-sequences, required empty shells, exact-partition validation, fingerprints,
-ordered label aggregates, and change detection for Tag New. Semantic and
+Internal machine Group IDs, friendly-name projection, tier sequences,
+required empty shells, exact-partition validation, fingerprints, ordered
+label aggregates, and change detection for Tag New are mechanical. Semantic
+level authorship moves to the recorded verdict path in the next verified
+slice. Semantic and
 therefore model work with an independent critic: which questions form one
 variant family, and every occupied group's HOW + WHAT description.
 
@@ -111,10 +113,28 @@ def group_key_for(concept_machine_id: str, tier: str, sequence: int) -> str:
     return f"({concept_machine_id}) {code}{int(sequence):02d}"
 
 
+def friendly_group_name(concept_name: str, tier: str) -> str:
+    """Return Q12's learner-visible name from an explicit concept name.
+
+    Machine identity is deliberately not accepted as a fallback here.  The
+    caller must supply the concept's explicit display name, while
+    ``group_key_for`` owns internal identity.
+    """
+    name = str(concept_name or "").strip()
+    if not name:
+        raise GroupingError(
+            "an explicit concept display name is required for "
+            "the visible group name")
+    if tier not in TIER_CODES:
+        raise GroupingError(f"unknown group tier {tier!r}")
+    return f"{name} — {tier}"
+
+
 def group_record(
     *,
     concept_id,
     concept_machine_id: str,
+    concept_name: str,
     tier: str,
     sequence: int,
     member_candidate_ids: list[str],
@@ -124,15 +144,16 @@ def group_record(
     authority: Mapping | None = None,
 ) -> dict:
     """AssessmentGroup record (spec §5.5) under the §8.2 naming contract:
-    group_name = group_display_name = the exact machine Group ID."""
+    visible names are friendly and machine identity remains in group_key."""
     key = group_key_for(concept_machine_id, tier, sequence)
+    visible_name = friendly_group_name(concept_name, tier)
     return {
         "group_key": key,
         "concept_id": concept_id,
         "group_type": tier,
         "group_sequence": int(sequence),
-        "group_name": key,
-        "group_display_name": key,
+        "group_name": visible_name,
+        "group_display_name": visible_name,
         "family": family,
         "semantic_fingerprint": rel.sha256_json(
             sorted(member_candidate_ids)),
@@ -144,12 +165,15 @@ def group_record(
     }
 
 
-def required_shells(concept_id, concept_machine_id: str) -> list[dict]:
+def required_shells(
+    concept_id, concept_machine_id: str, concept_name: str,
+) -> list[dict]:
     """The BG01/IG01/AG01 shells every concept carries (spec §8.1, §8.3)."""
     return [
         group_record(
             concept_id=concept_id,
             concept_machine_id=concept_machine_id,
+            concept_name=concept_name,
             tier=tier, sequence=1,
             member_candidate_ids=[],
             description="NA",

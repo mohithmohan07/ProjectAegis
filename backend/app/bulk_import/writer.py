@@ -154,6 +154,19 @@ def question_placement_key(label: str, group: models.Group) -> tuple:
             group.group_key or group.group_name)
 
 
+def visible_question_placement_key(
+    label: str, group: models.Group,
+) -> tuple:
+    """Legacy workbook identity when no internal-key column is available.
+
+    The canonical workbook has only Q12's friendly ``group_name`` slot.  The
+    legacy Build Assessments append lane therefore needs this read-back alias
+    after its internal ``group_key`` and visible name are separated.  MES
+    releases keep using their snapshot ledger and never depend on this alias.
+    """
+    return (*question_placement_key(label, group)[:-1], group.group_name)
+
+
 def concept_placement_key(concept: models.Concept, topic: models.Topic) -> tuple:
     """Normalized identity + ancestor path for one concept placement.
 
@@ -1336,12 +1349,19 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
     for q in _questions(db, question_ids):
         for n, group in enumerate(_question_placements(q)):
             key = question_placement_key(q.question_label, group)
-            if q.question_label and key in index.q_placements:
+            existing_key = key
+            if (
+                q.origin == "concept_mapping"
+                and key not in index.q_placements
+            ):
+                existing_key = visible_question_placement_key(
+                    q.question_label, group)
+            if q.question_label and existing_key in index.q_placements:
                 appended["skipped"] += 1
                 # Existing row: refresh its question_source in place so a
                 # duplicate question arriving from another book accumulates
                 # sources instead of duplicating the row.
-                loc = index.q_rows.get(key)
+                loc = index.q_rows.get(existing_key)
                 if loc and q.question_source:
                     sheet_name, row_i = loc
                     col = index.sheet_meta[sheet_name]["q_src_col"]

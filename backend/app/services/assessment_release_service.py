@@ -123,22 +123,58 @@ def _machine_id(concept: Mapping) -> str:
 
 def _complete_required_shells(snapshot: dict) -> None:
     """Every concept carries BG01/IG01/AG01 (spec §8.1) — mechanical
-    bookkeeping: any tier the payload's groups do not already cover gets
-    its NA shell so questionless concepts survive into the Master."""
-    covered: set[tuple[str, str]] = {
-        (str(g.get("concept_key") or ""), str(g.get("group_type") or ""))
-        for g in snapshot["groups"]
-    }
+    bookkeeping: any exact required identity absent from the payload gets its
+    NA shell so questionless concepts survive into the Master."""
+    concept_names: dict[str, str] = {}
+    for topic in snapshot["topics"]:
+        for concept in topic.get("concepts") or []:
+            concept_key = str(concept.get("concept_key") or "")
+            concept_names[concept_key] = str(
+                concept.get("concept_display_name") or "")
+
+    for group in snapshot["groups"]:
+        concept_key = str(group.get("concept_key") or "")
+        concept_name = concept_names.get(concept_key)
+        if concept_name is None:
+            continue
+        visible_name = grouping.friendly_group_name(
+            concept_name, str(group.get("group_type") or ""))
+        group["group_name"] = visible_name
+        group["group_display_name"] = visible_name
+
+    groups_by_home_key: dict[tuple[str, str], list[dict]] = {}
+    for group in snapshot["groups"]:
+        home_key = (
+            str(group.get("concept_key") or ""),
+            str(group.get("group_key") or ""),
+        )
+        groups_by_home_key.setdefault(home_key, []).append(group)
     for topic in snapshot["topics"]:
         for concept in topic.get("concepts") or []:
             concept_key = str(concept.get("concept_key") or "")
             machine = _machine_id(concept)
-            for shell in grouping.required_shells(concept_key, machine):
-                if (concept_key, shell["group_type"]) in covered:
+            concept_name = concept_names[concept_key]
+            for shell in grouping.required_shells(
+                concept_key, machine, concept_name,
+            ):
+                home_key = (concept_key, shell["group_key"])
+                matches = groups_by_home_key.get(home_key, [])
+                if any(
+                    str(group.get("group_type") or "")
+                    == shell["group_type"]
+                    and int(group.get("group_sequence") or 0)
+                    == shell["group_sequence"]
+                    for group in matches
+                ):
                     continue
+                if matches:
+                    raise grouping.GroupingError(
+                        f"required shell {shell['group_key']!r} has "
+                        "inconsistent group_type or group_sequence")
                 shell = dict(shell)
                 shell["concept_key"] = concept_key
                 snapshot["groups"].append(shell)
+                groups_by_home_key.setdefault(home_key, []).append(shell)
 
 
 def create_release(
@@ -397,16 +433,27 @@ def upload_master_to_database(
                 raise UploadRefused(
                     f"group {group.get('group_key')!r} references a concept "
                     "outside the release snapshot")
-            record = db.query(models.Group).filter_by(
-                concept_id=concept_id,
-                group_type=str(group.get("group_type") or ""),
-                group_key=str(group.get("group_key") or ""),
-            ).one_or_none()
+            group_key = str(group.get("group_key") or "")
+            group_type = str(group.get("group_type") or "")
+            key_matches = db.query(models.Group).filter_by(
+                group_key=group_key).all()
+            exact_matches = [
+                record for record in key_matches
+                if record.concept_id == concept_id
+                and record.group_type == group_type
+            ]
+            if len(key_matches) != len(exact_matches) or len(
+                exact_matches
+            ) > 1:
+                raise UploadRefused(
+                    f"group_key {group_key!r} already belongs to a "
+                    "different or duplicate database group")
+            record = exact_matches[0] if exact_matches else None
             if record is None:
                 record = models.Group(
                     concept_id=concept_id,
-                    group_type=str(group.get("group_type") or ""),
-                    group_key=str(group.get("group_key") or ""),
+                    group_type=group_type,
+                    group_key=group_key,
                     group_sequence=int(group.get("group_sequence") or 0),
                     group_name=str(group.get("group_name") or ""),
                     group_display_name=str(
@@ -416,9 +463,15 @@ def upload_master_to_database(
                 db.add(record)
                 db.flush()
                 groups_created += 1
+            record.group_name = str(group.get("group_name") or "")
+            record.group_display_name = str(
+                group.get("group_display_name") or "")
+            record.group_sequence = int(group.get("group_sequence") or 0)
+            record.group_status = str(
+                group.get("group_status") or "Active")
             record.group_description = str(
                 group.get("semantic_description") or "")
-            groups_by_key[str(group.get("group_key") or "")] = record
+            groups_by_key[group_key] = record
 
         existing_labels = {
             q.question_label

@@ -137,17 +137,32 @@ def test_group_identity_follows_the_mes_naming_contract():
     key = ag.group_key_for("06MSBMA_3DS_PL_T01_SolidShapes", "Basic", 2)
     assert key == "(06MSBMA_3DS_PL_T01_SolidShapes) BG02"
     record = ag.group_record(
-        concept_id=1, concept_machine_id="C1", tier="Advanced",
-        sequence=1, member_candidate_ids=["CAND-1"])
-    assert record["group_name"] == record["group_display_name"] == "(C1) AG01"
+        concept_id=1, concept_machine_id="C1", concept_name="Solid Shapes",
+        tier="Advanced", sequence=1, member_candidate_ids=["CAND-1"])
+    assert record["group_key"] == "(C1) AG01"
+    assert record["group_name"] == record["group_display_name"] == (
+        "Solid Shapes — Advanced")
     assert record["group_status"] == "Active"
     assert record["group_sequence"] == 1
 
 
+def test_visible_group_name_requires_an_explicit_concept_name():
+    with pytest.raises(ag.GroupingError, match="explicit concept"):
+        ag.group_record(
+            concept_id=1, concept_machine_id="C1", concept_name="",
+            tier="Basic", sequence=1, member_candidate_ids=[])
+
+
 def test_every_concept_carries_the_three_required_shells():
-    shells = ag.required_shells(1, "C1")
+    shells = ag.required_shells(1, "C1", "Solid Shapes")
     assert [s["group_key"] for s in shells] == [
         "(C1) BG01", "(C1) IG01", "(C1) AG01"]
+    assert [s["group_name"] for s in shells] == [
+        "Solid Shapes — Basic",
+        "Solid Shapes — Intermediate",
+        "Solid Shapes — Advanced",
+    ]
+    assert all(s["group_name"] == s["group_display_name"] for s in shells)
     assert all(s["semantic_description"] == "NA" for s in shells)
     assert all(s["member_candidate_ids"] == [] for s in shells)
 
@@ -266,7 +281,8 @@ def test_occupied_group_description_is_authored_and_critic_bound():
 
 def test_membership_change_makes_the_description_stale():
     record = ag.group_record(
-        concept_id=1, concept_machine_id="C1", tier="Basic", sequence=1,
+        concept_id=1, concept_machine_id="C1", concept_name="Solid Shapes",
+        tier="Basic", sequence=1,
         member_candidate_ids=["CAND-1", "CAND-2"])
     assert not ag.description_is_stale(record, ["CAND-2", "CAND-1"])
     assert ag.description_is_stale(record, ["CAND-1", "CAND-3"])

@@ -214,6 +214,25 @@ def duplicate_group_identities(groups: Iterable[Mapping]) -> list[tuple]:
     return duplicates
 
 
+def duplicate_group_keys(groups: Iterable[Mapping]) -> list[str]:
+    """Return repeated internal keys, regardless of concept or tier.
+
+    ``group_key`` is the release-wide machine identity.  Reusing one key for
+    a different home is structural corruption, not a semantic concern that a
+    later judgment pass may accept with a flag.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for group in groups:
+        group_key = str(group.get("group_key") or "")
+        if not group_key:
+            continue
+        if group_key in seen and group_key not in duplicates:
+            duplicates.append(group_key)
+        seen.add(group_key)
+    return duplicates
+
+
 def primary_placement_errors(placements: Iterable[Mapping]) -> list[str]:
     """Exactly one home concept and group per question (spec §3.7)."""
     errors: list[str] = []
@@ -286,6 +305,8 @@ def freeze_payload(payload: Mapping) -> dict:
         errors.extend(validate_placement(placement))
     for identity in duplicate_group_identities(payload.get("groups") or []):
         errors.append(f"duplicate group identity {identity}")
+    for group_key in duplicate_group_keys(payload.get("groups") or []):
+        errors.append(f"duplicate group_key {group_key!r}")
     errors.extend(
         primary_placement_errors(payload.get("placements") or []))
     return {

@@ -431,6 +431,7 @@ def run_release_for_job(
             record = grouping.group_record(
                 concept_id=f"db:{concept_id}",
                 concept_machine_id=machine,
+                concept_name=concept.concept_display_name,
                 tier=tier,
                 sequence=sequence,
                 member_candidate_ids=list(family["member_candidate_ids"]),
