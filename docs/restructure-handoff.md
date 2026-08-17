@@ -353,6 +353,33 @@ Doc: §4 Phase 03, Q3, Q4/D3 (adaptive-40).
   critic-flagged rationale. No `40` literal in any validator.
 - The Pre Master contains generated questions only.
 
+**Owner steer, 17 Aug 2026 — what Pre-Learning is, and what its questions
+must be calibrated to.** Recorded because it governs the generation slice
+and was previously only implicit:
+
+1. *Pre-Learning is fundamentals.* The concepts build is driven by the
+   prerequisite material §4 names — what was taught in previous years, the
+   vocabulary the chapter uses as if already known, and the basics needed to
+   understand a particular line or concept. The Pre map is built from that
+   captured evidence, never from the finished Post map (that is the retired
+   derive-from-existing flow).
+2. *The questions are GENERATED, and generated to fit.* They are not
+   source questions and never can be (§4: current-chapter source questions
+   never appear in the Pre Master). Each must be authored for the **level,
+   grade, context, subject and board** of the chapter in hand — a
+   prerequisite question for a Grade 6 science chapter and one for a Grade 10
+   mathematics chapter are different artefacts even where the underlying
+   fundamental is the same.
+
+The mechanism for (2) already exists and must be used rather than
+re-invented: The Architect (§8.1) assembles the run's instruction set —
+subject topology guidance, grade-band vocabulary, language mode, board and
+publication conventions — and its hash already joins every decision key.
+The generation pass consumes that set, so calibration is evidence the model
+reasons over, never a table of per-grade rules in code. A hard-coded
+grade/subject branch deciding question shape would be Rule 1's forbidden
+judgment wearing a curriculum hat.
+
 ### Step 8 — Four-output release on the SOP/MES schema (Q5)
 Doc: §6, §7, Q5.
 - Migrate schema constants, writer, and acceptance tests to the
