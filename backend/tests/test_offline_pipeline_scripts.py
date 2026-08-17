@@ -118,10 +118,19 @@ def test_no_surviving_offline_tool_gates_on_the_models_item_count():
     critic returned a different number of topics — or of concepts inside a topic —
     than it had been handed. That structurally forbade the critic from dropping a
     concept it had just judged out of the current grade: a count quota (Rule 1)
-    and a critic promoted to a gate (Q10) in one line. Comparing one ``len()``
-    against another is the shape of that gate, and after the deletion no source
-    under ``aegis_pipeline`` has it.
+    and a critic promoted to a gate (Q10) in one line.
+
+    What made it a quota was NOT the ``len()`` against ``len()`` — it was that
+    one side came back from a critic pass whose job included dropping. This is
+    a tripwire on that shape, not a verdict about it: ``len(row) !=
+    len(header)`` in a writer is parsing/schema mechanics, which CLAUDE.md
+    explicitly allows. So a hit here is a question to answer, not a defect
+    proven, and a legitimate one is allow-listed below with its reason rather
+    than silently deleted from the sweep.
     """
+
+    # (file, reason) for comparisons proven to be parsing/schema mechanics.
+    allowed: set[tuple[str, int]] = set()
 
     offenders: list[str] = []
     for path in _source_files():
@@ -136,10 +145,17 @@ def test_no_surviving_offline_tool_gates_on_the_models_item_count():
                 and isinstance(operand.func, ast.Name)
                 and operand.func.id == "len"
             )
-            if len_calls >= 2:
+            if len_calls >= 2 and (path.name, node.lineno) not in allowed:
                 offenders.append(f"{path.name}:{node.lineno}")
 
-    assert not offenders, f"count-preservation gate(s) at {offenders}"
+    assert not offenders, (
+        "a len()-vs-len() comparison appeared in the offline tools at "
+        f"{offenders}. If either side is a collection a model returned, this "
+        "is the retired count-preservation quota growing back (Rule 1, and "
+        "Q10 when it gates a pass that may drop) — remove it. If it is "
+        "parsing or schema mechanics (a row width against a header width), "
+        "add it to `allowed` above with its reason."
+    )
 
 
 def test_mcq_and_fill_blank_rows_are_siblings_of_one_branch():
