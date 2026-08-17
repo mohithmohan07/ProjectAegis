@@ -15,8 +15,11 @@ def _clean_overrides():
 def test_registry_has_core_prompts():
     keys = {s.key for s in prompts.specs()}
     for key in ("assessment.base", "assessment.output", "content.katex_rules",
-                "concepts.system", "identify.system", "prelearning.system"):
+                "concepts.system", "identify.system",
+                "concepts.skeleton.system"):
         assert key in keys
+    # Step 7 retired the pre-learning derivation prompts with their lane.
+    assert not keys & {"prelearning.system", "prelearning.auditor"}
 
 
 def test_override_applies_to_build_prompt():
@@ -76,3 +79,35 @@ def test_admin_unknown_key_404(client):
     r = client.put("/admin/prompts/does.not.exist",
                    json={"text": "x"}, headers={"X-Admin-Token": token})
     assert r.status_code == 404
+
+
+def test_a_retired_prompt_override_is_pruned_instead_of_stranded():
+    """A saved override for a retired key must not become unreachable.
+
+    Deleting a registration would otherwise strand its override in
+    ``DATA_DIR/prompt_overrides.json`` forever: absent from ``GET
+    /admin/prompts``, rejected by ``PUT`` (``set_override`` raises
+    ``KeyError``), and un-resettable (the reset route's ``describe``
+    404s). Naming the key in ``RETIRED_PROMPT_KEYS`` makes the next read
+    drop it, from memory and from disk.
+    """
+    assert {"prelearning.system", "prelearning.auditor",
+            "concepts.misconceptions.system"} <= prompts.RETIRED_PROMPT_KEYS
+
+    # A production data dir written by the previous release.
+    prompts._save_overrides({
+        "prelearning.system": "operator text for a retired prompt",
+        "assessment.base": "operator text for a live prompt",
+    })
+    prompts._invalidate_cache()
+
+    assert not prompts.is_overridden("prelearning.system")
+    assert prompts.is_overridden("assessment.base")
+    with pytest.raises(KeyError):
+        prompts.get_text("prelearning.system")
+
+    # The prune is persisted, so it survives the next process too.
+    prompts._invalidate_cache()
+    assert not prompts.is_overridden("prelearning.system")
+    assert prompts.get_text("assessment.base") == (
+        "operator text for a live prompt")

@@ -342,7 +342,11 @@ def test_resumable_discovery_is_owner_and_learning_kind_scoped(
             filename="a-pre.mmd",
             mmd_text="c",
             status="converted",
-            generation_checkpoint={"stage": "pre_derivation_audited"},
+            # The ``pre`` learning_kind is deliberately still a legal value
+            # (step 7 retired the pre generation lane, not the column or the
+            # route contract), so a pre-kind job with a real checkpoint stage
+            # must still be excluded from the post lane's discovery.
+            generation_checkpoint={"stage": "canonical_skeleton"},
         ),
         models.UploadJob(
             owner_sub="discovery-b",
@@ -492,28 +496,25 @@ def test_drive_worker_can_export_owned_checkpoint_without_public_bypass(
     assert b'"format": "aegis-concept-checkpoint"' in content
 
 
-@pytest.mark.parametrize(
-    ("learning_kind", "route_prefix", "should_fail"),
-    [
-        ("post", "post-learning", False),
-        ("pre", "pre-learning", True),
-    ],
-)
+@pytest.mark.parametrize("should_fail", [False, True])
 def test_concept_routes_queue_post_accounting_drive_state_on_success_and_error(
     db,
     client,
     first_chapter,
     monkeypatch,
-    learning_kind,
-    route_prefix,
     should_fail,
 ):
+    # Step 7 retired the pre-learning generate route, so both arms run the
+    # post lane; the property under test is the accounting/backup queueing on
+    # the success and the error path, not the lane.
+    learning_kind = "post"
+    route_prefix = "post-learning"
     job = models.UploadJob(
         owner_sub=auth.LOCAL_OWNER_SUB,
         module="build_concepts",
         upload_type="document",
         learning_kind=learning_kind,
-        filename=f"{learning_kind}-final.mmd",
+        filename=f"{learning_kind}-{'error' if should_fail else 'final'}.mmd",
         mmd_text="source",
         status="converted",
         generation_checkpoint={"stage": "stale-remote-stage"},

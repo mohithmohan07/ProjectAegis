@@ -297,23 +297,6 @@ def generate_post_learning(
     )
 
 
-def generate_pre_learning_from_upload(
-    db,
-    job_id: int,
-    target_chapter_id: int,
-    *args,
-    **kwargs,
-) -> dict[str, Any]:
-    return _run_generation_release(
-        build_concepts.generate_pre_learning_from_upload,
-        db,
-        job_id,
-        target_chapter_id,
-        *args,
-        **kwargs,
-    )
-
-
 def _wrap_generation(original):
     """Test/helper adapter retaining a wrapper-shaped interface."""
 

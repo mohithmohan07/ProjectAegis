@@ -64,7 +64,6 @@ _FROZEN_CORE_PROMPT_KEYS = (
     "concepts.culmination.system",
     "concepts.method_anchor_recovery.system",
     "concepts.method_worked_example.system",
-    "concepts.misconceptions.system",
     "concepts.missing_topic_recovery.system",
     "concepts.opening_recovery.system",
     "concepts.question_polishing.system",
@@ -238,9 +237,9 @@ def empty_set_sha256() -> str:
 
     This is the null Architect assembly: no authored slot text, current
     frozen core. It is the default instruction identity for run paths that
-    do not assemble (pre-learning, standalone transformations) and for
-    checkpoints written before the field existed — so a frozen-core prompt
-    change still invalidates those fingerprints, which is the point.
+    do not assemble (standalone transformations) and for checkpoints written
+    before the field existed — so a frozen-core prompt change still
+    invalidates those fingerprints, which is the point.
     """
 
     return instruction_set_sha256(_empty_slots(), _frozen_core_entries())

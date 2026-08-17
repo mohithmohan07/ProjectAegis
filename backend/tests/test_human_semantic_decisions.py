@@ -2042,13 +2042,16 @@ def test_expand_existing_never_selects_the_only_candidate_implicitly(
         )
 
 
-def test_pre_learning_pause_records_decision_then_resumes_explicitly(
+def test_pause_records_decision_then_resumes_explicitly(
     db,
     first_chapter,
     monkeypatch,
 ):
-    job, chapter = _job_at_81_percent(
-        db, first_chapter, learning_kind="pre")
+    # This property used to be pinned on the pre-learning upload lane, which
+    # step 7 retired. The property itself is lane-independent: submitting the
+    # decision never starts generation, and only an explicit resume completes
+    # the run.
+    job, chapter = _job_at_81_percent(db, first_chapter)
     generation_calls = 0
     resolution_seen = False
     identity = {
@@ -2064,36 +2067,21 @@ def test_pre_learning_pause_records_decision_then_resumes_explicitly(
             raise semantic_recovery.HumanDecisionRequired(_pending_packet())
         resolution_seen = True
         assert resolution["choice"] == "expand_existing"
-        return [{
+        return _seal_live_generation_result([{
             "topic": "Nationalism",
             "parent_concept": "Nationalism",
             "concept_title": "Renan's Idea of a Nation",
             "concept_details": "Description: A nation safeguards liberty.",
             "keywords": "nation, liberty",
-        }]
+        }], _kwargs["artifacts"])
 
     monkeypatch.setattr(
         build_concepts.config, "use_live_generation", lambda: True)
     monkeypatch.setattr(generation, "concepts_from_mmd", post_map)
     monkeypatch.setattr(
-        generation,
-        "pre_learning_from_rows",
-        lambda *_args, **_kwargs: [{
-            "topic": "Prerequisites",
-            "parent_concept": "Civic Ideas",
-            "concept_title": "Meaning of Liberty",
-            "concept_details": "Description: Understand liberty.",
-            "keywords": "liberty",
-        }],
-    )
-    monkeypatch.setattr(
         build_concepts,
         "_deposit_and_publish_concepts",
-        lambda *_args, **_kwargs: (
-            [901],
-            [],
-            {"written": 1, "sources_updated": 0, "parent_column": True},
-        ),
+        _mock_live_deposit(901),
     )
     monkeypatch.setattr(
         build_concepts.drive_checkpoints,
@@ -2101,11 +2089,11 @@ def test_pre_learning_pause_records_decision_then_resumes_explicitly(
         lambda *_args, **_kwargs: None,
     )
 
-    _stopped_run(lambda: build_concepts.generate_pre_learning_from_upload(
+    _stopped_run(lambda: build_concepts.generate_post_learning(
         db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB))
     assert generation_calls == 1
     db.refresh(job)
-    assert job.learning_kind == "pre"
+    assert job.learning_kind == "post"
     assert job.status == "converted"
     assert job.generation_checkpoint["stage"] == "pre_type_assignment"
     stopped_decision_id = job.pending_decision["decision_id"]
@@ -2120,7 +2108,7 @@ def test_pre_learning_pause_records_decision_then_resumes_explicitly(
     assert recorded["resume_required"] is True
     assert generation_calls == 1  # submission never starts generation
 
-    result = build_concepts.generate_pre_learning_from_upload(
+    result = build_concepts.generate_post_learning(
         db, job.id, chapter.id, owner_sub=auth.LOCAL_OWNER_SUB)
     assert result["concept_ids"] == [901]
     assert generation_calls == 2

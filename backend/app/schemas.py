@@ -366,11 +366,6 @@ class HumanSemanticDecisionResponse(BaseModel):
     resolved_decision: dict = Field(default_factory=dict)
 
 
-class PreLearningExistingRequest(BaseModel):
-    chapter_ids: list[int]
-    source_book: str = ""
-
-
 # --------------------------------------------------------------------------- #
 # Tagging (many-to-many) + import preview
 # --------------------------------------------------------------------------- #

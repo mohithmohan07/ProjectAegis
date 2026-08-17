@@ -278,7 +278,16 @@ class UploadJob(Base):
     upload_type: Mapped[str] = mapped_column(String(32), default="textbook")
     # textbook|questions|questions_and_answers|handwritten|document
     textbook_mode: Mapped[str] = mapped_column(String(16), default="")  # extract|create
-    learning_kind: Mapped[str] = mapped_column(String(16), default="")  # post|pre (build_concepts)
+    # post|pre (build_concepts). Restructure step 7 retired the legacy
+    # pre-learning generation lane but DELIBERATELY keeps this column and its
+    # ``post|pre`` domain: this repo has no migration system (``db.py``'s
+    # ``_ensure_columns`` is additive ``ALTER TABLE ADD COLUMN`` only and
+    # returns early for non-SQLite), so the column cannot be dropped, the value
+    # is inside every stored checkpoint fingerprint, and ``pre`` is public API
+    # contract on the two checkpoint routes, typed as a closed union by the
+    # frontend client. Pre/Post is becoming a per-output property rather than a
+    # per-job one; convergence is step 8's.
+    learning_kind: Mapped[str] = mapped_column(String(16), default="")
     # Book this upload came from (e.g. "RD Sharma"); drives multi-source tagging.
     source_book: Mapped[str] = mapped_column(String(128), default="")
     filename: Mapped[str] = mapped_column(String(255), default="")

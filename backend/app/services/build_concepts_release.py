@@ -96,7 +96,7 @@ def _instruction_set_summary(job: models.UploadJob) -> dict[str, Any]:
 
     Reads the persisted ``source.instruction-set.json`` from the job's
     artifact directory (written at generate time). Empty when no set was
-    assembled (legacy runs, pre-learning).
+    assembled (legacy runs).
     """
     from . import instruction_architect
 

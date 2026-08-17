@@ -160,7 +160,7 @@ def require_workbooks_live() -> None:
     raise LiveRequiredError(MSG_WORKBOOKS)
 
 
-# OpenAI model for concept extraction / pre-learning derivation. The same model
+# OpenAI model for concept extraction and concept generation. The same model
 # family the Create Workbooks pipeline is validated with. Provider-capacity mode
 # is enabled by default: live calls receive the model's configured maximum output
 # allowance, while oversized source is losslessly batched within its separate

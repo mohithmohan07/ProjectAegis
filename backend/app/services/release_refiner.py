@@ -26,7 +26,9 @@ module is §8.3's model-driven pre-stage output Refiner.
 
 Scope exclusions this round (later steps of docs/aegis-restructure.md §10):
 
-* the pre-learning outputs (step 7);
+* the Phase 03 prerequisite (Pre) outputs — step 7 retired the legacy
+  pre-learning derivation lane and its release wrapper; the replacement
+  outputs 03/04 join this seam when step 7 builds them;
 * the DB-deposit (non-release) path.
 
 The seam accepts an ``output_kind`` parameter so those lanes join without

@@ -32,14 +32,6 @@ def _checkpoint_stage():
     )
 
 
-def _pre_checkpoint_stage():
-    return generation._make_concept_checkpoint(
-        "pre_derivation_draft",
-        records=[],
-        pre_draft={"topics": []},
-    )
-
-
 def _job(db, *, learning_kind="post"):
     chapter = db.query(models.Chapter).order_by(models.Chapter.id).first()
     assert chapter is not None
@@ -64,11 +56,10 @@ def _job(db, *, learning_kind="post"):
     job.generation_checkpoint = (
         build_concepts._merge_generation_checkpoint_history(
             None,
-            (
-                _pre_checkpoint_stage()
-                if learning_kind == "pre"
-                else _checkpoint_stage()
-            ),
+            # Step 7 retired the three pre_derivation_* stages; the
+            # ``post|pre`` learning_kind contract is deliberately kept, so
+            # both lanes now checkpoint at the same surviving stage.
+            _checkpoint_stage(),
             fingerprint=build_concepts._generation_checkpoint_fingerprint(
                 job, chapter),
             target_identity=build_concepts._generation_target_identity(chapter),

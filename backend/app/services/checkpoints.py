@@ -1863,6 +1863,14 @@ def resumable_jobs(
     owner_sub: str | None = None,
     learning_kind: str,
 ) -> tuple[list[dict], int]:
+    """Resumable Build Concepts checkpoints owned by ``owner_sub``.
+
+    The ``post|pre`` domain is kept deliberately after restructure step 7
+    retired the legacy pre-learning generation lane: it is public API contract
+    (a closed union in the frontend client), it is part of every stored
+    checkpoint fingerprint, and the backing column cannot be dropped because
+    this repo has no migration system.
+    """
     kind = str(learning_kind or "").strip().lower()
     if kind not in {"post", "pre"}:
         raise ValueError("learning_kind must be post or pre")

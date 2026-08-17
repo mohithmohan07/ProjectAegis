@@ -127,57 +127,6 @@ def _post_generate_endpoint(
     )
 
 
-def _pre_generate_endpoint(
-    job_id: int,
-    req: schemas.PostLearningGenerateRequest,
-    db: Session = Depends(get_db),
-    user: auth.Principal = Depends(auth.require_user),
-):
-    try:
-        job = uploads.get_job(
-            db,
-            job_id,
-            owner_sub=user.sub,
-            module="build_concepts",
-            learning_kind="pre",
-        )
-    except uploads.UploadJobNotFound as exc:
-        raise HTTPException(404, str(exc))
-    if job.status in {"generated", release_svc.RELEASE_STATUS}:
-        raise HTTPException(
-            409,
-            "this upload already has a released or published output; start a new upload",
-        )
-    if uploads.is_job_running(job_id):
-        raise HTTPException(
-            409,
-            "generation is already running for this upload; wait for the active run to finish",
-        )
-
-    def work():
-        worker_db = SessionLocal()
-        try:
-            return uploads.run_with_openai_usage(
-                worker_db,
-                job_id,
-                lambda: release_contract.generate_pre_learning_from_upload(
-                    worker_db,
-                    job_id,
-                    req.target_chapter_id,
-                    owner_sub=user.sub,
-                ),
-                owner_sub=user.sub,
-            )
-        finally:
-            drive_checkpoints.schedule_checkpoint_backup(job_id)
-            worker_db.close()
-
-    return progress.stream(
-        work,
-        title="Build Concepts — pre-learning generation",
-    )
-
-
 def install(router) -> None:
     if getattr(router, "_RELEASE_API_CONTRACT_VERSION", 0) >= _CONTRACT_VERSION:
         return
@@ -192,11 +141,5 @@ def install(router) -> None:
         "/build-concepts/post-learning/uploads/{job_id}/generate",
         "POST",
         _post_generate_endpoint,
-    )
-    _replace_route(
-        router,
-        "/build-concepts/pre-learning/uploads/{job_id}/generate",
-        "POST",
-        _pre_generate_endpoint,
     )
     router._RELEASE_API_CONTRACT_VERSION = _CONTRACT_VERSION

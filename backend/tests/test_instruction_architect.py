@@ -88,7 +88,7 @@ def test_offline_defaults_are_deterministic_and_empty_slotted():
     }
     assert first["review_flags"] == []
     # The null assembly is the same identity every non-assembling caller
-    # (pre-learning, legacy checkpoints) resolves to.
+    # (legacy checkpoints, standalone transformations) resolves to.
     assert first["instruction_set_sha256"] == architect.empty_set_sha256()
     # The frozen core is enumerated and hashed.
     assert "concepts.skeleton.system" in first["frozen_core_registry_keys"]

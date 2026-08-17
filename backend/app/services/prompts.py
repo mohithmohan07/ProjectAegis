@@ -34,6 +34,27 @@ _REGISTRY: dict[str, PromptSpec] = {}
 _lock = threading.RLock()
 _overrides_cache: dict[str, str] | None = None
 
+# Prompt keys a previous release registered and this one has retired.
+#
+# An operator override for a retired key would otherwise be stranded in
+# ``DATA_DIR/prompt_overrides.json`` forever: invisible in ``GET
+# /admin/prompts`` (which lists the registry), unreachable by ``PUT`` (
+# :func:`set_override` raises ``KeyError``), and un-resettable (the reset
+# route's ``describe`` 404s). Naming the retired key here lets
+# :func:`_load_overrides` drop it on the next read. This is mechanics, not
+# judgment about prompt content: the key no longer addresses anything the
+# code can run, so the stored text can never take effect again.
+RETIRED_PROMPT_KEYS: frozenset[str] = frozenset({
+    # Retired with the legacy pre-learning derivation lane (restructure
+    # step 7): Phase 03 captures prerequisites during the run instead of
+    # deriving them from a finished Post map.
+    "prelearning.system",
+    "prelearning.auditor",
+    # Retired with ``generation._ensure_misconceptions_via_api``: the
+    # phase 3 analyse pass now authors learner analysis.
+    "concepts.misconceptions.system",
+})
+
 
 def _overrides_path() -> Path:
     return config.DATA_DIR / "prompt_overrides.json"
@@ -48,13 +69,26 @@ def _load_overrides() -> dict[str, str]:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                _overrides_cache = {str(k): str(v) for k, v in data.items()}
+                loaded = {str(k): str(v) for k, v in data.items()}
             else:
-                _overrides_cache = {}
+                loaded = {}
         except (json.JSONDecodeError, OSError):
-            _overrides_cache = {}
+            loaded = {}
     else:
-        _overrides_cache = {}
+        loaded = {}
+    stranded = [key for key in loaded if key in RETIRED_PROMPT_KEYS]
+    if stranded:
+        for key in stranded:
+            del loaded[key]
+        _overrides_cache = loaded
+        try:
+            _save_overrides(loaded)
+        except OSError:
+            # A read-only data dir must not break startup; the in-memory
+            # prune already makes the retired key inert for this process.
+            pass
+        return _overrides_cache
+    _overrides_cache = loaded
     return _overrides_cache
 
 

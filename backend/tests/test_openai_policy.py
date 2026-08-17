@@ -422,7 +422,12 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     # and anti-monotony regeneration calls. The recorded cell decision is now
     # kernel-owned; question generation authors once and fails closed on an
     # incomplete batch instead of running a second semantic retry lane.
-    assert len(generation_calls) == 37
+    # 34 after step 7 retired the legacy pre-learning derivation lane: its
+    # draft and syllabus-auditor calls (purpose="pre_learning") and the
+    # learner-analysis rewrite loop's call (purpose="concept_detailing")
+    # all went with it. The "pre_learning" purpose itself stays declared in
+    # aegis_pipeline/openai_policy.py for the offline CLIs.
+    assert len(generation_calls) == 34
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls

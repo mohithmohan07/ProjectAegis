@@ -1788,190 +1788,39 @@ def test_topic_headings_prefer_main_sections_over_subtopics():
 
 
 # --------------------------------------------------------------------------- #
-# Full-GPT passes: misconceptions, duplicate merge, merged cells, no-loss types
+# Full-GPT passes: duplicate merge, merged cells, no-loss types
 # --------------------------------------------------------------------------- #
 
-def test_learner_analysis_via_api_replaces_generic_text(monkeypatch):
-    def fake_openai(system, user, **kw):
-        assert "Misconceptions" in system and "Error Analysis" in system
-        return {"rows": [{
-            "topic": "Triangles", "parent_concept": "Similarity",
-            "concept": "Basic Proportionality Theorem",
-            "concept_description": (
-                "Description: unchanged\n"
-                "Misconception/ Error Analysis: Misconceptions: Students may "
-                "believe any line through two sides of a triangle creates "
-                "proportional segments; Error Analysis: Students may apply "
-                "the ratio to non-parallel cutting lines or form AD/DB and "
-                "AE/EC without first checking that DE is parallel to BC."
-            ),
-            "keywords": "",
-        }]}
+def test_no_learner_analysis_rewrite_machinery_survives():
+    """The retry-loop learner-analysis writer is gone from app/.
 
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "Triangles", "parent_concept": "Similarity",
-        "concept_title": "Basic Proportionality Theorem",
-        "concept_details": (
-            "Description: Relates parallel lines and proportional segments. // "
-            "Misconceptions: Students may apply Basic Proportionality Theorem "
-            "as a memorized rule without checking the conditions, context, or "
-            "representation given in the problem."
-        ),
-        "keywords": "",
-    }]
-    out = g._ensure_misconceptions_via_api(records, meta=g._metadata(subject="Math"))
-    details = out[0]["concept_details"]
-    assert "memorized rule" not in details
-    assert "any line through two sides" in details
-    assert "non-parallel cutting lines" in details
-    assert "Misconceptions:" in details
-    assert "Error Analysis:" in details
-    assert "Relates parallel lines and proportional segments." in details
-
-
-def test_learner_analysis_via_api_fails_closed_when_no_row_is_usable(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        g,
-        "_openai_json",
-        lambda *args, **kwargs: {
-            "rows": [{
-                "topic": "Triangles",
-                "parent_concept": "Similarity",
-                "concept": "Basic Proportionality Theorem",
-                "concept_description": "Description: unchanged",
-                "keywords": "",
-            }],
-        },
-    )
-    records = [{
-        "topic": "Triangles",
-        "parent_concept": "Similarity",
-        "concept_title": "Basic Proportionality Theorem",
-        "concept_details": (
-            "Description: Relates parallel lines and proportional segments."
-        ),
-        "keywords": "",
-    }]
-
-    with pytest.raises(
-        RuntimeError,
-        match="specific learner-analysis generation returned unusable rows",
-    ):
-        g._ensure_misconceptions_via_api(
-            records, meta=g._metadata(subject="Math"))
-
-
-def test_learner_analysis_via_api_retries_only_unresolved_rows(monkeypatch):
-    titles = ["Fair Test", "Systematic Observation"]
-    calls: list[dict] = []
-
-    def analysis_row(title: str, *, valid: bool) -> dict:
-        return {
-            "concept": title,
-            "misconception": (
-                "Students may believe that one observation proves a "
-                "universal pattern."
-                if valid else "Students may find this difficult."
-            ),
-            "error_analysis": (
-                "Students may omit the time and conditions when recording "
-                "each trial."
-                if valid else "Students may answer incorrectly."
-            ),
-        }
-
-    def fake_openai(_system, user, **_kwargs):
-        payload = json.loads(
-            user.split(
-                "Rows missing usable Misconceptions and/or Error Analysis "
-                "sections:\n",
-                1,
-            )[1].split("\n\nVALIDATION FEEDBACK", 1)[0]
+    ``_ensure_misconceptions_via_api`` and its predicate
+    ``_learner_analysis_needs_rewrite`` were the Pre lane's Q1 machinery
+    (a critic-gated retry loop with a max_attempts ceiling and an
+    allowed/banned verb vocabulary). Step 7 retired them with the lane;
+    phase 3's analyse pass authors learner analysis now.
+    """
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    # Two files name the retired symbols on purpose and are not machinery:
+    # prompts.RETIRED_PROMPT_KEYS (so a stranded operator override is pruned
+    # rather than left unreachable) and the Fixer's halt register (so it does
+    # not keep claiming an F27 seam the tree no longer has).
+    tombstones = {
+        app_dir / "services" / "prompts.py",
+        app_dir / "services" / "phase3" / "fixer.py",
+    }
+    hits = sorted(
+        f"{path.name}:{token}"
+        for path in app_dir.rglob("*.py")
+        if path not in tombstones
+        for token in (
+            "_ensure_misconceptions_via_api",
+            "_learner_analysis_needs_rewrite",
+            "concepts.misconceptions.system",
         )
-        requested = [row["concept"] for row in payload["rows"]]
-        calls.append({"requested": requested})
-        if len(calls) == 1:
-            return {"rows": [
-                analysis_row(titles[0], valid=True),
-                analysis_row(titles[1], valid=False),
-            ]}
-        return {"rows": [analysis_row(titles[1], valid=True)]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "Investigation",
-        "parent_concept": "Scientific Method",
-        "concept_title": title,
-        "concept_details": f"Description: {title}.",
-        "keywords": "",
-    } for title in titles]
-
-    repaired = g._ensure_misconceptions_via_api(
-        records, meta=g._metadata(subject="Science"), max_attempts=3)
-
-    assert calls == [
-        {"requested": titles},
-        {"requested": [titles[1]]},
-    ]
-    assert all(
-        not g._learner_analysis_needs_rewrite(row["concept_details"])
-        for row in repaired
+        if token in path.read_text(encoding="utf-8")
     )
-
-
-def test_learner_analysis_action_only_retry_recovers_stubborn_error(
-    monkeypatch,
-):
-    calls: list[str] = []
-
-    def fake_openai(_system, user, **_kwargs):
-        calls.append(user)
-        if len(calls) < 4:
-            error = (
-                "Students may believe that consecutive odd numbers can be "
-                "added in any order."
-            )
-        else:
-            error = (
-                "Students may miscalculate the running total by adding one "
-                "odd term twice, producing a sum that no longer equals the "
-                "cube."
-            )
-        return {"rows": [{
-            "concept": "Cubes as Sums of Consecutive Odd Numbers",
-            "misconception": (
-                "Students may believe every odd number is itself a perfect "
-                "cube."
-            ),
-            "error_analysis": error,
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "Cubic Numbers",
-        "parent_concept": "Odd-number Patterns",
-        "concept_title": "Cubes as Sums of Consecutive Odd Numbers",
-        "concept_details": (
-            "Description: A cube can be represented by an appropriate block "
-            "of consecutive odd numbers."
-        ),
-        "keywords": "",
-    }]
-
-    repaired = g._ensure_misconceptions_via_api(
-        records, meta=g._metadata(subject="Mathematics"))
-
-    assert len(calls) == 4
-    assert all(
-        "ACTION-ONLY ERROR_ANALYSIS CONTRACT" in call
-        for call in calls
-    )
-    assert not g._learner_analysis_needs_rewrite(
-        repaired[0]["concept_details"])
-    assert "adding one odd term twice" in repaired[0]["concept_details"]
+    assert hits == []
 
 
 def test_terminal_validation_rejects_both_title_substitution_fallbacks():

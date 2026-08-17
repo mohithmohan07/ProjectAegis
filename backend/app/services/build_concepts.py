@@ -3,10 +3,12 @@
   Post Learning — upload a document (any format), convert to MMD, parse it into
   concepts, and deposit them under a chapter.
 
-  Pre Learning — two options:
-    A. Upload: upload -> MMD -> derive pre-learning concepts -> deposit.
-    B. Use existing Post Learning: pick one or more chapters; their existing
-       post-learning concepts drive generation of pre-learning concepts.
+  Restructure step 7 retired the two legacy Pre Learning lanes (upload, and
+  "derive from existing Post Learning"): both ran the whole Post pipeline
+  first and then derived prerequisites from the finished map. Phase 03
+  captures prerequisites during the run instead. ``UploadJob.learning_kind``
+  and the checkpoint routes' ``post|pre`` contract are deliberately kept —
+  see the column's own note in ``models.py``.
 
   All created concepts are written to the Bulk Import output workbook
   (append-only) as concept-catalog rows, and chapters' pre_topics / post_topics
@@ -872,8 +874,10 @@ def _deposit_concepts(
         strict_mastery_statement=pre_post == "Post",
         source_text=source_text if pre_post == "Post" else "",
         # Q1 gate split (Post only): analysis existence is scoped to the
-        # rows the chapter inventory allotted items to; the Pre lane
-        # keeps the legacy every-row contract (None) until step 7.
+        # rows the chapter inventory allotted items to. Step 7 retired the
+        # legacy Pre lanes, so nothing in production reaches the ``None``
+        # (every-row) branch today; the parameter stays for the Phase 03
+        # Pre map, whose own contract is decided when that lane lands.
         analysis_allotted_keys=(
             concept_validator.analysis_allotted_keys(records)
             if pre_post == "Post"
@@ -883,8 +887,9 @@ def _deposit_concepts(
     classified_fatal = generation._fatal_errors(report)
     # Post deposit is the same terminal boundary as generation's final gate, so
     # use its complete fatal-code policy even when no inventory was supplied.
-    # Pre-learning validation deliberately remains tolerant of warnings emitted
-    # by Post-only/intermediate contracts.
+    # The non-Post branch deliberately remains tolerant of warnings emitted by
+    # Post-only/intermediate contracts. No production caller reaches it since
+    # step 7 retired the legacy Pre lanes.
     fatal = (
         classified_fatal
         if pre_post == "Post"
@@ -1340,7 +1345,7 @@ def _legacy_generation_checkpoint_fingerprint(
 def _run_instruction_set_sha256(instruction_set_sha256: str | None) -> str:
     """Resolve the instruction identity a fingerprint binds to.
 
-    ``None`` (callers that do not assemble: pre-learning, tests, legacy
+    ``None`` (callers that do not assemble: tests, legacy
     checkpoints without the stored field) resolves to the hash of the EMPTY
     instruction set over the current frozen core — so even those
     fingerprints move when a frozen-core prompt changes, which is the
@@ -1502,7 +1507,7 @@ def _merge_generation_checkpoint_history(
         )
         if source_resolution_applied:
             # Applying a verified-PDF block changes semantic_source_sha256.
-            # Every concept/pre-learning stage was derived from the old text
+            # Every concept stage was derived from the old text
             # and must be rebuilt. Keep only the ready Phase 3 graph so its
             # already-paid hierarchy and critic work remains reusable.
             source_order = generation._checkpoint_order(
@@ -4569,361 +4574,4 @@ def generate_post_learning(
         "output_certificate_sha256": str(
             (deposited_grounding or {}).get("certificate_sha256") or ""
         ),
-    }
-
-
-# --------------------------------------------------------------------------- #
-# Pre Learning
-# --------------------------------------------------------------------------- #
-
-def create_pre_learning_upload_job(
-    db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
-    owner_sub: str | None = None,
-) -> models.UploadJob:
-    """Stage the file only — conversion to MMD is a separate explicit step."""
-    job = models.UploadJob(
-        owner_sub=uploads.normalize_owner_sub(owner_sub),
-        module="build_concepts", upload_type="document", learning_kind="pre",
-        filename=Path(filename).name, mmd_text="", status="uploaded",
-        source_book=source_book.strip(),
-    )
-    return uploads.persist_new_job(db, job, raw_bytes)
-
-
-def generate_pre_learning_from_upload(
-    db: Session,
-    job_id: int,
-    target_chapter_id: int,
-    *,
-    owner_sub: str | None = None,
-) -> dict:
-    job = uploads.get_job(
-        db,
-        job_id,
-        owner_sub=owner_sub,
-        module="build_concepts",
-        learning_kind="pre",
-    )
-    if job.status != "converted":
-        if job.status == "generated":
-            raise ValueError(
-                "this upload has already been generated; start a new upload")
-        raise ValueError("convert the uploaded document to MMD before generating")
-    chapter = db.get(models.Chapter, target_chapter_id)
-    if not chapter:
-        raise ValueError("upload job or target chapter not found")
-    if not job.mmd_text:
-        raise ValueError("convert the uploaded document to MMD before generating")
-    progress.log(f"Pre-learning generation for chapter '{chapter.chapter_title}'.")
-
-    # Extract the chapter's concept map first, then derive prerequisites from
-    # it. Live mode runs the full dependency-architecture derivation (syllabus
-    # filter + auditor pass); dry mode keeps the deterministic framing.
-    artifacts: dict = {}
-    fingerprint = _generation_checkpoint_fingerprint(job, chapter)
-    target_identity = _generation_target_identity(chapter)
-    stored_checkpoint = job.generation_checkpoint or {}
-    resume_checkpoint = (
-        stored_checkpoint
-        if _checkpoint_identity_matches_generation(
-            stored_checkpoint, job=job, chapter=chapter)
-        else None
-    )
-    if stored_checkpoint and resume_checkpoint is None:
-        message = _checkpoint_mismatch_message(
-            stored_checkpoint,
-            expected_fingerprint=fingerprint,
-            expected_target=target_identity,
-        )
-        progress.log(message, level="error")
-        raise ValueError(message)
-    resumed: dict = {}
-    if resume_checkpoint:
-        resume_checkpoint, resumed = (
-            _persist_compatible_generation_checkpoint_mirror(
-                db,
-                job,
-                fingerprint=fingerprint,
-                target_identity=target_identity,
-                target_chapter_id=target_chapter_id,
-            )
-        )
-    initial_agent_resolution_ids: set[str] = set()
-    existing_pause = _existing_human_decision_pause(
-        db,
-        job,
-        resume_checkpoint,
-        agent_resolution_ids=initial_agent_resolution_ids,
-        owner_sub=owner_sub,
-    )
-    if existing_pause is not None:
-        return existing_pause
-    _raise_if_source_replacement_required(resume_checkpoint)
-    if resume_checkpoint:
-        stage_label = (
-            resumed.get("stage_label")
-            or resumed.get("stage")
-            or "saved stage"
-        )
-        progress.log(
-            f"Resuming from checkpoint '{stage_label}'; every earlier "
-            "compatible completed stage will be reused.",
-            level="success",
-        )
-
-    def save_checkpoint(checkpoint: dict) -> None:
-        discarded_stage = (
-            str(checkpoint.get("stage") or "").strip()
-            if checkpoint.get("checkpoint_action") == "discard_stage"
-            else ""
-        )
-        durable = _merge_generation_checkpoint_history(
-            job.generation_checkpoint,
-            checkpoint,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-        )
-        job.generation_checkpoint = durable
-        if discarded_stage:
-            next_retry = (
-                "retry resumes from the newest remaining compatible stage"
-                if durable
-                else "retry restarts generation from the beginning"
-            )
-            job.detail = (
-                f"Discarded invalid generation checkpoint "
-                f"'{discarded_stage}'; {next_retry}."
-            )
-            uploads.persist_current_openai_usage(
-                db, job.id, owner_sub=owner_sub
-            )
-            drive_checkpoints.schedule_checkpoint_backup(job.id)
-            progress.log(
-                f"Discarded durable checkpoint stage: {discarded_stage}.",
-                level="warning",
-            )
-            return
-        if (
-            "question_task_inventory" in checkpoint
-            or "mined_types" in checkpoint
-        ):
-            _store_inventory(job, {
-                "question_task_inventory": checkpoint.get(
-                    "question_task_inventory") or {},
-                "mined_types": checkpoint.get("mined_types") or {},
-            })
-        if (
-            checkpoint.get("source_review_resolution_applied")
-            or str(checkpoint.get("stage") or "").strip()
-            == "source_topic_review"
-        ):
-            job.question_inventory = {}
-        label = (
-            checkpoint.get("stage_label")
-            or checkpoint.get("stage")
-            or "completed stage"
-        )
-        job.detail = (
-            f"Generation checkpoint saved at {label}; retry resumes from "
-            "the newest compatible stage."
-        )
-        # Keep the portable/Drive checkpoint's usage current without adding
-        # the active run's already-persisted responses a second time.
-        uploads.persist_current_openai_usage(
-            db, job.id, owner_sub=owner_sub
-        )
-        drive_checkpoints.schedule_checkpoint_backup(job.id)
-        progress.log(
-            f"Saved durable checkpoint: {label} "
-            f"({float(checkpoint.get('progress') or 0.0):.1%}).",
-            level="success",
-        )
-
-    def generation_attempt() -> list[dict]:
-        artifacts.clear()
-        current_resume = (
-            copy.deepcopy(job.generation_checkpoint)
-            if _checkpoint_matches_generation(
-                job.generation_checkpoint or {},
-                job=job,
-                chapter=chapter,
-            )
-            else resume_checkpoint
-        )
-        with _human_decision_resolution_context(current_resume):
-            base = generation.concepts_from_mmd(
-                job.mmd_text,
-                subject=chapter.subject,
-                board=chapter.board,
-                grade=chapter.grade,
-                unit=chapter.unit,
-                chapter_title=chapter.chapter_title,
-                chapter_id=chapter.id,
-                chapter_code=chapter.chapter_code,
-                learning_kind="Post",
-                artifacts=artifacts,
-                resume_checkpoint=current_resume,
-                checkpoint_callback=save_checkpoint,
-                completion_progress=0.98,
-            )
-        _store_inventory(job, artifacts)
-        # The target concept map may have advanced its checkpoint during this
-        # attempt. Pre-learning must resume from that current durable envelope,
-        # including any repaired draft/audit stage retained from a prior pass.
-        pre_resume = (
-            copy.deepcopy(job.generation_checkpoint)
-            if _checkpoint_matches_generation(
-                job.generation_checkpoint or {},
-                job=job,
-                chapter=chapter,
-            )
-            else current_resume
-        )
-        return generation.pre_learning_from_rows(
-            base,
-            subject=chapter.subject,
-            grade=chapter.grade,
-            board=chapter.board,
-            chapter_title=chapter.chapter_title,
-            unit=chapter.unit,
-            resume_checkpoint=pre_resume,
-            checkpoint_callback=save_checkpoint,
-        )
-
-    def generation_and_deposit_attempt() -> tuple[
-        list[dict], list[int], list[int], dict
-    ]:
-        pre_records = generation_attempt()
-        try:
-            created_ids, merged_ids, written = _deposit_and_publish_concepts(
-                db,
-                chapter_id=target_chapter_id,
-                records=pre_records,
-                pre_post="Pre",
-                source_book=_job_source_label(job),
-            )
-        except Exception:
-            # Preserve the separately committed generation checkpoint and
-            # remove every partially materialized prerequisite row.
-            db.rollback()
-            db.refresh(job)
-            raise
-        return pre_records, created_ids, merged_ids, written
-
-    paused, pipeline_result = _run_with_human_decision_pause(
-        generation_and_deposit_attempt,
-        db=db,
-        job=job,
-        fingerprint=fingerprint,
-        target_chapter_id=target_chapter_id,
-        owner_sub=owner_sub,
-        initial_agent_resolution_ids=initial_agent_resolution_ids,
-    )
-    if paused is not None:
-        return paused
-    pre_records, created_ids, merged_ids, written = pipeline_result
-
-    job.status = "generated"
-    job.deposit_scope_type = "chapter"
-    job.deposit_scope_ids = [target_chapter_id]
-    job.result_ids = created_ids
-    job.generation_checkpoint = {}
-    job.detail = (
-        f"created {len(created_ids)} pre-learning concepts from upload, "
-        f"merged sources into {len(merged_ids)} existing"
-    )
-    db.commit()
-    progress.set_progress(1.0, label="Done")
-    progress.log(
-        f"Created {len(created_ids)} pre-learning concepts "
-        f"({len(merged_ids)} merged).", level="success")
-    progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
-    progress.log(
-        "Parent concept export: "
-        + ("parent_concept column" if written.get("parent_column") else "related_concepts fallback")
-    )
-    return {
-        "job_id": job_id,
-        "concepts_created": len(created_ids),
-        "concepts_merged": len(merged_ids),
-        "concept_ids": created_ids + merged_ids,
-        "rows_appended": written["written"],
-        "sources_updated": written["sources_updated"],
-        "output_workbook": str(config.BULK_IMPORT_OUTPUT),
-        "inventory_items": len((job.question_inventory or {}).get("items", [])),
-    }
-
-
-def generate_pre_learning_from_existing(
-    db: Session, chapter_ids: list[int], source_book: str = "",
-) -> dict:
-    """Option B: derive pre-learning concepts from existing post-learning chapters."""
-    chapters = db.query(models.Chapter).filter(models.Chapter.id.in_(chapter_ids)).all()
-    if not chapters:
-        raise ValueError("no chapters selected")
-
-    planned: list[tuple[int, list[dict]]] = []
-    per_chapter: dict[int, int] = {}
-    for chapter in chapters:
-        post_concepts = [
-            c for t in chapter.topics if t.pre_post_learning == "Post" for c in t.concepts
-        ]
-        if not post_concepts:
-            per_chapter[chapter.id] = 0
-            continue
-        pre_records = generation.pre_learning_from_concepts(post_concepts)
-        planned.append((chapter.id, [
-            {
-                "topic": rec["topic"],
-                "concept_title": rec["concept_title"],
-                "parent_concept": rec.get("parent_concept", ""),
-                "concept_details": rec["concept_details"],
-                "keywords": rec.get("keywords", ""),
-            }
-            for rec in pre_records
-        ]))
-
-    created_ids: list[int] = []
-    merged_ids: list[int] = []
-    try:
-        with workbook_sync.output_workbook_lock():
-            db.expire_all()
-            for chapter_id, pre_records in planned:
-                chapter = db.get(models.Chapter, chapter_id)
-                if chapter is None:
-                    raise ValueError("target chapter not found")
-                created, merged = _deposit_concepts(
-                    db, chapter, pre_records, "Pre", source_book)
-                created_ids += created
-                merged_ids += merged
-                active_ids = set(created + merged)
-                _sync_chapter_topic_summary(
-                    chapter,
-                    _chapter_meta_summary(
-                        chapter,
-                        active_ids,
-                        pre_post="Pre",
-                    ),
-                    active_concept_ids=active_ids,
-                    pre_post="Pre",
-                )
-                per_chapter[chapter.id] = len(created)
-            written = _commit_and_publish_concept_workbook(
-                db,
-                config.BULK_IMPORT_OUTPUT,
-                created_ids + merged_ids,
-            )
-    except Exception:
-        db.rollback()
-        raise
-    return {
-        "chapters": len(chapters),
-        "concepts_created": len(created_ids),
-        "concepts_merged": len(merged_ids),
-        "concept_ids": created_ids + merged_ids,
-        "per_chapter": per_chapter,
-        "rows_appended": written["written"],
-        "sources_updated": written["sources_updated"],
-        "output_workbook": str(config.BULK_IMPORT_OUTPUT),
     }
