@@ -36,7 +36,7 @@ from . import (
 from .phase3 import kernel
 
 
-_LEGACY_CELL_MARK_POLICY_VERSION = "assessment-legacy-cell-contract-1"
+_LEGACY_CELL_MARK_POLICY_VERSION = "assessment-legacy-cell-contract-2"
 
 _LEGACY_CELL_MARK_SYSTEM = (
     "You are the Aegis legacy blueprint-cell marks author. The user has "
@@ -454,7 +454,7 @@ def _recorded_cell_marks(
             "concept": copy.deepcopy(concept_payload),
         }
         decision = kernel.decide(
-            kind="assessment.cell",
+            kind="assessment.legacy_cell_contract",
             unit_id=cell_id,
             envelope_sha256=envelope_sha256,
             payload=payload,

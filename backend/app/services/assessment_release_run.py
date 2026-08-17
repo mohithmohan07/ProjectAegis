@@ -3,7 +3,9 @@
 The glue between the finished Build Concepts job and the two output files:
 
     source atoms  ->  cell classification (author + critic)
-                  ->  question/answer/rubric materialization (author + critic)
+                  ->  semantic question/answer/rubric materialization
+                  ->  Open/Specific answer-space verdict
+                  ->  marking decomposition, duration, and keyboard verdict
                   ->  one-home routing (author + critic)
                   ->  level verdicts  ->  variant clustering
                   ->  group descriptions  ->  touched-group QA
@@ -29,9 +31,11 @@ from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
 from .. import models
+from . import assessment_answer_restriction as answer_restriction
 from . import assessment_blueprint
 from . import assessment_cells as cell_decisions
 from . import assessment_grouping as grouping
+from . import assessment_marking as marking
 from . import assessment_materialization as materialization
 from . import assessment_quality as quality
 from . import assessment_release as rel
@@ -47,6 +51,10 @@ from .phase3 import kernel
 
 _CELL_AUDIT_FIELD = "_aegis_assessment_cell_verdict"
 _MATERIALIZATION_AUDIT_FIELD = "_aegis_assessment_materialization"
+_ANSWER_RESTRICTION_AUDIT_FIELD = (
+    "_aegis_assessment_answer_restriction"
+)
+_MARKING_AUDIT_FIELD = "_aegis_assessment_marking"
 _ROUTE_AUDIT_FIELD = "_aegis_assessment_route"
 _LEVEL_AUDIT_FIELD = "_aegis_assessment_level_verdict"
 _CLUSTER_AUDIT_FIELD = "_aegis_assessment_variant_cluster"
@@ -55,6 +63,8 @@ _QUALITY_AUDIT_FIELD = "_aegis_assessment_group_quality"
 
 _CELL_WARNING = "assessment_cell_review"
 _MATERIALIZATION_WARNING = "assessment_materialization_review"
+_ANSWER_RESTRICTION_WARNING = "assessment_answer_restriction_review"
+_MARKING_WARNING = "assessment_marking_review"
 _ROUTE_WARNING = "assessment_route_review"
 _LEVEL_WARNING = "assessment_level_review"
 _CLUSTER_WARNING = "assessment_variant_cluster_review"
@@ -63,6 +73,10 @@ _QUALITY_WARNING = "assessment_group_quality_review"
 
 _CELLS_SNAPSHOT = "source.phase3-assessment-cells.json"
 _MATERIALIZATIONS_SNAPSHOT = "source.phase3-assessment-materializations.json"
+_ANSWER_RESTRICTIONS_SNAPSHOT = (
+    "source.phase3-assessment-answer-restrictions.json"
+)
+_MARKINGS_SNAPSHOT = "source.phase3-assessment-markings.json"
 _ROUTES_SNAPSHOT = "source.phase3-assessment-routes.json"
 _LEVELS_SNAPSHOT = "source.phase3-assessment-levels.json"
 _GROUPS_SNAPSHOT = "source.phase3-assessment-groups.json"
@@ -128,6 +142,39 @@ def _append_warning(record: dict, warning: str) -> None:
     if warning not in flags:
         flags.append(warning)
     record["flags"] = flags
+
+
+def _candidate_rows_exactly(
+    stage: str,
+    candidates: list[Mapping],
+    rows: list[Mapping],
+) -> dict[str, Mapping]:
+    """Bind one ordered pass result to every candidate, fail-closed."""
+
+    expected = [
+        str(candidate.get("candidate_id") or "")
+        for candidate in candidates
+    ]
+    returned: list[str] = []
+    by_id: dict[str, Mapping] = {}
+    duplicates: set[str] = set()
+    for position, row in enumerate(rows, start=1):
+        if not isinstance(row, Mapping):
+            raise ReleaseRunError(
+                f"{stage} row {position} is not an object"
+            )
+        candidate_id = str(row.get("candidate_id") or "")
+        if candidate_id in by_id:
+            duplicates.add(candidate_id)
+        returned.append(candidate_id)
+        by_id[candidate_id] = row
+    if returned != expected or duplicates or len(by_id) != len(expected):
+        raise ReleaseRunError(
+            f"{stage} changed candidate coverage or order: "
+            f"expected={expected!r}; returned={returned!r}; "
+            f"duplicates={sorted(duplicates)!r}"
+        )
+    return by_id
 
 
 def _job_artifact_directory(job_id: int) -> Path | None:
@@ -418,6 +465,87 @@ def _snapshot_materializations(
     )
 
 
+def _snapshot_answer_restrictions(
+    directory: Path | None,
+    *,
+    envelope_sha256: str,
+    candidates: list[Mapping],
+) -> None:
+    rows = []
+    for candidate in candidates:
+        audit = candidate.get(_ANSWER_RESTRICTION_AUDIT_FIELD)
+        if not isinstance(audit, Mapping):
+            continue
+        rows.append({
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "answer_restriction": str(
+                candidate.get("answer_restriction") or ""
+            ),
+            "restriction_reason": str(
+                candidate.get("restriction_reason") or ""
+            ),
+            "answer_space_contract": str(
+                audit.get("answer_space_contract") or ""
+            ),
+            "required_elements": list(
+                audit.get("required_elements") or []
+            ),
+            "accepted_variations": list(
+                audit.get("accepted_variations") or []
+            ),
+            "evidence": str(audit.get("evidence") or ""),
+            "rationale": str(audit.get("rationale") or ""),
+            "registry": dict(audit.get("registry") or {}),
+            "flags": list(audit.get("flags") or []),
+            "authority": dict(audit.get("authority") or {}),
+        })
+    _write_snapshot(
+        directory,
+        _ANSWER_RESTRICTIONS_SNAPSHOT,
+        {
+            "envelope_sha256": envelope_sha256,
+            "answer_restrictions": rows,
+            "answer_restrictions_sha256": rel.sha256_json(rows),
+        },
+    )
+
+
+def _snapshot_markings(
+    directory: Path | None,
+    *,
+    envelope_sha256: str,
+    candidates: list[Mapping],
+) -> None:
+    rows = []
+    for candidate in candidates:
+        audit = candidate.get(_MARKING_AUDIT_FIELD)
+        if not isinstance(audit, Mapping):
+            continue
+        rows.append({
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "marks": candidate.get("marks"),
+            "question_duration": candidate.get("question_duration"),
+            "math_keyboard": str(candidate.get("math_keyboard") or ""),
+            "answers": list(candidate.get("answers") or []),
+            "sub_questions": list(candidate.get("sub_questions") or []),
+            "rationale": str(audit.get("rationale") or ""),
+            "blueprint_authority": dict(
+                audit.get("blueprint_authority") or {}
+            ),
+            "flags": list(audit.get("flags") or []),
+            "authority": dict(audit.get("authority") or {}),
+        })
+    _write_snapshot(
+        directory,
+        _MARKINGS_SNAPSHOT,
+        {
+            "envelope_sha256": envelope_sha256,
+            "markings": rows,
+            "markings_sha256": rel.sha256_json(rows),
+        },
+    )
+
+
 def _snapshot_routes(
     directory: Path | None,
     *,
@@ -678,7 +806,7 @@ def run_release_for_job(
         cells=cells,
     )
 
-    # Stage 4-6 — materialize candidates (zero-loss inside).
+    # Stage 4 — materialize complete semantic candidates (zero-loss inside).
     progress.log(f"Materializing {len(atoms)} assessment candidate(s).")
     materialize_provider, materialize_critic = _authority_pair(
         authorities, "materialize"
@@ -721,6 +849,114 @@ def run_release_for_job(
         if materialization_needs_review:
             _append_warning(candidate, _MATERIALIZATION_WARNING)
     _snapshot_materializations(
+        snapshot_directory,
+        envelope_sha256=envelope_sha,
+        candidates=candidates,
+    )
+
+    learner_text_before = _learner_text_snapshot(candidates)
+
+    # Stage 5 — decide Open/Specific from the complete, unweighted answer
+    # space and the authoritative v2.0 registry.  The registry is evidence,
+    # never an executable lookup; there is no local or sheet-kind default.
+    progress.log(
+        f"Classifying the answer space of {len(candidates)} candidate(s)."
+    )
+    restriction_provider, restriction_critic = _authority_pair(
+        authorities, "answer_restriction"
+    )
+    restriction_rows = answer_restriction.decide_restrictions(
+        candidates,
+        meta=meta,
+        envelope_sha256=envelope_sha,
+        provider=restriction_provider,
+        critic=restriction_critic,
+        store=store,
+        fixer=fixer,
+    )
+    restriction_by_candidate = _candidate_rows_exactly(
+        "assessment answer restriction", candidates, restriction_rows
+    )
+    for candidate in candidates:
+        verdict = restriction_by_candidate[candidate["candidate_id"]]
+        candidate["answer_restriction"] = str(
+            verdict.get("answer_restriction") or ""
+        )
+        candidate["restriction_reason"] = str(
+            verdict.get("restriction_reason") or ""
+        )
+        candidate[_ANSWER_RESTRICTION_AUDIT_FIELD] = {
+            "answer_restriction": candidate["answer_restriction"],
+            "restriction_reason": candidate["restriction_reason"],
+            "answer_space_contract": str(
+                verdict.get("answer_space_contract") or ""
+            ),
+            "required_elements": list(
+                verdict.get("required_elements") or []
+            ),
+            "accepted_variations": list(
+                verdict.get("accepted_variations") or []
+            ),
+            "evidence": str(verdict.get("evidence") or ""),
+            "rationale": str(verdict.get("rationale") or ""),
+            "registry": dict(verdict.get("registry") or {}),
+            "flags": list(verdict.get("flags") or []),
+            "authority": _stable_authority(verdict),
+        }
+        if _needs_review(verdict):
+            _append_warning(candidate, _ANSWER_RESTRICTION_WARNING)
+    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _snapshot_answer_restrictions(
+        snapshot_directory,
+        envelope_sha256=envelope_sha,
+        candidates=candidates,
+    )
+
+    # Stage 6 — allocate the explicit cell's canonical marks without changing
+    # the materializer's semantic answer space.  Duration and keyboard mode
+    # are authored here too; the workbook renderer has no local defaults.
+    progress.log(f"Authoring marking for {len(candidates)} candidate(s).")
+    marking_provider, marking_critic = _authority_pair(
+        authorities, "marking"
+    )
+    marking_rows = marking.decide_markings(
+        list(zip(candidates, cells)),
+        meta=meta,
+        envelope_sha256=envelope_sha,
+        provider=marking_provider,
+        critic=marking_critic,
+        store=store,
+        fixer=fixer,
+    )
+    marking_by_candidate = _candidate_rows_exactly(
+        "assessment marking", candidates, marking_rows
+    )
+    for candidate in candidates:
+        verdict = marking_by_candidate[candidate["candidate_id"]]
+        candidate["marks"] = verdict.get("marks")
+        candidate["question_duration"] = verdict.get("question_duration")
+        candidate["math_keyboard"] = str(
+            verdict.get("math_keyboard") or ""
+        )
+        candidate["answers"] = list(verdict.get("answers") or [])
+        candidate["sub_questions"] = list(
+            verdict.get("sub_questions") or []
+        )
+        candidate[_MARKING_AUDIT_FIELD] = {
+            "marks": candidate["marks"],
+            "question_duration": candidate["question_duration"],
+            "math_keyboard": candidate["math_keyboard"],
+            "rationale": str(verdict.get("rationale") or ""),
+            "blueprint_authority": dict(
+                verdict.get("blueprint_authority") or {}
+            ),
+            "flags": list(verdict.get("flags") or []),
+            "authority": _stable_authority(verdict),
+        }
+        if _needs_review(verdict):
+            _append_warning(candidate, _MARKING_WARNING)
+    _assert_learner_text_unchanged(learner_text_before, candidates)
+    _snapshot_markings(
         snapshot_directory,
         envelope_sha256=envelope_sha,
         candidates=candidates,
@@ -775,7 +1011,6 @@ def run_release_for_job(
     # Stage 8 — a recorded level verdict for every valid routed candidate.
     # No blueprint label is executable tier logic. An unresolved home remains
     # explicitly unplaced.
-    learner_text_before = _learner_text_snapshot(candidates)
     eligible: list[dict] = []
     for candidate in candidates:
         placement = placement_by_candidate.get(candidate["candidate_id"])

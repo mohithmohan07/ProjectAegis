@@ -125,7 +125,19 @@ def test_answer_restriction_is_never_silently_defaulted():
         "blueprint_cell_id": "CELL-01", "question": "Q?",
         "question_text": "Q?", "sheet_kind": "objective",
         "question_category": "MCQ", "cognitive_skill": "Remember",
-        "difficulty": "Less", "marks": 1,
+        "difficulty": "Less", "marks": 1, "question_duration": 2,
+        "math_keyboard": "", "restriction_reason": "Authored evidence.",
+        "answers": [
+            {
+                "answer_type": "Phrases", "answer_content": "A",
+                "correct_answer": "Yes", "answer_weightage": 1,
+            },
+            {
+                "answer_type": "Phrases", "answer_content": "B",
+                "correct_answer": "No", "answer_weightage": 0,
+            },
+        ],
+        "sub_questions": [],
     }
     missing = rel.validate_candidate(dict(base))
     assert any("answer_restriction" in e for e in missing)
@@ -134,6 +146,46 @@ def test_answer_restriction_is_never_silently_defaulted():
     assert open_objective == []
     assert rel.validate_candidate(
         dict(base, answer_restriction="Specific")) == []
+
+    near_match = dict(
+        base,
+        answer_restriction="Open",
+        answers=[dict(answer) for answer in base["answers"]],
+    )
+    near_match["answers"][0]["answer_weightage"] = "0.999"
+    assert any(
+        "objective answer 1 weightage 0.999 != 1" in error
+        for error in rel.validate_candidate(near_match)
+    )
+
+    for out_of_range in ("1e-10000", "1e1000000"):
+        invalid_duration = dict(
+            base,
+            answer_restriction="Open",
+            question_duration=out_of_range,
+        )
+        assert any(
+            "question_duration must be finite and positive" in error
+            for error in rel.validate_candidate(invalid_duration)
+        )
+
+    invalid_weight = dict(
+        base,
+        answer_restriction="Open",
+        answers=[dict(answer) for answer in base["answers"]],
+    )
+    invalid_weight["answers"][0]["answer_weightage"] = "1e1000000"
+    assert any(
+        "objective answer 1 weightage must be finite" in error
+        for error in rel.validate_candidate(invalid_weight)
+    )
+
+    invalid_weight["answers"][0]["answer_weightage"] = "+1"
+    invalid_weight["answers"][1]["answer_weightage"] = "-0"
+    assert any(
+        "weightage must be finite" in error
+        for error in rel.validate_candidate(invalid_weight)
+    )
 
 
 def test_release_model_persists_with_hashes(db):

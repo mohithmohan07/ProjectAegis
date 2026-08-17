@@ -68,6 +68,8 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     "_aegis_assessment_level_verdict",
     "_aegis_assessment_cell_verdict",
     "_aegis_assessment_materialization",
+    "_aegis_assessment_answer_restriction",
+    "_aegis_assessment_marking",
     "_aegis_assessment_route",
     "_aegis_assessment_variant_cluster",
     "_aegis_assessment_group_description",

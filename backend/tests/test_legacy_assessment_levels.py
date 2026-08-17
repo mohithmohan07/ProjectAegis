@@ -220,6 +220,96 @@ def test_production_legacy_levels_have_no_local_authority() -> None:
     assert '] or ["Understand"]' not in source
     assert '] or ["Moderate"]' not in source
     assert 'categories=categories or ["Multiple Choice Question"]' not in source
+    assert 'kind="assessment.legacy_cell_contract"' in source
+    assert (
+        '_LEGACY_CELL_MARK_POLICY_VERSION = '
+        '"assessment-legacy-cell-contract-2"'
+    ) in source
+    assert 'kind="assessment.cell"' not in source
+
+
+def test_legacy_cell_contract_redecides_under_its_distinct_kind(db) -> None:
+    concept = _new_concept(db)
+    cell = {
+        "cell_id": "CELL-LEGACY-CONTRACT",
+        "sheet_kind": "objective",
+        "question_category": "Multiple Choice Question",
+        "cognitive_skill": "Understand",
+        "difficulty": "Moderate",
+        "count": 1,
+        "appears_in": ["Pre/Post-Worksheet/Test"],
+        "concept_id": concept.id,
+        "source_policy": "generate",
+    }
+    meta = {"subject": "Science", "grade": "6"}
+    blueprint_cell = {
+        key: cell.get(key)
+        for key in (
+            "cell_id", "sheet_kind", "question_category",
+            "cognitive_skill", "difficulty", "count", "appears_in",
+            "concept_id", "source_policy",
+        )
+    }
+    payload = {
+        "stage": "assessment.legacy-cell-mark",
+        "rules": build_assessments._LEGACY_CELL_MARK_SYSTEM,
+        "critic_rules": build_assessments._LEGACY_CELL_MARK_CRITIC_SYSTEM,
+        "metadata": dict(meta),
+        "blueprint_cell": blueprint_cell,
+        "concept": build_assessments._legacy_concept(concept),
+    }
+    response = {
+        "cell_id": cell["cell_id"],
+        "marks": 1,
+        "question_duration": 2,
+        "math_keyboard": "",
+        "rationale": "Recorded fixture cell contract.",
+    }
+    store = kernel.DecisionStore()
+    old_calls = []
+
+    def old_provider(_request: dict) -> dict:
+        old_calls.append(1)
+        return dict(response)
+
+    old_decision = kernel.decide(
+        kind="assessment.cell",
+        unit_id=cell["cell_id"],
+        envelope_sha256=ENVELOPE_SHA256,
+        payload=payload,
+        provider=old_provider,
+        checker=build_assessments._legacy_cell_mark_checker(
+            cell["cell_id"], cell["sheet_kind"]
+        ),
+        store=store,
+        policy_version="assessment-legacy-cell-contract-1",
+    )
+    assert old_calls == [1]
+
+    new_calls = []
+
+    def new_provider(_request: dict) -> dict:
+        new_calls.append(1)
+        return dict(response)
+
+    decided = build_assessments._recorded_cell_marks(
+        [cell],
+        concepts_by_id={concept.id: concept},
+        meta=meta,
+        envelope_sha256=ENVELOPE_SHA256,
+        store=store,
+        provider=new_provider,
+    )
+
+    assert new_calls == [1]
+    assert len(store.keys()) == 2
+    authority = decided[cell["cell_id"]]["authority"]
+    assert authority["policy_version"] == "assessment-legacy-cell-contract-2"
+    assert authority["decision_key"] != old_decision["key"]
+    new_record = store.get(authority["decision_key"])
+    assert new_record is not None
+    assert new_record["kind"] == "assessment.legacy_cell_contract"
+    db.rollback()
 
 
 @pytest.mark.parametrize(

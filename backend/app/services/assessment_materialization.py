@@ -23,7 +23,7 @@ from . import assessment_release as rel
 from . import katex_rules
 from .phase3 import kernel
 
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-1"
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-2"
 
 # Workbook capacities are positional mechanics, not content judgments.
 MAX_OBJECTIVE_OPTIONS = 6
@@ -43,20 +43,18 @@ MATERIALIZE_SYSTEM = (
     "stay strictly inside the supplied curricular evidence. Never invent "
     "facts, values, or constraints.\n"
     "For Objective cells, return no more than six canonical options with "
-    "exactly one correct marker, its weightage equal to the cell marks, and "
-    "wrong options weighted zero. For Descriptive cells, return a complete "
-    "display answer, answer/rubric blocks, and any source-owned subquestions "
-    "with their marks and keyword slots. Preserve the exact marking "
-    "arithmetic.\n"
-    "Return Open or Specific from the complete answer space with a concise "
-    "reason. There is no default based on sheet kind, command word, subject, "
-    "or local label; an Objective item may be Open or Specific.\n"
+    "exactly one correct marker. For Descriptive cells, return a complete "
+    "display answer, complete semantic answer/rubric blocks, and every "
+    "source-owned subquestion with its complete keyword evidence.\n"
+    "Do not decide Open or Specific and do not allocate weights, subquestion "
+    "marks, keyword weights, duration, or keyboard mode. Dedicated later "
+    "decisions own answer restriction and marking; any such extra values in "
+    "your response are ignored.\n"
     "Use [Katex]...[/Katex] for rich mathematics and meaningful, neutral alt "
     "text for every image. Do not leak an answer in the question, options, or "
     "alt text.\n"
     "Return ONLY strict JSON:\n"
-    '{"candidate_id":"","question":"","answer_restriction":'
-    '"Open|Specific","restriction_reason":"","display_answer":"",'
+    '{"candidate_id":"","question":"","display_answer":"",'
     '"answers":[],"sub_questions":[],"answer_explanation":"",'
     '"requires_visual":false,"rationale":"evidence-bound reason"}'
 )
@@ -66,8 +64,9 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "materialization decision. Audit the exact proposed item against the "
     "complete source atom, curricular evidence, assets, and blueprint cell: "
     "source fidelity, answer correctness, answer-space preservation, "
-    "clarity and grade fit, rubric quality, marking, visual dependence, and "
-    "answer leakage. Open or Specific has no sheet-kind default. Do not "
+    "clarity and grade fit, semantic answer/rubric completeness, visual "
+    "dependence, and answer leakage. Do not classify Open/Specific or audit "
+    "mark allocation here. Do not "
     "rewrite, retry, or gate the proposal. Your dissent ships for review and "
     "the authored decision stands. State your honest confidence. There is no "
     "quota.\n"
@@ -135,7 +134,6 @@ def _validate_obligation(
 def _learner_rich_text(proposal: Mapping) -> list[str]:
     values = [
         proposal.get("question"),
-        proposal.get("restriction_reason"),
         proposal.get("display_answer"),
         proposal.get("answer_explanation"),
     ]
@@ -178,14 +176,8 @@ def _proposal_defects(
         proposal.get("question") or ""
     ).strip():
         defects.append("question must be a non-empty string")
-    restriction = proposal.get("answer_restriction")
-    if restriction not in rel.ANSWER_RESTRICTIONS:
-        defects.append(
-            f"answer_restriction must be one of {rel.ANSWER_RESTRICTIONS} "
-            f"(got {restriction!r}); never defaulted"
-        )
     for field in (
-        "restriction_reason", "display_answer", "answer_explanation", "rationale",
+        "display_answer", "answer_explanation", "rationale",
     ):
         if not isinstance(proposal.get(field), str):
             defects.append(f"{field} must be a string")
@@ -219,7 +211,6 @@ def _proposal_defects(
                 subquestions.append(subquestion)
 
     kind = str(cell.get("sheet_kind") or "")
-    marks = _to_float(cell.get("marks")) or 0.0
     if kind == "objective":
         if not 1 <= len(answers) <= MAX_OBJECTIVE_OPTIONS:
             defects.append(
@@ -234,26 +225,12 @@ def _proposal_defects(
             defects.append(
                 f"exactly one correct option required (got {len(correct)})"
             )
-        else:
-            weight = _to_float(correct[0].get("answer_weightage"))
-            if weight is None or abs(weight - marks) > 0.01:
-                defects.append(
-                    "correct option weightage "
-                    f"{correct[0].get('answer_weightage')!r} != marks {marks:g}"
-                )
-        for answer in answers:
-            if answer in correct:
-                continue
-            raw_weight = answer.get("answer_weightage")
-            if str(raw_weight or "").strip() == "":
-                continue  # blank workbook slots are mechanically zero
-            weight = _to_float(raw_weight)
-            if weight is None or abs(weight) > 0.01:
-                defects.append("wrong option weightage must be zero")
         contents = [
             str(answer.get("answer_content") or "").strip()
             for answer in answers
         ]
+        if any(not content for content in contents):
+            defects.append("objective options must have non-empty content")
         populated = [content for content in contents if content]
         if len(set(populated)) != len(populated):
             defects.append("duplicate option text")
@@ -262,33 +239,22 @@ def _proposal_defects(
     elif kind == "descriptive":
         if not str(proposal.get("display_answer") or "").strip():
             defects.append("missing display answer")
+        if not answers:
+            defects.append("descriptive needs at least one answer/rubric block")
         if len(answers) > MAX_DESCRIPTIVE_ANSWERS:
             defects.append(
                 f"more than {MAX_DESCRIPTIVE_ANSWERS} answer blocks"
             )
-        weights: list[float] = []
-        invalid_weights = False
         for position, answer in enumerate(answers, start=1):
-            raw_weight = answer.get("answer_weightage")
-            if str(raw_weight or "").strip() == "":
-                continue
-            weight = _to_float(raw_weight)
-            if weight is None:
+            if not str(answer.get("answer_content") or "").strip():
                 defects.append(
-                    f"answer {position} weightage must be finite and numeric"
-                )
-                invalid_weights = True
-            else:
-                weights.append(weight)
-        if weights and not invalid_weights and marks:
-            total = sum(weights)
-            if abs(total - marks) > 0.01:
-                defects.append(
-                    f"answer weightage sum {total:g} != marks {marks:g}"
+                    f"answer/rubric block {position} has no content"
                 )
         if len(subquestions) > MAX_SUBQUESTIONS:
             defects.append(f"more than {MAX_SUBQUESTIONS} subquestions")
         for position, subquestion in enumerate(subquestions, start=1):
+            if not str(subquestion.get("text") or "").strip():
+                defects.append(f"subquestion {position} has no text")
             keywords = subquestion.get("keywords")
             if not isinstance(keywords, list):
                 defects.append(
@@ -306,22 +272,11 @@ def _proposal_defects(
                         f"subquestion {position} keyword {keyword_position} "
                         "is not an object"
                     )
-        if subquestions and marks:
-            sub_marks = [
-                _to_float(subquestion.get("marks"))
-                for subquestion in subquestions
-            ]
-            for position, sub_mark in enumerate(sub_marks, start=1):
-                if sub_mark is None:
+                    continue
+                if not str(keyword.get("keyword") or "").strip():
                     defects.append(
-                        f"subquestion {position} marks must be finite and numeric"
-                    )
-            if None not in sub_marks:
-                total = sum(sub_marks)
-                if abs(total - marks) > 0.01:
-                    defects.append(
-                        f"subquestion marks sum {total:g} != parent marks "
-                        f"{marks:g}"
+                        f"subquestion {position} keyword {keyword_position} "
+                        "has no keyword text"
                     )
     defects.extend(_rich_text_defects(proposal))
     return defects
@@ -401,6 +356,25 @@ def _assemble(
         "flags": review_flags,
         "authority": authority,
     }
+    answers = copy.deepcopy(list(response.get("answers") or []))
+    for answer in answers:
+        if isinstance(answer, dict):
+            # Slice 4's dedicated marking pass is the sole authority for
+            # workbook weightage.  Preserve semantic option/rubric content,
+            # but never let an upstream draft allocation leak into Output 02.
+            answer["answer_weightage"] = ""
+            answer.pop("weightage", None)
+    sub_questions = copy.deepcopy(
+        list(response.get("sub_questions") or [])
+    )
+    for subquestion in sub_questions:
+        if not isinstance(subquestion, dict):
+            continue
+        subquestion["marks"] = ""
+        for keyword in subquestion.get("keywords") or []:
+            if isinstance(keyword, dict):
+                keyword["weightage"] = ""
+
     return {
         "candidate_id": candidate_id,
         "source_atom_ids": (
@@ -419,19 +393,19 @@ def _assemble(
         "question_appears_in": ", ".join(
             str(value) for value in cell.get("appears_in") or []
         ),
-        "answer_restriction": str(
-            response.get("answer_restriction") or ""
-        ),
-        "restriction_reason": str(response.get("restriction_reason") or ""),
+        # Populated only by assessment.answer_restriction.
+        "answer_restriction": "",
+        "restriction_reason": "",
         "display_answer": str(response.get("display_answer") or ""),
-        "answers": copy.deepcopy(list(response.get("answers") or [])),
-        "sub_questions": copy.deepcopy(
-            list(response.get("sub_questions") or [])
-        ),
+        "answers": answers,
+        "sub_questions": sub_questions,
         "answer_explanation": str(
             response.get("answer_explanation") or ""
         ),
         "requires_visual": bool(response.get("requires_visual")),
+        # Populated only by assessment.marking.
+        "question_duration": None,
+        "math_keyboard": "",
         "assets": copy.deepcopy(list(source.get("assets") or [])),
         "image_manifest": copy.deepcopy(source.get("image_manifest") or []),
         "image_urls": copy.deepcopy(source.get("image_urls") or []),

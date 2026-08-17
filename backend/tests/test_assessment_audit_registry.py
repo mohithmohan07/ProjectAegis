@@ -7,6 +7,8 @@ from app.services import build_concepts_release as release
 ASSESSMENT_AUDIT_FIELDS = {
     "_aegis_assessment_cell_verdict",
     "_aegis_assessment_materialization",
+    "_aegis_assessment_answer_restriction",
+    "_aegis_assessment_marking",
     "_aegis_assessment_route",
     "_aegis_assessment_level_verdict",
     "_aegis_assessment_variant_cluster",

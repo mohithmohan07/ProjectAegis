@@ -50,8 +50,11 @@ def _payload(
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 1.0,
+        "question_duration": 2.0,
+        "math_keyboard": "",
         "question_appears_in": "Pre/Post-Worksheet/Test",
         "answer_restriction": "Specific",
+        "restriction_reason": "The authored answer space is bounded.",
         "question": "Which of these is a solid?",
         "question_text": "Which of these is a solid?",
         "answers": [

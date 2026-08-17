@@ -194,33 +194,38 @@ Math/Physics families stay Open), Q12 (group naming).
 These were raised by the step-6 map and are **decided**; treat them as part of
 the brief above.
 
-**Slice 3 carry-forward (audited clean; act on these when next in the lane).**
+**Slice 3 carry-forward (retired in Slice 4; preserve these guarantees).**
 Slices 1–3 landed and were independently audited clean (grouping, then routing
 + cells + materialization; both slice-2 carryovers retired, concepts pipeline
-untouched). Three non-blocking follow-ups for slice 4/5 or a later touch of the
-assessment lane:
+untouched). Slice 4 completed all three follow-ups; they remain regression
+constraints for later assessment work:
 
 1. **`_FIXER_UNACCEPTABLE_CODES` does not exist** — an earlier version of this
    handoff referenced it as the fail-closed pattern. It was never needed: the
    kernel re-validates the Fixer's output against the *same* checker and raises
    `ContractError` on any surviving structural defect, so every marking /
    identity / arithmetic defect is unacceptable-with-flag by construction. That
-   is stronger than a code list. Document this in the assessment audit-registry
-   notes so a future reader isn't surprised the named set is absent.
+   is stronger than a code list. This is now recorded in
+   `docs/assessment-decision-registry.md`; do not add the named set.
 2. **Two schemas share `kind="assessment.cell"`** — the legacy
    `build_assessments._recorded_cell_marks` and the MES `assessment_cells`
    `decide_cells` use the same decision kind with different response schemas and
    checkers. Replay is safe today because their `policy_version` strings differ
    (`assessment-legacy-cell-contract-1` vs `assessment-cell-1`), but two schemas
-   under one kind is an audit-registry smell. Separate the kinds when next
-   touching that lane, preserving replay compatibility (a new kind changes the
-   decision key, so only rename alongside a policy-version bump or a recorded
-   re-decide).
+   under one kind was an audit-registry smell. Slice 4 renamed the legacy kind
+   to `assessment.legacy_cell_contract` and bumped its policy to
+   `assessment-legacy-cell-contract-2`, deliberately recording a re-decision;
+   preserve that separation.
 3. **`cell_id` uniqueness is implicit** — `assessment_cells.decide_cells`
    derives `cell_id = "CELL-" + decision_key[:16]` (64-bit) with no explicit
    output-uniqueness assertion; a collision is caught only downstream by the
-   materialization duplicate-`candidate_id` raise. Add an explicit uniqueness
-   assertion and a collision regression when next editing that module.
+   materialization duplicate-`candidate_id` raise. Slice 4 added an explicit
+   post-decision uniqueness assertion and prefix-collision regression; preserve
+   both.
+
+The implemented decision identities, audit fields, replay behavior, and the
+kernel's same-checker Fixer guarantee are recorded in
+`docs/assessment-decision-registry.md`.
 
 **The Open/Specific registry — now in the repo (AUTHORITATIVE).** The owner
 supplied the corrected v2.0 workbook; it is committed as
@@ -243,6 +248,18 @@ reference-workbook verdicts) as a second corroborating source. If a further
 correction of the workbook ever arrives, swap the files: the policy hash turns
 it into an automatic re-decide, no migration.
 
+**Slice 4 marking-evidence contract.** The full source named *Question-Paper
+Blueprint & Analysis* is not tracked in this repository. Until that owner
+artifact is supplied, the recorded assessment blueprint cell is canonical for
+the total marks and the adopted Phase-05 rules in `docs/aegis-restructure.md`
+are the marking-decomposition contract. The legacy, admin-overridable
+`assessment.rubric` prompt and the Open/Specific registry's worked mark
+examples are not substitutes for the missing artifact. Every
+`assessment.marking` audit records this evidence status alongside its explicit
+cell id and marks. A future owner artifact must be added as whole, versioned
+model evidence and hashed into a bumped marking policy; it is never recreated,
+parsed into executable rules, or silently claimed to have been present.
+
 **The Refiner dispatch is step-6 code.** There is no file-level freeze on
 steps 1–5. The real constraints are: golden fixtures are recorded verdicts and
 are never hand-edited; `rne_envelope.json` drifting is a red flag; the three
@@ -262,9 +279,9 @@ rather than a moved-together one.
 
 **Marking arithmetic stays fail-closed.** A Fixer decision may never
 accept-with-flag a weightage-sum mismatch, a mark-decomposition error, or a
-duplicate `group_key`. That is data corruption, not judgment — the same
-principle as the existing `_FIXER_UNACCEPTABLE_CODES` set, where identity and
-certificate codes are never acceptable-with-flag.
+duplicate `group_key`. That is data corruption, not judgment. No
+`_FIXER_UNACCEPTABLE_CODES` set exists or is needed: the kernel re-validates a
+Fixer response with the same checker and raises on any surviving defect.
 
 **Do not merely route around `post_generation.py`.** It is still consumed at
 `build_assessments.py:304` and `:619` (the legacy Build Assessments lane).

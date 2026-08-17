@@ -162,20 +162,32 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
     for candidate, response in zip(
         candidates, recorded["materialization_responses"]
     ):
-        assert {
-            key: candidate[key]
-            for key in response
-            if key != "rationale"
-        } == {
-            key: value
-            for key, value in response.items()
-            if key != "rationale"
-        }
+        for key in (
+            "candidate_id", "question", "display_answer", "answers",
+            "sub_questions", "answer_explanation", "requires_visual",
+        ):
+            if key in {"answers", "sub_questions"}:
+                continue
+            assert candidate[key] == response[key]
+        assert candidate["answer_restriction"] == ""
+        assert candidate["restriction_reason"] == ""
+        assert all(
+            answer["answer_weightage"] == ""
+            for answer in candidate["answers"]
+        )
+        assert all(
+            str(subquestion.get("marks") or "") == ""
+            and all(
+                str(keyword.get("weightage") or "") == ""
+                for keyword in subquestion.get("keywords") or []
+            )
+            for subquestion in candidate["sub_questions"]
+        )
         assert candidate["question"] == candidate["question_text"]
         audit = candidate["_aegis_assessment_materialization"]
         assert audit["rationale"] == response["rationale"]
         assert audit["authority"]["policy_version"] == (
-            "assessment-materialize-1"
+            "assessment-materialize-2"
         )
 
     for placement, response in zip(

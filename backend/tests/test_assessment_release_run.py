@@ -1,9 +1,10 @@
 """End-to-end orchestration: one generated job -> two published files.
 
 Every semantic stage is driven by scripted (author, critic) pairs, so the
-complete pipeline — atoms, cell classification, materialization, routing,
-level verdicts, clustering, descriptions, QA, release, atomic publication —
-runs offline exactly as wired for live use.
+complete pipeline — atoms, cell classification, semantic materialization,
+answer restriction, marking, routing, level verdicts, clustering,
+descriptions, QA, release, atomic publication — runs offline exactly as wired
+for live use.
 """
 from __future__ import annotations
 
@@ -163,6 +164,66 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "rationale": "preserves the constructed-response obligation",
         }
 
+    def answer_restriction_author(payload):
+        record("answer_restriction", payload)
+        candidate = payload["candidate"]
+        objective = candidate["sheet_kind"] == "objective"
+        return {
+            "candidate_id": candidate["candidate_id"],
+            "answer_restriction": "Specific" if objective else "Open",
+            "restriction_reason": (
+                "The response has one bounded correct option."
+                if objective else
+                "Materially different complete explanations can earn credit."
+            ),
+            "answer_space_contract": (
+                "Select the one correct option."
+                if objective else
+                "Explain the defining property with valid supporting wording."
+            ),
+            "required_elements": [
+                "the correct solid" if objective else "three dimensions"
+            ],
+            "accepted_variations": [
+                "equivalent wording"
+            ],
+            "evidence": "The complete question and semantic rubric decide it.",
+            "rationale": "Scripted evidence-bound answer-space verdict.",
+            "review_required": False,
+            "review_reason": "",
+        }
+
+    def marking_author(payload):
+        record("marking", payload)
+        candidate = payload["candidate"]
+        cell = payload["blueprint_evidence"]["explicit_blueprint_cell"]
+        answers = copy.deepcopy(candidate["answers"])
+        sub_questions = copy.deepcopy(candidate["sub_questions"])
+        if cell["sheet_kind"] == "objective":
+            for answer in answers:
+                answer["answer_weightage"] = (
+                    cell["marks"]
+                    if rel.is_correct_option(answer.get("correct_answer"))
+                    else 0
+                )
+            duration = 2
+            keyboard = ""
+        else:
+            assert len(answers) == 1
+            answers[0]["answer_weightage"] = cell["marks"]
+            duration = 5
+            keyboard = "No"
+        return {
+            "candidate_id": candidate["candidate_id"],
+            "question": candidate["question"],
+            "question_text": candidate["question_text"],
+            "answers": answers,
+            "sub_questions": sub_questions,
+            "question_duration": duration,
+            "math_keyboard": keyboard,
+            "rationale": "The explicit cell owns the complete decomposition.",
+        }
+
     def router(payload):
         record("route", payload)
         return {
@@ -223,6 +284,10 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
     return {
         "cells": (cell_author, verified_critic),
         "materialize": (materialize_author, verified_critic),
+        "answer_restriction": (
+            answer_restriction_author, verified_critic
+        ),
+        "marking": (marking_author, verified_critic),
         "route": (router, verified_critic),
         "level": (level_author, verified_critic),
         "cluster": (cluster_author, verified_critic),
@@ -262,11 +327,15 @@ def test_full_pipeline_publishes_a_ready_release(db):
     q = objective_rows[0]
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
     assert q["answer_restriction"] == "Specific"
+    assert q["question_duration"] == 2
     assert str(q["correct_answer_1"]) == "Yes"
     # Labels mint from the concept machine identity in source order.
     assert q["question_label"].endswith("Q01")
     assert descriptive_rows[0]["question_label"].endswith(
         ("Q01", "Q02"))
+    assert descriptive_rows[0]["answer_restriction"] == "Open"
+    assert descriptive_rows[0]["question_duration"] == 5
+    assert descriptive_rows[0]["math_keyboard"] == "No"
     # Both questions carry the model-authored Advanced tier even though their
     # blueprint difficulties are Less and Moderate. Two authored variant
     # families occupy that tier; the remaining required shells stay NA.
@@ -346,7 +415,22 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ] == "assessment-cell-1"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-1"
+        ] == "assessment-materialize-2"
+        restriction_authority = candidate[
+            "_aegis_assessment_answer_restriction"
+        ]["authority"]
+        assert restriction_authority["policy_version"].startswith(
+            "assessment-answer-restriction-2;"
+        )
+        assert candidate["_aegis_assessment_answer_restriction"][
+            "registry"
+        ]["registry_id"] == "registry-v2.0"
+        assert candidate["_aegis_assessment_marking"]["authority"][
+            "policy_version"
+        ] == "assessment-marking-2"
+        assert candidate["_aegis_assessment_marking"][
+            "blueprint_authority"
+        ]["full_question_paper_blueprint_available"] is False
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
         ] == "assessment-route-1"
@@ -761,12 +845,14 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
     expected_counts = {
         "cells": 2,
         "materialize": 2,
+        "answer_restriction": 2,
+        "marking": 2,
         "route": 2,
         "level": 2,
         "cluster": 1,
         "describe": 2,
         "qa": 2,
-        "critic": 13,
+        "critic": 17,
     }
     assert {key: len(calls.get(key, [])) for key in expected_counts} == (
         expected_counts
@@ -788,6 +874,8 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         for filename in (
             "source.phase3-assessment-cells.json",
             "source.phase3-assessment-materializations.json",
+            "source.phase3-assessment-answer-restrictions.json",
+            "source.phase3-assessment-markings.json",
             "source.phase3-assessment-routes.json",
             "source.phase3-assessment-levels.json",
             "source.phase3-assessment-groups.json",

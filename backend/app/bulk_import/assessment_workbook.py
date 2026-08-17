@@ -31,6 +31,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -195,12 +197,32 @@ def render_concept_file(snapshot: Mapping) -> bytes:
 # --------------------------------------------------------------------------- #
 
 def _question_record(candidate: Mapping, sheet: str) -> dict:
+    identity = str(
+        candidate.get("question_label")
+        or candidate.get("candidate_id")
+        or "candidate"
+    )
+    duration = _readback_decimal(candidate.get("question_duration"))
+    if duration is None or duration <= 0:
+        raise WorkbookRenderError(
+            f"{identity}: question_duration must be authored, finite, and "
+            "positive"
+        )
+    keyboard = candidate.get("math_keyboard")
+    if sheet == "Objective" and keyboard != "":
+        raise WorkbookRenderError(
+            f"{identity}: objective math_keyboard must be exactly blank"
+        )
+    if sheet == "Descriptive" and keyboard not in {"Yes", "No"}:
+        raise WorkbookRenderError(
+            f"{identity}: descriptive math_keyboard must be exactly Yes or No"
+        )
     record = {
         "question_label": candidate.get("question_label", ""),
         "question_category": candidate.get("question_category", ""),
         "cognitive_skills": candidate.get("cognitive_skill", ""),
         "question_source": candidate.get("question_source", ""),
-        "question_duration": candidate.get("question_duration", 1),
+        "question_duration": candidate["question_duration"],
         "question_appears_in": candidate.get("question_appears_in", ""),
         "answer_restriction": candidate.get("answer_restriction", ""),
         "level_of_difficulty": candidate.get("difficulty", ""),
@@ -224,7 +246,7 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
     else:  # Descriptive
-        record["math_keyboard"] = candidate.get("math_keyboard", "")
+        record["math_keyboard"] = candidate["math_keyboard"]
         record["display_answer"] = candidate.get("display_answer", "")
         if len(answers) > MAX_DESCRIPTIVE_ANSWERS:
             raise WorkbookRenderError(
@@ -475,6 +497,216 @@ def _header_errors(parsed: Mapping) -> list[str]:
     return errors
 
 
+def _readback_decimal(value: Any) -> Decimal | None:
+    """Parse one exact finite workbook number without truthy-zero tricks."""
+
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.startswith(("+", "-")):
+            return None
+    elif isinstance(value, (int, float, Decimal)):
+        text = str(value)
+    else:
+        return None
+    try:
+        number = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite():
+        return None
+    try:
+        wire_number = float(number)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(wire_number):
+        return None
+    if number != 0 and wire_number == 0:
+        return None
+    if Decimal(str(wire_number)) != number:
+        return None
+    return number
+
+
+def _populated(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _objective_marking_errors(
+    row: Mapping[str, Any], *, label: str, marks: Decimal | None,
+) -> list[str]:
+    errors: list[str] = []
+    correct_count = 0
+    weights: list[Decimal] = []
+    populated_options = 0
+    for n in range(1, MAX_OBJECTIVE_OPTIONS + 1):
+        fields = (
+            f"answer_type_{n}",
+            f"answer_content_{n}",
+            f"correct_answer_{n}",
+            f"answer_weightage_{n}",
+        )
+        if not any(_populated(row.get(field)) for field in fields):
+            continue
+        populated_options += 1
+        if not str(row.get(f"answer_content_{n}") or "").strip():
+            errors.append(f"{label}: option {n} has no answer content")
+        is_correct = rel.is_correct_option(row.get(f"correct_answer_{n}"))
+        if is_correct:
+            correct_count += 1
+        weight = _readback_decimal(row.get(f"answer_weightage_{n}"))
+        if weight is None:
+            errors.append(
+                f"{label}: option {n} weight must be finite and numeric"
+            )
+            continue
+        weights.append(weight)
+        if is_correct:
+            if weight <= 0:
+                errors.append(
+                    f"{label}: correct option {n} weight must be positive"
+                )
+            if marks is not None and weight != marks:
+                errors.append(
+                    f"{label}: correct weightage {weight} != marks {marks}"
+                )
+        elif weight != 0:
+            errors.append(
+                f"{label}: wrong option {n} weight must be exact zero"
+            )
+    if populated_options == 0:
+        errors.append(f"{label}: objective has no option/rubric blocks")
+    if correct_count != 1:
+        errors.append(f"{label}: {correct_count} correct options")
+    if (
+        marks is not None
+        and len(weights) == populated_options
+        and sum(weights, Decimal(0)) != marks
+    ):
+        errors.append(
+            f"{label}: option weights must sum exactly to marks {marks}"
+        )
+    return errors
+
+
+def _descriptive_marking_errors(
+    row: Mapping[str, Any], *, label: str, marks: Decimal | None,
+) -> list[str]:
+    errors: list[str] = []
+    answer_weights: list[Decimal] = []
+    populated_answers = 0
+    for n in range(1, MAX_DESCRIPTIVE_ANSWERS + 1):
+        fields = (
+            f"answer_type_{n}",
+            f"answer_content_{n}",
+            f"answer_weightage_{n}",
+        )
+        if not any(_populated(row.get(field)) for field in fields):
+            continue
+        populated_answers += 1
+        if not str(row.get(f"answer_content_{n}") or "").strip():
+            errors.append(
+                f"{label}: answer/rubric block {n} has no content"
+            )
+        weight = _readback_decimal(row.get(f"answer_weightage_{n}"))
+        if weight is None or weight <= 0:
+            errors.append(
+                f"{label}: answer/rubric weight {n} must be finite and positive"
+            )
+            continue
+        answer_weights.append(weight)
+    if populated_answers == 0:
+        errors.append(f"{label}: descriptive has no answer/rubric blocks")
+    if (
+        marks is not None
+        and len(answer_weights) == populated_answers
+        and sum(answer_weights, Decimal(0)) != marks
+    ):
+        errors.append(
+            f"{label}: answer/rubric weights must sum exactly to marks {marks}"
+        )
+
+    sub_marks: list[Decimal] = []
+    populated_subquestions = 0
+    for n in range(1, MAX_SUBQUESTIONS + 1):
+        keyword_fields = [
+            field
+            for m in range(1, MAX_SUBQUESTION_KEYWORDS + 1)
+            for field in (
+                f"sq{n}_answer_type_{m}",
+                f"sq{n}_weightage_{m}",
+                f"sq{n}_keyword_{m}",
+            )
+        ]
+        fields = [f"sub_question_{n}", f"sub_question_marks_{n}"]
+        if not any(
+            _populated(row.get(field)) for field in [*fields, *keyword_fields]
+        ):
+            continue
+        populated_subquestions += 1
+        if not str(row.get(f"sub_question_{n}") or "").strip():
+            errors.append(f"{label}: subquestion {n} has no text")
+        sub_mark = _readback_decimal(row.get(f"sub_question_marks_{n}"))
+        if sub_mark is None or sub_mark <= 0:
+            errors.append(
+                f"{label}: subquestion {n} marks must be finite and positive"
+            )
+        else:
+            sub_marks.append(sub_mark)
+
+        keyword_weights: list[Decimal] = []
+        populated_keywords = 0
+        for m in range(1, MAX_SUBQUESTION_KEYWORDS + 1):
+            fields = (
+                f"sq{n}_answer_type_{m}",
+                f"sq{n}_weightage_{m}",
+                f"sq{n}_keyword_{m}",
+            )
+            if not any(_populated(row.get(field)) for field in fields):
+                continue
+            populated_keywords += 1
+            if not str(row.get(f"sq{n}_keyword_{m}") or "").strip():
+                errors.append(
+                    f"{label}: subquestion {n} keyword {m} has no text"
+                )
+            weight = _readback_decimal(row.get(f"sq{n}_weightage_{m}"))
+            if weight is None or weight <= 0:
+                errors.append(
+                    f"{label}: subquestion {n} keyword {m} weight must be "
+                    "finite and positive"
+                )
+                continue
+            keyword_weights.append(weight)
+        if (
+            populated_keywords
+            and sub_mark is not None
+            and sub_mark > 0
+            and len(keyword_weights) == populated_keywords
+            and sum(keyword_weights, Decimal(0)) != sub_mark
+        ):
+            errors.append(
+                f"{label}: subquestion {n} keyword weights must sum exactly "
+                "to its marks"
+            )
+    if (
+        populated_subquestions
+        and marks is not None
+        and len(sub_marks) == populated_subquestions
+        and sum(sub_marks, Decimal(0)) != marks
+    ):
+        errors.append(
+            f"{label}: subquestion marks must sum exactly to marks {marks}"
+        )
+    return errors
+
+
 def validate_concept_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
     errors = _header_errors(parsed)
     if errors:
@@ -681,25 +913,29 @@ def validate_master_file(
             if restriction not in rel.ANSWER_RESTRICTIONS:
                 errors.append(
                     f"{label}: answer_restriction {restriction!r} invalid")
+            duration = _readback_decimal(row.get("question_duration"))
+            if duration is None or duration <= 0:
+                errors.append(
+                    f"{label}: question_duration must be finite and positive"
+                )
+            if name == "Descriptive" and row.get("math_keyboard") not in {
+                "Yes", "No",
+            }:
+                errors.append(
+                    f"{label}: descriptive math_keyboard must be exactly "
+                    "Yes or No"
+                )
+            marks = _readback_decimal(row.get("marks"))
+            if marks is None or marks <= 0:
+                errors.append(f"{label}: marks must be finite and positive")
             if name == "Objective":
-                marks = float(row.get("marks") or 0)
-                correct_weight = 0.0
-                correct_count = 0
-                for n in range(1, MAX_OBJECTIVE_OPTIONS + 1):
-                    if rel.is_correct_option(row.get(f"correct_answer_{n}")):
-                        correct_count += 1
-                        try:
-                            correct_weight = float(
-                                row.get(f"answer_weightage_{n}") or 0)
-                        except (TypeError, ValueError):
-                            correct_weight = -1.0
-                if correct_count != 1:
-                    errors.append(
-                        f"{label}: {correct_count} correct options")
-                elif abs(correct_weight - marks) > 0.01:
-                    errors.append(
-                        f"{label}: correct weightage {correct_weight:g} != "
-                        f"marks {marks:g}")
+                errors.extend(_objective_marking_errors(
+                    row, label=label, marks=marks,
+                ))
+            else:
+                errors.extend(_descriptive_marking_errors(
+                    row, label=label, marks=marks,
+                ))
 
     # Every concept (questionless included) and every created group appears.
     expected_concepts = {

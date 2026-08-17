@@ -163,13 +163,13 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-1"
+        "assessment-materialize-2"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
 
 
-def test_objective_open_is_mechanically_valid_and_never_defaulted():
+def test_materialization_cannot_author_restriction_or_marking():
     candidate = _materialize(
         provider=lambda request: _objective_response(
             request,
@@ -178,10 +178,18 @@ def test_objective_open_is_mechanically_valid_and_never_defaulted():
         )
     )
 
-    assert candidate["answer_restriction"] == "Open"
+    assert candidate["answer_restriction"] == ""
+    assert candidate["restriction_reason"] == ""
+    assert all(
+        answer["answer_weightage"] == ""
+        for answer in candidate["answers"]
+    )
+    assert candidate["question_duration"] is None
+    assert candidate["math_keyboard"] == ""
     assert candidate["assessment_eligibility"] == "accepted"
     assert "question_display" not in am.MATERIALIZE_SYSTEM
     assert "always Specific" not in am.MATERIALIZE_SYSTEM
+    assert "Do not decide Open or Specific" in am.MATERIALIZE_SYSTEM
 
 
 def test_mechanical_defects_receive_one_bounded_correction_sequence():
@@ -259,23 +267,30 @@ def test_fixer_corrects_a_block_once_and_the_intervention_is_flagged():
     assert any(flag.startswith("fixer:") for flag in candidate["flags"])
 
 
-def test_marking_arithmetic_never_ships_when_fixer_cannot_correct_it():
+def test_upstream_marking_allocation_is_erased_before_assembly():
     def wrong_weight(request):
-        response = _objective_response(request.get("original_payload", request))
-        response["answers"][0]["answer_weightage"] = "3"
+        response = _objective_response(request)
+        response["answers"][0]["answer_weightage"] = "NaN"
+        response["answers"][1]["answer_weightage"] = "-500"
         return response
 
-    with pytest.raises(kernel.ContractError, match="weightage"):
-        _materialize(provider=wrong_weight, critic=None, fixer=wrong_weight)
+    candidate = _materialize(provider=wrong_weight, critic=None)
+
+    assert [row["answer_weightage"] for row in candidate["answers"]] == [
+        "", ""
+    ]
 
 
-def test_malformed_numeric_marking_fields_are_mechanical_defects():
+def test_marking_fields_are_not_part_of_the_materialization_checker():
     objective_cell = _cell()
     objective_id = am._candidate_id(_atom(), objective_cell)
     objective = _objective_response({"candidate_id": objective_id})
     objective["answers"][1]["answer_weightage"] = "not-a-number"
-    assert "wrong option weightage must be zero" in am._proposal_defects(
-        objective, objective_cell, objective_id,
+    assert not any(
+        "weightage" in defect
+        for defect in am._proposal_defects(
+            objective, objective_cell, objective_id,
+        )
     )
 
     descriptive_cell = _cell(
@@ -292,11 +307,11 @@ def test_malformed_numeric_marking_fields_are_mechanical_defects():
     defects = am._proposal_defects(
         descriptive, descriptive_cell, descriptive_id,
     )
-    assert "answer 1 weightage must be finite and numeric" in defects
-    assert "subquestion 1 marks must be finite and numeric" in defects
+    assert not any("weightage" in defect for defect in defects)
+    assert not any("marks" in defect for defect in defects)
 
 
-def test_malformed_numeric_marking_reaches_the_fixer():
+def test_extra_numeric_marking_never_engages_materialization_fixer():
     provider_calls = []
     fixer_calls = []
 
@@ -308,15 +323,16 @@ def test_malformed_numeric_marking_reaches_the_fixer():
 
     def fixer(request):
         fixer_calls.append(copy.deepcopy(request))
-        return _objective_response(request["original_payload"])
+        raise AssertionError("marking defects belong to assessment.marking")
 
     candidate = _materialize(provider=malformed, fixer=fixer)
 
-    assert len(provider_calls) == kernel.MAX_ATTEMPTS
-    assert len(fixer_calls) == 1
-    assert candidate["_aegis_assessment_materialization"]["authority"][
+    assert len(provider_calls) == 1
+    assert fixer_calls == []
+    assert candidate["answers"][1]["answer_weightage"] == ""
+    assert not candidate["_aegis_assessment_materialization"]["authority"][
         "fixer"
-    ] is True
+    ]
 
 
 @pytest.mark.parametrize("marks", [float("nan"), float("inf"), "-Infinity"])
@@ -436,7 +452,7 @@ def test_batch_preserves_order_and_rejects_duplicate_candidate_identity(
     assert calls == []
 
 
-def test_nested_rich_text_and_descriptive_arithmetic_are_mechanical():
+def test_nested_rich_text_is_mechanical_but_marking_arithmetic_is_later():
     cell = _cell(
         sheet_kind="descriptive", question_category="Long Answer", marks=5.0,
     )
@@ -457,7 +473,7 @@ def test_nested_rich_text_and_descriptive_arithmetic_are_mechanical():
 
     defects = am._proposal_defects(malformed, cell, candidate_id)
 
-    assert any("subquestion marks sum 4 != parent marks 5" in row for row in defects)
+    assert not any("subquestion marks sum" in row for row in defects)
     assert any(row.startswith("rich-text:") for row in defects)
 
 

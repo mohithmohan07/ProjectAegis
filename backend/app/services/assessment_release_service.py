@@ -562,6 +562,10 @@ def upload_master_to_database(
                 question=str(candidate.get("question") or ""),
                 question_text=str(candidate.get("question_text") or ""),
                 marks=float(candidate.get("marks") or 0),
+                question_duration=float(
+                    candidate.get("question_duration") or 0
+                ),
+                math_keyboard=str(candidate.get("math_keyboard") or ""),
                 display_answer=str(candidate.get("display_answer") or ""),
                 answer_explanation=str(
                     candidate.get("answer_explanation") or ""),

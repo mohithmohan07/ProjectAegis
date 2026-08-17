@@ -382,6 +382,29 @@ def test_parallel_cell_decisions_preserve_atom_order(monkeypatch) -> None:
     ]
 
 
+def test_decision_key_prefix_collision_fails_closed(monkeypatch) -> None:
+    monkeypatch.setattr(cells.config, "phase3_decision_workers", lambda: 2)
+    shared_prefix = "f" * 16
+
+    def colliding_key(*, unit_id: str, **_kwargs) -> str:
+        suffix = "1" if unit_id == "QINV-0001" else "2"
+        return shared_prefix + (suffix * 48)
+
+    monkeypatch.setattr(cells.kernel, "decision_key", colliding_key)
+
+    with pytest.raises(cells.CellDecisionError, match="duplicate cell_id") as caught:
+        cells.decide_cells(
+            [_atom("QINV-0001"), _atom("QINV-0002")],
+            meta=META,
+            profile=PROFILE,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=_valid_response,
+            store=kernel.DecisionStore(),
+        )
+
+    assert "CELL-" + shared_prefix in str(caught.value)
+
+
 def test_cell_input_identity_and_profile_fail_before_provider_calls() -> None:
     provider = _forbidden("the provider")
     with pytest.raises(cells.CellDecisionError, match="repeat"):

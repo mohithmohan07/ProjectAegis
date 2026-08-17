@@ -307,8 +307,21 @@ def decide_cells(
             "authority": _decision_authority(decision),
         }
 
-    return kernel.parallel_map_in_order(
+    rows = kernel.parallel_map_in_order(
         prepared,
         decide_one,
         max_workers=config.phase3_decision_workers(),
     )
+    seen_cell_ids: set[str] = set()
+    duplicate_cell_ids: set[str] = set()
+    for row in rows:
+        cell_id = str(row.get("cell_id") or "")
+        if cell_id in seen_cell_ids:
+            duplicate_cell_ids.add(cell_id)
+        seen_cell_ids.add(cell_id)
+    if duplicate_cell_ids:
+        raise CellDecisionError(
+            "assessment cell decisions emitted duplicate cell_id values: "
+            f"{sorted(duplicate_cell_ids)!r}"
+        )
+    return rows
