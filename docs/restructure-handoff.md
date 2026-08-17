@@ -380,6 +380,27 @@ reasons over, never a table of per-grade rules in code. A hard-coded
 grade/subject branch deciding question shape would be Rule 1's forbidden
 judgment wearing a curriculum hat.
 
+3. *NO EXTRACTION OF ANY QUESTIONS, anywhere in the Pre lane.* Stronger
+   than "the Pre Master contains generated questions only": no question is
+   ever lifted out of the source into **any** Pre artefact — not the Pre
+   Master, and not the Pre concept detailing either. Consequences:
+
+   * A Pre concept row carries **no Types, Cases or Examples built from
+     current-chapter source questions**. Post's Examples *are* source
+     questions (Rule C: every QID has exactly one final Type/Case
+     assignment), so lifting one onto a Pre concept would also double-route
+     that QID and break Q2's exactly-once — the constraint and the existing
+     uniqueness law point the same way.
+   * The Pre map therefore ships Description and Achieving Mastery. Types,
+     Cases and Examples reach the Pre detailing only once **generated**
+     questions exist to fill them, which is the generation slice's work,
+     not the map build's.
+   * Mechanically checkable, and it should be checked: no QID from the
+     chapter's question/task inventory may appear anywhere in a Pre row or
+     the Pre release payload. That is identity accounting, not judgment —
+     a gate that refuses a broken artefact, which CLAUDE.md permits — and
+     it fails closed.
+
 ### Step 8 — Four-output release on the SOP/MES schema (Q5)
 Doc: §6, §7, Q5.
 - Migrate schema constants, writer, and acceptance tests to the
