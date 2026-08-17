@@ -449,9 +449,14 @@ Two model passes finish every question row:
   decomposition; the check only re-asks it (through the same checker, and
   through The Fixer on exhaustion per Q13, which is likewise re-validated by
   that checker) and refuses to ship arithmetic that does not balance —
-  nothing rewrites the model's marking. **The Blueprint is canonical for
-  mark decomposition**; the registry's worked mark-scheme examples are
-  calibration evidence for Open/Specific only.
+  nothing rewrites the model's marking. **The recorded blueprint cell is
+  canonical for a question's total marks; the decomposition of that total is
+  the model's per-item verdict.** Decided 17 Aug 2026: the API authors the
+  breakdown — there is no external marking-rubric document and none is
+  required (the *Question Paper Blueprint & Analysis* is not adopted as
+  runtime evidence; it stays only in this document's §11 provenance). The
+  registry's worked mark-scheme examples are calibration evidence for
+  Open/Specific only.
 
 Three release invariants sharpen the existing Rules E–G:
 

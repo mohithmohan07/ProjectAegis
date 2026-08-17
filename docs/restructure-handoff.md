@@ -248,17 +248,23 @@ reference-workbook verdicts) as a second corroborating source. If a further
 correction of the workbook ever arrives, swap the files: the policy hash turns
 it into an automatic re-decide, no migration.
 
-**Slice 4 marking-evidence contract.** The full source named *Question-Paper
-Blueprint & Analysis* is not tracked in this repository. Until that owner
-artifact is supplied, the recorded assessment blueprint cell is canonical for
-the total marks and the adopted Phase-05 rules in `docs/aegis-restructure.md`
-are the marking-decomposition contract. The legacy, admin-overridable
-`assessment.rubric` prompt and the Open/Specific registry's worked mark
-examples are not substitutes for the missing artifact. Every
-`assessment.marking` audit records this evidence status alongside its explicit
-cell id and marks. A future owner artifact must be added as whole, versioned
-model evidence and hashed into a bumped marking policy; it is never recreated,
-parsed into executable rules, or silently claimed to have been present.
+**Marking-evidence contract (decided 17 Aug 2026 — the API owns the
+breakdown).** The mark *decomposition* — how a question's total splits into
+step / diagram / sub-question marks and keyword weightages — is a model
+verdict authored per item, checked only by the fail-closed arithmetic. The
+recorded assessment blueprint **cell** stays canonical for the *total* marks
+(recorded pipeline data, not a document). There is **no external
+marking-rubric document, and none is expected**: the *Question Paper
+Blueprint & Analysis* is deliberately **not** adopted as runtime evidence —
+do not hunt for it, do not wire it in, do not fail closed waiting on it.
+(This reverses the earlier "missing owner artifact" framing.) The legacy,
+admin-overridable `assessment.rubric` prompt is likewise not the decomposition
+authority. Code carry-over for slice 5 / next-in-lane: the marking pass may
+keep recording an audit fact that no rubric document was consulted, but drop
+any wording — in code comments, the audit marker, or
+`docs/assessment-decision-registry.md` — that implies a *pending* or *missing*
+dependency; the model authoring the breakdown is the intended permanent
+design, not a fallback.
 
 **The Refiner dispatch is step-6 code.** There is no file-level freeze on
 steps 1–5. The real constraints are: golden fixtures are recorded verdicts and
