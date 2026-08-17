@@ -130,6 +130,63 @@ ANALYSE_CRITIC_SYSTEM = _SHARED + (
     "for human review and does not block the run."
 )
 
+PRELEARN_CAPTURE_SYSTEM = _SHARED + (
+    " Task: Phase 03 — keep the run's running capture of PRE-REQUISITE "
+    "elements from ONE stage's evidence. A prerequisite is what a learner "
+    "must already know BEFORE this chapter can be understood: something "
+    "taught in a previous year, a word the chapter uses as if already "
+    "known, or a basic needed to follow a particular line or concept. "
+    "Response schema: {\"prerequisites\": [{\"prerequisite_id\", "
+    "\"text\", \"evidence\": [\"<id>\", …], \"rationale\"}]}. "
+    "prerequisite_id is the positional mint PR-0001, PR-0002, … in "
+    "listing order. Read the request's evidence for what it ASSUMES, not "
+    "for what it teaches — this chapter's own content is never a "
+    "prerequisite for itself. text names the assumed element precisely "
+    "enough that it could be taught on its own; never a vague 'basic "
+    "knowledge of the topic'. evidence is a list of ids taken from THIS "
+    "request only. How many elements the evidence genuinely assumes is "
+    "entirely your judgment — evidence may assume few or none; never "
+    "invent one to fill space, and an empty prerequisites list is a "
+    "legitimate answer."
+)
+
+PRELEARN_MERGE_SYSTEM = _SHARED + (
+    " Task: Phase 03 — consolidate a run's per-stage prerequisite "
+    "captures into ONE prerequisite set for the chapter. Response "
+    "schema: {\"prerequisites\": [{\"prerequisite_id\", \"text\", "
+    "\"captures\": [\"<capture_ref>\", …], \"rationale\"}]}. "
+    "prerequisite_id is the positional mint PR-0001, PR-0002, … in "
+    "listing order. Each capture was taken at a different stage over "
+    "that stage's own evidence, so one prerequisite is often captured "
+    "more than once — recognised in the chapter's prose at one stage and "
+    "again in the task that needs it at another. Decide which captures "
+    "are the same prerequisite by what they MEAN, never by how similarly "
+    "they are worded: differently-worded captures of one assumed idea "
+    "are one prerequisite, and similarly-worded captures of genuinely "
+    "different assumed ideas stay separate. Name EVERY capture_ref from "
+    "the request exactly once across your prerequisites — a capture that "
+    "belongs with no other is its own single-capture prerequisite and is "
+    "never dropped. text is the prerequisite itself, precise enough to "
+    "be taught on its own and covering what all its captures assume."
+)
+
+PRELEARN_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit a proposed Phase 03 prerequisite "
+    "decision (a stage capture, or the chapter-wide merge). For a "
+    "capture: judge whether each element is genuinely PRIOR to this "
+    "chapter — flag anything that restates the chapter's own teaching as "
+    "a prerequisite, anything the cited evidence does not actually "
+    "assume, anything too vague to teach on its own, and any "
+    "prerequisite the evidence plainly assumes but the capture missed. "
+    "For a merge: judge each grouping on meaning — flag two captures "
+    "merged on wording alone when they assume different things, and two "
+    "kept apart when they are one prerequisite in different words. "
+    "Response schema: {\"verdict\": \"verified|rejected\", "
+    "\"confidence\", \"issues\": [..]}. You are an auditor, not a judge: "
+    "your dissent is recorded on the output for human review and does "
+    "not block the run."
+)
+
 HOST_SYSTEM = _SHARED + (
     " Task: certify one host concept per assignment unit, and place "
     "every question (qid) under its correct concept. Response schema: "

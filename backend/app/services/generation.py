@@ -20282,13 +20282,19 @@ def _prepare_final_concept_content(out: list[dict], **kwargs) -> list[dict]:
     runs Settle → Host → Polish → Assemble with the decision store in the
     job's artifact directory (docs/phase3-rewrite-spec.md). The legacy
     3.1–3.11 allocation lane this function used to drive is deleted.
+
+    A caller that passes a ``phase3_carry`` dict receives every non-row
+    key the run produced — the Phase 03 pre-requisite capture (doc §4,
+    Q3) among them. The returned rows are unaffected by it.
     """
     import sys as _sys
 
     from . import concept_topology_contract as _topology
 
+    carry = kwargs.get("phase3_carry")
     return _topology._run_rewritten_phase3(
-        _sys.modules[__name__], out, kwargs
+        _sys.modules[__name__], out, kwargs,
+        carry=carry if isinstance(carry, dict) else None,
     )
 
 
@@ -20971,9 +20977,41 @@ def concepts_from_mmd(
                 "skipped unless strict formatting finds a targeted repair.",
                 level="success",
             )
+            # Phase 03 (doc §4, Q3): a restored final checkpoint skips the
+            # whole phase-3 run, so the capture is not made in this
+            # process. Read back the snapshot the original run wrote
+            # beside its decision store; when there is none, record the
+            # ABSENCE explicitly. A missing key would otherwise be
+            # indistinguishable from a chapter that genuinely assumes no
+            # prerequisite, and a resumed job would ship an empty Pre map
+            # with nothing flagged (R4).
+            if artifacts is not None:
+                from . import concept_topology_contract as _topology
+
+                restored_prerequisites = _topology.restored_prerequisites()
+                if restored_prerequisites is not None:
+                    artifacts["phase3_prerequisites"] = restored_prerequisites
+                else:
+                    artifacts["phase3_prerequisites_absent"] = (
+                        "final content checkpoint restored and no "
+                        f"{_topology.PRELEARN_SNAPSHOT} was found beside the "
+                        "decision store: this run made no Phase 03 capture "
+                        "and the empty set here must not be read as one."
+                    )
+                    progress.log(
+                        "The Phase 03 pre-requisite capture is unavailable on "
+                        "this restored checkpoint and its absence is recorded "
+                        "rather than reported as an empty prerequisite set.",
+                        level="warning",
+                    )
         else:
+            # Phase 03 (doc §4, Q3): the run's pre-requisite capture leaves
+            # the sealed boundary through this dict. The rows returned by
+            # the call are untouched by it.
+            phase3_carry: dict = {}
             out = _prepare_final_concept_content(
                 out,
+                phase3_carry=phase3_carry,
                 subject=subject,
                 board=board,
                 chapter_title=chapter_title,
@@ -20989,6 +21027,21 @@ def concepts_from_mmd(
                 refresh_chapter_wide_assignments=bool(
                     final_checkpoint_refresh_reasons),
             )
+            prerequisites = phase3_carry.get("prerequisites")
+            if artifacts is not None:
+                if isinstance(prerequisites, dict):
+                    # A capture that recorded nothing is a legitimate
+                    # answer and ships as itself; only a capture that
+                    # never happened is recorded as absent.
+                    artifacts["phase3_prerequisites"] = copy.deepcopy(
+                        prerequisites
+                    )
+                else:
+                    artifacts["phase3_prerequisites_absent"] = (
+                        "the rewritten Phase 3 returned no prerequisites "
+                        "key: this run made no Phase 03 capture and the "
+                        "empty set here must not be read as one."
+                    )
         if artifacts is not None:
             artifacts["mined_types"] = copy.deepcopy(mined_types)
         # Older terminal checkpoints can predate the canonical mastery/recap

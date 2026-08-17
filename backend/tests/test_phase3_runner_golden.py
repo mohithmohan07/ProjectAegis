@@ -13,9 +13,10 @@ import re
 import pytest
 
 from app.services import concept_cleanup
-from app.services.phase3 import kernel, runner
+from app.services.phase3 import runner
 from tests import test_phase3_analyse as analyse_golden
 from tests import test_phase3_host_golden as host_golden
+from tests import test_phase3_prelearn as prelearn_golden
 from tests import test_phase3_settle_golden as settle_golden
 
 
@@ -94,6 +95,11 @@ def replay_providers(golden_envelope):
             encoding="utf-8"
         )
     )
+    golden_prelearn = json.loads(
+        (settle_golden.GOLDEN / "rne_prelearn.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mapping = settle_golden._replay_map(golden_envelope, golden_rows)
     topology, grounding, analysis, critic = settle_golden._providers(mapping)
 
@@ -115,6 +121,9 @@ def replay_providers(golden_envelope):
         "host": _HostProvider(),
         "place": place_replay_provider(golden_place),
         "analyse": analyse_golden.analyse_replay_provider(golden_analysis),
+        "prelearn": prelearn_golden.prelearn_replay_provider(
+            golden_prelearn
+        ),
         "critic": critic,
     }
 
@@ -198,6 +207,36 @@ def test_runner_produces_publication_ready_output(
             row["concept_details"]
         )
         assert has_section == bool(row.get("_aegis_analysis_allotments"))
+    # Phase 03 (Q3): the running pre-requisite capture rode through the
+    # runner alongside every stage — four captures over four different
+    # stage payloads, then one merge that consolidates every capture
+    # exactly once (R4). It never touches the Post rows.
+    prerequisites = result["prerequisites"]
+    assert set(prerequisites["captures"]) == {
+        "settle", "host", "place", "analyse",
+    }
+    assert [
+        len(prerequisites["captures"][stage])
+        for stage in ("settle", "host", "place", "analyse")
+    ] == [7, 6, 3, 4]
+    assert len(prerequisites["prerequisites"]) == 16
+    consolidated = [
+        ref
+        for row in prerequisites["prerequisites"]
+        for ref in row["captures"]
+    ]
+    assert len(consolidated) == len(set(consolidated)) == 20
+    assert prerequisites["review_flags"] == {}
+    # No decision drew a dissent on the golden replay, at a row or at a
+    # decision — the two channels agree here.
+    assert prerequisites["stage_flags"] == {}
+    # A prerequisite seen by three stages carries all three, which is
+    # what makes the doc's word "running" mean something.
+    assert sorted(
+        row["stages"] for row in prerequisites["prerequisites"]
+        if len(row["stages"]) > 1
+    ) == [["settle", "analyse"], ["settle", "host"],
+          ["settle", "host", "place"]]
     # The Q2 deterministic audit found nothing on the golden replay.
     assert result["coverage"]["case_audit"] == []
     assert result["coverage"]["case_splits"] == []
@@ -295,6 +334,18 @@ def test_settled_rows_snapshot_lands_beside_the_store(
     assert snapshot["source_contract_hash"] == golden_envelope[
         "source_contract_hash"
     ]
+
+    # The Phase 03 capture lands beside the store too, so the Pre lane
+    # and the diagnostics export can read it long after the run.
+    capture = json.loads(
+        (artifact_dir / "source.phase3-prelearn-capture.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(capture) == {
+        "captures", "prerequisites", "review_flags", "stage_flags",
+    }
+    assert len(capture["prerequisites"]) == 16
 
 
 def test_the_migration_flag_is_retired():

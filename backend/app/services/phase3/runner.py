@@ -23,6 +23,7 @@ from . import host as host_mod
 from . import kernel
 from . import place as place_mod
 from . import polish as polish_mod
+from . import prelearn as prelearn_mod
 from . import settle as settle_mod
 
 
@@ -114,6 +115,31 @@ def _snapshot_analysis(
         pass  # snapshotting is best-effort; the store already has decisions
 
 
+def _snapshot_prelearn(
+    prerequisites: Mapping[str, Any],
+    store_dir: str | Path | None,
+) -> None:
+    """Persist the Phase 03 running pre-requisite capture (doc §4, Q3).
+
+    Written beside the decision store so the per-stage captures and the
+    merged prerequisite set — every capture consolidated exactly once
+    (R4) — survive the run for the Pre lane and the diagnostics export.
+    """
+
+    if not store_dir:
+        return
+    import json
+
+    try:
+        path = Path(store_dir).parent / "source.phase3-prelearn-capture.json"
+        path.write_text(
+            json.dumps(dict(prerequisites), ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # snapshotting is best-effort; the store already has decisions
+
+
 def run(
     env: Mapping[str, Any],
     *,
@@ -123,11 +149,17 @@ def run(
     """Settle → Host → Place → Analyse → Polish → Assemble.
 
     ``providers`` is test-only injection ({"topology", "grounding",
-    "analysis", "host", "place", "analyse", "analyse_allot", "critic",
-    "fixer"} — "analysis" is Settle's content-authoring provider,
-    "analyse" the Q1 chapter-inventory pass); production omits it and
-    the passes use their live API adapters — including the live Fixer
-    (Q13) — failing closed if no API is live.
+    "analysis", "host", "place", "analyse", "analyse_allot", "prelearn",
+    "prelearn_merge", "critic", "fixer"} — "analysis" is Settle's
+    content-authoring provider, "analyse" the Q1 chapter-inventory pass,
+    "prelearn" the Phase 03 per-stage pre-requisite capture); production
+    omits it and the passes use their live API adapters — including the
+    live Fixer (Q13) — failing closed if no API is live.
+
+    The Phase 03 capture (doc §4, Q3) runs alongside the passes: one
+    decision at each stage boundary over THAT stage's own evidence, then
+    one merge. It rides out on the ``prerequisites`` key; ``records``
+    is untouched by it.
     """
 
     from .. import progress
@@ -135,6 +167,23 @@ def run(
     env = envelope_mod.validate(env)
     store = kernel.DecisionStore(store_dir)
     injected = dict(providers or {})
+    # Phase 03 (doc §4, Q3): the running pre-requisite capture. One
+    # decision per stage boundary, each over the evidence THAT stage had
+    # in hand — which is why it lives here and not inside any pass: the
+    # runner is the only place that controls each payload, and no
+    # existing pass's payload, checker, or policy_version is touched.
+    captures: list[dict[str, Any]] = []
+
+    def _capture(stage: str, **evidence: Any) -> None:
+        captures.append(prelearn_mod.capture_stage(
+            env,
+            stage,
+            provider=injected.get("prelearn"),
+            critic=injected.get("critic"),
+            store=store,
+            fixer=injected.get("fixer"),
+            **evidence,
+        ))
 
     progress.step(
         "Phase 3 — Settle: topology, grounding, and content authoring",
@@ -150,6 +199,7 @@ def run(
         fixer=injected.get("fixer"),
     )
     _snapshot_settled_rows(env, settled, store_dir)
+    _capture("settle", settled=settled)
     progress.step(
         "Phase 3 — Host: certifying Type/Case and QID hosts", value=0.91
     )
@@ -161,6 +211,7 @@ def run(
         store=store,
         fixer=injected.get("fixer"),
     )
+    _capture("host")
     # Phase 2.2 (doc §4): pool Container-02 chapter-wide and let the model
     # place every activity, info hub, and unclaimed figure BEFORE Polish
     # converges content — the placements ride into Assemble, which stamps
@@ -179,6 +230,7 @@ def run(
         fixer=injected.get("fixer"),
     )
     _snapshot_place(placements, store_dir)
+    _capture("place")
     # Phase 2.4 + 4.3 (Q1): the chapter's misconception/error-analysis
     # inventory is built over chapter-wide evidence and each item is
     # allotted to exactly one concept. Assemble stamps the allotments;
@@ -198,6 +250,29 @@ def run(
         fixer=injected.get("fixer"),
     )
     _snapshot_analysis(analysis, store_dir)
+    _capture("analyse", analysis=analysis)
+    # Phase 03 (Q3): the running capture is consolidated into one
+    # prerequisite set. The model decides which captures are the same
+    # prerequisite seen from two stages; the checker only refuses a
+    # response that loses one (R4). This call is deliberately unwrapped:
+    # it can only fail after the bounded corrections AND The Fixer both
+    # failed, which is protocol impossibility, and swallowing it would
+    # drop a learner's prerequisite silently (prelearn.py's docstring
+    # records the choice).
+    progress.step(
+        "Phase 3 — Prerequisites: consolidating the running Phase 03 "
+        "capture",
+        value=0.937,
+    )
+    prerequisites = prelearn_mod.merge(
+        env,
+        captures,
+        provider=injected.get("prelearn_merge") or injected.get("prelearn"),
+        critic=injected.get("critic"),
+        store=store,
+        fixer=injected.get("fixer"),
+    )
+    _snapshot_prelearn(prerequisites, store_dir)
     # Terminal content quality (generic analysis, verbatim Descriptions)
     # is converged BEFORE Assemble seals anything, on settled and
     # host-created rows alike; only failing rows cost a model call.
@@ -234,6 +309,7 @@ def run(
         "qid_map": hosts["qid_map"],
         "new_concepts": hosts["new_concepts"],
         "analysis": analysis,
+        "prerequisites": prerequisites,
         "coverage": assembled["coverage"],
         "summary": {
             "row_count": len(rows),
