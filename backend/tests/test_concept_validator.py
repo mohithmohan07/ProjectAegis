@@ -1073,6 +1073,127 @@ def test_strict_analysis_accepts_either_section_alone():
     } & _codes(report))
 
 
+def test_q1_gate_split_scopes_existence_to_allotted_rows():
+    """The Q1 allotment context splits existence from quality: with a
+    key set, the missing-section codes fire only for allotted rows; an
+    unallotted row must carry none; ``None`` keeps the legacy every-row
+    contract for the Pre lane."""
+    section = (
+        " // Misconception/ Error Analysis: Misconceptions: Students may "
+        "believe a negative input always makes the final result negative."
+    )
+    allotted_missing = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula.",
+    )
+    # Allotted row missing its section: the existence code fires.
+    report = cv.validate_concept_rows(
+        [allotted_missing], strict_analysis_section=True,
+        analysis_allotted_keys={0},
+    )
+    assert "analysis_section_format" in _codes(report)
+
+    # Unallotted row missing a section: clean under strict.
+    report = cv.validate_concept_rows(
+        [allotted_missing], strict_analysis_section=True,
+        analysis_allotted_keys=set(),
+    )
+    assert not ({
+        "analysis_section_format", "missing_learner_analysis",
+        "missing_misconception_or_error_analysis",
+        "unallotted_analysis_section",
+    } & _codes(report))
+
+    # Unallotted row WITH a section: the fatal marker-accounting code.
+    unallotted_with_section = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula." + section,
+    )
+    report = cv.validate_concept_rows(
+        [unallotted_with_section], strict_analysis_section=True,
+        analysis_allotted_keys=set(),
+    )
+    assert "unallotted_analysis_section" in _codes(report)
+    # It is release-blocking (mechanics: marker accounting).
+    from app.services import generation as g
+
+    assert "unallotted_analysis_section" in g._FATAL_CODES
+
+    # Allotted row WITH its section: clean.
+    report = cv.validate_concept_rows(
+        [unallotted_with_section], strict_analysis_section=True,
+        analysis_allotted_keys={0},
+    )
+    assert not ({
+        "analysis_section_format", "unallotted_analysis_section",
+    } & _codes(report))
+
+    # None = legacy behavior (the Pre lane): every row owes a section.
+    report = cv.validate_concept_rows(
+        [allotted_missing], strict_analysis_section=True,
+    )
+    assert "analysis_section_format" in _codes(report)
+
+
+def test_q1_quality_codes_keep_their_meaning_on_allotted_sections():
+    """The gate split never dilutes quality: a generic analysis on an
+    ALLOTTED row still fails, and a malformed section on an UNALLOTTED
+    row still gets its shape code beside the marker-accounting code."""
+    generic = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: "
+        "Misconceptions: n/a",
+    )
+    report = cv.validate_concept_rows(
+        [generic], strict_analysis_section=True,
+        analysis_allotted_keys={0},
+    )
+    assert "generic_misconception" in _codes(report)
+
+    malformed_unallotted = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconceptions: Students may believe a negative "
+        "input always makes the final result negative.",
+    )
+    report = cv.validate_concept_rows(
+        [malformed_unallotted], strict_analysis_section=True,
+        analysis_allotted_keys=set(),
+    )
+    codes = _codes(report)
+    assert "analysis_section_format" in codes
+    assert "unallotted_analysis_section" in codes
+
+
+def test_analysis_allotted_keys_derive_from_the_row_marker():
+    marked = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: "
+        "Misconceptions: Students may believe a negative input always "
+        "makes the final result negative.",
+    )
+    marked["_aegis_analysis_allotments"] = ["LA-0001"]
+    unmarked = _rec(
+        "Another Concept",
+        "Description: Another complete explanation of the idea at hand.",
+    )
+    assert cv.analysis_allotted_keys([marked, unmarked]) == {0}
+    report = cv.validate_concept_rows(
+        [marked, unmarked], strict_analysis_section=True,
+        analysis_allotted_keys=cv.analysis_allotted_keys(
+            [marked, unmarked]
+        ),
+    )
+    assert not ({
+        "analysis_section_format", "missing_learner_analysis",
+        "unallotted_analysis_section",
+    } & _codes(report))
+
+
 def test_strict_figure_examples_require_matching_canonical_image_tag():
     assert cv._example_figure_ids("Refer to Fig．1（a） and Fig. 11.4.") == [
         "1(a)", "11.4",

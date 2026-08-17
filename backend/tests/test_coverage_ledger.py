@@ -122,6 +122,108 @@ def test_missing_learner_analysis_is_named_per_row():
     assert ledger["complete"] is False
 
 
+def _complete_inventory() -> dict:
+    inventory = _inventory()
+    inventory["_type_case_qid_placement_ledger"]["placements"][
+        "QINV-0002.2"] = {}
+    return inventory
+
+
+def test_q1_ledger_keys_analysis_off_the_allotment_ledger():
+    """Q1: allotted rows missing their rendered section = incomplete;
+    unallotted rows without one = fine; every LA-item accounted."""
+    allotted = {
+        "concept_title": "The Concept",
+        "concept_details": (
+            "Concept teaching text. // Misconception/ Error Analysis: "
+            "Misconceptions: x; Error Analysis: y // Achieving Mastery: "
+            "does the thing."
+        ),
+        "activity_hub": "Try the activity. [[QINV-0003]]",
+        "types": "Example ![](img/map.png)",
+        "_aegis_analysis_allotments": ["LA-0001", "LA-0002"],
+    }
+    unallotted = {
+        "concept_title": "The Quiet Concept",
+        "concept_details": (
+            "Complete teaching text. // Achieving Mastery: applies it."
+        ),
+    }
+    snapshot = {
+        "inventory": [
+            {"item_id": "LA-0001", "kind": "misconception", "text": "x"},
+            {"item_id": "LA-0002", "kind": "error_analysis", "text": "y"},
+        ],
+        "allotments": {"LA-0001": "CONCEPT-0001", "LA-0002": "CONCEPT-0001"},
+    }
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=_complete_inventory(),
+        records=[allotted, unallotted],
+        analysis_snapshot=snapshot,
+    )
+    # The unallotted row owes no analysis section — complete.
+    assert ledger["rows_missing_learner_analysis"] == []
+    assert ledger["summary"]["learner_analysis_items"] == {
+        "total": 2, "allotted": 2, "unaccounted": 0}
+    assert ledger["complete"] is True
+
+    # An ALLOTTED row missing its rendered section is incomplete.
+    stripped = dict(allotted)
+    stripped["concept_details"] = (
+        "Concept teaching text. // Achieving Mastery: does the thing."
+    )
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=_complete_inventory(),
+        records=[stripped, unallotted],
+        analysis_snapshot=snapshot,
+    )
+    missing = ledger["rows_missing_learner_analysis"]
+    assert [row["missing"] for row in missing] == [
+        ["misconception_error_analysis"]
+    ]
+    assert ledger["complete"] is False
+
+
+def test_q1_ledger_names_an_unallotted_inventory_item():
+    """R4: an LA-item without an allotment is visible incompleteness,
+    never a silent drop."""
+    snapshot = {
+        "inventory": [
+            {"item_id": "LA-0001", "kind": "misconception", "text": "x"},
+            {"item_id": "LA-0002", "kind": "error_analysis", "text": "y"},
+        ],
+        "allotments": {"LA-0001": "CONCEPT-0001"},
+    }
+    record = {
+        "concept_title": "The Concept",
+        "concept_details": (
+            "Concept teaching text. // Misconception/ Error Analysis: "
+            "Misconceptions: x // Achieving Mastery: does the thing."
+        ),
+        "activity_hub": "Try the activity. [[QINV-0003]]",
+        "types": "Example ![](img/map.png)",
+        "_aegis_analysis_allotments": ["LA-0001"],
+    }
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=_complete_inventory(),
+        records=[record],
+        analysis_snapshot=snapshot,
+    )
+    assert ledger["summary"]["learner_analysis_items"] == {
+        "total": 2, "allotted": 1, "unaccounted": 1}
+    assert ledger["complete"] is False
+    rendered = coverage_ledger.render_coverage(ledger)
+    assert "unaccounted analysis item LA-0002" in rendered
+
+    # A legacy job (no snapshot, no markers) keeps the every-row
+    # expectation — the analysis-carrying row is complete as before.
+    legacy = coverage_ledger.build_coverage_ledger(
+        question_inventory=_complete_inventory(), records=_records())
+    assert legacy["summary"]["learner_analysis_items"] == {
+        "total": 0, "allotted": 0, "unaccounted": 0}
+    assert legacy["complete"] is True
+
+
 def test_an_unplaced_ledger_row_never_counts_as_placed():
     """unplaced_pending_certification is a flagged gap, not a placement."""
     inventory = _inventory()
@@ -167,7 +269,9 @@ def test_render_names_the_unaccounted_and_the_flags():
         coverage_ledger.build_coverage_ledger(
             question_inventory=inventory, records=_records()))
     assert "everything accounted for" in complete
-    assert "learner analysis: present on every released row" in complete
+    assert (
+        "learner analysis: every owed section present" in complete
+    )
 
 
 def test_diagnostics_export_ships_the_ledger():

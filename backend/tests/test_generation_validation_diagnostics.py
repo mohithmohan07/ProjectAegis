@@ -13,7 +13,7 @@ def _row(
     parent: str = "Arithmetic Progressions",
     evidence: str = "",
 ) -> dict:
-    return {
+    row = {
         "topic": topic,
         "parent_concept": parent,
         "concept_title": title,
@@ -21,6 +21,13 @@ def _row(
         "keywords": "sequence, term",
         "source_evidence": evidence,
     }
+    # Q1: a fixture row carrying the learner-analysis section models an
+    # allotted row, so it carries the assemble-stamped marker; a row
+    # without the section models an unallotted row and carries none.
+    if "Misconception/ Error Analysis" in details and not title.lower(
+    ).startswith("culmination"):
+        row["_aegis_analysis_allotments"] = ["LA-0001"]
+    return row
 
 
 def _culmination(topic: str = "General Term") -> dict:
@@ -132,7 +139,7 @@ def _strict_normal_row(
         if question else ""
     )
     hub_section = f" // Activity/Info Hub: {hub}" if hub else ""
-    return _row(
+    row = _row(
         "Electric Current Relationship",
         "Description: Electric current relates charge flow to time and can "
         "be combined with resistance to reason about a circuit."
@@ -147,6 +154,10 @@ def _strict_normal_row(
         topic="Electric Current",
         parent="Circuit Quantities",
     )
+    # Q1: a row carrying the analysis section is, by definition, a row the
+    # chapter inventory allotted items to — the marker rides with it.
+    row["_aegis_analysis_allotments"] = ["LA-0001", "LA-0002"]
+    return row
 
 
 def _strict_culmination(*, question: str = "") -> dict:
@@ -162,6 +173,33 @@ def _strict_culmination(*, question: str = "") -> dict:
         topic="Electric Current",
         parent="Culmination",
     )
+
+
+def test_q1_final_gate_splits_analysis_existence_by_allotment():
+    """Q1 gate split at the terminal boundary: an UNALLOTTED row without
+    a section clears the final gate; an ALLOTTED row missing its section
+    fails; an unallotted row that kept a section fails on the
+    marker-accounting code."""
+    unallotted = _strict_normal_row()
+    unallotted["concept_details"] = unallotted["concept_details"].split(
+        " // Misconception/ Error Analysis:"
+    )[0]
+    del unallotted["_aegis_analysis_allotments"]
+    g._validate_final_or_raise([unallotted, _strict_culmination()])
+
+    allotted_missing = _strict_normal_row()
+    allotted_missing["concept_details"] = allotted_missing[
+        "concept_details"
+    ].split(" // Misconception/ Error Analysis:")[0]
+    with pytest.raises(RuntimeError, match="analysis_section_format"):
+        g._validate_final_or_raise(
+            [allotted_missing, _strict_culmination()])
+
+    unallotted_with_section = _strict_normal_row()
+    del unallotted_with_section["_aegis_analysis_allotments"]
+    with pytest.raises(RuntimeError, match="unallotted_analysis_section"):
+        g._validate_final_or_raise(
+            [unallotted_with_section, _strict_culmination()])
 
 
 def test_final_validation_requires_mastery_and_authored_culmination():

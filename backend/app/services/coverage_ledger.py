@@ -30,6 +30,9 @@ from . import containers
 LEDGER_VERSION = 2
 
 _TYPE_CASE_LEDGER_KEY = "_type_case_qid_placement_ledger"
+# Q1 allotment marker stamped by phase3/assemble.py (kept in lockstep
+# with concept_validator.ANALYSIS_ALLOTMENTS_FIELD).
+_ANALYSIS_ALLOTMENTS_FIELD = "_aegis_analysis_allotments"
 # The pooled hub kind vocabulary lives in ``containers`` (single source);
 # this name is a consumer alias, pinned by the lockstep test.
 _HUB_KINDS = containers.HUB_INVENTORY_KINDS
@@ -151,7 +154,18 @@ def _figure_block_rows(
 
 def _learner_analysis_rows(
     records: list[Mapping[str, Any]],
+    *,
+    allotment_aware: bool = False,
 ) -> list[dict[str, Any]]:
+    """Rows missing their Mastery line or their OWED analysis section.
+
+    ``allotment_aware`` is the Q1 contract: the analysis section is
+    owed only by rows carrying the ``_aegis_analysis_allotments``
+    marker (the chapter inventory allotted them an item); an unallotted
+    row without a section is complete. Legacy jobs (no allotment ledger
+    anywhere) keep the every-row accounting. Achieving Mastery stays
+    owed by every row either way.
+    """
     rows: list[dict[str, Any]] = []
     for index, record in enumerate(records, start=1):
         if not isinstance(record, Mapping):
@@ -160,12 +174,21 @@ def _learner_analysis_rows(
         title = str(
             record.get("concept_title") or record.get("title") or ""
         )
+        analysis_owed = (
+            bool(record.get(_ANALYSIS_ALLOTMENTS_FIELD))
+            if allotment_aware
+            else True
+        )
         missing = [
-            label for label, mark in (
-                ("achieving_mastery", _MASTERY_MARK),
-                ("misconception_error_analysis", _ANALYSIS_MARK),
+            label for label, mark, owed in (
+                ("achieving_mastery", _MASTERY_MARK, True),
+                (
+                    "misconception_error_analysis",
+                    _ANALYSIS_MARK,
+                    analysis_owed,
+                ),
             )
-            if mark not in text
+            if owed and mark not in text
         ]
         if not missing:
             continue
@@ -178,6 +201,48 @@ def _learner_analysis_rows(
     return rows
 
 
+def _analysis_item_rows(
+    analysis_snapshot: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Account every Phase 2.4 inventory item (R4: allotted exactly once).
+
+    The allotments map carries at most one concept per item by
+    construction, so the checkable facts are: every LA-id received an
+    allotment, and no allotment names an item outside the inventory.
+    """
+    snapshot = dict(analysis_snapshot or {})
+    allotments = {
+        str(item_id): str(concept_id)
+        for item_id, concept_id in (snapshot.get("allotments") or {}).items()
+    }
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in snapshot.get("inventory") or []:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = str(item.get("item_id") or "")
+        if not item_id:
+            continue
+        seen.add(item_id)
+        concept_id = allotments.get(item_id, "")
+        rows.append({
+            "item_id": item_id,
+            "kind": str(item.get("kind") or ""),
+            "text": str(item.get("text") or "")[:300],
+            "status": "allotted" if concept_id else "unaccounted",
+            "concept_id": concept_id,
+        })
+    for item_id in sorted(set(allotments) - seen):
+        rows.append({
+            "item_id": item_id,
+            "kind": "",
+            "text": "",
+            "status": "unknown_item",
+            "concept_id": allotments[item_id],
+        })
+    return rows
+
+
 def build_coverage_ledger(
     *,
     question_inventory: Mapping[str, Any] | None,
@@ -185,14 +250,18 @@ def build_coverage_ledger(
     chapter_reading: Mapping[str, Any] | None = None,
     container_projections: Mapping[str, Any] | None = None,
     place_snapshot: Mapping[str, Any] | None = None,
+    analysis_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Account for every source item and every shipped concept.
 
     ``container_projections`` is the persisted ``source.containers.json``
     (canonical figure-block evidence + verbatim furniture, both lanes);
     ``place_snapshot`` is the Phase 2.2 placement pass's recorded output
-    (``source.phase3-place.json``). Both are optional — a legacy job
-    without them keeps the item/URL accounting.
+    (``source.phase3-place.json``); ``analysis_snapshot`` the Phase
+    2.4/4.3 chapter analysis inventory
+    (``source.phase3-analysis.json``, Q1). All are optional — a legacy
+    job without them keeps the item/URL accounting (and the legacy
+    every-row analysis expectation).
     """
     inventory = dict(question_inventory or {})
     rows = [row for row in (records or []) if isinstance(row, Mapping)]
@@ -234,7 +303,16 @@ def build_coverage_ledger(
     figure_block_rows = _figure_block_rows(
         figure_blocks, records_text, figure_placements
     )
-    analysis_rows = _learner_analysis_rows(rows)
+    # Q1: with an allotment ledger (the snapshot, or markers riding the
+    # rows themselves), the analysis section is owed only by allotted
+    # rows; a legacy job keeps the every-row expectation.
+    allotment_aware = analysis_snapshot is not None or any(
+        row.get(_ANALYSIS_ALLOTMENTS_FIELD) for row in rows
+    )
+    analysis_rows = _learner_analysis_rows(
+        rows, allotment_aware=allotment_aware
+    )
+    analysis_item_rows = _analysis_item_rows(analysis_snapshot)
 
     furniture = projections.get("furniture")
     furniture = dict(furniture) if isinstance(furniture, Mapping) else {}
@@ -272,6 +350,9 @@ def build_coverage_ledger(
     normal_missing = [
         row for row in analysis_rows if not row["culmination"]
     ]
+    analysis_items_unaccounted = [
+        row for row in analysis_item_rows if row["status"] != "allotted"
+    ]
     summary = {
         "questions": channel_counts("question"),
         "hubs": channel_counts("hub"),
@@ -287,6 +368,14 @@ def build_coverage_ledger(
         "released_rows": len(rows),
         "rows_missing_learner_analysis": len(analysis_rows),
         "normal_rows_missing_learner_analysis": len(normal_missing),
+        # Q1 (R4): every LA-item accounted — allotted to exactly one
+        # concept; an unallotted item is visible incompleteness.
+        "learner_analysis_items": {
+            "total": len(analysis_item_rows),
+            "allotted": len(analysis_item_rows)
+            - len(analysis_items_unaccounted),
+            "unaccounted": len(analysis_items_unaccounted),
+        },
         "flagged_for_review": sum(1 for row in item_rows if row["flag"]),
     }
     complete = (
@@ -295,6 +384,7 @@ def build_coverage_ledger(
         and summary["figures"]["unaccounted"] == 0
         and block_status_counts.get("unaccounted", 0) == 0
         and not normal_missing
+        and not analysis_items_unaccounted
     )
     reading = dict(chapter_reading or {})
     return {
@@ -309,6 +399,7 @@ def build_coverage_ledger(
         # projections carry the uncapped lines and win when present.
         "dropped_furniture": dropped_furniture,
         "rows_missing_learner_analysis": analysis_rows,
+        "learner_analysis_items": analysis_item_rows,
         "chapter_reading": {
             "provenance": dict(reading.get("provenance") or {}),
             "census_rows": reading.get("census_rows"),
@@ -373,7 +464,27 @@ def render_coverage(ledger: Mapping[str, Any]) -> str:
                 f"{', '.join(row.get('missing') or [])}{suffix}"
             )
     else:
-        lines.append("  learner analysis: present on every released row")
+        lines.append(
+            "  learner analysis: every owed section present "
+            "(mastery on every row; analysis on every allotted row)"
+        )
+    analysis_items = summary.get("learner_analysis_items") or {}
+    if analysis_items.get("total"):
+        lines.append(
+            "  analysis inventory items: "
+            f"{analysis_items.get('allotted', 0)}/"
+            f"{analysis_items.get('total', 0)} allotted"
+            + (
+                f", {analysis_items['unaccounted']} unaccounted"
+                if analysis_items.get("unaccounted") else ""
+            )
+        )
+        for row in list(ledger.get("learner_analysis_items") or [])[:20]:
+            if row.get("status") != "allotted":
+                lines.append(
+                    f"    unaccounted analysis item {row.get('item_id')} "
+                    f"[{row.get('kind')}]: {str(row.get('text'))[:120]!r}"
+                )
     unaccounted = [
         row for row in ledger.get("items") or []
         if row.get("status") != "placed"

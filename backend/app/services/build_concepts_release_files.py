@@ -561,16 +561,23 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
     # capped job-state accounting.
     artifact_dir = _artifact_directory(job)
     projections = containers.load_containers(artifact_dir)
-    place_snapshot: dict[str, Any] | None = None
-    if artifact_dir is not None:
-        place_path = artifact_dir / "source.phase3-place.json"
-        if place_path.is_file():
-            try:
-                loaded = json.loads(place_path.read_text(encoding="utf-8"))
-                if isinstance(loaded, dict):
-                    place_snapshot = loaded
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                place_snapshot = None
+
+    def _artifact_snapshot(name: str) -> dict[str, Any] | None:
+        if artifact_dir is None:
+            return None
+        path = artifact_dir / name
+        if not path.is_file():
+            return None
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return loaded if isinstance(loaded, dict) else None
+
+    place_snapshot = _artifact_snapshot("source.phase3-place.json")
+    # Q1: the chapter analysis inventory's recorded build + allotments
+    # (phase3/analyse.py) — lets the ledger account every LA-item.
+    analysis_snapshot = _artifact_snapshot("source.phase3-analysis.json")
 
     coverage = coverage_ledger.build_coverage_ledger(
         question_inventory=job.question_inventory or {},
@@ -581,6 +588,7 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         chapter_reading=(job.question_inventory or {}).get("chapter_reading"),
         container_projections=projections,
         place_snapshot=place_snapshot,
+        analysis_snapshot=analysis_snapshot,
     )
     run_report = concept_run_report.build_run_report(
         payload,

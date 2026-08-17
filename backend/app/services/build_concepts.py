@@ -871,6 +871,14 @@ def _deposit_concepts(
         strict_analysis_section=pre_post == "Post",
         strict_mastery_statement=pre_post == "Post",
         source_text=source_text if pre_post == "Post" else "",
+        # Q1 gate split (Post only): analysis existence is scoped to the
+        # rows the chapter inventory allotted items to; the Pre lane
+        # keeps the legacy every-row contract (None) until step 7.
+        analysis_allotted_keys=(
+            concept_validator.analysis_allotted_keys(records)
+            if pre_post == "Post"
+            else None
+        ),
     )
     classified_fatal = generation._fatal_errors(report)
     # Post deposit is the same terminal boundary as generation's final gate, so

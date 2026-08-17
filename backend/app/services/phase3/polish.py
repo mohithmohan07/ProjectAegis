@@ -26,6 +26,16 @@ _BATCH_SIZE = 1
 
 # The subset of the deposit gate's fatal codes that are row-local content
 # quality (repairable by rewriting concept_details alone).
+#
+# Q1 gate split: the analysis EXISTENCE codes (analysis_section_format,
+# missing_learner_analysis) remain listed, but ``_failures`` passes the
+# allotment context (``analysis_allotted_keys`` derived from each row's
+# ``_aegis_analysis_allotments`` marker) to the validator, so they are
+# reported only for rows the chapter inventory allotted an item to —
+# an unallotted row legitimately carries no section. This semantic
+# change re-keys every stored polish decision through the policy
+# version below (the "q1-allotment" prefix): a pre-Q1 stored repair
+# must never replay against the allotment-scoped checker.
 CONTENT_CODES = {
     "verbatim_source_description",
     "generic_misconception",
@@ -81,6 +91,11 @@ def _failures(
         strict_analysis_section=True,
         strict_mastery_statement=True,
         source_text=source_text,
+        # Q1: analysis existence is demanded only of allotted rows (the
+        # marker rides each row); before Assemble stamps the inventory's
+        # allotments no row carries one, so Polish never manufactures a
+        # section the inventory did not allot.
+        analysis_allotted_keys=cv.analysis_allotted_keys(normalized_rows),
     )
     failures: dict[int, list[dict[str, str]]] = {}
     for error in report.get("errors") or []:
@@ -428,8 +443,10 @@ def polish(
             # The gate codes ARE the contract: tightening them must mint
             # new decision keys, or a stored repair that predates a code
             # replays past the stricter checker (rehearsal 15: a
-            # section-dropping repair replayed from the store).
-            policy_version="content-codes:" + ",".join(
+            # section-dropping repair replayed from the store). The
+            # "q1-allotment" prefix re-keys for the Q1 gate split (see
+            # the CONTENT_CODES comment).
+            policy_version="q1-allotment;content-codes:" + ",".join(
                 sorted(CONTENT_CODES)
             ),
             fixer=fixer,

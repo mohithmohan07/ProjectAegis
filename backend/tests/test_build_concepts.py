@@ -954,6 +954,9 @@ def test_upload_workbook_failure_rolls_back_new_concepts(
             "required step while applying the stated procedure."
         ),
         "keywords": "",
+        # Q1: the row carries the analysis section, so it models an
+        # allotted row (assemble-stamped marker).
+        "_aegis_analysis_allotments": ["LA-0001", "LA-0002"],
     }
     post_records = [
         normal,

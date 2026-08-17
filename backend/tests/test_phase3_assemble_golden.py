@@ -12,8 +12,10 @@ import re
 
 import pytest
 
+from tests import test_phase3_analyse as analyse_golden
 from tests import test_phase3_host_golden as host_golden
 from tests import test_phase3_settle_golden as settle_golden
+from app.services.phase3 import analyse as analyse_mod
 from app.services.phase3 import assemble as assemble_mod
 from app.services.phase3 import host as host_mod
 from app.services.phase3 import kernel, settle
@@ -61,15 +63,30 @@ def assembled(golden_envelope):
         critic=host_golden._verified_critic,
         store=kernel.DecisionStore(),
     )
+    golden_analysis = json.loads(
+        (settle_golden.GOLDEN / "rne_analysis.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    analysis = analyse_mod.analyse(
+        golden_envelope,
+        [*settled, *(hosts.get("new_concepts") or [])],
+        provider=analyse_golden.analyse_replay_provider(golden_analysis),
+        critic=analyse_golden._verified_critic,
+        store=kernel.DecisionStore(),
+    )
     return (
-        assemble_mod.assemble(golden_envelope, settled, hosts),
+        assemble_mod.assemble(
+            golden_envelope, settled, hosts, None, analysis
+        ),
         golden_hosts,
         settled,
+        analysis,
     )
 
 
 def test_types_are_embedded_in_the_house_format(assembled, golden_envelope):
-    result, golden_hosts, _settled = assembled
+    result, golden_hosts, _settled, _analysis = assembled
     types, cases = assemble_mod._type_catalog(golden_envelope)
 
     # Per-question rendering: every Example appears on the row its own
@@ -117,7 +134,7 @@ def test_types_are_embedded_in_the_house_format(assembled, golden_envelope):
 
 
 def test_every_certified_qid_routes_to_its_host_row(assembled):
-    result, golden_hosts, _settled = assembled
+    result, golden_hosts, _settled, _analysis = assembled
     rows_by_qid = {}
     for row in result["rows"]:
         for qid in row.get("_aegis_release_qids") or []:
@@ -131,7 +148,7 @@ def test_every_certified_qid_routes_to_its_host_row(assembled):
 
 
 def test_every_inventory_item_is_accounted_for(assembled, golden_envelope):
-    result, _golden_hosts, _settled = assembled
+    result, _golden_hosts, _settled, _analysis = assembled
     coverage = result["coverage"]
     inventory_qids = {
         str(item.get("qid"))
@@ -148,7 +165,7 @@ def test_every_inventory_item_is_accounted_for(assembled, golden_envelope):
 
 
 def test_rows_stay_consumable_by_the_publication_chain(assembled):
-    result, _golden_hosts, settled = assembled
+    result, _golden_hosts, settled, _analysis = assembled
     assert len(result["rows"]) == len(settled)  # replay creates no hosts
     for row in result["rows"]:
         assert _normal(row["topic"]), row["concept_title"]
@@ -160,7 +177,7 @@ def test_types_sections_do_not_sprawl_beyond_hosts(assembled):
     """Types stay on their host rows. The deposit-parity pipeline may
     relocate a small amount of inventory-owned content onto a non-host
     row (its coverage repair), but Types never sprawl broadly."""
-    result, _golden_hosts, _settled = assembled
+    result, _golden_hosts, _settled, _analysis = assembled
     unhosted = [
         row for row in result["rows"]
         if not row.get("_aegis_release_type_case_routes")
@@ -176,7 +193,7 @@ def test_types_sections_do_not_sprawl_beyond_hosts(assembled):
 
 
 def test_assemble_is_deterministic(assembled, golden_envelope):
-    result, golden_hosts, settled = assembled
+    result, golden_hosts, settled, analysis = assembled
     hosts = host_mod.host(
         golden_envelope,
         settled,
@@ -184,14 +201,16 @@ def test_assemble_is_deterministic(assembled, golden_envelope):
         critic=host_golden._verified_critic,
         store=kernel.DecisionStore(),
     )
-    again = assemble_mod.assemble(golden_envelope, settled, hosts)
+    again = assemble_mod.assemble(
+        golden_envelope, settled, hosts, None, analysis
+    )
     assert again == result
 
 
 def test_a_host_entry_for_a_missing_row_is_a_hard_error(
     assembled, golden_envelope,
 ):
-    _result, _golden_hosts, settled = assembled
+    _result, _golden_hosts, settled, _analysis = assembled
     broken = {
         "host_map": {
             "TYPE-9999::CASE-9999::0001": {

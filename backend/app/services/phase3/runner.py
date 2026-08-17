@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Mapping
 
+from . import analyse as analyse_mod
 from . import assemble as assemble_mod
 from . import envelope as envelope_mod
 from . import host as host_mod
@@ -88,17 +89,44 @@ def _snapshot_place(
         pass  # snapshotting is best-effort; the store already has decisions
 
 
+def _snapshot_analysis(
+    analysis: Mapping[str, Any],
+    store_dir: str | Path | None,
+) -> None:
+    """Persist the Phase 2.4/4.3 chapter analysis inventory (Q1).
+
+    Written beside the decision store so the coverage ledger and the
+    diagnostics export can account every LA-item — allotted to exactly
+    one concept (R4) — long after the run.
+    """
+
+    if not store_dir:
+        return
+    import json
+
+    try:
+        path = Path(store_dir).parent / "source.phase3-analysis.json"
+        path.write_text(
+            json.dumps(dict(analysis), ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # snapshotting is best-effort; the store already has decisions
+
+
 def run(
     env: Mapping[str, Any],
     *,
     store_dir: str | Path | None = None,
     providers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Settle → Host → Place → Polish → Assemble.
+    """Settle → Host → Place → Analyse → Polish → Assemble.
 
     ``providers`` is test-only injection ({"topology", "grounding",
-    "analysis", "host", "place", "critic", "fixer"}); production omits it
-    and the passes use their live API adapters — including the live Fixer
+    "analysis", "host", "place", "analyse", "analyse_allot", "critic",
+    "fixer"} — "analysis" is Settle's content-authoring provider,
+    "analyse" the Q1 chapter-inventory pass); production omits it and
+    the passes use their live API adapters — including the live Fixer
     (Q13) — failing closed if no API is live.
     """
 
@@ -109,7 +137,7 @@ def run(
     injected = dict(providers or {})
 
     progress.step(
-        "Phase 3 — Settle: topology, grounding, and learner analysis",
+        "Phase 3 — Settle: topology, grounding, and content authoring",
         value=0.82,
     )
     settled = settle_mod.settle(
@@ -151,6 +179,25 @@ def run(
         fixer=injected.get("fixer"),
     )
     _snapshot_place(placements, store_dir)
+    # Phase 2.4 + 4.3 (Q1): the chapter's misconception/error-analysis
+    # inventory is built over chapter-wide evidence and each item is
+    # allotted to exactly one concept. Assemble stamps the allotments;
+    # the rendered section exists only where an item landed.
+    progress.step(
+        "Phase 3 — Analyse: chapter misconception/error-analysis "
+        "inventory",
+        value=0.935,
+    )
+    analysis = analyse_mod.analyse(
+        env,
+        [*settled, *(hosts.get("new_concepts") or [])],
+        provider=injected.get("analyse"),
+        allot_provider=injected.get("analyse_allot"),
+        critic=injected.get("critic"),
+        store=store,
+        fixer=injected.get("fixer"),
+    )
+    _snapshot_analysis(analysis, store_dir)
     # Terminal content quality (generic analysis, verbatim Descriptions)
     # is converged BEFORE Assemble seals anything, on settled and
     # host-created rows alike; only failing rows cost a model call.
@@ -175,7 +222,9 @@ def run(
         "(deterministic)",
         value=0.96,
     )
-    assembled = assemble_mod.assemble(env, settled, hosts, placements)
+    assembled = assemble_mod.assemble(
+        env, settled, hosts, placements, analysis
+    )
 
     rows = assembled["rows"]
     flagged = sum(1 for row in rows if row.get("review_flags"))
@@ -184,6 +233,7 @@ def run(
         "host_map": hosts["host_map"],
         "qid_map": hosts["qid_map"],
         "new_concepts": hosts["new_concepts"],
+        "analysis": analysis,
         "coverage": assembled["coverage"],
         "summary": {
             "row_count": len(rows),

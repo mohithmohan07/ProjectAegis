@@ -4700,6 +4700,9 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
                 + analysis
             ),
             "keywords": "Marianne, Germania, allegory",
+            # Q1: the row carries the analysis section, so it models an
+            # allotted row (assemble-stamped marker).
+            "_aegis_analysis_allotments": ["LA-0001", "LA-0002"],
         },
         {
             "topic": "Visual Symbols",
@@ -4816,6 +4819,9 @@ def test_saved_final_checkpoint_restores_missing_inventory_example_without_api(
                 "// " + analysis
             ),
             "keywords": "sovereignty, citizens",
+            # Q1: the row carries the analysis section, so it models an
+            # allotted row (assemble-stamped marker).
+            "_aegis_analysis_allotments": ["LA-0001", "LA-0002"],
         },
         {
             "topic": "Nationalism",

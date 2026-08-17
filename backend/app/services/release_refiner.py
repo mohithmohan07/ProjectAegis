@@ -309,6 +309,13 @@ def _terminal_error_keys(
         strict_analysis_section=pre_post == "Post",
         strict_mastery_statement=pre_post == "Post",
         source_text=source_text if pre_post == "Post" else "",
+        # Q1 gate split (Post only): analysis existence is judged under
+        # each row's own allotment marker.
+        analysis_allotted_keys=(
+            cv.analysis_allotted_keys([dict(row) for row in rows])
+            if pre_post == "Post"
+            else None
+        ),
     )
     keys: dict[int, set[tuple[str, str]]] = {}
     for error in report.get("errors") or []:

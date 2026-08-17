@@ -1,0 +1,1039 @@
+{
+ "_comment": "Recorded Phase 2.4 chapter inventory + Phase 4.3 allotments for job 23 (the RNE golden chapter), authored from the 47 settled rows' recorded per-concept analyses exactly the way rne_place.json was authored: the recorded texts are the evidence. Every one of the 94 recorded texts names distinct chapter content (the highest token overlap between any two is the shared 'reverse the sequence' phrasing pattern, each about different events), so no near-duplicates collapsed — all 94 ship as distinct LA-items, each allotted to the row that carried it. allot_to names the destination by (topic_id, concept_title); the replay provider resolves that pair against the request's own settled_concepts payload, exactly as the place fixture does. Item ids are the positional mint LA-0001… in settled-row order, misconception before error_analysis within a row.",
+ "items": [
+  {
+   "item_id": "LA-0001",
+   "kind": "misconception",
+   "text": "Students may believe Sorrieu’s print records a political union that had already been achieved in Europe in 1848.",
+   "evidence": "BLK-00005, BLK-00013",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "Utopian Nationalism and Democratic-social Republicanism"
+   }
+  },
+  {
+   "item_id": "LA-0002",
+   "kind": "error_analysis",
+   "text": "Students may misread the marching figures and national flags as evidence of existing unified states and label Germany as already unified, producing a factual reading instead of a utopian one.",
+   "evidence": "BLK-00005, BLK-00013",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "Utopian Nationalism and Democratic-social Republicanism"
+   }
+  },
+  {
+   "item_id": "LA-0003",
+   "kind": "misconception",
+   "text": "Students may believe the tricolour, National Assembly, and civic ceremonies were merely symbolic changes without altering who held political authority.",
+   "evidence": "BLK-00029, BLK-00031",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The French Revolution’s Transfer of Sovereignty to Citizens"
+   }
+  },
+  {
+   "item_id": "LA-0004",
+   "kind": "error_analysis",
+   "text": "Students may mislabel the Estates General as the elected National Assembly and attribute popular sovereignty to the pre-revolutionary institution, reversing the political sequence.",
+   "evidence": "BLK-00029, BLK-00031",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The French Revolution’s Transfer of Sovereignty to Citizens"
+   }
+  },
+  {
+   "item_id": "LA-0005",
+   "kind": "misconception",
+   "text": "Students may assume abolishing internal customs duties changed trade but had no connection to creating a common national identity.",
+   "evidence": "BLK-00031",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "French Revolutionary Measures for National Uniformity"
+   }
+  },
+  {
+   "item_id": "LA-0006",
+   "kind": "error_analysis",
+   "text": "Students may omit customs duties and common weights and measures when explaining national uniformity, leaving language policy as the sole cause and narrowing the causal account.",
+   "evidence": "BLK-00031",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "French Revolutionary Measures for National Uniformity"
+   }
+  },
+  {
+   "item_id": "LA-0007",
+   "kind": "misconception",
+   "text": "Students may believe nationalism spread beyond France solely through French military conquest and not through Jacobin clubs and educated middle-class activism.",
+   "evidence": "BLK-00033, BLK-00035",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The Outward Diffusion of French Revolutionary Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0008",
+   "kind": "error_analysis",
+   "text": "Students may reverse the sequence by placing French military expansion before the formation and activities of Jacobin clubs, producing an incorrect causal chain.",
+   "evidence": "BLK-00033, BLK-00035",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The Outward Diffusion of French Revolutionary Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0009",
+   "kind": "misconception",
+   "text": "Students may think equality before the law meant that everyone received identical wealth and social conditions.",
+   "evidence": "BLK-00041",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The Napoleonic Code and Legal Equality"
+   }
+  },
+  {
+   "item_id": "LA-0010",
+   "kind": "error_analysis",
+   "text": "Students may omit the Code’s protection of property when extracting its effects from a passage and conclude that it addressed only birth-based privilege.",
+   "evidence": "BLK-00041",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The Napoleonic Code and Legal Equality"
+   }
+  },
+  {
+   "item_id": "LA-0011",
+   "kind": "misconception",
+   "text": "Students may believe that freeing peasants from serfdom automatically ended all forms of Napoleonic domination in the conquered territories.",
+   "evidence": "BLK-00041",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "Napoleonic Administrative and Social Reforms in Conquered Territories"
+   }
+  },
+  {
+   "item_id": "LA-0012",
+   "kind": "error_analysis",
+   "text": "Students may mislabel improved transport and communication as legal-equality provisions and omit the administrative changes when classifying the reforms, merging infrastructure with law.",
+   "evidence": "BLK-00041",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "Napoleonic Administrative and Social Reforms in Conquered Territories"
+   }
+  },
+  {
+   "item_id": "LA-0013",
+   "kind": "misconception",
+   "text": "Students may believe residents opposed French rule from the beginning because the occupation used coercive measures.",
+   "evidence": "BLK-00046, BLK-00043",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The Contradictory Experience of French Domination"
+   }
+  },
+  {
+   "item_id": "LA-0014",
+   "kind": "error_analysis",
+   "text": "Students may mislabel taxation, censorship, and conscription as benefits when annotating evidence and use those entries to conclude that French rule brought only liberty.",
+   "evidence": "BLK-00046, BLK-00043",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0001",
+    "concept_title": "The Contradictory Experience of French Domination"
+   }
+  },
+  {
+   "item_id": "LA-0015",
+   "kind": "misconception",
+   "text": "Students may think the Habsburg Empire was a nation-state because its diverse peoples shared one emperor and political territory.",
+   "evidence": "BLK-00050, BLK-00052",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Fragmented Europe and the Multinational Habsburg Empire"
+   }
+  },
+  {
+   "item_id": "LA-0016",
+   "kind": "error_analysis",
+   "text": "Students may mislabel Habsburg territories as separate national states in a classification table and omit the common dynastic ruler, producing a false picture of political organization.",
+   "evidence": "BLK-00050, BLK-00052",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Fragmented Europe and the Multinational Habsburg Empire"
+   }
+  },
+  {
+   "item_id": "LA-0017",
+   "kind": "misconception",
+   "text": "Students may believe national unity was pursued only by the old landed aristocracy and not by liberal middle classes.",
+   "evidence": "BLK-00058, BLK-00068",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Aristocratic Dominance and the Emergence of Liberal Middle Classes"
+   }
+  },
+  {
+   "item_id": "LA-0018",
+   "kind": "error_analysis",
+   "text": "Students may omit the rise of workers, industrialists, businessmen, and professionals when linking industrialisation to nationalism, leaving the explanation centred on aristocratic estates.",
+   "evidence": "BLK-00058, BLK-00068",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Aristocratic Dominance and the Emergence of Liberal Middle Classes"
+   }
+  },
+  {
+   "item_id": "LA-0019",
+   "kind": "misconception",
+   "text": "Students may think nineteenth-century liberal nationalism gave women and all men equal political power from the outset.",
+   "evidence": "BLK-00072, BLK-00074",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Political Liberalism and the Limits of Nineteenth-century Citizenship"
+   }
+  },
+  {
+   "item_id": "LA-0020",
+   "kind": "error_analysis",
+   "text": "Students may reverse the sequence of revolutionary France, the Jacobin period, and the Napoleonic Code, recording the temporary widening of male suffrage as the lasting arrangement and overlooking its later restriction.",
+   "evidence": "BLK-00072, BLK-00074",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Political Liberalism and the Limits of Nineteenth-century Citizenship"
+   }
+  },
+  {
+   "item_id": "LA-0021",
+   "kind": "misconception",
+   "text": "Students may believe the Zollverein was a military alliance created to defend German states.",
+   "evidence": "BLK-00076, BLK-00078",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Economic Liberalism and the Zollverein"
+   }
+  },
+  {
+   "item_id": "LA-0022",
+   "kind": "error_analysis",
+   "text": "Students may misread customs barriers as state borders and list each as a separate member state, obscuring the Zollverein’s role in tariff and market integration.",
+   "evidence": "BLK-00076, BLK-00078",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Economic Liberalism and the Zollverein"
+   }
+  },
+  {
+   "item_id": "LA-0023",
+   "kind": "misconception",
+   "text": "Students may believe conservative rulers preserved authority by rejecting modern bureaucracy, armies, and economic reforms.",
+   "evidence": "BLK-00082, BLK-00084",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Conservative Statecraft and the Vienna Settlement"
+   }
+  },
+  {
+   "item_id": "LA-0024",
+   "kind": "error_analysis",
+   "text": "Students may misplace the Vienna settlement after Napoleon’s defeat and assign its design to Napoleon, producing an incorrect chronology and authorship.",
+   "evidence": "BLK-00082, BLK-00084",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Conservative Statecraft and the Vienna Settlement"
+   }
+  },
+  {
+   "item_id": "LA-0025",
+   "kind": "misconception",
+   "text": "Students may believe the Treaty of Vienna merely restored the old monarchies and left Europe’s territorial boundaries unchanged.",
+   "evidence": "BLK-00094",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Restoration and Territorial Reordering After Vienna"
+   }
+  },
+  {
+   "item_id": "LA-0026",
+   "kind": "error_analysis",
+   "text": "Students may omit the territorial changes involving the Netherlands, Piedmont, Prussia, Austria, Russia, and Saxony from a settlement summary, reducing the treaty to Bourbon restoration alone.",
+   "evidence": "BLK-00094",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Restoration and Territorial Reordering After Vienna"
+   }
+  },
+  {
+   "item_id": "LA-0027",
+   "kind": "misconception",
+   "text": "Students may believe censorship targeted only revolutionary pamphlets and did not affect ordinary newspapers, books, plays, or songs.",
+   "evidence": "BLK-00096, BLK-00102, BLK-00103",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Autocracy, Censorship, and the Demand for Freedom of the Press"
+   }
+  },
+  {
+   "item_id": "LA-0028",
+   "kind": "error_analysis",
+   "text": "Students may mislabel the Club of Thinkers caricature as evidence of open debate, so their source analysis fails to connect the image with repression and the demand for press freedom.",
+   "evidence": "BLK-00096, BLK-00102, BLK-00103",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Autocracy, Censorship, and the Demand for Freedom of the Press"
+   }
+  },
+  {
+   "item_id": "LA-0029",
+   "kind": "misconception",
+   "text": "Students may believe Mazzini’s secret societies aimed only to preserve Italy’s separate monarchies.",
+   "evidence": "BLK-00107, BLK-00109, BLK-00112",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Secret Societies and Mazzini’s Republican Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0030",
+   "kind": "error_analysis",
+   "text": "Students may misplace Mazzini’s 1831 exile and the founding of Young Italy in Marseilles on a timeline, causing the sequence of repression and organised republican activism to be reversed.",
+   "evidence": "BLK-00107, BLK-00109, BLK-00112",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0002",
+    "concept_title": "Secret Societies and Mazzini’s Republican Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0031",
+   "kind": "misconception",
+   "text": "Students may believe educated middle-class liberals were the only people involved in these revolutions.",
+   "evidence": "BLK-00116, BLK-00173",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Educated Middle-class Leadership of Liberal-nationalist Revolutions"
+   }
+  },
+  {
+   "item_id": "LA-0032",
+   "kind": "error_analysis",
+   "text": "Students may swap the roles of leaders and supporters in a participant chart, recording wider popular groups as organisers and professors, schoolteachers, clerks, and commercial professionals as mere followers.",
+   "evidence": "BLK-00116, BLK-00173",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Educated Middle-class Leadership of Liberal-nationalist Revolutions"
+   }
+  },
+  {
+   "item_id": "LA-0033",
+   "kind": "misconception",
+   "text": "Students may believe the Belgian uprising was a French annexation rather than a separate movement for national independence.",
+   "evidence": "BLK-00118",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The July Revolution and Belgian Independence"
+   }
+  },
+  {
+   "item_id": "LA-0034",
+   "kind": "error_analysis",
+   "text": "Students may reverse the timeline by placing the Belgian uprising before the French July Revolution, so their explanation presents the later event as the trigger.",
+   "evidence": "BLK-00118",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The July Revolution and Belgian Independence"
+   }
+  },
+  {
+   "item_id": "LA-0035",
+   "kind": "misconception",
+   "text": "Students may believe Greece became independent as soon as its revolt began in 1821.",
+   "evidence": "BLK-00120",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The Greek War of Independence and European Nationalist Support"
+   }
+  },
+  {
+   "item_id": "LA-0036",
+   "kind": "error_analysis",
+   "text": "Students may misplace 1821 and 1832 on a timeline, recording the Treaty of Constantinople as the revolt’s beginning and concluding that recognition preceded the struggle.",
+   "evidence": "BLK-00120",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The Greek War of Independence and European Nationalist Support"
+   }
+  },
+  {
+   "item_id": "LA-0037",
+   "kind": "misconception",
+   "text": "Students may believe Romanticism promoted reason and scientific calculation as the main sources of national identity.",
+   "evidence": "BLK-00124, BLK-00126, BLK-00128, BLK-00129",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Romanticism and the Cultural Construction of the Nation"
+   }
+  },
+  {
+   "item_id": "LA-0038",
+   "kind": "error_analysis",
+   "text": "Students may misread a Romantic painting by listing only its colours and omitting the depicted suffering and emotional response, so they miss how art generated shared sympathy.",
+   "evidence": "BLK-00124, BLK-00126, BLK-00128, BLK-00129",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Romanticism and the Cultural Construction of the Nation"
+   }
+  },
+  {
+   "item_id": "LA-0039",
+   "kind": "misconception",
+   "text": "Students may believe Herder’s volksgeist came from elite political laws rather than the language and traditions of common people.",
+   "evidence": "BLK-00131, BLK-00133, BLK-00147",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Folk Culture, Language, and the German National Spirit"
+   }
+  },
+  {
+   "item_id": "LA-0040",
+   "kind": "error_analysis",
+   "text": "Students may mislabel the Grimms’ 1812 first tale collection as their 33-volume dictionary, causing the evidence to attribute the wrong publication to their language work.",
+   "evidence": "BLK-00131, BLK-00133, BLK-00147",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Folk Culture, Language, and the German National Spirit"
+   }
+  },
+  {
+   "item_id": "LA-0041",
+   "kind": "misconception",
+   "text": "Students may believe that Polish national identity disappeared because Poland no longer had an independent territory.",
+   "evidence": "BLK-00133, BLK-00135",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Language and Cultural Resistance in Partitioned Poland"
+   }
+  },
+  {
+   "item_id": "LA-0042",
+   "kind": "error_analysis",
+   "text": "Students may mislabel the polonaise and mazurka as Russian cultural symbols when matching musical evidence to national identity, leading to an incorrect account of cultural resistance.",
+   "evidence": "BLK-00133, BLK-00135",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Language and Cultural Resistance in Partitioned Poland"
+   }
+  },
+  {
+   "item_id": "LA-0043",
+   "kind": "misconception",
+   "text": "Students may believe that popular revolts in the 1830s and 1840s resulted only from political repression rather than economic hardship.",
+   "evidence": "BLK-00139, BLK-00157",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Economic Hardship as a Cause of Popular Unrest"
+   }
+  },
+  {
+   "item_id": "LA-0044",
+   "kind": "error_analysis",
+   "text": "Students may omit population growth, reduced weavers’ payments, and food-price evidence from a cause-and-effect chain, leading to an unsupported explanation based only on industrialisation.",
+   "evidence": "BLK-00139, BLK-00157",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Economic Hardship as a Cause of Popular Unrest"
+   }
+  },
+  {
+   "item_id": "LA-0045",
+   "kind": "misconception",
+   "text": "Students may believe that the 1848 French Republic emerged through a peaceful constitutional process without pressure from food shortages and unemployment.",
+   "evidence": "BLK-00141, BLK-00155",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The French Republic and Social Reforms of 1848"
+   }
+  },
+  {
+   "item_id": "LA-0046",
+   "kind": "error_analysis",
+   "text": "Students may misread “all adult men older than twenty-one” as all adults and record universal suffrage, producing an inaccurate description of the republic’s reform.",
+   "evidence": "BLK-00141, BLK-00155",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The French Republic and Social Reforms of 1848"
+   }
+  },
+  {
+   "item_id": "LA-0047",
+   "kind": "misconception",
+   "text": "Students may believe that Wilhelm Wolff’s account is a neutral and complete record of the Silesian weavers’ revolt.",
+   "evidence": "BLK-00157, BLK-00159, BLK-00161, BLK-00165",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Interpreting Wilhelm Wolff’s Account of the Silesian Weavers’ Revolt"
+   }
+  },
+  {
+   "item_id": "LA-0048",
+   "kind": "error_analysis",
+   "text": "Students may copy Wolff’s evaluative descriptions into the factual-evidence column without separating reported conditions and actions from journalistic wording, causing the source’s viewpoint to be overlooked.",
+   "evidence": "BLK-00157, BLK-00159, BLK-00161, BLK-00165",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Interpreting Wilhelm Wolff’s Account of the Silesian Weavers’ Revolt"
+   }
+  },
+  {
+   "item_id": "LA-0049",
+   "kind": "misconception",
+   "text": "Students may believe the liberal programme of 1848 concerned only economic demands and excluded national unification.",
+   "evidence": "BLK-00173",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Middle-class Liberal Nationalism in 1848"
+   }
+  },
+  {
+   "item_id": "LA-0050",
+   "kind": "error_analysis",
+   "text": "Students may omit the distinction between France’s republican change and nation-building movements elsewhere, then label every 1848 revolt as the same national-unification project.",
+   "evidence": "BLK-00173",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Middle-class Liberal Nationalism in 1848"
+   }
+  },
+  {
+   "item_id": "LA-0051",
+   "kind": "misconception",
+   "text": "Students may think the Frankfurt Parliament failed only because Friedrich Wilhelm IV rejected the offered crown.",
+   "evidence": "BLK-00175",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The Frankfurt Parliament and Its Failure"
+   }
+  },
+  {
+   "item_id": "LA-0052",
+   "kind": "error_analysis",
+   "text": "Students may skip the deputies’ exclusion of workers and artisans when evaluating the collapse, then attribute the assembly’s dissolution solely to the king’s refusal.",
+   "evidence": "BLK-00175",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "The Frankfurt Parliament and Its Failure"
+   }
+  },
+  {
+   "item_id": "LA-0053",
+   "kind": "misconception",
+   "text": "Students may assume that women’s participation in associations, newspapers, and demonstrations automatically gave them voting rights.",
+   "evidence": "BLK-00177, BLK-00185, BLK-00188",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Gendered Limits of Liberal Political Rights"
+   }
+  },
+  {
+   "item_id": "LA-0054",
+   "kind": "error_analysis",
+   "text": "Students may misread the visitors’ gallery detail as evidence that women were elected Frankfurt deputies, then record observation rights as voting rights.",
+   "evidence": "BLK-00177, BLK-00185, BLK-00188",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Gendered Limits of Liberal Political Rights"
+   }
+  },
+  {
+   "item_id": "LA-0055",
+   "kind": "misconception",
+   "text": "Students may believe that reforms after 1848 were liberal victories achieved immediately by revolutionary governments.",
+   "evidence": "BLK-00190",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Liberal Concessions After Conservative Suppression"
+   }
+  },
+  {
+   "item_id": "LA-0056",
+   "kind": "error_analysis",
+   "text": "Students may misplace the 1867 Hungarian autonomy reform in the 1848 revolutionary year and classify it as an immediate concession.",
+   "evidence": "BLK-00190",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0003",
+    "concept_title": "Liberal Concessions After Conservative Suppression"
+   }
+  },
+  {
+   "item_id": "LA-0057",
+   "kind": "misconception",
+   "text": "Students may believe nationalism after 1848 remained mainly a democratic movement led by elected representatives.",
+   "evidence": "BLK-00202, BLK-00204, BLK-00224",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Nationalism as Conservative State Power After 1848"
+   }
+  },
+  {
+   "item_id": "LA-0058",
+   "kind": "error_analysis",
+   "text": "Students may omit monarchies, armies, and bureaucracies from a comparison and label conservative state-building as liberal revolution.",
+   "evidence": "BLK-00202, BLK-00204, BLK-00224",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Nationalism as Conservative State Power After 1848"
+   }
+  },
+  {
+   "item_id": "LA-0059",
+   "kind": "misconception",
+   "text": "Students may believe German unification was achieved through a single war against France.",
+   "evidence": "BLK-00204, BLK-00206",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Bismarck’s Military Unification of Germany"
+   }
+  },
+  {
+   "item_id": "LA-0060",
+   "kind": "error_analysis",
+   "text": "Students may reverse the sequence of the wars against Denmark, Austria, and France, producing an incorrect account of how the German Empire was formed.",
+   "evidence": "BLK-00204, BLK-00206",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Bismarck’s Military Unification of Germany"
+   }
+  },
+  {
+   "item_id": "LA-0061",
+   "kind": "misconception",
+   "text": "Students may think German unification changed only territorial borders while each region retained separate currencies, laws, and banking systems.",
+   "evidence": "BLK-00206, BLK-00208",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Prussian State-building in the German Empire"
+   }
+  },
+  {
+   "item_id": "LA-0062",
+   "kind": "error_analysis",
+   "text": "Students may mislabel shared currency, banking, legal, and judicial reforms as territorial changes only, omitting institutional standardisation from their explanation.",
+   "evidence": "BLK-00206, BLK-00208",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Prussian State-building in the German Empire"
+   }
+  },
+  {
+   "item_id": "LA-0063",
+   "kind": "misconception",
+   "text": "Students may believe the Italian peninsula already had one common government and a uniform language before unification.",
+   "evidence": "BLK-00216",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "The Fragmented States and Identities of Pre-unification Italy"
+   }
+  },
+  {
+   "item_id": "LA-0064",
+   "kind": "error_analysis",
+   "text": "Students may misplace Sardinia-Piedmont, the Austrian-controlled north, the Papal centre, and the Bourbon south on a map, producing a false picture of territorial unity.",
+   "evidence": "BLK-00216",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "The Fragmented States and Identities of Pre-unification Italy"
+   }
+  },
+  {
+   "item_id": "LA-0065",
+   "kind": "misconception",
+   "text": "Students may believe Cavour unified Italy through a popular republican uprising led by ordinary citizens.",
+   "evidence": "BLK-00224",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Cavour’s Diplomacy and Sardinia-Piedmont’s Leadership"
+   }
+  },
+  {
+   "item_id": "LA-0066",
+   "kind": "error_analysis",
+   "text": "Students may omit the French alliance when explaining Sardinia-Piedmont’s 1859 defeat of Austria and attribute the victory solely to its own army, weakening the causal explanation.",
+   "evidence": "BLK-00224",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Cavour’s Diplomacy and Sardinia-Piedmont’s Leadership"
+   }
+  },
+  {
+   "item_id": "LA-0067",
+   "kind": "misconception",
+   "text": "Students may think Garibaldi’s Red Shirts immediately unified all Italy and captured Rome in 1860.",
+   "evidence": "BLK-00224, BLK-00247, BLK-00249",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Garibaldi’s Volunteer Campaigns"
+   }
+  },
+  {
+   "item_id": "LA-0068",
+   "kind": "error_analysis",
+   "text": "Students may reverse the sequence by placing Rome’s capture before the Expedition of the Thousand and recording 1860 as the year Rome joined Italy, producing an incorrect timeline.",
+   "evidence": "BLK-00224, BLK-00247, BLK-00249",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Garibaldi’s Volunteer Campaigns"
+   }
+  },
+  {
+   "item_id": "LA-0069",
+   "kind": "misconception",
+   "text": "Students may assume that support for Garibaldi meant southern peasants already shared a clear Italian nationalist identity.",
+   "evidence": "BLK-00224",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Limited Popular Awareness of Italian Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0070",
+   "kind": "error_analysis",
+   "text": "Students may omit the distinction between political unification and popular awareness and use Garibaldi’s volunteer support as proof that all southern peasants understood Italian nationalism.",
+   "evidence": "BLK-00224",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Limited Popular Awareness of Italian Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0071",
+   "kind": "misconception",
+   "text": "Students may believe Britain became a nation through a single revolutionary event that united equally powerful English, Welsh, Scottish, and Irish communities.",
+   "evidence": "BLK-00230, BLK-00237",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "The Gradual Formation of the British Nation-state"
+   }
+  },
+  {
+   "item_id": "LA-0072",
+   "kind": "error_analysis",
+   "text": "Students may skip the 1707 Act of Union and list the 1688 transfer of power from the monarchy as the moment Britain was created, misdating the formation of Great Britain.",
+   "evidence": "BLK-00230, BLK-00237",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "The Gradual Formation of the British Nation-state"
+   }
+  },
+  {
+   "item_id": "LA-0073",
+   "kind": "misconception",
+   "text": "Students may believe Scottish Highland communities willingly abandoned their language, dress, and identity to become part of Britain.",
+   "evidence": "BLK-00237",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Suppression of Scottish National Identity"
+   }
+  },
+  {
+   "item_id": "LA-0074",
+   "kind": "error_analysis",
+   "text": "Students may omit the bans on Gaelic and national dress and the forced displacement when classifying British rule as voluntary integration, producing an inaccurate account of nation-building.",
+   "evidence": "BLK-00237",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Suppression of Scottish National Identity"
+   }
+  },
+  {
+   "item_id": "LA-0075",
+   "kind": "misconception",
+   "text": "Students may believe that Ireland joined the United Kingdom in 1801 through voluntary agreement among its religious communities.",
+   "evidence": "BLK-00239",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Ireland’s Coercive Incorporation into the United Kingdom"
+   }
+  },
+  {
+   "item_id": "LA-0076",
+   "kind": "error_analysis",
+   "text": "Students may reverse the sequence by placing the 1801 Act of Union before the 1798 revolt, producing an incorrect causal timeline.",
+   "evidence": "BLK-00239",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "Ireland’s Coercive Incorporation into the United Kingdom"
+   }
+  },
+  {
+   "item_id": "LA-0077",
+   "kind": "misconception",
+   "text": "Students may believe that the Union Jack, national anthem, and English language gave all constituent nations equal cultural recognition within Britain.",
+   "evidence": "BLK-00239",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "English Culture and Symbols of British Identity"
+   }
+  },
+  {
+   "item_id": "LA-0078",
+   "kind": "error_analysis",
+   "text": "Students may omit the English language when identifying the symbols of British identity and list only the Union Jack and anthem, leaving the process of cultural standardisation incomplete.",
+   "evidence": "BLK-00239",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0004",
+    "concept_title": "English Culture and Symbols of British Identity"
+   }
+  },
+  {
+   "item_id": "LA-0079",
+   "kind": "misconception",
+   "text": "Students may believe that the female figure in a national allegory is a portrait of a real woman rather than a symbolic representation of the nation.",
+   "evidence": "BLK-00257, BLK-00259",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0005",
+    "concept_title": "Personifying the Nation Through Female Allegories"
+   }
+  },
+  {
+   "item_id": "LA-0080",
+   "kind": "error_analysis",
+   "text": "Students may omit the red cap, broken chain, blindfold, and scales when decoding the image and identify the allegory only from the figure’s gender, resulting in an unsupported label.",
+   "evidence": "BLK-00257, BLK-00259",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0005",
+    "concept_title": "Personifying the Nation Through Female Allegories"
+   }
+  },
+  {
+   "item_id": "LA-0081",
+   "kind": "misconception",
+   "text": "Students may believe Marianne was a real queen who directly ruled France.",
+   "evidence": "BLK-00261, BLK-00269",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0005",
+    "concept_title": "Marianne as the Allegory of France"
+   }
+  },
+  {
+   "item_id": "LA-0082",
+   "kind": "error_analysis",
+   "text": "Students may mislabel Marianne’s red cap as a sign of monarchy and use that label to describe the image as royal propaganda.",
+   "evidence": "BLK-00261, BLK-00269",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0005",
+    "concept_title": "Marianne as the Allegory of France"
+   }
+  },
+  {
+   "item_id": "LA-0083",
+   "kind": "misconception",
+   "text": "Students may believe Germania was a portrait of a specific German ruler.",
+   "evidence": "BLK-00263, BLK-00271, BLK-00275, BLK-00287",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0005",
+    "concept_title": "Germania and the Symbolic Language of German Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0084",
+   "kind": "error_analysis",
+   "text": "Students may swap the olive branch and sword in a symbol table, labelling peace as military readiness and military readiness as peace.",
+   "evidence": "BLK-00263, BLK-00271, BLK-00275, BLK-00287",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0005",
+    "concept_title": "Germania and the Symbolic Language of German Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0085",
+   "kind": "misconception",
+   "text": "Students may think nationalism consistently promoted liberty, equality, and democracy throughout the nineteenth century.",
+   "evidence": "BLK-00295",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "The Shift from Liberal Nationalism to Imperial Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0086",
+   "kind": "error_analysis",
+   "text": "Students may omit later evidence of intolerance, warfare, and imperial manipulation when comparing periods, then conclude that nationalism did not change.",
+   "evidence": "BLK-00295",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "The Shift from Liberal Nationalism to Imperial Nationalism"
+   }
+  },
+  {
+   "item_id": "LA-0087",
+   "kind": "misconception",
+   "text": "Students may believe the Balkan peoples shared one national identity and followed one common independence movement.",
+   "evidence": "BLK-00297",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Romantic Nationalism and the Breakup of Ottoman Control in the Balkans"
+   }
+  },
+  {
+   "item_id": "LA-0088",
+   "kind": "error_analysis",
+   "text": "Students may reverse the sequence of Ottoman decline and nationalist demands on a timeline, attributing independence movements to events that occurred later.",
+   "evidence": "BLK-00297",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Romantic Nationalism and the Breakup of Ottoman Control in the Balkans"
+   }
+  },
+  {
+   "item_id": "LA-0089",
+   "kind": "misconception",
+   "text": "Students may believe the Balkan conflicts were mainly religious disputes rather than struggles over territory and national independence.",
+   "evidence": "BLK-00299",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Balkan Rivalries as a Cause of the First World War"
+   }
+  },
+  {
+   "item_id": "LA-0090",
+   "kind": "error_analysis",
+   "text": "Students may reverse the causal sequence by placing great-power intervention after the First World War, making the Balkan wars appear unrelated to the 1914 crisis.",
+   "evidence": "BLK-00299",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Balkan Rivalries as a Cause of the First World War"
+   }
+  },
+  {
+   "item_id": "LA-0091",
+   "kind": "misconception",
+   "text": "Students may believe that the map’s references to freedom and its celebratory symbols show British rule benefited colonised peoples equally.",
+   "evidence": "BLK-00301",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Imperial Imagery and British National Pride"
+   }
+  },
+  {
+   "item_id": "LA-0092",
+   "kind": "error_analysis",
+   "text": "Students may mislabel Britannia, the animals, and the freedom banner as neutral geographic markers, omitting the map’s message linking empire with British national pride.",
+   "evidence": "BLK-00301",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Imperial Imagery and British National Pride"
+   }
+  },
+  {
+   "item_id": "LA-0093",
+   "kind": "misconception",
+   "text": "Students may believe anti-imperial nationalism copied one uniform European model everywhere.",
+   "evidence": "BLK-00302",
+   "rationale": "a distinct incorrect belief the chapter's own account plausibly invites; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Colonised Peoples’ Nationalist Struggle for Independent Nation-states"
+   }
+  },
+  {
+   "item_id": "LA-0094",
+   "kind": "error_analysis",
+   "text": "Students may group all anti-imperial movements into a single model and omit their distinct local forms of organisation, concluding that every struggle followed an identical path to independence.",
+   "evidence": "BLK-00302",
+   "rationale": "a distinct concrete process error in working with this chapter's evidence; recorded verbatim from job 23's authored analysis and kept as its own inventory item",
+   "allot_to": {
+    "topic_id": "TOPIC-0006",
+    "concept_title": "Colonised Peoples’ Nationalist Struggle for Independent Nation-states"
+   }
+  }
+ ]
+}

@@ -95,6 +95,12 @@ _CANONICAL_IMAGE_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 _CANONICAL_ANALYSIS_LABEL = "Misconception/ Error Analysis"
+# Q1 allotment marker (stamped by phase3/assemble.py): the LA-item ids
+# the chapter analysis inventory allotted to a row. Rows carrying it are
+# the ONLY rows whose learner-analysis section must exist; a row without
+# it must carry none. Callers derive the validator's allotment context
+# from this field via ``analysis_allotted_keys``.
+ANALYSIS_ALLOTMENTS_FIELD = "_aegis_analysis_allotments"
 # Either section alone is a complete learner analysis; both appear only when
 # they carry genuinely different insight (reviewer contract). The combined
 # both-sections form keeps its exact legacy shape.
@@ -1041,6 +1047,21 @@ def _add(errors: list[dict], row_index: int, field: str, code: str,
     })
 
 
+def analysis_allotted_keys(rows: list[dict[str, Any]]) -> set[int]:
+    """Row indexes carrying a Q1 analysis allotment marker.
+
+    The derived set is the ``analysis_allotted_keys`` context Post-lane
+    callers hand to ``validate_concept_rows``: only these rows must
+    carry the learner-analysis section; every other row must carry none
+    (mechanics — pure marker accounting, no content judgment).
+    """
+    return {
+        index
+        for index, row in enumerate(rows)
+        if isinstance(row, dict) and row.get(ANALYSIS_ALLOTMENTS_FIELD)
+    }
+
+
 def validate_concept_rows(
     rows: list[dict[str, Any]], *,
     # Parent Concept ships empty: concepts sit flat under their topic, so its
@@ -1054,9 +1075,24 @@ def validate_concept_rows(
     strict_analysis_section: bool = False,
     strict_mastery_statement: bool = False,
     source_text: str = "",
+    # Q1 gate split: ``None`` keeps the legacy every-row existence
+    # contract (the Pre lane); a set of row indexes scopes the EXISTENCE
+    # codes (missing-section ``analysis_section_format``,
+    # ``missing_learner_analysis``,
+    # ``missing_misconception_or_error_analysis``) to allotted rows
+    # only, and a row OUTSIDE the set that carries a section gets the
+    # fatal ``unallotted_analysis_section`` (marker accounting). The
+    # QUALITY codes (generic/framing/overlap/shape/order) keep their
+    # meaning for any section that exists, allotted or not.
+    analysis_allotted_keys: Collection[int] | None = None,
 ) -> dict:
     """Return a structured validation report for concept-map records."""
     errors: list[dict] = []
+    allotted_rows = (
+        None
+        if analysis_allotted_keys is None
+        else {int(index) for index in analysis_allotted_keys}
+    )
     topic_title_counts: Counter[tuple[str, str]] = Counter()
     title_counts: Counter[str] = Counter()
     topic_rows: defaultdict[str, list[tuple[int, dict]]] = defaultdict(list)
@@ -1202,7 +1238,29 @@ def validate_concept_rows(
             for label, content in concept_refiner.split_sections(details)
             if concept_refiner.is_learner_analysis_label(label)
         ]
-        if strict_analysis_section and not is_culm:
+        # Q1 allotment context: with a key set, only allotted rows must
+        # carry the section; without one (legacy / Pre lane), every
+        # normal row must.
+        analysis_allotted = allotted_rows is None or i in allotted_rows
+        if (
+            allotted_rows is not None
+            and not analysis_allotted
+            and not is_culm
+            and analysis_sections
+        ):
+            # Marker accounting (mechanics): a section exists on a row
+            # the inventory never allotted an item to.
+            _add(
+                errors, i, "concept_details", "unallotted_analysis_section",
+                "row carries a 'Misconception/ Error Analysis' section but "
+                "received no allotment from the chapter analysis inventory "
+                "(Q1: the section exists only where an item was allotted)",
+            )
+        if (
+            strict_analysis_section
+            and not is_culm
+            and (analysis_allotted or analysis_sections)
+        ):
             canonical_match = None
             orphan_analysis_prefix = bool(
                 _ORPHAN_ANALYSIS_PREFIX_RE.search(details))
@@ -1250,10 +1308,16 @@ def validate_concept_rows(
                 )
 
         if not is_culm:
-            if not misconception_sections and not error_analysis_sections:
+            if (
+                analysis_allotted
+                and not misconception_sections
+                and not error_analysis_sections
+            ):
                 # This remains a warning because validation also runs during
                 # intermediate generation stages, before the dedicated issue
                 # analysis pass.  Final refinement guarantees one or both.
+                # Q1: an unallotted row is REQUIRED to carry neither, so
+                # the existence warning fires only for allotted rows.
                 _add(
                     errors, i, "concept_details",
                     "missing_misconception_or_error_analysis",

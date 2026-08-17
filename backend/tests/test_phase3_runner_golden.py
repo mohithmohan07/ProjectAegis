@@ -14,6 +14,7 @@ import pytest
 
 from app.services import concept_cleanup
 from app.services.phase3 import kernel, runner
+from tests import test_phase3_analyse as analyse_golden
 from tests import test_phase3_host_golden as host_golden
 from tests import test_phase3_settle_golden as settle_golden
 
@@ -88,6 +89,11 @@ def replay_providers(golden_envelope):
             encoding="utf-8"
         )
     )
+    golden_analysis = json.loads(
+        (settle_golden.GOLDEN / "rne_analysis.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mapping = settle_golden._replay_map(golden_envelope, golden_rows)
     topology, grounding, analysis, critic = settle_golden._providers(mapping)
 
@@ -108,6 +114,7 @@ def replay_providers(golden_envelope):
         "analysis": analysis,
         "host": _HostProvider(),
         "place": place_replay_provider(golden_place),
+        "analyse": analyse_golden.analyse_replay_provider(golden_analysis),
         "critic": critic,
     }
 
@@ -128,8 +135,49 @@ def test_runner_produces_publication_ready_output(
     # decides every unit, so every case-covered QID reaches a host.
     assert summary["routed_qids"] == 31
     assert summary["unrouted_items"] == 0
-    assert summary["flagged_row_count"] == 0
+    # Q2/R4 re-baseline: the deposit-parity pipeline's exact-once
+    # Example dedupe has ALWAYS removed these rows' duplicate activity
+    # Examples and the Case shells the removal emptied — it used to do
+    # so silently (the map's gap 4). The removals are now review flags
+    # naming where each Example renders, so the three affected rows
+    # (the hub-relocated Wolff account plus the two rows whose
+    # duplicated figure-activity Cases were deduped) surface as flagged.
+    assert summary["flagged_row_count"] == 3
+    flagged_rows = [
+        row for row in result["records"] if row.get("review_flags")
+    ]
+    assert sorted(
+        _normal(row["concept_title"]) for row in flagged_rows
+    ) == [
+        "Educated Middle-class Leadership of Liberal-nationalist "
+        "Revolutions",
+        "Nationalism as Conservative State Power After 1848",
+        "Personifying the Nation Through Female Allegories",
+    ]
+    for row in flagged_rows:
+        for flag in row["review_flags"]:
+            assert flag.startswith(
+                "Q2: removed the example-less Case shell"
+            )
+            assert "its Example(s) render under:" in flag
     assert summary["envelope_sha256"] == golden_envelope["envelope_sha256"]
+    # Q1: the analysis inventory rode through the runner — every LA-item
+    # allotted exactly once, and only allotted rows carry the section.
+    analysis = result["analysis"]
+    assert len(analysis["inventory"]) == 94
+    assert set(analysis["allotments"]) == {
+        item["item_id"] for item in analysis["inventory"]
+    }
+    coverage_analysis = result["coverage"]["learner_analysis"]
+    assert coverage_analysis["allotments"] == analysis["allotments"]
+    for row in result["records"]:
+        has_section = "Misconception/ Error Analysis" in str(
+            row["concept_details"]
+        )
+        assert has_section == bool(row.get("_aegis_analysis_allotments"))
+    # The Q2 deterministic audit found nothing on the golden replay.
+    assert result["coverage"]["case_audit"] == []
+    assert result["coverage"]["case_splits"] == []
 
     # Every row survives the actual publication cleaner used by
     # stage_release upload and the bulk-import writer chain.

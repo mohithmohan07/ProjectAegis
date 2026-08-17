@@ -13074,6 +13074,9 @@ _FATAL_CODES = {
     "generic_error_analysis", "error_analysis_framing",
     "issue_section_overlap",
     "analysis_section_format", "missing_learner_analysis",
+    # Q1 marker accounting: a learner-analysis section on a row the
+    # chapter inventory never allotted an item to.
+    "unallotted_analysis_section",
     "figure_reference_without_image",
     "figure_reference_image_mismatch", "generic_case_definition",
     "missing_case_definition", "case_without_example",
@@ -13173,7 +13176,15 @@ def _repair_records_via_api(
         report = cv.validate_concept_rows(
             records, **opts,
             allowed_source_examples=allowed_source_examples,
-            source_text=source_context)
+            source_text=source_context,
+            # Q1 gate split at the terminal stage: analysis existence is
+            # scoped to the rows the chapter inventory allotted items to.
+            analysis_allotted_keys=(
+                cv.analysis_allotted_keys(records)
+                if stage == "final"
+                else None
+            ),
+        )
         hard = [e for e in report["errors"] if e["severity"] == "error"]
         progress.log(
             f"{stage}: validation found {len(hard)} error(s), "
@@ -14489,7 +14500,10 @@ def _dedupe_rendered_inventory_examples(
     if not expected_keys:
         return records, 0
 
-    seen: set[str] = set()
+    # Q2/R4: the first render of a key is its carrier; a later duplicate
+    # is removed and any Case the removal empties is dropped WITH a
+    # review flag naming where its Examples live — never silently.
+    seen: dict[str, str] = {}
     removed = 0
     out: list[dict] = []
     for record in records:
@@ -14531,21 +14545,45 @@ def _dedupe_rendered_inventory_examples(
                 case_title = (pieces[0] or "").strip() or "Source-based question"
                 examples = [piece.strip() for piece in pieces[1:] if piece.strip()]
                 kept: list[str] = []
+                removed_carriers: list[str] = []
                 for example in examples:
                     key = _inventory_coverage_key(example)
                     if key in expected_keys:
                         if key in seen:
                             removed += 1
                             changed = True
+                            carrier = seen[key]
+                            if carrier and carrier not in removed_carriers:
+                                removed_carriers.append(carrier)
                             continue
-                        seen.add(key)
+                        seen[key] = str(
+                            record.get("concept_title") or ""
+                        ).strip()
                     kept.append(example)
                 if kept:
                     cases.append((case_title, kept))
+                elif examples:
+                    # Dedupe emptied this Case: dropping the shell is the
+                    # Q2 repair, and the removal is flagged with where the
+                    # Example(s) render — never a silent mask (R4).
+                    changed = True
+                    rec["review_flags"] = [
+                        *(rec.get("review_flags") or []),
+                        "Q2: removed the example-less Case shell "
+                        f"{case_title[:80]!r} left by exact-once Example "
+                        "dedupe; its Example(s) render under: "
+                        + (
+                            ", ".join(
+                                repr(title[:60])
+                                for title in removed_carriers
+                            )
+                            or "another concept row"
+                        ),
+                    ]
                 else:
-                    # A deduplicated Case with no remaining Example violates
-                    # the public Case -> Example hierarchy, so drop it rather
-                    # than leave an empty shell behind.
+                    # A Case that arrived with no Example at all violates
+                    # the public Case -> Example hierarchy, so drop it
+                    # rather than leave an empty shell behind.
                     changed = True
             if cases:
                 header = type_header.strip()
@@ -15819,6 +15857,9 @@ def _validate_final_or_raise(
             strict_analysis_section=True,
             strict_mastery_statement=True,
             source_text=source_text,
+            # Q1 gate split: existence codes fire only for rows the
+            # chapter inventory allotted an item to (marker-derived).
+            analysis_allotted_keys=cv.analysis_allotted_keys(records),
         )
 
     report = _run_report()
@@ -19390,17 +19431,26 @@ def _final_checkpoint_refresh_reasons(
         # another semantic field changes. Such a checkpoint must replay the
         # reviewed host decision even when its question wording still matches.
         reasons.append("source inventory semantics changed")
+    checkpoint_records = checkpoint.get("records") or []
     analysis_report = cv.validate_concept_rows(
-        checkpoint.get("records") or [], strict_analysis_section=True)
+        checkpoint_records, strict_analysis_section=True,
+        # Q1: a checkpoint's analysis contract is judged under the
+        # allotment markers its own rows carry — a pre-Q1 checkpoint
+        # (sections everywhere, no markers) is refreshed, never reused.
+        analysis_allotted_keys=cv.analysis_allotted_keys(
+            checkpoint_records),
+    )
     malformed_analysis = [
         error for error in analysis_report["errors"]
-        if error.get("code") == "analysis_section_format"
+        if error.get("code") in (
+            "analysis_section_format", "unallotted_analysis_section",
+        )
         and error.get("severity") == "error"
     ]
     if malformed_analysis:
         reasons.append(
             f"{len(malformed_analysis)} final learner-analysis section(s) "
-            "need canonical normalization"
+            "violate the canonical Q1 contract"
         )
     source_text = "\n\n".join(
         str(group.get("excerpt") or "")

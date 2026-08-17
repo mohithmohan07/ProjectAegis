@@ -1033,7 +1033,7 @@ def test_pipeline_restores_skeleton_method_rows_before_content_passes(
             anchor["anchor_id"] for anchor in anchors
         }
         refined = []
-        for record in records:
+        for index, record in enumerate(records, start=1):
             record = dict(record)
             record["concept_details"] = (
                 f"Description: Refined before the boundary: "
@@ -1046,6 +1046,9 @@ def test_pipeline_restores_skeleton_method_rows_before_content_passes(
                 "omit checking consecutive differences before applying the "
                 "relevant AP derivation."
             )
+            # Q1: a row carrying the analysis section models an allotted
+            # row — the assemble-stamped marker rides with it.
+            record["_aegis_analysis_allotments"] = [f"LA-{index:04d}"]
             refined.append(record)
         return refined
 

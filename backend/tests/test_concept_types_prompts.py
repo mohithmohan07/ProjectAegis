@@ -1406,6 +1406,9 @@ def test_final_content_checkpoint_skips_semantic_api_repair(monkeypatch):
                 "Students may omit a required step."
             ),
             "keywords": "",
+            # Q1: the row carries the analysis section, so it models an
+            # allotted row (assemble-stamped marker).
+            "_aegis_analysis_allotments": ["LA-0001", "LA-0002"],
         }],
         question_task_inventory={"items": [], "stats": {}},
         mined_types={"types": []},

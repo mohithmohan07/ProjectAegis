@@ -3,10 +3,12 @@
 Consumes the sealed envelope, decides every normal concept exactly once
 through the kernel, and emits the settled row set — the artifact the old
 pipeline knew as the validated final concept topology. Culminations are
-derived, never decided. Stage 3 authors each concept's Description,
-Achieving Mastery, and Misconception/Error Analysis in a single decision
-grounded on the concept's own source blocks — there is no separate
-description-refinement or mastery pass under the rewrite.
+derived, never decided. Stage 3 authors each concept's Description and
+Achieving Mastery in a single decision grounded on the concept's own
+source blocks — there is no separate description-refinement or mastery
+pass under the rewrite. Misconceptions/Error Analysis are NOT authored
+here: the chapter inventory pass (phase3/analyse.py, Q1) is the only
+analysis mechanism, and Assemble stamps its allotments onto the rows.
 """
 from __future__ import annotations
 
@@ -25,6 +27,12 @@ from .. import semantic_confidence_policy as confidence_policy
 _BATCH_SIZE = 12
 
 _DECISIONS = {"keep", "refine", "split"}
+
+# The Q1 unbundling (docs/aegis-restructure.md §12 Q1) removed
+# misconception_error_analysis from settle.author's response schema and
+# house string. The suffix re-keys every stored authoring decision so a
+# pre-Q1 record can never replay its stale schema past the new checker.
+AUTHOR_POLICY_SUFFIX = "-q1"
 
 _ANALYSIS_SPLIT = re.compile(
     r"\s*//\s*Misconception/?\s*Error Analysis:\s*", re.IGNORECASE
@@ -328,8 +336,9 @@ def _grounding_checker(
 
 
 # ---------------------------------------------------------------------------
-# stage 3: content authoring (one decision per batch — description,
-# mastery, and learner analysis together, so none can drift apart)
+# stage 3: content authoring (one decision per batch — description and
+# mastery together, so neither can drift apart; learner analysis is the
+# chapter inventory pass's alone, Q1)
 
 
 _MATH_FORMAT_ISSUES = {
@@ -402,7 +411,6 @@ def _authoring_checker(
                 )
         seen: set[str] = set()
         mastery_seen: dict[str, str] = {}
-        analysis_seen: dict[str, str] = {}
         for row in rows:
             if not isinstance(row, Mapping):
                 defects.append("an authored entry is not an object")
@@ -430,8 +438,9 @@ def _authoring_checker(
             ):
                 defects.append(
                     f"{concept_id} concept_description must carry only the "
-                    "teaching paragraph — mastery and learner analysis go "
-                    "in their own fields"
+                    "teaching paragraph — mastery goes in its own field, "
+                    "and Misconceptions/Error Analysis are never authored "
+                    "here (the chapter inventory pass owns them)"
                 )
             math_defect = _math_format_defect(
                 concept_id, "concept_description", description
@@ -459,53 +468,6 @@ def _authoring_checker(
                     )
                 else:
                     mastery_seen[key] = concept_id
-
-            body = _FIELD_LABEL.sub(
-                "", _normal(row.get("misconception_error_analysis"))
-            )
-            lowered = body.casefold()
-            # Either section alone is a complete analysis; both appear only
-            # when they carry genuinely different insight.
-            if "misconception" not in lowered and "error analysis" not in (
-                lowered
-            ):
-                defects.append(
-                    f"{concept_id} analysis must contain a Misconceptions "
-                    "or an Error Analysis part (either one is sufficient)"
-                )
-                continue
-            if re.search(r"misconception/\s*error analysis", lowered):
-                defects.append(
-                    f"{concept_id} analysis repeats the "
-                    "'Misconception/ Error Analysis' label — start "
-                    "directly with 'Misconceptions:' or 'Error Analysis:'"
-                )
-            if (
-                len(re.findall(r"misconceptions?\s*:", lowered)) > 1
-                or len(re.findall(r"error analysis\s*:", lowered)) > 1
-            ):
-                defects.append(
-                    f"{concept_id} analysis repeats a section label — at "
-                    "most one Misconceptions and one Error Analysis section"
-                )
-            if "learner" not in lowered and "student" not in lowered:
-                defects.append(
-                    f"{concept_id} analysis must name the learner or "
-                    "student and their belief or concrete faulty action"
-                )
-            if lowered in analysis_seen:
-                defects.append(
-                    f"{concept_id} analysis repeats {analysis_seen[lowered]}"
-                    "'s — each concept's analysis must come from its own "
-                    "content"
-                )
-            else:
-                analysis_seen[lowered] = concept_id
-            math_defect = _math_format_defect(
-                concept_id, "misconception_error_analysis", body
-            )
-            if math_defect:
-                defects.append(math_defect)
         missing = sorted(expected - seen)
         if missing:
             defects.append("unauthored concept(s): " + ", ".join(missing))
@@ -1012,24 +974,10 @@ def settle(
                     "or a compact worked cue. achieving_mastery: ONE "
                     "sentence naming what a learner can DO once this "
                     "concept is mastered — distinct for every concept, "
-                    "never shared or paraphrased between concepts. "
-                    "misconception_error_analysis: the genuine learner "
-                    "insight for THIS concept — 'Misconceptions:' names a "
-                    "plausible learner belief; 'Error Analysis:' names the "
-                    "learner and a concrete faulty action or reasoning "
-                    "step, not another belief. State the belief or action "
-                    "CONCRETELY — what the learner actually thinks or "
-                    "does with THIS concept's content, with the specific "
-                    "quantity, step, or claim named — never a vague "
-                    "'confuses X with Y' or 'misunderstands the "
-                    "relationship'. Default to the ONE section "
-                    "that carries the sharpest insight for this concept; "
-                    "add the second ONLY when it contributes genuinely "
-                    "different insight — never as a paraphrase of the "
-                    "first, and never reuse one concept's analysis for "
-                    "another. Start the field directly with "
-                    "'Misconceptions:' or 'Error Analysis:' — never repeat "
-                    "the outer 'Misconception/ Error Analysis' label. In "
+                    "never shared or paraphrased between concepts. Do NOT "
+                    "author Misconceptions or Error Analysis in any field "
+                    "— the chapter-level inventory pass owns them (Q1) "
+                    "and they are allotted to concepts later. In "
                     "every field, wrap EVERY mathematical expression "
                     "exactly as [Katex] valid LaTeX [/Katex]; never emit "
                     "raw TeX, $ delimiters, bare sub/superscripts, or bare "
@@ -1089,7 +1037,9 @@ def settle(
                 checker=_authoring_checker(concept_ids, batch_culm_ids),
                 critic=critic,
                 store=store,
-                policy_version=policy,
+                # Q1 re-key: the authoring schema lost its analysis field,
+                # so stored pre-Q1 decisions must never replay here.
+                policy_version=policy + AUTHOR_POLICY_SUFFIX,
                 fixer=fixer,
             )
             for position, concept_id in zip(offset_batch, concept_ids):
@@ -1118,13 +1068,12 @@ def settle(
                 mastery = _FIELD_LABEL.sub(
                     "", _normal(authored.get("achieving_mastery"))
                 )
-                analysis = _FIELD_LABEL.sub(
-                    "", _normal(authored.get("misconception_error_analysis"))
-                )
+                # Q1: Settle mints Description + Achieving Mastery only.
+                # The Misconception/ Error Analysis section is stamped by
+                # Assemble from the chapter inventory's allotments.
                 row["concept_details"] = kr.repair_unwrapped_math(
                     "Description: " + description
                     + "\nAchieving Mastery: " + mastery
-                    + " // Misconception/ Error Analysis: " + analysis
                 )
 
         topic_flag_count = sum(1 for flags in local_flags.values() if flags)

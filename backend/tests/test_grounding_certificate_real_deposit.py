@@ -40,6 +40,9 @@ def _sealed_post_records() -> list[dict]:
                 "political authority."
             ),
             "keywords": "sovereignty, citizens",
+            # Q1: the row carries the analysis section, so it models an
+            # allotted row (assemble-stamped marker).
+            "_aegis_analysis_allotments": ["LA-0001", "LA-0002"],
             "_source_block_ids": [_SOURCE_BLOCK_ID],
             "_source_grounding_contract": (
                 "api-verified-source-block-ids"

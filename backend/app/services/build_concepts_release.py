@@ -56,6 +56,11 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # audit and are stripped before DB upload.
     "_aegis_hub_placements",
     "_aegis_figure_placements",
+    # The Phase 2.4/4.3 chapter analysis inventory's allotments (Q1,
+    # phase3/assemble.py): the LA-item ids this row received. Rides the
+    # release for the reviewer's audit (every LA-id accounted, allotted
+    # to exactly one concept) and is stripped before DB upload.
+    "_aegis_analysis_allotments",
 })
 
 _UNIT_ID_RE = re.compile(
@@ -715,6 +720,56 @@ def _repeated_question_issues(
     return issues
 
 
+def _case_uniqueness_issues(
+    records: Sequence[Mapping[str, Any]],
+    mined_types: object,
+) -> list[dict[str, Any]]:
+    """Q2 deterministic uniqueness audit over the released rows.
+
+    Runs ``phase3.assemble.audit_case_uniqueness`` (mechanics: rendered
+    Case identities exactly-once, QID-keyed Example exactly-once, no
+    example-less Case shells) and converts its findings into release
+    issues — the release audit fails visibly, nothing is silently
+    repaired.
+    """
+
+    from .phase3 import assemble as p3_assemble
+
+    rows = [dict(row) for row in records if isinstance(row, Mapping)]
+    if not rows:
+        return []
+    try:
+        _types, cases = p3_assemble._type_catalog(
+            {"mined_types": dict(mined_types or {})
+             if isinstance(mined_types, Mapping) else {}}
+        )
+    except Exception:  # noqa: BLE001 - a malformed catalog never blocks release
+        cases = {}
+    prompt_by_qid: dict[str, str] = {}
+    for case in cases.values():
+        for example in case.get("examples") or []:
+            qid = _normal(example.get("qid"))
+            if qid and qid not in prompt_by_qid:
+                prompt_by_qid[qid] = str(example.get("prompt") or "")
+    findings = p3_assemble.audit_case_uniqueness(
+        rows,
+        cases=cases or None,
+        expected_examples=[
+            {"qid": qid, "prompt": prompt}
+            for qid, prompt in sorted(prompt_by_qid.items())
+        ],
+    )
+    return [
+        _issue(
+            code=f"case_uniqueness_{finding.get('code')}",
+            message=str(finding.get("message") or ""),
+            phase="type_case_release",
+            qids=finding.get("qids") or [],
+        )
+        for finding in findings
+    ]
+
+
 def _issue_matches_record(issue: Mapping[str, Any], record: Mapping[str, Any]) -> bool:
     unit_id = _normal(issue.get("unit_id"))
     origin_ids = {
@@ -1019,6 +1074,7 @@ def stage_release(
         types_value, inventory_value
     )
     issues.extend(type_case_issues)
+    issues.extend(_case_uniqueness_issues(record_rows, types_value))
     if not record_rows:
         issues.append(_issue(
             code="no_materialized_concept_rows",

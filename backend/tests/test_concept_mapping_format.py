@@ -10,6 +10,23 @@ from app.bulk_import import writer
 from tests.conftest import convert_concept_upload, stream_result
 
 
+def _mark_allotted(records):
+    """Q1 re-baseline: a fixture row carrying the learner-analysis section
+    models an allotted row (the marker assemble stamps rides with it); a
+    row without the section models an unallotted row and carries none."""
+    counter = 0
+    for row in records:
+        title = str(row.get("concept_title") or "")
+        if title.lower().startswith("culmination"):
+            continue
+        if "Misconception" in str(row.get("concept_details") or ""):
+            counter += 1
+            row.setdefault(
+                "_aegis_analysis_allotments", [f"LA-{counter:04d}"]
+            )
+    return records
+
+
 def test_strip_helpers():
     assert bi.strip_title_tag("Number System (09_Mathematics_CBSE_RS)") \
         == "Number System"
@@ -118,7 +135,8 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
              "Example 01: Combine square and square-root facts in one review problem. // "
              "Misconception: Students may believe roots and powers cannot appear together."), "keywords": ""},
     ]
-    build_concepts._deposit_concepts(db, chapter, records, "Post", "")
+    build_concepts._deposit_concepts(
+        db, chapter, _mark_allotted(records), "Post", "")
     build_concepts._sync_chapter_topic_summary(chapter)
     db.commit()
 
@@ -205,7 +223,7 @@ def test_post_deposit_keeps_math_recap_rich_text_canonical(db):
     ]
 
     created, _merged = build_concepts._deposit_concepts(
-        db, chapter, records, "Post", "")
+        db, chapter, _mark_allotted(records), "Post", "")
     db.flush()
 
     culmination = next(
@@ -256,7 +274,7 @@ def test_post_deposit_rejects_cases_without_numbered_examples(db):
 
     with pytest.raises(ValueError, match="case_without_example"):
         build_concepts._deposit_concepts(
-            db, chapter, records, "Post", "")
+            db, chapter, _mark_allotted(records), "Post", "")
 
 
 def test_post_deposit_ships_extra_examples_with_explicit_empty_inventory(db):
@@ -309,7 +327,7 @@ def test_post_deposit_ships_extra_examples_with_explicit_empty_inventory(db):
     created, _merged = build_concepts._deposit_concepts(
         db,
         chapter,
-        records,
+        _mark_allotted(records),
         "Post",
         "",
         inventory={"items": [], "stats": {}},
@@ -381,7 +399,7 @@ def test_post_deposit_without_inventory_uses_generation_fatal_policy(db):
         build_concepts._deposit_concepts(
             db,
             chapter,
-            records,
+            _mark_allotted(records),
             "Post",
             "",
             inventory=None,
@@ -444,7 +462,7 @@ def test_post_deposit_preserves_inventory_example_and_image_in_export(db):
     created, merged = build_concepts._deposit_concepts(
         db,
         chapter,
-        records,
+        _mark_allotted(records),
         "Post",
         "",
         inventory=inventory,
@@ -529,7 +547,7 @@ def test_post_deposit_refreshes_existing_concept_with_current_contract(db):
     ]
 
     created, merged = build_concepts._deposit_concepts(
-        db, chapter, records, "Post", "NCERT")
+        db, chapter, _mark_allotted(records), "Post", "NCERT")
 
     assert legacy_id in merged
     assert len(created) == 1
@@ -586,7 +604,7 @@ def test_post_deposit_repairs_missing_inventory_question_before_writes(db):
     created, merged = build_concepts._deposit_concepts(
         db,
         chapter,
-        records,
+        _mark_allotted(records),
         "Post",
         "",
         inventory=inventory,
