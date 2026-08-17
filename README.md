@@ -28,10 +28,6 @@ directory selection.
 **Post Learning** — upload a document (any format) → convert to MMD → parse
 concepts → deposit under a chapter.
 
-**Pre Learning** — either upload a document, or **use existing Post Learning**:
-pick one or more chapters and derive prerequisite concepts from their existing
-post-learning concepts.
-
 ### Post-generation pipeline
 
 After every generation: **assessment tagging** (cluster questions, build group

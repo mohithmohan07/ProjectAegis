@@ -215,14 +215,9 @@ export default function DocumentUpload({
     setBusy(true);
     setError(null);
     try {
-      let created: UploadJob;
-      if (module === "assessments") {
-        created = await api.createAssessmentUpload(uploadType || "document", file, source);
-      } else if (conceptKind === "pre") {
-        created = await api.preLearningUpload(file, source);
-      } else {
-        created = await api.postLearningUpload(file, source);
-      }
+      const created: UploadJob = module === "assessments"
+        ? await api.createAssessmentUpload(uploadType || "document", file, source)
+        : await api.postLearningUpload(file, source);
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
       emit(created);

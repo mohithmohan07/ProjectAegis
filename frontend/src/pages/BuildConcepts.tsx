@@ -16,7 +16,7 @@ import type {
   UploadJob,
 } from "../types";
 
-type Path = null | "post" | "pre";
+type Path = null | "post";
 
 export default function BuildConcepts() {
   const auth = useOptionalAuth();
@@ -38,13 +38,13 @@ export default function BuildConcepts() {
     let active = true;
     setResumeDiscoveryLoading(true);
     setResumeError(null);
-    Promise.all([
-      api.resumableConceptCheckpoints("post"),
-      api.resumableConceptCheckpoints("pre"),
-    ])
-      .then(([post, pre]) => {
+    // One lane only. `learning_kind` stays in the route contract (there is no
+    // migration path for the stored column), but Build Concepts no longer
+    // initiates a pre-learning discovery call.
+    api.resumableConceptCheckpoints("post")
+      .then((post) => {
         if (!active) return;
-        const candidate = [...post.items, ...pre.items]
+        const candidate = post.items
           .filter((job) => job.checkpoint_available)
           .sort((left, right) =>
             checkpointTime(right).localeCompare(checkpointTime(left)))
@@ -88,7 +88,7 @@ export default function BuildConcepts() {
         acknowledgeCheckpointPrompt(ownerKey, freshSummary);
         setPendingResume(null);
         setResumeJob(fresh);
-        setPath(fresh.learning_kind === "pre" ? "pre" : "post");
+        setPath("post");
       } catch (pollError) {
         if (active) {
           setResumeError(
@@ -125,7 +125,7 @@ export default function BuildConcepts() {
       acknowledgeCheckpointPrompt(ownerKey, job);
       setPendingResume(null);
       setResumeJob(fullJob);
-      setPath(fullJob.learning_kind === "pre" ? "pre" : "post");
+      setPath("post");
     } catch (resumeFailure) {
       setResumeError(`Could not restore the saved run: ${String(resumeFailure)}`);
     } finally {
@@ -151,8 +151,8 @@ export default function BuildConcepts() {
     <>
       <h1>Build Concepts</h1>
       <div className="subtitle">
-        Generate concepts from documents (Post Learning) or derive prerequisite
-        concepts (Pre Learning). Output is written to the Bulk Import workbook.
+        Generate concepts from documents. Output is written to the Bulk Import
+        workbook.
       </div>
       {resumeDiscoveryLoading && (
         <div className="muted" role="status" style={{ marginBottom: 12 }}>
@@ -161,26 +161,18 @@ export default function BuildConcepts() {
       )}
 
       {!path && (
-        <div className="grid cols-2">
+        // One card, so no cols-2: that grid is a fixed two-column template
+        // and would render the lone card at half width beside an empty
+        // column. Step 9 collapses this chooser entirely.
+        <div className="grid">
           <button
             className="module-card"
             disabled={resumeDiscoveryLoading}
             onClick={() => choosePath("post")}
           >
-            <div className="module-title">1 · Post Learning</div>
+            <div className="module-title">Post Learning</div>
             <div className="module-desc">
               Upload a document → convert to MMD → parse concepts → deposit under a chapter.
-            </div>
-          </button>
-          <button
-            className="module-card"
-            disabled={resumeDiscoveryLoading}
-            onClick={() => choosePath("pre")}
-          >
-            <div className="module-title">2 · Pre Learning</div>
-            <div className="module-desc">
-              Upload a document, or derive pre-learning concepts from one or more
-              existing Post Learning chapters.
             </div>
           </button>
         </div>
@@ -203,14 +195,6 @@ export default function BuildConcepts() {
           bookSources={bookSources}
           initialJob={
             resumeJob?.learning_kind === "post" ? resumeJob : null
-          }
-        />
-      )}
-      {path === "pre" && (
-        <PreLearningFlow
-          bookSources={bookSources}
-          initialUploadJob={
-            resumeJob?.learning_kind === "pre" ? resumeJob : null
           }
         />
       )}
@@ -458,269 +442,6 @@ function PostLearningFlow({
   );
 }
 
-/* ----------------------------- pre learning ----------------------------- */
-
-function PreLearningFlow({
-  bookSources,
-  initialUploadJob,
-}: {
-  bookSources: string[];
-  initialUploadJob: UploadJob | null;
-}) {
-  const [mode, setMode] = useState<"upload" | "existing">("upload");
-
-  return (
-    <>
-      <div className="card row" style={{ marginBottom: 16 }}>
-        <strong>Pre Learning source:</strong>
-        <label className="radio">
-          <input type="radio" checked={mode === "upload"} onChange={() => setMode("upload")} />
-          Upload a document
-        </label>
-        <label className="radio">
-          <input type="radio" checked={mode === "existing"} onChange={() => setMode("existing")} />
-          Use existing Post Learning
-        </label>
-      </div>
-      {mode === "upload"
-        ? (
-          <PreLearningUpload
-            bookSources={bookSources}
-            initialJob={initialUploadJob}
-          />
-        )
-        : <PreLearningExisting bookSources={bookSources} />}
-    </>
-  );
-}
-
-function PreLearningUpload({
-  bookSources,
-  initialJob,
-}: {
-  bookSources: string[];
-  initialJob: UploadJob | null;
-}) {
-  const { run } = useRunConsole();
-  const [job, setJob] = useState<UploadJob | null>(initialJob);
-  const [scope, setScope] = useState<Scope | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<Record<string, unknown> | null>(null);
-  const [resultResumed, setResultResumed] = useState(false);
-  const [treeReload, setTreeReload] = useState(0);
-  // Read-only record of a semantic issue the run carried into its release.
-  // It never gates the page: Aegis does not ask the user to choose mid-run.
-  const [carriedIssue, setCarriedIssue] =
-    useState<PendingSemanticDecision | null>(
-      initialJob?.pending_decision ?? null,
-    );
-
-  useEffect(() => {
-    if (initialJob) {
-      setJob(initialJob);
-      setCarriedIssue(initialJob.pending_decision ?? null);
-    }
-  }, [initialJob]);
-
-  const handleJob = useCallback((nextJob: UploadJob | null) => {
-    setJob(nextJob);
-    setCarriedIssue(nextJob?.pending_decision ?? null);
-    setError(null);
-    setResult(null);
-  }, []);
-
-  async function generate() {
-    if (!job || !scope) return;
-    const resumedFromCheckpoint = Boolean(job.checkpoint_available);
-    setBusy(true);
-    setError(null);
-    setResult(null);
-    setCarriedIssue(null);
-    setResultResumed(resumedFromCheckpoint);
-    try {
-      const data = await run<Record<string, unknown>>(
-        "Pre Learning — generating concepts",
-        api.paths.preLearningGenerate(job.id),
-        { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
-        {
-          cumulative: true,
-          resumed: resumedFromCheckpoint,
-          filename: job.filename,
-          fileLabel: "Source file",
-          initialUsage: job.openai_usage,
-        },
-        {
-          module: "concepts",
-          jobId: job.id,
-          // The run finished while the connection was down: rebuild the
-          // fields the result panel reads from the completed job itself.
-          recoverResult: async () => {
-            const finished = await api.getUploadJob("concepts", job.id);
-            return {
-              status: "generated",
-              reattached: true,
-              job_id: finished.id,
-              openai_usage: finished.openai_usage,
-              pending_decision: finished.pending_decision,
-            } as Record<string, unknown>;
-          },
-        },
-      );
-      let refreshedJob: UploadJob | null = null;
-      try {
-        refreshedJob = await api.getUploadJob("concepts", job.id);
-        setJob(refreshedJob);
-      } catch {
-        // The result remains usable even if refreshing the completed job fails.
-      }
-      // A semantic issue is carried into the release, never turned back into
-      // a mid-run question. Anything still attached is shown read-only.
-      setCarriedIssue(
-        pendingDecisionFrom(data) ?? refreshedJob?.pending_decision ?? null,
-      );
-      setResult(data);
-    } catch (e) {
-      let refreshedJob: UploadJob | null = null;
-      try {
-        refreshedJob = await api.getUploadJob("concepts", job.id);
-        setJob(refreshedJob);
-      } catch {
-        // Keep the generation error visible if refreshing job state also fails.
-      }
-      setCarriedIssue(refreshedJob?.pending_decision ?? null);
-      setError(formatGenerationError(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="section-title">1 · Upload document</div>
-      <DocumentUpload
-        module="concepts"
-        conceptKind="pre"
-        bookSources={bookSources}
-        externalJob={job}
-        disabled={busy}
-        onJob={handleJob}
-      />
-      {!result && (
-        <ApiUsageSummary
-          usage={job?.openai_usage}
-          filename={job?.filename}
-          fileLabel="Source file"
-          cumulative
-          resumed={Boolean(job?.checkpoint_available)}
-        />
-      )}
-      {job && job.status === "converted" && (
-        <>
-          <div className="section-title">2 · Deposit pre-learning concepts under a chapter</div>
-          <div className="card">
-            <DirectoryPicker
-              onScope={setScope}
-              chapterOnly
-              reloadSignal={treeReload}
-              initialChapterIdentity={checkpointTargetIdentity(job)}
-            />
-            <SyllabusUploader disabled={busy} onLoaded={() => setTreeReload((n) => n + 1)} />
-            <div className="row" style={{ marginTop: 12 }}>
-              <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
-              <div className="spacer" />
-              {(
-                <button disabled={!scope || busy} onClick={generate}>
-                  {job.checkpoint_available
-                    ? `Resume from ${Math.round(
-                      (job.checkpoint_progress ?? 0) * 100,
-                    )}% checkpoint`
-                    : "Generate pre-learning concepts"}
-                </button>
-              )}
-            </div>
-          </div>
-        </>
-      )}
-      {carriedIssue && (
-        <CarriedSemanticIssue issue={carriedIssue} />
-      )}
-      {result && job && <ConceptReviewPanel jobId={job.id} />}
-      {error && (
-        <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
-      )}
-      {result && (
-        <ConceptResult
-          result={result}
-          filename={job?.filename}
-          resumed={resultResumed}
-        />
-      )}
-    </>
-  );
-}
-
-function PreLearningExisting({ bookSources }: { bookSources: string[] }) {
-  const { run } = useRunConsole();
-  const [scope, setScope] = useState<Scope | null>(null);
-  const [chapterIds, setChapterIds] = useState<number[]>([]);
-  const [source, setSource] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<Record<string, unknown> | null>(null);
-
-  function addChapter() {
-    if (scope && scope.type === "chapter" && !chapterIds.includes(scope.ids[0])) {
-      setChapterIds([...chapterIds, scope.ids[0]]);
-    }
-  }
-
-  async function generate() {
-    setBusy(true);
-    setError(null);
-    try {
-      const data = await run<Record<string, unknown>>(
-        "Pre Learning — deriving from existing chapters",
-        api.paths.preLearningFromExisting,
-        { body: JSON.stringify({ chapter_ids: chapterIds, source_book: source }) },
-      );
-      setResult(data);
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <>
-      <div className="section-title">Choose Post Learning chapters (one or more)</div>
-      <div className="card">
-        <input placeholder="Source book (optional)" value={source}
-          onChange={(e) => setSource(e.target.value)} list="book-sources" />
-        <datalist id="book-sources">{bookSources.map((b) => <option key={b} value={b} />)}</datalist>
-        <DirectoryPicker onScope={setScope} chapterOnly />
-        <div className="row" style={{ marginTop: 12 }}>
-          <button className="ghost" disabled={!scope} onClick={addChapter}>
-            + Add chapter {scope ? `(${scope.label})` : ""}
-          </button>
-          <div className="spacer" />
-          <button disabled={busy || chapterIds.length === 0} onClick={generate}>
-            Generate pre-learning concepts
-          </button>
-        </div>
-        {chapterIds.length > 0 && (
-          <div className="muted" style={{ marginTop: 8 }}>
-            Selected chapter ids: {chapterIds.join(", ")}
-          </div>
-        )}
-      </div>
-      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
-      {result && <ConceptResult result={result} />}
-    </>
-  );
-}
-
 function CarriedSemanticIssue({ issue }: { issue: PendingSemanticDecision }) {
   // Aegis no longer asks the user to resolve a semantic issue during a run.
   // The issue travels into the release with its evidence, so this panel is
@@ -859,10 +580,6 @@ function ResumeCheckpointPrompt({
           <div>
             <dt>File</dt>
             <dd>{job.filename}</dd>
-          </div>
-          <div>
-            <dt>Learning flow</dt>
-            <dd>{job.learning_kind === "pre" ? "Pre Learning" : "Post Learning"}</dd>
           </div>
           <div>
             <dt>Saved stage</dt>

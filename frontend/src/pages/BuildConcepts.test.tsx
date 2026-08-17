@@ -41,8 +41,6 @@ const apiMock = vi.hoisted(() => ({
   submitConceptRevision: vi.fn(),
   paths: {
     postLearningGenerate: vi.fn((id: number) => `/post/${id}`),
-    preLearningGenerate: vi.fn((id: number) => `/pre/${id}`),
-    preLearningFromExisting: "/pre-existing",
   },
 }));
 const streamMock = vi.hoisted(() => vi.fn());
@@ -287,12 +285,13 @@ beforeEach(() => {
   streamMock.mockReset();
   window.sessionStorage.clear();
   apiMock.vocab.mockResolvedValue({ book_sources: [] });
-  apiMock.resumableConceptCheckpoints.mockImplementation(
-    async (kind: "post" | "pre") => ({
-      items: kind === "post" ? [savedSummary()] : [],
-      total: kind === "post" ? 1 : 0,
-    }),
-  );
+  // Single lane. The mock answers whatever lane it is asked for, so a
+  // re-introduced pre-lane call would show up as an extra call rather than
+  // being silently absorbed by a lane-branched fixture.
+  apiMock.resumableConceptCheckpoints.mockResolvedValue({
+    items: [savedSummary()],
+    total: 1,
+  });
   apiMock.getUploadJob.mockImplementation(
     async (_module: string, id: number) => savedJob({ id }),
   );
@@ -341,9 +340,14 @@ test("Keep for later acknowledges this checkpoint for the browser session", asyn
   first.unmount();
 
   renderPage();
+  // Two mounts × one lane: discovery ran again on the second mount (so it is
+  // still working), and the acknowledgement — not a missing call — is what
+  // suppresses the dialog.
   await waitFor(() => {
-    expect(apiMock.resumableConceptCheckpoints).toHaveBeenCalledTimes(4);
+    expect(apiMock.resumableConceptCheckpoints).toHaveBeenCalledTimes(2);
   });
+  expect(apiMock.resumableConceptCheckpoints).toHaveBeenCalledWith("post");
+  expect(apiMock.resumableConceptCheckpoints).not.toHaveBeenCalledWith("pre");
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
@@ -353,21 +357,22 @@ test("does not prompt when the owner has no resumable checkpoint", async () => {
     total: 0,
   });
   renderPage();
+  // Discovery ran — exactly once, on the surviving post lane — and found
+  // nothing to offer.
   await waitFor(() => {
-    expect(apiMock.resumableConceptCheckpoints).toHaveBeenCalledTimes(2);
+    expect(apiMock.resumableConceptCheckpoints).toHaveBeenCalledTimes(1);
   });
+  expect(apiMock.resumableConceptCheckpoints).toHaveBeenCalledWith("post");
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 
 test("polls an active run instead of offering a duplicate Resume action", async () => {
   vi.useFakeTimers();
   const active = savedSummary({ generation_running: true });
-  apiMock.resumableConceptCheckpoints.mockImplementation(
-    async (kind: "post" | "pre") => ({
-      items: kind === "post" ? [active] : [],
-      total: kind === "post" ? 1 : 0,
-    }),
-  );
+  apiMock.resumableConceptCheckpoints.mockResolvedValue({
+    items: [active],
+    total: 1,
+  });
   apiMock.getUploadJob.mockResolvedValue({
     ...active,
     generation_running: false,
@@ -435,17 +440,13 @@ test("refreshes a rejected 98% checkpoint to the retained 91% stage", async () =
     checkpoint_stage: "post_type_assignment",
     checkpoint_progress: 0.91,
   });
-  apiMock.resumableConceptCheckpoints.mockImplementation(
-    async (kind: "post" | "pre") => ({
-      items: kind === "post"
-        ? [savedSummary({
-          checkpoint_stage: "final_content_ready",
-          checkpoint_progress: 0.98,
-        })]
-        : [],
-      total: kind === "post" ? 1 : 0,
-    }),
-  );
+  apiMock.resumableConceptCheckpoints.mockResolvedValue({
+    items: [savedSummary({
+      checkpoint_stage: "final_content_ready",
+      checkpoint_progress: 0.98,
+    })],
+    total: 1,
+  });
   apiMock.getUploadJob
     .mockResolvedValueOnce(finalCheckpoint)
     .mockResolvedValueOnce(retainedCheckpoint);

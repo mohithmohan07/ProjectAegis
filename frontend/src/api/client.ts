@@ -342,8 +342,6 @@ export const api = {
     sessionGenerate: (id: number) => `/build-assessments/sessions/${id}/generate`,
     conceptConvert: (id: number) => `/build-concepts/uploads/${id}/convert`,
     postLearningGenerate: (id: number) => `/build-concepts/post-learning/uploads/${id}/generate`,
-    preLearningGenerate: (id: number) => `/build-concepts/pre-learning/uploads/${id}/generate`,
-    preLearningFromExisting: "/build-concepts/pre-learning/from-existing",
     workbookGenerate: "/workbooks/generate",
   },
 
@@ -416,24 +414,6 @@ export const api = {
       `/build-concepts/post-learning/uploads/${jobId}/generate`,
       { method: "POST", body: JSON.stringify({ target_chapter_id }) },
     ),
-  preLearningUpload: (file: File, sourceBook = "") => {
-    const fd = new FormData();
-    fd.append("file", file);
-    return http<UploadJob>(
-      `/build-concepts/pre-learning/uploads?source_book=${encodeURIComponent(sourceBook)}`,
-      { method: "POST", body: fd },
-    );
-  },
-  preLearningGenerateFromUpload: (jobId: number, target_chapter_id: number) =>
-    http<Record<string, unknown>>(
-      `/build-concepts/pre-learning/uploads/${jobId}/generate`,
-      { method: "POST", body: JSON.stringify({ target_chapter_id }) },
-    ),
-  preLearningFromExisting: (chapter_ids: number[], source_book = "") =>
-    http<Record<string, unknown>>("/build-concepts/pre-learning/from-existing", {
-      method: "POST",
-      body: JSON.stringify({ chapter_ids, source_book }),
-    }),
 
   // Create Workbooks (revision-PDF generator)
   workbookSubjects: () =>

@@ -134,12 +134,12 @@ test("a stream heartbeat makes a long final step visibly active", () => {
   fireEvent.click(screen.getByText("First"));
   act(() => pending[0].onEvent({
     type: "step",
-    label: "Pre-learning — deriving prerequisite map",
+    label: "Post Learning — generating concepts",
   }));
   act(() => pending[0].onEvent({ type: "heartbeat" }));
 
   expect(screen.getByTestId("progress-label").textContent).toBe(
-    "Pre-learning — deriving prerequisite map (still working...)",
+    "Post Learning — generating concepts (still working...)",
   );
 });
 
