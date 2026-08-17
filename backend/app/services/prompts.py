@@ -13,6 +13,7 @@ is unusable. :func:`render` only replaces the explicit ``{{name}}`` tokens.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -33,6 +34,7 @@ class PromptSpec:
 _REGISTRY: dict[str, PromptSpec] = {}
 _lock = threading.RLock()
 _overrides_cache: dict[str, str] | None = None
+_LOGGER = logging.getLogger(__name__)
 
 # Prompt keys a previous release registered and this one has retired.
 #
@@ -44,6 +46,12 @@ _overrides_cache: dict[str, str] | None = None
 # :func:`_load_overrides` drop it on the next read. This is mechanics, not
 # judgment about prompt content: the key no longer addresses anything the
 # code can run, so the stored text can never take effect again.
+#
+# The operator's text is never destroyed to achieve that. It is copied to
+# ``DATA_DIR/prompt_overrides.retired.json`` and the prune is logged by key,
+# so authored work stays recoverable and the removal is recorded rather than
+# silent — the same doctrine that governs learner content, applied to
+# operator content.
 RETIRED_PROMPT_KEYS: frozenset[str] = frozenset({
     # Retired with the legacy pre-learning derivation lane (restructure
     # step 7): Phase 03 captures prerequisites during the run instead of
@@ -60,36 +68,85 @@ def _overrides_path() -> Path:
     return config.DATA_DIR / "prompt_overrides.json"
 
 
-def _load_overrides() -> dict[str, str]:
-    global _overrides_cache
-    if _overrides_cache is not None:
-        return _overrides_cache
-    path = _overrides_path()
+def retired_overrides_path() -> Path:
+    """Where an override for a retired key is kept after it is pruned."""
+    return config.DATA_DIR / "prompt_overrides.retired.json"
+
+
+def _archive_retired_overrides(retired: dict[str, str]) -> None:
+    """Copy pruned overrides to the retired sidecar, keeping earlier ones.
+
+    Written BEFORE the live file is rewritten, so an interrupted prune leaves
+    the operator's text in both places rather than in neither.
+    """
+    path = retired_overrides_path()
+    existing: dict[str, str] = {}
     if path.exists():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                loaded = {str(k): str(v) for k, v in data.items()}
-            else:
-                loaded = {}
+                existing = {str(k): str(v) for k, v in data.items()}
         except (json.JSONDecodeError, OSError):
-            loaded = {}
-    else:
-        loaded = {}
-    stranded = [key for key in loaded if key in RETIRED_PROMPT_KEYS]
-    if stranded:
-        for key in stranded:
-            del loaded[key]
-        _overrides_cache = loaded
-        try:
-            _save_overrides(loaded)
-        except OSError:
-            # A read-only data dir must not break startup; the in-memory
-            # prune already makes the retired key inert for this process.
-            pass
+            existing = {}
+    existing.update(retired)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(existing, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_overrides() -> dict[str, str]:
+    global _overrides_cache
+    if _overrides_cache is not None:
         return _overrides_cache
-    _overrides_cache = loaded
-    return _overrides_cache
+    # The prune below turns this read into a disk write, so it must not race
+    # an admin ``PUT``/``reset``. ``_lock`` is the same RLock those writers
+    # take, and it is reentrant, so a caller already holding it is safe.
+    with _lock:
+        if _overrides_cache is not None:
+            # Filled while this thread waited for the lock.
+            return _overrides_cache
+        path = _overrides_path()
+        if path.exists():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    loaded = {str(k): str(v) for k, v in data.items()}
+                else:
+                    loaded = {}
+            except (json.JSONDecodeError, OSError):
+                loaded = {}
+        else:
+            loaded = {}
+        stranded = [key for key in loaded if key in RETIRED_PROMPT_KEYS]
+        if stranded:
+            retired = {key: loaded[key] for key in stranded}
+            for key in stranded:
+                del loaded[key]
+            _overrides_cache = loaded
+            try:
+                _archive_retired_overrides(retired)
+                _save_overrides(loaded)
+            except OSError:
+                # A read-only data dir must not break startup; the in-memory
+                # prune already makes the retired key inert for this process,
+                # and the live file still holds the operator's text.
+                _LOGGER.warning(
+                    "prompt overrides for retired key(s) %s could not be "
+                    "archived or pruned on disk (data dir not writable); "
+                    "they are inert for this process only",
+                    ", ".join(sorted(stranded)),
+                )
+                return _overrides_cache
+            _LOGGER.warning(
+                "pruned prompt override(s) for retired key(s) %s from %s; "
+                "the authored text was copied to %s",
+                ", ".join(sorted(stranded)),
+                _overrides_path(),
+                retired_overrides_path(),
+            )
+            return _overrides_cache
+        _overrides_cache = loaded
+        return _overrides_cache
 
 
 def _save_overrides(data: dict[str, str]) -> None:

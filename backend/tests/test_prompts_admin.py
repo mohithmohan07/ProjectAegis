@@ -1,4 +1,6 @@
 """Editable prompt registry + Admin API."""
+import json
+
 import pytest
 
 from app.services import assessment_prompts as ap
@@ -8,8 +10,10 @@ from app.services import prompts
 @pytest.fixture(autouse=True)
 def _clean_overrides():
     prompts.reset_all()
+    prompts.retired_overrides_path().unlink(missing_ok=True)
     yield
     prompts.reset_all()
+    prompts.retired_overrides_path().unlink(missing_ok=True)
 
 
 def test_registry_has_core_prompts():
@@ -90,6 +94,10 @@ def test_a_retired_prompt_override_is_pruned_instead_of_stranded():
     ``KeyError``), and un-resettable (the reset route's ``describe``
     404s). Naming the key in ``RETIRED_PROMPT_KEYS`` makes the next read
     drop it, from memory and from disk.
+
+    The prune must not DESTROY the operator's authored text to achieve that:
+    it is copied to ``prompt_overrides.retired.json`` first, so the removal is
+    recoverable and recorded rather than silent.
     """
     assert {"prelearning.system", "prelearning.auditor",
             "concepts.misconceptions.system"} <= prompts.RETIRED_PROMPT_KEYS
@@ -111,3 +119,26 @@ def test_a_retired_prompt_override_is_pruned_instead_of_stranded():
     assert not prompts.is_overridden("prelearning.system")
     assert prompts.get_text("assessment.base") == (
         "operator text for a live prompt")
+
+    # ... and the authored text was archived, not destroyed.
+    archived = json.loads(
+        prompts.retired_overrides_path().read_text(encoding="utf-8"))
+    assert archived["prelearning.system"] == (
+        "operator text for a retired prompt")
+    assert "assessment.base" not in archived
+
+
+def test_a_second_retired_override_does_not_overwrite_the_first_archive():
+    """Archiving is additive: one retirement must not erase an earlier one."""
+    prompts._save_overrides({"prelearning.system": "first authored text"})
+    prompts._invalidate_cache()
+    prompts._load_overrides()
+
+    prompts._save_overrides({"prelearning.auditor": "second authored text"})
+    prompts._invalidate_cache()
+    prompts._load_overrides()
+
+    archived = json.loads(
+        prompts.retired_overrides_path().read_text(encoding="utf-8"))
+    assert archived["prelearning.system"] == "first authored text"
+    assert archived["prelearning.auditor"] == "second authored text"

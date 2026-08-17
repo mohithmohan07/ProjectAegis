@@ -3954,6 +3954,13 @@ def record_human_semantic_decision(
         owner_sub=owner_sub,
         module="build_concepts",
     )
+    # ``pre`` stays in the accepted domain for the same reason the checkpoint
+    # routes keep it (see ``checkpoints.resumable_jobs``): it is stored public
+    # contract this repo has no migration system to drop. Since restructure
+    # step 7 no route can resume a legacy ``pre`` job, so a decision recorded
+    # against one is stored but will not be consumed by a resumed run — it is
+    # kept recorded rather than refused so the operator's answer is never
+    # thrown away, and step 8 decides where those jobs go.
     if job.learning_kind not in {"post", "pre"}:
         raise uploads.UploadJobNotFound("upload job not found")
     try:
