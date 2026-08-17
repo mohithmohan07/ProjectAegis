@@ -202,7 +202,12 @@ text into the `assessment.answer_restriction` payload, hash the file into that
 pass's `policy_version`, and let a future replacement of the file re-key and
 re-decide every stored verdict automatically. That file documents its own
 replacement procedure. No code parses it or branches on subject, question
-type, keyword, or family name.
+type, keyword, or family name. The file now also carries a **calibration
+appendix** — the real `answer_restriction` verdicts from the three accepted
+reference workbooks — as recorded ground-truth evidence the model reasons
+over (still not a rule table, still passed whole). The full corrected v2.0
+workbook remains owed; committing it later is a body-swap that the policy
+hash turns into an automatic re-decide, no migration.
 
 **The Refiner dispatch is step-6 code.** There is no file-level freeze on
 steps 1–5. The real constraints are: golden fixtures are recorded verdicts and
