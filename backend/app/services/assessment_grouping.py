@@ -1,37 +1,62 @@
-"""Semantic groups: tiers, variant clustering, identity, and descriptions
-(MES spec §6 Stages 8–10, §7 Tag New / Rewrite Full, §8 group contract).
+"""Semantic assessment groups (MES §6 Stages 8–10, §8 contract).
 
-Internal machine Group IDs, friendly-name projection, tier sequences,
-required empty shells, exact-partition validation, fingerprints, ordered
-label aggregates, and change detection for Tag New are mechanical. Semantic
-level authorship moves to the recorded verdict path in the next verified
-slice. Semantic and
-therefore model work with an independent critic: which questions form one
-variant family, and every occupied group's HOW + WHAT description.
+Level, variant-family, and occupied-group-description authorship all use the
+Phase-3 decision kernel: one cached model verdict, a mechanics-only checker,
+an independent advisory critic, and The Fixer for a structurally blocked
+decision.  No difficulty label, question count, or local content rule is an
+authority for those judgments.
 
-Fail-closed (spec §14): an unresolved clustering ships every candidate as
-its own single-member family, flagged — singleton clusters assert no
-variant relationship, so no semantic merge is ever made deterministically;
-an unresolved description ships flagged, never a generic count summary.
+Internal group IDs, friendly-name projection, tier sequences, required empty
+shells, exact-partition validation, fingerprints, ordered label aggregates,
+and Tag-New change detection remain mechanical.  Empty required shells keep
+their explicit ``NA`` description without spending a model call.
 """
 from __future__ import annotations
 
+import copy
 import json
-from typing import Callable, Mapping
+from typing import Any, Mapping
 
+from .. import config
 from . import assessment_release as rel
+from .phase3 import kernel
 
-MAX_ATTEMPTS = 3
-
-# Stage 8 — the accepted difficulty maps mechanically onto a tier.
-DIFFICULTY_TO_TIER = {"Less": "Basic", "Moderate": "Intermediate",
-                      "High": "Advanced"}
 TIER_CODES = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
+
+LEVEL_POLICY_VERSION = "assessment-level-1"
+VARIANT_CLUSTER_POLICY_VERSION = "assessment-variant-cluster-1"
+GROUP_DESCRIPTION_POLICY_VERSION = "assessment-group-description-1"
+
+LEVEL_SYSTEM = (
+    "You are the Aegis assessment-level author. Decide whether this one "
+    "question belongs in Basic, Intermediate, or Advanced by reading the "
+    "complete question, expected answer and rubric, source and routing "
+    "evidence, assets, and the home concept's teaching description. The "
+    "blueprint difficulty label is deliberately absent and has no authority "
+    "over this verdict. Judge the capability and construction actually "
+    "required by the question. There is no quota for the three tiers; never "
+    "balance, spread, or infer a tier from how many questions exist.\n"
+    "Return ONLY strict JSON:\n"
+    '{"candidate_id":"","tier":"Basic|Intermediate|Advanced",'
+    '"rationale":"evidence-bound reason"}'
+)
+
+LEVEL_CRITIC_SYSTEM = (
+    "You are the independent advisory critic for one assessment-level "
+    "verdict. Audit the proposed tier against the complete question, answer "
+    "and rubric, source and route evidence, assets, and home-concept "
+    "description. Do not substitute a blueprint difficulty label, balance "
+    "tiers, or revise the verdict. There is no quota. Your dissent is "
+    "advisory: the proposed verdict stands and your concerns ship for "
+    "review. State your honest confidence.\n"
+    "Return ONLY strict JSON:\n"
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+)
 
 CLUSTER_SYSTEM = (
     "You are the Aegis variant-clustering author. Partition the supplied "
-    "assessment questions (all sharing one concept and one difficulty "
-    "tier) into semantic variant families. One family means: the same "
+    "assessment questions (all sharing one concept and one authored tier) "
+    "into semantic variant families. One family means: the same "
     "atomic assessed idea, the same questioning intent, materially "
     "equivalent givens, the same expected response and answer space, the "
     "same solution or rubric shape, and compatible visual dependence and "
@@ -43,24 +68,26 @@ CLUSTER_SYSTEM = (
     "When existing groups are supplied, a question that genuinely belongs "
     "to one of them joins it (return its group_key); otherwise open a new "
     "family. Never force unrelated assessments into one family and never "
-    "split a true variant pair to balance sizes.\n"
+    "split a true variant pair to balance sizes. There is no quota for the "
+    "number or size of families.\n"
     "Every candidate_id must appear in exactly one family.\n"
     "Return ONLY strict JSON:\n"
-    '{"families":[{"existing_group_key":"","family":"short name",'
-    '"member_candidate_ids":[""]}]}'
+    '{"concept_key":"","tier":"Basic|Intermediate|Advanced",'
+    '"families":[{"existing_group_key":"","family":"short name",'
+    '"member_candidate_ids":[""]}],"rationale":"evidence-bound reason"}'
 )
 
 CLUSTER_CRITIC_SYSTEM = (
-    "You are the independent Aegis clustering critic. You are READ-ONLY. "
-    "Verify the proposed variant families against the questions: reject "
-    "families that mix different assessed ideas, intents, response "
-    "shapes, or visual dependence, and reject splits that separate true "
-    "paraphrase/value variants.\n"
+    "You are the independent advisory critic for one Aegis variant-family "
+    "verdict. Audit the proposed partition against the complete questions, "
+    "answers and rubrics, source and route evidence, assets, and the home "
+    "concept. Flag families that mix different assessed ideas, intents, "
+    "response shapes, or visual dependence, and flag splits that separate "
+    "true paraphrase or value variants. There is no quota. Do not revise or "
+    "gate the partition; dissent ships as review evidence. State your honest "
+    "confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"accept","proposal_sha256":"","feedback":[]} or '
-    '{"verdict":"reject","proposal_sha256":"","feedback":["evidence-bound '
-    'reason ..."]}\n'
-    "proposal_sha256 MUST echo the exact hash you were given."
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
 )
 
 DESCRIBE_SYSTEM = (
@@ -72,22 +99,22 @@ DESCRIBE_SYSTEM = (
     "pair of linear equations using substitution and showing intermediate "
     "working'.\n"
     "Never write a label list, a concept-description copy, a membership "
-    "history, a count summary ('3 questions covering Remember'), or "
+    "history, a question-count summary, or "
     "generic difficulty prose ('Basic assessments for Shapes').\n"
-    'Return ONLY strict JSON: {"description":""}'
+    "Return ONLY strict JSON:\n"
+    '{"group_key":"","description":"",'
+    '"rationale":"evidence-bound reason"}'
 )
 
 DESCRIBE_CRITIC_SYSTEM = (
-    "You are the independent Aegis group-description critic. You are "
-    "READ-ONLY. Verify the description against the member questions: it "
+    "You are the independent advisory Aegis group-description critic. "
+    "Audit the description against the complete member questions: it "
     "must state HOW and WHAT is assessed, be true of every member, and "
     "contain no label lists, counts, membership history, or generic "
-    "difficulty prose.\n"
+    "difficulty prose. Do not revise or gate the description; dissent ships "
+    "as review evidence. State your honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"accept","proposal_sha256":"","feedback":[]} or '
-    '{"verdict":"reject","proposal_sha256":"","feedback":["evidence-bound '
-    'reason ..."]}\n'
-    "proposal_sha256 MUST echo the exact hash you were given."
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
 )
 
 
@@ -98,14 +125,6 @@ class GroupingError(ValueError):
 # --------------------------------------------------------------------------- #
 # Mechanical identity (spec §8.1, §8.2)
 # --------------------------------------------------------------------------- #
-
-def tier_for_difficulty(difficulty: str) -> str:
-    tier = DIFFICULTY_TO_TIER.get(str(difficulty or "").strip())
-    if tier is None:
-        raise GroupingError(
-            f"unknown difficulty {difficulty!r}; the accepted value maps "
-            "mechanically and is never guessed")
-    return tier
 
 
 def group_key_for(concept_machine_id: str, tier: str, sequence: int) -> str:
@@ -183,6 +202,322 @@ def required_shells(
 
 
 # --------------------------------------------------------------------------- #
+# Shared semantic evidence and recorded-decision mechanics
+# --------------------------------------------------------------------------- #
+
+def _member_payload(candidates: list[Mapping]) -> list[dict[str, Any]]:
+    """Project complete semantic evidence without prior level authority.
+
+    Both rich and plain question forms, every answer/rubric/subquestion,
+    source and route provenance, and every supplied asset ride intact.  The
+    blueprint's difficulty and cognitive labels are deliberately absent:
+    neither is evidence for a fresh level or family verdict.  No text is
+    truncated and no volume-derived summary is manufactured.
+    """
+
+    return [
+        {
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "question": copy.deepcopy(candidate.get("question")),
+            "question_text": copy.deepcopy(candidate.get("question_text")),
+            "question_display": copy.deepcopy(
+                candidate.get("question_display")),
+            "sheet_kind": copy.deepcopy(candidate.get("sheet_kind")),
+            "question_category": copy.deepcopy(
+                candidate.get("question_category")),
+            "marks": copy.deepcopy(candidate.get("marks")),
+            "answer_restriction": copy.deepcopy(
+                candidate.get("answer_restriction")),
+            "restriction_reason": copy.deepcopy(
+                candidate.get("restriction_reason")),
+            "display_answer": copy.deepcopy(
+                candidate.get("display_answer")),
+            "answers": copy.deepcopy(candidate.get("answers")),
+            "rubric": copy.deepcopy(candidate.get("rubric")),
+            "marking_scheme": copy.deepcopy(
+                candidate.get("marking_scheme")),
+            "sub_questions": copy.deepcopy(candidate.get("sub_questions")),
+            "answer_explanation": copy.deepcopy(
+                candidate.get("answer_explanation")),
+            "requires_visual": bool(candidate.get("requires_visual")),
+            "assets": copy.deepcopy(candidate.get("assets")),
+            "image_manifest": copy.deepcopy(
+                candidate.get("image_manifest")),
+            "tables": copy.deepcopy(candidate.get("tables")),
+            "source_atom_ids": copy.deepcopy(
+                candidate.get("source_atom_ids")),
+            "source_qid": copy.deepcopy(candidate.get("source_qid")),
+            "source_document_hash": copy.deepcopy(
+                candidate.get("source_document_hash")),
+            "source_kind": copy.deepcopy(candidate.get("source_kind")),
+            "source_evidence": copy.deepcopy(
+                candidate.get("source_evidence")),
+            "shared_context": copy.deepcopy(
+                candidate.get("shared_context")),
+            "source_context": copy.deepcopy(
+                candidate.get("source_context")),
+            "raw_text": copy.deepcopy(candidate.get("raw_text")),
+            "normalized_public_text": copy.deepcopy(
+                candidate.get("normalized_public_text")),
+            "options": copy.deepcopy(candidate.get("options")),
+            "answer_evidence": copy.deepcopy(
+                candidate.get("answer_evidence")),
+            "route_evidence": copy.deepcopy(
+                candidate.get("route_evidence")),
+            "image_urls": copy.deepcopy(candidate.get("image_urls")),
+            "content_objects": copy.deepcopy(
+                candidate.get("content_objects")),
+            "blueprint_cell_id": copy.deepcopy(
+                candidate.get("blueprint_cell_id")),
+            "assessment_gist": copy.deepcopy(
+                candidate.get("assessment_gist")),
+        }
+        for candidate in candidates
+    ]
+
+
+def _concept_payload(concept: Mapping) -> dict[str, Any]:
+    """Carry explicit concept identity, display text, and full descriptions."""
+
+    return {
+        "concept_key": copy.deepcopy(concept.get("concept_key")),
+        "concept_id": copy.deepcopy(concept.get("concept_id")),
+        "concept_machine_id": copy.deepcopy(
+            concept.get("concept_machine_id")),
+        "concept_display_name": copy.deepcopy(
+            concept.get("concept_display_name")),
+        "concept_title": copy.deepcopy(concept.get("concept_title")),
+        "description": copy.deepcopy(concept.get("description")),
+        "teaching_description": copy.deepcopy(
+            concept.get("teaching_description")),
+        "concept_description": copy.deepcopy(
+            concept.get("concept_description")),
+        "concept_details": copy.deepcopy(concept.get("concept_details")),
+    }
+
+
+def _envelope_hash(value: str) -> str:
+    envelope_sha = str(value or "").strip()
+    if not envelope_sha:
+        raise GroupingError("assessment grouping requires an envelope hash")
+    return envelope_sha
+
+
+def _candidate_ids(candidates: list[Mapping], *, stage: str) -> list[str]:
+    ids: list[str] = []
+    for position, candidate in enumerate(candidates, start=1):
+        if not isinstance(candidate, Mapping):
+            raise GroupingError(
+                f"{stage} candidate {position} is not an object")
+        candidate_id = str(candidate.get("candidate_id") or "").strip()
+        if not candidate_id:
+            raise GroupingError(
+                f"{stage} candidate {position} has no candidate_id")
+        ids.append(candidate_id)
+    if len(ids) != len(set(ids)):
+        raise GroupingError(f"{stage} candidates repeat a candidate_id")
+    return ids
+
+
+def _review_flags(decision: Mapping[str, Any]) -> list[str]:
+    return [
+        str(flag) for flag in decision.get("review_flags") or []
+        if str(flag).strip()
+    ]
+
+
+def _decision_authority(decision: Mapping[str, Any]) -> dict[str, Any]:
+    """Stable row-private audit; volatile provider/time fields never escape."""
+
+    return {
+        "decision_key": str(decision.get("key") or ""),
+        "policy_version": str(decision.get("policy_version") or ""),
+        "review_flags": _review_flags(decision),
+        "fixer": bool(decision.get("fixer")),
+    }
+
+
+def _live_level(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        LEVEL_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_mapping",
+    )
+
+
+def _live_level_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        LEVEL_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
+
+
+def _live_cluster(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        CLUSTER_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_mapping",
+    )
+
+
+def _live_cluster_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        CLUSTER_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
+
+
+def _live_description(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        DESCRIBE_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_detailing",
+    )
+
+
+def _live_description_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        DESCRIBE_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
+
+
+def _live_authorities(
+    provider: kernel.Provider | None,
+    critic: kernel.Critic | None,
+    fixer: kernel.Provider | None,
+    *,
+    live_provider: kernel.Provider,
+    live_critic: kernel.Critic,
+) -> tuple[kernel.Provider, kernel.Critic | None, kernel.Provider | None]:
+    """Wire production authorities while preserving injected test seams."""
+
+    if provider is not None:
+        return provider, critic, fixer
+    from .phase3 import envelope as envelope_mod
+    from .phase3 import fixer as fixer_mod
+
+    envelope_mod.require_live_api()
+    return live_provider, critic or live_critic, fixer or fixer_mod.live_fixer
+
+
+# --------------------------------------------------------------------------- #
+# Stage 8 — model-authored level verdicts
+# --------------------------------------------------------------------------- #
+
+def _level_checker(candidate_id: str) -> kernel.Checker:
+    """Mechanics only: bind identity, enum, and required response fields."""
+
+    def check(response: Mapping[str, Any]) -> list[str]:
+        if not isinstance(response, Mapping):
+            return ["response is not an object"]
+        defects: list[str] = []
+        if str(response.get("candidate_id") or "") != candidate_id:
+            defects.append(f"candidate_id must echo {candidate_id!r}")
+        if str(response.get("tier") or "").strip() not in TIER_CODES:
+            defects.append(
+                "tier must be Basic, Intermediate, or Advanced")
+        if not str(response.get("rationale") or "").strip():
+            defects.append("response has no rationale")
+        return defects
+
+    return check
+
+
+def decide_levels(
+    units: list[Mapping],
+    *,
+    meta: Mapping,
+    envelope_sha256: str,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+) -> list[dict[str, Any]]:
+    """Author one recorded tier verdict per candidate, in input order."""
+
+    envelope_sha = _envelope_hash(envelope_sha256)
+    prepared: list[tuple[Mapping, Mapping, str]] = []
+    seen: set[str] = set()
+    for position, unit in enumerate(units, start=1):
+        if not isinstance(unit, Mapping):
+            raise GroupingError(f"level unit {position} is not an object")
+        candidate = unit.get("candidate")
+        concept = unit.get("concept")
+        if not isinstance(candidate, Mapping):
+            raise GroupingError(
+                f"level unit {position} has no candidate object")
+        if not isinstance(concept, Mapping):
+            raise GroupingError(
+                f"level unit {position} has no concept object")
+        candidate_id = str(candidate.get("candidate_id") or "").strip()
+        if not candidate_id:
+            raise GroupingError(
+                f"level unit {position} candidate has no candidate_id")
+        if candidate_id in seen:
+            raise GroupingError(
+                f"level units repeat candidate_id {candidate_id!r}")
+        seen.add(candidate_id)
+        prepared.append((candidate, concept, candidate_id))
+    if not prepared:
+        return []
+
+    provider, critic, fixer = _live_authorities(
+        provider, critic, fixer,
+        live_provider=_live_level,
+        live_critic=_live_level_critic,
+    )
+    store = store or kernel.DecisionStore()
+
+    def decide_one(unit: tuple[Mapping, Mapping, str]) -> dict[str, Any]:
+        candidate, concept, candidate_id = unit
+        payload = {
+            "stage": "assessment.level",
+            "rules": LEVEL_SYSTEM,
+            "metadata": copy.deepcopy(dict(meta)),
+            "candidate": _member_payload([candidate])[0],
+            "concept": _concept_payload(concept),
+        }
+        decision = kernel.decide(
+            kind="assessment.level",
+            unit_id=candidate_id,
+            envelope_sha256=envelope_sha,
+            payload=payload,
+            provider=provider,
+            checker=_level_checker(candidate_id),
+            critic=critic,
+            store=store,
+            policy_version=LEVEL_POLICY_VERSION,
+            fixer=fixer,
+        )
+        response = copy.deepcopy(dict(decision["response"]))
+        flags = _review_flags(decision)
+        return {
+            "candidate_id": candidate_id,
+            "tier": str(response.get("tier") or ""),
+            "rationale": str(response.get("rationale") or ""),
+            "decision": response,
+            "flags": flags,
+            "authority": _decision_authority(decision),
+        }
+
+    return kernel.parallel_map_in_order(
+        prepared,
+        decide_one,
+        max_workers=config.phase3_decision_workers(),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Stage 9 — semantic variant clustering
 # --------------------------------------------------------------------------- #
 
@@ -191,21 +526,29 @@ def _partition_defects(
     existing_keys: set[str],
 ) -> list[str]:
     """Exact disjoint partition over all candidate ids (mechanical)."""
+
     defects: list[str] = []
     seen: list[str] = []
-    for family in families:
+    used_existing: list[str] = []
+    for position, family in enumerate(families, start=1):
         if not isinstance(family, Mapping):
-            defects.append("family is not an object")
+            defects.append(f"family {position} is not an object")
             continue
         existing = str(family.get("existing_group_key") or "")
         if existing and existing not in existing_keys:
             defects.append(f"unknown existing_group_key {existing!r}")
-        members = [
-            str(m) for m in family.get("member_candidate_ids") or []
-            if str(m).strip()
-        ]
-        if not members:
-            defects.append("family with no members")
+        if existing:
+            used_existing.append(existing)
+        if "family" not in family or not isinstance(family.get("family"), str):
+            defects.append(f"family {position} has no string family name")
+        raw_members = family.get("member_candidate_ids")
+        if not isinstance(raw_members, list):
+            defects.append(
+                f"family {position} has no member_candidate_ids array")
+            continue
+        members = [str(member) for member in raw_members]
+        if not members or any(not member.strip() for member in members):
+            defects.append(f"family {position} has an empty member identity")
         seen.extend(members)
     report = rel.zero_loss_report(candidate_ids, seen, [])
     if report["missing"]:
@@ -214,168 +557,143 @@ def _partition_defects(
         defects.append(f"unknown candidates: {report['unexpected']}")
     if len(seen) != len(set(seen)):
         defects.append("a candidate appears in more than one family")
+    if len(used_existing) != len(set(used_existing)):
+        defects.append("an existing_group_key appears in more than one family")
     return defects
 
 
-def _member_payload(candidates: list[Mapping]) -> list[dict]:
-    from . import assessment_routing
+def _cluster_checker(
+    candidate_ids: list[str], existing_keys: set[str],
+    concept_key: str, tier: str,
+) -> kernel.Checker:
+    def check(response: Mapping[str, Any]) -> list[str]:
+        if not isinstance(response, Mapping):
+            return ["response is not an object"]
+        defects: list[str] = []
+        if str(response.get("concept_key") or "") != concept_key:
+            defects.append(f"concept_key must echo {concept_key!r}")
+        if str(response.get("tier") or "") != tier:
+            defects.append(f"tier must echo {tier!r}")
+        families = response.get("families")
+        if not isinstance(families, list):
+            return [*defects, "response has no families array"]
+        defects.extend(
+            _partition_defects(families, candidate_ids, existing_keys))
+        if not str(response.get("rationale") or "").strip():
+            defects.append("response has no rationale")
+        return defects
 
-    return [
-        {
-            "candidate_id": str(c.get("candidate_id") or ""),
-            "question": str(c.get("question") or ""),
-            "answer_evidence": assessment_routing.routing_answer_evidence(c),
-            "requires_visual": bool(c.get("requires_visual")),
-            "sub_question_count": len(c.get("sub_questions") or []),
-        }
-        for c in candidates
-    ]
+    return check
 
 
 def cluster_tier(
     candidates: list[Mapping],
     *,
-    concept_title: str,
+    concept: Mapping,
     tier: str,
-    existing_groups: list[Mapping] | None = None,
     meta: Mapping,
-    author_call: Callable[..., dict] | None = None,
-    critic_call: Callable[..., dict] | None = None,
-    max_attempts: int = MAX_ATTEMPTS,
-) -> dict:
-    """Partition one concept+tier's candidates into variant families.
+    envelope_sha256: str,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+    existing_groups: list[Mapping] | None = None,
+) -> dict[str, Any]:
+    """Record one variant-family verdict for one occupied concept+tier.
 
-    Returns {"families": [...], "flags": [...], "authority": {...}}. A
-    family is {"existing_group_key": "", "family": name, "member_candidate_
-    ids": [...]}. Unresolved clustering ships singleton families, flagged:
-    singletons assert no variant relationship, so nothing semantic was
-    decided deterministically.
+    Every non-empty pool, including a singleton, is a semantic decision.
+    Empty pools require no family and therefore spend no provider call.
     """
-    candidate_ids = [str(c.get("candidate_id") or "") for c in candidates]
+
     if not candidates:
         return {"families": [], "flags": [], "authority": {}}
-    if len(candidates) == 1:
-        # One question is one family; there is nothing to decide.
-        return {
-            "families": [{
-                "existing_group_key": "",
-                "family": "",
-                "member_candidate_ids": candidate_ids,
-            }],
-            "flags": [],
-            "authority": {"basis": "singleton"},
-        }
-
-    if author_call is None or critic_call is None:
-        from . import generation
-
-        def _default_author(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_mapping")
-
-        def _default_critic(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_validation")
-
-        author_call = author_call or _default_author
-        critic_call = critic_call or _default_critic
+    if not isinstance(concept, Mapping):
+        raise GroupingError("variant clustering requires a concept object")
+    if tier not in TIER_CODES:
+        raise GroupingError(f"unknown group tier {tier!r}")
+    envelope_sha = _envelope_hash(envelope_sha256)
+    candidate_ids = _candidate_ids(candidates, stage="variant clustering")
+    concept_key = str(concept.get("concept_key") or "").strip()
+    if not concept_key:
+        raise GroupingError("variant clustering concept has no concept_key")
 
     existing = list(existing_groups or [])
-    existing_keys = {str(g.get("group_key") or "") for g in existing}
+    existing_keys: list[str] = []
+    for position, group in enumerate(existing, start=1):
+        if not isinstance(group, Mapping):
+            raise GroupingError(
+                f"existing group {position} is not an object")
+        group_key = str(group.get("group_key") or "").strip()
+        if not group_key:
+            raise GroupingError(f"existing group {position} has no group_key")
+        if str(group.get("concept_key") or "") != concept_key:
+            raise GroupingError(
+                f"existing group {group_key!r} belongs to a different concept")
+        if str(group.get("group_type") or "") != tier:
+            raise GroupingError(
+                f"existing group {group_key!r} belongs to a different tier")
+        existing_keys.append(group_key)
+    if len(existing_keys) != len(set(existing_keys)):
+        raise GroupingError("existing groups repeat a group_key")
+    known_existing = set(existing_keys)
+
+    provider, critic, fixer = _live_authorities(
+        provider, critic, fixer,
+        live_provider=_live_cluster,
+        live_critic=_live_cluster_critic,
+    )
+    store = store or kernel.DecisionStore()
     payload = {
-        "metadata": dict(meta),
-        "concept_title": concept_title,
+        "stage": "assessment.variant_cluster",
+        "rules": CLUSTER_SYSTEM,
+        "metadata": copy.deepcopy(dict(meta)),
+        "concept": _concept_payload(concept),
         "tier": tier,
         "candidates": _member_payload(candidates),
         "existing_groups": [
             {
-                "group_key": str(g.get("group_key") or ""),
-                "semantic_description": str(
-                    g.get("semantic_description") or ""),
+                "group_key": str(group.get("group_key") or ""),
+                "group_type": copy.deepcopy(group.get("group_type")),
+                "family": copy.deepcopy(group.get("family")),
+                "semantic_description": copy.deepcopy(
+                    group.get("semantic_description")),
+                "member_candidate_ids": copy.deepcopy(
+                    group.get("member_candidate_ids")),
             }
-            for g in existing
+            for group in existing
         ],
     }
-    attempts: list[dict] = []
-    feedback: list[str] = []
-    for attempt in range(1, max(1, max_attempts) + 1):
-        user = json.dumps(payload, ensure_ascii=False)
-        if feedback:
-            user += (
-                "\n\nYOUR PREVIOUS PARTITION WAS REJECTED. Address every "
-                "item, then return a fresh complete partition:\n- "
-                + "\n- ".join(feedback)
-            )
-        try:
-            proposal = author_call(CLUSTER_SYSTEM, user)
-        except Exception as exc:  # noqa: BLE001
-            attempts.append({"attempt": attempt, "outcome": "author_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        families = (
-            list(proposal.get("families") or [])
-            if isinstance(proposal, Mapping) else [])
-        defects = _partition_defects(families, candidate_ids, existing_keys)
-        if defects:
-            attempts.append({"attempt": attempt, "outcome": "mechanical",
-                             "defects": defects})
-            feedback = defects
-            continue
-        sha = rel.sha256_json(families)
-        try:
-            review = critic_call(
-                CLUSTER_CRITIC_SYSTEM,
-                json.dumps({
-                    "proposal": families,
-                    "proposal_sha256": sha,
-                    "candidates": _member_payload(candidates),
-                }, ensure_ascii=False))
-        except Exception as exc:  # noqa: BLE001
-            attempts.append({"attempt": attempt, "outcome": "critic_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        review = review if isinstance(review, Mapping) else {}
-        if str(review.get("proposal_sha256") or "") != sha:
-            attempts.append({"attempt": attempt, "outcome": "critic_unbound"})
-            feedback = ["the critic review did not bind to the partition"]
-            continue
-        if str(review.get("verdict") or "").strip().lower() == "accept":
-            return {
-                "families": [
-                    {
-                        "existing_group_key": str(
-                            f.get("existing_group_key") or ""),
-                        "family": str(f.get("family") or ""),
-                        "member_candidate_ids": [
-                            str(m) for m in f["member_candidate_ids"]],
-                    }
-                    for f in families
-                ],
-                "flags": [],
-                "authority": {
-                    "proposal_sha256": sha,
-                    "critic_response_sha256": rel.sha256_json(dict(review)),
-                    "attempts": attempts + [
-                        {"attempt": attempt, "outcome": "accepted"}],
-                },
-            }
-        route_feedback = [
-            str(f) for f in review.get("feedback") or [] if str(f).strip()]
-        attempts.append({"attempt": attempt, "outcome": "critic_rejected",
-                         "feedback": route_feedback})
-        feedback = route_feedback or ["rejected without usable feedback"]
-
-    # Unresolved: singleton families assert no variant relationship — no
-    # semantic merge was made deterministically — and every family is
-    # flagged for review.
+    decision = kernel.decide(
+        kind="assessment.variant_cluster",
+        unit_id=f"{concept_key}|{tier}",
+        envelope_sha256=envelope_sha,
+        payload=payload,
+        provider=provider,
+        checker=_cluster_checker(
+            candidate_ids, known_existing, concept_key, tier),
+        critic=critic,
+        store=store,
+        policy_version=VARIANT_CLUSTER_POLICY_VERSION,
+        fixer=fixer,
+    )
+    response = copy.deepcopy(dict(decision["response"]))
+    families = [
+        {
+            "existing_group_key": str(
+                family.get("existing_group_key") or ""),
+            "family": str(family.get("family") or ""),
+            "member_candidate_ids": [
+                str(member)
+                for member in family.get("member_candidate_ids") or []
+            ],
+        }
+        for family in response.get("families") or []
+    ]
     return {
-        "families": [
-            {"existing_group_key": "", "family": "",
-             "member_candidate_ids": [cid]}
-            for cid in candidate_ids
-        ],
-        "flags": ["unresolved_clustering"],
-        "authority": {"attempts": attempts},
+        "families": families,
+        "decision": response,
+        "flags": _review_flags(decision),
+        "authority": _decision_authority(decision),
     }
 
 
@@ -383,107 +701,135 @@ def cluster_tier(
 # Stage 10 — group descriptions
 # --------------------------------------------------------------------------- #
 
+def _description_checker(
+    group_key: str, internal_ids: set[str],
+) -> kernel.Checker:
+    """Mechanics only: required fields and no supplied internal-ID leak."""
+
+    def check(response: Mapping[str, Any]) -> list[str]:
+        if not isinstance(response, Mapping):
+            return ["response is not an object"]
+        defects: list[str] = []
+        if str(response.get("group_key") or "") != group_key:
+            defects.append(f"group_key must echo {group_key!r}")
+        description = str(response.get("description") or "").strip()
+        if not description:
+            defects.append("response has no description")
+        folded_description = description.casefold()
+        leaked = sorted(
+            internal_id
+            for internal_id in internal_ids
+            if internal_id and internal_id.casefold() in folded_description
+        )
+        if leaked:
+            defects.append(
+                "description exposes internal identity: "
+                + ", ".join(repr(value) for value in leaked)
+            )
+        if not str(response.get("rationale") or "").strip():
+            defects.append("response has no rationale")
+        return defects
+
+    return check
+
+
+def _description_internal_ids(
+    group: Mapping, concept: Mapping, members: list[Mapping],
+) -> set[str]:
+    """Exact supplied machine identities that may never enter visible prose."""
+
+    def identity(record: Mapping, field: str) -> str:
+        value = record.get(field)
+        return value.strip() if isinstance(value, str) else ""
+
+    identities = {
+        identity(group, field)
+        for field in ("group_key", "concept_key", "concept_id")
+    }
+    identities.update(
+        identity(concept, field)
+        for field in ("concept_key", "concept_id", "concept_machine_id")
+    )
+    for member in members:
+        identities.update(
+            identity(member, field)
+            for field in (
+                "candidate_id",
+                "group_key",
+                "blueprint_cell_id",
+                "source_qid",
+            )
+        )
+        identities.update(
+            str(value or "").strip()
+            for value in member.get("source_atom_ids") or []
+        )
+    return {identity for identity in identities if identity}
+
+
 def describe_group(
     group: Mapping,
     members: list[Mapping],
     *,
+    concept: Mapping,
     meta: Mapping,
-    author_call: Callable[..., dict] | None = None,
-    critic_call: Callable[..., dict] | None = None,
-    max_attempts: int = MAX_ATTEMPTS,
-) -> dict:
-    """One occupied group -> {"description": ..., "flags": [...]}.
+    envelope_sha256: str,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+) -> dict[str, Any]:
+    """Author an occupied group's HOW + WHAT description once.
 
-    Empty required shells stay 'NA' (spec §8.3) — mechanical, no call.
+    Empty required shells stay ``NA`` mechanically and make no model call.
     """
+
     if not members:
         return {"description": "NA", "flags": [], "authority": {}}
+    if not isinstance(group, Mapping):
+        raise GroupingError("group description requires a group object")
+    if not isinstance(concept, Mapping):
+        raise GroupingError("group description requires a concept object")
+    group_key = str(group.get("group_key") or "").strip()
+    if not group_key:
+        raise GroupingError("group description requires a group_key")
+    _candidate_ids(members, stage="group description")
+    envelope_sha = _envelope_hash(envelope_sha256)
 
-    if author_call is None or critic_call is None:
-        from . import generation
-
-        def _default_author(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_detailing")
-
-        def _default_critic(system, user):
-            return generation._openai_json(
-                system, user, purpose="concept_validation")
-
-        author_call = author_call or _default_author
-        critic_call = critic_call or _default_critic
-
+    provider, critic, fixer = _live_authorities(
+        provider, critic, fixer,
+        live_provider=_live_description,
+        live_critic=_live_description_critic,
+    )
+    store = store or kernel.DecisionStore()
     payload = {
-        "metadata": dict(meta),
-        "group_key": str(group.get("group_key") or ""),
-        "tier": str(group.get("group_type") or ""),
+        "stage": "assessment.group_description",
+        "rules": DESCRIBE_SYSTEM,
+        "metadata": copy.deepcopy(dict(meta)),
+        "group": copy.deepcopy(dict(group)),
+        "concept": _concept_payload(concept),
         "members": _member_payload(members),
     }
-    attempts: list[dict] = []
-    feedback: list[str] = []
-    best = ""
-    for attempt in range(1, max(1, max_attempts) + 1):
-        user = json.dumps(payload, ensure_ascii=False)
-        if feedback:
-            user += (
-                "\n\nYOUR PREVIOUS DESCRIPTION WAS REJECTED. Address every "
-                "item, then return a fresh description:\n- "
-                + "\n- ".join(feedback)
-            )
-        try:
-            proposal = author_call(DESCRIBE_SYSTEM, user)
-        except Exception as exc:  # noqa: BLE001
-            attempts.append({"attempt": attempt, "outcome": "author_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        description = (
-            str(proposal.get("description") or "").strip()
-            if isinstance(proposal, Mapping) else "")
-        if not description:
-            attempts.append(
-                {"attempt": attempt, "outcome": "empty_description"})
-            feedback = ["the description was empty"]
-            continue
-        best = description
-        sha = rel.sha256_json({"description": description})
-        try:
-            review = critic_call(
-                DESCRIBE_CRITIC_SYSTEM,
-                json.dumps({
-                    "proposal": {"description": description},
-                    "proposal_sha256": sha,
-                    "members": _member_payload(members),
-                }, ensure_ascii=False))
-        except Exception as exc:  # noqa: BLE001
-            attempts.append({"attempt": attempt, "outcome": "critic_error",
-                             "error": f"{type(exc).__name__}: {exc}"})
-            break
-        review = review if isinstance(review, Mapping) else {}
-        if str(review.get("proposal_sha256") or "") != sha:
-            attempts.append({"attempt": attempt, "outcome": "critic_unbound"})
-            feedback = ["the critic review did not bind to the description"]
-            continue
-        if str(review.get("verdict") or "").strip().lower() == "accept":
-            return {
-                "description": description,
-                "flags": [],
-                "authority": {
-                    "proposal_sha256": sha,
-                    "critic_response_sha256": rel.sha256_json(dict(review)),
-                    "attempts": attempts + [
-                        {"attempt": attempt, "outcome": "accepted"}],
-                },
-            }
-        route_feedback = [
-            str(f) for f in review.get("feedback") or [] if str(f).strip()]
-        attempts.append({"attempt": attempt, "outcome": "critic_rejected",
-                         "feedback": route_feedback})
-        feedback = route_feedback or ["rejected without usable feedback"]
-
+    decision = kernel.decide(
+        kind="assessment.group_description",
+        unit_id=group_key,
+        envelope_sha256=envelope_sha,
+        payload=payload,
+        provider=provider,
+        checker=_description_checker(
+            group_key, _description_internal_ids(group, concept, members)
+        ),
+        critic=critic,
+        store=store,
+        policy_version=GROUP_DESCRIPTION_POLICY_VERSION,
+        fixer=fixer,
+    )
+    response = copy.deepcopy(dict(decision["response"]))
     return {
-        "description": best,
-        "flags": ["unresolved_description"],
-        "authority": {"attempts": attempts},
+        "description": str(response.get("description") or ""),
+        "decision": response,
+        "flags": _review_flags(decision),
+        "authority": _decision_authority(decision),
     }
 
 
@@ -524,14 +870,26 @@ def label_aggregates(
 # --------------------------------------------------------------------------- #
 
 def candidate_content_sha256(candidate: Mapping) -> str:
-    """Accepted-content identity for change detection (spec §7.1)."""
-    return rel.sha256_json({
-        "question": candidate.get("question"),
-        "answers": candidate.get("answers"),
-        "sub_questions": candidate.get("sub_questions"),
-        "display_answer": candidate.get("display_answer"),
-        "marks": candidate.get("marks"),
-    })
+    """All semantic candidate evidence for Tag-New change detection.
+
+    Placement/group identities and recorded audit stamps are downstream
+    bookkeeping, not authored content.  Every other field participates so a
+    change to source/route evidence, rich assets, a rubric, a subquestion, or
+    any future semantic field automatically makes the candidate new again.
+    """
+
+    downstream = {
+        "candidate_id", "question_label", "concept_id", "group_key",
+        "group_name", "group_display_name", "group_description",
+        "group_type", "group_sequence", "semantic_fingerprint",
+        "content_sha256", "flags", "authority", "created_at", "updated_at",
+    }
+    content = {
+        str(key): copy.deepcopy(value)
+        for key, value in candidate.items()
+        if str(key) not in downstream and not str(key).startswith("_aegis_")
+    }
+    return rel.sha256_json(content)
 
 
 def plan_tagging(

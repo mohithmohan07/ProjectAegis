@@ -61,6 +61,13 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # release for the reviewer's audit (every LA-id accounted, allotted
     # to exactly one concept) and is stripped before DB upload.
     "_aegis_analysis_allotments",
+    # Assessment grouping verdicts (step 6): private release audit carried by
+    # candidates/groups and stripped before concept-row database publication.
+    # The assessment renderer has no visible slots for these records.
+    "_aegis_assessment_level_verdict",
+    "_aegis_assessment_variant_cluster",
+    "_aegis_assessment_group_description",
+    "_aegis_assessment_group_quality",
 })
 
 _UNIT_ID_RE = re.compile(
@@ -1242,4 +1249,3 @@ def _strip_release_fields(record: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in record.items()
         if key not in _RELEASE_AUDIT_FIELDS
     }
-

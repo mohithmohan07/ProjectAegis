@@ -5,7 +5,29 @@ import uuid
 
 from app import models
 from app.bulk_import import writer
-from app.services import post_generation
+from app.services import build_assessments, post_generation
+
+
+def test_legacy_group_creation_uses_explicit_display_name(db):
+    topic = db.query(models.Topic).order_by(models.Topic.id).first()
+    assert topic is not None
+    token = uuid.uuid4().hex
+    concept = models.Concept(
+        topic_id=topic.id,
+        concept_title=f"(MACHINE-{token}) Tagged internal title",
+        concept_display_name=f"Visible concept {token}",
+    )
+    db.add(concept)
+    db.flush()
+
+    group = build_assessments._group_for(db, concept, "Less")
+
+    assert group.group_name == group.group_display_name == (
+        f"Visible concept {token} — Basic"
+    )
+    assert f"MACHINE-{token}" not in group.group_name
+
+    db.rollback()
 
 
 def test_post_generation_only_synchronises_friendly_group_names(db, tmp_path):

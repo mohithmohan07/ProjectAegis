@@ -26,8 +26,8 @@ from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import workbook_sync
 from . import (
-    assessment_blueprint, auth, directory, generation, mmd, post_generation,
-    progress, uploads,
+    assessment_blueprint, assessment_grouping, auth, directory, generation,
+    mmd, post_generation, progress, uploads,
 )
 
 # A blueprint's difficulty selects which concept group a question lands in.
@@ -158,10 +158,12 @@ def _group_for(db: Session, concept: models.Concept, difficulty: str) -> models.
     for g in concept.groups:
         if g.group_type == g_type:
             return g
+    visible_name = assessment_grouping.friendly_group_name(
+        concept.concept_display_name, g_type)
     group = models.Group(
         concept_id=concept.id, group_type=g_type,
-        group_name=f"{concept.concept_title} — {g_type}",
-        group_display_name=f"{concept.concept_title} — {g_type}",
+        group_name=visible_name,
+        group_display_name=visible_name,
         group_status="Active",
     )
     db.add(group)
