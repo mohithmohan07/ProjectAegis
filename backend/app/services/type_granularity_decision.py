@@ -27,7 +27,10 @@ from . import semantic_confidence_policy as confidence_policy
 from .semantic_recovery import HumanDecisionRequired
 
 
-_GATE_VERSION = "type-granularity-human-gate-5"
+# v6: the Architect's instruction_set_sha256 joins the decision identity
+# (docs/aegis-restructure.md §8.1) — a changed instruction set changes what
+# generation produces, so the operator's answer must never bind across it.
+_GATE_VERSION = "type-granularity-human-gate-6"
 
 _HUMAN_RESOLUTIONS: ContextVar[Any] = ContextVar(
     "aegis_type_granularity_human_resolutions",
@@ -489,6 +492,10 @@ def _identity(
             for key in (
                 "board", "grade", "subject", "unit", "chapter_title",
                 "chapter_code", "learning_kind",
+                # The Architect's instruction identity (§8.1): present in
+                # generation metadata whenever a set was assembled; empty
+                # string otherwise.
+                "instruction_set_sha256",
             )
         },
         # Stable raw counts only: the model's fragmentation verdict (and its

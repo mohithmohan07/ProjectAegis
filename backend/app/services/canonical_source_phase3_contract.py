@@ -166,6 +166,12 @@ def install(generation: ModuleType | None = None) -> None:
             "chapter_id": kwargs.get("chapter_id"),
             "chapter_code": kwargs.get("chapter_code") or "",
             "learning_kind": kwargs.get("learning_kind") or "",
+            # The Architect's instruction identity joins the graph's
+            # semantic context (docs/aegis-restructure.md §8.1): a verified
+            # graph is reused only under the same instruction set.
+            "instruction_set_sha256": (
+                kwargs.get("instruction_set_sha256") or ""
+            ),
         }
         resume_review = generation._newest_compatible_concept_checkpoint(
             kwargs.get("resume_checkpoint"),

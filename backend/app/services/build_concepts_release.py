@@ -60,6 +60,38 @@ class ReleaseUnavailableError(ValueError):
     """No staged release exists for the requested operation."""
 
 
+def _instruction_set_summary(job: models.UploadJob) -> dict[str, Any]:
+    """The Architect's assembled set for this job, summarized for the payload.
+
+    Reads the persisted ``source.instruction-set.json`` from the job's
+    artifact directory (written at generate time). Empty when no set was
+    assembled (legacy runs, pre-learning).
+    """
+    from . import instruction_architect
+
+    helper = getattr(uploads, "source_artifact_directory", None)
+    if not callable(helper):
+        return {}
+    try:
+        stored = instruction_architect.load_instruction_set(
+            helper(int(job.id)))
+    except Exception:  # noqa: BLE001 - a missing artifact never blocks release
+        stored = None
+    if not isinstance(stored, dict):
+        return {}
+    return {
+        key: copy.deepcopy(stored.get(key))
+        for key in (
+            "architect_version",
+            "instruction_set_sha256",
+            "slots_source",
+            "slots",
+            "review_flags",
+        )
+        if key in stored
+    }
+
+
 def _json_safe(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {
@@ -1045,6 +1077,12 @@ def stage_release(
             annotated,
             pre_post="Pre" if job.learning_kind == "pre" else "Post",
         )),
+        # The Architect's assembled instruction set for this run
+        # (docs/aegis-restructure.md §8.1): version, hash, authored slots,
+        # and the critic's advisory flags, for the reviewer's audit. The
+        # full set (frozen-core hashes included) ships in the diagnostics
+        # zip via the artifact directory.
+        "instruction_set": _json_safe(_instruction_set_summary(job)),
         "summary": summary,
     }
 

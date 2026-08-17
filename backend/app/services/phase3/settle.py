@@ -683,6 +683,11 @@ def settle(
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     policy = confidence_policy.POLICY_VERSION
+    from . import prompts as prompts_mod
+
+    # The Architect's run instructions ride the sealed envelope metadata;
+    # empty slots append nothing, so payloads stay byte-identical.
+    rules_suffix = prompts_mod.instruction_rules_suffix(env)
 
     topics = _topic_rows(env)
     blocks_by_topic = _blocks_by_topic(env)
@@ -774,7 +779,7 @@ def settle(
                     "'Achieving Mastery:' line — segments must never share "
                     "or paraphrase one mastery sentence. State your honest "
                     "confidence; a low-confidence decision ships flagged "
-                    "for review."
+                    "for review." + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -871,7 +876,7 @@ def settle(
                     "in reason; such a decision ships flagged for review. "
                     "Never return an empty source_block_ids. State your "
                     "honest confidence; a low-confidence decision ships "
-                    "flagged for review."
+                    "flagged for review." + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -1026,7 +1031,7 @@ def settle(
                     "language) tying the topic's member concepts together — "
                     "what the learner can now do with them combined — "
                     "never a list of concept names and never a repeat of "
-                    "any single concept's description."
+                    "any single concept's description." + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [

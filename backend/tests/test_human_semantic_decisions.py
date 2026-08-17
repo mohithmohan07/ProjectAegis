@@ -45,6 +45,30 @@ def _resolution_in_context(identity: dict) -> dict | None:
 
 
 @pytest.fixture(autouse=True)
+def _null_architect_assembly(monkeypatch):
+    """Stub The Architect's live assembly like every other model seam here.
+
+    These tests flip ``use_live_generation`` on with fake providers; the
+    Architect's assembly call is a live model call too, so it is stubbed to
+    the deterministic empty (offline-defaults) set — whose hash is exactly
+    the default identity every fingerprint helper in this module binds.
+    """
+    architect = build_concepts.instruction_architect
+    empty = architect._finalize(
+        architect._identity_metadata({}),
+        architect._empty_slots(),
+        architect._frozen_core_entries(),
+        slots_source="offline-defaults",
+        review_flags=[],
+    )
+    monkeypatch.setattr(
+        architect,
+        "ensure_instruction_set",
+        lambda **kwargs: copy.deepcopy(empty),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _attended_decision_mode(monkeypatch):
     """Drive every decision in this module to its terminal stop.
 

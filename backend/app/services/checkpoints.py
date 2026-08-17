@@ -244,16 +244,41 @@ def _expected_fingerprint(
     learning_kind: str,
     target: dict[str, str],
     mmd_text: str,
+    instruction_set_sha256: str,
 ) -> str:
+    """Mirror of ``build_concepts._generation_checkpoint_fingerprint`` (v3)."""
     material = (
-        "concept-generation-checkpoint-v2\0"
+        "concept-generation-checkpoint-v3\0"
         + "\0".join([
             _stable(learning_kind or "post"),
             *(target[field] for field in _TARGET_FIELDS),
             mmd_text,
+            str(instruction_set_sha256 or ""),
         ])
     )
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
+
+
+def _checkpoint_instruction_set_sha256(checkpoint: dict, path: str) -> str:
+    """The instruction identity a checkpoint's fingerprint binds (§8.1).
+
+    An envelope without the stored field validates against the EMPTY
+    instruction set over the current frozen core — so legacy (v2) bundles
+    fail their fingerprint check and rewind rather than resuming under
+    instructions that no longer exist, and even null-assembly fingerprints
+    move when a frozen-core prompt changes.
+    """
+    value = checkpoint.get("instruction_set_sha256", "")
+    if not isinstance(value, str):
+        raise ValueError(f"{path}.instruction_set_sha256 must be a string")
+    if value and not _SHA256_RE.fullmatch(value):
+        raise ValueError(
+            f"{path}.instruction_set_sha256 must be a lowercase SHA-256")
+    if value:
+        return value
+    from . import instruction_architect
+
+    return instruction_architect.empty_set_sha256()
 
 
 def _validate_target(
@@ -281,7 +306,12 @@ def _validate_target(
         if value != _stable(value):
             raise ValueError(
                 f"{path}.target_identity.{field} is not normalized")
-    if digest != _expected_fingerprint(learning_kind, target, mmd_text):
+    if digest != _expected_fingerprint(
+        learning_kind,
+        target,
+        mmd_text,
+        _checkpoint_instruction_set_sha256(checkpoint, path),
+    ):
         raise ValueError(
             f"{path}.fingerprint does not match the converted source and "
             "target identity"

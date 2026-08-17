@@ -16,7 +16,13 @@ from typing import Any, Mapping
 
 from .. import canonical_source_phase3 as phase3_core
 
-ENVELOPE_VERSION = 1
+# Version 2: the sealed metadata carries the Architect's run-instruction
+# identity (``instruction_set_sha256`` + ``instruction_slots``), so
+# envelope_sha256 — and with it every kernel decision key — changes whenever
+# the assembled instruction set changes. Version-1 envelopes fail validation
+# and are rebuilt rather than replaying decisions made under unknown
+# instructions.
+ENVELOPE_VERSION = 2
 
 _SEAL_FIELD = "envelope_sha256"
 

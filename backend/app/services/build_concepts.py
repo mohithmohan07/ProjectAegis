@@ -43,6 +43,7 @@ from . import (
     drive_checkpoints,
     generation,
     grounding_certificate,
+    instruction_architect,
     mmd,
     openai_usage,
     progress,
@@ -1291,13 +1292,34 @@ def _legacy_generation_checkpoint_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _run_instruction_set_sha256(instruction_set_sha256: str | None) -> str:
+    """Resolve the instruction identity a fingerprint binds to.
+
+    ``None`` (callers that do not assemble: pre-learning, tests, legacy
+    checkpoints without the stored field) resolves to the hash of the EMPTY
+    instruction set over the current frozen core — so even those
+    fingerprints move when a frozen-core prompt changes, which is the
+    governance point (docs/aegis-restructure.md §8.1).
+    """
+    if instruction_set_sha256 is None:
+        return instruction_architect.empty_set_sha256()
+    return str(instruction_set_sha256 or "")
+
+
 def _generation_checkpoint_fingerprint(
     job: models.UploadJob, chapter: models.Chapter,
+    *,
+    instruction_set_sha256: str | None = None,
 ) -> str:
-    """Semantic input fingerprint, intentionally independent of DB/git IDs."""
+    """Semantic input fingerprint, intentionally independent of DB/git IDs.
+
+    v3 appends the Architect's ``instruction_set_sha256``: a checkpoint made
+    under one instruction set can never resume a run under another
+    (validator mirror: ``checkpoints._expected_fingerprint``).
+    """
     identity = _generation_target_identity(chapter)
     payload = (
-        "concept-generation-checkpoint-v2\0"
+        "concept-generation-checkpoint-v3\0"
         + "\0".join([
             _stable_checkpoint_value(job.learning_kind or "post"),
             *(identity[field] for field in (
@@ -1305,6 +1327,7 @@ def _generation_checkpoint_fingerprint(
                 "chapter_title", "chapter_code",
             )),
             str(job.mmd_text or ""),
+            _run_instruction_set_sha256(instruction_set_sha256),
         ])
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -1314,6 +1337,7 @@ def _checkpoint_matches_generation(
     checkpoint: dict, *,
     job: models.UploadJob,
     chapter: models.Chapter,
+    instruction_set_sha256: str | None = None,
 ) -> bool:
     if not generation._valid_concept_checkpoint(checkpoint):
         return False
@@ -1321,6 +1345,7 @@ def _checkpoint_matches_generation(
         checkpoint,
         job=job,
         chapter=chapter,
+        instruction_set_sha256=instruction_set_sha256,
     )
 
 
@@ -1329,15 +1354,19 @@ def _checkpoint_identity_matches_generation(
     *,
     job: models.UploadJob,
     chapter: models.Chapter,
+    instruction_set_sha256: str | None = None,
 ) -> bool:
     """Match source/target identity independently of stage compatibility.
 
     A deployment can intentionally invalidate every saved stage contract.  A
     same-source envelope must then normalize to an empty restart instead of
-    being misreported as a different upload or chapter.
+    being misreported as a different upload or chapter. The fingerprint
+    binds the Architect's instruction identity too, so a checkpoint made
+    under a different instruction set never matches (rewind, not replay).
     """
 
-    stable_fingerprint = _generation_checkpoint_fingerprint(job, chapter)
+    stable_fingerprint = _generation_checkpoint_fingerprint(
+        job, chapter, instruction_set_sha256=instruction_set_sha256)
     target_identity = _generation_target_identity(chapter)
     if checkpoint.get("checkpoint_format") == generation._CONCEPT_CHECKPOINT_FORMAT:
         return bool(
@@ -1376,6 +1405,7 @@ def _merge_generation_checkpoint_history(
     fingerprint: str,
     target_identity: dict[str, str],
     target_chapter_id: int,
+    instruction_set_sha256: str | None = None,
 ) -> dict:
     """Keep the newest completed artifact per stage in one portable envelope.
 
@@ -1473,6 +1503,12 @@ def _merge_generation_checkpoint_history(
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
         "fingerprint": fingerprint,
+        # The instruction identity the fingerprint was computed under; the
+        # bundle validator recomputes the fingerprint from this stored value
+        # (checkpoints._expected_fingerprint), and resume compares against
+        # the CURRENT assembly — mismatch rewinds instead of replaying.
+        "instruction_set_sha256": _run_instruction_set_sha256(
+            instruction_set_sha256),
         "target_identity": copy.deepcopy(target_identity),
         # Informational only for schema v3; compatibility uses target_identity.
         "target_chapter_id": target_chapter_id,
@@ -1495,6 +1531,7 @@ def _compatible_generation_checkpoint_envelope(
     fingerprint: str,
     target_identity: dict[str, str],
     target_chapter_id: int,
+    instruction_set_sha256: str | None = None,
 ) -> dict:
     """Prune unusable history and mirror the stage this deployment will use."""
     history = [
@@ -1523,6 +1560,8 @@ def _compatible_generation_checkpoint_envelope(
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
         "fingerprint": fingerprint,
+        "instruction_set_sha256": _run_instruction_set_sha256(
+            instruction_set_sha256),
         "target_identity": copy.deepcopy(target_identity),
         "target_chapter_id": target_chapter_id,
         "stage": stage,
@@ -1548,6 +1587,7 @@ def _persist_compatible_generation_checkpoint_mirror(
     fingerprint: str,
     target_identity: dict[str, str],
     target_chapter_id: int,
+    instruction_set_sha256: str | None = None,
 ) -> tuple[dict | None, dict]:
     """Persist the actual fallback stage before a resumed run can fail."""
     stored = copy.deepcopy(job.generation_checkpoint or {})
@@ -1556,6 +1596,7 @@ def _persist_compatible_generation_checkpoint_mirror(
         fingerprint=fingerprint,
         target_identity=target_identity,
         target_chapter_id=target_chapter_id,
+        instruction_set_sha256=instruction_set_sha256,
     )
     if not normalized and _source_replacement_required(stored):
         # A user's explicit source-authority decision remains terminal even if
@@ -4164,13 +4205,55 @@ def generate_post_learning(
         raise ValueError("convert the uploaded document to MMD before generating")
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
     artifacts: dict = {}
-    fingerprint = _generation_checkpoint_fingerprint(job, chapter)
+    # The Architect (docs/aegis-restructure.md §8.1): assemble this run's
+    # instruction set before any fingerprint or checkpoint identity is
+    # computed — its hash joins every decision key, so a changed instruction
+    # set can never silently reuse old verdicts. Assembly failure fails
+    # closed here, pre-spend, before generation begins (The Fixer covers
+    # mid-run blocks only and deliberately does not apply). The set is
+    # persisted into the artifact directory and ships in diagnostics.
+    artifact_dir = None
+    artifact_dir_helper = getattr(uploads, "source_artifact_directory", None)
+    if callable(artifact_dir_helper):
+        try:
+            artifact_dir = artifact_dir_helper(int(job.id))
+        except Exception:  # noqa: BLE001 - diagnostics dir must never block
+            artifact_dir = None
+    instruction_set = instruction_architect.ensure_instruction_set(
+        metadata={
+            "board": chapter.board,
+            "grade": chapter.grade,
+            "subject": chapter.subject,
+            "unit": chapter.unit,
+            "chapter_title": chapter.chapter_title,
+            "chapter_id": chapter.id,
+            "chapter_code": chapter.chapter_code,
+            "learning_kind": "Post",
+            "source_book": job.source_book or "",
+        },
+        source_text=str(job.mmd_text or ""),
+        artifact_dir=artifact_dir,
+    )
+    instruction_hash = str(
+        instruction_set.get("instruction_set_sha256") or "")
+    instruction_slots = copy.deepcopy(instruction_set.get("slots") or {})
+    for flag in instruction_set.get("review_flags") or []:
+        progress.log(f"Architect review flag: {flag}", level="warning")
+    progress.log(
+        "Instruction set "
+        f"{instruction_hash[:12]} assembled "
+        f"({instruction_set.get('slots_source')}); its hash joins every "
+        "decision identity for this run."
+    )
+    fingerprint = _generation_checkpoint_fingerprint(
+        job, chapter, instruction_set_sha256=instruction_hash)
     target_identity = _generation_target_identity(chapter)
     stored_checkpoint = job.generation_checkpoint or {}
     resume_checkpoint = (
         stored_checkpoint
         if _checkpoint_identity_matches_generation(
-            stored_checkpoint, job=job, chapter=chapter)
+            stored_checkpoint, job=job, chapter=chapter,
+            instruction_set_sha256=instruction_hash)
         else None
     )
     if stored_checkpoint and resume_checkpoint is None:
@@ -4190,6 +4273,7 @@ def generate_post_learning(
                 fingerprint=fingerprint,
                 target_identity=target_identity,
                 target_chapter_id=target_chapter_id,
+                instruction_set_sha256=instruction_hash,
             )
         )
     initial_agent_resolution_ids: set[str] = set()
@@ -4227,6 +4311,7 @@ def generate_post_learning(
             fingerprint=fingerprint,
             target_identity=target_identity,
             target_chapter_id=target_chapter_id,
+            instruction_set_sha256=instruction_hash,
         )
         job.generation_checkpoint = durable
         if discarded_stage:
@@ -4298,6 +4383,11 @@ def generate_post_learning(
         "chapter_id": chapter.id,
         "chapter_code": chapter.chapter_code,
         "learning_kind": "Post",
+        # The Architect's run instructions: the hash joins the sealed
+        # envelope, the kernel decision keys, semantic_context_hash and the
+        # pre-spend gate identities; the slots render into every prompt.
+        "instruction_set_sha256": instruction_hash,
+        "instruction_slots": instruction_slots,
     }
     def generation_attempt() -> list[dict]:
         # Every automatic checkpoint is durable. On retry, obtain the
@@ -4310,6 +4400,7 @@ def generate_post_learning(
                 job.generation_checkpoint or {},
                 job=job,
                 chapter=chapter,
+                instruction_set_sha256=instruction_hash,
             )
             else resume_checkpoint
         )

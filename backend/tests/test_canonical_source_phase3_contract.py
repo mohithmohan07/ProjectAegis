@@ -276,7 +276,12 @@ def test_concepts_wrapper_activates_verified_graph_and_semantic_source(
 
     assert records
     assert observed["verify_semantics"] is True
-    assert observed["metadata"] == _metadata()
+    # The wrapper forwards the Architect's instruction identity into the
+    # graph metadata (docs/aegis-restructure.md §8.1); empty when the caller
+    # assembled no set, keeping legacy graph identities unchanged.
+    assert observed["metadata"] == {
+        **_metadata(), "instruction_set_sha256": "",
+    }
     assert session["graph"] is graph
 
 

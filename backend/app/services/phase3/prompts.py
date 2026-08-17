@@ -184,3 +184,35 @@ CRITIC_SYSTEM = _SHARED + (
 
 def render(payload: Mapping[str, Any]) -> str:
     return json.dumps(dict(payload), ensure_ascii=False, indent=1)
+
+
+def instruction_rules_suffix(env: Mapping[str, Any]) -> str:
+    """The Architect's run-instruction texts, appended to payload rules.
+
+    Settle and Host read the ``subject_topology_guidance`` and
+    ``grade_band_vocabulary`` slots straight from the sealed envelope
+    metadata (docs/aegis-restructure.md §8.1) — no extra parameters are
+    threaded through the passes. Empty slots return an empty suffix, so
+    payloads (and therefore decision keys) are unchanged when no
+    instructions were authored.
+    """
+
+    metadata = env.get("metadata") if isinstance(env, Mapping) else None
+    slots = (
+        metadata.get("instruction_slots")
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    if not isinstance(slots, Mapping):
+        return ""
+    parts: list[str] = []
+    for label, key in (
+        ("Subject topology guidance", "subject_topology_guidance"),
+        ("Grade-band vocabulary", "grade_band_vocabulary"),
+    ):
+        text = " ".join(str(slots.get(key) or "").split())
+        if text:
+            parts.append(f"{label}: {text}")
+    if not parts:
+        return ""
+    return " RUN INSTRUCTIONS (Architect): " + " ".join(parts)

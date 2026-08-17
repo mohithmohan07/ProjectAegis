@@ -383,6 +383,11 @@ def host(
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     policy = confidence_policy.POLICY_VERSION
+    from . import prompts as prompts_mod
+
+    # The Architect's run instructions ride the sealed envelope metadata;
+    # empty slots append nothing, so payloads stay byte-identical.
+    rules_suffix = prompts_mod.instruction_rules_suffix(env)
 
     settled_titles = _settled_index(settled_rows)
     known_blocks = {
@@ -541,7 +546,7 @@ def host(
                 "spanning several concepts. Each "
                 "question gets EXACTLY ONE destination; when the rules "
                 "leave two candidates, the later topic in teaching "
-                "order wins."
+                "order wins." + rules_suffix
             ),
             "topics_in_teaching_order": [
                 {

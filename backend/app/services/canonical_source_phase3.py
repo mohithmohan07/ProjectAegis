@@ -477,6 +477,13 @@ def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
         )
     }
     identity["subject_adapter"] = subject_adapter(identity["subject"])
+    # The Architect's instruction identity (docs/aegis-restructure.md §8.1)
+    # joins the semantic context when present, so a graph verified under one
+    # instruction set is never silently reused under another. Absent for
+    # convert-time compiles and legacy graphs, which stay self-consistent.
+    instruction = str(metadata.get("instruction_set_sha256") or "").strip()
+    if instruction:
+        identity["instruction_set_sha256"] = instruction
     return _sha256_json(identity)
 
 

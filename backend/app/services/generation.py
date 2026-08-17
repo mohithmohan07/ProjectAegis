@@ -2453,6 +2453,8 @@ def _metadata(
     chapter_title: str = "", chapter_id: int | str | None = None,
     chapter_code: str = "", learning_kind: str = "Post",
     finalized_duration_minutes: int = 0,
+    instruction_set_sha256: str = "",
+    instruction_slots: dict | None = None,
 ) -> dict:
     return {
         "subject": subject or "",
@@ -2464,7 +2466,51 @@ def _metadata(
         "chapter_code": chapter_code or "",
         "learning_kind": learning_kind or "Post",
         "finalized_duration_minutes": int(finalized_duration_minutes or 0),
+        # The Architect's run instructions (docs/aegis-restructure.md §8.1):
+        # the hash joins the sealed envelope and every decision identity; the
+        # slots render into every prompt through _metadata_block.
+        "instruction_set_sha256": str(instruction_set_sha256 or ""),
+        "instruction_slots": copy.deepcopy(dict(instruction_slots or {})),
     }
+
+
+def _instruction_slot_lines(slots: dict) -> list[str]:
+    """Render the Architect's authored slots; empty slots render nothing."""
+    if not isinstance(slots, dict):
+        return []
+    lines: list[str] = []
+    for label, key in (
+        ("Subject topology guidance", "subject_topology_guidance"),
+        ("Grade-band vocabulary", "grade_band_vocabulary"),
+        ("Board/publication conventions", "board_publication_conventions"),
+    ):
+        text = " ".join(str(slots.get(key) or "").split())
+        if text:
+            lines.append(f"- {label}: {text}")
+    mode = slots.get("language_mode") or {}
+    mode_name = " ".join(str(
+        (mode.get("mode") or "") if isinstance(mode, dict) else ""
+    ).split())
+    if mode_name:
+        rationale = " ".join(str(
+            (mode.get("rationale") or "") if isinstance(mode, dict) else ""
+        ).split())
+        lines.append(
+            f"- Language mode: {mode_name}"
+            + (f" — {rationale}" if rationale else "")
+        )
+    cautions = [
+        " ".join(str(row).split())
+        for row in (
+            slots.get("chapter_cautions")
+            if isinstance(slots.get("chapter_cautions"), list)
+            else []
+        )
+        if str(row).strip()
+    ]
+    if cautions:
+        lines.append("- Chapter cautions: " + " | ".join(cautions))
+    return lines
 
 
 def _metadata_block(meta: dict) -> str:
@@ -2480,6 +2526,9 @@ def _metadata_block(meta: dict) -> str:
     finalized = int(meta.get("finalized_duration_minutes") or 0)
     if finalized > 0:
         block += f"\nFinalized chapter duration (minutes): {finalized}"
+    slot_lines = _instruction_slot_lines(meta.get("instruction_slots") or {})
+    if slot_lines:
+        block += "\nRUN INSTRUCTIONS (Architect):\n" + "\n".join(slot_lines)
     return block
 
 
@@ -20876,6 +20925,8 @@ def concepts_from_mmd(
     resume_checkpoint: dict | None = None,
     checkpoint_callback=None,
     completion_progress: float = 1.0,
+    instruction_set_sha256: str = "",
+    instruction_slots: dict | None = None,
 ) -> list[dict]:
     """Parse an MMD document into concept records (post-learning).
 
@@ -20891,6 +20942,8 @@ def concepts_from_mmd(
         subject=subject, board=board, grade=grade, unit=unit,
         chapter_title=chapter_title, chapter_id=chapter_id,
         chapter_code=chapter_code, learning_kind=learning_kind,
+        instruction_set_sha256=instruction_set_sha256,
+        instruction_slots=instruction_slots,
     )
     if use_live:
         progress.step("Concept extraction — parsing source structure", value=0.01)

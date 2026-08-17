@@ -19,7 +19,10 @@ from typing import Any, Iterator, Mapping
 from .semantic_recovery import HumanDecisionRequired
 
 
-_GATE_VERSION = "source-topic-coverage-human-gate-1"
+# v2: the Architect's instruction_set_sha256 joins the decision identity
+# (docs/aegis-restructure.md §8.1) — a changed instruction set changes what
+# generation produces, so the operator's answer must never bind across it.
+_GATE_VERSION = "source-topic-coverage-human-gate-2"
 _PRESERVE_TARGET_ID = "preserve-all-source-topics"
 _HUMAN_RESOLUTIONS: ContextVar[Any] = ContextVar(
     "aegis_source_topic_human_resolutions",
@@ -103,6 +106,10 @@ def _identity(
             for key in (
                 "board", "grade", "subject", "unit", "chapter_title",
                 "chapter_code", "learning_kind",
+                # The Architect's instruction identity (§8.1): present in
+                # generation metadata whenever a set was assembled; empty
+                # string otherwise.
+                "instruction_set_sha256",
             )
         },
         "source_topics": [

@@ -93,6 +93,20 @@ def _run_rewritten_phase3(
                     stored.get("graph") or {}
                 )
                 == _gc.semantic_topology_sha256(graph)
+                # The Architect's instruction identity joins the reuse
+                # comparison (docs/aegis-restructure.md §8.1): a changed
+                # instruction set must never silently replay decisions
+                # sealed under the previous instructions.
+                and str(
+                    (stored.get("metadata") or {}).get(
+                        "instruction_set_sha256"
+                    ) or ""
+                )
+                == str(
+                    (kwargs.get("meta") or {}).get(
+                        "instruction_set_sha256"
+                    ) or ""
+                )
             ):
                 env = stored
                 generation.progress.log(
