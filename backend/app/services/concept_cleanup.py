@@ -33,17 +33,11 @@ _FORBIDDEN_TOPIC_NAMES = {
     "summary", "misc", "miscellaneous",
 }
 
-# Pedagogy/instruction rows are task containers, not durable teaching concepts.
-# Patterns are universal classroom-instruction labels (not chapter titles).
-_PEDAGOGY_CONCEPT_RE = re.compile(
-    r"\b(?:"
-    r"pre-?\s*reading|informal letter|formal letter|letter writing|"
-    r"reading in manageable parts|oral check|prediction and discussion|"
-    r"comprehension drill|discussion questions|warm-?up activity|"
-    r"think and discuss|classroom activity"
-    r")\b",
-    re.IGNORECASE,
-)
+# ``_PEDAGOGY_CONCEPT_RE`` stood here: a twelve-phrase classroom-instruction
+# vocabulary that deleted any concept row whose TITLE matched it. It is gone.
+# See :func:`filter_review_violations` for why (Rule 1's first forbidden
+# bullet, plus a silent unrecoverable row loss) and for the verdicts that
+# already cover the rows it was written for.
 _PEDAGOGY_TOPIC_RE = re.compile(
     r"\b(?:"
     r"pre-?\s*reading|informal letter|formal letter|letter writing|"
@@ -140,11 +134,75 @@ _IMAGE_URL_RE = re.compile(
 )
 
 
+def _add_review_flag(rec: dict, flag: str) -> None:
+    """Attach a row-addressable review flag, idempotently.
+
+    The deterministic chain replays itself toward a fixpoint (assemble.py
+    seam F10) and runs again at the deposit boundary, so re-adding an
+    identical flag must be a no-op or the replay would never converge.
+    """
+    existing = list(rec.get("review_flags") or [])
+    if flag not in existing:
+        rec["review_flags"] = [*existing, flag]
+
+
 def filter_review_violations(
     records: list[dict], *, subject: str = "", board: str = "",
     chapter_title: str = "",
 ) -> list[dict]:
-    """Drop or reassign rows that QA flagged across subject samples."""
+    """Reassign or omit rows that QA flagged across subject samples.
+
+    **No row is removed for what its title appears to MEAN.**
+    ``_PEDAGOGY_CONCEPT_RE`` used to delete any row whose ``concept_title``
+    matched a twelve-phrase classroom-instruction vocabulary
+    (``pre-?\\s*reading``, ``letter writing``, ``think and discuss``, ...).
+    That was CLAUDE.md Rule 1's first forbidden bullet stated almost
+    verbatim — a regex vocabulary classifying content, answering "is this
+    filler?" — and it lost the row *silently*: the only trace was an
+    aggregate count, with no title, no id and no review flag, so a
+    legitimately-named concept such as "Pre-Reading Vocabulary" simply
+    vanished (R4, the stronger clause). This function carries no lane guard
+    and runs at BOTH the deposit boundary (``build_concepts``) and the
+    release boundary (``release_refiner`` / ``phase3.assemble``), so a row
+    that survived deposit and was already counted into the staged payload
+    could be deleted a second time on its way out to the learner.
+
+    Whether a row is a task container rather than a durable teaching
+    concept is a judgment, and this codebase already holds that verdict
+    twice over — no new model pass is warranted here:
+
+    * upstream, the Activity/Info Hub host proposal and its independent
+      critic (``concepts.activity_hub.system`` /
+      ``concepts.activity_hub_critic.system``) are the pass that rules that
+      classroom activity / experiment / discussion material belongs in
+      Activity/Info Hub on a real teaching concept rather than standing as
+      its own row — the note further down has said exactly that since this
+      filter was written;
+    Note what does NOT cover them, because it looks as though it should:
+    ``concept_validator``'s ``forbidden_name`` / ``forbidden_topic`` are
+    exact-set membership in an eight-name list ("introduction", "overview",
+    "basics", …) that contains none of the twelve pedagogy phrases, and
+    ``forbidden_name`` is emitted at severity ``error``, not ``warning``.
+    They are not a safety net for this class and must not be cited as one.
+
+    So the drop is deleted and the row survives to the upstream verdict.
+    What this function still does to a row is recorded ON that row as a
+    review flag, or — where the row cannot carry one — by naming the row,
+    never as a bare count.
+
+    One boundary caveat, recorded rather than implied: ``models.Concept``
+    has no ``review_flags`` column, so a flag added here rides the release
+    payload (``release_refiner`` / ``phase3.assemble``) but is dropped on
+    the DB-deposit path. The omission log below is what carries the record
+    at that boundary.
+
+    Still Rule 1 and still here: ``_PEDAGOGY_TOPIC_RE`` below reassigns a
+    row's topic from the same twelve-phrase vocabulary. It reassigns and
+    flags rather than losing the row, so it is not the R4 defect this
+    change removes — but it is the same forbidden bullet and its purge is
+    tracked separately, because removing it changes Post-lane topic
+    assignment and owes its own evidence.
+    """
     if not records:
         return records
 
@@ -166,18 +224,26 @@ def filter_review_violations(
     )
 
     out: list[dict] = []
-    dropped = 0
+    omitted: list[str] = []
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
         topic = (rec.get("topic") or "").strip()
         topic_key = bi.normalize_question_text(topic)
 
-        if _PEDAGOGY_CONCEPT_RE.search(title):
-            dropped += 1
-            continue
         if _PEDAGOGY_TOPIC_RE.search(topic):
             rec = dict(rec)
             rec["topic"] = fallback_topic
+            # R4: a learner-visible field was rewritten by deterministic
+            # cleanup. The row carries the record itself, naming the exact
+            # before/after, so the change is reviewable per row rather than
+            # inferred from an aggregate.
+            _add_review_flag(
+                rec,
+                "R4: deterministic deposit cleanup re-filed this row from "
+                f"topic {topic!r} to {fallback_topic!r} because the original "
+                "topic label reads as classroom instruction; the row's own "
+                "content is untouched — confirm this is its right topic",
+            )
             out.append(rec)
             continue
         # Overview / Summary / Basics topics are omitted entirely — never
@@ -185,14 +251,21 @@ def filter_review_violations(
         # Classroom discussion cases / activity blocks are classified by the
         # GPT Activity/Info Hub pass, not by chapter-named regex filters.
         if topic_key in _FORBIDDEN_TOPIC_NAMES:
-            dropped += 1
+            omitted.append(f"{title or '(untitled)'!r} under topic {topic!r}")
             continue
         out.append(rec)
 
-    if dropped:
+    if omitted:
         from . import progress as _progress
+        # R4: an omitted row cannot carry a review flag, so it is named
+        # instead. A bare count ("Dropped N pedagogy / filler concept
+        # row(s)") is not a record of anything — it cannot be traced back to
+        # a row, and it is exactly how a learner-facing concept went missing
+        # unnoticed.
         _progress.log(
-            f"Dropped {dropped} pedagogy / filler concept row(s).",
+            f"Omitted {len(omitted)} concept row(s) filed under a structural "
+            "umbrella topic name (never merged into a neighbouring topic): "
+            + "; ".join(omitted),
             level="warning",
         )
     return out

@@ -151,21 +151,60 @@ def test_alias_related_titles_both_survive_the_cleanup_chain():
     assert len(duplicated) == 4  # validation never mutates or drops rows
 
 
-def test_filter_drops_pedagogy_concepts_without_subject_branch():
+def test_no_concept_row_is_deleted_for_what_its_title_seems_to_mean():
+    """The pedagogy-title vocabulary is purged; the rows survive (Rule 1, R4).
+
+    ``_PEDAGOGY_CONCEPT_RE`` deleted any row whose ``concept_title`` matched
+    a twelve-phrase classroom-instruction vocabulary. That is CLAUDE.md's
+    first forbidden bullet ("is this filler?") answered by a regex, and the
+    loss was silent — an aggregate count, no title, no id, no review flag.
+    Whether a row is a task container rather than a durable teaching concept
+    is a judgment the pipeline already holds a verdict on (the Activity/Info
+    Hub host proposal + its independent critic upstream; the validator's
+    row-addressable ``forbidden_name``/``forbidden_topic`` review warnings
+    downstream), so no new model pass is introduced here — the drop is
+    simply gone.
+    """
+    assert not hasattr(concept_cleanup, "_PEDAGOGY_CONCEPT_RE")
+
     records = [
         {"topic": "A Letter to God", "concept_title": "Lencho's Faith",
          "concept_details": "Description: a", "keywords": ""},
+        # The row the old vocabulary was written for.
         {"topic": "A Letter to God",
          "concept_title": "Pre-reading Prediction and Discussion",
          "concept_details": "Description: b", "keywords": ""},
+        # A legitimately-named teaching concept the same pattern swallowed.
+        {"topic": "A Letter to God",
+         "concept_title": "Pre-Reading Vocabulary",
+         "concept_details": "Description: c", "keywords": ""},
+        {"topic": "Writing Skills", "concept_title": "Informal Letter Format",
+         "concept_details": "Description: d", "keywords": ""},
     ]
     out = concept_cleanup.filter_review_violations(
         records, subject="Unclassified Upload", board="CBSE")
-    assert len(out) == 1
-    assert out[0]["concept_title"] == "Lencho's Faith"
+    assert [r["concept_title"] for r in out] == [
+        "Lencho's Faith",
+        "Pre-reading Prediction and Discussion",
+        "Pre-Reading Vocabulary",
+        "Informal Letter Format",
+    ]
+    # Surviving untouched means no flag either: nothing happened to them.
+    assert not any(r.get("review_flags") for r in out)
+
+    # The second run at the release boundary cannot take a second bite:
+    # the function is now a fixpoint over the rows it keeps.
+    assert concept_cleanup.filter_review_violations(
+        out, subject="Unclassified Upload", board="CBSE") == out
 
 
-def test_pedagogy_topic_uses_chapter_title_without_subject_branch():
+def test_pedagogy_topic_reassignment_rides_the_row_as_a_review_flag():
+    """A rewritten learner-visible topic is recorded on the row (R4).
+
+    The topic reassignment survives this slice, but it may not be silent:
+    the flag names the exact before/after so a reviewer can address the row,
+    never an aggregate the run cannot trace back to anything.
+    """
     records = [
         {"topic": "Classroom Activity", "concept_title": "Lencho's Faith",
          "concept_details": "Description: a", "keywords": ""},
@@ -173,6 +212,40 @@ def test_pedagogy_topic_uses_chapter_title_without_subject_branch():
     out = concept_cleanup.filter_review_violations(
         records, subject="", board="CBSE", chapter_title="A Letter to God")
     assert out[0]["topic"] == "A Letter to God"
+    flags = out[0]["review_flags"]
+    assert len(flags) == 1
+    assert "R4" in flags[0]
+    assert "'Classroom Activity'" in flags[0]
+    assert "'A Letter to God'" in flags[0]
+
+    # Idempotent: replaying the deterministic chain must not stack flags.
+    again = concept_cleanup.filter_review_violations(
+        out, subject="", board="CBSE", chapter_title="A Letter to God")
+    assert again == out
+
+
+def test_omitted_umbrella_topic_rows_are_named_never_bare_counted(monkeypatch):
+    """An omitted row cannot carry a flag, so it is named instead (R4)."""
+    from app.services import progress as _progress
+
+    logged: list[str] = []
+    monkeypatch.setattr(
+        _progress, "log",
+        lambda message, **_kw: logged.append(str(message)),
+    )
+    records = [
+        {"topic": "Real Section", "concept_title": "A",
+         "concept_details": "Description: a", "keywords": ""},
+        {"topic": "Overview", "concept_title": "Preview of the Chapter",
+         "concept_details": "Description: b", "keywords": ""},
+    ]
+    out = concept_cleanup.filter_review_violations(
+        records, subject="Civics", board="CBSE")
+    assert [r["concept_title"] for r in out] == ["A"]
+    assert len(logged) == 1
+    assert "'Preview of the Chapter'" in logged[0]
+    assert "'Overview'" in logged[0]
+    assert "pedagogy / filler concept row(s)" not in logged[0]
 
 
 def test_overview_topic_is_dropped_not_reassigned():

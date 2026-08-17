@@ -75,6 +75,30 @@ def _slug(text: str, length: int = 22) -> str:
 
 
 def _topic_index(concept: models.Concept) -> int:
+    """Position of the concept's topic among ALL topics of the chapter.
+
+    Deliberately NOT scoped to the learning lane, and the reason is
+    recorded because the opposite looks obviously right: ``question_label``
+    below carries a literal ``_PL_`` segment and no lane discriminator, so
+    numbering each lane from 1 makes a Pre label collide with a Post label
+    whenever same-position topics carry the same concept title. A collision
+    is not merely cosmetic — ``assessment_release_service`` builds
+    ``existing_labels`` from a GLOBAL ``Question`` query and skips a
+    candidate whose label already exists ("append-only: an uploaded label
+    is immutable"), with no flag and no log, and ``question_label`` carries
+    only ``index=True``, no unique constraint. Lane-scoping the numbering
+    would therefore silently drop a learner's question (R4), which is worse
+    than the drift it would prevent.
+
+    The drift it would prevent is also narrower than it appears: sorting
+    every topic by id leaves already-published Post positions untouched in
+    the natural sequence, because Pre topics are created later and hold
+    higher ids, so they append rather than interleave.
+
+    Giving the label a lane discriminator is the real fix, and that is the
+    per-topic/per-concept ID minting rebuild §9 assigns to §10 step 8. See
+    the step-8 brief in ``docs/restructure-handoff.md``.
+    """
     topic = concept.topic
     siblings = sorted(topic.chapter.topics, key=lambda t: t.id)
     return siblings.index(topic) + 1

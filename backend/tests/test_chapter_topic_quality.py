@@ -783,3 +783,95 @@ def test_chapter_meta_prompt_contract():
     assert "chapter_duration_minutes" in text
     assert "topic_description" in text
     assert "never generic filler" in text.lower()
+
+
+# --------------------------------------------------------------------------- #
+# Question-label topic numbering: why it is NOT lane-scoped
+# --------------------------------------------------------------------------- #
+
+def _labelled_chapter(db, code: str, lanes: list[str], titles: list[str]):
+    """A chapter whose topics carry the given lanes, one concept each."""
+    chapter = models.Chapter(
+        chapter_code=code, board="CBSE", grade="10", subject="Mathematics",
+        unit="Mathematics Unit", chapter_title="Circles",
+        chapter_display_name="Circles", chapter_description="",
+        chapter_duration="",
+    )
+    db.add(chapter)
+    db.flush()
+    concepts = []
+    for lane, title in zip(lanes, titles):
+        topic = models.Topic(
+            chapter_id=chapter.id, topic_title=f"{title} Topic",
+            topic_display_name=f"{title} Topic", pre_post_learning=lane,
+            topic_description="",
+        )
+        db.add(topic)
+        db.flush()
+        concept = models.Concept(
+            topic_id=topic.id, concept_title=title,
+            concept_display_name=title, concept_details="",
+        )
+        db.add(concept)
+        db.flush()
+        concepts.append(concept)
+    db.commit()
+    return concepts
+
+
+def test_topic_numbering_is_chapter_wide_so_pre_labels_cannot_collide(db):
+    """``_topic_index`` must NOT be scoped to the learning lane.
+
+    ``question_label`` carries a literal ``_PL_`` and no lane discriminator,
+    so numbering each lane from 1 makes a Pre label byte-identical to a Post
+    label whenever same-position topics carry the same concept title. That
+    is not cosmetic: ``assessment_release_service`` builds ``existing_labels``
+    from a global ``Question`` query and silently skips a candidate whose
+    label already exists, and ``question_label`` has no unique constraint —
+    so the colliding question is never created, with no flag (R4).
+
+    Giving the label a lane discriminator is the §10 step-8 ID-minting
+    rebuild. Until then this pins the numbering that keeps the two lanes
+    apart, and pins WHY, so the lane scoping is not reintroduced alone.
+    """
+    post, pre = _labelled_chapter(
+        db, "10CBMA_Collide", ["Post", "Pre"], ["Ratio Basics", "Ratio Basics"],
+    )
+
+    assert g._topic_index(post) == 1
+    assert g._topic_index(pre) == 2, (
+        "the Pre topic must keep a distinct number; lane-scoped numbering "
+        "would make both 1 and the two labels identical"
+    )
+    assert g.question_label(post, 1) != g.question_label(pre, 1)
+
+
+def test_publishing_a_pre_map_leaves_post_question_labels_byte_identical(db):
+    """The drift the lane scoping would have prevented does not occur.
+
+    Pre topics are created after the Post map, so they hold higher ids and
+    append to the id-sorted ordering rather than interleaving with it.
+    """
+    post_a, post_b = _labelled_chapter(
+        db, "10CBMA_Stable", ["Post", "Post"], ["Chords Idea", "Arcs Idea"],
+    )
+    before = [g.question_label(post_a, 1), g.question_label(post_b, 1)]
+
+    chapter = post_a.topic.chapter
+    for title in ("Prerequisite Fractions", "Prerequisite Angles"):
+        topic = models.Topic(
+            chapter_id=chapter.id, topic_title=f"{title} Topic",
+            topic_display_name=f"{title} Topic", pre_post_learning="Pre",
+            topic_description="",
+        )
+        db.add(topic)
+        db.flush()
+        db.add(models.Concept(
+            topic_id=topic.id, concept_title=title,
+            concept_display_name=title, concept_details="",
+        ))
+    db.commit()
+    db.refresh(chapter)
+
+    after = [g.question_label(post_a, 1), g.question_label(post_b, 1)]
+    assert after == before
