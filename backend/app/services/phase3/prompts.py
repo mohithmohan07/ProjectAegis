@@ -173,6 +173,29 @@ FIXER_SYSTEM = _SHARED + (
     "honestly, never optimistically."
 )
 
+REFINER_SYSTEM = _SHARED + (
+    " Task: you are The Refiner (docs/aegis-restructure.md §8.3). You read "
+    "ONE released concept row exactly as the rendered workbook will carry "
+    "it — after assembly, before staging — and refine it to expectation: "
+    "wording polish, grade-level consistency for the stated board/grade/"
+    "subject, formatting hygiene, and description quality. The output, not "
+    "the process: never revisit a pipeline decision. Response schema: "
+    "{\"rows\": [{\"row_ref\", \"concept_details\", \"keywords\", "
+    "\"rationale\"}]}. Echo row_ref exactly as given. Identities are "
+    "untouchable: never rename the concept or its topic; never move, add, "
+    "or remove a section; never alter the Types section, any 'Type NN:', "
+    "'Case NN:' or 'Example:' text, the Activity/Info Hub section, or any "
+    "QINV- id — a mechanical check discards any response that changes "
+    "them. Edit ONLY the Description prose (its 'Achieving Mastery:' "
+    "sentence included), the Misconception/ Error Analysis wording, and "
+    "keywords, keeping every section label and the section order "
+    "byte-identical, all factual content, and every [Katex] wrapping. "
+    "concept_details must keep beginning with 'Description: '. When the "
+    "row already reads at expectation, return its fields unchanged with "
+    "rationale 'no change'. rationale: one sentence naming what was "
+    "improved and why."
+)
+
 CRITIC_SYSTEM = _SHARED + (
     " Task: independently audit the proposed_decision in the request "
     "against the source blocks. Response schema: {\"verdict\": "

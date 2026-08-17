@@ -1,5 +1,10 @@
 """Deterministic chapter-level refinement of concept-mapping output.
 
+Name note: this is the deterministic pre-deposit FORMATTER (numbering,
+section shape) — distinct from ``app/services/release_refiner.py``, The
+Refiner of docs/aegis-restructure.md §8.3, which polishes the RENDERED
+release output through the model before staging.
+
 Runs on the full, ordered list of concept records for a chapter right before
 they are deposited, so the stored Bulk Import rows carry the exact format the
 team requires regardless of which extractor produced them:

@@ -35,6 +35,7 @@ RELEASE_ROW_ERRORS_FIELD = "_aegis_release_errors"
 RELEASE_ROW_QIDS_FIELD = "_aegis_release_qids"
 RELEASE_ROW_BLOCKS_FIELD = "_aegis_release_block_ids"
 RELEASE_ROW_ROUTES_FIELD = "_aegis_release_type_case_routes"
+RELEASE_ROW_REFINED_FIELD = "_aegis_release_refined"
 
 _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_STATUS_FIELD,
@@ -42,6 +43,9 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_QIDS_FIELD,
     RELEASE_ROW_BLOCKS_FIELD,
     RELEASE_ROW_ROUTES_FIELD,
+    # The Refiner's per-row mark (docs/aegis-restructure.md §8.3): rides the
+    # release for the reviewer's audit, stripped before DB upload.
+    RELEASE_ROW_REFINED_FIELD,
     # Fixer-accepted validator codes (Q13, seams F22/F39/F40): a recorded
     # acceptance ships in the release payload for the reviewer's audit and
     # is stripped before DB upload like every other audit field.
@@ -951,8 +955,15 @@ def stage_release(
     pending_decision: Mapping[str, Any] | None = None,
     error: Exception | None = None,
     reason: str = "",
+    refinements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist one release payload and clear every manual decision gate."""
+    """Persist one release payload and clear every manual decision gate.
+
+    ``refinements`` is The Refiner's recorded diff on this release
+    (docs/aegis-restructure.md §8.3): its changes, summary, review flags,
+    and re-seal marker. ``None`` (callers that never entered the Refiner
+    seam) stores no key; the payload stays byte-compatible.
+    """
 
     checkpoint_value = copy.deepcopy(
         dict(checkpoint)
@@ -1085,6 +1096,10 @@ def stage_release(
         "instruction_set": _json_safe(_instruction_set_summary(job)),
         "summary": summary,
     }
+    if refinements is not None:
+        # The Refiner's diff on the release (§8.3): every refinement is a
+        # recorded change beside the rows it polished.
+        payload["refinements"] = _json_safe(dict(refinements))
 
     durable_inventory = copy.deepcopy(dict(job.question_inventory or {}))
     durable_inventory[RELEASE_KEY] = copy.deepcopy(payload)

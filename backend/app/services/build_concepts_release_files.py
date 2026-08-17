@@ -364,6 +364,41 @@ def build_release_workbook(job: models.UploadJob) -> bytes:
             cell.fill = fill
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
+    refinements = payload.get("refinements")
+    if isinstance(refinements, Mapping):
+        # The Refiner's recorded diff (docs/aegis-restructure.md §8.3):
+        # every refinement beside its row identity, plus the advisory and
+        # availability flags. Present only when the release traversed the
+        # Refiner seam.
+        refined = workbook.create_sheet("Refinements")
+        _header(refined, [
+            "Kind",
+            "Concept Key",
+            "Field",
+            "Before",
+            "After",
+            "Reason / Flag",
+        ])
+        for change in refinements.get("changes") or []:
+            if not isinstance(change, Mapping):
+                continue
+            refined.append([
+                "refinement",
+                _cell_text(change.get("concept_key")),
+                change.get("field", ""),
+                change.get("before", ""),
+                change.get("after", ""),
+                change.get("reason", ""),
+            ])
+            for cell in refined[refined.max_row]:
+                cell.fill = _READY_FILL
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        for flag in refinements.get("review_flags") or []:
+            refined.append(["flag", "", "", "", "", str(flag)])
+            for cell in refined[refined.max_row]:
+                cell.fill = _WARNING_FILL
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
     manifest = workbook.create_sheet("Release Manifest")
     _header(manifest, ["Field", "Value"])
     manifest_rows = {
@@ -378,6 +413,11 @@ def build_release_workbook(job: models.UploadJob) -> bytes:
         "Checkpoint stage": payload.get("checkpoint_stage"),
         "Checkpoint progress": payload.get("checkpoint_progress"),
         **_provenance_manifest_rows(payload),
+        **(
+            {"Refinements": str(refinements.get("summary") or "")}
+            if isinstance(refinements, Mapping)
+            else {}
+        ),
         "Summary": payload.get("summary"),
         "Database publication": (
             "uploaded" if (payload.get("summary") or {}).get("database_uploaded")

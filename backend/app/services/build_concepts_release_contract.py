@@ -17,6 +17,7 @@ from .. import models
 from . import build_concepts, uploads
 from . import build_concepts_release as release
 from . import build_concepts_release_files as release_files
+from . import release_refiner
 
 
 _CONTRACT_VERSION = 4
@@ -88,6 +89,59 @@ def _capture_deposit(original, args, kwargs) -> tuple[list[int], list[int], dict
     return [], [], written
 
 
+def _refine_captured_records(
+    db,
+    job: models.UploadJob,
+    target_chapter_id: int,
+    captured: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The Refiner seam (docs/aegis-restructure.md §8.3), release mode.
+
+    Runs after ``_capture_deposit`` produced the captured records and before
+    ``release.stage_release``. Returns the rows to stage plus the recorded
+    ``refinements`` payload entry. The Refiner must never block a release:
+    any failure here stages the UNREFINED rows with an availability flag.
+    """
+
+    records = [
+        copy.deepcopy(dict(row))
+        for row in captured.get("records") or []
+        if isinstance(row, Mapping)
+    ]
+    try:
+        chapter = db.get(models.Chapter, int(target_chapter_id or 0))
+        metadata = {
+            "board": chapter.board if chapter else "",
+            "grade": chapter.grade if chapter else "",
+            "subject": chapter.subject if chapter else "",
+            "unit": chapter.unit if chapter else "",
+            "chapter_title": chapter.chapter_title if chapter else "",
+            "chapter_code": chapter.chapter_code if chapter else "",
+            "pre_post": "Pre" if job.learning_kind == "pre" else "Post",
+            "source_book": job.source_book or job.filename or "",
+            "inventory": captured.get("inventory") or {},
+            "mined_types": captured.get("mined_types") or {},
+            "source_text": str(job.mmd_text or ""),
+        }
+        refined, diff, flags = release_refiner.refine_release(
+            records,
+            metadata=metadata,
+            instruction_set=release._instruction_set_summary(job),
+            store=release_refiner.decision_store_for_job(int(job.id)),
+        )
+        return refined, {**diff, "review_flags": list(flags)}
+    except Exception as exc:  # noqa: BLE001 - the Refiner never blocks
+        flag = f"refiner unavailable: {type(exc).__name__}: {exc}"
+        return records, {
+            "policy_version": release_refiner.REFINER_POLICY_VERSION,
+            "output_kind": "concepts_release",
+            "changes": [],
+            "summary": flag,
+            "resealed_after_refinement": False,
+            "review_flags": [flag],
+        }
+
+
 def _release_after_result(
     db,
     job_id: int,
@@ -109,11 +163,17 @@ def _release_after_result(
         if isinstance(raw_pending, Mapping):
             pending = dict(raw_pending)
     if captured:
+        refined_records, refinements = _refine_captured_records(
+            db,
+            job,
+            target_chapter_id,
+            captured,
+        )
         return release.stage_release(
             db,
             job,
             target_chapter_id=target_chapter_id,
-            records=captured.get("records") or [],
+            records=refined_records,
             inventory=captured.get("inventory") or {},
             mined_types=captured.get("mined_types") or {},
             final_grounding_certificate=(
@@ -125,6 +185,7 @@ def _release_after_result(
                 "Generation completed. The output was staged and was not "
                 "uploaded to the database."
             ),
+            refinements=refinements,
         )
     return release.stage_release(
         db,
