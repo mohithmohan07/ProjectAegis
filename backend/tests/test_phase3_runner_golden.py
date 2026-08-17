@@ -135,31 +135,54 @@ def test_runner_produces_publication_ready_output(
     # decides every unit, so every case-covered QID reaches a host.
     assert summary["routed_qids"] == 31
     assert summary["unrouted_items"] == 0
-    # Q2/R4 re-baseline: the deposit-parity pipeline's exact-once
-    # Example dedupe has ALWAYS removed these rows' duplicate activity
-    # Examples and the Case shells the removal emptied — it used to do
-    # so silently (the map's gap 4). The removals are now review flags
-    # naming where each Example renders, so the three affected rows
-    # (the hub-relocated Wolff account plus the two rows whose
-    # duplicated figure-activity Cases were deduped) surface as flagged.
-    assert summary["flagged_row_count"] == 3
+    # Q2/R4 re-baseline. Two deterministic repairs in the deposit-parity
+    # pipeline have ALWAYS acted on this chapter and used to act silently;
+    # both now ride the rows they touched.
+    #
+    #  * exact-once Example dedupe removes duplicate activity Examples and
+    #    the Case shells the removal empties (the map's gap 4) — three
+    #    rows, unchanged from the previous baseline;
+    #  * coverage repair FORCE-PLACES an inventory prompt that no authored
+    #    Type/Case rendered, synthesising a Type/Case shell around the raw
+    #    source wording and publishing it to a learner. Ten of this
+    #    chapter's 31 routed QIDs land that way. That was invisible before
+    #    — nothing was dropped, but a deterministic guess reached the page
+    #    unrecorded, which Q13 forbids. Flagging it is what makes the
+    #    purged word-count nomination safe to remove: a section banner the
+    #    extractor mistook for a task now arrives at a reviewer instead of
+    #    quietly becoming an Example.
+    assert summary["flagged_row_count"] == 6
     flagged_rows = [
         row for row in result["records"] if row.get("review_flags")
     ]
     assert sorted(
         _normal(row["concept_title"]) for row in flagged_rows
     ) == [
+        "Autocracy, Censorship, and the Demand for Freedom of the Press",
         "Educated Middle-class Leadership of Liberal-nationalist "
         "Revolutions",
+        "Gendered Limits of Liberal Political Rights",
         "Nationalism as Conservative State Power After 1848",
         "Personifying the Nation Through Female Allegories",
+        "Utopian Nationalism and Democratic-social Republicanism",
     ]
+    forced_qids: list[str] = []
     for row in flagged_rows:
         for flag in row["review_flags"]:
+            if flag.startswith("R4: source question "):
+                forced_qids.append(flag.split()[3])
+                assert "force-placed its inventory wording here" in flag
+                continue
             assert flag.startswith(
                 "Q2: removed the example-less Case shell"
             )
-            assert "its Example(s) render under:" in flag
+            assert "its Example wording renders under:" in flag
+    # Every force-placement names its QID, so the reviewer can go back to
+    # the source row rather than guessing which Example was synthesised.
+    assert sorted(forced_qids) == [
+        "QINV-0001", "QINV-0005", "QINV-0009", "QINV-0010", "QINV-0011.1",
+        "QINV-0011.2", "QINV-0012", "QINV-0013", "QINV-0014", "QINV-0015",
+    ]
     assert summary["envelope_sha256"] == golden_envelope["envelope_sha256"]
     # Q1: the analysis inventory rode through the runner — every LA-item
     # allotted exactly once, and only allotted rows carry the section.

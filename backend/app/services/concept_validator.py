@@ -42,20 +42,6 @@ _CASE_SEGMENT_RE = re.compile(
     r"\bCase\s+\d{1,2}:\s*(.*?)(?=\b(?:Case|Type)\s+\d{1,2}:|$)",
     re.IGNORECASE | re.DOTALL,
 )
-_CASE_TASK_VERB_RE = re.compile(
-    r"\b(?:solve|simplify|find|write|identify|expand|compare|calculate|"
-    r"rationalise|express|evaluate|convert|draw|label|explain|prove|"
-    r"describe|discuss|analyse|analyze|examine|interpret|outline|assess|"
-    r"state|list|mention|account|justify|trace|distinguish|define|"
-    r"what|why|how|who|when|where)\b",
-    re.IGNORECASE,
-)
-# Concrete detail: math tokens, proper-name phrases, or quoted source wording.
-_CASE_SPECIFIC_DETAIL_RE = re.compile(
-    r"(?:\d|[+\-*/÷×=^]|[A-Za-z]\s*\^\s*\d|"
-    r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+|"
-    r"['\"][^'\"]{3,}['\"])"
-)
 _EXAMPLE_SPLIT_RE = re.compile(
     r"\bExamples?(?:\s+0*\d+)?\s*:\s*", re.IGNORECASE)
 _EXAMPLE_MARKER_RE = re.compile(
@@ -925,35 +911,6 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
     return records
 
 
-def _example_too_short(example_text: str) -> bool:
-    words = re.findall(r"\w+", example_text or "")
-    text = example_text or ""
-    if len(words) >= 5:
-        return False
-    # Descriptive/history prompts are often 4+ words with a clear ask and no
-    # digits (e.g. "Explain German unification under Prussia").
-    if len(words) >= 4 and _CASE_TASK_VERB_RE.search(text):
-        return False
-    # A complete yes/no mathematics prompt can be both substantive and very
-    # short even though its interrogative auxiliary is not an action verb
-    # (for example, "Is 9 a cube?"). Require a question mark and concrete
-    # numeric/expression detail so generic fragments such as "Is this correct?"
-    # remain invalid.
-    if (
-        len(words) >= 3
-        and re.match(r"^\s*(?:is|are|does|do|can)\b", text, re.IGNORECASE)
-        and "?" in text
-        and _CASE_SPECIFIC_DETAIL_RE.search(text)
-    ):
-        return False
-    # Concise math tasks: action + concrete expression/value detail.
-    return not (
-        len(words) >= 3
-        and _CASE_TASK_VERB_RE.search(text)
-        and _CASE_SPECIFIC_DETAIL_RE.search(text)
-    )
-
-
 def _allowed_source_example_spans(
     case_text: str, allowed_source_examples: Collection[str],
 ) -> list[tuple[int, int]]:
@@ -1017,23 +974,6 @@ def _case_examples(
             else len(case_text)
         ].strip()
     ]
-
-
-def _case_example_too_short(
-    case_text: str, allowed_source_examples: Collection[str] = (),
-) -> bool:
-    """A Case is 'Case NN: <sub-type definition> Example: <full question> ...'.
-
-    When Example lines exist, each must carry a substantive untruncated
-    question. Legacy cases carry the question directly in the Case text.
-    """
-    case_text = case_text or ""
-    markers = _structural_example_markers(
-        case_text, allowed_source_examples)
-    examples = _case_examples(case_text, markers)
-    if examples:
-        return any(_example_too_short(ex) for ex in examples)
-    return _example_too_short(case_text.strip())
 
 
 def _add(errors: list[dict], row_index: int, field: str, code: str,
@@ -1563,11 +1503,17 @@ def validate_concept_rows(
                      "Types must use zero-padded Type NN and Case NN labels")
             for case_match in _CASE_SEGMENT_RE.finditer(type_body or ""):
                 case_text = re.sub(r"\s+", " ", case_match.group(1)).strip()
-                if _case_example_too_short(
-                    case_text, allowed_source_examples
-                ):
-                    _add(errors, i, "concept_details", "short_case_example",
-                         "Case examples should include the full source question/task")
+                # The retired short-case-example gate lived here. It asked
+                # a word-count cascade whether an Example was "a real task" —
+                # exactly the shape heuristic CLAUDE.md names by example
+                # ("'too short to be a real task' cannot tell a mangled
+                # question from a section banner — only the source can"), and
+                # it is the sibling of the question_polishing gate step 2
+                # already deleted. Whether a rendered Example carries the
+                # source question is now decided where the source is in hand:
+                # the exact-once inventory coverage contract in
+                # ``generation._rendered_inventory_coverage_defects`` (keyed by
+                # QID, not by length) and the inventory-row adjudicator.
                 if strict_type_hierarchy:
                     markers = _structural_example_markers(
                         case_text, allowed_source_examples)

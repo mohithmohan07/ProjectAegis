@@ -2309,9 +2309,6 @@ Rules:
   ``[Katex] valid LaTeX [/Katex]``. Never leave raw ``$``/``$$`` delimiters,
   ``\\(...\\)``/``\\[...\\]`` delimiters, TeX commands, subscripts, or
   superscripts outside a canonical Katex span.
-- For short_case_example issues: replace the truncated Example with the FULL
-  source question wording (and the source image URL when the question is
-  visual).
 """)
 
 prompts.register(
@@ -6830,38 +6827,53 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
     return deduped
 
 
-def _unowned_inventory_row_is_non_task(item: dict) -> bool:
-    """High-confidence semantic rows that describe content but ask nothing."""
-    source_kind = str(item.get("source_kind") or "").strip().lower()
-    raw = _strip_source_visual_markup(str(
-        item.get("raw_task") or item.get("normalized_task") or ""))
-    plain = re.sub(r"\s+", " ", raw).strip()
-    if (
-        source_kind == "source_task"
-        and "?" not in plain
-        and not re.match(
-            r"(?i)^(?:analyse|analyze|compare|describe|discuss|draw|"
-            r"explain|identify|interpret|investigate|list|observe|"
-            r"prepare|record|state|study|write)\b",
-            plain,
-        )
-    ):
-        return True
-    return bool(
-        source_kind in {"intext_question", "checkpoint_question", "other"}
-        and re.search(
-            r"(?i)\?\s*(?:Let\s+us|We(?:'ll|\s+will)|You\s+will)\s+"
-            r"(?:find\s+out|learn|see|explore)\.?\s*$",
-            plain,
-        )
-    )
+def _inventory_row_task_is_only_its_own_label(item: dict) -> bool:
+    """The row carries no task text of its own beyond its filing label.
+
+    Absence of content, not a judgment about content — the same family as
+    the empty-task check beside it. A row whose ``raw_task`` normalizes to
+    exactly the ``source_label`` it was filed under contributes no prompt:
+    the extractor captured the name of a question collection and nothing
+    else. That is *what the row does not contain*, measured by string
+    identity between two extracted fields; it is not a verdict on what the
+    book means, and it decides nothing on its own.
+
+    It is a NOMINATION only. Whether such a row is a section banner the
+    extractor mistook for a task (dropped) or a real question whose text
+    extraction lost (kept, and the run stops) is ruled by
+    :func:`_adjudicate_invalid_inventory_rows` against the source excerpt,
+    with an independent critic, fail-closed at every turn.
+
+    This is the route the Balbharati Std 6 "Three Dimensional Shapes"
+    incident needs (``## Practice Set 1.1`` / ``## Exercise 1`` arriving as
+    task rows) — see tests/test_inventory_row_adjudication.py. The
+    word-count cascade that used to nominate those rows is gone: length
+    cannot tell a mangled question from a banner, and it swept up genuinely
+    short questions ("Is 9 a cube?") on the way. The keyword vocabulary
+    that briefly stood in for it (a verb allow-list plus a "?" test) is
+    gone with it — that was a content classifier, forbidden outright by
+    CLAUDE.md's first bullet.
+    """
+    # Compare the row's WORDING only. ``_inventory_task_text`` appends the
+    # row's own figures as ``[img]`` tags; a banner that happens to sit
+    # beside a figure still carries no prompt of its own, and leaving the
+    # tags in would make the comparison depend on visual bookkeeping.
+    wording = dict(item)
+    wording.pop("image_urls", None)
+    wording.pop("_image_captions", None)
+    task_key = _inventory_coverage_key(_inventory_task_text(wording))
+    if not task_key:
+        return False
+    label_key = _inventory_coverage_key(str(item.get("source_label") or ""))
+    return bool(label_key) and task_key == label_key
 
 
 _INVALID_ROW_ADJUDICATION_SYSTEM = (
     "You are the Aegis inventory-row adjudicator. Deterministic validation "
     "rejected some rows of a textbook question inventory because their task "
-    "text is empty or too short to be answerable, or nominated them because "
-    "their text describes content without asking anything. Each such row is "
+    "text is empty, or nominated them because the row carries no task text "
+    "of its own — its task is nothing but the label it was filed under. "
+    "Length plays no part — a complete question can "
     "one of two things, and you decide which against the supplied source "
     "excerpt:\n"
     "  real_task  — the source really asks this, and extraction mangled or "
@@ -6966,13 +6978,14 @@ def _adjudicate_invalid_inventory_rows(
 ) -> tuple[list[dict], list[dict]]:
     """Let the model rule on rows deterministic validation rejected.
 
-    Validation is deliberately strict: a row whose task text is empty or too
-    short cannot render as a public Example. But "too short to answer" and
+    Validation is deliberately strict: a row whose task text is empty cannot
+    render as a public Example. But "extraction mangled a real question" and
     "not a question at all" are different failures with opposite remedies —
     the first must stop the run, the second is an extraction artifact the run
     should drop and continue past. Which one a given row is depends on what
     the book actually prints around it, so the model decides against that
-    source rather than a rule guessing from shape.
+    source rather than a rule guessing from shape. Brevity is never a
+    nomination reason: a three-word question is a question.
 
     Fail-closed at every turn: any row the model does not positively call an
     artifact is kept, a critic must approve the proposal before anything is
@@ -7095,26 +7108,42 @@ def _adjudicate_invalid_inventory_rows(
 def _unowned_stub_inventory_candidates(
     items: list[dict], anchors: list[dict],
 ) -> list[dict]:
-    """Detect model-only stub/non-task rows with no exact source owner.
+    """Detect rows carrying no task of their own and no exact source owner.
 
-    Detection only, never a decision: shape can nominate a row for review,
-    but whether an unowned stub is a mangled learner question (kept; the
+    Detection only, never a decision: nomination can send a row for review,
+    but whether an unowned row is a mangled learner question (kept; the
     terminal gate stops the run) or an extraction artifact (dropped) is
     ruled by the inventory-row adjudicator and its independent critic
-    against the source. An exact source-owned short task is never
-    nominated — deterministic anchors are the source-of-truth safety net.
+    against the source. An exact source-owned task is never nominated —
+    deterministic anchors are the source-of-truth safety net.
+
+    Both nomination reasons are ABSENCE of task content, never brevity and
+    never a reading of what the text says:
+
+    * ``empty_task`` — the task text normalizes to nothing at all.
+    * ``task_is_only_its_own_label`` — the task text normalizes to exactly
+      the ``source_label`` the row was filed under, so the row contributes
+      no prompt beyond the name of the collection it belongs to.
+
+    The word-count "stub" cascade that used to sit here is gone — length
+    never decides whether the book asked something (Rule 1), so a short
+    source question such as "Is 9 a cube?" is no longer nominated for
+    dropping. Removing it must NOT remove the judge with the judgment,
+    though: a section banner captured as a task ("## Practice Set 1.1")
+    reached the source-reading adjudicator only through this function, and
+    with no nomination at all it would instead be OWED a rendered public
+    Example by the coverage contract and force-placed in front of a
+    learner. ``task_is_only_its_own_label`` restores that route on
+    mechanics.
     """
     candidates: list[dict] = []
     for index, item in enumerate(items):
         text = _inventory_task_text(item)
         key = _inventory_coverage_key(text)
-        source_kind = (item.get("source_kind") or "").strip().lower()
-        unusable = (
-            not key
-            or (
-                source_kind not in _HUB_INVENTORY_KINDS
-                and cv._example_too_short(text)
-            )
+        unusable = not key
+        label_only = (
+            not unusable
+            and _inventory_row_task_is_only_its_own_label(item)
         )
         item_key = _inventory_task_match_key(item)
         source_owned = any(
@@ -7132,16 +7161,13 @@ def _unowned_stub_inventory_candidates(
             )
             for anchor in anchors
         )
-        if (
-            unusable
-            or _unowned_inventory_row_is_non_task(item)
-        ) and not source_owned:
+        if (unusable or label_only) and not source_owned:
             candidates.append({
                 "index": index,
                 "qid": str(item.get("qid") or "").strip(),
                 "reason": (
-                    "empty_or_stub_task" if unusable
-                    else "describes_content_but_asks_nothing"
+                    "empty_task" if unusable
+                    else "task_is_only_its_own_label"
                 ),
             })
     return candidates
@@ -7376,17 +7402,15 @@ def _extract_question_task_inventory_via_api(
         ]
 
     def invalid_task_indexes(items: list[dict]) -> list[int]:
+        """Rows with no task text at all — emptiness, never brevity.
+
+        A short extraction is not evidence of under-extraction; whether the
+        chunk was fully itemized is the completeness reviewer's verdict
+        below, made by re-reading the chunk (Rule 1).
+        """
         invalid: list[int] = []
         for index, item in enumerate(items):
-            text = _inventory_task_text(item)
-            source_kind = (item.get("source_kind") or "").strip().lower()
-            if (
-                not _inventory_coverage_key(text)
-                or (
-                    source_kind not in _HUB_INVENTORY_KINDS
-                    and cv._example_too_short(text)
-                )
-            ):
+            if not _inventory_coverage_key(_inventory_task_text(item)):
                 invalid.append(index)
         return invalid
 
@@ -7407,8 +7431,8 @@ def _extract_question_task_inventory_via_api(
         invalid_indexes = invalid_task_indexes(items)
         # Whether this extraction covered the chunk is the model's judgment,
         # made by re-reading the chunk — never an expected-count formula or
-        # a task-marker regex. Stub detection below is detection only: it
-        # can nominate a correction, and the terminal inventory-row
+        # a task-marker regex. The deterministic half detects emptiness
+        # only: it can nominate a correction, and the terminal inventory-row
         # adjudicator rules on any row that persists.
         completeness = _inventory_chunk_completeness_verdict_via_api(
             chunk, items, meta=meta)
@@ -7418,11 +7442,11 @@ def _extract_question_task_inventory_via_api(
                 + (f" ({completeness['reason']})"
                    if completeness["reason"] else "")
                 if not completeness["complete"]
-                else "stub rows only"
+                else "empty rows only"
             )
             progress.log(
                 f"  inventory chunk {i}/{len(chunks)} needs correction: "
-                f"{len(items)} item(s), {len(invalid_indexes)} empty/stub "
+                f"{len(items)} item(s), {len(invalid_indexes)} empty "
                 f"row(s), {reviewer_note} — retrying once.",
                 level="warning",
             )
@@ -7434,7 +7458,7 @@ def _extract_question_task_inventory_via_api(
             retry_user = (
                 user
                 + f"\n\nYOUR PREVIOUS ANSWER HAD {len(items)} ITEMS, INCLUDING "
-                f"{len(invalid_indexes)} EMPTY OR STUB TASKS. Re-read the chunk "
+                f"{len(invalid_indexes)} EMPTY TASKS. Re-read the chunk "
                 "because this is under-extraction, and itemize EVERY assessable "
                 "question/task: every numbered exercise, every in-text checkpoint "
                 "/ boxed '?' / 'Let's recall' prompt, every picture- or "
@@ -13111,7 +13135,7 @@ _FATAL_CODES = {
     "duplicate_topic_concept", "source_artifact", "types_too_early",
     "culmination_too_early", "types_format", "case_without_type",
     "type_without_case", "culmination_description", "culmination_count",
-    "culmination_order", "section_number", "empty_types", "short_case_example",
+    "culmination_order", "section_number", "empty_types",
     "merged_description", "rich_text_format", "empty_misconception",
     "empty_error_analysis", "duplicate_misconception",
     "duplicate_error_analysis", "missing_misconception_or_error_analysis",
@@ -13317,29 +13341,10 @@ def _inventory_source_examples(inventory: dict | None) -> list[str]:
     ]
 
 
-
 _TYPE_SPLIT_RE = re.compile(r"(?=\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:)", re.IGNORECASE)
 _CASE_SPLIT_RE = re.compile(r"(?=\bCase\s+\d{1,2}:)", re.IGNORECASE)
 _EXAMPLE_LINE_RE = re.compile(
     r"\bExamples?(?:\s+0*\d+)?\s*:\s*", re.IGNORECASE)
-
-
-def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
-    """Full teacher-facing task texts from the Question / Task Inventory."""
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in (inventory or {}).get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        source_kind = (item.get("source_kind") or "").strip().lower()
-        if source_kind in _HUB_INVENTORY_KINDS:
-            continue
-        text = _inventory_task_text(item)
-        key = _inventory_coverage_key(text)
-        if text and key and key not in seen and not cv._example_too_short(text):
-            seen.add(key)
-            out.append(text)
-    return out
 
 
 def _rendered_type_examples(records: list[dict]) -> list[str]:
@@ -13449,9 +13454,30 @@ def _rendered_inventory_coverage_defects(
 ) -> dict:
     """Missing/duplicate inventory prompts in rendered public Examples.
 
-    Only inventory items with a non-empty, placeable prompt participate in the
-    exact-coverage contract. Empty or stub-length inventory rows cannot become
-    valid Examples, so they must not abort chapter deposit.
+    EVERY inventory item participates. Participation is emptiness-only
+    mechanics: a row whose text normalizes to no coverage key has nothing
+    to render. The former word-count participation filter could silently
+    drop a genuinely short source question ("Is 9 a cube?") out of the
+    coverage ledger — a Rule 1 violation and an R4 silent loss at once —
+    and this gate does not re-litigate by shape what a row means.
+
+    What keeps a non-task out of the ledger is NOT this filter. It is the
+    nomination + adjudication pass upstream
+    (:func:`_unowned_stub_inventory_candidates` ->
+    :func:`_adjudicate_invalid_inventory_rows`), where a row carrying no
+    task text of its own gets a model verdict against the source excerpt
+    with an independent critic. Note that the inventory is not purely
+    model-ruled: :func:`_merge_source_task_anchors` also backfills
+    deterministic source anchors, so "it is in the inventory" is not by
+    itself a model verdict that it is a task.
+
+    When a participating QID cannot be rendered it is reported here. What
+    the caller then does depends on the lane: the deposit lane wires the
+    F24 Fixer seam and places it by one recorded decision, while the
+    assemble fixpoint lane deliberately passes no fixer (assemble.py
+    module docstring) and its repair ladder force-places the wording with
+    a review flag on the row, raising only if even that is impossible.
+    Nothing is dropped or silently excluded on any of those paths.
 
     Textbook ``activity`` items live in Activity/Info Hub rather than Types
     Examples, so they are excluded from this Types coverage contract.
@@ -13466,9 +13492,8 @@ def _rendered_inventory_coverage_defects(
         source_kind = (item.get("source_kind") or "").strip().lower()
         if source_kind in _HUB_INVENTORY_KINDS:
             continue
-        text = _inventory_task_text(item)
-        key = _inventory_coverage_key(text)
-        if not key or cv._example_too_short(text):
+        key = _inventory_coverage_key(_inventory_task_text(item))
+        if not key:
             continue
         expected_by_qid[qid] = key
     rendered_counts = _rendered_inventory_example_counts(
@@ -13489,10 +13514,18 @@ def _rendered_inventory_coverage_defects(
 def _invalid_inventory_items(inventory: dict | None) -> list[dict]:
     """Inventory rows that cannot participate in an exact public contract.
 
-    Coverage deliberately ignores empty/one-token legacy rows because there is
-    no valid Example text to render.  The terminal gate must not silently
-    certify an inventory that contains those rows, though: doing so can turn an
-    extraction omission into an apparently complete chapter.
+    Identity mechanics (missing/duplicate/mistyped qid) and genuine
+    emptiness only. Brevity is NOT a defect here: the ``stub_task`` reason
+    used to be raised by a word-count cascade, which cannot tell a mangled
+    question from a complete short one, so a real learner question such as
+    "Is 9 a cube?" was routed for dropping by its length.
+
+    Whether a row is a task at all is decided by the model, not here: rows
+    with no task text of their own are nominated by
+    :func:`_unowned_stub_inventory_candidates` and ruled on against the
+    source by :func:`_adjudicate_invalid_inventory_rows` with an
+    independent critic. This terminal gate only refuses an artifact it can
+    prove broken by identity or emptiness.
     """
     invalid: list[dict] = []
     seen_qids: set[str] = set()
@@ -13527,33 +13560,12 @@ def _invalid_inventory_items(inventory: dict | None) -> list[dict]:
         else:
             seen_qids.add(qid)
 
-        text = _inventory_task_text(item)
-        source_kind = str(item.get("source_kind") or "").strip().lower()
-        if not _inventory_coverage_key(text):
+        if not _inventory_coverage_key(_inventory_task_text(item)):
             invalid.append({
                 "index": index,
                 "qid": qid,
                 "reason": "empty_task",
             })
-        elif (
-            source_kind not in _HUB_INVENTORY_KINDS
-            and cv._example_too_short(text)
-        ):
-            # A short imperative whose substance lives in its shared context
-            # ("Complete the table below." plus the table) is a complete
-            # source task, not an extraction stub: the context ships with the
-            # public prompt once rendering embeds it.
-            context = str(item.get("shared_context") or "").strip()
-            if not (
-                item.get("requires_context")
-                and context
-                and not cv._example_too_short(f"{context} {text}")
-            ):
-                invalid.append({
-                    "index": index,
-                    "qid": qid,
-                    "reason": "stub_task",
-                })
     return invalid
 
 
@@ -14063,9 +14075,10 @@ def _rendered_inventory_keys_present(
     for item in (inventory or {}).get("items") or []:
         if not isinstance(item, dict):
             continue
-        text = _inventory_task_text(item)
-        key = _inventory_coverage_key(text)
-        if key and not cv._example_too_short(text):
+        # Every inventory prompt participates; only genuine emptiness (no
+        # coverage key at all) has nothing to look for.
+        key = _inventory_coverage_key(_inventory_task_text(item))
+        if key:
             expected_keys.add(key)
     if not expected_keys:
         return set()
@@ -14164,7 +14177,6 @@ def _resolved_type_case_qid_placement_ledger(
                 f"placement ledgers disagree at {label}"
             )
     return copy.deepcopy(reference)
-
 
 
 def _final_type_case_qid_host_manifests(
@@ -14546,6 +14558,39 @@ def _dedupe_rendered_inventory_examples(
     if not expected_keys:
         return records, 0
 
+    # Coverage is keyed by normalized wording, so distinct QIDs that print
+    # the same prompt ("Fill the table below.") share one key and collapse
+    # into a single rendered Example here. Carry their identities so the
+    # review flag can NAME them instead of claiming the removed Example
+    # "renders elsewhere" — it is the wording that renders elsewhere, not
+    # necessarily every question that carries it (R4).
+    qids_by_key: dict[str, list[str]] = {}
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        item_key = _inventory_coverage_key(_inventory_task_text(item))
+        item_qid = str(item.get("qid") or "").strip()
+        if item_key and item_qid and item_qid not in qids_by_key.setdefault(
+            item_key, []
+        ):
+            qids_by_key[item_key].append(item_qid)
+
+    def _collapse_note(key: str) -> str:
+        siblings = qids_by_key.get(key) or []
+        if len(siblings) < 2:
+            return ""
+        return (
+            f"; NOTE: {len(siblings)} distinct source questions carry this "
+            f"exact wording ({', '.join(siblings)}) and the exact-once "
+            "coverage contract is keyed by wording, so they share that one "
+            "rendered Example — confirm every one of them is represented"
+        )
+
+    def _add_flag(rec: dict, flag: str) -> None:
+        existing = list(rec.get("review_flags") or [])
+        if flag not in existing:
+            rec["review_flags"] = [*existing, flag]
+
     # Q2/R4: the first render of a key is its carrier; a later duplicate
     # is removed and any Case the removal empties is dropped WITH a
     # review flag naming where its Examples live — never silently.
@@ -14592,6 +14637,7 @@ def _dedupe_rendered_inventory_examples(
                 examples = [piece.strip() for piece in pieces[1:] if piece.strip()]
                 kept: list[str] = []
                 removed_carriers: list[str] = []
+                collapsed_note = ""
                 for example in examples:
                     key = _inventory_coverage_key(example)
                     if key in expected_keys:
@@ -14601,6 +14647,8 @@ def _dedupe_rendered_inventory_examples(
                             carrier = seen[key]
                             if carrier and carrier not in removed_carriers:
                                 removed_carriers.append(carrier)
+                            collapsed_note = (
+                                _collapse_note(key) or collapsed_note)
                             continue
                         seen[key] = str(
                             record.get("concept_title") or ""
@@ -14608,24 +14656,35 @@ def _dedupe_rendered_inventory_examples(
                     kept.append(example)
                 if kept:
                     cases.append((case_title, kept))
+                    if collapsed_note:
+                        # The Case survives, but a duplicate render of one
+                        # source wording was removed from it. Name the
+                        # QIDs that share that wording so the collapse is
+                        # recorded, not merely counted (R4).
+                        _add_flag(
+                            rec,
+                            "Q2: a duplicate render of this exact source "
+                            "wording was removed here" + collapsed_note,
+                        )
                 elif examples:
                     # Dedupe emptied this Case: dropping the shell is the
                     # Q2 repair, and the removal is flagged with where the
                     # Example(s) render — never a silent mask (R4).
                     changed = True
-                    rec["review_flags"] = [
-                        *(rec.get("review_flags") or []),
+                    _add_flag(
+                        rec,
                         "Q2: removed the example-less Case shell "
                         f"{case_title[:80]!r} left by exact-once Example "
-                        "dedupe; its Example(s) render under: "
+                        "dedupe; its Example wording renders under: "
                         + (
                             ", ".join(
                                 repr(title[:60])
                                 for title in removed_carriers
                             )
                             or "another concept row"
-                        ),
-                    ]
+                        )
+                        + collapsed_note,
+                    )
                 else:
                     # A Case that arrived with no Example at all violates
                     # the public Case -> Example hierarchy, so drop it
@@ -14752,6 +14811,33 @@ def _repair_rendered_inventory_coverage(
     covered_keys = _rendered_inventory_keys_present(out, inventory)
     placed = 0
     skipped_unplaceable = 0
+
+    def _flag_forced_placement(index: int, qid: str) -> None:
+        """Record every force-placed Example on the row itself (R4 / Q13).
+
+        Force-placement is a deterministic best guess: no model-authored
+        Type/Case chose to render this inventory prompt, so this pass
+        synthesises a Type/Case shell around the raw inventory wording and
+        publishes it as a learner-facing Example. Nothing is dropped — but
+        nothing may be *guessed silently* either, so the guess rides the
+        row as a review flag naming the QID. Reviewers see, in particular,
+        any row the extractor mangled or any section banner that reached
+        this point without a source-reading verdict.
+
+        Idempotent: the deposit pipeline replays itself to a fixpoint
+        (assemble.py seam F10), and on replay the Example is already
+        rendered, so no second flag is added.
+        """
+        flag = (
+            f"R4: source question {qid} was not rendered by any authored "
+            "Type/Case; the coverage repair force-placed its inventory "
+            "wording here as an Example — verify it is a real question and "
+            "that this is its right home"
+        )
+        existing = list(out[index].get("review_flags") or [])
+        if flag not in existing:
+            out[index] = {**out[index], "review_flags": [*existing, flag]}
+
     still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
     for qid in still_missing:
         item = items_by_qid.get(qid)
@@ -14773,6 +14859,7 @@ def _repair_rendered_inventory_coverage(
             skipped_unplaceable += 1
             continue
         out[index] = _append_inventory_example_to_record(out[index], text, item)
+        _flag_forced_placement(index, qid)
         covered_keys.add(key)
         placed += 1
 
@@ -14792,6 +14879,7 @@ def _repair_rendered_inventory_coverage(
             continue
         out[index] = _append_inventory_example_to_record(
             out[index], text, item)
+        _flag_forced_placement(index, qid)
         covered_keys.add(key)
         placed += 1
 
@@ -15273,51 +15361,16 @@ def _normalize_activity_hubs_at_final_boundary(
         records, inventory, mined_types)
 
 
-def _match_inventory_for_short_example(
-    stub: str, inventory_texts: list[str], *, used: set[str],
-    context: str = "",
-) -> str:
-    """Best full inventory question for a truncated Example stub.
-
-    ``context`` may carry the Case title / concept title so short stubs like
-    "Describe the print." can still match a Germania / allegory inventory item.
-    """
-    stub_key = bi.normalize_question_text(stub)
-    context_key = bi.normalize_question_text(context)
-    if not stub_key and not context_key:
-        return ""
-    stub_tokens = {t for t in stub_key.split() if len(t) > 2}
-    context_tokens = {t for t in context_key.split() if len(t) > 2}
-    # Prefer inventory items that already contain / start with the stub.
-    candidates: list[tuple[int, int, str, str]] = []
-    for text in inventory_texts:
-        key = bi.normalize_question_text(text)
-        if key in used:
-            continue
-        if stub_key and (stub_key in key or key.startswith(stub_key)):
-            used.add(key)
-            return text
-        text_tokens = set(key.split())
-        stub_overlap = len(stub_tokens & text_tokens) if stub_tokens else 0
-        ctx_overlap = len(context_tokens & text_tokens) if context_tokens else 0
-        if stub_overlap or ctx_overlap:
-            candidates.append((stub_overlap, ctx_overlap, key, text))
-    # Pure placeholder stubs ("q") with no useful context cannot be matched.
-    if len(stub_key.split()) <= 1 and not context_tokens:
-        return ""
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda x: (-x[0], -x[1], -len(x[2])))
-    best_stub, best_ctx, best_key, best_text = candidates[0]
-    # Accept when the stub itself overlaps enough, OR when context strongly
-    # points at one unused inventory question (History allegory / source tasks).
-    if best_stub >= max(2, (len(stub_tokens) + 1) // 2 if stub_tokens else 2):
-        used.add(best_key)
-        return best_text
-    if best_ctx >= 2 and (best_stub >= 1 or len(stub_key.split()) <= 3):
-        used.add(best_key)
-        return best_text
-    return ""
+# ``_match_inventory_for_short_example`` stood here: a token-overlap /
+# word-count matcher that guessed which full inventory question a
+# "truncated Example stub" was meant to be. It was already unreachable
+# (its only feeder, ``_inventory_lookup_texts``, had no callers either),
+# and it carried the same family of predicates this purge removes —
+# ``len(stub_key.split()) <= 1``, ``<= 3``, and overlap thresholds
+# deciding whether two texts mean the same thing. Both halves are gone;
+# an Example that does not carry the source wording is a coverage defect,
+# reported by ``_rendered_inventory_coverage_defects`` against the QID
+# ledger and repaired from the inventory's own authoritative text.
 
 
 def _rebuild_types_body(
@@ -15336,8 +15389,6 @@ def _rebuild_types_body(
                     f"Example {example_i:02d}: {example.strip()}")
     # Preserve original Type NN labels from headers; only Case indexes restart.
     return " ".join(parts)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -15592,17 +15643,21 @@ def _fix_invalid_inventory_via_fixer(
 ) -> list[dict]:
     """Fixer judgment over ``invalid_source_inventory`` rows (seam F23).
 
-    Only the content-judgment reasons (``empty_task``/``stub_task`` —
-    "is this a real task or an extraction stub?" is exactly the question
-    Rule 1 forbids deciding by threshold) may be accepted-with-flag; the
+    Only the content-judgment reason (``empty_task`` — "is this a real
+    task or an extraction artifact?" is exactly the question Rule 1
+    forbids deciding by threshold) may be accepted-with-flag; the
     identity reasons (missing/duplicate/typed qid) are mechanics and
     keep failing closed. Returns the invalid rows that remain blocking.
+
+    The former ``stub_task`` reason is gone with the word-count cascade
+    that produced it: a short row is no longer a defect to adjudicate,
+    it simply participates in coverage like every other inventory item.
     """
 
     from .phase3 import fixer as p3_fixer
     from .phase3 import kernel as p3_kernel
 
-    acceptable_reasons = {"empty_task", "stub_task"}
+    acceptable_reasons = {"empty_task"}
     store = store or _phase3_fixer_store()
     items = (inventory or {}).get("items") or []
     remaining: list[dict] = []
@@ -19206,9 +19261,9 @@ def _compatible_concept_checkpoint_entry(
     } and _invalid_inventory_items(
         checkpoint.get("question_task_inventory")
     ):
-        # Shape compatibility is not enough for a resumable inventory. Empty,
-        # stub, or duplicate-qid rows can never satisfy exact coverage and
-        # would otherwise fail at 98% on every retry.
+        # Shape compatibility is not enough for a resumable inventory. Empty
+        # or duplicate-qid rows can never satisfy exact coverage and would
+        # otherwise fail at 98% on every retry.
         return False
     if stage in {
         _TYPE_TAXONOMY_CHECKPOINT_STAGE,

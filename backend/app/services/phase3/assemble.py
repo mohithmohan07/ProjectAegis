@@ -402,18 +402,18 @@ def audit_case_uniqueness(
             })
 
     if expected_examples:
-        from .. import concept_validator as cv
         from .. import generation
 
         qids_by_key: dict[str, set[str]] = {}
         for example in expected_examples:
             qid = str(example.get("qid") or "").strip()
             prompt = str(example.get("prompt") or "")
+            # Every expected Example participates — the item is a task by
+            # the outline judge's verdict, and coverage is keyed by QID.
+            # The former word-count participation filter mirrored the
+            # coverage contract's filter; both are gone (Rule 1: length
+            # never decides whether the book asked something).
             if not qid or not prompt:
-                continue
-            if cv._example_too_short(prompt):
-                # Mirrors the coverage contract's participation rule: a
-                # stub prompt cannot become a valid rendered Example.
                 continue
             key = generation._inventory_coverage_key(prompt)
             if key:
