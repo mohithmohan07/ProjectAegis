@@ -62,6 +62,14 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # release for the reviewer's audit (every LA-id accounted, allotted
     # to exactly one concept) and is stripped before DB upload.
     "_aegis_analysis_allotments",
+    # The Phase 03 Pre-Learning map's row-private records (doc §4,
+    # phase3/premap.py): the captured prerequisites a pre-concept teaches,
+    # and its explicit needed-for links to the Post concepts that require
+    # it. Both ride the release for the reviewer's audit and are stripped
+    # before DB upload; their column home is step 8's related_concepts
+    # (Q5), and neither adds a house-format section.
+    "_aegis_pre_prerequisites",
+    "_aegis_needed_for",
     # Assessment grouping verdicts (step 6): private release audit carried by
     # candidates/groups and stripped before concept-row database publication.
     # The assessment renderer has no visible slots for these records.

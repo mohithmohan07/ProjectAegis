@@ -187,6 +187,69 @@ PRELEARN_CRITIC_SYSTEM = _SHARED + (
     "not block the run."
 )
 
+PREMAP_SYSTEM = _SHARED + (
+    " Task: Phase 03 — build the chapter's PRE-LEARNING concept map from "
+    "the run's captured prerequisite set. Response schema: {\"topics\": "
+    "[{\"pre_topic_id\", \"title\", \"concepts\": [{\"pre_concept_id\", "
+    "\"concept_title\", \"description\", \"achieving_mastery\", "
+    "\"keywords\", \"prerequisites\": [\"PR-0001\", …], "
+    "\"rationale\"}]}]}. pre_topic_id is the positional mint PRT-0001, "
+    "PRT-0002, … and pre_concept_id the positional mint PRC-0001, "
+    "PRC-0002, … in listing order across the whole map. A pre-learning "
+    "concept teaches a fundamental this chapter assumes the learner "
+    "already holds — never this chapter's own teaching. Group the "
+    "captured prerequisites by what they MEAN, and name every "
+    "prerequisite_id from the request exactly once across the map; one "
+    "that fits with no other is its own single-prerequisite concept and "
+    "is never dropped. How many topics and concepts the evidence "
+    "supports is entirely your judgment; never invent one to fill out a "
+    "map or balance a topic. description is the full teaching paragraph "
+    "for the fundamental itself, in original language, authored for the "
+    "level, grade, subject and board in the chapter calibration; "
+    "achieving_mastery is one sentence naming what a learner can do once "
+    "it is held, distinct for every concept. Carry no 'Description:' or "
+    "'Achieving Mastery:' label inside a field. This map has NO Types, "
+    "NO Cases and NO Examples, and no question from this chapter may "
+    "appear anywhere in it. Wrap every mathematical expression exactly "
+    "as [Katex] valid LaTeX [/Katex]."
+)
+
+PREMAP_NEEDED_FOR_SYSTEM = _SHARED + (
+    " Task: Phase 03 — give each pre-learning concept its explicit "
+    "needed-for links to the post-learning concepts of this chapter that "
+    "require it. Response schema: {\"links\": [{\"pre_concept_id\", "
+    "\"post_concept_ids\": [\"<concept id>\", …], \"rationale\"}]}. "
+    "Decide EVERY pre_concept_id in the request exactly once, citing "
+    "only post concept ids from the request. Judge from each "
+    "post-learning concept's description against the pre-learning "
+    "concept's own teaching: link it when a learner who did not hold "
+    "that fundamental could not follow the concept. Never spread links "
+    "to cover the chapter, and never link on shared subject matter "
+    "alone. An empty post_concept_ids list is a legitimate answer when "
+    "nothing here genuinely requires the fundamental — it is reviewed, "
+    "not corrected away."
+)
+
+PREMAP_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit a proposed Phase 03 Pre-Learning "
+    "decision (a concept map built from the captured prerequisite set, "
+    "or a set of needed-for links). Judge four things and state each "
+    "plainly. NECESSITY: is each pre-learning concept genuinely required "
+    "before this chapter, and does each needed-for link name a concept "
+    "that truly could not be followed without it? GRADE BOUNDARY: does "
+    "each concept sit before this chapter's own level for this grade, "
+    "subject and board — neither this chapter's own teaching promoted "
+    "into the prerequisites, nor material so far below the learner that "
+    "it is not worth teaching? NON-DUPLICATION: do any two pre-learning "
+    "concepts teach the same fundamental in different words? LEAKAGE: "
+    "does any pre-learning concept carry this chapter's own content — "
+    "its explanations, its examples, or its questions — rather than the "
+    "prior knowledge it assumes? Response schema: {\"verdict\": "
+    "\"verified|rejected\", \"confidence\", \"issues\": [..]}. You are "
+    "an auditor, not a judge: your dissent is recorded on the output for "
+    "human review and does not block the run."
+)
+
 HOST_SYSTEM = _SHARED + (
     " Task: certify one host concept per assignment unit, and place "
     "every question (qid) under its correct concept. Response schema: "
@@ -359,7 +422,30 @@ def render(payload: Mapping[str, Any]) -> str:
     return json.dumps(dict(payload), ensure_ascii=False, indent=1)
 
 
-def instruction_rules_suffix(env: Mapping[str, Any]) -> str:
+# The Architect slots every pass reads. Widening this tuple would re-key
+# every stored Settle/Host/Place/Analyse/capture decision, so it is fixed;
+# a lane that needs more slots passes its own tuple instead.
+DEFAULT_SLOTS: tuple[tuple[str, str], ...] = (
+    ("Subject topology guidance", "subject_topology_guidance"),
+    ("Grade-band vocabulary", "grade_band_vocabulary"),
+)
+
+# The Pre-Learning lane's slots (owner steer, 17 Aug 2026, point 2): a
+# prerequisite concept must fit the chapter's level, grade, subject AND
+# board, so the board/publication slot the Architect already authors is
+# read there too. Calibration stays evidence the model reasons over — a
+# per-grade or per-board branch in code would be Rule 1's forbidden
+# judgment wearing a curriculum hat.
+PRE_LEARNING_SLOTS: tuple[tuple[str, str], ...] = DEFAULT_SLOTS + (
+    ("Board and publication conventions", "board_publication_conventions"),
+)
+
+
+def instruction_rules_suffix(
+    env: Mapping[str, Any],
+    *,
+    slots: tuple[tuple[str, str], ...] = DEFAULT_SLOTS,
+) -> str:
     """The Architect's run-instruction texts, appended to payload rules.
 
     Settle and Host read the ``subject_topology_guidance`` and
@@ -367,23 +453,21 @@ def instruction_rules_suffix(env: Mapping[str, Any]) -> str:
     metadata (docs/aegis-restructure.md §8.1) — no extra parameters are
     threaded through the passes. Empty slots return an empty suffix, so
     payloads (and therefore decision keys) are unchanged when no
-    instructions were authored.
+    instructions were authored. ``slots`` defaults to exactly the two
+    every existing pass reads, so no existing payload moves.
     """
 
     metadata = env.get("metadata") if isinstance(env, Mapping) else None
-    slots = (
+    authored = (
         metadata.get("instruction_slots")
         if isinstance(metadata, Mapping)
         else None
     )
-    if not isinstance(slots, Mapping):
+    if not isinstance(authored, Mapping):
         return ""
     parts: list[str] = []
-    for label, key in (
-        ("Subject topology guidance", "subject_topology_guidance"),
-        ("Grade-band vocabulary", "grade_band_vocabulary"),
-    ):
-        text = " ".join(str(slots.get(key) or "").split())
+    for label, key in slots:
+        text = " ".join(str(authored.get(key) or "").split())
         if text:
             parts.append(f"{label}: {text}")
     if not parts:

@@ -24,6 +24,7 @@ from . import kernel
 from . import place as place_mod
 from . import polish as polish_mod
 from . import prelearn as prelearn_mod
+from . import premap as premap_mod
 from . import settle as settle_mod
 
 
@@ -140,6 +141,31 @@ def _snapshot_prelearn(
         pass  # snapshotting is best-effort; the store already has decisions
 
 
+def _snapshot_premap(
+    pre_map: Mapping[str, Any],
+    store_dir: str | Path | None,
+) -> None:
+    """Persist the Phase 03 Pre-Learning concept map (doc §4, Q3).
+
+    Written beside the decision store so the built Pre rows, their
+    needed-for links, and their review flags survive the run for the
+    later deposit/release slice and the diagnostics export.
+    """
+
+    if not store_dir:
+        return
+    import json
+
+    try:
+        path = Path(store_dir).parent / "source.phase3-prelearn-map.json"
+        path.write_text(
+            json.dumps(dict(pre_map), ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # snapshotting is best-effort; the store already has decisions
+
+
 def run(
     env: Mapping[str, Any],
     *,
@@ -150,16 +176,21 @@ def run(
 
     ``providers`` is test-only injection ({"topology", "grounding",
     "analysis", "host", "place", "analyse", "analyse_allot", "prelearn",
-    "prelearn_merge", "critic", "fixer"} — "analysis" is Settle's
-    content-authoring provider, "analyse" the Q1 chapter-inventory pass,
-    "prelearn" the Phase 03 per-stage pre-requisite capture); production
-    omits it and the passes use their live API adapters — including the
-    live Fixer (Q13) — failing closed if no API is live.
+    "prelearn_merge", "premap", "premap_links", "critic", "fixer"} —
+    "analysis" is Settle's content-authoring provider, "analyse" the Q1
+    chapter-inventory pass, "prelearn" the Phase 03 per-stage
+    pre-requisite capture, "premap" the Pre-Learning map build);
+    production omits it and the passes use their live API adapters —
+    including the live Fixer (Q13) — failing closed if no API is live.
 
     The Phase 03 capture (doc §4, Q3) runs alongside the passes: one
     decision at each stage boundary over THAT stage's own evidence, then
-    one merge. It rides out on the ``prerequisites`` key; ``records``
-    is untouched by it.
+    one merge. It rides out on the ``prerequisites`` key, and the Pre map
+    built from it on ``pre_map``; ``records`` is untouched by both. A Pre
+    map that fails the no-extraction guard is refused and recorded on
+    ``pre_map["refused"]`` — the finished Post map still ships, because
+    a Pre-lane fault must not discard work that is already done and paid
+    for (see the call site).
     """
 
     from .. import progress
@@ -302,6 +333,68 @@ def run(
     )
 
     rows = assembled["rows"]
+    # Phase 03 (doc §4): the consolidated capture becomes the complete
+    # Pre-Learning concept map. It runs LAST because its needed-for links
+    # read the finished Post Descriptions to link TO them — the map
+    # itself is built from the capture and its source evidence, never
+    # from the Post conclusions (the retired derive-from-existing flow,
+    # Q3). The Post rows are handed over read-only.
+    progress.step(
+        "Phase 3 — Pre-Learning: building the Phase 03 concept map",
+        value=0.97,
+    )
+    try:
+        pre_map = premap_mod.build(
+            env,
+            prerequisites,
+            rows,
+            provider=injected.get("premap"),
+            links_provider=injected.get("premap_links"),
+            critic=injected.get("critic"),
+            store=store,
+            fixer=injected.get("fixer"),
+        )
+    except premap_mod.PreExtractionError as error:
+        # Recorded as a deliberate decision, not left as an omission.
+        #
+        # The no-extraction guard fails closed on the ARTEFACT — a Pre
+        # row carrying a source question's identity must never ship, and
+        # ``premap.build`` refuses it. But by this line the Post map is
+        # finished and sealed: Settle, Host, Place, Analyse, Polish and
+        # Assemble have all completed and been paid for. Letting the
+        # refusal propagate would discard every one of those rows, and
+        # discard them PERMANENTLY — the offending decision is stored
+        # content-addressed, so the replay reproduces the refusal at zero
+        # spend with no route out. CLAUDE.md is explicit in the other
+        # direction: "finished work always ships", and a run may be
+        # stopped only at the pre-spend pauses or on genuine
+        # impossibility, neither of which this is.
+        #
+        # So the Pre map is refused and the refusal is recorded — on the
+        # returned map, in the snapshot, and in the run log — while the
+        # finished Post map ships. Refusing loudly is the fail-closed
+        # behaviour the steer asks for; taking the chapter down with it
+        # is not. A provider that dies here still raises, exactly as it
+        # does in every other pass (CLAUDE.md's "provider down" carve-out
+        # covers that, and nothing is finished-and-discarded by it
+        # that would not also be lost by a Post-lane provider failure).
+        pre_map = {
+            "rows": [],
+            "topics": [],
+            "needed_for": {},
+            "review_flags": {},
+            "decision_flags": {},
+            "validation": [],
+            "refused": str(error),
+        }
+        progress.log(
+            "Pre-Learning map REFUSED and not shipped: " + str(error)
+            + " The chapter's finished Post-Learning map is unaffected "
+            "and ships; the Pre map must be rebuilt once the leak is "
+            "corrected.",
+            level="error",
+        )
+    _snapshot_premap(pre_map, store_dir)
     flagged = sum(1 for row in rows if row.get("review_flags"))
     return {
         "records": rows,
@@ -310,6 +403,7 @@ def run(
         "new_concepts": hosts["new_concepts"],
         "analysis": analysis,
         "prerequisites": prerequisites,
+        "pre_map": pre_map,
         "coverage": assembled["coverage"],
         "summary": {
             "row_count": len(rows),

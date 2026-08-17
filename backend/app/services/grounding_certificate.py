@@ -48,12 +48,38 @@ FINAL_CERTIFICATE_FIELD = "final_grounding_certificate"
 PLACEMENT_CONTRACT_FIELD = "_placement_contract"
 TYPE_CASE_HOST_MANIFEST_FIELD = "_type_case_qid_host_placement_manifest"
 
+# The Pre-Learning lane's grounding contract (docs/aegis-restructure.md §4
+# Phase 03, step-7 spec T4). A pre-learning concept teaches what the
+# chapter ASSUMES, so it has no current-chapter source block by
+# definition — and it must not borrow the chapter's own introduction or
+# review blocks either (the doc's Sorrieu passage: a chapter opening with
+# a scene from later in the plot is not pre-learning, and treating it as
+# such would lose it). Rows on this contract are excluded from the
+# current-chapter block seal and from nothing else.
+PRELEARN_GROUNDING_CONTRACT = "derived-from-prerequisite-capture"
+
 VERIFIED_GROUNDING_CONTRACTS = frozenset({
     "api-verified-source-block-ids",
     "api-verified-boundary-aware-source-block-ids",
     "api-created-missing-type-host",
     "derived-from-verified-topic-concepts",
+    PRELEARN_GROUNDING_CONTRACT,
 })
+
+
+def is_prelearn_grounded(record: Mapping[str, Any]) -> bool:
+    """Whether this row is grounded on the Phase 03 prerequisite capture.
+
+    The ONLY predicate the block-seal exclusion is allowed to use. It is
+    marker accounting over a contract value this pipeline mints — never a
+    blanket "skip validation for Pre".
+    """
+
+    return (
+        str(record.get("_source_grounding_contract") or "").strip()
+        == PRELEARN_GROUNDING_CONTRACT
+    )
+
 
 _MASTERY_TAIL_RE = re.compile(
     r"(?:\n|\s)+Achieving\s+Mastery\s*:\s*.*$",
@@ -1589,7 +1615,17 @@ def seal_records(
             # aliases and object key order must not create a second digest.
             record[PLACEMENT_CONTRACT_FIELD] = verified_placement
         block_ids = _block_ids(record)
-        if not block_ids:
+        prelearn = is_prelearn_grounded(record)
+        if prelearn and block_ids:
+            # The exclusion is two-sided: a row contracted to the Phase 03
+            # prerequisite capture is grounded on what the chapter assumes,
+            # so a current-chapter block id on it is a defect, not a bonus.
+            raise GroundingCertificateError(
+                f"grounding certificate row {index} is grounded on the "
+                "pre-requisite capture but cites current-chapter source "
+                "block(s): " + ",".join(block_ids)
+            )
+        if not block_ids and not prelearn:
             raise GroundingCertificateError(
                 f"grounding certificate row {index} has no source blocks"
             )
@@ -1657,7 +1693,8 @@ def verify_row(record: Mapping[str, Any], *, row_index: int) -> None:
         )
     current_block_ids = _block_ids(record)
     attested_block_ids = _attested_block_ids(record)
-    if not attested_block_ids:
+    prelearn = is_prelearn_grounded(record)
+    if not attested_block_ids and not prelearn:
         raise GroundingCertificateError(
             f"grounding certificate {concept_id} lost its attested evidence "
             "manifest"
@@ -1669,9 +1706,17 @@ def verify_row(record: Mapping[str, Any], *, row_index: int) -> None:
     )
     if evidence_change:
         raise GroundingCertificateError(evidence_change)
-    if not current_block_ids:
+    if not current_block_ids and not prelearn:
         raise GroundingCertificateError(
             f"grounding certificate {concept_id} lost its evidence set"
+        )
+    if prelearn and (current_block_ids or attested_block_ids):
+        # Same two-sided exclusion as the seal: a pre-learning row that
+        # acquired a current-chapter block id after sealing is a defect.
+        raise GroundingCertificateError(
+            f"grounding certificate {concept_id} is grounded on the "
+            "pre-requisite capture but carries current-chapter source "
+            "block(s)"
         )
     contract = str(record.get("_source_grounding_contract") or "").strip()
     if contract not in VERIFIED_GROUNDING_CONTRACTS:
