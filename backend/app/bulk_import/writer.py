@@ -154,6 +154,19 @@ def question_placement_key(label: str, group: models.Group) -> tuple:
             group.group_key or group.group_name)
 
 
+def visible_question_placement_key(
+    label: str, group: models.Group,
+) -> tuple:
+    """Legacy workbook identity when no internal-key column is available.
+
+    The canonical workbook has only Q12's friendly ``group_name`` slot.  The
+    legacy Build Assessments append lane therefore needs this read-back alias
+    after its internal ``group_key`` and visible name are separated.  MES
+    releases keep using their snapshot ledger and never depend on this alias.
+    """
+    return (*question_placement_key(label, group)[:-1], group.group_name)
+
+
 def concept_placement_key(concept: models.Concept, topic: models.Topic) -> tuple:
     """Normalized identity + ancestor path for one concept placement.
 
@@ -369,11 +382,7 @@ _HUB_PREFIX_RE = re.compile(
 
 def _api_question_placement_active() -> bool:
     """Whether the rewritten Phase 3's routing rules own question placement."""
-    try:
-        from app.services.phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive import ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def _validate_concepts_workbook_bytes(
@@ -385,19 +394,7 @@ def _validate_concepts_workbook_bytes(
 ) -> None:
     """Read the serialized XLSX back and enforce final delivery invariants."""
     expected: dict[tuple[str, str, str, str], dict[str, str]] = {}
-    primary_titles_by_topic: dict[
-        tuple[str, str, str], list[str]
-    ] = defaultdict(list)
     for concept in concepts:
-        primary_key = (
-            normalize_question_text(concept.topic.chapter.chapter_title),
-            normalize_question_text(
-                strip_topic_title(concept.topic.topic_title)
-                or concept.topic.topic_title
-            ),
-            normalize_question_text(concept.topic.pre_post_learning),
-        )
-        primary_titles_by_topic[primary_key].append(concept.concept_title)
         for topic in _concept_placements(concept):
             key = (
                 normalize_question_text(topic.chapter.chapter_title),
@@ -531,21 +528,13 @@ def _validate_concepts_workbook_bytes(
                 issues.append(
                     f"{topic_key[1]}: expected one culmination row")
                 continue
-            culmination_title, recap = culminations[0]
+            culmination_title, _details = culminations[0]
             if len(culmination_title) > 120:
                 issues.append(
                     f"{topic_key[1]}: culmination title exceeds 120 chars")
-            recap_key = normalize_question_text(recap)
-            omitted = [
-                title
-                for title in primary_titles_by_topic.get(topic_key, ())
-                if not title.casefold().startswith("culmination")
-                if normalize_question_text(title) not in recap_key
-            ]
-            if omitted:
-                issues.append(
-                    f"{topic_key[1]}: culmination recap omits "
-                    + ", ".join(omitted))
+            # The culmination Description is the model-authored consolidation
+            # paragraph; the retired "Recap of <every title>" composition is
+            # no longer a read-back contract.
 
         if issues:
             raise ConceptWorkbookValidationError(
@@ -1360,12 +1349,19 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
     for q in _questions(db, question_ids):
         for n, group in enumerate(_question_placements(q)):
             key = question_placement_key(q.question_label, group)
-            if q.question_label and key in index.q_placements:
+            existing_key = key
+            if (
+                q.origin == "concept_mapping"
+                and key not in index.q_placements
+            ):
+                existing_key = visible_question_placement_key(
+                    q.question_label, group)
+            if q.question_label and existing_key in index.q_placements:
                 appended["skipped"] += 1
                 # Existing row: refresh its question_source in place so a
                 # duplicate question arriving from another book accumulates
                 # sources instead of duplicating the row.
-                loc = index.q_rows.get(key)
+                loc = index.q_rows.get(existing_key)
                 if loc and q.question_source:
                     sheet_name, row_i = loc
                     col = index.sheet_meta[sheet_name]["q_src_col"]

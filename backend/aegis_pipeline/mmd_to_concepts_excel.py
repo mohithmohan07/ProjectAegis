@@ -679,7 +679,9 @@ def get_system_prompt(subject: str) -> str:
             "Type 03: ... // Misconception: ...\n\n"
 
             "QUALITY RULES:\n"
-            "- Produce 40–60 concepts (excluding culmination rows).\n"
+            "- Let the chapter's own teaching structure decide how many "
+            "concepts there are — there is no quota (excluding culmination "
+            "rows).\n"
             "- No duplicates or near-duplicates: if the same concept appears in both theory and exercises, output it ONCE with the more comprehensive definition.\n"
             "- No vague filler like 'Introduction', 'Misc', 'Basics'.\n"
             "- Prefer small, testable, taggable concepts. Segregate topics by chapter flow; one culmination at the end of each topic.\n"
@@ -748,7 +750,9 @@ def get_system_prompt(subject: str) -> str:
             "Type 03: ... // Misconception: ...\n\n"
 
             "QUALITY RULES:\n"
-            "- Produce 40–60 concepts (excluding culmination rows).\n"
+            "- Let the chapter's own teaching structure decide how many "
+            "concepts there are — there is no quota (excluding culmination "
+            "rows).\n"
             "- No duplicates or near-duplicates: same concept in theory and exercises → output ONCE.\n"
             "- No vague filler like 'Introduction', 'Misc', 'Basics'.\n"
             "- Prefer small, testable, taggable concepts. Segregate topics by chapter flow; one culmination at the end of each topic.\n"

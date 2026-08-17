@@ -912,6 +912,57 @@ def test_verified_pdf_missing_parent_heading_is_rendered_in_source_order():
     assert semantic.index(parent) < semantic.index(child)
 
 
+def test_dropped_vision_heading_evidence_is_recorded_never_silent():
+    """Sub-floor or ambiguous page evidence for a missing numbered parent is
+    still not emitted as a virtual heading — but the drop is recorded as an
+    advisory graph issue instead of vanishing silently."""
+    source = (DATA / "RNE.mmd").read_text(encoding="utf-8")
+    section_two = "\\section*{2 The Making of Nationalism in Europe}\n\n"
+    corrupted = source.replace(section_two, "", 1)
+    canonical = phase2.compile_phase2_source(
+        corrupted,
+        source_filename="RNE.pdf",
+        consumer_module="build_concepts",
+    ).canonical
+    graph, report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=corrupted,
+        metadata={
+            "subject": "History",
+            "chapter_title": "The Rise of Nationalism in Europe",
+            "board": "CBSE",
+        },
+        page_bundle={
+            "schema_version": "1.1.0",
+            "pages": [{
+                "page_id": "PAGE-0006",
+                "page_number": 6,
+                "blocks": [{
+                    "reading_order": 1,
+                    "kind": "heading",
+                    "text": "2 The Making of Nationalism in Europe",
+                    "heading_level": 1,
+                    # Below the source-critical extraction floor.
+                    "confidence": 0.5,
+                }],
+            }],
+        },
+    )
+
+    assert "The Making of Nationalism in Europe" not in {
+        row["title"] for row in graph["topics"]
+    }
+    dropped = [
+        row for row in graph["issues"]
+        if row.get("code") == "vision_heading_evidence_unresolved"
+    ]
+    assert len(dropped) == 1
+    assert dropped[0]["severity"] == "warning"
+    assert "2" in dropped[0]["message"]
+    assert "confidence floor" in dropped[0]["message"]
+    assert dropped[0] in report["issues"]
+
+
 def test_arithmetic_progressions_uses_pedagogical_topics_not_tex_layout():
     _source, canonical, graph, _report, semantic = _compile_fixture(
         "jemh105 (1).mmd", subject="Mathematics",
@@ -919,11 +970,17 @@ def test_arithmetic_progressions_uses_pedagogical_topics_not_tex_layout():
     )
 
     assert graph["status"] == "ready"
+    # "Summary" stays: the offline structural fallback no longer carries a
+    # deterministic non-topic-heading vocabulary — ruling a section banner
+    # out of the topic list is the chapter-outline judge's call, and without
+    # that verdict the section ships as a topic rather than being guessed
+    # away (§3 purge, item 3).
     assert [row["title"] for row in graph["topics"]] == [
         "Introduction",
         "Arithmetic Progressions",
         "nth Term of an AP",
         "Sum of First n Terms of an AP",
+        "Summary",
     ]
     assert len(graph["tasks"]) == 65
     assert all("\\boldsymbol" not in row["title"] for row in graph["topics"])
@@ -1050,8 +1107,22 @@ def test_electricity_blocks_converter_markup_until_verified_pdf_repair():
             "issues": ["the visual ownership is still uncertain"],
         },
     )
-    assert rejected["status"] == "review_required"
+    # Under the rewrite a rejected adjudication never blocks the chapter:
+    # the block keeps its verbatim extracted text and ships flagged, and
+    # the critic's textual dissent joins the recorded issue message.
+    assert rejected["status"] == "ready"
     assert rejected.get("source_fusion_repairs") == []
+    unresolved_issue = next(
+        issue for issue in rejected["issues"]
+        if issue["code"]
+        == "converter_semantic_markup_requires_pdf_reconciliation"
+    )
+    assert unresolved_issue["severity"] == "warning"
+    assert "Recorded dissent" in unresolved_issue["message"]
+    assert (
+        "the visual ownership is still uncertain"
+        in unresolved_issue["message"]
+    )
 
 
 def test_stale_markup_review_checkpoint_re_reconciles_on_resume(
@@ -1071,7 +1142,6 @@ def test_stale_markup_review_checkpoint_re_reconciles_on_resume(
     assert graph["status"] == "review_required"
     graph["classification_mode"] = "api_classified_and_verified"
 
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
     monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
     pages = _electricity_page_bundle()
     monkeypatch.setattr(
@@ -1267,109 +1337,6 @@ def test_qid_derived_type_scope_ignores_stale_visible_topic_hint():
     assert mtype["topic_match_hint"] == "The Making of Nationalism in Europe"
 
 
-def test_full_type_allocator_uses_qid_topic_ancestry_not_stale_subtopic_hint(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    _source, _canonical, graph, _report, _semantic = _compile_fixture(
-        "RNE.mmd", subject="History",
-    )
-    records = [
-        {
-            "topic": "The French Revolution and the Idea of the Nation",
-            "parent_concept": "Nationalism",
-            "concept_title": "Opening Ideas of Nationalism",
-            "concept_details": (
-                "Description: The chapter opening introduces nationalism and the "
-                "nation-state.\nAchieving Mastery: Explain the opening ideas."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "The Making of Nationalism in Europe",
-            "parent_concept": "Liberal Nationalism",
-            "concept_title": "Economic Nationalism and Political Unification",
-            "concept_details": (
-                "Description: Economic integration could support political "
-                "unification.\nAchieving Mastery: Explain the political end of "
-                "economic reform."
-            ),
-            "keywords": "",
-        },
-        {
-            "topic": "The Making of Nationalism in Europe",
-            "parent_concept": "Liberal Nationalism",
-            "concept_title": "Culmination: The Making of Nationalism in Europe",
-            "concept_details": (
-                "Description: This row synthesises the topic.\n"
-                "Achieving Mastery: Connect its major ideas."
-            ),
-            "keywords": "",
-        },
-    ]
-    mined = {"types": [{
-        "type_id": "TYPE-0003",
-        "type_title": "Interpreting political ends of economic measures",
-        "type_description": "Infer political aims from an economic policy.",
-        "task_pattern": "Infer the political purpose of the stated measure.",
-        "topic_match_hint": "1 The Aristocracy and the New Middle Class",
-        "source_question_ids": ["QINV-0003"],
-        "case_prompts": [{
-            "case_id": "CASE-0003",
-            "case_title": "Political ends of economic measures",
-            "case_signature": "Infer political purpose from economic evidence.",
-            "placement_scope": "normal",
-            "examples": [{
-                "source_question_id": "QINV-0003",
-                "example_prompt": (
-                    "Describe the political ends that List hopes to achieve "
-                    "through economic measures."
-                ),
-            }],
-        }],
-        "is_activity": False,
-        "placement_scope": "normal",
-    }]}
-
-    calls: list[str] = []
-
-    def fake_openai_json(_system: str, user: str, **_kwargs) -> dict:
-        calls.append(user)
-        assert "The Making of Nationalism in Europe" in user
-        assert "1 The Aristocracy and the New Middle Class" not in user
-        return {
-            "assignments": [{
-                "concept_id": "CONCEPT-0002",
-                "type_ids": ["TYPE-0003::CASE-0003"],
-            }]
-        }
-
-    monkeypatch.setattr(generation, "_openai_json", fake_openai_json)
-    # This regression isolates QID ancestry in the Type allocator. Source
-    # grounding has its own provider/critic contract and must not consume the
-    # allocator-shaped fake response above.
-    monkeypatch.setattr(
-        phase3,
-        "ground_concepts",
-        lambda current, **_kwargs: current,
-    )
-    with phase3.activate(graph):
-        assigned = generation._assign_mined_types_via_api(
-            records,
-            meta={"subject": "History"},
-            mined_types=mined,
-            max_attempts=1,
-        )
-
-    assert calls
-    assert mined["types"][0]["_semantic_topic_ids"] == ["TOPIC-0002"]
-    assert mined["types"][0]["topic_match_hint"] == (
-        "The Making of Nationalism in Europe"
-    )
-    assert "Types:" not in assigned[0]["concept_details"]
-    assert "Types:" in assigned[1]["concept_details"]
-    assert "Types:" not in assigned[2]["concept_details"]
-
-
 def test_chapter_wide_inventory_topic_resolution_does_not_mutate_parent_task():
     _source, _canonical, graph, _report, _semantic = _compile_fixture(
         "RNE.mmd", subject="History",
@@ -1509,164 +1476,81 @@ def test_unknown_generated_concept_topic_uses_bounded_api_and_independent_critic
     assert resolved[0]["_semantic_topic_id"] == "TOPIC-0002"
     assert resolved[0]["topic"] == "The Making of Nationalism in Europe"
     assert resolved[0]["_semantic_topic_contract"] == "api-verified-topic-id"
+    assert not resolved[0].get("review_flags")
 
-    with pytest.raises(ValueError, match="independent verification"):
-        phase3.canonicalize_record_topics(
-            records,
-            graph,
-            provider=provider,
-            critic=lambda _payload: {
-                "verdict": "verified",
-                "confidence": 0.999,
-                "issues": ["source evidence is insufficient"],
-            },
-        )
+    # The critic is an auditor: its dissent lands as review flags on the
+    # affected rows and never blocks the verified assignment (Q10).
+    dissented = phase3.canonicalize_record_topics(
+        records,
+        graph,
+        provider=provider,
+        critic=lambda _payload: {
+            "verdict": "verified",
+            "confidence": 0.999,
+            "issues": ["source evidence is insufficient"],
+        },
+    )
+    assert dissented[0]["_semantic_topic_id"] == "TOPIC-0002"
+    assert dissented[0]["_semantic_topic_contract"] == "api-verified-topic-id"
+    assert any(
+        "source evidence is insufficient" in flag
+        for flag in dissented[0]["review_flags"]
+    )
 
 
-def test_concept_source_grounding_requires_high_confidence_and_critic():
-    _source, canonical, graph, _report, _semantic = _compile_fixture(
+def test_sub_floor_concept_topic_confidence_ships_flagged_not_blocked():
+    _source, _canonical, graph, _report, _semantic = _compile_fixture(
         "RNE.mmd", subject="History",
     )
     records = [{
-        "topic": "The Making of Nationalism in Europe",
-        "parent_concept": "Social Structure",
-        "concept_title": "Landed Aristocracy and Peasant Society",
-        "concept_details": (
-            "Description: A landed aristocracy dominated social and political life, "
-            "while most people belonged to the peasantry."
-        ),
-        "keywords": "aristocracy, peasantry",
+        "topic": "A heading phrase not present in the source",
+        "parent_concept": "Social Change",
+        "concept_title": "Aristocracy and the Emerging Middle Classes",
+        "concept_details": "Description: Landed aristocracy remained powerful.",
+        "keywords": "",
     }]
-    target_block = next(
-        row for row in graph["blocks"]
-        if row["topic_id"] == "TOPIC-0002"
-        and row["subtopic_id"] == "TOPIC-0002-SUB-001"
-        and row["kind"] == "paragraph"
-    )
 
-    def provider(payload: dict) -> dict:
-        assert payload["topic"]["topic_id"] == "TOPIC-0002"
-        return {"concepts": [{
+    def low_confidence_provider(payload: dict) -> dict:
+        return {"assignments": [{
             "concept_id": payload["concepts"][0]["concept_id"],
-            "source_block_ids": [target_block["block_id"]],
-            "confidence": 0.999,
-            "reason": "The selected paragraph explicitly describes both classes.",
-        }]}
-
-    def critic(payload: dict) -> dict:
-        assert payload["proposed_grounding"][0]["source_block_ids"] == [
-            target_block["block_id"]
-        ]
-        return {"verdict": "verified", "confidence": 0.999, "issues": []}
-
-    grounded = phase3.ground_concepts(
-        records,
-        graph=graph,
-        canonical=canonical,
-        provider=provider,
-        critic=critic,
-    )
-
-    assert grounded[0]["_source_block_ids"] == [target_block["block_id"]]
-    assert grounded[0]["_semantic_subtopic_ids"] == ["TOPIC-0002-SUB-001"]
-    assert grounded[0]["_source_grounding_contract"] == (
-        "api-verified-source-block-ids"
-    )
-
-    uncertain_calls = 0
-
-    def uncertain_provider(payload: dict) -> dict:
-        nonlocal uncertain_calls
-        uncertain_calls += 1
-        return {"concepts": [{
-            "concept_id": payload["concepts"][0]["concept_id"],
-            "source_block_ids": [target_block["block_id"]],
+            "topic_id": "TOPIC-0002",
             "confidence": 0.5,
-            "reason": "uncertain",
+            "reason": "uncertain but this is the only supported topic",
         }]}
 
-    with pytest.raises(
-        phase3.semantic_recovery.ProviderResponseContractError
-    ) as failed:
-        phase3.ground_concepts(
-            records,
-            graph=graph,
-            canonical=canonical,
-            provider=uncertain_provider,
-            critic=critic,
-        )
-    assert uncertain_calls == 3
-    assert "confidence 0.500 is below 0.920" in str(failed.value)
-
-
-def test_missing_type_host_preflight_adds_only_source_grounded_topic_two_host():
-    _source, canonical, graph, _report, _semantic = _compile_fixture(
-        "RNE.mmd", subject="History",
-    )
-    records = [
-        {
-            "topic": topic["title"],
-            "parent_concept": "Core Ideas",
-            "concept_title": f"Concept for {topic['title']}",
-            "concept_details": "Description: Existing source-grounded concept.\nAchieving Mastery: Explain it.",
-            "keywords": "",
-        }
-        for topic in graph["topics"]
-        if topic["topic_id"] != "TOPIC-0002"
-    ]
-    mined = {"types": [{
-        "type_id": "TYPE-0003",
-        "type_title": "Interpreting political ends of economic measures",
-        "type_description": "Infer political aims from the stated economic policy.",
-        "topic_match_hint": "1 The Aristocracy and the New Middle Class",
-        "source_question_ids": ["QINV-0003"],
-        "case_prompts": [],
-        "is_activity": False,
-    }]}
-
-    def provider(payload: dict) -> dict:
-        assert payload["topic"]["topic_id"] == "TOPIC-0002"
-        assert len(payload["assignment_units"]) == 1
-        assert payload["source_blocks"]
-        return {"concepts": [{
-            "concept_title": "Economic Nationalism and Political Unification",
-            "parent_concept": "Liberal Nationalism",
-            "description": (
-                "Economic integration could be used to bind separate German states "
-                "into a politically unified nation."
-            ),
-            "achieving_mastery": (
-                "Explain how the Zollverein connected economic reform with national unity."
-            ),
-            "keywords": ["Zollverein", "economic nationalism"],
-            "source_block_ids": [payload["source_blocks"][0]["block_id"]],
-            "assignment_unit_ids": [
-                payload["assignment_units"][0]["assignment_unit_id"]
-            ],
-        }]}
-
-    def critic(payload: dict) -> dict:
-        assert payload["proposed_concepts"][0]["_semantic_topic_id"] == "TOPIC-0002"
-        return {"verdict": "verified", "confidence": 0.999, "issues": []}
-
-    repaired = phase3.ensure_type_scope_hosts(
+    resolved = phase3.canonicalize_record_topics(
         records,
-        mined_types=mined,
-        graph=graph,
-        canonical=canonical,
-        provider=provider,
-        critic=critic,
+        graph,
+        provider=low_confidence_provider,
+        critic=lambda _payload: {
+            "verdict": "verified", "confidence": 0.999, "issues": [],
+        },
     )
-    added = [
-        row for row in repaired
-        if row.get("_source_grounding_contract") == "api-created-missing-type-host"
-    ]
 
-    assert len(added) == 1
-    assert added[0]["_semantic_topic_id"] == "TOPIC-0002"
-    assert added[0]["_source_block_ids"]
-    assert added[0]["_phase3_assignment_unit_ids"] == ["TYPE-0003"]
-    assert [row["_semantic_topic_id"] for row in repaired].index("TOPIC-0002") == 1
+    # The assignment stands (never silently lost, never blocked) and the
+    # sub-floor confidence is a review flag, not a gate.
+    assert resolved[0]["_semantic_topic_id"] == "TOPIC-0002"
+    assert resolved[0]["_semantic_topic_confidence"] == 0.5
+    assert any(
+        "confidence 0.500" in flag and "flagged for review" in flag
+        for flag in resolved[0]["review_flags"]
+    )
+
+    # The bounded ID contract stays mechanical and fail-closed.
+    with pytest.raises(ValueError, match="bounded ID contract"):
+        phase3.canonicalize_record_topics(
+            records,
+            graph,
+            provider=lambda payload: {"assignments": [{
+                "concept_id": payload["concepts"][0]["concept_id"],
+                "topic_id": "TOPIC-DOES-NOT-EXIST",
+                "confidence": 0.999,
+                "reason": "invented topic",
+            }]},
+            critic=lambda _payload: {
+                "verdict": "verified", "confidence": 0.999, "issues": [],
+            },
+        )
 
 
 def test_graph_validation_rejects_unknown_ids_order_drift_and_override_tampering():
@@ -1712,7 +1596,7 @@ def test_graph_validation_rejects_unknown_ids_order_drift_and_override_tampering
     }
 
 
-def test_hierarchy_critic_cannot_request_unbounded_repair():
+def test_hierarchy_critic_dissent_flags_and_never_blocks():
     classifications = {
         "SEC-0001": {
             "section_id": "SEC-0001",
@@ -1721,24 +1605,68 @@ def test_hierarchy_critic_cannot_request_unbounded_repair():
         }
     }
 
-    with pytest.raises(ValueError, match="requires review"):
+    # A repair request without a bounded repair is dissent: the hierarchy
+    # stands and the dissent is recorded as an advisory issue (Q10).
+    repaired, advisory = phase3._apply_critic_repairs(
+        classifications,
+        {
+            "verdict": "repair_required",
+            "confidence": 0.999,
+            "repairs": [],
+            "issues": [],
+        },
+    )
+    assert repaired == classifications
+    assert any(
+        row["code"] == "hierarchy_critic_dissent"
+        and row["severity"] == "warning"
+        for row in advisory
+    )
+
+    # Sub-floor critic confidence is a review flag, never a gate.
+    repaired, advisory = phase3._apply_critic_repairs(
+        classifications,
+        {
+            "verdict": "verified",
+            "confidence": 0.5,
+            "repairs": [],
+            "issues": [],
+        },
+    )
+    assert repaired == classifications
+    assert any(
+        row["code"] == "hierarchy_critic_low_confidence"
+        and "0.500" in row["message"]
+        for row in advisory
+    )
+
+    # A fully verified review leaves no advisory issues.
+    repaired, advisory = phase3._apply_critic_repairs(
+        classifications,
+        {
+            "verdict": "verified",
+            "confidence": 0.999,
+            "repairs": [],
+            "issues": [],
+        },
+    )
+    assert repaired == classifications
+    assert advisory == []
+
+    # Naming a section that does not exist stays a mechanical failure.
+    with pytest.raises(ValueError, match="invented a section ID"):
         phase3._apply_critic_repairs(
             classifications,
             {
                 "verdict": "repair_required",
                 "confidence": 0.999,
-                "repairs": [],
-                "issues": [],
-            },
-        )
-    with pytest.raises(ValueError, match="confidence"):
-        phase3._apply_critic_repairs(
-            classifications,
-            {
-                "verdict": "verified",
-                "confidence": 0.5,
-                "repairs": [],
-                "issues": [],
+                "repairs": [{
+                    "section_id": "SEC-MISSING",
+                    "role": "subtopic",
+                    "parent_section_id": "",
+                    "reason": "bad",
+                }],
+                "issues": ["misplaced"],
             },
         )
 

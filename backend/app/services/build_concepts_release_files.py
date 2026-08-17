@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 
 from .. import models
 from . import concept_run_report
+from . import containers
 from . import coverage_ledger
 from . import uploads
 from .build_concepts_release import (
@@ -49,8 +50,6 @@ def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
     untouched.
     """
     from ..bulk_import import writer as bi_writer
-    from . import build_concepts
-
     payload = release_payload(job)
     if payload is None:
         raise ValueError("this upload has no staged release")
@@ -59,87 +58,8 @@ def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
     if bool(summary.get("database_uploaded")) and result_ids:
         return bi_writer.write_concepts_workbook(db, result_ids)
 
-    source_chapter = db.get(
-        models.Chapter, int(payload.get("target_chapter_id") or 0)
-    )
-    if source_chapter is None:
-        raise ValueError("the release target chapter no longer exists")
-    records = [
-        row for row in payload.get("records") or []
-        if isinstance(row, Mapping)
-        and str(row.get("topic") or "").strip()
-        and str(
-            row.get("concept_title") or row.get("concept") or ""
-        ).strip()
-    ]
-    if not records:
-        raise ValueError("the release contains no concept rows to export")
-
-    pre_post = "Pre" if job.learning_kind == "pre" else "Post"
-    chapter = models.Chapter(
-        chapter_code=source_chapter.chapter_code,
-        board=source_chapter.board,
-        grade=source_chapter.grade,
-        subject=source_chapter.subject,
-        unit=source_chapter.unit,
-        chapter_title=source_chapter.chapter_title,
-        chapter_display_name=source_chapter.chapter_display_name,
-        # Never inherit a possibly-stale stored description: the authored
-        # release metadata or a fresh deterministic summary over THESE rows
-        # fills it below. The stored duration is kept — a finalized
-        # duration wins over authored metadata by design.
-        chapter_description="",
-        chapter_duration=source_chapter.chapter_duration,
-        pre_topics="",
-        post_topics="",
-    )
-    chapter.id = -1
-    topics_by_key: dict[str, models.Topic] = {}
-    concepts: list[models.Concept] = []
-    for index, record in enumerate(records, start=1):
-        topic_title = str(record.get("topic") or "").strip()
-        key = topic_title.casefold()
-        topic = topics_by_key.get(key)
-        if topic is None:
-            topic = models.Topic(
-                topic_title=topic_title,
-                pre_post_learning=pre_post,
-            )
-            topic.id = -(len(topics_by_key) + 1)
-            topic.source_order = len(topics_by_key) + 1
-            topic.chapter = chapter
-            # Relationships only assign foreign keys at flush; the export
-            # scope groups topics by chapter_id, so set it explicitly.
-            topic.chapter_id = chapter.id
-            topics_by_key[key] = topic
-        concept = models.Concept(
-            concept_title=str(
-                record.get("concept_title") or record.get("concept") or ""
-            ),
-            concept_display_name=str(
-                record.get("concept_title") or record.get("concept") or ""
-            ),
-            parent_concept=str(record.get("parent_concept") or ""),
-            concept_details=str(
-                record.get("concept_details")
-                or record.get("concept_description")
-                or ""
-            ),
-            keywords=str(record.get("keywords") or ""),
-            sources=str(job.source_book or job.filename or ""),
-        )
-        concept.id = -index
-        concept.source_order = index
-        concept.topic = topic
-        concepts.append(concept)
-    # The same summary logic the database upload runs, on the transient
-    # copy: authored chapter/topic metadata from the release payload, with
-    # deterministic fallbacks for anything missing.
-    build_concepts._sync_chapter_topic_summary(
-        chapter,
-        dict(payload.get("chapter_meta") or {}),
-        active_concept_ids=None,
-        pre_post=pre_post,
+    chapter, concepts, _records = transient_release_hierarchy(
+        db, job, payload=payload
     )
 
     wb = bi_writer._new_workbook()
@@ -165,6 +85,126 @@ def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
     buffer = io.BytesIO()
     wb.save(buffer)
     return buffer.getvalue()
+
+
+def transient_release_hierarchy(
+    db,
+    job: models.UploadJob,
+    *,
+    payload: Mapping[str, Any] | None = None,
+) -> tuple[models.Chapter, list[models.Concept], list[dict[str, Any]]]:
+    """Build the one transient hierarchy shared by Outputs 01 and 02.
+
+    The staged release records are the concept authority.  The target chapter
+    supplies only directory metadata; no persisted Topic or Concept row is
+    read.  Keeping this construction in one place prevents the Concept and
+    Master projections from drifting before the explicit database upload.
+    """
+
+    from . import build_concepts
+
+    release = dict(payload) if isinstance(payload, Mapping) else release_payload(job)
+    if release is None:
+        raise ValueError("this upload has no staged release")
+    source_chapter = db.get(
+        models.Chapter, int(release.get("target_chapter_id") or 0)
+    )
+    if source_chapter is None:
+        raise ValueError("the release target chapter no longer exists")
+    directory = release.get("directory_metadata")
+    if not isinstance(directory, Mapping) or not directory:
+        raise ValueError(
+            "the staged release has no frozen chapter directory metadata"
+        )
+    raw_records = release.get("records") or []
+    if not isinstance(raw_records, list):
+        raise ValueError("the staged release concept records are not an array")
+    records: list[dict[str, Any]] = []
+    for position, row in enumerate(raw_records, start=1):
+        if not isinstance(row, Mapping):
+            raise ValueError(
+                f"staged concept row {position} is not an object"
+            )
+        if not str(row.get("topic") or "").strip():
+            raise ValueError(f"staged concept row {position} has no topic")
+        if not str(
+            row.get("concept_title") or row.get("concept") or ""
+        ).strip():
+            raise ValueError(
+                f"staged concept row {position} has no concept title"
+            )
+        records.append(dict(row))
+    if not records:
+        raise ValueError("the release contains no concept rows to export")
+
+    pre_post = (
+        "Pre"
+        if str(release.get("learning_kind") or "").strip().lower() == "pre"
+        else "Post"
+    )
+    chapter = models.Chapter(
+        chapter_code=str(directory.get("chapter_code") or ""),
+        board=str(directory.get("board") or ""),
+        grade=str(directory.get("grade") or ""),
+        subject=str(directory.get("subject") or ""),
+        unit=str(directory.get("unit") or ""),
+        chapter_title=str(directory.get("chapter_title") or ""),
+        chapter_display_name=str(
+            directory.get("chapter_display_name") or ""
+        ),
+        chapter_description="",
+        chapter_duration=str(directory.get("chapter_duration") or ""),
+        pre_topics="",
+        post_topics="",
+    )
+    chapter.id = -1
+    topics_by_key: dict[str, models.Topic] = {}
+    concepts: list[models.Concept] = []
+    for index, record in enumerate(records, start=1):
+        topic_title = str(record.get("topic") or "").strip()
+        key = topic_title.casefold()
+        topic = topics_by_key.get(key)
+        if topic is None:
+            topic = models.Topic(
+                topic_title=topic_title,
+                pre_post_learning=pre_post,
+            )
+            topic.id = -(len(topics_by_key) + 1)
+            topic.source_order = len(topics_by_key) + 1
+            topic.chapter = chapter
+            topic.chapter_id = chapter.id
+            topics_by_key[key] = topic
+        title = str(
+            record.get("concept_title") or record.get("concept") or ""
+        )
+        concept = models.Concept(
+            concept_title=title,
+            concept_display_name=title,
+            parent_concept=str(record.get("parent_concept") or ""),
+            concept_details=str(
+                record.get("concept_details")
+                or record.get("concept_description")
+                or ""
+            ),
+            keywords=str(record.get("keywords") or ""),
+            sources=str(
+                release.get("source_book")
+                or release.get("filename")
+                or ""
+            ),
+        )
+        concept.id = -index
+        concept.source_order = index
+        concept.topic = topic
+        concepts.append(concept)
+
+    build_concepts._sync_chapter_topic_summary(
+        chapter,
+        dict(release.get("chapter_meta") or {}),
+        active_concept_ids=None,
+        pre_post=pre_post,
+    )
+    return chapter, concepts, records
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -364,6 +404,41 @@ def build_release_workbook(job: models.UploadJob) -> bytes:
             cell.fill = fill
             cell.alignment = Alignment(vertical="top", wrap_text=True)
 
+    refinements = payload.get("refinements")
+    if isinstance(refinements, Mapping):
+        # The Refiner's recorded diff (docs/aegis-restructure.md §8.3):
+        # every refinement beside its row identity, plus the advisory and
+        # availability flags. Present only when the release traversed the
+        # Refiner seam.
+        refined = workbook.create_sheet("Refinements")
+        _header(refined, [
+            "Kind",
+            "Concept Key",
+            "Field",
+            "Before",
+            "After",
+            "Reason / Flag",
+        ])
+        for change in refinements.get("changes") or []:
+            if not isinstance(change, Mapping):
+                continue
+            refined.append([
+                "refinement",
+                _cell_text(change.get("concept_key")),
+                change.get("field", ""),
+                change.get("before", ""),
+                change.get("after", ""),
+                change.get("reason", ""),
+            ])
+            for cell in refined[refined.max_row]:
+                cell.fill = _READY_FILL
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+        for flag in refinements.get("review_flags") or []:
+            refined.append(["flag", "", "", "", "", str(flag)])
+            for cell in refined[refined.max_row]:
+                cell.fill = _WARNING_FILL
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
     manifest = workbook.create_sheet("Release Manifest")
     _header(manifest, ["Field", "Value"])
     manifest_rows = {
@@ -378,6 +453,11 @@ def build_release_workbook(job: models.UploadJob) -> bytes:
         "Checkpoint stage": payload.get("checkpoint_stage"),
         "Checkpoint progress": payload.get("checkpoint_progress"),
         **_provenance_manifest_rows(payload),
+        **(
+            {"Refinements": str(refinements.get("summary") or "")}
+            if isinstance(refinements, Mapping)
+            else {}
+        ),
         "Summary": payload.get("summary"),
         "Database publication": (
             "uploaded" if (payload.get("summary") or {}).get("database_uploaded")
@@ -513,11 +593,31 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
                 blocks.setdefault(block_id, block)
     _index_string_block_references(blocks, payload)
 
-    run_report = concept_run_report.build_run_report(
-        payload,
-        generation_log=job.generation_log or [],
-        generation_checkpoint=job.generation_checkpoint or {},
-    )
+    # The persisted container projections and Phase 2.2 placement snapshot
+    # (when the artifact directory holds them) let the ledger account every
+    # canonical figure block and list both lanes' verbatim dropped
+    # furniture uncapped; jobs from before these artifacts existed keep the
+    # capped job-state accounting.
+    artifact_dir = _artifact_directory(job)
+    projections = containers.load_containers(artifact_dir)
+
+    def _artifact_snapshot(name: str) -> dict[str, Any] | None:
+        if artifact_dir is None:
+            return None
+        path = artifact_dir / name
+        if not path.is_file():
+            return None
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return None
+        return loaded if isinstance(loaded, dict) else None
+
+    place_snapshot = _artifact_snapshot("source.phase3-place.json")
+    # Q1: the chapter analysis inventory's recorded build + allotments
+    # (phase3/analyse.py) — lets the ledger account every LA-item.
+    analysis_snapshot = _artifact_snapshot("source.phase3-analysis.json")
+
     coverage = coverage_ledger.build_coverage_ledger(
         question_inventory=job.question_inventory or {},
         records=[
@@ -525,6 +625,15 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
             if isinstance(row, Mapping)
         ],
         chapter_reading=(job.question_inventory or {}).get("chapter_reading"),
+        container_projections=projections,
+        place_snapshot=place_snapshot,
+        analysis_snapshot=analysis_snapshot,
+    )
+    run_report = concept_run_report.build_run_report(
+        payload,
+        generation_log=job.generation_log or [],
+        generation_checkpoint=job.generation_checkpoint or {},
+        dropped_furniture=coverage.get("dropped_furniture"),
     )
 
     buffer = io.BytesIO()

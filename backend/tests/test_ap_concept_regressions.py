@@ -156,6 +156,40 @@ The nth-position rule gives a term directly.
 """
 
 
+def _fake_authored_culminations(records: list[dict]) -> list[dict]:
+    """Test stand-in for the model-authored culmination pass.
+
+    Production never synthesizes culmination rows from code any more; this
+    fixture plays the model's role by appending one authored culmination to
+    every multi-concept topic.
+    """
+    out: list[dict] = []
+    topics: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for rec in records:
+        topic = rec.get("topic", "")
+        if topic not in topics:
+            topics[topic] = []
+            order.append(topic)
+        if not g.cr.is_culmination(rec.get("concept_title", "")):
+            topics[topic].append(rec)
+    for topic in order:
+        out.extend(topics[topic])
+        if len(topics[topic]) < 2:
+            continue
+        out.append({
+            "topic": topic,
+            "parent_concept": "Culmination",
+            "concept_title": f"Culmination - {topic}",
+            "concept_details": (
+                f"Description: An authored consolidation tying {topic}'s "
+                "concepts together into one applied account."
+            ),
+            "keywords": "culmination, recap, mixed application",
+        })
+    return out
+
+
 def _row(topic: str, title: str, *, evidence: str = "") -> dict:
     return {
         "topic": topic,
@@ -165,16 +199,6 @@ def _row(topic: str, title: str, *, evidence: str = "") -> dict:
         "keywords": "arithmetic progression",
         "source_evidence": evidence,
     }
-
-
-def _row_with_types(topic: str, *type_titles: str) -> dict:
-    row = _row(topic, f"{topic} concept")
-    body = " ".join(
-        f"Type {index:02d}: {type_title} Case 01: Solve the source task."
-        for index, type_title in enumerate(type_titles, start=1)
-    )
-    row["concept_details"] = g._inject_types(row["concept_details"], body)
-    return row
 
 
 def _api_row(record: dict) -> dict:
@@ -229,6 +253,9 @@ def test_source_topic_excerpts_group_structural_sections_under_main_topic():
         "Arithmetic Progressions",
         "nth Term of an AP",
         "Sum of First n Terms of an AP",
+        # The numbered 5.5 Summary section is structure the model sees;
+        # whether its recap contributes concepts is the model's judgment.
+        "Summary",
     ]
     nth_excerpt = groups[1]["excerpt"]
     assert "HEADING PATH: Example 3" in nth_excerpt
@@ -237,8 +264,10 @@ def test_source_topic_excerpts_group_structural_sections_under_main_topic():
     assert "A sum of ₹1000 is invested" in nth_excerpt
     assert "flower bed" in nth_excerpt
     assert "Example 3" not in groups[0]["excerpt"]
-    assert all(
-        "A Note to the Reader" not in group["excerpt"] for group in groups)
+    # Editorial postscripts are no longer withheld from the model (§3 purge):
+    # the note rides in its structurally owning topic's excerpt.
+    assert any(
+        "A Note to the Reader" in group["excerpt"] for group in groups)
 
 
 def test_exact_source_evidence_places_audited_ap_concepts_semantically():
@@ -327,8 +356,11 @@ def test_exact_source_evidence_places_audited_ap_concepts_semantically():
         ),
         "Using the Sum Formula in Problems": "Sum of First n Terms of an AP",
         "Ambiguous Shared Evidence": "Model-selected Topic",
+        # The "A Note to the Reader" postscript physically follows the 5.5
+        # Summary section; with the heading vocabulary purged its text lives
+        # in the Summary excerpt, so exact evidence grounds the row there.
         "Arithmetic Mean as the Middle Term of Three Numbers in AP": (
-            "Arithmetic Progressions"
+            "Summary"
         ),
         "Anchored Method": "Anchor-authoritative Topic",
     }
@@ -399,7 +431,14 @@ def test_ap_gpt_first_inventory_backfills_missed_examples_and_exercises(
 
     assert calls["count"] > 0
     assert inventory["stats"]["worked_examples"] == 16
-    assert inventory["stats"]["exercise_questions"] == 6
+    # Backfilled list items carry the neutral parse-time kind (§3 purge);
+    # the outline/page model verdict owns the exercise split, so the
+    # deterministic stats count them as subjective items, not exercises.
+    assert inventory["stats"]["exercise_questions"] == 0
+    assert sum(
+        item["source_kind"] == "intext_question"
+        for item in inventory["items"]
+    ) == 6
     assert inventory["stats"]["total_inventory_items"] == 22
     assert all(
         item["raw_solution_or_answer"] == ""
@@ -514,6 +553,10 @@ def test_ap_method_anchors_force_skeleton_retry_and_survive(monkeypatch):
     calls = {"count": 0}
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            # The per-chunk audit is a separate advisory verdict with its own
+            # regressions; this test isolates the method-anchor retry.
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls["count"] += 1
         if calls["count"] == 1:
             return {"rows": [_api_row(record) for record in base]}
@@ -724,6 +767,8 @@ def test_anchor_retry_prefers_tagged_duplicate_concept_row(monkeypatch):
     calls = {"count": 0}
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls["count"] += 1
         return {"rows": [_api_row(first if calls["count"] == 1 else retry)]}
 
@@ -764,6 +809,8 @@ def test_focused_method_recovery_restores_anchor_after_broad_retry_omits_it(
     calls: list[tuple[str, str]] = []
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls.append((system, user))
         if len(calls) <= 2:
             return {"rows": [_api_row(untagged)]}
@@ -814,6 +861,8 @@ def test_focused_method_recovery_fails_clearly_after_malformed_responses(
     calls = {"count": 0}
 
     def fake_openai(system, user, **kwargs):
+        if "audit a concept-skeleton extraction" in system:
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
         calls["count"] += 1
         if calls["count"] <= 2:
             return {"rows": [_api_row(untagged)]}
@@ -878,9 +927,16 @@ def test_canonicalization_cannot_drop_an_ap_derivation_row(monkeypatch):
     )
 
 
-def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
+def test_pipeline_restores_skeleton_method_rows_before_content_passes(
     monkeypatch,
 ):
+    """Method rows dropped by canonicalization are restored pre-boundary.
+
+    The dedicated pre-81% Description pass is retired (Settle authors content
+    inside the rewritten Phase 3), so the earliest surviving content pass —
+    the method worked-example pass — must already see every restored
+    mandatory method row, and the rows must still reach the 81% boundary.
+    """
     anchors = [
         {
             "anchor_id": "METHOD-1111111111",
@@ -928,7 +984,7 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         "Deriving the General Term",
         "Deriving the Finite Sum",
     }
-    description_input_ids: set[str] = set()
+    content_pass_input_ids: set[str] = set()
 
     monkeypatch.setattr(
         g, "_method_coverage_anchors", lambda sections: anchors)
@@ -966,21 +1022,21 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         g, "_consolidate_task_grounded_fragments_via_api",
         lambda records, **kwargs: records)
 
-    def capture_and_refine_descriptions(records, **kwargs):
-        nonlocal description_input_ids
-        description_input_ids = {
+    def capture_and_refine_content(records, **kwargs):
+        nonlocal content_pass_input_ids
+        content_pass_input_ids = {
             anchor_id
             for record in records
             for anchor_id in g._method_anchor_ids(record)
         }
-        assert description_input_ids == {
+        assert content_pass_input_ids == {
             anchor["anchor_id"] for anchor in anchors
         }
         refined = []
-        for record in records:
+        for index, record in enumerate(records, start=1):
             record = dict(record)
             record["concept_details"] = (
-                f"Description: Refined before cleanup: "
+                f"Description: Refined before the boundary: "
                 f"{record['concept_title']}.\n"
                 f"Achieving Mastery: Explain {record['concept_title']} "
                 "independently. // "
@@ -990,15 +1046,15 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
                 "omit checking consecutive differences before applying the "
                 "relevant AP derivation."
             )
+            # Q1: a row carrying the analysis section models an allotted
+            # row — the assemble-stamped marker rides with it.
+            record["_aegis_analysis_allotments"] = [f"LA-{index:04d}"]
             refined.append(record)
         return refined
 
     monkeypatch.setattr(
-        g, "_refine_descriptions_via_api",
-        capture_and_refine_descriptions)
-    monkeypatch.setattr(
         g, "_ensure_method_worked_examples_via_api",
-        lambda records, **kwargs: records)
+        capture_and_refine_content)
     monkeypatch.setattr(
         g, "_ensure_mastery_lines_via_api",
         lambda records, **kwargs: records)
@@ -1010,31 +1066,15 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         lambda **kwargs: {"types": []})
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
-        lambda records, **kwargs: g._ensure_culmination_rows(records))
-    monkeypatch.setattr(
-        g, "_assign_types_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_merge_similar_concepts_via_api",
-        lambda records, **kwargs: records)
+        lambda records, **kwargs: _fake_authored_culminations(records))
     monkeypatch.setattr(
         g, "_repair_records_via_api",
         lambda records, **kwargs: records)
+    # The post-81% step is the rewritten Phase 3; this test covers only the
+    # pre-boundary restoration, so hand the boundary rows straight through.
     monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api",
-        lambda records, **kwargs: records)
-
-    original_refine = g.cr.refine_chapter
-
-    def lose_restored_rows_during_final_cleanup(records):
-        refined = original_refine(records)
-        return [
-            record for record in refined
-            if record["concept_title"] not in dropped_titles
-        ]
-
-    monkeypatch.setattr(
-        g.cr, "refine_chapter", lose_restored_rows_during_final_cleanup)
+        g, "_prepare_final_concept_content",
+        lambda out, **kwargs: out)
 
     out = g.concepts_from_mmd(
         _ap_mmd(),
@@ -1044,14 +1084,14 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
     )
 
     expected_ids = {anchor["anchor_id"] for anchor in anchors}
-    assert description_input_ids == expected_ids
+    assert content_pass_input_ids == expected_ids
     assert {
         anchor_id
         for record in out
         for anchor_id in g._method_anchor_ids(record)
     } == expected_ids
     assert all(
-        "Refined before cleanup:" in record["concept_details"]
+        "Refined before the boundary:" in record["concept_details"]
         for record in out
         if g._method_anchor_ids(record)
     )
@@ -1073,435 +1113,6 @@ def test_pipeline_restores_skeleton_method_rows_before_description_and_cleanup(
         else:
             assert topic_rows == taught
     assert g._missing_method_anchors(out, anchors) == []
-
-
-def test_final_pipeline_restores_post_description_method_snapshot(monkeypatch):
-    monkeypatch.setattr(
-        g,
-        "_openai_json",
-        lambda system, *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError(
-                "all API stages in this regression must be mocked: "
-                + system[:80]
-            )
-        ),
-    )
-    anchors = [
-        {
-            "anchor_id": "METHOD-AAAAAAAAAA",
-            "topic_hint": "nth Term of an AP",
-            "required_formulas": [],
-            "source_evidence": "alpha source derivation",
-            "evidence_terms": ["alpha", "source", "derivation"],
-        },
-        {
-            "anchor_id": "METHOD-BBBBBBBBBB",
-            "topic_hint": "nth Term of an AP",
-            "required_formulas": [],
-            "source_evidence": "beta source derivation",
-            "evidence_terms": ["beta", "source", "derivation"],
-        },
-        {
-            "anchor_id": "METHOD-CCCCCCCCCC",
-            "topic_hint": "Sum of First n Terms of an AP",
-            "required_formulas": [],
-            "source_evidence": "gamma source derivation",
-            "evidence_terms": ["gamma", "source", "derivation"],
-        },
-    ]
-    shared = _row(
-        "nth Term of an AP",
-        "Deriving the General Term",
-        evidence=(
-            "METHOD-AAAAAAAAAA | METHOD-BBBBBBBBBB | "
-            "alpha and beta source derivations"
-        ),
-    )
-    shared["concept_details"] = (
-        "Description: Build the general term from the first term and common "
-        "difference.\n"
-        "Achieving Mastery: Derive the general term independently. // "
-        "Misconception/ Error Analysis: Misconceptions: Students may believe "
-        "the term number is the term value.; Error Analysis: Students may "
-        "substitute the term number for n without first subtracting one in the "
-        "factor n-1."
-    )
-    dropped = _row(
-        "Sum of First n Terms of an AP",
-        "Deriving the Finite Sum",
-        evidence="METHOD-CCCCCCCCCC | gamma source derivation",
-    )
-    dropped["concept_details"] = (
-        "Description: Pair the forward and reversed finite progressions to "
-        "derive their sum.\n"
-        "Achieving Mastery: Derive the finite-sum rule independently. // "
-        "Misconception/ Error Analysis: Misconceptions: Students may believe "
-        "paired terms can have different totals in the forward and reversed "
-        "arithmetic progression.; Error Analysis: Students may pair terms "
-        "without keeping the number of terms fixed."
-    )
-
-    monkeypatch.setattr(
-        g, "_method_coverage_anchors", lambda sections: anchors)
-    monkeypatch.setattr(
-        g, "_extract_skeleton_via_api",
-        lambda chunks, **kwargs: [dict(shared), dict(dropped)])
-    monkeypatch.setattr(
-        g, "_consolidate_concepts_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_topic_segregation_verdict_via_api",
-        lambda records, **kwargs: {"restructure": True, "reason": "test"})
-    monkeypatch.setattr(
-        g, "_restructure_topics_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_recover_missing_topic_concepts_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_missing_source_topic_excerpts",
-        lambda records, source_topic_excerpts: [])
-    monkeypatch.setattr(
-        g, "_consolidate_task_grounded_fragments_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_refine_descriptions_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_ensure_method_worked_examples_via_api",
-        lambda records, **kwargs: records)
-    source_question = (
-        "Derive and use the nth-term relation from the first term and common "
-        "difference, explaining each algebraic step."
-    )
-    inventory = {"items": [{
-        "qid": "QINV-0001",
-        "source_kind": "exercise",
-        "topic_hint": "nth Term of an AP",
-        "raw_task": source_question,
-    }], "stats": {"total_inventory_items": 1}}
-    mined_types = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Apply the general-term derivation",
-        "topic_match_hint": "nth Term of an AP",
-        "concept_match_hint": "Deriving the General Term",
-        "placement_scope": "normal",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_id": "CASE-0001",
-            "case_title": (
-                "Given a first term and common difference, derive and use a "
-                "requested term"
-            ),
-            "placement_scope": "normal",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": source_question,
-            }],
-        }],
-    }]}
-    monkeypatch.setattr(
-        g, "_extract_question_task_inventory_via_api",
-        lambda **kwargs: inventory)
-    monkeypatch.setattr(
-        g, "_mine_types_from_inventory_via_api",
-        lambda **kwargs: mined_types)
-    monkeypatch.setattr(
-        g, "_build_culminations_via_api",
-        lambda records, **kwargs: g._ensure_culmination_rows(records))
-
-    def add_richer_final_types(records, **kwargs):
-        out = [dict(record) for record in records]
-        target = next(
-            record for record in out
-            if record["concept_title"] == "Deriving the General Term"
-        )
-        target["concept_details"] = g._inject_types(
-            target["concept_details"],
-            "Type 01: Apply the general-term derivation "
-            "Case 01: Given a first term and common difference, derive and use "
-            f"a requested term Example 01: {source_question}",
-        )
-        certification_owner = kwargs.get("mined_types")
-        if isinstance(certification_owner, dict):
-            g._reset_placement_certifications(certification_owner)
-            g._certify_inventory_host(
-                certification_owner,
-                "QINV-0001",
-                target,
-                basis="type_host_review",
-            )
-        return out
-
-    monkeypatch.setattr(g, "_assign_types_via_api", add_richer_final_types)
-    monkeypatch.setattr(
-        g,
-        "_assign_mined_types_via_api",
-        lambda records, **kwargs: add_richer_final_types(records, **kwargs),
-    )
-    monkeypatch.setattr(
-        g, "_merge_similar_concepts_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_repair_records_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api",
-        lambda records, **kwargs: records)
-
-    original_refine = g.cr.refine_chapter
-
-    def lose_method_rows_during_final_cleanup(records):
-        refined = original_refine(records)
-        out = []
-        for record in refined:
-            if record["concept_title"] == "Deriving the Finite Sum":
-                continue
-            record = dict(record)
-            if record["concept_title"] == "Deriving the General Term":
-                record["source_evidence"] = ""
-            out.append(record)
-        return out
-
-    monkeypatch.setattr(
-        g.cr, "refine_chapter", lose_method_rows_during_final_cleanup)
-
-    out = g.concepts_from_mmd(
-        _ap_mmd(),
-        subject="Mathematics",
-        chapter_title="Arithmetic Progressions",
-        live=True,
-    )
-
-    title_keys = [
-        g.bi.normalize_question_text(record["concept_title"])
-        for record in out
-    ]
-    assert len(title_keys) == len(set(title_keys))
-    shared_final = next(
-        record for record in out
-        if record["concept_title"] == "Deriving the General Term"
-    )
-    assert g._method_anchor_ids(shared_final) == {
-        "METHOD-AAAAAAAAAA", "METHOD-BBBBBBBBBB",
-    }
-    assert "Apply the general-term derivation" in shared_final["concept_details"]
-    assert shared_final["topic"] == "Nth Term of an AP"
-    dropped_final = next(
-        record for record in out
-        if record["concept_title"] == "Deriving the Finite Sum"
-    )
-    assert dropped_final["topic"] == "Sum of First N Terms of an AP"
-    assert g._method_anchor_ids(dropped_final) == {"METHOD-CCCCCCCCCC"}
-    for restored in (shared_final, dropped_final):
-        assert g._has_mastery_line(restored["concept_details"])
-        assert (
-            g._misconception_body(restored["concept_details"])
-            or g._error_analysis_body(restored["concept_details"])
-        )
-    for topic in {record["topic"] for record in out}:
-        topic_rows = [record for record in out if record["topic"] == topic]
-        taught = [
-            record for record in topic_rows
-            if not g.cr.is_culmination(record["concept_title"])
-        ]
-        # A culmination closes a topic that teaches several concepts; a
-        # single-concept topic has nothing to consolidate and carries none.
-        if len(taught) > 1:
-            assert g.cr.is_culmination(topic_rows[-1]["concept_title"])
-        else:
-            assert topic_rows == taught
-    assert g._missing_method_anchors(out, anchors) == []
-    assert g._fatal_errors(g._validate_final_or_raise(out)) == []
-
-
-def test_final_boundary_salvages_short_case_reintroduced_by_later_pass(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        g,
-        "_openai_json",
-        lambda system, *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError(
-                "all API stages in this regression must be mocked: "
-                + system[:80]
-            )
-        ),
-    )
-    full_question = (
-        "Determine whether the real-life savings pattern 100, 150, 200, 250 "
-        "forms an arithmetic progression and justify the answer."
-    )
-    other_question = (
-        "Find the next three terms after 21 when the common difference is 4."
-    )
-    inventory = {
-        "items": [
-            {
-                "qid": "QINV-AP-0001",
-                "source_kind": "exercise",
-                "topic_hint": "Arithmetic Progressions",
-                "raw_task": full_question,
-            },
-            {
-                "qid": "QINV-AP-0002",
-                "source_kind": "exercise",
-                "topic_hint": "Arithmetic Progressions",
-                "raw_task": other_question,
-            },
-        ],
-    }
-    normal = _row(
-        "Arithmetic Progressions",
-        "Recognize AP-like Patterns in Real Life",
-    )
-    normal["concept_details"] = (
-        "Description: Everyday savings can grow by a fixed amount, producing "
-        "an ordered sequence with a constant difference.\n"
-        "Achieving Mastery: Recognizing constant-change patterns independently. "
-        "// Misconception/ Error Analysis: Misconceptions: Students may believe "
-        "an increasing savings sequence is always an arithmetic progression "
-        "even when successive increases differ.; Error Analysis: Students may "
-        "compare the terms instead of their consecutive differences."
-    )
-
-    monkeypatch.setattr(g, "_method_coverage_anchors", lambda sections: [])
-    monkeypatch.setattr(
-        g, "_extract_skeleton_via_api",
-        lambda chunks, **kwargs: [dict(normal)])
-    monkeypatch.setattr(
-        g, "_consolidate_concepts_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_refine_descriptions_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_extract_question_task_inventory_via_api",
-        lambda **kwargs: inventory)
-    monkeypatch.setattr(
-        g, "_mine_types_from_inventory_via_api",
-        lambda **kwargs: {"types": []})
-    monkeypatch.setattr(
-        g, "_build_culminations_via_api",
-        lambda records, **kwargs: g._ensure_culmination_rows(records))
-
-    def assign_types(records, **kwargs):
-        out = [dict(record) for record in records]
-        target = next(
-            record for record in out
-            if record["concept_title"] == normal["concept_title"]
-        )
-        target["concept_details"] = g._inject_types(
-            target["concept_details"],
-            "Type 01: Recognize and extend AP patterns "
-            f"Case 01: Savings pattern Example: {full_question} "
-            f"Case 02: Extend a sequence Example: {other_question}",
-        )
-        certification_owner = kwargs.get("mined_types")
-        if isinstance(certification_owner, dict):
-            g._reset_placement_certifications(certification_owner)
-            for qid in ("QINV-AP-0001", "QINV-AP-0002"):
-                g._certify_inventory_host(
-                    certification_owner,
-                    qid,
-                    target,
-                    basis="type_host_review",
-                )
-        return out
-
-    monkeypatch.setattr(g, "_assign_types_via_api", assign_types)
-    monkeypatch.setattr(
-        g, "_merge_similar_concepts_via_api",
-        lambda records, **kwargs: records)
-
-    final_repair_mutated = False
-
-    def mutate_inventory_prompt_during_final_repair(records, **kwargs):
-        nonlocal final_repair_mutated
-        out = [dict(record) for record in records]
-        if kwargs.get("stage") == "final":
-            target = next(
-                record for record in out
-                if record["concept_title"] == normal["concept_title"]
-            )
-            target["concept_details"] = target["concept_details"].replace(
-                full_question,
-                full_question.replace("justify the answer", "explain the answer"),
-            )
-            final_repair_mutated = True
-        return out
-
-    monkeypatch.setattr(
-        g, "_repair_records_via_api",
-        mutate_inventory_prompt_during_final_repair)
-    monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api",
-        lambda records, **kwargs: records)
-
-    mastery_api_calls = 0
-    reintroduced_short_case = False
-
-    def reintroduce_short_case_during_late_mastery(records, **kwargs):
-        nonlocal mastery_api_calls, reintroduced_short_case
-        out = [dict(record) for record in records]
-        if kwargs.get("use_api", True):
-            mastery_api_calls += 1
-            if mastery_api_calls == 2:
-                target = next(
-                    record for record in out
-                    if record["concept_title"] == normal["concept_title"]
-                )
-                target["concept_details"] = target["concept_details"].replace(
-                    full_question, "q")
-                reintroduced_short_case = any(
-                    error["code"] == "short_case_example"
-                    for error in g.cv.validate_concept_rows(
-                        out, allow_types=True, require_culmination=False,
-                    )["errors"]
-                )
-        return out
-
-    monkeypatch.setattr(
-        g, "_ensure_mastery_lines_via_api",
-        reintroduce_short_case_during_late_mastery)
-
-    original_salvage = g._salvage_short_case_examples
-    salvage_outputs: list[list[dict]] = []
-
-    def capture_salvage(records, **kwargs):
-        salvaged = original_salvage(records, **kwargs)
-        salvage_outputs.append([dict(record) for record in salvaged])
-        return salvaged
-
-    monkeypatch.setattr(g, "_salvage_short_case_examples", capture_salvage)
-
-    out = g.concepts_from_mmd(
-        r"\section*{Arithmetic Progressions}"
-        "\nA real-life savings pattern can have a constant difference.",
-        subject="Mathematics",
-        chapter_title="Arithmetic Progressions",
-        live=True,
-    )
-
-    assert final_repair_mutated
-    # Types do not exist during semantic mastery repair anymore, so a late
-    # semantic pass cannot truncate a source-owned Case Example.
-    assert not reintroduced_short_case
-    assert salvage_outputs
-    final = next(
-        record for record in out
-        if record["concept_title"] == normal["concept_title"]
-    )
-    assert "Type 01: Recognize and extend AP patterns" in final["concept_details"]
-    assert full_question in final["concept_details"]
-    assert other_question in final["concept_details"]
-    assert "Example: q" not in final["concept_details"]
-    assert not any(
-        error["code"] == "short_case_example"
-        for error in g.cv.validate_concept_rows(
-            out, allow_types=True, require_culmination=True,
-        )["errors"]
-    )
 
 
 def test_method_anchor_id_is_stable_across_chunk_topic_context():
@@ -1672,7 +1283,7 @@ def test_cross_topic_split_sends_unattributed_qids_to_the_later_topic():
     ]
 
 
-def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
+def test_mathpix_latex_topic_wrappers_share_one_source_topic_key():
     variants = [
         "Sum of First $ n $ Terms",
         r"Sum of First \boldsymbol{n} Terms",
@@ -1687,37 +1298,13 @@ def test_mathpix_latex_topic_wrappers_share_one_source_topic_key(monkeypatch):
         {"heading": variants[0], "body": "", "heading_level": 2},
         {"heading": "Solution", "body": "", "heading_level": 2},
     ]
+    # Without numbered structure, the fallback keeps "Solution" as its own
+    # structural heading (§3 purge) — no vocabulary folds it into the main
+    # topic; the semantic outline owns that call in production.
     assert [topic for topic, _ in g._sections_with_source_topics(sections)] == [
-        variants[2], variants[2],
+        variants[2], "Solution",
     ]
 
-    records = [_row(variants[2], "Adding a Finite Sequence")]
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Finding a Finite Sum",
-        "topic_match_hint": variants[1],
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_title": "Number of terms is given",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": "Find the finite sum for the stated terms.",
-            }],
-        }],
-    }]}
-
-    def fake_assignment(system, user, **kwargs):
-        assert '"allowed_concept_ids": ["CONCEPT-0001"]' in user
-        return {"assignments": [{
-            "concept_id": "CONCEPT-0001",
-            "type_ids": ["TYPE-0001"],
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_assignment)
-    out = g._assign_mined_types_via_api(
-        records, meta=g._metadata(subject="Mathematics"), mined_types=mined)
-
-    assert not g._mined_type_topic_violations(out, mined)
     prose_anchor = {
         "anchor_id": "METHOD-ABCDEF1234",
         "topic_hint": variants[0],
@@ -1750,157 +1337,6 @@ def test_method_anchor_topic_is_restored_after_topic_restructuring():
 
     assert out[0]["topic"] == "nth Term of an AP"
     assert g._method_anchor_covered(out, anchor)
-
-
-def test_type_assignment_rejects_wrong_ap_source_topic(monkeypatch):
-    records = [
-        _row("Arithmetic Progressions", "Common Difference"),
-        _row("Sum of First n Terms of an AP", "Applying the Sum Formula"),
-    ]
-    mined = {"types": [{
-        "type_id": "TYPE-0001",
-        "type_title": "Finding a Finite AP Sum",
-        "topic_match_hint": "Sum of First n Terms of an AP",
-        "source_question_ids": ["QINV-0001"],
-        "case_prompts": [{
-            "case_title": "First term, difference, and number of terms given",
-            "examples": [{
-                "source_question_id": "QINV-0001",
-                "example_prompt": "Find the sum of 2, 7, 12, ... to 10 terms.",
-            }],
-        }],
-    }]}
-    calls = {"count": 0}
-
-    def fake_assignment(system, user, **kwargs):
-        calls["count"] += 1
-        assert '"allowed_concept_ids": ["CONCEPT-0002"]' in user
-        if calls["count"] == 1:
-            return {"assignments": [{
-                "concept_id": "CONCEPT-0001",
-                "type_ids": ["TYPE-0001"],
-            }]}
-        return {"assignments": [{
-            "concept_id": "CONCEPT-0002",
-            "type_ids": ["TYPE-0001"],
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_assignment)
-    out = g._assign_mined_types_via_api(
-        records, meta=g._metadata(subject="Mathematics"),
-        mined_types=mined, max_attempts=2)
-
-    # The accepted retry has one legal source-topic destination, so it is
-    # deterministically certified without an unnecessary second API review.
-    assert calls["count"] == 2
-    assert "Finding a Finite AP Sum" not in out[0]["concept_details"]
-    assert "Finding a Finite AP Sum" in out[1]["concept_details"]
-    assert not g._mined_type_topic_violations(out, mined)
-
-
-def test_topic_validator_accepts_same_title_split_across_expected_topics():
-    title = "Applying a shared arithmetic progression pattern"
-    mined = {"types": [
-        {
-            "type_id": "TYPE-0001",
-            "type_title": title,
-            "topic_match_hint": "Arithmetic Progressions",
-        },
-        {
-            "type_id": "TYPE-0002",
-            "type_title": title,
-            "topic_match_hint": "nth Term of an AP",
-        },
-    ]}
-    candidate = [
-        _row_with_types("Arithmetic Progressions", title),
-        _row_with_types("Nth Term of an AP", title),
-    ]
-    original = [_row("Arithmetic Progressions", "Original concept")]
-
-    assert not g._mined_type_topic_violations(candidate, mined)
-    assert g._accept_topic_safe_type_review(original, candidate, mined) is candidate
-
-
-def test_topic_validator_reports_missing_same_title_topic_sibling():
-    title = "Applying a shared arithmetic progression pattern"
-    mined = {"types": [
-        {
-            "type_id": "TYPE-0001",
-            "type_title": title,
-            "topic_match_hint": "Arithmetic Progressions",
-        },
-        {
-            "type_id": "TYPE-0002",
-            "type_title": title,
-            "topic_match_hint": "nth Term of an AP",
-        },
-    ]}
-    candidate = [_row_with_types("Arithmetic Progressions", title)]
-    original = [_row("Arithmetic Progressions", "Original concept")]
-
-    assert g._mined_type_topic_violations(candidate, mined) == [{
-        "type_id": "TYPE-0002",
-        "type_title": title,
-        "expected_topic": "nth Term of an AP",
-        "actual_topic": "",
-        "reason": "missing",
-    }]
-    assert g._accept_topic_safe_type_review(original, candidate, mined) is original
-
-
-def test_topic_validator_reports_only_unexpected_third_topic_for_shared_title():
-    title = "Applying a shared arithmetic progression pattern"
-    mined = {"types": [
-        {
-            "type_id": "TYPE-0001",
-            "type_title": title,
-            "topic_match_hint": "Arithmetic Progressions",
-        },
-        {
-            "type_id": "TYPE-0002",
-            "type_title": title,
-            "topic_match_hint": "nth Term of an AP",
-        },
-    ]}
-    candidate = [
-        _row_with_types("Arithmetic Progressions", title),
-        _row_with_types("Nth Term of an AP", title),
-        _row_with_types("Sum of First n Terms of an AP", title),
-    ]
-    original = [_row("Arithmetic Progressions", "Original concept")]
-    violations = g._mined_type_topic_violations(candidate, mined)
-
-    assert len(violations) == 1
-    assert violations[0]["reason"] == "wrong_topic"
-    assert violations[0]["actual_topic"] == "Sum of First n Terms of an AP"
-    assert g._accept_topic_safe_type_review(original, candidate, mined) is original
-
-
-def test_topic_validator_preserves_same_topic_title_multiplicity():
-    title = "Applying a duplicated arithmetic progression pattern"
-    mined = {"types": [
-        {
-            "type_id": "TYPE-0001",
-            "type_title": title,
-            "topic_match_hint": "Arithmetic Progressions",
-        },
-        {
-            "type_id": "TYPE-0002",
-            "type_title": title,
-            "topic_match_hint": "Arithmetic Progressions",
-        },
-    ]}
-
-    assert not g._mined_type_topic_violations([
-        _row_with_types("Arithmetic Progressions", title, title),
-    ], mined)
-    violations = g._mined_type_topic_violations([
-        _row_with_types("Arithmetic Progressions", title),
-    ], mined)
-    assert [(item["type_id"], item["reason"]) for item in violations] == [
-        ("TYPE-0002", "missing"),
-    ]
 
 
 def test_numbered_main_section_chapter_title_exception_is_explicit_in_prompts():
@@ -2037,8 +1473,10 @@ def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
     anchors = g._source_task_anchors(sections)
     assert len(anchors) == 2
     assert all(anchor["raw_solution_or_answer"] == "" for anchor in anchors)
+    # List items carry the neutral parse-time kind (§3 purge).
     optional = next(
-        anchor for anchor in anchors if anchor["source_kind"] == "exercise")
+        anchor for anchor in anchors
+        if anchor["source_kind"] == "intext_question")
     assert optional["topic_hint"] == "General Term"
     assert optional["requires_visual"] is True
     assert optional["image_urls"] == [
@@ -2071,9 +1509,6 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
         g, "_consolidate_concepts_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
-        g, "_refine_descriptions_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
         g, "_ensure_mastery_lines_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
@@ -2084,26 +1519,13 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
         lambda **kwargs: {"types": []})
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
-        lambda records, **kwargs: g._ensure_culmination_rows(records))
-    monkeypatch.setattr(
-        g, "_assign_types_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_merge_similar_concepts_via_api",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api",
-        lambda records, **kwargs: records)
+        lambda records, **kwargs: _fake_authored_culminations(records))
     monkeypatch.setattr(
         g, "_repair_records_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
-        g, "_neutralize_unrepaired_rows",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(
-        g, "_salvage_short_case_examples",
-        lambda records, **kwargs: records)
-    monkeypatch.setattr(g.cr, "refine_chapter", lambda records: records)
+        g, "_prepare_final_concept_content",
+        lambda out, **kwargs: out)
     monkeypatch.setattr(
         g, "_validate_final_or_raise",
         lambda records, **kwargs: {"ok": True})
@@ -2118,11 +1540,14 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
 
     progress_values = [value for value, _ in values]
     assert progress_values == sorted(progress_values)
-    assert {0.58, 0.72, 0.81, 0.85, 0.93, 1.0} <= set(progress_values)
+    assert {0.58, 0.72, 0.81, 0.85, 0.91, 1.0} <= set(progress_values)
     labels = " ".join(label for _, label in values)
     assert "inventorying questions" in labels
-    assert "assigning Types within source topics" in labels
-    assert "validating and repairing final map" in labels
+    # Type allocation is deferred to the rewritten Phase 3: the pre-final
+    # stage narrates topology preparation, never an 85-91% Type assignment.
+    assert "preparing final topology before Type allocation" in labels
+    assert "topology ready for final Type allocation" in labels
+    assert "assigning Types within source topics" not in labels
 
 
 def test_canonicalization_does_not_compact_to_hit_a_row_count(monkeypatch):

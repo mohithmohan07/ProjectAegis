@@ -1,10 +1,9 @@
-"""The production flip: AEGIS_PHASE3_REWRITE routes 81%+ through runner.run.
+"""The 81% seam: prepare_final always routes through runner.run.
 
 The seam is the installed ``prepare_final`` wrapper — the single point
-where the old pipeline crosses the 81% boundary. With the flag on it
-seals the envelope from exactly the session state it holds and hands the
-run to the rewritten Phase 3; with the flag off (the default) the old
-path is untouched.
+where the pipeline crosses the 81% boundary. It seals the envelope from
+exactly the session state it holds and hands the run to the rewritten
+Phase 3; since PR 4 there is no other path.
 """
 from __future__ import annotations
 
@@ -14,7 +13,6 @@ from pathlib import Path
 import pytest
 
 from app.services import canonical_source_phase3 as phase3
-from app.services import concept_topology_contract as contract
 from app.services import generation
 from app.services.phase3 import envelope as envelope_mod
 from app.services.phase3 import runner
@@ -37,7 +35,7 @@ def _graph_from(fixture_env: dict) -> dict:
     }
 
 
-def test_flag_on_routes_prepare_final_through_the_rewrite(
+def test_prepare_final_routes_through_the_rewrite(
     monkeypatch, tmp_path, fixture_env,
 ):
     captured: dict = {}
@@ -60,7 +58,6 @@ def test_flag_on_routes_prepare_final_through_the_rewrite(
             },
         }
 
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
     monkeypatch.setattr(runner, "run", fake_run)
 
     session = {
@@ -93,43 +90,6 @@ def test_flag_on_routes_prepare_final_through_the_rewrite(
     assert str(captured["store_dir"]).startswith(str(tmp_path))
 
 
-def test_flag_off_keeps_the_old_path(monkeypatch, fixture_env):
-    monkeypatch.delenv("AEGIS_PHASE3_REWRITE", raising=False)
-
-    def must_not_run(*_args, **_kwargs):
-        raise AssertionError("runner.run must not fire with the flag off")
-
-    monkeypatch.setattr(runner, "run", must_not_run)
-    sentinel = [{"concept_title": "Old Path Row"}]
-    monkeypatch.setattr(
-        generation,
-        "_TOPOLOGY_CONTRACT_ORIGINAL_PREPARE",
-        lambda out, **kwargs: copy.deepcopy(sentinel),
-    )
-    monkeypatch.setattr(
-        contract,
-        "_allocate_after_freeze",
-        lambda _generation, topology, **kwargs: topology,
-    )
-
-    rows = generation._prepare_final_concept_content(
-        copy.deepcopy(fixture_env["skeleton_rows"][:2]),
-        subject="History",
-        mmd_text="canonical semantic source",
-        meta=fixture_env["metadata"],
-        source_sections=[],
-        source_topic_excerpts=[],
-        method_anchors=[],
-        question_task_inventory={"items": []},
-        mined_types={"types": []},
-        refresh_chapter_wide_assignments=False,
-    )
-
-    # The old path normalizes rows on the way through; the sentinel row
-    # surviving proves the original prepare chain ran, not the rewrite.
-    assert [row["concept_title"] for row in rows] == ["Old Path Row"]
-
-
 def test_the_sealed_envelope_is_reused_across_resumes(
     monkeypatch, tmp_path, fixture_env,
 ):
@@ -151,7 +111,6 @@ def test_the_sealed_envelope_is_reused_across_resumes(
             },
         }
 
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
     monkeypatch.setattr(runner, "run", fake_run)
     session = {
         "artifact_dir": tmp_path,

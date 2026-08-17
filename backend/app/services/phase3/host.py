@@ -368,17 +368,26 @@ def host(
     provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> dict[str, Any]:
     """Certify one host per unit. Returns host_map, qid_map, new_concepts."""
+
+    from . import fixer as fixer_mod
 
     env = envelope_mod.validate(env)
     if provider is None:
         envelope_mod.require_live_api()
         provider = _live_host
         critic = critic if critic is not None else _live_critic
+        fixer = fixer or fixer_mod.live_fixer
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    policy = confidence_policy.threshold_text()
+    policy = confidence_policy.POLICY_VERSION
+    from . import prompts as prompts_mod
+
+    # The Architect's run instructions ride the sealed envelope metadata;
+    # empty slots append nothing, so payloads stay byte-identical.
+    rules_suffix = prompts_mod.instruction_rules_suffix(env)
 
     settled_titles = _settled_index(settled_rows)
     known_blocks = {
@@ -487,8 +496,9 @@ def host(
                 "existing settled concept whenever it teaches the unit's "
                 "durable source idea; create_new only when no existing row "
                 "can host a distinct durable idea, and then define the "
-                "complete source-grounded concept. Confidence floor is "
-                f"{policy}. Separately, place EVERY qid in qid_placements "
+                "complete source-grounded concept. State your honest "
+                "confidence; a low-confidence decision ships flagged for "
+                "review. Separately, place EVERY qid in qid_placements "
                 "by understanding the whole question against the settled "
                 "concepts. Placement rules: (1) a question that falls "
                 "under one specific concept alone goes under that same "
@@ -536,7 +546,7 @@ def host(
                 "spanning several concepts. Each "
                 "question gets EXACTLY ONE destination; when the rules "
                 "leave two candidates, the later topic in teaching "
-                "order wins."
+                "order wins." + rules_suffix
             ),
             "topics_in_teaching_order": [
                 {
@@ -579,6 +589,7 @@ def host(
             critic=critic,
             store=store,
             policy_version=policy,
+            fixer=fixer,
         )
         assigned = {
             str(row.get("unit_id") or ""): row

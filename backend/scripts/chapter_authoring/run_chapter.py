@@ -29,10 +29,8 @@ os.environ.setdefault("AEGIS_PUBLIC_BASE_URL", "https://aegis.local")
 os.environ.setdefault("AEGIS_SOURCE_ASSET_SECRET", "local-run-secret")
 
 # Production's pipeline behaviour comes from fly.toml's [env]. Read it rather
-# than hand-copying: missing AEGIS_PHASE3_REWRITE silently ran the legacy
-# 3.1/3.2/3.3 lane for a full hour, which fly.toml's own comment warns about
-# ("without this flag the deleted-era legacy path runs and the webpage output
-# diverges from everything validated in staging").
+# than hand-copying (the rewritten Phase 3 is now the only post-81% path, so
+# no flag is needed, but concurrency sizing and similar knobs still apply).
 # Deployment-specific keys are deliberately skipped: they point at the Fly
 # volume and Google auth, which would break or bypass the local run.
 _DEPLOY_ONLY = {

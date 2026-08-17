@@ -1,0 +1,145 @@
+{
+ "_comment": "Recorded Slice-2 assessment verdicts authored from the sealed RNE question/task inventory and its recorded host map. QINV-0009 and QINV-0016.5 are preserved as complete assessment evidence under their recorded home concept; the responses below are replay evidence, never executable classification rules.",
+ "envelope_fixture": "rne_envelope.json",
+ "concept": {
+  "concept_key": "rne:gendered-limits-of-liberal-political-rights",
+  "concept_machine_id": "RNE_Gendered_Limits",
+  "concept_title": "Gendered Limits of Liberal Political Rights",
+  "concept_display_name": "Gendered Limits of Liberal Political Rights",
+  "teaching_description": "Liberal political rights were historically restricted by gender even when liberal movements claimed equality and representative government."
+ },
+ "metadata": {
+  "subject": "History",
+  "grade": "10",
+  "chapter_title": "The Rise of Nationalism in Europe"
+ },
+ "candidates": [
+  {
+   "candidate_id": "RNE-QINV-0009",
+   "source_atom_ids": [
+    "QINV-0009"
+   ],
+   "sheet_kind": "descriptive",
+   "question_category": "Long Answer",
+   "cognitive_skill": "Analyse",
+   "question": "Compare the positions on the question of women's rights voiced by the three writers cited in the accompanying material. What do they reveal about liberal ideology?",
+   "question_text": "Compare the positions on the question of women's rights voiced by the three writers cited in the accompanying material. What do they reveal about liberal ideology?",
+   "display_answer": "The writers' positions show that liberal claims of equality and political participation remained bounded by gender, with women excluded from rights claimed for men.",
+   "answers": [
+    {
+     "answer_type": "Phrases",
+     "answer_content": "Compares the writers' positions and connects their differences to the gendered limits of liberal ideology.",
+     "answer_weightage": "4"
+    }
+   ],
+   "sub_questions": [],
+   "answer_explanation": "A complete response compares the supplied positions before drawing the ideological conclusion.",
+   "marks": 4,
+   "requires_visual": false,
+   "source_evidence": {
+    "source_qid": "QINV-0009",
+    "source_kind": "checkpoint_question",
+    "source_label": "Discuss"
+   },
+   "route_evidence": {
+    "home_concept": "Gendered Limits of Liberal Political Rights"
+   },
+   "assets": []
+  },
+  {
+   "candidate_id": "RNE-QINV-0016.5",
+   "source_atom_ids": [
+    "QINV-0016.5"
+   ],
+   "sheet_kind": "descriptive",
+   "question_category": "Long Answer",
+   "cognitive_skill": "Analyse",
+   "question": "Write a note on the role of women in nationalist struggles.",
+   "question_text": "Write a note on the role of women in nationalist struggles.",
+   "display_answer": "Women participated in nationalist movements as activists, organisers and symbols while often remaining excluded from equal formal political rights.",
+   "answers": [
+    {
+     "answer_type": "Phrases",
+     "answer_content": "Explains women's participation and the political constraints that remained within nationalist movements.",
+     "answer_weightage": "3"
+    }
+   ],
+   "sub_questions": [],
+   "answer_explanation": "The note must cover both participation and continuing exclusion.",
+   "marks": 3,
+   "requires_visual": false,
+   "shared_context": "Write a note on:",
+   "source_evidence": {
+    "source_qid": "QINV-0016.5",
+    "source_kind": "exercise",
+    "source_label": "Write in brief Q1"
+   },
+   "route_evidence": {
+    "home_concept": "Gendered Limits of Liberal Political Rights"
+   },
+   "assets": []
+  }
+ ],
+ "level_responses": [
+  {
+   "candidate_id": "RNE-QINV-0009",
+   "tier": "Advanced",
+   "rationale": "The response must compare multiple supplied positions and infer what their differences reveal about an ideology."
+  },
+  {
+   "candidate_id": "RNE-QINV-0016.5",
+   "tier": "Advanced",
+   "rationale": "The response must synthesize women's participation with the contradiction of continued political exclusion."
+  }
+ ],
+ "cluster_response": {
+  "concept_key": "rne:gendered-limits-of-liberal-political-rights",
+  "tier": "Advanced",
+  "families": [
+   {
+    "existing_group_key": "",
+    "family": "Comparative ideological interpretation",
+    "member_candidate_ids": [
+     "RNE-QINV-0009"
+    ]
+   },
+   {
+    "existing_group_key": "",
+    "family": "Expository movement participation",
+    "member_candidate_ids": [
+     "RNE-QINV-0016.5"
+    ]
+   }
+  ],
+  "rationale": "The questions share a home concept and tier but require different response constructions and are not minimum-variation variants."
+ },
+ "description_responses": {
+  "(RNE_Gendered_Limits) AG01": {
+   "group_key": "(RNE_Gendered_Limits) AG01",
+   "description": "Comparative interpretation of writers' positions on women's rights to explain the gendered limits of liberal ideology.",
+   "rationale": "This states both the comparative construction and the ideological capability assessed."
+  },
+  "(RNE_Gendered_Limits) AG02": {
+   "group_key": "(RNE_Gendered_Limits) AG02",
+   "description": "Expository explanation of women's participation and constraints within nationalist struggles.",
+   "rationale": "This states both the note-form construction and the historical capability assessed."
+  }
+ },
+ "quality_responses": {
+  "(RNE_Gendered_Limits) AG01": {
+   "group_key": "(RNE_Gendered_Limits) AG01",
+   "flags": [],
+   "rationale": "The question, answer evidence, level, family boundary and description are mutually consistent."
+  },
+  "(RNE_Gendered_Limits) AG02": {
+   "group_key": "(RNE_Gendered_Limits) AG02",
+   "flags": [],
+   "rationale": "The question, answer evidence, level, family boundary and description are mutually consistent."
+  }
+ },
+ "critic_review": {
+  "verdict": "verified",
+  "confidence": 1.0,
+  "issues": []
+ }
+}

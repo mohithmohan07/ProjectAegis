@@ -476,10 +476,17 @@ def test_low_confidence_first_action_gets_one_evidence_expansion(
         provider=provider,
     )
 
+    # The first low-confidence proposal still earns one bounded evidence
+    # expansion (a spend guard), but the FINAL otherwise-valid decision now
+    # applies with a review flag instead of escalating on confidence alone.
     assert calls == 2
-    assert result.status == "escalated"
-    assert result.resolved is False
+    assert result.status == "resolved"
+    assert result.resolved is True
     assert result.confidence == 0.91
+    assert any(
+        "0.910" in flag and "flagged for review" in flag
+        for flag in result.review_flags
+    )
 
 
 def test_invented_target_is_rejected_locally():
@@ -1587,5 +1594,17 @@ def test_source_topology_and_new_concepts_use_source_critical_confidence(
         ),
     )
 
-    assert result.status == "escalated"
-    assert result.resolved is False
+    if choice == "select_candidate":
+        # A candidate not tied to its exact bound text hash is a mechanical
+        # defect and still escalates.
+        assert result.status == "escalated"
+        assert result.resolved is False
+    else:
+        # 0.94 is below the 0.96 source-critical floor, but the final
+        # otherwise-valid decision applies flagged instead of escalating
+        # on confidence alone.
+        assert result.status == "resolved"
+        assert any(
+            "source_critical" in flag and "flagged for review" in flag
+            for flag in result.review_flags
+        )

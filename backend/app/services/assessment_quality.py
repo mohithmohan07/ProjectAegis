@@ -13,10 +13,13 @@ across a concept's groups and blueprint-coverage arithmetic.
 """
 from __future__ import annotations
 
+import copy
 import json
-from typing import Callable, Mapping
+from typing import Any, Mapping
 
-from . import assessment_release as rel
+from .phase3 import kernel
+
+QUALITY_POLICY_VERSION = "assessment-group-quality-1"
 
 QA_SYSTEM = (
     "You are the Aegis touched-group QA reviewer. Review ONE assessment "
@@ -26,11 +29,144 @@ QA_SYSTEM = (
     "(one variant family, not a mixture); separation from the sibling "
     "groups supplied; difficulty compatibility with the tier; and image "
     "and rich-text integrity.\n"
-    "You only FLAG. You never rewrite, re-place, or remove anything.\n"
+    "You only flag. You must not revise, rewrite, re-place, regroup, or "
+    "remove anything. There is no quota: return every genuine concern and "
+    "an empty flags list when there is none.\n"
     "Return ONLY strict JSON:\n"
-    '{"flags":[{"code":"","member_candidate_id":"","detail":""}]} — an '
-    "empty flags list means the group passes."
+    '{"group_key":"","flags":[{"code":"","member_candidate_id":"",'
+    '"detail":""}]}\n'
+    "group_key must echo the reviewed group exactly. A flag may leave "
+    "member_candidate_id empty when it concerns the group as a whole."
 )
+
+QA_CRITIC_SYSTEM = (
+    "You are the independent advisory critic for one touched-group quality "
+    "review. Audit the proposed flags against the complete group, concept, "
+    "member, and sibling evidence. You must not revise the group or the "
+    "questions. Your dissent is advisory: the proposed review stands and "
+    "your concerns ship for review. There is no quota. State your honest "
+    "confidence.\n"
+    "Return ONLY strict JSON:\n"
+    '{"verdict":"verified","confidence":0.0,"issues":[]} or '
+    '{"verdict":"dissent","confidence":0.0,"issues":["evidence-bound '
+    'concern"]}'
+)
+
+
+class QualityError(ValueError):
+    """The quality pass cannot bind its mechanical input identity."""
+
+
+def _member_evidence(members: list[Mapping]) -> list[dict[str, Any]]:
+    """Full member evidence, preserving the grouping pass's projection.
+
+    ``assessment_grouping._member_payload`` is the shared semantic evidence
+    projection. The complete member record is merged around it so answers,
+    rubrics, subquestions, shared context, and assets are never truncated.
+    A subquestion count is not evidence and is deliberately excluded.
+    """
+
+    from . import assessment_grouping
+
+    projected = assessment_grouping._member_payload(members)
+    evidence: list[dict[str, Any]] = []
+    for member, shared in zip(members, projected):
+        row = copy.deepcopy(dict(member))
+        row.update(copy.deepcopy(dict(shared)))
+        row.pop("sub_question_count", None)
+        row["sub_questions"] = copy.deepcopy(
+            list(member.get("sub_questions") or []))
+        evidence.append(row)
+    return evidence
+
+
+def _sibling_evidence(siblings: list[Mapping] | None) -> list[dict[str, Any]]:
+    """Normalize legacy group rows and complete ``group + members`` rows.
+
+    Malformed evidence is a protocol defect, never something this semantic
+    pass may silently omit.
+    """
+
+    evidence: list[dict[str, Any]] = []
+    for sibling_position, sibling in enumerate(siblings or [], start=1):
+        if not isinstance(sibling, Mapping):
+            raise QualityError(
+                f"sibling {sibling_position} is not an object"
+            )
+        nested_group = sibling.get("group")
+        if nested_group is not None and not isinstance(nested_group, Mapping):
+            raise QualityError(
+                f"sibling {sibling_position} group is not an object"
+            )
+        group = nested_group if isinstance(nested_group, Mapping) else sibling
+        raw_members = sibling.get("members")
+        if raw_members is not None and not isinstance(raw_members, list):
+            raise QualityError(
+                f"sibling {sibling_position} members is not an array"
+            )
+        members = list(raw_members or [])
+        for member_position, member in enumerate(members, start=1):
+            if not isinstance(member, Mapping):
+                raise QualityError(
+                    f"sibling {sibling_position} member {member_position} "
+                    "is not an object"
+                )
+        evidence.append({
+            "group": copy.deepcopy(dict(group)),
+            "members": _member_evidence(members),
+        })
+    return evidence
+
+
+def _quality_checker(
+    group_key: str, member_ids: set[str],
+) -> kernel.Checker:
+    """Mechanics only: identity binding and the authored flag schema."""
+
+    def check(response: Mapping[str, Any]) -> list[str]:
+        if not isinstance(response, Mapping):
+            return ["response is not an object"]
+        defects: list[str] = []
+        if str(response.get("group_key") or "") != group_key:
+            defects.append(
+                f"group_key must echo {group_key!r}")
+        flags = response.get("flags")
+        if not isinstance(flags, list):
+            return [*defects, "response has no flags array"]
+        for position, flag in enumerate(flags, start=1):
+            if not isinstance(flag, Mapping):
+                defects.append(f"flag {position} is not an object")
+                continue
+            if not str(flag.get("code") or "").strip():
+                defects.append(f"flag {position} has no code")
+            if not str(flag.get("detail") or "").strip():
+                defects.append(f"flag {position} has no detail")
+            member_id = str(flag.get("member_candidate_id") or "")
+            if member_id and member_id not in member_ids:
+                defects.append(
+                    f"flag {position} names unknown member_candidate_id "
+                    f"{member_id!r}")
+        return defects
+
+    return check
+
+
+def _live_review(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        QA_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
+
+
+def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        QA_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
 
 
 def review_group(
@@ -38,56 +174,93 @@ def review_group(
     members: list[Mapping],
     *,
     siblings: list[Mapping] | None = None,
-    concept_description: str = "",
+    concept: Mapping,
     meta: Mapping,
-    reviewer_call: Callable[..., dict] | None = None,
+    envelope_sha256: str,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> dict:
-    """One touched group -> {"flags": [...]}. Never raises, never blocks."""
+    """Review one complete touched group through the decide-once kernel."""
+
+    if not isinstance(group, Mapping):
+        raise QualityError("group quality review requires a group object")
+    if not isinstance(concept, Mapping):
+        raise QualityError("group quality review requires a concept object")
+    if not isinstance(meta, Mapping):
+        raise QualityError("group quality review requires metadata")
+    for position, member in enumerate(members, start=1):
+        if not isinstance(member, Mapping):
+            raise QualityError(
+                f"group quality member {position} is not an object"
+            )
+    group_key = str(group.get("group_key") or "")
+    if not group_key:
+        raise QualityError("group quality review requires a group_key")
     if not members:
-        return {"flags": []}
-    if reviewer_call is None:
-        from . import generation
+        return {
+            "flags": [],
+            "quality_review": "not_applicable",
+            "authority": {},
+        }
+    envelope_sha = str(envelope_sha256 or "").strip()
+    if not envelope_sha:
+        raise QualityError(
+            "group quality review requires an assessment envelope hash")
+    member_ids = [str(member.get("candidate_id") or "") for member in members]
+    if any(not member_id for member_id in member_ids):
+        raise QualityError("group quality member has no candidate_id")
+    if len(member_ids) != len(set(member_ids)):
+        raise QualityError("group quality members repeat a candidate_id")
 
-        def reviewer_call(system, user):  # noqa: F811
-            return generation._openai_json(
-                system, user, purpose="concept_validation")
+    if provider is None:
+        from .phase3 import envelope as envelope_mod
+        from .phase3 import fixer as fixer_mod
 
-    from . import assessment_grouping
+        envelope_mod.require_live_api()
+        provider = _live_review
+        critic = critic if critic is not None else _live_critic
+        fixer = fixer or fixer_mod.live_fixer
+    store = store or kernel.DecisionStore()
 
     payload = {
-        "metadata": dict(meta),
-        "group_key": str(group.get("group_key") or ""),
-        "tier": str(group.get("group_type") or ""),
-        "semantic_description": str(group.get("semantic_description") or ""),
-        "concept_description": concept_description[:2_000],
-        "members": assessment_grouping._member_payload(members),
-        "sibling_groups": [
-            {
-                "group_key": str(s.get("group_key") or ""),
-                "semantic_description": str(
-                    s.get("semantic_description") or ""),
-            }
-            for s in siblings or []
-        ],
+        "stage": "assessment.group_quality",
+        "rules": QA_SYSTEM,
+        "metadata": copy.deepcopy(dict(meta)),
+        "group": copy.deepcopy(dict(group)),
+        "concept": copy.deepcopy(dict(concept)),
+        "members": _member_evidence(members),
+        "sibling_groups": _sibling_evidence(siblings),
     }
-    try:
-        review = reviewer_call(QA_SYSTEM, json.dumps(payload, ensure_ascii=False))
-    except Exception as exc:  # noqa: BLE001 — QA never blocks the run
-        return {"flags": [{
-            "code": "qa_unavailable",
-            "member_candidate_id": "",
-            "detail": f"{type(exc).__name__}: {exc}",
-        }]}
-    flags = []
-    for flag in (review or {}).get("flags") or []:
-        if isinstance(flag, Mapping) and str(flag.get("code") or "").strip():
-            flags.append({
-                "code": str(flag.get("code") or ""),
-                "member_candidate_id": str(
-                    flag.get("member_candidate_id") or ""),
-                "detail": str(flag.get("detail") or ""),
-            })
-    return {"flags": flags}
+    decision = kernel.decide(
+        kind="assessment.group_quality",
+        unit_id=group_key,
+        envelope_sha256=envelope_sha,
+        payload=payload,
+        provider=provider,
+        checker=_quality_checker(group_key, set(member_ids)),
+        critic=critic,
+        store=store,
+        policy_version=QUALITY_POLICY_VERSION,
+        fixer=fixer,
+    )
+    flags = [
+        copy.deepcopy(dict(flag))
+        for flag in decision["response"].get("flags") or []
+        if isinstance(flag, Mapping)
+    ]
+    review_flags = [str(flag) for flag in decision.get("review_flags") or []]
+    return {
+        "flags": flags,
+        "quality_review": "flagged" if flags or review_flags else "verified",
+        "authority": {
+            "decision_key": str(decision.get("key") or ""),
+            "policy_version": str(decision.get("policy_version") or ""),
+            "review_flags": review_flags,
+            "fixer": bool(decision.get("fixer")),
+        },
+    }
 
 
 # --------------------------------------------------------------------------- #

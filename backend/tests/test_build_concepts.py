@@ -7,32 +7,20 @@ from app import models
 from app.services import (
     build_concepts,
     canonical_source_phase2 as phase2,
-    canonical_source_phase31_grounding_contract as phase31,
     canonical_source_phase3 as phase3,
     grounding_certificate,
     openai_usage,
     placement_policy,
 )
+from app.services.phase3 import reground as p3_reground
 from tests.conftest import convert_concept_upload, stream_events, stream_result
 
 
 def _use_specific_dry_learner_analysis(monkeypatch):
-    monkeypatch.setattr(
-        build_concepts.concept_refiner,
-        "_fallback_misconception",
-        lambda title: (
-            f"Students may believe the description of {title} guarantees the "
-            "same result in every context."
-        ),
-    )
-    monkeypatch.setattr(
-        build_concepts.concept_refiner,
-        "_fallback_error_analysis",
-        lambda title: (
-            f"Students may reverse a stated relationship while applying "
-            f"{title} to an example."
-        ),
-    )
+    # The deterministic learner-analysis fallbacks are deleted (filler is
+    # never synthesized); dry rows simply carry whatever analysis their
+    # fixtures author. Kept as a no-op seam so callers stay explicit.
+    del monkeypatch
 
 
 def test_filename_source_fallback_cannot_create_fake_delimited_sources():
@@ -682,9 +670,9 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     # re-ground whenever deterministic final formatting changes its sealed
     # claim; emulate that independently verified pass without a provider call.
     monkeypatch.setattr(
-        phase31,
-        "ground_concepts",
-        lambda current, **_kwargs: prepare_grounded(current),
+        p3_reground,
+        "reground_rows",
+        lambda current, _drifted, **_kwargs: prepare_grounded(current),
     )
     validations = []
 
@@ -958,12 +946,17 @@ def test_upload_workbook_failure_rolls_back_new_concepts(
         "concept_title": marker,
         "concept_details": (
             "Description: Learners apply a complete, source-grounded "
-            "procedure accurately. // Misconception/ Error Analysis: "
+            "procedure accurately.\nAchieving Mastery: Carrying out the "
+            "full stated procedure without skipping a required step. // "
+            "Misconception/ Error Analysis: "
             "Misconceptions: Students may believe every procedure uses the "
             "same sequence of steps.; Error Analysis: Students may omit a "
             "required step while applying the stated procedure."
         ),
         "keywords": "",
+        # Q1: the row carries the analysis section, so it models an
+        # allotted row (assemble-stamped marker).
+        "_aegis_analysis_allotments": ["LA-0001", "LA-0002"],
     }
     post_records = [
         normal,

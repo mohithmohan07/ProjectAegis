@@ -95,6 +95,12 @@ _CANONICAL_IMAGE_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 _CANONICAL_ANALYSIS_LABEL = "Misconception/ Error Analysis"
+# Q1 allotment marker (stamped by phase3/assemble.py): the LA-item ids
+# the chapter analysis inventory allotted to a row. Rows carrying it are
+# the ONLY rows whose learner-analysis section must exist; a row without
+# it must carry none. Callers derive the validator's allotment context
+# from this field via ``analysis_allotted_keys``.
+ANALYSIS_ALLOTMENTS_FIELD = "_aegis_analysis_allotments"
 # Either section alone is a complete learner analysis; both appear only when
 # they carry genuinely different insight (reviewer contract). The combined
 # both-sections form keeps its exact legacy shape.
@@ -643,15 +649,6 @@ def _is_substantive_mastery_statement(value: str) -> bool:
     )
 
 
-def _normalized_recap_text(value: str) -> str:
-    """Normalize only presentation wrappers for exact recap comparison."""
-    value = re.sub(r"\[/?Katex\]", " ", value or "", flags=re.IGNORECASE)
-    value = re.sub(r"\[img\b[^\]]*\]", " ", value, flags=re.IGNORECASE)
-    value = unicodedata.normalize("NFKC", value)
-    value = _norm(value)
-    return re.sub(r"\s+([,;:.!?])", r"\1", value)
-
-
 def _source_word_windows(source_text: str, *, width: int = 18) -> set[str]:
     """Return normalized contiguous source spans used to catch copied prose."""
     words = re.findall(r"\w+", (source_text or "").casefold())
@@ -883,39 +880,16 @@ def _learner_analysis_statements(text: str) -> list[str]:
     ]
 
 
-def _preserve_authored_analysis() -> bool:
-    """Whether analysis content is API-authored and must not be rewritten.
-
-    Under the rewritten Phase 3, learner analysis is authored by Settle and
-    repaired by Polish — both model passes judged by the terminal gate. The
-    deterministic shape/overlap filters below must then only FORMAT that
-    content, never drop a statement or substitute the fallback filler: the
-    filler is forbidden at the gate, so a silent substitution turns valid
-    API content into a guaranteed failure.
-    """
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive import ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
-
-
 def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
-    """Keep valid learner-analysis sections and apply the deterministic fallback.
+    """Canonicalize the learner-analysis section, preserving authored text.
 
-    API repair can fail or return unusable category text. Normalization alone
-    intentionally preserves legacy non-empty text, so this final-boundary helper
-    removes invalid analysis, keeps either or both valid categories in canonical
-    order, and then lets the refiner add its Error Analysis fallback when a
-    normal concept has neither. Culminations remain optional and receive no
-    fallback.
-
-    With the rewritten Phase 3 active, both categories are kept exactly as
-    the model authored them (formatting canonicalized, exact duplicates
-    removed): quality is judged by the terminal gate and repaired by the
-    Polish pass, not by these deterministic filters.
+    Learner analysis is authored by Settle and repaired by Polish — both
+    model passes judged by the terminal gate. This final-boundary helper
+    only FORMATS that content into the canonical combined section; it never
+    drops a statement or substitutes deterministic filler (the filler is
+    forbidden at the gate, and a missing analysis is the Polish pass's to
+    author with a real model call). Culminations remain optional.
     """
-    preserve = _preserve_authored_analysis()
     for rec in records:
         details = rec.get("concept_details") or ""
         if not details.strip():
@@ -925,85 +899,13 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
         misconception_body, error_analysis_body = (
             concept_refiner.analysis_components(normalized)
         )
-        if preserve:
-            # Keep the authored component text VERBATIM: splitting into
-            # statements and re-joining subtly re-spaces punctuation
-            # (e.g. "12,..." -> "12, ..."), which the rich-text
-            # canonicalizer then collapses on the next pass — an
-            # oscillation the sealed-row fixpoint correctly refuses.
-            misconception = misconception_body.strip()
-            error_analysis = error_analysis_body.strip()
-            kept = [
-                (label, content)
-                for label, content in sections
-                if not concept_refiner.is_learner_analysis_label(label)
-            ]
-            if misconception or error_analysis:
-                combined: list[str] = []
-                if misconception:
-                    combined.append(f"Misconceptions: {misconception}")
-                if error_analysis:
-                    combined.append(f"Error Analysis: {error_analysis}")
-                kept.append((
-                    "Misconception/ Error Analysis",
-                    "; ".join(combined),
-                ))
-            rec["concept_details"] = concept_refiner.join_sections(kept)
-            continue
-        misconceptions: list[str] = []
-        errors: list[str] = []
-        seen_misconceptions: set[str] = set()
-        seen_errors: set[str] = set()
-        for content, preferred_kind in (
-            (misconception_body, "misconception"),
-            (error_analysis_body, "error_analysis"),
-        ):
-            for value in _learner_analysis_statements(content):
-                belief_value = concept_refiner._strip_misconception_correction_tail(
-                    value
-                )
-                belief_key = _norm(belief_value)
-                error_key = _norm(value)
-                valid_misconception = is_valid_misconception(belief_value)
-                valid_error = is_valid_error_analysis(value)
-                if (
-                    preferred_kind == "misconception"
-                    and valid_misconception
-                    and belief_key not in seen_misconceptions
-                ):
-                    seen_misconceptions.add(belief_key)
-                    misconceptions.append(belief_value)
-                elif (
-                    preferred_kind == "error_analysis"
-                    and valid_error
-                    and error_key not in seen_errors
-                ):
-                    seen_errors.add(error_key)
-                    errors.append(value)
-                elif (
-                    valid_misconception
-                    and belief_key not in seen_misconceptions
-                ):
-                    seen_misconceptions.add(belief_key)
-                    misconceptions.append(belief_value)
-                elif valid_error and error_key not in seen_errors:
-                    # Legacy rows often put procedural mistakes under
-                    # Misconception, while some model versions did the reverse.
-                    # Classify by meaning and preserve every distinct valid item.
-                    seen_errors.add(error_key)
-                    errors.append(value)
-        if misconceptions and errors:
-            errors = [
-                error
-                for error in errors
-                if not any(
-                    issue_sections_overlap(misconception, error)
-                    for misconception in misconceptions
-                )
-            ]
-        misconception = " ".join(misconceptions)
-        error_analysis = " ".join(errors)
-
+        # Keep the authored component text VERBATIM: splitting into
+        # statements and re-joining subtly re-spaces punctuation
+        # (e.g. "12,..." -> "12, ..."), which the rich-text
+        # canonicalizer then collapses on the next pass — an
+        # oscillation the sealed-row fixpoint correctly refuses.
+        misconception = misconception_body.strip()
+        error_analysis = error_analysis_body.strip()
         kept = [
             (label, content)
             for label, content in sections
@@ -1020,13 +922,7 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
                 "; ".join(combined),
             ))
         rec["concept_details"] = concept_refiner.join_sections(kept)
-
-    if _preserve_authored_analysis():
-        # No deterministic fallback: the filler it would insert is exactly
-        # what the terminal gate forbids, and missing analysis is the
-        # Polish pass's to repair with a real model call.
-        return records
-    return concept_refiner.ensure_analysis_sections(records)
+    return records
 
 
 def _example_too_short(example_text: str) -> bool:
@@ -1151,6 +1047,21 @@ def _add(errors: list[dict], row_index: int, field: str, code: str,
     })
 
 
+def analysis_allotted_keys(rows: list[dict[str, Any]]) -> set[int]:
+    """Row indexes carrying a Q1 analysis allotment marker.
+
+    The derived set is the ``analysis_allotted_keys`` context Post-lane
+    callers hand to ``validate_concept_rows``: only these rows must
+    carry the learner-analysis section; every other row must carry none
+    (mechanics — pure marker accounting, no content judgment).
+    """
+    return {
+        index
+        for index, row in enumerate(rows)
+        if isinstance(row, dict) and row.get(ANALYSIS_ALLOTMENTS_FIELD)
+    }
+
+
 def validate_concept_rows(
     rows: list[dict[str, Any]], *,
     # Parent Concept ships empty: concepts sit flat under their topic, so its
@@ -1163,11 +1074,25 @@ def validate_concept_rows(
     strict_type_hierarchy: bool = False,
     strict_analysis_section: bool = False,
     strict_mastery_statement: bool = False,
-    strict_culmination_recap: bool = False,
     source_text: str = "",
+    # Q1 gate split: ``None`` keeps the legacy every-row existence
+    # contract (the Pre lane); a set of row indexes scopes the EXISTENCE
+    # codes (missing-section ``analysis_section_format``,
+    # ``missing_learner_analysis``,
+    # ``missing_misconception_or_error_analysis``) to allotted rows
+    # only, and a row OUTSIDE the set that carries a section gets the
+    # fatal ``unallotted_analysis_section`` (marker accounting). The
+    # QUALITY codes (generic/framing/overlap/shape/order) keep their
+    # meaning for any section that exists, allotted or not.
+    analysis_allotted_keys: Collection[int] | None = None,
 ) -> dict:
     """Return a structured validation report for concept-map records."""
     errors: list[dict] = []
+    allotted_rows = (
+        None
+        if analysis_allotted_keys is None
+        else {int(index) for index in analysis_allotted_keys}
+    )
     topic_title_counts: Counter[tuple[str, str]] = Counter()
     title_counts: Counter[str] = Counter()
     topic_rows: defaultdict[str, list[tuple[int, dict]]] = defaultdict(list)
@@ -1313,7 +1238,29 @@ def validate_concept_rows(
             for label, content in concept_refiner.split_sections(details)
             if concept_refiner.is_learner_analysis_label(label)
         ]
-        if strict_analysis_section and not is_culm:
+        # Q1 allotment context: with a key set, only allotted rows must
+        # carry the section; without one (legacy / Pre lane), every
+        # normal row must.
+        analysis_allotted = allotted_rows is None or i in allotted_rows
+        if (
+            allotted_rows is not None
+            and not analysis_allotted
+            and not is_culm
+            and analysis_sections
+        ):
+            # Marker accounting (mechanics): a section exists on a row
+            # the inventory never allotted an item to.
+            _add(
+                errors, i, "concept_details", "unallotted_analysis_section",
+                "row carries a 'Misconception/ Error Analysis' section but "
+                "received no allotment from the chapter analysis inventory "
+                "(Q1: the section exists only where an item was allotted)",
+            )
+        if (
+            strict_analysis_section
+            and not is_culm
+            and (analysis_allotted or analysis_sections)
+        ):
             canonical_match = None
             orphan_analysis_prefix = bool(
                 _ORPHAN_ANALYSIS_PREFIX_RE.search(details))
@@ -1361,10 +1308,16 @@ def validate_concept_rows(
                 )
 
         if not is_culm:
-            if not misconception_sections and not error_analysis_sections:
+            if (
+                analysis_allotted
+                and not misconception_sections
+                and not error_analysis_sections
+            ):
                 # This remains a warning because validation also runs during
                 # intermediate generation stages, before the dedicated issue
                 # analysis pass.  Final refinement guarantees one or both.
+                # Q1: an unallotted row is REQUIRED to carry neither, so
+                # the existence warning fires only for allotted rows.
                 _add(
                     errors, i, "concept_details",
                     "missing_misconception_or_error_analysis",
@@ -1666,11 +1619,7 @@ def validate_concept_rows(
                         # illustration ships flagged for review instead of
                         # blocking the chapter, matching the explicit
                         # figure-citation policy at the source gate.
-                        figure_severity = (
-                            "warning"
-                            if _preserve_authored_analysis()
-                            else "error"
-                        )
+                        figure_severity = "warning"
                         if not image_figure_ids:
                             _add(
                                 errors, i, "concept_details",
@@ -1729,10 +1678,18 @@ def validate_concept_rows(
                             "Examples must use contiguous zero-padded labels "
                             "starting at Example 01 within every Case",
                         )
-        if is_culm and details and not details.split(" // ", 1)[0].startswith(
-                "Description: Recap"):
-            _add(errors, i, "concept_details", "culmination_description",
-                 "culmination description must start with 'Description: Recap'")
+        if is_culm and details:
+            # The culmination Description is the model-authored consolidation
+            # paragraph (no code-composed "Recap of ..." prefix). Mechanics
+            # only: it must be a labeled, non-empty Description section.
+            leading = details.split(" // ", 1)[0]
+            if (
+                not leading.startswith("Description:")
+                or not leading[len("Description:"):].strip()
+            ):
+                _add(errors, i, "concept_details", "culmination_description",
+                     "culmination must carry a non-empty authored "
+                     "'Description: ...' consolidation")
 
     for norm_title, count in title_counts.items():
         if norm_title and count > 1:
@@ -1770,39 +1727,6 @@ def validate_concept_rows(
                 if _norm(title) in affected:
                     _add(errors, i, "concept_title", "repeated_sibling_opener",
                          f"repeated leading phrase: {repeated['phrase']}")
-        if strict_culmination_recap:
-            normal_titles = [
-                (row.get("concept_title") or row.get("concept") or "").strip()
-                for _, row in normal
-            ]
-            normal_titles = [title for title in normal_titles if title]
-            expected_recap = concept_refiner.recap_text(normal_titles)
-            for culmination_index, culmination in culms:
-                recap = _description_text(
-                    culmination.get("concept_details")
-                    or culmination.get("concept_description")
-                    or ""
-                )
-                if not re.match(r"^Recap of\s+\S", recap):
-                    _add(
-                        errors, culmination_index, "concept_details",
-                        "culmination_recap_format",
-                        "culmination Description must begin with the detailed "
-                        "canonical form 'Recap of ...'",
-                    )
-                # The canonical recap is a required PREFIX: an authored
-                # consolidation paragraph may follow it (reviewers found a
-                # bare name list too thin for a description), but the recap
-                # itself must name the topic's concepts exactly.
-                if not _normalized_recap_text(recap).startswith(
-                    _normalized_recap_text(expected_recap)
-                ):
-                    _add(
-                        errors, culmination_index, "concept_details",
-                        "culmination_recap_missing_concepts",
-                        "culmination recap must begin with the canonical "
-                        f"topic recap: {expected_recap}",
-                    )
         if require_culmination and topic:
             # A culmination consolidates several concepts, so only a topic
             # teaching more than one requires it. A topic teaching exactly
@@ -1811,10 +1735,15 @@ def validate_concept_rows(
             # hand-authored rows) is tolerated here rather than failing a
             # whole revalidation. Either way, at most one, and it goes last.
             if len(normal) > 1 and not culms:
+                # A topic the model left without a culmination ships
+                # without one — the row is never invented from code — and
+                # this warning records it for review (R4: flag, not fake).
                 row_i = indexed[-1][0] if indexed else -1
                 _add(errors, row_i, "concept_title", "culmination_count",
-                     "exactly one culmination row is required for a topic "
-                     f"teaching {len(normal)} concepts")
+                     "this topic ships without a culmination row: the "
+                     f"model authored none for its {len(normal)} concepts; "
+                     "flagged for review",
+                     severity="warning")
             elif len(culms) > 1:
                 row_i = indexed[-1][0] if indexed else -1
                 _add(errors, row_i, "concept_title", "culmination_count",

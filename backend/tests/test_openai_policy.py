@@ -404,7 +404,25 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     # 46 with the inventory-completeness reviewer: whether a chunk was
     # under-extracted is a judgment about the source, so it replaced the
     # chars-per-item expected-count formula and the task-marker regex.
-    assert len(generation_calls) == 46
+    # 41 after the phase-3 rewrite migration deleted the legacy post-81%
+    # lane (Type assignment, hub population, alignment review, and
+    # description refinement now live in app/services/phase3, which has its
+    # own purpose-labelled call sites).
+    # 42 with the skeleton-chunk audit verdict: whether a chunk's skeleton
+    # under-covers its source or micro-splits it is a judgment about what
+    # the text teaches, so it replaced the character-count floors/ceilings.
+    # (The type-granularity fragmentation verdict passes _openai_json as
+    # api_call into type_granularity_decision and is purpose-labelled there.)
+    # 39 after the §10 step-2 purge deleted three call sites: the dead
+    # mined-type allocator (_assign_mined_types_via_api), the dead
+    # near-duplicate merge pass (_merge_similar_concepts_via_api), and the
+    # mastery-line backfill's never-taken use_api block (mastery is
+    # authored by Settle and repaired by Polish).
+    # 37 after Slice 3 removed the legacy assessment author's review-triggered
+    # and anti-monotony regeneration calls. The recorded cell decision is now
+    # kernel-owned; question generation authors once and fails closed on an
+    # incomplete batch instead of running a second semantic retry lane.
+    assert len(generation_calls) == 37
     generation_purposes = [
         ast.literal_eval(keyword.value)
         for node in generation_calls
@@ -415,10 +433,10 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     assert set(generation_purposes) <= set(EXPECTED_REASONING_POLICY)
 
     workbooks._vendor()
-    from gpt_writer import GPTWriter
+    import gpt_writer
 
     workbook_tree = ast.parse(
-        Path(__import__("gpt_writer").__file__).read_text(encoding="utf-8")
+        Path(gpt_writer.__file__).read_text(encoding="utf-8")
     )
     workbook_calls = [
         node

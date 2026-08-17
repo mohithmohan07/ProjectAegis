@@ -98,7 +98,11 @@ def test_validator_rejects_only_high_confidence_truncated_description_clause():
     assert "description_truncated_clause" not in _codes(complete)
 
 
-def test_ensure_valid_learner_analysis_reclassifies_preserves_and_exempts_culmination():
+def test_ensure_valid_learner_analysis_preserves_authored_content_and_exempts_culmination():
+    """API-authored analysis is authoritative: the final boundary only
+    canonicalizes formatting into one combined section — it never drops a
+    statement, rewrites one, or backfills a missing sibling with filler.
+    Culminations keep no analysis section."""
     valid_misconception = (
         "Students may misunderstand multiplication as an operation that "
         "always makes a number larger."
@@ -133,25 +137,23 @@ def test_ensure_valid_learner_analysis_reclassifies_preserves_and_exempts_culmin
 
     out = cv.ensure_valid_learner_analysis(records)
 
-    repaired = _analysis_sections(out[0]["concept_details"])
-    assert [label for label, _ in repaired] == [
-        "Misconceptions",
+    # Legacy cross-filed statements are re-labelled by normalization without
+    # losing a word: the mistake filed under Misconceptions joins the authored
+    # Error Analysis text verbatim.
+    assert _analysis_sections(out[0]["concept_details"]) == [(
         "Error Analysis",
+        "Students may believe that every negative input produces a negative "
+        "result. Students may omit the negative sign during substitution.",
+    )]
+
+    # A single authored section stays alone: no deterministic filler is
+    # inserted for the missing sibling.
+    assert _analysis_sections(out[1]["concept_details"]) == [
+        ("Misconceptions", valid_misconception),
     ]
-    assert cv.is_valid_misconception(repaired[0][1])
-    assert cv.is_valid_error_analysis(repaired[1][1])
-    assert "believe that every negative input" in repaired[0][1]
-    assert "omit the negative sign" in repaired[1][1]
-
-    scale_analysis = _analysis_sections(out[1]["concept_details"])
-    assert scale_analysis[0] == ("Misconceptions", valid_misconception)
-    assert scale_analysis[1][0] == "Error Analysis"
-    assert cv.is_valid_error_analysis(scale_analysis[1][1])
-
-    signed_analysis = _analysis_sections(out[2]["concept_details"])
-    assert signed_analysis[0][0] == "Misconceptions"
-    assert cv.is_valid_misconception(signed_analysis[0][1])
-    assert signed_analysis[1] == ("Error Analysis", valid_error)
+    assert _analysis_sections(out[2]["concept_details"]) == [
+        ("Error Analysis", valid_error),
+    ]
     assert _analysis_sections(out[3]["concept_details"]) == []
 
 
@@ -283,7 +285,7 @@ def test_concise_numeric_yes_no_question_is_not_a_stub():
     assert cv._example_too_short("Is this correct?")
 
 
-def test_belief_adverbs_remain_misconceptions_and_are_reclassified():
+def test_belief_adverbs_classify_as_misconceptions_but_authored_placement_wins():
     beliefs = (
         "Students may incorrectly assume that multiplication always makes a "
         "number larger.",
@@ -301,9 +303,10 @@ def test_belief_adverbs_remain_misconceptions_and_are_reclassified():
     sections = _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
-    assert sections[0] == ("Misconceptions", beliefs[0])
-    assert sections[1][0] == "Error Analysis"
-    assert cv.is_valid_error_analysis(sections[1][1])
+    # The API filed this belief under Error Analysis; authored placement is
+    # authoritative, so it stays there verbatim and no Misconceptions sibling
+    # is fabricated.
+    assert sections == [("Error Analysis", beliefs[0])]
 
 
 def test_misconceptions_reject_generic_objects_and_mixed_action_statements():
@@ -325,12 +328,11 @@ def test_misconceptions_reject_generic_objects_and_mixed_action_statements():
         "Description: Scaling depends on the factor and signed inputs. // "
         f"Misconceptions: {mixed}",
     )
+    # Authored analysis is preserved verbatim: the mixed statement is not
+    # split into belief + mistake and stays under its authored label.
     assert _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
-    ) == [
-        ("Misconceptions", belief),
-        ("Error Analysis", mistake),
-    ]
+    ) == [("Misconceptions", mixed)]
 
 
 def test_analysis_splitter_does_not_split_learner_words_inside_a_belief():
@@ -347,9 +349,9 @@ def test_analysis_splitter_does_not_split_learner_words_inside_a_belief():
         sections = _analysis_sections(
             cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
         )
-        assert sections[0] == ("Misconceptions", belief)
-        assert sections[1][0] == "Error Analysis"
-        assert cv.is_valid_error_analysis(sections[1][1])
+        # The belief survives whole under its authored label; no fallback
+        # Error Analysis sibling is inserted.
+        assert sections == [("Misconceptions", belief)]
 
     assert not cv.is_valid_misconception("Students may believe.")
 
@@ -382,13 +384,14 @@ def test_misconceptions_reject_correction_prose_after_the_false_belief():
     sections = _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
-    assert sections[0] == (
-        "Misconceptions", "Students may believe denominators are added.")
-    assert sections[1][0] == "Error Analysis"
-    assert cv.is_valid_error_analysis(sections[1][1])
+    # The correction tail is authored content and is kept verbatim (the text
+    # fails the misconception predicate, so normalization files the whole
+    # statement under Error Analysis) — it is never trimmed down to the
+    # bare belief.
+    assert sections == [("Error Analysis", corrected)]
 
 
-def test_overlap_removal_keeps_distinct_error_analysis_items():
+def test_overlapping_authored_error_analysis_items_are_all_preserved():
     misconception = "Students may believe signs can be omitted."
     overlapping_error = "Students may omit signs during substitution."
     distinct_error = (
@@ -405,9 +408,12 @@ def test_overlap_removal_keeps_distinct_error_analysis_items():
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
 
+    # The overlap filter no longer drops authored statements: every error
+    # item the model wrote survives verbatim; overlap quality is the terminal
+    # gate's judgment, not a deterministic filter's.
     assert sections == [
         ("Misconceptions", misconception),
-        ("Error Analysis", distinct_error),
+        ("Error Analysis", f"{overlapping_error} {distinct_error}"),
     ]
 
 
@@ -985,114 +991,6 @@ def test_strict_mastery_reports_missing_malformed_duplicate_and_stray_markers():
     assert "missing_mastery_statement" not in _codes(legacy_report)
 
 
-def test_strict_culmination_recap_names_every_normal_topic_concept():
-    valid = cv.validate_concept_rows(
-        [
-            _rec("Linear   Growth", topic="Sequences"),
-            _rec("Finite Sum Rule", topic="Sequences"),
-            _rec(
-                "Culmination - Sequences",
-                "Description: Recap of linear growth and FINITE SUM RULE.",
-                topic="Sequences",
-                parent="Culmination",
-            ),
-        ],
-        strict_culmination_recap=True,
-    )
-    assert not ({
-        "culmination_recap_format",
-        "culmination_recap_missing_concepts",
-    } & _codes(valid))
-
-    missing = cv.validate_concept_rows(
-        [
-            _rec("Linear Growth", topic="Sequences"),
-            _rec("Finite Sum Rule", topic="Sequences"),
-            _rec(
-                "Culmination - Sequences",
-                "Description: Recap of Linear Growth.",
-                topic="Sequences",
-                parent="Culmination",
-            ),
-        ],
-        strict_culmination_recap=True,
-    )
-    assert "culmination_recap_missing_concepts" in _codes(missing)
-    missing_error = next(
-        error for error in missing["errors"]
-        if error["code"] == "culmination_recap_missing_concepts"
-    )
-    assert "Finite Sum Rule" in missing_error["message"]
-
-    malformed = cv.validate_concept_rows(
-        [
-            _rec("Linear Growth", topic="Sequences"),
-            _rec(
-                "Culmination - Sequences",
-                "Description: Summary of Linear Growth.",
-                topic="Sequences",
-                parent="Culmination",
-            ),
-        ],
-        strict_culmination_recap=True,
-    )
-    assert "culmination_recap_format" in _codes(malformed)
-
-    legacy = cv.validate_concept_rows([
-        _rec(
-            "Culmination - Sequences",
-            "Description: Recap",
-            topic="Sequences",
-            parent="Culmination",
-        ),
-    ])
-    assert "culmination_recap_format" not in _codes(legacy)
-
-
-def test_strict_culmination_recap_ignores_canonical_katex_wrappers():
-    title = r"Use the Finite-sum Formula S_n = \frac{n}{2}(a+l)"
-    report = cv.validate_concept_rows(
-        [
-            _rec(title, topic="Sequences"),
-            _rec(
-                f"Culmination - {title}",
-                "Description: Recap of Use the Finite-sum Formula "
-                r"[Katex] S_n = \frac{n}{2}(a+l) [/Katex].",
-                topic="Sequences",
-                parent="Culmination",
-            ),
-        ],
-        strict_culmination_recap=True,
-    )
-
-    assert "culmination_recap_missing_concepts" not in _codes(report)
-
-
-def test_strict_culmination_recap_does_not_count_nested_title_as_separate():
-    report = cv.validate_concept_rows(
-        [
-            _rec("Arithmetic Progression", topic="Sequences"),
-            _rec("Progression", topic="Sequences"),
-            _rec(
-                "Culmination - Sequences",
-                "Description: Recap of Arithmetic Progression.",
-                topic="Sequences",
-                parent="Culmination",
-            ),
-        ],
-        strict_culmination_recap=True,
-    )
-
-    error = next(
-        error for error in report["errors"]
-        if error["code"] == "culmination_recap_missing_concepts"
-    )
-    assert (
-        "Recap of Arithmetic Progression and Progression."
-        in error["message"]
-    )
-
-
 def test_strict_analysis_requires_one_exact_combined_section():
     valid = _rec(
         "Signed Substitution",
@@ -1172,6 +1070,127 @@ def test_strict_analysis_accepts_either_section_alone():
         [error_only], strict_analysis_section=True)
     assert not ({
         "analysis_section_format", "missing_learner_analysis",
+    } & _codes(report))
+
+
+def test_q1_gate_split_scopes_existence_to_allotted_rows():
+    """The Q1 allotment context splits existence from quality: with a
+    key set, the missing-section codes fire only for allotted rows; an
+    unallotted row must carry none; ``None`` keeps the legacy every-row
+    contract for the Pre lane."""
+    section = (
+        " // Misconception/ Error Analysis: Misconceptions: Students may "
+        "believe a negative input always makes the final result negative."
+    )
+    allotted_missing = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula.",
+    )
+    # Allotted row missing its section: the existence code fires.
+    report = cv.validate_concept_rows(
+        [allotted_missing], strict_analysis_section=True,
+        analysis_allotted_keys={0},
+    )
+    assert "analysis_section_format" in _codes(report)
+
+    # Unallotted row missing a section: clean under strict.
+    report = cv.validate_concept_rows(
+        [allotted_missing], strict_analysis_section=True,
+        analysis_allotted_keys=set(),
+    )
+    assert not ({
+        "analysis_section_format", "missing_learner_analysis",
+        "missing_misconception_or_error_analysis",
+        "unallotted_analysis_section",
+    } & _codes(report))
+
+    # Unallotted row WITH a section: the fatal marker-accounting code.
+    unallotted_with_section = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula." + section,
+    )
+    report = cv.validate_concept_rows(
+        [unallotted_with_section], strict_analysis_section=True,
+        analysis_allotted_keys=set(),
+    )
+    assert "unallotted_analysis_section" in _codes(report)
+    # It is release-blocking (mechanics: marker accounting).
+    from app.services import generation as g
+
+    assert "unallotted_analysis_section" in g._FATAL_CODES
+
+    # Allotted row WITH its section: clean.
+    report = cv.validate_concept_rows(
+        [unallotted_with_section], strict_analysis_section=True,
+        analysis_allotted_keys={0},
+    )
+    assert not ({
+        "analysis_section_format", "unallotted_analysis_section",
+    } & _codes(report))
+
+    # None = legacy behavior (the Pre lane): every row owes a section.
+    report = cv.validate_concept_rows(
+        [allotted_missing], strict_analysis_section=True,
+    )
+    assert "analysis_section_format" in _codes(report)
+
+
+def test_q1_quality_codes_keep_their_meaning_on_allotted_sections():
+    """The gate split never dilutes quality: a generic analysis on an
+    ALLOTTED row still fails, and a malformed section on an UNALLOTTED
+    row still gets its shape code beside the marker-accounting code."""
+    generic = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: "
+        "Misconceptions: n/a",
+    )
+    report = cv.validate_concept_rows(
+        [generic], strict_analysis_section=True,
+        analysis_allotted_keys={0},
+    )
+    assert "generic_misconception" in _codes(report)
+
+    malformed_unallotted = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconceptions: Students may believe a negative "
+        "input always makes the final result negative.",
+    )
+    report = cv.validate_concept_rows(
+        [malformed_unallotted], strict_analysis_section=True,
+        analysis_allotted_keys=set(),
+    )
+    codes = _codes(report)
+    assert "analysis_section_format" in codes
+    assert "unallotted_analysis_section" in codes
+
+
+def test_analysis_allotted_keys_derive_from_the_row_marker():
+    marked = _rec(
+        "Signed Substitution",
+        "Description: Signed values retain their signs during substitution "
+        "into a formula. // Misconception/ Error Analysis: "
+        "Misconceptions: Students may believe a negative input always "
+        "makes the final result negative.",
+    )
+    marked["_aegis_analysis_allotments"] = ["LA-0001"]
+    unmarked = _rec(
+        "Another Concept",
+        "Description: Another complete explanation of the idea at hand.",
+    )
+    assert cv.analysis_allotted_keys([marked, unmarked]) == {0}
+    report = cv.validate_concept_rows(
+        [marked, unmarked], strict_analysis_section=True,
+        analysis_allotted_keys=cv.analysis_allotted_keys(
+            [marked, unmarked]
+        ),
+    )
+    assert not ({
+        "analysis_section_format", "missing_learner_analysis",
+        "unallotted_analysis_section",
     } & _codes(report))
 
 

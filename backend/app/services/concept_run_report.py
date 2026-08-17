@@ -531,8 +531,14 @@ def build_run_report(
     *,
     generation_log: Sequence[Any] | None = None,
     generation_checkpoint: Mapping[str, Any] | None = None,
+    dropped_furniture: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Return the reproducible explanation of how this run ended."""
+    """Return the reproducible explanation of how this run ended.
+
+    ``dropped_furniture`` carries both source lanes' verbatim dropped
+    lines ({"chapter_reading": [...], "acsd": [...]}) so the report can
+    list what was dropped and what it said (R4) — never a bare count.
+    """
 
     log = list(generation_log or [])
     checkpoint = dict(generation_checkpoint or {})
@@ -544,8 +550,21 @@ def build_run_report(
     summary = summary if isinstance(summary, Mapping) else {}
 
     decisions = _decision_history(checkpoint)
+    furniture = dict(dropped_furniture or {})
     return {
         "version": "aegis-concept-run-report-1",
+        "dropped_furniture": {
+            "chapter_reading": [
+                str(line)
+                for line in furniture.get("chapter_reading") or []
+                if str(line or "").strip()
+            ],
+            "acsd": [
+                str(line)
+                for line in furniture.get("acsd") or []
+                if str(line or "").strip()
+            ],
+        },
         "stopped": bool(issue),
         "outcome": "stopped" if issue else "completed",
         "job_id": payload.get("job_id"),
@@ -587,6 +606,32 @@ def build_run_report(
         },
         "log_pointers": _log_pointers(log, message),
     }
+
+
+def _render_furniture(report: Mapping[str, Any]) -> list[str]:
+    """R4: list dropped furniture with what it said — never a bare count."""
+
+    furniture = report.get("dropped_furniture") or {}
+    rows = [
+        (lane, str(line))
+        for lane in ("chapter_reading", "acsd")
+        for line in furniture.get(lane) or []
+        if str(line or "").strip()
+    ]
+    if not rows:
+        return []
+    lines = ["", "DROPPED FURNITURE"]
+    lines.append(
+        f"  {len(rows)} line(s) were dropped as running heads, footers, or "
+        "page numbers; each is listed verbatim:"
+    )
+    for lane, line in rows[:60]:
+        lines.append(f"  [{lane}] {line}")
+    if len(rows) > 60:
+        lines.append(
+            f"  … {len(rows) - 60} more line(s) in context/run_report.json"
+        )
+    return lines
 
 
 def _render_accepted(report: Mapping[str, Any]) -> list[str]:
@@ -696,6 +741,7 @@ def render_run_report(report: Mapping[str, Any]) -> str:
             "accepted without",
             "  full independent verification is below.",
             *_render_accepted(report),
+            *_render_furniture(report),
             "",
             "Full detail, including exact log indexes, is in "
             "context/run_report.json.",
@@ -771,6 +817,7 @@ def render_run_report(report: Mapping[str, Any]) -> str:
         ]
     # A stopped run still released rows, so the same quality question applies.
     lines += _render_accepted(report)
+    lines += _render_furniture(report)
     lines += [
         "",
         "Full detail, including exact log indexes, is in "

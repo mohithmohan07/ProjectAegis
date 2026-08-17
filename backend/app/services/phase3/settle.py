@@ -3,10 +3,12 @@
 Consumes the sealed envelope, decides every normal concept exactly once
 through the kernel, and emits the settled row set — the artifact the old
 pipeline knew as the validated final concept topology. Culminations are
-derived, never decided. Stage 3 authors each concept's Description,
-Achieving Mastery, and Misconception/Error Analysis in a single decision
-grounded on the concept's own source blocks — there is no separate
-description-refinement or mastery pass under the rewrite.
+derived, never decided. Stage 3 authors each concept's Description and
+Achieving Mastery in a single decision grounded on the concept's own
+source blocks — there is no separate description-refinement or mastery
+pass under the rewrite. Misconceptions/Error Analysis are NOT authored
+here: the chapter inventory pass (phase3/analyse.py, Q1) is the only
+analysis mechanism, and Assemble stamps its allotments onto the rows.
 """
 from __future__ import annotations
 
@@ -25,6 +27,12 @@ from .. import semantic_confidence_policy as confidence_policy
 _BATCH_SIZE = 12
 
 _DECISIONS = {"keep", "refine", "split"}
+
+# The Q1 unbundling (docs/aegis-restructure.md §12 Q1) removed
+# misconception_error_analysis from settle.author's response schema and
+# house string. The suffix re-keys every stored authoring decision so a
+# pre-Q1 record can never replay its stale schema past the new checker.
+AUTHOR_POLICY_SUFFIX = "-q1"
 
 _ANALYSIS_SPLIT = re.compile(
     r"\s*//\s*Misconception/?\s*Error Analysis:\s*", re.IGNORECASE
@@ -328,8 +336,9 @@ def _grounding_checker(
 
 
 # ---------------------------------------------------------------------------
-# stage 3: content authoring (one decision per batch — description,
-# mastery, and learner analysis together, so none can drift apart)
+# stage 3: content authoring (one decision per batch — description and
+# mastery together, so neither can drift apart; learner analysis is the
+# chapter inventory pass's alone, Q1)
 
 
 _MATH_FORMAT_ISSUES = {
@@ -402,7 +411,6 @@ def _authoring_checker(
                 )
         seen: set[str] = set()
         mastery_seen: dict[str, str] = {}
-        analysis_seen: dict[str, str] = {}
         for row in rows:
             if not isinstance(row, Mapping):
                 defects.append("an authored entry is not an object")
@@ -430,8 +438,9 @@ def _authoring_checker(
             ):
                 defects.append(
                     f"{concept_id} concept_description must carry only the "
-                    "teaching paragraph — mastery and learner analysis go "
-                    "in their own fields"
+                    "teaching paragraph — mastery goes in its own field, "
+                    "and Misconceptions/Error Analysis are never authored "
+                    "here (the chapter inventory pass owns them)"
                 )
             math_defect = _math_format_defect(
                 concept_id, "concept_description", description
@@ -459,53 +468,6 @@ def _authoring_checker(
                     )
                 else:
                     mastery_seen[key] = concept_id
-
-            body = _FIELD_LABEL.sub(
-                "", _normal(row.get("misconception_error_analysis"))
-            )
-            lowered = body.casefold()
-            # Either section alone is a complete analysis; both appear only
-            # when they carry genuinely different insight.
-            if "misconception" not in lowered and "error analysis" not in (
-                lowered
-            ):
-                defects.append(
-                    f"{concept_id} analysis must contain a Misconceptions "
-                    "or an Error Analysis part (either one is sufficient)"
-                )
-                continue
-            if re.search(r"misconception/\s*error analysis", lowered):
-                defects.append(
-                    f"{concept_id} analysis repeats the "
-                    "'Misconception/ Error Analysis' label — start "
-                    "directly with 'Misconceptions:' or 'Error Analysis:'"
-                )
-            if (
-                len(re.findall(r"misconceptions?\s*:", lowered)) > 1
-                or len(re.findall(r"error analysis\s*:", lowered)) > 1
-            ):
-                defects.append(
-                    f"{concept_id} analysis repeats a section label — at "
-                    "most one Misconceptions and one Error Analysis section"
-                )
-            if "learner" not in lowered and "student" not in lowered:
-                defects.append(
-                    f"{concept_id} analysis must name the learner or "
-                    "student and their belief or concrete faulty action"
-                )
-            if lowered in analysis_seen:
-                defects.append(
-                    f"{concept_id} analysis repeats {analysis_seen[lowered]}"
-                    "'s — each concept's analysis must come from its own "
-                    "content"
-                )
-            else:
-                analysis_seen[lowered] = concept_id
-            math_defect = _math_format_defect(
-                concept_id, "misconception_error_analysis", body
-            )
-            if math_defect:
-                defects.append(math_defect)
         missing = sorted(expected - seen)
         if missing:
             defects.append("unauthored concept(s): " + ", ".join(missing))
@@ -549,6 +511,106 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# the Fixer seam F2: a skeleton row that resolves to no graph topic
+
+
+def _fix_topic_resolution(
+    row: dict[str, Any],
+    topics: list[Mapping[str, Any]],
+    *,
+    row_index: int,
+    fixer: kernel.Provider,
+    store: kernel.DecisionStore,
+    envelope_sha: str,
+) -> str:
+    """One recorded Fixer decision naming the graph topic hosting ``row``.
+
+    Returns the chosen topic_id, or "" when the Fixer could not name a
+    real topic after bounded attempts (the caller then raises exactly as
+    a fixer-less run does — protocol impossibility).
+    """
+
+    from . import fixer as fixer_mod
+
+    title = _normal(row.get("concept_title") or row.get("concept"))
+    topic_ids = {
+        str(topic.get("topic_id") or "")
+        for topic in topics
+        if str(topic.get("topic_id") or "")
+    }
+    blocked = (
+        "skeleton row resolves to no graph topic: " + title[:80]
+    )
+    payload = {
+        "fixer": True,
+        "blocked_check": [blocked],
+        "contract": {
+            "kind": "fixer.topic_resolution",
+            "rule": (
+                "every skeleton row must belong to exactly one graph "
+                "topic; name the topic_id whose material this concept "
+                "belongs to. Response schema: {\"topic_id\", "
+                "\"rationale\"}"
+            ),
+        },
+        "row": {
+            "topic": row.get("topic"),
+            "parent_concept": row.get("parent_concept"),
+            "concept_title": row.get("concept_title"),
+            "concept_details": str(row.get("concept_details") or "")[:1200],
+            "keywords": row.get("keywords"),
+        },
+        "topics": [
+            {
+                "topic_id": str(topic.get("topic_id") or ""),
+                "title": str(topic.get("title") or ""),
+            }
+            for topic in topics
+        ],
+    }
+
+    def check(response: Mapping[str, Any]) -> list[str]:
+        defects: list[str] = []
+        chosen = str(response.get("topic_id") or "")
+        if chosen not in topic_ids:
+            defects.append(
+                f"topic_id {chosen or '<empty>'!r} is not a graph topic; "
+                "name one of: " + ", ".join(sorted(topic_ids))
+            )
+        if not str(response.get("rationale") or "").strip():
+            defects.append("rationale is required")
+        return defects
+
+    try:
+        decision = kernel.decide(
+            kind="fixer.topic_resolution",
+            unit_id=f"skeleton-row#{row_index}",
+            envelope_sha256=envelope_sha,
+            payload=payload,
+            provider=fixer,
+            checker=check,
+            store=store,
+            policy_version=fixer_mod.FIXER_POLICY_VERSION,
+        )
+    except kernel.ContractError:
+        return ""
+    topic_id = str(decision["response"].get("topic_id") or "")
+    title_by_id = {
+        str(topic.get("topic_id") or ""): str(topic.get("title") or "")
+        for topic in topics
+    }
+    rationale = " ".join(
+        str(decision["response"].get("rationale") or "").split()
+    )[:240]
+    row.setdefault("_fixer_review_flags", []).append(
+        f"fixer: blocked={blocked}; decided=hosted under topic "
+        f"{topic_id} ({title_by_id.get(topic_id, '')[:60]})"
+        + (f" — {rationale}" if rationale else "")
+    )
+    return topic_id
+
+
+# ---------------------------------------------------------------------------
 # the pass
 
 
@@ -560,8 +622,11 @@ def settle(
     analysis_provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
 ) -> list[dict[str, Any]]:
     """Settle every concept: one decision each, flags attached, no pauses."""
+
+    from . import fixer as fixer_mod
 
     env = envelope_mod.validate(env)
     explicit = topology_provider is not None
@@ -571,6 +636,7 @@ def settle(
         grounding_provider = grounding_provider or _live_grounding
         analysis_provider = analysis_provider or _live_analysis
         critic = critic or _live_critic
+        fixer = fixer or fixer_mod.live_fixer
     if grounding_provider is None or analysis_provider is None:
         raise ValueError(
             "settle needs grounding and analysis providers when the "
@@ -578,7 +644,12 @@ def settle(
         )
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    policy = confidence_policy.threshold_text()
+    policy = confidence_policy.POLICY_VERSION
+    from . import prompts as prompts_mod
+
+    # The Architect's run instructions ride the sealed envelope metadata;
+    # empty slots append nothing, so payloads stay byte-identical.
+    rules_suffix = prompts_mod.instruction_rules_suffix(env)
 
     topics = _topic_rows(env)
     blocks_by_topic = _blocks_by_topic(env)
@@ -587,9 +658,23 @@ def settle(
 
     normal_rows: list[dict[str, Any]] = []
     culmination_rows: list[dict[str, Any]] = []
-    for row in env["skeleton_rows"]:
+    for row_index, row in enumerate(env["skeleton_rows"]):
         resolved = copy.deepcopy(dict(row))
         topic_id = resolve_topic_id(resolved, topics)
+        if not topic_id and fixer is not None:
+            # The Fixer seam F2 (Q13): a skeleton row that resolves to no
+            # graph topic is a judgment call — which topic hosts it — not
+            # a reason to halt. One recorded decision names the hosting
+            # topic; the row proceeds flagged. R4: the row is never
+            # dropped.
+            topic_id = _fix_topic_resolution(
+                resolved,
+                topics,
+                row_index=row_index,
+                fixer=fixer,
+                store=store,
+                envelope_sha=envelope_sha,
+            )
         if not topic_id:
             raise envelope_mod.EnvelopeError(
                 "skeleton row resolves to no graph topic: "
@@ -654,9 +739,17 @@ def settle(
                     "slides from it alone (never a sliver of the parent's "
                     "text) — and its own distinct "
                     "'Achieving Mastery:' line — segments must never share "
-                    "or paraphrase one mastery sentence. Confidence must "
-                    "reflect source evidence; the acceptance floor is "
-                    f"{policy}."
+                    "or paraphrase one mastery sentence. "
+                    "Pedagogy/activity banners and enrichment boxes — "
+                    "'Activity', 'Project', 'do you know?', fact boxes, "
+                    "discussion prompts and the like — are NEVER concepts "
+                    "of their own: they cue an action or enrich a concept, "
+                    "and their information reaches the learner through the "
+                    "concept's Activity/Info Hub after placement, not as a "
+                    "concept row. Never keep, refine, or split a row into "
+                    "such a banner-concept. State your honest "
+                    "confidence; a low-confidence decision ships flagged "
+                    "for review." + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -681,6 +774,7 @@ def settle(
                 critic=critic,
                 store=store,
                 policy_version=policy,
+                fixer=fixer,
             )
             response_by_id = {
                 str(row.get("concept_id") or ""): row
@@ -714,11 +808,17 @@ def settle(
                         "_phase32_segment_order": order,
                     }
                     index = len(topic_settled)
-                    flags = _pin_flags(
-                        list(decision.get("review_flags") or []),
-                        [c["concept_id"] for c in batch],
-                        row["concept_id"],
-                    )
+                    flags = [
+                        # A Fixer topic-resolution decision (seam F2) is
+                        # recorded on every row derived from the skeleton
+                        # row it unblocked.
+                        *(row.get("_fixer_review_flags") or []),
+                        *_pin_flags(
+                            list(decision.get("review_flags") or []),
+                            [c["concept_id"] for c in batch],
+                            row["concept_id"],
+                        ),
+                    ]
                     if flags:
                         local_flags[index] = flags
                     topic_settled.append(settled_row)
@@ -744,8 +844,9 @@ def settle(
                     "later section), ground on the chapter blocks that DO "
                     "teach it — from other_topic_blocks — and explain that "
                     "in reason; such a decision ships flagged for review. "
-                    "Never return an empty source_block_ids. The "
-                    f"acceptance floor is {policy}."
+                    "Never return an empty source_block_ids. State your "
+                    "honest confidence; a low-confidence decision ships "
+                    "flagged for review." + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -784,6 +885,7 @@ def settle(
                 critic=critic,
                 store=store,
                 policy_version=policy,
+                fixer=fixer,
             )
             grounded_by_id = {
                 str(row.get("concept_id") or ""): row
@@ -872,24 +974,10 @@ def settle(
                     "or a compact worked cue. achieving_mastery: ONE "
                     "sentence naming what a learner can DO once this "
                     "concept is mastered — distinct for every concept, "
-                    "never shared or paraphrased between concepts. "
-                    "misconception_error_analysis: the genuine learner "
-                    "insight for THIS concept — 'Misconceptions:' names a "
-                    "plausible learner belief; 'Error Analysis:' names the "
-                    "learner and a concrete faulty action or reasoning "
-                    "step, not another belief. State the belief or action "
-                    "CONCRETELY — what the learner actually thinks or "
-                    "does with THIS concept's content, with the specific "
-                    "quantity, step, or claim named — never a vague "
-                    "'confuses X with Y' or 'misunderstands the "
-                    "relationship'. Default to the ONE section "
-                    "that carries the sharpest insight for this concept; "
-                    "add the second ONLY when it contributes genuinely "
-                    "different insight — never as a paraphrase of the "
-                    "first, and never reuse one concept's analysis for "
-                    "another. Start the field directly with "
-                    "'Misconceptions:' or 'Error Analysis:' — never repeat "
-                    "the outer 'Misconception/ Error Analysis' label. In "
+                    "never shared or paraphrased between concepts. Do NOT "
+                    "author Misconceptions or Error Analysis in any field "
+                    "— the chapter-level inventory pass owns them (Q1) "
+                    "and they are allotted to concepts later. In "
                     "every field, wrap EVERY mathematical expression "
                     "exactly as [Katex] valid LaTeX [/Katex]; never emit "
                     "raw TeX, $ delimiters, bare sub/superscripts, or bare "
@@ -899,7 +987,7 @@ def settle(
                     "language) tying the topic's member concepts together — "
                     "what the learner can now do with them combined — "
                     "never a list of concept names and never a repeat of "
-                    "any single concept's description."
+                    "any single concept's description." + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -947,10 +1035,21 @@ def settle(
                 payload=payload,
                 provider=analysis_provider,
                 checker=_authoring_checker(concept_ids, batch_culm_ids),
-                critic=None,
+                critic=critic,
                 store=store,
-                policy_version=policy,
+                # Q1 re-key: the authoring schema lost its analysis field,
+                # so stored pre-Q1 decisions must never replay here.
+                policy_version=policy + AUTHOR_POLICY_SUFFIX,
+                fixer=fixer,
             )
+            for position, concept_id in zip(offset_batch, concept_ids):
+                flags = _pin_flags(
+                    list(decision.get("review_flags") or []),
+                    concept_ids,
+                    concept_id,
+                )
+                if flags:
+                    local_flags.setdefault(position, []).extend(flags)
             authored_by_id = {
                 str(row.get("concept_id") or ""): row
                 for row in decision["response"].get("rows") or []
@@ -969,13 +1068,12 @@ def settle(
                 mastery = _FIELD_LABEL.sub(
                     "", _normal(authored.get("achieving_mastery"))
                 )
-                analysis = _FIELD_LABEL.sub(
-                    "", _normal(authored.get("misconception_error_analysis"))
-                )
+                # Q1: Settle mints Description + Achieving Mastery only.
+                # The Misconception/ Error Analysis section is stamped by
+                # Assemble from the chapter inventory's allotments.
                 row["concept_details"] = kr.repair_unwrapped_math(
                     "Description: " + description
                     + "\nAchieving Mastery: " + mastery
-                    + " // Misconception/ Error Analysis: " + analysis
                 )
 
         topic_flag_count = sum(1 for flags in local_flags.values() if flags)
@@ -991,6 +1089,11 @@ def settle(
         )
 
         # -- culminations: structure derived, prose authored above -------
+        # The Description is the model-authored consolidation paragraph —
+        # never a code-composed "Recap of ..." title list. The authoring
+        # checker makes the consolidation mandatory, so an empty one here
+        # is an unexpected defect: the row still ships (never dropped),
+        # flagged for review.
         culm_rows: list[dict[str, Any]] = []
         for culm_index, row in enumerate(topic_culms):
             derived_blocks: list[str] = []
@@ -998,24 +1101,29 @@ def settle(
                 for block_id in source.get("_source_block_ids") or []:
                     if block_id not in derived_blocks:
                         derived_blocks.append(block_id)
-            recap = cr.recap_text([
-                r["concept_title"] for r in topic_settled
-            ])
             prose = culm_consolidations.get(f"CULM#{culm_index}", "")
-            culm_rows.append({
+            culm_row = {
                 "topic": row.get("topic"),
                 "parent_concept": _normal(row.get("parent_concept")),
                 "concept_title": _normal(row.get("concept_title")),
-                "concept_details": (
-                    "Description: " + recap + (f" {prose}" if prose else "")
-                ),
+                "concept_details": "Description: " + prose,
                 "keywords": _normal(row.get("keywords")),
                 "_semantic_topic_id": topic_id,
                 "_source_block_ids": derived_blocks,
                 "_source_grounding_contract": (
                     "derived-from-verified-topic-concepts"
                 ),
-            })
+            }
+            culm_flags = list(row.get("_fixer_review_flags") or [])
+            if not prose:
+                culm_flags.append(
+                    "culmination shipped without an authored consolidation "
+                    "paragraph; the authoring pass returned none and no "
+                    "text was code-composed — needs review"
+                )
+            if culm_flags:
+                culm_row["review_flags"] = culm_flags
+            culm_rows.append(culm_row)
         return topic_settled, local_flags, culm_rows
 
     # Topics are independent decision streams (each one's topology ->

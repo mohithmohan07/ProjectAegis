@@ -20,9 +20,17 @@ Concretely, do NOT introduce:
 
 Instead: give the model the source evidence and the question, take its verdict,
 and — following this codebase's existing pattern — have an **independent second
-pass verify** before anything is dropped, merged, or rewritten. Fail closed:
-when the model does not positively decide, keep the content and stop the run.
-Stopping is recoverable; silently losing a learner's question is not.
+pass verify** before anything is dropped, merged, or rewritten (its dissent is
+an advisory review flag, never a gate — Q10). When the model does not
+positively decide mid-run, the block goes to **The Fixer** (§8.2 of
+docs/aegis-restructure.md, decided by Q13 amending Q7 in the §12 register):
+one recorded, flagged, content-addressed best-judgment decision with the full
+context of the block, and the run completes. Nothing is ever guessed
+*silently*, nothing is lost, finished work always ships. Only the pre-spend
+source-integrity pauses (source review, source-topic recovery, Type
+granularity) and genuine impossibility — source unreadable, provider down,
+quota exhausted, a decision that cannot be made mechanically applicable — may
+stop a run. Silently losing a learner's question is never recoverable.
 
 ### Why
 
@@ -44,7 +52,10 @@ written for.
 ### What is still allowed to be deterministic
 
 Mechanics, not meaning: parsing, ID assignment, caching, ordering, atomic
-writes, schema validation, and **gates that refuse to proceed**. A strict check
-that stops the run is fine — it makes no judgment about the content, it just
-declines to guess. What must not be deterministic is the decision about what
-the source *means*.
+writes, schema validation, and **gates that refuse to accept a broken
+artifact**. A strict check that detects a defect is fine — it makes no
+judgment about the content, it just declines to guess. But mid-run a detected
+defect routes to The Fixer's recorded decision rather than halting (Q13);
+a gate may only stop the run outright at the pre-spend pauses or on genuine
+impossibility. What must not be deterministic is the decision about what the
+source *means*.

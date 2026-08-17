@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import config, models
 from ..bulk_import import workbook_sync, writer
+from . import assessment_grouping, generation
 
 
 # --------------------------------------------------------------------------- #
@@ -26,13 +27,29 @@ from ..bulk_import import workbook_sync, writer
 
 def _group_of_type(db: Session, concept: models.Concept, group_type: str) -> models.Group:
     """Find or create the group of ``group_type`` under ``concept``."""
-    for g in concept.groups:
-        if g.group_type == group_type:
-            return g
+    if group_type not in assessment_grouping.TIER_CODES:
+        raise ValueError(f"unknown recorded group tier {group_type!r}")
+    matches = [group for group in concept.groups if group.group_type == group_type]
+    if len(matches) > 1:
+        raise ValueError(
+            f"concept {concept.id} has multiple {group_type} variant groups; "
+            "tagging requires an explicit group identity"
+        )
+    if matches:
+        return matches[0]
+    visible_name = assessment_grouping.friendly_group_name(
+        concept.concept_display_name, group_type
+    )
+    machine_base = generation.question_label(concept, 1).rsplit(" Q", 1)[0]
     group = models.Group(
-        concept_id=concept.id, group_type=group_type,
-        group_name=f"{concept.concept_title} — {group_type}",
-        group_display_name=f"{concept.concept_title} — {group_type}",
+        concept_id=concept.id,
+        group_type=group_type,
+        group_key=assessment_grouping.group_key_for(
+            machine_base, group_type, 1
+        ),
+        group_sequence=1,
+        group_name=visible_name,
+        group_display_name=visible_name,
         group_status="Active",
     )
     db.add(group)
@@ -66,7 +83,9 @@ def tag_question_to_concept(db: Session, question_id: int, concept_id: int) -> d
     concept = db.get(models.Concept, concept_id)
     if not question or not concept:
         raise ValueError("question or concept not found")
-    group_type = question.group.group_type if question.group else "Basic"
+    if question.group is None:
+        raise ValueError("question has no recorded home group")
+    group_type = question.group.group_type
     group = _group_of_type(db, concept, group_type)
     return tag_question_to_group(db, question_id, group.id)
 
@@ -100,7 +119,12 @@ def _classify_question(q: models.Question, index: writer.WorkbookIndex) -> list[
     rows: list[dict] = []
     for group in writer._question_placements(q):
         key = writer.question_placement_key(q.question_label, group)
-        if key in index.q_placements:
+        existing_key = key
+        if q.origin == "concept_mapping" and key not in index.q_placements:
+            existing_key = writer.visible_question_placement_key(
+                q.question_label, group
+            )
+        if existing_key in index.q_placements:
             outcome = "SKIP"
         elif q.question_label in index.labels:
             outcome = "TAG"

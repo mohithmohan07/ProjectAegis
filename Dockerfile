@@ -20,6 +20,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./
 
+# Runtime policy evidence. These are the single authoritative repo-root
+# artifacts; no copied mirror is checked into the backend package.
+COPY docs/open-specific-registry-v2.md docs/open-specific-registry-v2.xlsx /app/docs/
+
 COPY --from=frontend-build /frontend/dist /app/frontend_dist
 
 ENV FRONTEND_DIST_DIR=/app/frontend_dist

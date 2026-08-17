@@ -214,7 +214,37 @@ def _mock_stages() -> dict:
     ]
     # Culminations are added BEFORE the Types pass (mirrors the live pipeline),
     # so mined mixed/synthesis Types could also land on culmination rows.
-    culminated = generation._ensure_culmination_rows([dict(r) for r in desc])
+    # The live pipeline's culminations are model-authored; this offline QA
+    # sample supplies equivalent hand-authored fixture rows.
+    def _sample_culminations(rows: list[dict]) -> list[dict]:
+        out: list[dict] = []
+        topics: dict[str, list[dict]] = {}
+        order: list[str] = []
+        for rec in rows:
+            topic = rec.get("topic", "")
+            if topic not in topics:
+                topics[topic] = []
+                order.append(topic)
+            topics[topic].append(rec)
+        for topic in order:
+            out.extend(topics[topic])
+            if len(topics[topic]) < 2:
+                continue
+            out.append(_row(
+                topic,
+                "Culmination",
+                f"Culmination - {topic}",
+                (
+                    "Description: Together these concepts let the learner "
+                    f"combine every idea taught in {topic} — moving from "
+                    "each rule on its own to choosing and applying the "
+                    "right one in mixed problems."
+                ),
+                "culmination, recap, mixed application",
+            ))
+        return out
+
+    culminated = _sample_culminations([dict(r) for r in desc])
     typed = [dict(r) for r in culminated]
     type_bodies = [
         "Type 01: Converting repeated multiplication to exponential form Case 01: Write 3 × 3 × 3 × 3 in exponential form Case 02: Write 5 × 5 × 5 using exponent notation",

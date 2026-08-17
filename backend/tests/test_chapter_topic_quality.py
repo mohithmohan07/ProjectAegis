@@ -19,60 +19,71 @@ def _rec(title, details, topic="Topic A", parent="P"):
             "concept_title": title, "concept_details": details, "keywords": ""}
 
 
-def test_recap_lists_merged_concepts():
+def test_recap_machinery_is_gone_and_authored_culminations_survive():
+    """The 'Recap of <titles>' prefix was code-composed, not decided by the
+    model. It is deleted: the culmination Description is the model-authored
+    consolidation, and no deterministic pass rewrites it."""
+    assert not hasattr(cr, "recap_text")
+    assert not hasattr(cr, "set_culmination_recap")
+
+    authored = (
+        "Description: Together these ideas let the learner move from single "
+        "criteria to choosing the right similarity argument in mixed "
+        "problems. // Types: Type 01: Mix Case 01: q"
+    )
     records = [
         _rec("Similarity of Figures", "Description: a"),
         _rec("Similar Triangles", "Description: b"),
-        _rec("Basic Proportionality Theorem", "Description: c"),
-        _rec("Culmination - Similarity",
-             "Description: Recap // Types: Type 01: Mix Case 01: q",
-             parent="Culmination"),
+        _rec("Culmination - Similarity", authored, parent="Culmination"),
     ]
-    out = cr.set_culmination_recap(records)
-    culm = out[-1]["concept_details"]
-    assert culm.startswith(
-        "Description: Recap of Similarity of Figures, Similar Triangles "
-        "and Basic Proportionality Theorem.")
-    # Types are untouched.
-    assert "Types: Type 01: Mix" in culm
+    out = cr.refine_chapter(records)
+    assert out[-1]["concept_details"] == authored
+    assert "Recap of" not in out[-1]["concept_details"]
 
 
-def test_recap_scopes_to_own_topic():
-    records = [
-        _rec("A", "Description: a", topic="T1"),
-        _rec("Culmination - T1", "Description: Recap", topic="T1", parent="Culmination"),
-        _rec("B", "Description: b", topic="T2"),
-        _rec("Culmination - T2", "Description: Recap", topic="T2", parent="Culmination"),
-    ]
-    out = cr.set_culmination_recap(records)
-    assert out[1]["concept_details"] == "Description: Recap of A."
-    assert out[3]["concept_details"] == "Description: Recap of B."
-
-
-def test_recap_without_normal_concepts_falls_back():
-    records = [_rec("Culmination - Empty", "Description: Recap", parent="Culmination")]
-    out = cr.set_culmination_recap(records)
-    assert out[0]["concept_details"] == "Description: Recap"
-
-
-def test_validator_accepts_detailed_recap():
+def test_validator_accepts_authored_consolidation_description():
     rows = [
         {"topic": "T", "parent_concept": "P", "concept_title": "A",
          "concept_details": "Description: teaches a thing clearly and fully",
          "keywords": "k"},
+        {"topic": "T", "parent_concept": "P", "concept_title": "B",
+         "concept_details": "Description: teaches another thing fully",
+         "keywords": "k"},
         {"topic": "T", "parent_concept": "Culmination",
          "concept_title": "Culmination - T",
-         "concept_details": "Description: Recap of A. // Types: "
-                            "Type 01: Mix Case 01: combine",
+         "concept_details": "Description: a long authored synthesis of A "
+                            "and B // Types: Type 01: Mix Case 01: combine",
          "keywords": "k"},
     ]
+    # An authored consolidation with NO "Recap of" prefix passes.
     report = cv.validate_concept_rows(rows, require_culmination=True)
     assert not [e for e in report["errors"]
                 if e["code"] == "culmination_description"]
 
-    rows[1]["concept_details"] = "Description: a long synthesis // Types: Type 01: M Case 01: q"
+    # Only a culmination without any authored Description content fails
+    # (mechanics: the labeled section must exist and be non-empty).
+    rows[2]["concept_details"] = "Description:  // Types: Type 01: M Case 01: q"
     report = cv.validate_concept_rows(rows, require_culmination=True)
     assert [e for e in report["errors"] if e["code"] == "culmination_description"]
+
+
+def test_topic_without_authored_culmination_ships_flagged_not_invented():
+    rows = [
+        {"topic": "T", "parent_concept": "P", "concept_title": "A",
+         "concept_details": "Description: teaches a thing clearly and fully",
+         "keywords": "k"},
+        {"topic": "T", "parent_concept": "P", "concept_title": "B",
+         "concept_details": "Description: teaches another thing fully",
+         "keywords": "k"},
+    ]
+    report = cv.validate_concept_rows(rows, require_culmination=True)
+    flagged = [
+        e for e in report["errors"] if e["code"] == "culmination_count"
+    ]
+    assert flagged and flagged[0]["severity"] == "warning"
+    assert "flagged for review" in flagged[0]["message"]
+    # A warning never blocks the run.
+    assert report["ok"]
 
 
 # --------------------------------------------------------------------------- #
@@ -106,11 +117,13 @@ def test_refine_chapter_formats_mastery_but_not_culminations():
     records = [
         _rec("A", "Description: body. Achieving Mastery: applying the rule. // "
                   "Types: Type 01: X Case 01: q"),
-        _rec("Culmination - Topic A", "Description: Recap", parent="Culmination"),
+        _rec("Culmination - Topic A", "Description: An authored synthesis.",
+             parent="Culmination"),
     ]
     out = cr.refine_chapter(records)
     assert "\nAchieving Mastery: applying the rule." in out[0]["concept_details"]
-    assert out[1]["concept_details"].startswith("Description: Recap of A.")
+    # The authored culmination Description is left exactly as authored.
+    assert out[1]["concept_details"] == "Description: An authored synthesis."
 
 
 def test_description_refine_prompt_requires_mastery_line():
@@ -186,7 +199,12 @@ def test_topic_segregation_verdict_fails_closed_on_no_decision(monkeypatch):
         )
 
 
-def test_topic_headings_skip_exercises_parts_and_general():
+# ``_topic_headings`` is the structural FALLBACK topic list: the contract
+# wrapper prefers the semantic graph's model-ruled outline, and this fallback
+# no longer censors structure by heading wording (§3 purge). Only mechanics
+# remain: part-suffix merging, the parser's own "General" placeholder, OCR
+# math fragments, and numbered-outline selection.
+def test_topic_headings_merge_parts_and_keep_structural_blocks():
     sections = [
         {"heading": "Similar Triangles"},
         {"heading": "Similar Triangles (part 2/3)"},
@@ -195,10 +213,12 @@ def test_topic_headings_skip_exercises_parts_and_general():
         {"heading": "Areas of Similar Triangles"},
     ]
     assert g._topic_headings(sections) == [
-        "Similar Triangles", "Areas of Similar Triangles"]
+        "Similar Triangles", "EXERCISE 6.1", "Areas of Similar Triangles"]
 
 
-def test_topic_headings_skip_structural_ocr_headings():
+def test_topic_headings_keep_structural_ocr_headings_unfiltered():
+    """No heading vocabulary decides what is "not a topic" — whether a
+    Solution/Summary block is a topic is the semantic outline's call."""
     sections = [
         {"heading": "Similarity of Triangles"},
         {"heading": "Solution"},
@@ -209,10 +229,19 @@ def test_topic_headings_skip_structural_ocr_headings():
         {"heading": "Pythagoras Theorem"},
     ]
     assert g._topic_headings(sections) == [
-        "Similarity of Triangles", "Pythagoras Theorem"]
+        "Similarity of Triangles",
+        "Solution",
+        "Example 3",
+        "Summary",
+        "Tick the Correct Answer and Justify",
+        "Note to the Reader",
+        "Pythagoras Theorem",
+    ]
 
 
-def test_topic_headings_skip_optional_exercises_and_math_fragments():
+def test_topic_headings_skip_only_math_fragments():
+    """OCR math fragments stay filtered (mechanics); exercise headings do
+    not — they are structure the semantic outline may still discard."""
     sections = [
         {"heading": "Criteria for Similarity of Triangles"},
         {"heading": "$ AMC PNR $"},
@@ -220,10 +249,13 @@ def test_topic_headings_skip_optional_exercises_and_math_fragments():
         {"heading": "Pythagoras Theorem"},
     ]
     assert g._topic_headings(sections) == [
-        "Criteria for Similarity of Triangles", "Pythagoras Theorem"]
+        "Criteria for Similarity of Triangles",
+        "EXERCISE 6.6 (Optional)*",
+        "Pythagoras Theorem",
+    ]
 
 
-def test_topic_headings_skip_exercise_question_type_headings():
+def test_topic_headings_keep_question_type_headings_unfiltered():
     sections = [
         {"heading": "Shaping of the Earth's Surface"},
         {"heading": "Short Answer Questions"},
@@ -233,7 +265,13 @@ def test_topic_headings_skip_exercise_question_type_headings():
         {"heading": "Forces of Gradation"},
     ]
     assert g._topic_headings(sections) == [
-        "Shaping of the Earth's Surface", "Forces of Gradation"]
+        "Shaping of the Earth's Surface",
+        "Short Answer Questions",
+        "Long Answer Questions",
+        "Multiple Choice Questions",
+        "Fill in the Blanks",
+        "Forces of Gradation",
+    ]
 
 
 def test_topic_headings_prefer_main_heading_level_over_micro_subheadings():
@@ -257,6 +295,8 @@ def test_topic_headings_prefer_main_heading_level_over_micro_subheadings():
         "Forces of Gradation",
         "Weathering and Erosion",
         "Depositional Landforms",
+        "Short Answer Questions",
+        "Multiple Choice Questions",
     ]
 
 
@@ -324,6 +364,7 @@ def test_topic_headings_prefer_numbered_sections_over_ocr_quote_noise():
         "Trigonometric Ratios",
         "Trigonometric Ratios of Some Specific Angles",
         "Trigonometric Identities",
+        "Summary",
     ]
 
 
@@ -341,6 +382,9 @@ def test_topic_headings_keep_numbered_mixed_math_heading():
         "Arithmetic Progressions",
         "nth Term of an AP",
         "Sum of First n Terms of an AP",
+        # The numbered 5.5 Summary section is real structure; whether it is
+        # a teaching topic is the semantic outline's decision.
+        "Summary",
     ]
 
 
@@ -389,38 +433,66 @@ def test_snap_topics_skipped_with_too_few_headings():
     assert out[0]["topic"] == "Invented Topic"
 
 
-def test_scrub_merges_structural_topics_into_previous():
+def test_scrub_keeps_model_topics_and_strips_only_numbering():
+    """The scrub is mechanics only (§3 purge): numbering artifacts go, but
+    no wording vocabulary reassigns or deletes a model-authored row."""
     records = [
         _rec("Meaning of Similarity", "Description: a", topic="Similar Figures"),
         _rec("Worked ratio problem", "Description: b", topic="Solution"),
         _rec("Chapter recap idea", "Description: c", topic="Summary"),
         _rec("Pythagoras statement", "Description: d", topic="Pythagoras Theorem"),
+        _rec("Numbering only", "Description: e", topic="EXERCISE 6.1"),
     ]
     out = g._scrub_section_numbers(records)
-    # Solution inherits the previous teaching topic; Summary filler is dropped.
     assert [r["topic"] for r in out] == [
-        "Similar Figures", "Similar Figures", "Pythagoras Theorem"]
+        "Similar Figures",
+        "Solution",
+        "Summary",
+        "Pythagoras Theorem",
+        # "EXERCISE 6.1" scrubs to nothing, so the row inherits the previous
+        # topic instead of being orphaned or dropped.
+        "Pythagoras Theorem",
+    ]
     assert [r["concept_title"] for r in out] == [
-        "Meaning of Similarity", "Worked ratio problem", "Pythagoras statement"]
+        "Meaning of Similarity",
+        "Worked ratio problem",
+        "Chapter recap idea",
+        "Pythagoras statement",
+        "Numbering only",
+    ]
 
 
-def test_enforce_culminations_never_invents_starter_types():
+def test_enforce_culminations_never_invents_rows_types_or_recaps():
+    authored = "Description: An authored consolidation of both criteria."
     records = [
         _rec("AA Criterion", "Description: a", topic="T1"),
         _rec("SSS Criterion", "Description: b", topic="T1"),
-        _rec("Culmination - T1", "Description: Recap", topic="T1",
+        _rec("Culmination - T1", authored, topic="T1",
              parent="Culmination"),
     ]
     out = g._enforce_culminations(records)
-    culm = out[-1]["concept_details"]
-    assert "Types:" not in culm
-    assert "Recap of AA Criterion and SSS Criterion" in culm
+    culm = out[-1]
+    # Authored content kept verbatim: no synthesized Types, no code-composed
+    # recap, and the authored title survives.
+    assert culm["concept_details"] == authored
+    assert culm["concept_title"] == "Culmination - T1"
+    assert "Types:" not in culm["concept_details"]
     # A culmination with an inventory-backed Type is preserved.
     records[2]["concept_details"] = (
         "Description: Recap // Types: Type 01: Real mined mix Case 01: combine x and y")
     out = g._enforce_culminations(records)
     assert "Real mined mix" in out[-1]["concept_details"]
     assert "Mixed application combining" not in out[-1]["concept_details"]
+
+    # A topic the model left without a culmination ships WITHOUT one — no
+    # invented row — and duplicate authored rows are normalized to one.
+    out = g._enforce_culminations([
+        _rec("AA Criterion", "Description: a", topic="T1"),
+        _rec("SSS Criterion", "Description: b", topic="T1"),
+    ])
+    assert [r["concept_title"] for r in out] == [
+        "AA Criterion", "SSS Criterion",
+    ]
 
 
 def test_restructure_topics_reassigns_only_topics(monkeypatch):
@@ -603,41 +675,76 @@ def test_sync_chapter_topic_summary_falls_back_without_meta(db):
     assert topic.topic_description == "Covers A."
 
 
-def test_mastery_line_pass_completes_missing_rows(monkeypatch):
+def test_mastery_line_pass_normalizes_format_and_never_backfills(monkeypatch):
+    """Settle authors mastery under the rewritten Phase 3: this pass never
+    calls the API and never invents a template line — it only normalizes the
+    line-broken format. A row still missing mastery is the Polish pass's to
+    repair with a real model call."""
     records = [
         _rec(
             "Has One",
-            "Description: body.\nAchieving Mastery: Applying the relationship "
+            "Description: body. Achieving Mastery: Applying the relationship "
             "accurately to unfamiliar problems.",
         ),
         _rec("Missing One", "Description: body only. // Types: Type 01: X Case 01: q"),
-        _rec("Culmination - T", "Description: Recap", parent="Culmination"),
+        _rec("Culmination - T", "Description: An authored synthesis.",
+             parent="Culmination"),
     ]
 
-    def fake_openai(system, user, **kw):
-        assert "Missing One" in user and "Has One" not in user
-        return {"rows": [{
-            "topic": "Topic A", "parent_concept": "P", "concept": "Missing One",
-            "concept_description": ("Description: body only.\nAchieving Mastery: "
-                                    "applying the rule to fresh problems."),
-            "keywords": "",
-        }]}
+    def forbidden_openai(*_args, **_kwargs):
+        pytest.fail("the mastery-line pass must not call the API")
 
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_openai_json", forbidden_openai)
     out = g._ensure_mastery_lines_via_api(records, meta=g._metadata(subject="Math"))
-    assert ("\nAchieving Mastery: applying the rule to fresh problems."
-            in out[1]["concept_details"])
-    # Types are untouched; culminations are never targeted.
+    # The authored inline mastery is normalized onto its own line.
+    assert ("\nAchieving Mastery: Applying the relationship accurately to "
+            "unfamiliar problems." in out[0]["concept_details"])
+    # A row without mastery stays without one — no template backfill.
+    assert "Achieving Mastery" not in out[1]["concept_details"]
+    assert "correctly in new problems" not in out[1]["concept_details"]
     assert "Types: Type 01: X Case 01: q" in out[1]["concept_details"]
-    assert out[2]["concept_details"] == "Description: Recap"
+    # Culminations are never targeted.
+    assert out[2]["concept_details"] == "Description: An authored synthesis."
 
 
-def test_mastery_line_deterministic_fallback():
-    records = [_rec("AA Similarity Criterion", "Description: body only.")]
-    out = g._ensure_mastery_lines_via_api(
-        records, meta=g._metadata(subject="Math"), use_api=False)
-    assert ("\nAchieving Mastery: Applying AA Similarity Criterion correctly "
-            "in new problems.") in out[0]["concept_details"]
+def test_mastery_template_is_gone_and_polish_repairs_missing_mastery():
+    """The deterministic 'Applying {title} correctly in new problems.'
+    template is purged from app/; a missing mastery line reaches the Polish
+    pass as model-repairable content."""
+    import pathlib
+    import subprocess
+
+    app_dir = pathlib.Path(g.__file__).resolve().parents[1]
+    hits = subprocess.run(
+        ["grep", "-rn", "correctly in new problems", str(app_dir)],
+        capture_output=True, text=True,
+    )
+    real_hits = [
+        line for line in hits.stdout.splitlines()
+        if "__pycache__" not in line
+    ]
+    assert real_hits == []
+
+    from app.services.phase3 import polish
+
+    assert "missing_mastery_statement" in polish.CONTENT_CODES
+    failures = polish._failures(
+        [{
+            "topic": "T", "parent_concept": "P",
+            "concept_title": "AA Similarity Criterion",
+            "concept_details": (
+                "Description: body only, teaching the idea fully. // "
+                "Misconception/ Error Analysis: Misconceptions: Learners "
+                "may believe similarity requires equal sides."
+            ),
+            "keywords": "",
+        }],
+        source_text="",
+    )
+    assert any(
+        entry["code"] == "missing_mastery_statement"
+        for entry in failures.get(0, [])
+    )
 
 
 def test_duplicate_titles_are_dropped_chapter_wide():

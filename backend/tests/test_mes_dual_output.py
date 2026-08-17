@@ -7,7 +7,9 @@ both renderers to it (spec §0 item 2, §1, §9, §10, §13).
 from __future__ import annotations
 
 import copy
+import io
 
+import openpyxl
 import pytest
 
 from app.bulk_import import assessment_workbook as mp
@@ -43,9 +45,11 @@ def _snapshot() -> dict:
         "concept_source": "Balbharati",
     }
     groups = []
-    for key, machine in (("C_A", "06MSMA_T01_TwoDim"),
-                         ("C_B", "06MSMA_T01_ThreeDim")):
-        for shell in ag.required_shells(key, machine):
+    for key, machine, name in (
+        ("C_A", "06MSMA_T01_TwoDim", "Two-dimensional shape"),
+        ("C_B", "06MSMA_T01_ThreeDim", "Three-dimensional shape"),
+    ):
+        for shell in ag.required_shells(key, machine, name):
             shell = dict(shell)
             shell["concept_key"] = key
             groups.append(shell)
@@ -57,6 +61,8 @@ def _snapshot() -> dict:
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 1.0,
+        "question_duration": 2.0,
+        "math_keyboard": "",
         "question_appears_in": "Pre/Post-Worksheet/Test",
         "answer_restriction": "Specific",
         "question": "Which of these is a two-dimensional shape?",
@@ -81,6 +87,8 @@ def _snapshot() -> dict:
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "marks": 4.0,
+        "question_duration": 5.0,
+        "math_keyboard": "No",
         "question_appears_in": "Pre/Post-Worksheet/Test",
         "answer_restriction": "Open",
         "question": "Explain how a square differs from a cube.",
@@ -178,6 +186,20 @@ def test_master_contains_everything_including_questionless_concepts():
     objective_rows = parsed["sheets"]["Objective"]["rows"]
     descriptive_rows = parsed["sheets"]["Descriptive"]["rows"]
     assert parsed["sheets"]["Subjective"]["rows"] == []
+    group_keys = {group["group_key"] for group in _snapshot()["groups"]}
+    for row in [*objective_rows, *descriptive_rows]:
+        assert row["group_name"] == row["group_display_name"]
+        assert row["group_name"] not in group_keys
+        assert all(key not in row["group_name"] for key in group_keys)
+    provenance = {
+        (item["sheet"], item["row"]): item["group_key"]
+        for item in issues["group_provenance"]
+    }
+    assert provenance[("Objective", 3)] == "(06MSMA_T01_TwoDim) BG01"
+    assert provenance[("Descriptive", 3)] == "(06MSMA_T01_TwoDim) IG01"
+    assert provenance[("Objective", 4)] == "(06MSMA_T01_TwoDim) AG01"
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [3, 4, 5, 6, 7]
+    assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
 
     # One objective question row + catalogue rows for the five groups no
     # question represents (2 concepts x 3 shells - the occupied BG01... the
@@ -191,10 +213,10 @@ def test_master_contains_everything_including_questionless_concepts():
         r["concept_title"].startswith("Three-dimensional")
         for r in catalogue_rows)
     shells = {r["group_name"] for r in catalogue_rows}
-    assert "(06MSMA_T01_ThreeDim) BG01" in shells
+    assert "Three-dimensional shape — Basic" in shells
     assert all(
         r["group_description"] == "NA" for r in catalogue_rows
-        if r["group_name"].endswith(("BG01", "IG01", "AG01"))
+        if r["group_type"] in {"Basic", "Intermediate", "Advanced"}
         and r["concept_title"].startswith("Three-dimensional"))
 
     q = question_rows[0]
@@ -237,6 +259,128 @@ def test_master_validation_names_wire_value_and_arithmetic_defects():
     errors = mp.validate_master_file(mp.parse_workbook(master), snapshot)
     assert any("not the profile wire value" in e for e in errors)
     assert any("correct weightage 3 != marks 1" in e for e in errors)
+
+
+def test_master_provenance_distinguishes_shared_friendly_group_names():
+    snapshot = copy.deepcopy(_snapshot())
+    first_group = next(
+        group for group in snapshot["groups"]
+        if group["group_key"] == "(06MSMA_T01_TwoDim) BG01"
+    )
+    first_group["group_name"] = "Two-dimensional shape — Basic"
+    first_group["group_display_name"] = "Two-dimensional shape — Basic"
+    second_group = copy.deepcopy(first_group)
+    second_group["group_key"] = "(06MSMA_T01_TwoDim) BG02"
+    second_group["semantic_description"] = "A second Basic variant family."
+    snapshot["groups"].append(second_group)
+
+    second_question = copy.deepcopy(snapshot["candidates"][0])
+    second_question["candidate_id"] = "CAND-3"
+    second_question["question_label"] = "06MSMA_T01_TwoDim Q03"
+    second_question["question"] = "Which listed figure is flat?"
+    second_question["question_text"] = "Which listed figure is flat?"
+    second_question["group_key"] = "(06MSMA_T01_TwoDim) BG02"
+    snapshot["candidates"].append(second_question)
+
+    master, issues = mp.render_master_file(snapshot)
+    parsed = mp.parse_workbook(master)
+    friendly_rows = [
+        (row_number, row)
+        for row_number, row in zip(
+            parsed["sheets"]["Objective"]["row_numbers"],
+            parsed["sheets"]["Objective"]["rows"],
+        )
+        if row["group_name"] == "Two-dimensional shape — Basic"
+    ]
+    assert [row["group_display_name"] for _, row in friendly_rows] == [
+        "Two-dimensional shape — Basic",
+        "Two-dimensional shape — Basic",
+    ]
+    assert [row["group_question_labels"] for _, row in friendly_rows] == [
+        "06MSMA_T01_TwoDim Q01",
+        "06MSMA_T01_TwoDim Q03",
+    ]
+
+    provenance = {
+        (item["sheet"], item["row"]): item["group_key"]
+        for item in issues["group_provenance"]
+    }
+    assert [
+        provenance[("Objective", row_number)]
+        for row_number, _ in friendly_rows
+    ] == [
+        "(06MSMA_T01_TwoDim) BG01",
+        "(06MSMA_T01_TwoDim) BG02",
+    ]
+    assert mp.validate_master_file(
+        parsed, snapshot,
+        group_provenance=issues["group_provenance"],
+    ) == []
+    assert any(
+        "group provenance required" in error
+        for error in mp.validate_master_file(parsed, snapshot)
+    )
+
+    result = mp.build_dual_output(snapshot)
+    assert result["valid"], result["manifest"]["read_back"]
+
+
+def test_master_refuses_duplicate_internal_group_keys():
+    snapshot = copy.deepcopy(_snapshot())
+    duplicate = copy.deepcopy(snapshot["groups"][0])
+    duplicate["concept_key"] = "C_B"
+    duplicate["group_type"] = "Advanced"
+    duplicate["group_name"] = "Three-dimensional shape — Advanced"
+    duplicate["group_display_name"] = duplicate["group_name"]
+    snapshot["groups"].append(duplicate)
+    with pytest.raises(mp.WorkbookRenderError, match="duplicate group_key"):
+        mp.render_master_file(snapshot)
+
+
+def test_master_refuses_non_q12_visible_group_names():
+    snapshot = copy.deepcopy(_snapshot())
+    group = snapshot["groups"][0]
+    group["group_name"] = group["group_key"]
+    group["group_display_name"] = group["group_key"]
+    with pytest.raises(mp.WorkbookRenderError, match="visible names"):
+        mp.render_master_file(snapshot)
+
+    missing_display = copy.deepcopy(_snapshot())
+    missing_display["topics"][0]["concepts"][0][
+        "concept_display_name"
+    ] = ""
+    with pytest.raises(
+        mp.WorkbookRenderError, match="no explicit concept_display_name",
+    ):
+        mp.render_master_file(missing_display)
+
+
+def test_master_refuses_candidate_group_concept_mismatch():
+    snapshot = copy.deepcopy(_snapshot())
+    snapshot["candidates"][0]["concept_key"] = "C_B"
+    with pytest.raises(mp.WorkbookRenderError, match="does not match group"):
+        mp.render_master_file(snapshot)
+
+
+def test_master_provenance_uses_physical_sheet_row_numbers():
+    snapshot = _snapshot()
+    master, issues = mp.render_master_file(snapshot)
+    workbook = openpyxl.load_workbook(io.BytesIO(master))
+    workbook["Objective"].insert_rows(3)
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+    workbook.close()
+
+    parsed = mp.parse_workbook(buffer.getvalue())
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [4, 5, 6, 7, 8]
+    assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
+    shifted_provenance = copy.deepcopy(issues["group_provenance"])
+    for item in shifted_provenance:
+        if item["sheet"] == "Objective":
+            item["row"] += 1
+    assert mp.validate_master_file(
+        parsed, snapshot, group_provenance=shifted_provenance,
+    ) == []
 
 
 def test_formula_injection_and_cell_limit_guards():

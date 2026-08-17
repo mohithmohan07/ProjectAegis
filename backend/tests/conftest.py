@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 # Tests are always deterministic dry-mode, even when live API keys are present
 # in the environment (live is default-on when keys exist).
@@ -12,7 +13,7 @@ from fastapi.testclient import TestClient
 from app import config
 from app.bulk_import import reader
 from app.db import Base, SessionLocal, engine, init_db
-from app.main import app, bootstrap
+from app.main import app
 
 
 def _load_test_fixtures() -> None:
@@ -57,6 +58,129 @@ def _forget_negotiated_reasoning_ceilings():
     openai_policy.reset_reasoning_ceilings()
     yield
     openai_policy.reset_reasoning_ceilings()
+
+
+@pytest.fixture(autouse=True)
+def _recorded_legacy_assessment_level_authority(monkeypatch):
+    """Give dry legacy-generation tests an explicit recorded tier authority.
+
+    Production deliberately has no offline semantic fallback.  The historical
+    HTTP/session tests still need to exercise persistence without a live model,
+    so their model verdict is injected here, in test code, at the documented
+    authority seam.
+    """
+    from app import bulk_import as bi
+    from app.services import build_assessments, generation
+
+    def provider(payload: dict) -> dict:
+        return {
+            "candidate_id": payload["candidate"]["candidate_id"],
+            "tier": "Advanced",
+            "rationale": "Explicit recorded fixture verdict for a dry test.",
+        }
+
+    def critic(_payload: dict) -> dict:
+        return {"verdict": "verified", "confidence": 1.0, "issues": []}
+
+    def cell_provider(payload: dict) -> dict:
+        cell = payload["blueprint_cell"]
+        kind = cell["sheet_kind"]
+        return {
+            "cell_id": cell["cell_id"],
+            "marks": {
+                "objective": 1.0,
+                "subjective": 3.0,
+                "descriptive": 5.0,
+            }[kind],
+            "question_duration": {
+                "objective": 2.0,
+                "subjective": 5.0,
+                "descriptive": 10.0,
+            }[kind],
+            "math_keyboard": "" if kind == "objective" else "No",
+            "rationale": "Explicit recorded fixture cell contract.",
+        }
+
+    def route_provider(payload: dict) -> dict:
+        return {
+            "candidate_id": payload["candidate"]["candidate_id"],
+            "concept_key": payload["candidate_concepts"][0]["concept_key"],
+            "evidence": "Explicit recorded fixture route evidence.",
+            "rationale": "Explicit recorded fixture home-concept verdict.",
+        }
+
+    def identify_provider(payload: dict) -> dict:
+        requested = payload["question_type"]
+        kind = "objective" if requested == "auto" else requested
+        chunks = [
+            chunk.strip()
+            for chunk in re.split(r"\n\s*\n+", payload["mmd_text"])
+            if chunk.strip() and not chunk.lstrip().startswith("#")
+        ]
+        context_trigger = re.compile(
+            r"based on the (above|following)|from the "
+            r"(conversation|passage|dialogue)|refer(ring)? to the "
+            r"(diagram|table|figure|graph)|using the table|according to the "
+            r"(case study|passage)|answer the following",
+            re.IGNORECASE,
+        )
+        rows = []
+        previous = ""
+        for chunk in chunks:
+            question_text = bi.to_plain_text(chunk[:400])
+            if previous and context_trigger.search(chunk):
+                question_text = (
+                    f"Context: {bi.to_plain_text(previous[:600])}\n\n"
+                    f"{question_text}"
+                )
+            rows.append({
+                "sheet_kind": kind,
+                "question_category": {
+                    "objective": "Multiple Choice Question",
+                    "subjective": "Short Answer",
+                    "descriptive": "Long Answer",
+                }[kind],
+                "cognitive_skills": "Understand",
+                "level_of_difficulty": "Moderate",
+                "marks": {
+                    "objective": 1.0,
+                    "subjective": 3.0,
+                    "descriptive": 5.0,
+                }[kind],
+                "question_duration": {
+                    "objective": 2.0,
+                    "subjective": 5.0,
+                    "descriptive": 10.0,
+                }[kind],
+                "math_keyboard": "" if kind == "objective" else "No",
+                "question": chunk[:400],
+                "question_text": question_text,
+                "answers": [],
+                "sub_questions": [],
+            })
+            previous = chunk
+        return {"questions": rows}
+
+    monkeypatch.setattr(
+        build_assessments,
+        "_legacy_level_authorities",
+        lambda: (provider, critic, None),
+    )
+    monkeypatch.setattr(
+        build_assessments,
+        "_legacy_cell_mark_authorities",
+        lambda: (cell_provider, critic, None),
+    )
+    monkeypatch.setattr(
+        build_assessments,
+        "_legacy_route_authorities",
+        lambda: (route_provider, critic, None),
+    )
+    monkeypatch.setattr(
+        generation,
+        "_offline_assessment_identification_authority",
+        lambda: identify_provider,
+    )
 
 
 @pytest.fixture()

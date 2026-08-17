@@ -39,7 +39,6 @@ Requirements: pip install pandas openpyxl openai
 """
 
 import argparse
-import difflib
 import json
 import os
 import re
@@ -62,7 +61,7 @@ except ImportError:
 
 try:
     from openpyxl import load_workbook, Workbook
-    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.styles import Alignment, Font
     from openpyxl.utils import get_column_letter
 except ImportError:
     load_workbook = Workbook = None
@@ -185,18 +184,10 @@ def prelearning_output_prefix(
         stem = stem[: -len("_Concepts")]
     return stem
 # Pre-learning structure (dependency architecture prompt)
-MIN_TOPICS = 4
-MAX_TOPICS = 6
-MIN_CONCEPTS_PER_TOPIC = 5
-MAX_CONCEPTS_PER_TOPIC = 7
 ALLOWED_TAGS = frozenset({"FL", "NU", "VC", "RS", "GR"})
 DESC_CHARS_PER_CONCEPT = 350  # full chapter mapping; truncate each row for token budget
-SIMILARITY_THRESHOLD = 0.95
 MAX_RETRIES = 3
 RETRY_SLEEP = 2
-
-# Highlight color for 95%+ similar pairs
-HIGHLIGHT_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 
 
 def detect_board_book_grade(
@@ -521,9 +512,10 @@ Assign ONE primary tag per concept: FL | NU | VC | RS | GR
 - RS → Real-world Sense
 - GR → Graphical Reasoning
 
-## TOPIC AND CONCEPT COUNTS (STRICT)
-- Topics per chapter: **{MIN_T} to {MAX_T}** (inclusive).
-- Concepts per topic: **{MIN_CT} to {MAX_CT}** (inclusive), every topic must satisfy this.
+## TOPIC AND CONCEPT COUNTS
+Let the chapter's own prerequisite structure decide how many topics and how many
+concepts each topic has — there is no quota. A thin chapter with few genuine
+prerequisites should produce few; a dense one may produce many.
 
 ## CONCEPT DESCRIPTION FORMAT (MANDATORY — matches mmd_to_concepts_excel)
 Each concept_description must be a **single string** with **exactly three sections**, in order, separated by ` // ` (space-slash-slash-space):
@@ -548,13 +540,13 @@ Return a JSON object with one key: **"topics"** (array).
 
 Each topic object must have:
 - **topic_name**: short pre-learning topic label (groups dependencies; NOT an "Introduction to…" to the chapter)
-- **concepts**: array of **{MIN_CT}–{MAX_CT}** objects, each with:
+- **concepts**: array of objects (as many as the chapter's prerequisite structure warrants — there is no quota), each with:
   - **parent_concept**: umbrella prerequisite category for this row
   - **concept_name**: follows naming rules above
   - **concept_description**: single string with Description: ... // Types: ... // Misconception: ...
   - **tag**: one of FL, NU, VC, RS, GR
 
-There must be **{MIN_T}–{MAX_T}** topics in the array. Order topics and concepts by dependency (earlier prerequisites first). No duplicate or overlapping ideas.
+Let the chapter's own prerequisite structure decide how many topics the array has — there is no quota. Order topics and concepts by dependency (earlier prerequisites first). No duplicate or overlapping ideas.
 
 ## FINAL VALIDATION STEP (VERY IMPORTANT)
 Before outputting, for **EACH** concept ask:
@@ -574,12 +566,7 @@ Return ONLY valid JSON. No markdown. No table. No explanation.
 
 
 def get_prelearning_system_prompt(subject: str, grade: int = 10, board: str = "ICSE") -> str:
-    base = DEPENDENCY_PRELEARNING_PROMPT.format(
-        MIN_T=MIN_TOPICS,
-        MAX_T=MAX_TOPICS,
-        MIN_CT=MIN_CONCEPTS_PER_TOPIC,
-        MAX_CT=MAX_CONCEPTS_PER_TOPIC,
-    )
+    base = DEPENDENCY_PRELEARNING_PROMPT
     return (
         base
         + f"\n\n## RUN CONTEXT\nSubject: {subject}\nGrade: {grade}\nBoard: {board}\n\n"
@@ -809,9 +796,6 @@ def _validate_concept_row(c: Dict[str, Any], topic_idx: int, concept_idx: int) -
 def _validate_prelearning_topics(topics: List[Dict[str, Any]]) -> Tuple[bool, str]:
     if not isinstance(topics, list):
         return False, "topics is not a list"
-    n = len(topics)
-    if n < MIN_TOPICS or n > MAX_TOPICS:
-        return False, f"topic count {n} must be {MIN_TOPICS}-{MAX_TOPICS}"
     for ti, t in enumerate(topics):
         if not isinstance(t, dict):
             return False, f"topic {ti} is not an object"
@@ -820,13 +804,6 @@ def _validate_prelearning_topics(topics: List[Dict[str, Any]]) -> Tuple[bool, st
         concepts = t.get("concepts", [])
         if not isinstance(concepts, list):
             return False, f"topic {ti}: concepts is not a list"
-        m = len(concepts)
-        if m < MIN_CONCEPTS_PER_TOPIC or m > MAX_CONCEPTS_PER_TOPIC:
-            return (
-                False,
-                f"topic {ti} ({t.get('topic_name', '')!r}) has {m} concepts; "
-                f"need {MIN_CONCEPTS_PER_TOPIC}-{MAX_CONCEPTS_PER_TOPIC}",
-            )
         for ci, c in enumerate(concepts):
             if not isinstance(c, dict):
                 return False, f"topic {ti} concept {ci} is not an object"
@@ -876,8 +853,8 @@ Topics within the chapter (Concept Mapping — {n_rows} rows in THIS batch only,
 {concepts_text}
 
 Return JSON with key "topics" only (array).
-- Exactly {MIN_TOPICS}-{MAX_TOPICS} topics.
-- Each topic has topic_name and concepts array with {MIN_CONCEPTS_PER_TOPIC}-{MAX_CONCEPTS_PER_TOPIC} items.
+- Let the chapter's own prerequisite structure decide how many topics and how many concepts each topic has — there is no quota.
+- Each topic has topic_name and a concepts array.
 - Each concept: parent_concept, concept_name, tag (one of {", ".join(tags)}),
   concept_description = Description: ... // Types: ... // Misconception: ...
   In Types:, include Type 01: (title) with Case 01:/Case 02: examples, then Type 02: (title) with Case 01:/Case 02:, all specific to that concept.
@@ -885,7 +862,8 @@ Allowed tags: {", ".join(tags)}."""
 
     reminder = (
         f"CRITICAL: Fix your JSON. Requirements: "
-        f"{MIN_TOPICS}-{MAX_TOPICS} topics; each topic {MIN_CONCEPTS_PER_TOPIC}-{MAX_CONCEPTS_PER_TOPIC} concepts; "
+        f"topics array with topic_name and concepts per topic — let the chapter's own "
+        f"prerequisite structure decide how many; there is no quota; "
         f"each concept: parent_concept, concept_name, tag (one of {tags}); "
         f"Types must have Type 01: and Type 02:, each with Case 01: and Case 02: "
         f"(≥2× Case 01: and ≥2× Case 02: total, examples tied to that concept); "
@@ -967,69 +945,8 @@ Allowed tags: {", ".join(tags)}."""
 
 
 # ============================================================
-# SIMILARITY DETECTION
-# ============================================================
-def text_similarity(a: str, b: str) -> float:
-    """Return similarity ratio 0-1 using SequenceMatcher."""
-    a = (a or "").strip().lower()
-    b = (b or "").strip().lower()
-    if not a and not b:
-        return 1.0
-    if not a or not b:
-        return 0.0
-    return difflib.SequenceMatcher(None, a, b).ratio()
-
-
-def find_similar_pairs(
-    items: List[Tuple[int, str, str]],
-    threshold: float = SIMILARITY_THRESHOLD,
-) -> List[Tuple[int, int, float, float, float]]:
-    """
-    items: [(row_idx, concept_name, concept_description), ...]
-    Returns: [(row_i, row_j, sim_name, sim_desc, max_sim), ...] for pairs >= threshold
-    """
-    pairs = []
-    n = len(items)
-    for i in range(n):
-        for j in range(i + 1, n):
-            _, name_i, desc_i = items[i]
-            _, name_j, desc_j = items[j]
-            sim_name = text_similarity(name_i, name_j)
-            sim_desc = text_similarity(desc_i, desc_j)
-            sim = max(sim_name, sim_desc)
-            if sim >= threshold:
-                pairs.append((i, j, sim_name, sim_desc, sim))
-    return pairs
-
-
-# ============================================================
 # WRITE OUTPUT EXCEL
 # ============================================================
-def write_similarity_report(
-    all_rows: List[Dict[str, Any]],
-    report_path: Path,
-) -> int:
-    """Write a text report of 95%+ similar concept pairs. Returns count of pairs."""
-    items = [
-        (i, r.get("concept", ""), r.get("concept_description", ""))
-        for i, r in enumerate(all_rows)
-    ]
-    pairs = find_similar_pairs(items, SIMILARITY_THRESHOLD)
-    if not pairs:
-        return 0
-    report_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write("Pre-Learning Similarity Report (95%+ similar - review for consolidation)\n")
-        f.write("=" * 70 + "\n\n")
-        for idx, (i, j, sim_name, sim_desc, sim) in enumerate(pairs, 1):
-            row_i, row_j = all_rows[i], all_rows[j]
-            f.write(f"Pair {idx}: Similarity {sim:.1%}\n")
-            f.write(f"  Row {i+2}: {row_i.get('concept','')[:60]}...\n")
-            f.write(f"  Row {j+2}: {row_j.get('concept','')[:60]}...\n")
-            f.write(f"  (Name sim: {sim_name:.1%}, Desc sim: {sim_desc:.1%})\n\n")
-    return len(pairs)
-
-
 def write_prelearning_excel(
     all_rows: List[Dict[str, Any]],
     output_path: Path,
@@ -1074,22 +991,6 @@ def write_prelearning_excel(
             sanitize_for_excel(r.get("tag")),
         ])
         ws.cell(row=ws.max_row, column=desc_col).alignment = Alignment(wrap_text=True, vertical="top")
-
-    # Similarity highlighting
-    items = [
-        (i + 2, r.get("concept", ""), r.get("concept_description", ""))
-        for i, r in enumerate(all_rows)
-    ]
-    pairs = find_similar_pairs(items, SIMILARITY_THRESHOLD)
-    rows_to_highlight = set()
-    for i, j, *_ in pairs:
-        # i,j are 0-based indices into all_rows; Excel data rows are 2 + index (row 1 = header)
-        rows_to_highlight.add(i + 2)
-        rows_to_highlight.add(j + 2)
-
-    for row_idx in rows_to_highlight:
-        for col in range(1, len(headers) + 1):
-            ws.cell(row=row_idx, column=col).fill = HIGHLIGHT_FILL
 
     # Autosize
     for col in range(1, ws.max_column + 1):
@@ -1217,10 +1118,6 @@ def process_subject(
 
     if all_rows:
         write_prelearning_excel(all_rows, output_path, subject, grade=grade_eff)
-        report_path = output_path.with_suffix(".similarity_report.txt")
-        n_pairs = write_similarity_report(all_rows, report_path)
-        if n_pairs:
-            print(f"    Similarity: {n_pairs} pairs 95%+ similar -> {report_path.name}")
 
     return len(all_rows)
 

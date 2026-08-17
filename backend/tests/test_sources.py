@@ -6,26 +6,13 @@ import openpyxl
 from app import bulk_import as bi
 from app import config, models
 from app.bulk_import import writer
-from app.services import concept_refiner
 
 
 def _use_specific_dry_learner_analysis(monkeypatch):
-    monkeypatch.setattr(
-        concept_refiner,
-        "_fallback_misconception",
-        lambda title: (
-            f"Students may believe the description of {title} guarantees the "
-            "same result in every context."
-        ),
-    )
-    monkeypatch.setattr(
-        concept_refiner,
-        "_fallback_error_analysis",
-        lambda title: (
-            f"Students may reverse a stated relationship while applying "
-            f"{title} to an example."
-        ),
-    )
+    # The deterministic learner-analysis fallbacks are deleted (filler is
+    # never synthesized); dry rows simply carry whatever analysis their
+    # fixtures author. Kept as a no-op seam so callers stay explicit.
+    del monkeypatch
 
 
 def test_merge_sources_dedupes_case_insensitively():

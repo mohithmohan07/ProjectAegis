@@ -4,7 +4,6 @@ import io
 import re
 
 import openpyxl
-import pytest
 
 from app import bulk_import as bi
 from app import models
@@ -223,7 +222,12 @@ def test_tagged_secondary_concept_is_not_required_in_that_topics_recap(db):
     assert data.startswith(b"PK")
 
 
-def test_readback_blocks_one_type_number_on_two_real_hosts(db):
+def test_readback_accepts_one_type_number_on_two_real_hosts(db):
+    """Under the rewritten Phase 3 the Host pass routes each question to the
+    concept it belongs to, so two Cases of one chapter-wide Type may
+    legitimately live on different concept hosts; the read-back gate must not
+    reject that as a split Type (the single-host expectation belonged to the
+    legacy allocator)."""
     chapter = models.Chapter(
         chapter_code="10CBSS_SplitType",
         board="CBSE",
@@ -265,11 +269,8 @@ def test_readback_blocks_one_type_number_on_two_real_hosts(db):
     db.add(chapter)
     db.commit()
 
-    with pytest.raises(
-        writer.ConceptWorkbookValidationError,
-        match="span multiple concept hosts",
-    ):
-        writer.write_concepts_workbook(db, [first.id, second.id])
+    data = writer.write_concepts_workbook(db, [first.id, second.id])
+    assert data.startswith(b"PK")
 
 
 def test_deposit_removes_stale_same_chapter_secondary_topic(db):
@@ -353,39 +354,3 @@ def test_generic_activity_marker_is_not_repeated_in_visible_hub_note():
     assert note.count(task) == 1
 
 
-def test_culmination_title_is_topic_based_while_recap_remains_complete():
-    topic = "A Compact Topic"
-    records = [
-        {
-            "topic": topic,
-            "concept_title": (
-                "A Very Long First Concept Name That Previously Overflowed "
-                "the Culmination Title"),
-            "concept_details": "Description: First.",
-        },
-        {
-            "topic": topic,
-            "concept_title": (
-                "A Very Long Second Concept Name That Previously Made the "
-                "Title Even Longer"),
-            "concept_details": "Description: Second.",
-        },
-        {
-            "topic": topic,
-            "concept_title": "A Third Concept Previously Omitted from the Title",
-            "concept_details": "Description: Third.",
-        },
-        {
-            "topic": topic,
-            "concept_title": "A Fourth Concept Also Omitted from the Title",
-            "concept_details": "Description: Fourth.",
-        },
-    ]
-
-    result = g._enforce_culminations(records)
-    culmination = result[-1]
-
-    assert culmination["concept_title"] == f"Culmination - {topic}"
-    assert len(culmination["concept_title"]) < 120
-    for record in records:
-        assert record["concept_title"] in culmination["concept_details"]

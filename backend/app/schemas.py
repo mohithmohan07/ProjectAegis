@@ -60,10 +60,10 @@ class CreateSessionRequest(BaseModel):
 
 
 class BlueprintBatchRequest(BaseModel):
-    cognitive_skills: list[str] = Field(default_factory=list)
-    difficulty_levels: list[str] = Field(default_factory=list)
-    categories: list[str] = Field(default_factory=list)
-    question_type: str = "objective"
+    cognitive_skills: list[str]
+    difficulty_levels: list[str]
+    categories: list[str]
+    question_type: str
     num_questions: int = 1
     appears_in: list[str] = Field(default_factory=list)
 
@@ -258,6 +258,9 @@ class AgentSemanticReview(BaseModel):
     reason: str = Field(default="", max_length=8_000)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     evidence_refs: list[str] = Field(default_factory=list, max_length=100)
+    # Advisory dissent recorded on an applied decision (for example a
+    # sub-floor final confidence): the decision stands, flagged for review.
+    review_flags: list[str] = Field(default_factory=list, max_length=20)
     choice: SemanticDecisionChoice | None = None
     instruction: str = Field(default="", max_length=4_000)
     target_id: str = Field(default="", max_length=512)

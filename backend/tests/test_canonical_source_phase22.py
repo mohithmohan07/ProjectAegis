@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import fitz
+import pytest
 
 from app import config
 from app.services import canonical_source_phase2 as phase2
@@ -91,6 +92,7 @@ def _decision(packet: dict) -> dict:
             "page_number": 3,
             "recovered_text": "What is the caricaturist trying to depict?",
             "source_label": "Discuss",
+            "task_kind": "checkpoint_question",
             "insert_before_block_id": anchor,
             "confidence": 0.999,
             "verification": {
@@ -162,12 +164,17 @@ def test_verified_pdf_decisions_restore_six_sections_and_26_tasks(
         f"QINV-{index:04d}" for index in range(1, 27)
     ]
     inventory = phase2.inventory_from_canonical(canonical)
-    assert len(inventory["items"]) == 31
-    assert any(item["qid"] == "QINV-0011.2" for item in inventory["items"])
+    # Never-split: 26 whole parent items; the sealed counts below still
+    # tally the ledger's leaf routes (27: only QINV-0011's recovered
+    # follow-up prompt still mints leaves — the retired deterministic
+    # enumeration split no longer does).
+    assert len(inventory["items"]) == 26
+    assert not any("." in item["qid"] for item in inventory["items"])
+    assert any(item["qid"] == "QINV-0011" for item in inventory["items"])
     assert canonical["phase21_hardening"]["parent_task_count"] == 26
-    assert canonical["phase21_hardening"]["inventory_item_count"] == 31
-    assert canonical["source_contract"]["inventory_item_count"] == 31
-    assert report["summary"]["inventory_items"] == 31
+    assert canonical["phase21_hardening"]["inventory_item_count"] == 27
+    assert canonical["source_contract"]["inventory_item_count"] == 27
+    assert report["summary"]["inventory_items"] == 27
     mains, _subsections = structure.numbered_heading_inventory(canonical)
     assert sorted(mains) == [1, 2, 3, 4, 5, 6]
 
@@ -244,14 +251,22 @@ def test_phase22_rebuilds_stale_missing_leaf_derivations_unconditionally(
     by_qid = {item["qid"]: item for item in inventory["items"]}
     assert ready is True
     assert len(canonical["tasks"]) == 26
-    assert len(inventory["items"]) == 31
-    assert "QINV-0011.2" in by_qid
-    assert "Examine Fig. 14(b)." in by_qid["QINV-0011.2"]["raw_task"]
-    assert canonical["phase21_hardening"]["inventory_item_count"] == 31
-    assert canonical["statistics"]["inventory_leaf_tasks"] == 31
-    assert canonical["source_contract"]["inventory_item_count"] == 31
-    assert report["phase21_hardening"]["inventory_item_count"] == 31
-    assert report["summary"]["inventory_items"] == 31
+    # Never-split: whole parents only in the inventory; the rebuilt leaf
+    # derivations are visible in the ledger and its sealed counts.
+    assert len(inventory["items"]) == 26
+    assert "QINV-0011" in by_qid
+    rebuilt = next(
+        task for task in canonical["tasks"] if task["qid"] == "QINV-0011"
+    )
+    assert [leaf["qid"] for leaf in rebuilt["leaf_cases"]] == [
+        "QINV-0011.1", "QINV-0011.2",
+    ]
+    assert "Examine Fig. 14(b)." in rebuilt["leaf_cases"][1]["raw_prompt"]
+    assert canonical["phase21_hardening"]["inventory_item_count"] == 27
+    assert canonical["statistics"]["inventory_leaf_tasks"] == 27
+    assert canonical["source_contract"]["inventory_item_count"] == 27
+    assert report["phase21_hardening"]["inventory_item_count"] == 27
+    assert report["summary"]["inventory_items"] == 27
 
 
 def test_unverified_decision_never_mutates_source_topology(tmp_path: Path, monkeypatch):
@@ -371,6 +386,7 @@ def test_multimodal_call_uses_source_adjudication_policy(monkeypatch):
                         "evidence_id": "EVIDENCE-PAGE-A",
                         "recovered_text": "",
                         "source_label": "",
+                        "task_kind": "not_applicable",
                         "insert_before_block_id": "",
                         "confidence": 0.99,
                         "evidence": [],
@@ -581,6 +597,206 @@ def test_review_required_adjudication_result_is_not_cached(tmp_path: Path, monke
 
     assert ready is False
     assert list(cache_dir.glob("*.json")) == []
+
+
+def _orphan_candidate(**overrides) -> dict:
+    candidate = {
+        "verdict": "visible_exact",
+        "evidence_id": "EVIDENCE-PAGE-A",
+        "recovered_text": "Find out more about the members of this club.",
+        "source_label": "Explore",
+        "task_kind": "activity",
+        "insert_before_block_id": "BLK-00102",
+        "confidence": 0.999,
+        "evidence": [],
+    }
+    candidate.update(overrides)
+    return candidate
+
+
+def _orphan_packet() -> dict:
+    return {
+        "issue_type": "orphan_figure_task",
+        "figure_caption": "Fig. 6 - The Club of Thinkers",
+        "allowed_insert_before_block_ids": ["BLK-00102"],
+    }
+
+
+def _evidence_page() -> phase22.EvidencePage:
+    return phase22.EvidencePage(
+        evidence_id="EVIDENCE-PAGE-A",
+        page_number=9,
+        text="Explore\nFind out more about the members of this club.",
+        image_data_url="data:image/jpeg;base64,AA==",
+        score=1.0,
+    )
+
+
+def test_is_task_like_no_longer_vetoes_a_page_verified_recovery():
+    """§3 purge, item 4C: the keyword imperative list must not veto a
+    recovery the page verifier is about to judge — even wording the list
+    never anticipated ('Ponder over this map with a friend.') is validated."""
+    candidate = _orphan_candidate(
+        recovered_text="Ponder over this map with a friend.",
+    )
+
+    normalized, reason, protocol_error = phase22._validated_candidate(
+        _orphan_packet(), candidate, [_evidence_page()]
+    )
+
+    assert reason == ""
+    assert protocol_error is False
+    assert normalized is not None
+    assert normalized["recovered_text"] == "Ponder over this map with a friend."
+
+
+def test_unknown_source_labels_are_preserved_verbatim():
+    """§3 purge, item 4D: `_SOURCE_LABELS` used to blank any cue outside its
+    six-word vocabulary; the visible label now survives verbatim."""
+    assert phase22._normalize_source_label("Explore More!") == "Explore More!"
+    assert phase22._normalize_source_label("  Let's   Try  ") == "Let's Try"
+    assert phase22._normalize_source_label("") == ""
+
+    normalized, reason, _protocol = phase22._validated_candidate(
+        _orphan_packet(),
+        _orphan_candidate(source_label="Keep the Curiosity Alive"),
+        [_evidence_page()],
+    )
+    assert reason == ""
+    assert normalized["source_label"] == "Keep the Curiosity Alive"
+
+
+def test_sub_floor_extractor_confidence_flags_instead_of_rejecting():
+    """6E: numeric confidence floors are review flags, never acceptance
+    gates — the author's positive verdict ships flagged."""
+    normalized, reason, protocol_error = phase22._validated_candidate(
+        _orphan_packet(),
+        _orphan_candidate(confidence=0.42),
+        [_evidence_page()],
+    )
+
+    assert reason == ""
+    assert protocol_error is False
+    assert normalized is not None
+    assert any("evidence floor" in flag for flag in normalized["review_flags"])
+
+
+def test_unruled_task_kind_ships_neutral_and_flagged():
+    normalized, reason, _protocol = phase22._validated_candidate(
+        _orphan_packet(),
+        _orphan_candidate(task_kind=""),
+        [_evidence_page()],
+    )
+
+    assert reason == ""
+    assert normalized["task_kind"] == "checkpoint_question"
+    assert any("kind" in flag for flag in normalized["review_flags"])
+
+
+def test_verifier_dissent_flags_the_decision_instead_of_rejecting(monkeypatch):
+    """R2/6E: the independent verifier is an auditor, never a judge — its
+    dissent becomes a review flag on the shipped decision."""
+    page = _evidence_page()
+    candidate = _orphan_candidate(
+        page_number=page.page_number,
+        text_layer_match=True,
+    )
+
+    def dissenting(**_kwargs):
+        return {
+            "verdict": "does_not_match",
+            "recovered_text": "Entirely different wording.",
+            "source_label_matches": False,
+            "task_kind_matches": False,
+            "confidence": 0.31,
+            "evidence": [],
+        }
+
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", dissenting)
+    accepted, reason = phase22._verify_candidate(
+        _orphan_packet(), candidate, [page]
+    )
+
+    assert reason == ""
+    assert accepted is not None
+    # The author's transcription ships, carrying every dissent as a flag.
+    assert accepted["recovered_text"] == candidate["recovered_text"]
+    flags = "\n".join(accepted["review_flags"])
+    assert "does_not_match" in flags
+    assert "source label" in flags
+    assert "task" in flags and "kind" in flags
+    assert "disagree" in flags
+    assert "evidence floor" in flags
+    assert accepted["verification"]["verdict"] == "does_not_match"
+
+
+def test_verifier_missing_evidence_page_stays_fail_closed(monkeypatch):
+    monkeypatch.setattr(
+        phase22,
+        "_openai_multimodal_json",
+        lambda **_kwargs: pytest.fail("no call may happen without a page"),
+    )
+    accepted, reason = phase22._verify_candidate(
+        _orphan_packet(),
+        _orphan_candidate(evidence_id="EVIDENCE-PAGE-Z"),
+        [_evidence_page()],
+    )
+
+    assert accepted is None
+    assert "unavailable" in reason
+
+
+def test_adjudicated_task_kind_drives_source_kind_and_verbatim_label(
+    tmp_path: Path, monkeypatch,
+):
+    """The model's task_kind verdict — not the label wording — decides
+    source_kind/activity_origin, and the visible label ships verbatim."""
+    source = _corrupted_rne()
+    compiled = _compile(source)
+    pdf = tmp_path / "RNE.pdf"
+    _make_pdf(pdf)
+    artifact_dir = tmp_path / "artifacts"
+
+    from app.services import uploads
+
+    monkeypatch.setattr(uploads, "upload_file_path", lambda _job: pdf)
+    monkeypatch.setattr(uploads, "source_artifact_directory", lambda _job_id: artifact_dir)
+    monkeypatch.setattr(phase22, "_CACHE_DIR", tmp_path / "cache")
+
+    def decision(packet: dict) -> dict:
+        value = _decision(packet)
+        if packet["issue_type"] == "orphan_figure_task":
+            value["decision"]["source_label"] = "Wonder Why"
+            value["decision"]["task_kind"] = "activity"
+        return value
+
+    job = SimpleNamespace(
+        id=77,
+        filename="RNE.pdf",
+        mmd_text=source,
+        generation_checkpoint={},
+        question_inventory={},
+        detail="",
+    )
+    db = SimpleNamespace(commit=lambda: None)
+    canonical, _report, ready = phase22.adjudicate_job_source(
+        db,
+        job,
+        compiled.canonical,
+        compiled.report,
+        decision_provider=lambda packet, _pages: decision(packet),
+    )
+
+    assert ready is True
+    club = next(
+        task for task in canonical["tasks"]
+        if "caricaturist trying to depict" in task["raw_prompt"]
+    )
+    assert club["source_label"] == "Wonder Why"
+    assert club["source_kind"] == "activity"
+    assert club["activity_origin"] is True
+    semantic = phase22.semantic_source(canonical, source)
+    assert "\\section*{Wonder Why}" in semantic
 
 
 def test_verifier_is_fixed_to_one_page_and_requires_source_label(monkeypatch):

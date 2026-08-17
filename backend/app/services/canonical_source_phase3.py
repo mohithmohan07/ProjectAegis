@@ -169,8 +169,6 @@ _EMPTY_MATH_DELIMITER_PATTERNS = (
 
 HierarchyProvider = Callable[[dict[str, Any]], dict[str, Any]]
 HierarchyCritic = Callable[[dict[str, Any]], dict[str, Any]]
-GroundingProvider = Callable[[dict[str, Any]], dict[str, Any]]
-GroundingCritic = Callable[[dict[str, Any]], dict[str, Any]]
 TopicResolutionProvider = Callable[[dict[str, Any]], dict[str, Any]]
 TopicResolutionCritic = Callable[[dict[str, Any]], dict[str, Any]]
 AnomalyProvider = Callable[[dict[str, Any]], dict[str, Any]]
@@ -479,6 +477,13 @@ def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
         )
     }
     identity["subject_adapter"] = subject_adapter(identity["subject"])
+    # The Architect's instruction identity (docs/aegis-restructure.md §8.1)
+    # joins the semantic context when present, so a graph verified under one
+    # instruction set is never silently reused under another. Absent for
+    # convert-time compiles and legacy graphs, which stay self-consistent.
+    instruction = str(metadata.get("instruction_set_sha256") or "").strip()
+    if instruction:
+        identity["instruction_set_sha256"] = instruction
     return _sha256_json(identity)
 
 
@@ -596,9 +601,18 @@ def _vision_heading_evidence(page_bundle: dict[str, Any] | None) -> list[dict[st
 
 
 def _virtual_missing_main_candidates(
-    canonical: dict[str, Any], page_bundle: dict[str, Any] | None
+    canonical: dict[str, Any],
+    page_bundle: dict[str, Any] | None,
+    *,
+    advisory_issues: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Use verified page evidence only for provably missing numbered parents."""
+    """Use verified page evidence only for provably missing numbered parents.
+
+    Emitting an unverified virtual heading would put unvetted text into the
+    learner-visible hierarchy, so ambiguous or sub-floor evidence is still
+    skipped — but never silently: every skip is recorded as an advisory
+    graph issue so a reviewer can resolve the missing parent explicitly.
+    """
     mains, subsections = structure.numbered_heading_inventory(canonical)
     missing = sorted(major for major in subsections if major not in mains)
     if not missing:
@@ -606,17 +620,46 @@ def _virtual_missing_main_candidates(
     evidence = _vision_heading_evidence(page_bundle)
     virtual: list[dict[str, Any]] = []
     for number in missing:
-        matches = [
+        numbered_rows = [
             row for row in evidence
             if row.get("number") == str(number)
             and _MAIN_NUMBER_RE.fullmatch(str(row.get("number") or ""))
-            and confidence_policy.accepts(
+        ]
+        matches = [
+            row for row in numbered_rows
+            if confidence_policy.accepts(
                 row.get("confidence"),
                 confidence_policy.ConfidenceGate.SOURCE_CRITICAL,
             )
         ]
         titles = {_normal(row.get("title")) for row in matches if row.get("title")}
         if len(matches) != 1 or len(titles) != 1:
+            if advisory_issues is not None:
+                sub_floor = len(numbered_rows) - len(matches)
+                if not numbered_rows:
+                    reason = "no verified page heading evidence carries it"
+                elif sub_floor and len(matches) != 1:
+                    reason = (
+                        f"{sub_floor} candidate heading(s) fell below the "
+                        "source-critical extraction confidence floor and no "
+                        "single verified candidate remained"
+                    )
+                else:
+                    reason = (
+                        f"{len(matches)} verified candidate(s) with "
+                        f"{len(titles)} distinct title(s) are ambiguous"
+                    )
+                advisory_issues.append({
+                    "code": "vision_heading_evidence_unresolved",
+                    "severity": "warning",
+                    "block_ids": [],
+                    "message": (
+                        f"Missing numbered parent heading {number} was not "
+                        f"restored from original-PDF evidence: {reason}. Its "
+                        "subsections keep their physical order and this is "
+                        "recorded for review, not silently dropped."
+                    ),
+                })
             continue
         first_sub_start = min(
             int(block.get("source_start") or 0) for block in subsections[number]
@@ -1100,18 +1143,34 @@ def _validate_classifications(
 
 def _apply_critic_repairs(
     classifications: dict[str, dict[str, Any]], critic: dict[str, Any]
-) -> dict[str, dict[str, Any]]:
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+    """Apply the critic's bounded repairs; its dissent flags, never gates.
+
+    The critic is an auditor.  A sub-floor confidence, an unsupported
+    verdict, or textual issues without a bounded repair are recorded as
+    advisory graph issues on the affected sections — the classified
+    hierarchy stands.  Only a mechanical ID violation (a repair naming a
+    section that does not exist) still fails closed.
+    """
     verdict = str(critic.get("verdict") or "")
     confidence = float(critic.get("confidence") or 0.0)
     issues = [str(value).strip() for value in critic.get("issues") or [] if str(value).strip()]
-    if not confidence_policy.accepts(confidence):
-        raise ValueError(
-            "Phase 3 hierarchy critic confidence "
-            f"{confidence:.3f} is below "
-            f"{confidence_policy.threshold_text()}"
-        )
+    advisory: list[dict[str, Any]] = []
+    band = confidence_policy.semantic_band(confidence)
+    if band != "accepted":
+        advisory.append({
+            "code": "hierarchy_critic_low_confidence",
+            "severity": "warning",
+            "section_ids": [],
+            "message": (
+                "Phase 3 hierarchy critic confidence "
+                f"{confidence:.3f} (band: {band}) is below the semantic "
+                "acceptance band; the classified hierarchy stands and this "
+                "dissent is recorded for review."
+            ),
+        })
     if verdict == "verified" and not issues:
-        return classifications
+        return classifications, advisory
     repaired = copy.deepcopy(classifications)
     for row in critic.get("repairs") or []:
         if not isinstance(row, dict):
@@ -1123,18 +1182,40 @@ def _apply_critic_repairs(
         repaired[section_id]["parent_section_id"] = str(row.get("parent_section_id") or "")
         repaired[section_id]["critic_reason"] = str(row.get("reason") or "")
     repairs = [row for row in critic.get("repairs") or [] if isinstance(row, dict)]
-    if verdict == "repair_required" and not repairs:
-        detail = "; ".join(issues[:10]) or "critic requested repair without a bounded repair"
-        raise ValueError("Phase 3 hierarchy critic requires review: " + detail)
     if issues and not repairs:
-        raise ValueError(
-            "Phase 3 hierarchy critic requires review: " + "; ".join(issues[:10])
-        )
+        advisory.append({
+            "code": "hierarchy_critic_dissent",
+            "severity": "warning",
+            "section_ids": [],
+            "message": (
+                "Phase 3 hierarchy critic dissent (verdict "
+                f"{verdict or 'missing'!r}, no bounded repair): "
+                + "; ".join(issues[:10])
+                + ". The classified hierarchy stands, flagged for review."
+            ),
+        })
+    elif verdict == "repair_required" and not repairs:
+        advisory.append({
+            "code": "hierarchy_critic_dissent",
+            "severity": "warning",
+            "section_ids": [],
+            "message": (
+                "Phase 3 hierarchy critic requested repair without a bounded "
+                "repair; the classified hierarchy stands, flagged for review."
+            ),
+        })
     if verdict not in {"verified", "repair_required"}:
-        raise ValueError(
-            "Phase 3 hierarchy critic returned an unsupported verdict: " + verdict
-        )
-    return repaired
+        advisory.append({
+            "code": "hierarchy_critic_dissent",
+            "severity": "warning",
+            "section_ids": [row.get("section_id") for row in repairs if row.get("section_id")],
+            "message": (
+                "Phase 3 hierarchy critic returned an unsupported verdict "
+                f"{verdict!r}; the classified hierarchy stands, flagged for "
+                "review."
+            ),
+        })
+    return repaired, advisory
 
 
 def _forced_structural_roles(
@@ -1205,7 +1286,13 @@ def compile_semantic_graph(
         copy.deepcopy(row) for row in canonical.get("sections") or []
         if isinstance(row, dict) and str(row.get("section_id") or "")
     ]
-    sections.extend(_virtual_missing_main_candidates(canonical, page_bundle))
+    # Advisory (never blocking) issues raised while compiling: dropped vision
+    # evidence and independent-critic dissent land here so a reviewer sees
+    # them on the graph instead of the run silently guessing or stopping.
+    advisory_issues: list[dict[str, Any]] = []
+    sections.extend(_virtual_missing_main_candidates(
+        canonical, page_bundle, advisory_issues=advisory_issues,
+    ))
     numbered_main_bindings = _numbered_main_binding_rows(
         canonical,
         sections,
@@ -1345,9 +1432,10 @@ def compile_semantic_graph(
                 **payload,
                 "proposed_hierarchy": list(classifications.values()),
             }
-            classifications = _apply_critic_repairs(
+            classifications, critic_advisory_issues = _apply_critic_repairs(
                 classifications, critic_provider(critic_payload)
             )
+            advisory_issues.extend(critic_advisory_issues)
             classification_mode = "api_classified_and_verified"
 
     # The source numbering contract outranks semantic model drift.
@@ -1650,7 +1738,7 @@ def compile_semantic_graph(
             "page_count": len((page_bundle or {}).get("pages") or []),
             "heading_count": len(_vision_heading_evidence(page_bundle)),
         },
-        "issues": [
+        "issues": ([
             {
                 "code": "converter_semantic_markup_requires_pdf_reconciliation",
                 "severity": "error",
@@ -1661,7 +1749,7 @@ def compile_semantic_graph(
                     "semantic generation."
                 ),
             }
-        ] if suspicious_blocks else [],
+        ] if suspicious_blocks else []) + copy.deepcopy(advisory_issues),
     }
     semantic_source = render_semantic_source(graph, canonical)
     graph["semantic_source_sha256"] = _sha256_text(semantic_source)
@@ -2939,6 +3027,7 @@ def reconcile_source_anomalies(
     ]
     repairs: list[dict[str, Any]] = []
     unresolved: list[str] = []
+    unresolved_dissent: list[str] = []
     graph_block_by_id = {
         str(row.get("block_id") or ""): row
         for row in out.get("blocks") or [] if isinstance(row, dict)
@@ -2974,6 +3063,14 @@ def reconcile_source_anomalies(
             )
         ):
             unresolved.append(block_id)
+            if isinstance(selection, dict):
+                unresolved_dissent.append(
+                    f"{block_id}: author decision "
+                    f"{str(selection.get('decision') or 'missing')!r} with "
+                    "confidence "
+                    f"{float(selection.get('confidence') or 0.0):.3f} did not "
+                    "positively select a verified page block"
+                )
             continue
         verification = critic({
             "packet": copy.deepcopy(packet),
@@ -2990,6 +3087,19 @@ def reconcile_source_anomalies(
             or bool(verification.get("issues"))
         ):
             unresolved.append(block_id)
+            if isinstance(verification, dict):
+                critic_issues = "; ".join(
+                    str(value).strip()
+                    for value in list(verification.get("issues") or [])[:4]
+                    if str(value).strip()
+                )
+                unresolved_dissent.append(
+                    f"{block_id}: independent critic verdict "
+                    f"{str(verification.get('verdict') or 'missing')!r} with "
+                    "confidence "
+                    f"{float(verification.get('confidence') or 0.0):.3f}"
+                    + (f" — {critic_issues}" if critic_issues else "")
+                )
             continue
         selected_page, selected_block = _page_and_block_by_key(
             page_bundle, selected_key
@@ -3032,19 +3142,11 @@ def reconcile_source_anomalies(
         })
     out["source_fusion_repairs"] = repairs
     if unresolved:
-        def _unresolved_markup_ships_for_review() -> bool:
-            # Under the rewritten pipeline a block whose adjudication fell
-            # below the source-critical floor keeps its VERBATIM canonical
-            # text (already produced and dual-verified by the page
-            # extraction) and ships flagged for review; only the legacy
-            # path turns the heuristic into a chapter-blocking decision.
-            try:
-                from .phase3 import runner as _phase3_runner
-            except ImportError:  # pragma: no cover - defensive ordering
-                return False
-            return _phase3_runner.rewrite_enabled()
-
-        review_only = _unresolved_markup_ships_for_review()
+        # A block whose adjudication fell below the source-critical
+        # floor keeps its VERBATIM canonical text (already produced and
+        # dual-verified by the page extraction) and ships flagged for
+        # review; it never blocks the chapter.
+        review_only = True
         out["status"] = "ready" if review_only else "review_required"
         out["issues"] = [
             issue for issue in out.get("issues") or []
@@ -3060,6 +3162,11 @@ def reconcile_source_anomalies(
                     " The affected block(s) keep their verbatim extracted "
                     "text and are flagged for review."
                     if review_only
+                    else ""
+                )
+                + (
+                    " Recorded dissent: " + " | ".join(unresolved_dissent[:10])
+                    if unresolved_dissent
                     else ""
                 )
             ),
@@ -5251,355 +5358,6 @@ def annotate_assignment_units(
     return out
 
 
-def _missing_host_schema(
-    assignment_unit_ids: list[str], source_block_ids: list[str]
-) -> dict[str, Any]:
-    return {
-        "name": "aegis_phase3_missing_type_host_concepts",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "concepts": {
-                    "type": "array",
-                    "minItems": 1,
-                    "maxItems": max(1, len(assignment_unit_ids)),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "concept_title": {"type": "string"},
-                            "parent_concept": {"type": "string"},
-                            "description": {"type": "string"},
-                            "achieving_mastery": {"type": "string"},
-                            "keywords": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                            },
-                            "source_block_ids": {
-                                "type": "array",
-                                "minItems": 1,
-                                "items": {
-                                    "type": "string",
-                                    "enum": source_block_ids,
-                                },
-                            },
-                            "assignment_unit_ids": {
-                                "type": "array",
-                                "minItems": 1,
-                                "items": {
-                                    "type": "string",
-                                    "enum": assignment_unit_ids,
-                                },
-                            },
-                        },
-                        "required": [
-                            "concept_title",
-                            "parent_concept",
-                            "description",
-                            "achieving_mastery",
-                            "keywords",
-                            "source_block_ids",
-                            "assignment_unit_ids",
-                        ],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["concepts"],
-            "additionalProperties": False,
-        },
-    }
-
-
-def _missing_host_critic_schema() -> dict[str, Any]:
-    return {
-        "name": "aegis_phase3_missing_type_host_critic",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "verdict": {"type": "string", "enum": ["verified", "rejected"]},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "issues": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["verdict", "confidence", "issues"],
-            "additionalProperties": False,
-        },
-    }
-
-
-def _create_missing_hosts_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
-    unit_ids = [
-        str(row.get("assignment_unit_id") or "")
-        for row in payload.get("assignment_units") or []
-    ]
-    block_ids = [
-        str(row.get("block_id") or "")
-        for row in payload.get("source_blocks") or []
-    ]
-    system = (
-        "You are the Aegis missing-concept reconciler. A canonical textbook "
-        "topic contains source-grounded Type assignment units but the restored "
-        "checkpoint has no normal concept in that topic. Create the smallest "
-        "pedagogically coherent set of normal concepts needed to host every "
-        "assignment unit exactly once. Preserve grade and subject level. Use "
-        "only supplied source_block_ids and assignment_unit_ids. Do not create "
-        "a culmination, activity, question, person-only label, or unsupported "
-        "fact. Description and mastery must be specific enough to teach and "
-        "assess the source method or idea."
-    )
-    return phase22._openai_multimodal_json(
-        system=system,
-        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
-        pages=[],
-        response_schema=_missing_host_schema(unit_ids, block_ids),
-        purpose="concept_mapping",
-        max_tokens=max(5000, min(24000, len(unit_ids) * 900)),
-    )
-
-
-def _critic_missing_hosts_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
-    system = (
-        "You are the independent Aegis concept-topology critic. Verify that "
-        "the proposed missing concepts are necessary, source-grounded, "
-        "non-duplicative, grade-appropriate, and collectively cover every "
-        "assignment unit exactly once without over-merging distinct methods. "
-        "Reject any unsupported, generic, culmination-like, or question-shaped "
-        "concept. Do not rewrite the proposal."
-    )
-    return phase22._openai_multimodal_json(
-        system=system,
-        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
-        pages=[],
-        response_schema=_missing_host_critic_schema(),
-        purpose="concept_mapping",
-        max_tokens=4000,
-    )
-
-
-def ensure_type_scope_hosts(
-    records: list[dict[str, Any]],
-    *,
-    mined_types: dict[str, Any],
-    graph: dict[str, Any] | None = None,
-    canonical: dict[str, Any] | None = None,
-    provider: AnomalyProvider | None = None,
-    critic: AnomalyCritic | None = None,
-) -> list[dict[str, Any]]:
-    """Create source-grounded normal hosts before the legacy allocator gate.
-
-    This is the fail-soft turnover for an 81% legacy checkpoint: verified
-    concepts, inventory, and Types survive, while only missing topic topology is
-    reconciled before allocation. Heading text is never used as identity.
-    """
-    graph = graph or active_graph()
-    if not isinstance(graph, dict):
-        return records
-    canonical = canonical or (active_session() or {}).get("canonical") or {}
-    from . import concept_refiner as cr
-    from . import generation
-
-    out = canonicalize_record_topics(records, graph)
-    annotated_types = annotate_mined_types(mined_types, graph)
-    units = annotate_assignment_units(
-        generation._expand_mined_types_to_assignment_units(
-            list(annotated_types.get("types") or [])
-        ),
-        graph,
-    )
-    topic_by_id = {
-        str(row.get("topic_id") or ""): row
-        for row in graph.get("topics") or [] if isinstance(row, dict)
-    }
-    normal_topics = {
-        str(row.get("_semantic_topic_id") or "")
-        for row in out
-        if not cr.is_culmination(row.get("concept_title", ""))
-    }
-    units_by_topic: dict[str, list[dict[str, Any]]] = {}
-    for unit in units:
-        if unit.get("is_activity"):
-            continue
-        topic_ids = [str(value) for value in unit.get("_semantic_topic_ids") or []]
-        if len(topic_ids) != 1:
-            continue
-        topic_id = topic_ids[0]
-        if topic_id and topic_id not in normal_topics:
-            units_by_topic.setdefault(topic_id, []).append(unit)
-    if not units_by_topic:
-        return out
-
-    canonical_blocks = {
-        str(row.get("block_id") or ""): row
-        for row in canonical.get("blocks") or [] if isinstance(row, dict)
-    }
-    graph_blocks = [
-        row for row in graph.get("blocks") or [] if isinstance(row, dict)
-    ]
-    provider = provider or (
-        _create_missing_hosts_via_openai if semantic_api_enabled() else None
-    )
-    critic = critic or (
-        _critic_missing_hosts_via_openai if semantic_api_enabled() else None
-    )
-    if provider is None or critic is None:
-        missing_titles = [
-            str((topic_by_id.get(topic_id) or {}).get("title") or topic_id)
-            for topic_id in units_by_topic
-        ]
-        raise RuntimeError(
-            "Phase 3 Type-scope preflight requires semantic reconciliation for "
-            + ", ".join(missing_titles)
-        )
-
-    for topic_id in [
-        str(row.get("topic_id") or "") for row in graph.get("topics") or []
-        if str(row.get("topic_id") or "") in units_by_topic
-    ]:
-        topic = topic_by_id[topic_id]
-        topic_units = units_by_topic[topic_id]
-        source_blocks: list[dict[str, Any]] = []
-        for block in graph_blocks:
-            if block.get("topic_id") != topic_id or block.get("kind") in {"layout", "heading"}:
-                continue
-            source = canonical_blocks.get(str(block.get("block_id") or ""), {})
-            visible = _clean_public_text(_graph_block_text(block, source))
-            if visible:
-                source_blocks.append({
-                    "block_id": str(block.get("block_id") or ""),
-                    "subtopic_id": str(block.get("subtopic_id") or ""),
-                    "kind": str(block.get("kind") or ""),
-                    "text": visible[:2200],
-                })
-        if not source_blocks:
-            raise RuntimeError(
-                f"Phase 3 cannot create a Type host for {topic.get('title')!r}: "
-                "the canonical topic has no source blocks"
-            )
-        unit_payload: list[dict[str, Any]] = []
-        unit_ids: list[str] = []
-        for index, unit in enumerate(topic_units, start=1):
-            unit_id = str(unit.get("type_id") or f"UNIT-{index:04d}")
-            if unit_id in unit_ids:
-                unit_id = f"{unit_id}--{index:03d}"
-            unit_ids.append(unit_id)
-            unit_payload.append({
-                "assignment_unit_id": unit_id,
-                "type_title": str(unit.get("type_title") or unit.get("title") or ""),
-                "type_description": str(unit.get("type_description") or unit.get("description") or ""),
-                "source_question_ids": [
-                    str(value) for value in unit.get("source_question_ids") or []
-                ],
-                "case_title": str(unit.get("case_title") or ""),
-                "case_definition": str(unit.get("case_definition") or ""),
-            })
-        payload = {
-            "metadata": copy.deepcopy(graph.get("metadata") or {}),
-            "topic": copy.deepcopy(topic),
-            "assignment_units": unit_payload,
-            "source_blocks": source_blocks,
-        }
-        proposal = provider(copy.deepcopy(payload))
-        concepts = proposal.get("concepts") if isinstance(proposal, dict) else None
-        if not isinstance(concepts, list) or not concepts:
-            raise RuntimeError(
-                f"Phase 3 missing-host reconciliation returned no concepts for {topic.get('title')!r}"
-            )
-        allowed_units = set(unit_ids)
-        allowed_blocks = {row["block_id"] for row in source_blocks}
-        covered: list[str] = []
-        titles: set[str] = set()
-        normalized: list[dict[str, Any]] = []
-        for concept in concepts:
-            if not isinstance(concept, dict):
-                raise RuntimeError("Phase 3 missing-host reconciliation returned a non-object concept")
-            title = _plain_title(concept.get("concept_title"))
-            title_key = _normal(title)
-            block_ids = [str(value) for value in concept.get("source_block_ids") or []]
-            assigned = [str(value) for value in concept.get("assignment_unit_ids") or []]
-            if (
-                not title
-                or title_key in titles
-                or not block_ids
-                or any(value not in allowed_blocks for value in block_ids)
-                or not assigned
-                or any(value not in allowed_units for value in assigned)
-            ):
-                raise RuntimeError("Phase 3 missing-host proposal violates its bounded ID contract")
-            titles.add(title_key)
-            covered.extend(assigned)
-            description = _SPACE_RE.sub(" ", str(concept.get("description") or "")).strip()
-            mastery = _SPACE_RE.sub(" ", str(concept.get("achieving_mastery") or "")).strip()
-            parent = _plain_title(concept.get("parent_concept")) or str(topic.get("title") or "Core Concepts")
-            if not description or not mastery:
-                raise RuntimeError("Phase 3 missing-host proposal omitted pedagogical content")
-            normalized.append({
-                "topic": str(topic.get("title") or ""),
-                "parent_concept": parent,
-                "concept_title": title,
-                "concept_details": (
-                    f"Description: {description}\n"
-                    f"Achieving Mastery: {mastery}"
-                ),
-                "keywords": ", ".join(
-                    str(value).strip()
-                    for value in concept.get("keywords") or []
-                    if str(value).strip()
-                ),
-                "_semantic_topic_id": topic_id,
-                "_semantic_graph_contract": graph.get("source_contract_hash"),
-                "_source_block_ids": block_ids,
-                "_semantic_subtopic_ids": sorted({
-                    str(block.get("subtopic_id") or "")
-                    for block in graph_blocks
-                    if str(block.get("block_id") or "") in block_ids
-                    and str(block.get("subtopic_id") or "")
-                }),
-                "_source_grounding_contract": "api-created-missing-type-host",
-                "_phase3_assignment_unit_ids": assigned,
-            })
-        if sorted(covered) != sorted(allowed_units) or len(covered) != len(set(covered)):
-            raise RuntimeError(
-                "Phase 3 missing-host proposals did not cover every assignment unit exactly once"
-            )
-        review = critic({
-            **copy.deepcopy(payload),
-            "proposed_concepts": copy.deepcopy(normalized),
-        })
-        if (
-            not isinstance(review, dict)
-            or review.get("verdict") != "verified"
-            or not confidence_policy.accepts(review.get("confidence"))
-            or bool(review.get("issues"))
-        ):
-            raise RuntimeError(
-                f"Phase 3 independent critic rejected missing Type hosts for {topic.get('title')!r}"
-            )
-        # Insert immediately before that topic's culmination, or before the next
-        # topic, preserving canonical chapter order.
-        insertion = len(out)
-        topic_order = int(topic.get("order") or 0)
-        for index, row in enumerate(out):
-            row_topic = topic_by_id.get(str(row.get("_semantic_topic_id") or ""), {})
-            if (
-                str(row.get("_semantic_topic_id") or "") == topic_id
-                and cr.is_culmination(row.get("concept_title", ""))
-            ):
-                insertion = index
-                break
-            if int(row_topic.get("order") or 0) > topic_order:
-                insertion = index
-                break
-        out[insertion:insertion] = normalized
-        normal_topics.add(topic_id)
-        progress.log(
-            f"Phase 3 Type-scope preflight created {len(normalized)} "
-            f"source-grounded concept host(s) for {topic.get('title')!r}.",
-            level="success",
-        )
-    return out
-
-
 def _record_topic_schema(
     concept_ids: list[str], topic_ids: list[str]
 ) -> dict[str, Any]:
@@ -5766,19 +5524,31 @@ def canonicalize_record_topics(
                 concept_id = str(row.get("concept_id") or "")
                 topic_id = str(row.get("topic_id") or "")
                 confidence = float(row.get("confidence") or 0.0)
+                # The bounded ID contract is mechanical and still fails
+                # closed; an honest sub-floor confidence is a judgment
+                # signal, so the assignment ships flagged for review.
                 if (
                     concept_id not in concept_index
                     or concept_id in seen
                     or topic_id not in topic_by_id
-                    or not confidence_policy.accepts(confidence)
                 ):
                     raise ValueError("Phase 3 concept-topic resolver violated its bounded ID contract")
                 seen.add(concept_id)
+                proposal_flags: list[str] = []
+                if not confidence_policy.accepts(confidence):
+                    band = confidence_policy.semantic_band(confidence)
+                    proposal_flags.append(
+                        "concept-topic assignment confidence "
+                        f"{confidence:.3f} (band: {band}) is below the "
+                        "semantic acceptance band; the assignment stands, "
+                        "flagged for review"
+                    )
                 proposals.append({
                     "concept_id": concept_id,
                     "topic_id": topic_id,
                     "confidence": confidence,
                     "reason": str(row.get("reason") or ""),
+                    "review_flags": proposal_flags,
                 })
             if seen != set(concept_index):
                 raise ValueError("Phase 3 concept-topic resolver omitted concept IDs")
@@ -5786,13 +5556,10 @@ def canonicalize_record_topics(
                 **copy.deepcopy(payload),
                 "proposed_assignments": copy.deepcopy(proposals),
             })
-            if (
-                not isinstance(review, dict)
-                or review.get("verdict") != "verified"
-                or not confidence_policy.accepts(review.get("confidence"))
-                or bool(review.get("issues"))
-            ):
-                raise ValueError("Phase 3 concept-topic assignments failed independent verification")
+            # The critic is an auditor: its dissent becomes review flags on
+            # the affected rows and can never block the resolved topics.
+            from .phase3 import kernel as _phase3_kernel
+            critic_flags = _phase3_kernel.advisory_flags(review)
             for proposal in proposals:
                 index = concept_index[proposal["concept_id"]]
                 topic = topic_by_id[proposal["topic_id"]]
@@ -5801,6 +5568,12 @@ def canonicalize_record_topics(
                 out[index]["_semantic_graph_contract"] = graph.get("source_contract_hash")
                 out[index]["_semantic_topic_confidence"] = proposal["confidence"]
                 out[index]["_semantic_topic_contract"] = "api-verified-topic-id"
+                row_flags = [*proposal["review_flags"], *critic_flags]
+                if row_flags:
+                    out[index]["review_flags"] = [
+                        *(out[index].get("review_flags") or []),
+                        *row_flags,
+                    ]
         else:
             # Explicit offline/test mode retains deterministic source progression.
             for index in unresolved:
@@ -5819,238 +5592,142 @@ def canonicalize_record_topics(
                 out[index]["_semantic_topic_contract"] = "offline-source-order-fallback"
     return out
 
-def _grounding_schema(concept_ids: list[str], block_ids: list[str]) -> dict[str, Any]:
-    return {
-        "name": "phase3_concept_source_grounding",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "concepts": {
-                    "type": "array",
-                    "minItems": len(concept_ids),
-                    "maxItems": len(concept_ids),
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "concept_id": {"type": "string", "enum": concept_ids},
-                            "source_block_ids": {
-                                "type": "array",
-                                "minItems": 1,
-                                "items": {"type": "string", "enum": block_ids},
-                            },
-                            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                            "reason": {"type": "string"},
-                        },
-                        "required": ["concept_id", "source_block_ids", "confidence", "reason"],
-                        "additionalProperties": False,
-                    },
-                }
-            },
-            "required": ["concepts"],
-            "additionalProperties": False,
-        },
-    }
-
-
-def _ground_records_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
-    concept_ids = [str(row["concept_id"]) for row in payload.get("concepts") or []]
-    block_ids = [str(row["block_id"]) for row in payload.get("source_blocks") or []]
-    system = (
-        "Ground every pedagogical concept to the smallest sufficient set of "
-        "source blocks from its already-fixed canonical topic. Use only supplied "
-        "opaque IDs. Do not rewrite concepts or source text. A concept must be "
-        "supported by visible textbook evidence, not merely topical similarity."
-    )
-    return phase22._openai_multimodal_json(
-        system=system,
-        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
-        pages=[],
-        response_schema=_grounding_schema(concept_ids, block_ids),
-        purpose="concept_mapping",
-        max_tokens=max(4000, min(20000, len(concept_ids) * 220)),
-    )
-
-
-def _grounding_critic_schema() -> dict[str, Any]:
-    return {
-        "name": "phase3_concept_source_grounding_critic",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "verdict": {"type": "string", "enum": ["verified", "rejected"]},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                "issues": {"type": "array", "items": {"type": "string"}},
-            },
-            "required": ["verdict", "confidence", "issues"],
-            "additionalProperties": False,
-        },
-    }
-
-
-def _critic_ground_records_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
-    system = (
-        "Independently verify that every proposed concept-to-source-block grounding "
-        "is visibly supported, topic-bounded, minimally sufficient, and not based "
-        "on broad topical similarity. Reject omitted concepts, unrelated blocks, "
-        "or confidence unsupported by the supplied source. Do not rewrite anything."
-    )
-    return phase22._openai_multimodal_json(
-        system=system,
-        prompt=json.dumps(payload, ensure_ascii=False, indent=2),
-        pages=[],
-        response_schema=_grounding_critic_schema(),
-        purpose="concept_mapping",
-        max_tokens=4000,
-    )
-
-
-def ground_concepts(
-    records: list[dict[str, Any]],
-    *,
-    graph: dict[str, Any] | None = None,
-    canonical: dict[str, Any] | None = None,
-    provider: GroundingProvider | None = None,
-    critic: GroundingCritic | None = None,
-) -> list[dict[str, Any]]:
-    graph = graph or active_graph()
-    if not isinstance(graph, dict) or not records:
-        return records
-    out = canonicalize_record_topics(records, graph)
-    canonical = canonical or (active_session() or {}).get("canonical") or {}
-    canonical_blocks = {
-        str(row.get("block_id") or ""): row
-        for row in canonical.get("blocks") or [] if isinstance(row, dict)
-    }
-    graph_blocks = [row for row in graph.get("blocks") or [] if isinstance(row, dict)]
-    topic_by_id = {
-        str(row.get("topic_id") or ""): row for row in graph.get("topics") or []
-        if isinstance(row, dict)
-    }
-    provider = provider or (_ground_records_via_openai if semantic_api_enabled() else None)
-    critic = critic or (
-        _critic_ground_records_via_openai if semantic_api_enabled() else None
-    )
-    for topic_id, topic in topic_by_id.items():
-        indices = [
-            index for index, row in enumerate(out)
-            if str(row.get("_semantic_topic_id") or "") == topic_id
-        ]
-        if not indices:
-            continue
-        candidates = [
-            block for block in graph_blocks
-            if block.get("topic_id") == topic_id
-            and block.get("kind") not in {"layout", "heading"}
-        ]
-        candidate_payload = []
-        for block in candidates:
-            source = canonical_blocks.get(str(block.get("block_id") or ""), {})
-            text = _clean_public_text(_graph_block_text(block, source))
-            if not text:
-                continue
-            candidate_payload.append({
-                "block_id": block["block_id"],
-                "kind": block.get("kind"),
-                "subtopic_id": block.get("subtopic_id") or "",
-                "text": text[:1800],
-            })
-        if not candidate_payload:
-            continue
-        concepts_payload = []
-        concept_id_by_index: dict[str, int] = {}
-        for local, index in enumerate(indices, start=1):
-            concept_id = f"CONCEPT-GROUND-{local:04d}"
-            concept_id_by_index[concept_id] = index
-            concepts_payload.append({
-                "concept_id": concept_id,
-                "concept_title": str(out[index].get("concept_title") or ""),
-                "parent_concept": str(out[index].get("parent_concept") or ""),
-                "description": str(out[index].get("concept_details") or "")[:2200],
-            })
-        if provider is None:
-            # Deterministic bounded fallback: ground to all source blocks in the
-            # topic rather than inventing semantic precision.
-            for index in indices:
-                block_ids = [row["block_id"] for row in candidate_payload]
-                out[index]["_source_block_ids"] = block_ids
-                out[index]["_semantic_subtopic_ids"] = sorted({
-                    str(block.get("subtopic_id") or "")
-                    for block in candidates
-                    if block.get("subtopic_id")
-                })
-                out[index]["_source_grounding_contract"] = "topic-bounded-deterministic"
-            continue
-        payload = {
-            "topic": topic,
-            "concepts": concepts_payload,
-            "source_blocks": candidate_payload,
-        }
-        response = provider(payload)
-        rows = response.get("concepts") if isinstance(response, dict) else None
-        if not isinstance(rows, list):
-            raise ValueError("Phase 3 concept grounding returned no concepts array")
-        if critic is None:
-            raise ValueError("Phase 3 concept grounding requires an independent critic")
-        seen: set[str] = set()
-        allowed_blocks = {str(row["block_id"]) for row in candidate_payload}
-        proposals: list[dict[str, Any]] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                raise ValueError("Phase 3 concept grounding returned a non-object row")
-            concept_id = str(row.get("concept_id") or "")
-            confidence = float(row.get("confidence") or 0.0)
-            if concept_id not in concept_id_by_index or concept_id in seen:
-                raise ValueError("Phase 3 concept grounding changed concept identity")
-            seen.add(concept_id)
-            block_ids = [str(value) for value in row.get("source_block_ids") or []]
-            if (
-                not block_ids
-                or any(value not in allowed_blocks for value in block_ids)
-                or not confidence_policy.accepts(confidence)
-            ):
-                raise ValueError("Phase 3 concept grounding used an invalid or uncertain source block")
-            proposals.append({
-                "concept_id": concept_id,
-                "source_block_ids": block_ids,
-                "confidence": confidence,
-                "reason": str(row.get("reason") or ""),
-            })
-        if seen != set(concept_id_by_index):
-            raise ValueError("Phase 3 concept grounding omitted concept IDs")
-        review = critic({
-            **copy.deepcopy(payload),
-            "proposed_grounding": copy.deepcopy(proposals),
-        })
-        if (
-            not isinstance(review, dict)
-            or review.get("verdict") != "verified"
-            or not confidence_policy.accepts(review.get("confidence"))
-            or bool(review.get("issues"))
-        ):
-            raise ValueError("Phase 3 concept grounding failed independent verification")
-        for proposal in proposals:
-            index = concept_id_by_index[proposal["concept_id"]]
-            block_ids = proposal["source_block_ids"]
-            out[index]["_source_block_ids"] = block_ids
-            out[index]["_semantic_subtopic_ids"] = sorted({
-                str(next(
-                    (block.get("subtopic_id") for block in candidates if block.get("block_id") == block_id),
-                    "",
-                ) or "")
-                for block_id in block_ids
-            } - {""})
-            out[index]["_source_grounding_contract"] = "api-verified-source-block-ids"
-            out[index]["_source_grounding_confidence"] = proposal["confidence"]
-    return out
-
 
 def graph_topic_headings(graph: dict[str, Any] | None = None) -> list[str]:
     graph = graph or active_graph()
     if not isinstance(graph, dict):
         return []
     return [str(row.get("title") or "") for row in graph.get("topics") or [] if str(row.get("title") or "")]
+
+
+def _balanced_command_bodies(value: object, command: str) -> list[str]:
+    """Return every balanced braced body for one LaTeX command."""
+    text = str(value or "")
+    pattern = re.compile(
+        rf"\\{re.escape(command)}(?:\[[^\]]*\])?\s*\{{",
+        re.IGNORECASE,
+    )
+    bodies: list[str] = []
+    cursor = 0
+    while True:
+        match = pattern.search(text, cursor)
+        if match is None:
+            break
+        brace = text.find("{", match.start(), match.end())
+        if brace < 0:
+            break
+        depth = 0
+        index = brace
+        end: int | None = None
+        while index < len(text):
+            character = text[index]
+            if character == "\\":
+                index += 2
+                continue
+            if character == "{":
+                depth += 1
+            elif character == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index + 1
+                    break
+            index += 1
+        if end is None:
+            break
+        bodies.append(text[brace + 1 : end - 1])
+        cursor = end
+    return bodies
+
+
+def _append_labelled_evidence(
+    parts: list[str], label: str, value: object
+) -> None:
+    cleaned = _clean_public_text(value)
+    if not cleaned:
+        return
+    key = " ".join(str(cleaned).split()).casefold()
+    if any(
+        key and key in " ".join(str(existing).split()).casefold()
+        for existing in parts
+    ):
+        return
+    parts.append(f"[{label}] {cleaned}")
+
+
+def _block_excerpt_text(
+    graph_block: dict[str, Any],
+    canonical_block: dict[str, Any],
+    canonical: dict[str, Any],
+) -> str:
+    """Return learner-visible block evidence, including source-owned captions.
+
+    Visual captions, Figure registry references, and image alt text travel
+    with the source text so downstream topic packets can see what the page
+    actually shows. The leading "[Source text] " label is stripped so exact
+    plain-text comparisons on non-visual blocks keep matching the shipped
+    source wording (the retired Phase 3.7/3.7.1 pair pinned both behaviors;
+    the excerpts feed pre-81% consumers and stay unchanged).
+    """
+    raw = _graph_block_text(graph_block, canonical_block)
+    parts: list[str] = []
+    _append_labelled_evidence(parts, "Source text", raw)
+
+    # A raw Figure/Table block can carry a caption even when no registry row
+    # was materialized. Preserve the balanced source body before layout
+    # commands are stripped by the ordinary public-text cleaner.
+    for caption in _balanced_command_bodies(raw, "caption"):
+        _append_labelled_evidence(parts, "Source caption", caption)
+
+    figure_id = str(
+        graph_block.get("figure_id")
+        or canonical_block.get("figure_id")
+        or ""
+    )
+    figures = {
+        str(row.get("figure_id") or ""): row
+        for row in canonical.get("figures") or []
+        if isinstance(row, dict) and str(row.get("figure_id") or "")
+    }
+    images = {
+        str(row.get("image_id") or ""): row
+        for row in canonical.get("images") or []
+        if isinstance(row, dict) and str(row.get("image_id") or "")
+    }
+    figure = figures.get(figure_id, {})
+    if figure:
+        _append_labelled_evidence(
+            parts, "Verified Figure caption", figure.get("caption_raw")
+        )
+        references = [
+            str(value).strip()
+            for value in figure.get("reference_ids") or []
+            if str(value).strip()
+        ]
+        if references:
+            _append_labelled_evidence(
+                parts,
+                "Canonical Figure reference",
+                ", ".join(references),
+            )
+        for image_id in figure.get("image_ids") or []:
+            image = images.get(str(image_id), {})
+            _append_labelled_evidence(
+                parts, "Source image alt text", image.get("alt_raw")
+            )
+
+    # Verified GPT page ACSD and deterministic ACSD can attach a caption
+    # directly to the canonical block in addition to the Figure registry.
+    _append_labelled_evidence(
+        parts, "Verified visual caption", canonical_block.get("caption")
+    )
+    _append_labelled_evidence(
+        parts, "Verified visual caption", graph_block.get("caption")
+    )
+    value = "\n".join(parts).strip()
+    prefix = "[Source text] "
+    if value.startswith(prefix):
+        return value[len(prefix):]
+    return value
 
 
 def graph_topic_excerpts(
@@ -6067,13 +5744,23 @@ def graph_topic_excerpts(
     }
     out: list[dict[str, str]] = []
     for topic in graph.get("topics") or []:
+        if not isinstance(topic, dict):
+            continue
         topic_id = str(topic.get("topic_id") or "")
         pieces: list[str] = []
         for block in graph.get("blocks") or []:
-            if not isinstance(block, dict) or block.get("topic_id") != topic_id:
+            if (
+                not isinstance(block, dict)
+                or str(block.get("topic_id") or "") != topic_id
+                or str(block.get("kind") or "") in {
+                    "layout",
+                    "heading",
+                    "navigation",
+                }
+            ):
                 continue
             source = blocks.get(str(block.get("block_id") or ""), {})
-            text = _clean_public_text(_graph_block_text(block, source))
+            text = _block_excerpt_text(block, source, canonical)
             if text:
                 pieces.append(text)
         out.append({"topic": str(topic.get("title") or ""), "excerpt": "\n\n".join(pieces)})
@@ -6815,16 +6502,11 @@ def prepare_generation_graph(
         )
 
     def _automatic_reconciliation_allowed() -> bool:
-        # Under the rewritten pipeline the converter-markup anomaly is
-        # adjudicated automatically: the provider decides against the
-        # verified original-PDF page evidence (the same material a human
-        # reviewer would be shown) and its verdict ships in the audit.
-        # The legacy path keeps the explicit human decision.
-        try:
-            from .phase3 import runner as _phase3_runner
-        except ImportError:  # pragma: no cover - defensive ordering
-            return False
-        return _phase3_runner.rewrite_enabled()
+        # The converter-markup anomaly is adjudicated automatically: the
+        # provider decides against the verified original-PDF page evidence
+        # (the same material a human reviewer would be shown) and its
+        # verdict ships in the audit.
+        return True
 
     if verify_semantics:
         artifact_graph = load_graph(artifact_dir, canonical)

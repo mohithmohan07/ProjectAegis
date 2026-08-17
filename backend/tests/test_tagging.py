@@ -158,3 +158,50 @@ def test_tag_to_home_placement_is_noop(client, db, first_chapter):
     r = client.post(f"/tagging/questions/{qid}/tag-to-group",
                     json={"group_id": q.group_id}).json()
     assert r["status"] == "noop"
+
+
+def test_new_tag_group_uses_explicit_display_name_and_internal_key(db):
+    topic = db.query(models.Topic).order_by(models.Topic.id).first()
+    concept = models.Concept(
+        topic_id=topic.id,
+        concept_title="Machine-facing concept title",
+        concept_display_name="Learner-facing concept name",
+    )
+    db.add(concept)
+    db.flush()
+
+    group = tagging._group_of_type(db, concept, "Advanced")
+
+    assert group.group_name == group.group_display_name == (
+        "Learner-facing concept name — Advanced"
+    )
+    assert group.group_key
+    assert group.group_key != group.group_name
+    assert group.group_sequence == 1
+
+
+def test_new_tag_group_requires_display_name_and_unambiguous_variant(db):
+    topic = db.query(models.Topic).order_by(models.Topic.id).first()
+    missing_name = models.Concept(
+        topic_id=topic.id,
+        concept_title="Title is not a visible-name fallback",
+        concept_display_name="",
+    )
+    db.add(missing_name)
+    db.flush()
+    with pytest.raises(ValueError, match="explicit concept display name"):
+        tagging._group_of_type(db, missing_name, "Basic")
+
+    ambiguous = models.Concept(
+        topic_id=topic.id,
+        concept_title="Ambiguous variants",
+        concept_display_name="Ambiguous variants",
+    )
+    ambiguous.groups = [
+        models.Group(group_type="Basic", group_key="(AMB) BG01"),
+        models.Group(group_type="Basic", group_key="(AMB) BG02"),
+    ]
+    db.add(ambiguous)
+    db.flush()
+    with pytest.raises(ValueError, match="explicit group identity"):
+        tagging._group_of_type(db, ambiguous, "Basic")

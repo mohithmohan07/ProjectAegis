@@ -1,4 +1,6 @@
 """Assessment-creation quality: prompt assembly, variety, rubrics, review."""
+import pytest
+
 from app import models
 from app.services import assessment_prompts as ap
 from app.services import generation
@@ -23,15 +25,21 @@ def test_prompt_assembly_combines_all_blocks():
 
 
 def test_prompt_differs_per_difficulty_and_skill():
-    a = ap.build_prompt(question_type="objective", difficulty="Less", skill="Remember")
-    b = ap.build_prompt(question_type="objective", difficulty="High", skill="Analyse")
+    a = ap.build_prompt(
+        question_type="objective", difficulty="Less", skill="Remember",
+        marks=1, category="Multiple Choice Question")
+    b = ap.build_prompt(
+        question_type="objective", difficulty="High", skill="Analyse",
+        marks=1, category="Multiple Choice Question")
     assert a != b
     assert "direct recall" in a.lower()
     assert "error analysis" in b.lower() or "inference" in b.lower()
 
 
 def test_unnatural_combo_flagged_but_allowed():
-    p = ap.build_prompt(question_type="objective", difficulty="High", skill="Create")
+    p = ap.build_prompt(
+        question_type="objective", difficulty="High", skill="Create",
+        marks=1, category="Multiple Choice Question")
     assert "usually not ideal" in p
 
 
@@ -46,12 +54,40 @@ def test_stem_variety_within_batch(db, first_concept):
     recs = generation.generate_questions_for_concept(
         concept, question_type="subjective", cognitive_skill="Understand",
         difficulty="Moderate", category="Short Answer", count=5,
+        marks=3, question_duration=5, math_keyboard="No",
         start_index=1, live=False,
     )
     openers = {r["question"].split()[0].lower() for r in recs}
     assert len(openers) >= 3, f"stems too repetitive: {openers}"
     report = ap.stem_monotony_report([r["question"] for r in recs])
     assert not report["monotonous"], report
+
+
+def test_live_generation_fails_closed_on_cell_underfill_without_retry(
+    monkeypatch, db, first_concept,
+):
+    concept = _concept(db, first_concept)
+    calls = {"count": 0}
+
+    def provider(*_args, **_kwargs):
+        calls["count"] += 1
+        return {"questions": [{"question": "Only one obligation returned."}]}
+
+    monkeypatch.setattr(generation, "_openai_json", provider)
+    with pytest.raises(RuntimeError, match="exact blueprint cell count"):
+        generation.generate_questions_for_concept(
+            concept,
+            question_type="objective",
+            cognitive_skill="Remember",
+            difficulty="Less",
+            category="Multiple Choice Question",
+            count=2,
+            marks=1,
+            question_duration=2,
+            math_keyboard="",
+            live=True,
+        )
+    assert calls["count"] == 1
 
 
 def test_monotony_report_detects_repetition():
@@ -68,7 +104,8 @@ def test_subjective_rubric_markwise_and_sums_to_marks(db, first_concept):
     concept = _concept(db, first_concept)
     rec = generation.generate_questions_for_concept(
         concept, question_type="subjective", cognitive_skill="Apply",
-        difficulty="Moderate", category="Short Answer", count=1, live=False,
+        difficulty="Moderate", category="Short Answer", count=1,
+        marks=3, question_duration=5, math_keyboard="No", live=False,
     )[0]
     weights = [float(a["weightage"]) for a in rec["answers"]]
     assert sum(weights) == rec["marks"]
@@ -79,7 +116,8 @@ def test_descriptive_rubric_placement(db, first_concept):
     concept = _concept(db, first_concept)
     rec = generation.generate_questions_for_concept(
         concept, question_type="descriptive", cognitive_skill="Evaluate",
-        difficulty="High", category="Long Answer", count=1, live=False,
+        difficulty="High", category="Long Answer", count=1,
+        marks=5, question_duration=10, math_keyboard="No", live=False,
     )[0]
     # display_answer = model answer (not "Yes"); answer_content = rubric points.
     assert len(rec["display_answer"]) > 20
@@ -95,7 +133,8 @@ def test_objective_mcq_quality(db, first_concept):
     concept = _concept(db, first_concept)
     rec = generation.generate_questions_for_concept(
         concept, question_type="objective", cognitive_skill="Remember",
-        difficulty="Less", category="Multiple Choice Question", count=1, live=False,
+        difficulty="Less", category="Multiple Choice Question", count=1,
+        marks=1, question_duration=2, math_keyboard="", live=False,
     )[0]
     correct = [a for a in rec["answers"] if a["correct_answer"] == "Yes"]
     wrong = [a for a in rec["answers"] if a["correct_answer"] == "No"]
@@ -128,7 +167,8 @@ def test_review_passes_good_question(db, first_concept):
     concept = _concept(db, first_concept)
     rec = generation.generate_questions_for_concept(
         concept, question_type="descriptive", cognitive_skill="Analyse",
-        difficulty="High", category="Long Answer", count=1, live=False,
+        difficulty="High", category="Long Answer", count=1,
+        marks=5, question_duration=10, math_keyboard="No", live=False,
     )[0]
     assert ap.review_question(rec) == []
 

@@ -457,39 +457,6 @@ def test_source_topic_checkpoint_requires_complete_resume_shape():
     assert g._compatible_concept_checkpoint_entry(request_started)
 
 
-def test_late_lossy_candidate_restores_latest_complete_topology_without_api(
-    monkeypatch,
-):
-    baseline = [
-        *_records(),
-        {
-            "topic": "The Making of Nationalism in Europe",
-            "parent_concept": "European Nationalism",
-            "concept_title": "Nationalism and Social Transformation",
-            "concept_details": "Description: Social groups transformed Europe.",
-            "keywords": "nationalism, Europe",
-        },
-    ]
-    candidate = copy.deepcopy(baseline[:1])
-    monkeypatch.setattr(
-        g,
-        "_recover_missing_topic_concepts_via_api",
-        lambda *_args, **_kwargs: pytest.fail(
-            "late deterministic rollback must not spend an API request"
-        ),
-    )
-
-    accepted = g._accept_source_topic_complete_candidate(
-        baseline,
-        candidate,
-        _source_topics(),
-        stage="test cleanup",
-    )
-
-    assert accepted == baseline
-    assert accepted is not baseline
-
-
 def test_source_request_started_checkpoint_precedes_dispatch_and_blocks_replay(
     monkeypatch,
 ):

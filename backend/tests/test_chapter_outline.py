@@ -709,17 +709,20 @@ def test_unlabelled_bullet_parts_partition_like_lettered_ones():
 
 
 def test_task_cues_stop_minting_a_topic_under_an_outline():
-    # Every task block used to emit "# Discuss", so a 24-task chapter derived
-    # 24 sections nobody asked for around the outline's real topics. The cue
-    # drops to a sub-level heading rather than losing its heading entirely.
+    # Every task block used to emit a level-1 cue heading, so a 24-task
+    # chapter derived 24 sections nobody asked for around the outline's real
+    # topics. The cue — now the VERBATIM visible label — drops to a
+    # sub-level heading rather than losing its heading entirely.
     page_acsd = _page_acsd()
     outline, _flags = fallback._normalize_chapter_outline(page_acsd, _candidate())
     page_acsd["chapter_outline"] = outline
 
     rendered = fallback.render_page_acsd_to_mmd(page_acsd)
 
-    assert "\n# Discuss" not in rendered
-    assert "### Discuss" in rendered
+    assert "\n# (1)" not in rendered
+    assert "### (1)" in rendered
+    # The retired vocabulary no longer prints a cue the book never carried.
+    assert "Discuss" not in rendered
     # The outline's own topic keeps its heading weight.
     assert "# Dimensions" in rendered
 
@@ -728,8 +731,13 @@ def test_the_rendered_mmd_still_yields_its_tasks_when_recompiled():
     """The regression PR 208 shipped: bold cues hid every task.
 
     Conversion builds the canonical from the page ACSD, so it still reported
-    the tasks; only generation recompiles from the MMD, where they had
-    vanished. Compile the rendered MMD here, the way generation does.
+    the tasks; only generation recompiles from the MMD. Under verbatim cue
+    headings the MMD parser's fixed vocabulary cannot be the safety net any
+    more — the verified page ledger is: generation's load path
+    (rehydrate_verified_fallback) reapplies it on every recompile and FAILS
+    CLOSED when a single ledger task cannot be reconciled. Recompile the
+    rendered MMD here the way generation does, ledger reapplication
+    included.
     """
     from app.services import canonical_source_phase2 as phase2
 
@@ -743,6 +751,8 @@ def test_the_rendered_mmd_still_yields_its_tasks_when_recompiled():
         source_filename="outline.mmd",
         consumer_module="build_concepts",
     ).canonical
+    fallback._attach_chapter_outline(canonical, page_acsd)
+    mapped = fallback.apply_page_acsd_relationships(canonical, page_acsd)
 
     task_blocks = [
         block for page in page_acsd["pages"]
@@ -750,7 +760,14 @@ def test_the_rendered_mmd_still_yields_its_tasks_when_recompiled():
         if block.get("kind") == "task"
     ]
     assert task_blocks, "fixture must contain a task to be meaningful"
+    # apply_page_acsd_relationships raises unless EVERY ledger task is
+    # reconciled — the exact-once guarantee generation relies on.
+    assert mapped == len(task_blocks)
     assert len(canonical["tasks"]) == len(task_blocks)
+    assert all(
+        task["source_location_confidence"] == "gpt_pdf_acsd_verified_block"
+        for task in canonical["tasks"]
+    )
 
     # And the topics are still only the outline's, not one per task cue.
     level_one = [
@@ -763,7 +780,9 @@ def test_the_rendered_mmd_still_yields_its_tasks_when_recompiled():
 def test_task_cues_stay_headings_when_no_outline_decided_the_structure():
     rendered = fallback.render_page_acsd_to_mmd(_page_acsd())
 
-    assert "# Discuss" in rendered
+    # The verbatim visible cue keeps a heading; no vocabulary rewrites it.
+    assert "# (1)" in rendered
+    assert "Discuss" not in rendered
 
 
 def test_the_bold_task_cue_is_still_stripped_when_matching_tasks():

@@ -1,0 +1,61 @@
+{
+ "_comment": "Recorded Phase 2.2 placement verdicts for job 23's pooled Container-02 items (the RNE golden chapter, 'Nationalism in Europe'). The pool is the 11 hub inventory items (2 pure activities + 9 _activity_origin checkpoint questions); the golden envelope's canonical figure blocks carry no extractable image markup (the fixture's blocks were slimmed to offsets), so the figure pool is empty and figure placement is exercised by the synthetic end-to-end regression instead. Each placement was judged from the item's own text and captions against the settled concepts' Descriptions — printer position played no part (it is not in the pass's payload at all).",
+ "hub_placements": {
+  "QINV-0001": {
+   "topic_id": "TOPIC-0001",
+   "concept_title": "Utopian Nationalism and Democratic-social Republicanism",
+   "rationale": "The print is asked about as a utopian vision; the utopian-nationalism concept teaches exactly that idea."
+  },
+  "QINV-0004": {
+   "topic_id": "TOPIC-0002",
+   "concept_title": "Restoration and Territorial Reordering After Vienna",
+   "rationale": "Plotting the Vienna Congress's map changes exercises the territorial-reordering content directly."
+  },
+  "QINV-0008": {
+   "topic_id": "TOPIC-0003",
+   "concept_title": "Interpreting Wilhelm Wolff’s Account of the Silesian Weavers’ Revolt",
+   "rationale": "The eyewitness-weaver report retells the Silesian weavers' revolt that Wolff's account teaches."
+  },
+  "QINV-0010": {
+   "topic_id": "TOPIC-0004",
+   "concept_title": "Prussian State-building in the German Empire",
+   "rationale": "The reichstag caricature of Bismarck dominating elected deputies depicts the Prussian-dominated institutions of the new empire."
+  },
+  "QINV-0011.1": {
+   "topic_id": "TOPIC-0004",
+   "concept_title": "The Fragmented States and Identities of Pre-unification Italy",
+   "rationale": "Fig. 14(a) shows the pre-unification states, and the question asks about fragmented Italian identities."
+  },
+  "QINV-0011.2": {
+   "topic_id": "TOPIC-0004",
+   "concept_title": "Cavour’s Diplomacy and Sardinia-Piedmont’s Leadership",
+   "rationale": "Reading which regions joined unified Italy and when follows the Sardinia-Piedmont-led unification the concept teaches."
+  },
+  "QINV-0012": {
+   "topic_id": "TOPIC-0004",
+   "concept_title": "Garibaldi’s Volunteer Campaigns",
+   "rationale": "The boot cartoon portrays Garibaldi's campaign fitting Italy onto the king — the concept's own material."
+  },
+  "QINV-0013": {
+   "topic_id": "TOPIC-0005",
+   "concept_title": "Germania and the Symbolic Language of German Nationalism",
+   "rationale": "Interpreting the attributes of Veit's Germania via the Box 3 chart exercises the Germania symbolism content."
+  },
+  "QINV-0014": {
+   "topic_id": "TOPIC-0005",
+   "concept_title": "Germania and the Symbolic Language of German Nationalism",
+   "rationale": "Hübner's fallen Germania is an allegorical Germania image; the concept teaches reading that symbolism."
+  },
+  "QINV-0015": {
+   "topic_id": "TOPIC-0005",
+   "concept_title": "Germania and the Symbolic Language of German Nationalism",
+   "rationale": "Relating to the banner of Germania in the Frankfurt parliament exercises reading Germania as a national symbol."
+  },
+  "QINV-0026": {
+   "topic_id": "TOPIC-0006",
+   "concept_title": "Colonised Peoples’ Nationalist Struggle for Independent Nation-states",
+   "rationale": "Nationalist symbols outside Europe belong with anti-colonial nationalism developing its own national forms."
+  }
+ },
+ "figure_placements": {}
+}

@@ -21,10 +21,14 @@ def test_registry_has_core_prompts():
 
 def test_override_applies_to_build_prompt():
     prompts.set_override("assessment.base", "CUSTOM PERSONA MARKER 4242")
-    out = ap.build_prompt(question_type="objective", difficulty="Less", skill="Remember")
+    out = ap.build_prompt(
+        question_type="objective", difficulty="Less", skill="Remember",
+        marks=1, category="Multiple Choice Question")
     assert "CUSTOM PERSONA MARKER 4242" in out
     prompts.reset("assessment.base")
-    out2 = ap.build_prompt(question_type="objective", difficulty="Less", skill="Remember")
+    out2 = ap.build_prompt(
+        question_type="objective", difficulty="Less", skill="Remember",
+        marks=1, category="Multiple Choice Question")
     assert "CUSTOM PERSONA MARKER 4242" not in out2
 
 
@@ -56,13 +60,15 @@ def test_admin_edit_and_reset_prompt(client):
 
     # The edit is live for the next generation immediately.
     assert "EDITED VIA ADMIN 7777" in ap.build_prompt(
-        question_type="objective", difficulty="Less", skill="Remember")
+        question_type="objective", difficulty="Less", skill="Remember",
+        marks=1, category="Multiple Choice Question")
 
     r = client.post("/admin/prompts/assessment.base/reset", headers=headers)
     assert r.status_code == 200
     assert r.json()["overridden"] is False
     assert "EDITED VIA ADMIN 7777" not in ap.build_prompt(
-        question_type="objective", difficulty="Less", skill="Remember")
+        question_type="objective", difficulty="Less", skill="Remember",
+        marks=1, category="Multiple Choice Question")
 
 
 def test_admin_unknown_key_404(client):

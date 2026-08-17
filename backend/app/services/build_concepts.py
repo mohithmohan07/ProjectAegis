@@ -36,7 +36,6 @@ from ..bulk_import import workbook_sync, writer
 from . import (
     autonomous_resolution,
     canonical_source_phase22,
-    canonical_source_phase38_boundary_grounding_turnover_contract as phase38,
     chapter_durations,
     concept_cleanup,
     concept_refiner,
@@ -44,6 +43,7 @@ from . import (
     drive_checkpoints,
     generation,
     grounding_certificate,
+    instruction_architect,
     mmd,
     openai_usage,
     progress,
@@ -81,12 +81,6 @@ _HUMAN_DECISION_HASH_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_HUMAN_DECISIONS = 5_000
 _MAX_DEFERRED_HUMAN_DECISIONS = 5_000
 _MAX_AGENT_REVIEW_HISTORY = 100
-_SEMANTIC_RECOVERY_DISPATCHES_KEY = "semantic_recovery_dispatches"
-_SEMANTIC_RECOVERY_DISPATCHES_VERSION = 1
-_SEMANTIC_RECOVERY_ISSUE_KEY_VERSION = 1
-_MAX_SEMANTIC_RECOVERY_DISPATCHES = 100
-_PHASE38_CONVERGENCE_KEY = "phase38_convergence"
-_PHASE38_CONTROL_ONLY_KEY = "phase38_control_only"
 _DEPOSITED_GROUNDING_CERTIFICATE_KEY = "deposited_grounding_certificate"
 _ACTIVE_AGENT_RESOLUTION_IDS: ContextVar[frozenset[str]] = ContextVar(
     "aegis_active_agent_resolution_ids",
@@ -232,102 +226,10 @@ def _human_decision_ledger(checkpoint: dict | None) -> dict:
     return copy.deepcopy(value) if isinstance(value, dict) else {}
 
 
-def _semantic_recovery_dispatch_ledger(
-    checkpoint: dict | None,
-) -> dict:
-    if not isinstance(checkpoint, dict):
-        return {}
-    value = checkpoint.get(_SEMANTIC_RECOVERY_DISPATCHES_KEY)
-    return copy.deepcopy(value) if isinstance(value, dict) else {}
 
 
-def _phase38_convergence_ledger(checkpoint: dict | None) -> dict:
-    """Return the JSON-safe per-job Phase 3.8 convergence namespace."""
-
-    if not isinstance(checkpoint, dict):
-        return {}
-    value = checkpoint.get(_PHASE38_CONVERGENCE_KEY)
-    return copy.deepcopy(value) if isinstance(value, dict) else {}
 
 
-def _copy_phase38_convergence_ledger(
-    target: dict,
-    source: dict | None,
-) -> dict:
-    result = copy.deepcopy(target)
-    ledger = _phase38_convergence_ledger(source)
-    if ledger:
-        result[_PHASE38_CONVERGENCE_KEY] = ledger
-    return result
-
-
-def _phase38_control_only_envelope(
-    source: dict | None,
-    *,
-    fingerprint: str,
-    target_identity: dict[str, str],
-    target_chapter_id: int,
-) -> dict:
-    """Preserve a live Phase 3.8 budget when no stage remains resumable."""
-
-    ledger = _phase38_convergence_ledger(source)
-    if not ledger:
-        return {}
-    return {
-        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
-        "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
-        "fingerprint": fingerprint,
-        "target_identity": copy.deepcopy(target_identity),
-        "target_chapter_id": target_chapter_id,
-        _PHASE38_CONTROL_ONLY_KEY: True,
-        "checkpoints": [],
-        _PHASE38_CONVERGENCE_KEY: ledger,
-    }
-
-
-def _copy_semantic_recovery_dispatch_ledger(
-    target: dict,
-    source: dict | None,
-) -> dict:
-    result = copy.deepcopy(target)
-    ledger = _semantic_recovery_dispatch_ledger(source)
-    if ledger:
-        result[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = ledger
-    return result
-
-
-def _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
-    envelope: dict,
-    *,
-    retained_stage: str,
-) -> dict:
-    """Drop paid-repair seals belonging only to discarded later stages."""
-
-    result = copy.deepcopy(envelope)
-    ledger = _semantic_recovery_dispatch_ledger(result)
-    if not ledger:
-        return result
-    retained_order = generation._checkpoint_order(retained_stage)
-    attempts = []
-    changed = False
-    for raw in ledger.get("attempts") or []:
-        if not isinstance(raw, dict):
-            continue
-        attempt_order = generation._checkpoint_order(
-            str(raw.get("stage") or "")
-        )
-        if (
-            retained_order >= 0
-            and attempt_order >= 0
-            and attempt_order > retained_order
-        ):
-            changed = True
-            continue
-        attempts.append(copy.deepcopy(raw))
-    if changed:
-        ledger["attempts"] = attempts
-        result[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = ledger
-    return result
 
 
 def _pending_human_decision(checkpoint: dict | None) -> dict | None:
@@ -525,92 +427,6 @@ def _prune_human_decisions_after_checkpoint_fallback(
     return result
 
 
-def _retire_repaired_row_decisions(
-    envelope: dict,
-    *,
-    changed_row_indexes: tuple[int, ...],
-    repair_signature: str,
-) -> dict:
-    """Supersede saved semantic directions bound to rows a repair rewrote.
-
-    A saved grounding/topology direction is an identity of the exact candidate
-    payload it was recorded against; the positional CONCEPT-GROUND-style unit
-    IDs keep pointing at the row after its content changes.  Replaying such a
-    stale direction against the repaired row would re-assert the old evidence
-    mapping, so the same durable write that persists the repair retires the
-    ledger entries for every changed unit.
-    """
-
-    if not changed_row_indexes:
-        return envelope
-    result = copy.deepcopy(envelope)
-    ledger = _human_decision_ledger(result)
-    if not ledger:
-        return result
-    changed = {int(value) for value in changed_row_indexes}
-
-    def bound_to_changed_row(raw_pending: object) -> bool:
-        if not isinstance(raw_pending, dict):
-            return False
-        item = raw_pending.get("item")
-        unit_id = (
-            str(item.get("unit_id") or "").strip()
-            if isinstance(item, dict)
-            else ""
-        )
-        match = semantic_recovery._CONCEPT_ID_RE.fullmatch(unit_id)
-        if match is None:
-            return False
-        return (int(match.group("number")) - 1) in changed
-
-    retired_issue_keys: set[str] = set()
-
-    def remember_review_issue(raw_pending: object) -> None:
-        if not isinstance(raw_pending, dict):
-            return
-        review = raw_pending.get("agent_review")
-        issue_key = (
-            str(review.get("issue_key") or "")
-            if isinstance(review, dict) else ""
-        )
-        if issue_key:
-            retired_issue_keys.add(issue_key)
-
-    mutated = False
-    pending = ledger.get("pending")
-    if bound_to_changed_row(pending):
-        remember_review_issue(pending)
-        ledger["pending"] = None
-        mutated = True
-    resolutions: list[dict] = []
-    for raw in ledger.get("resolutions") or []:
-        entry = copy.deepcopy(raw)
-        if (
-            isinstance(entry, dict)
-            and str(entry.get("status") or "") in {"ready", "consumed"}
-            and bound_to_changed_row(entry.get("pending_decision"))
-        ):
-            remember_review_issue(entry.get("pending_decision"))
-            entry["status"] = "superseded"
-            entry["superseded_by_repair_signature"] = repair_signature
-            mutated = True
-        resolutions.append(entry)
-    if mutated:
-        ledger["resolutions"] = resolutions
-        # Review attempts for the retired units are identities of the
-        # pre-repair candidate. Keeping them would suppress the regenerated
-        # issue as an already-reviewed duplicate.
-        ledger["agent_review_history"] = [
-            copy.deepcopy(row)
-            for row in ledger.get("agent_review_history") or []
-            if not (
-                isinstance(row, dict)
-                and str(row.get("issue_key") or "") in retired_issue_keys
-            )
-        ]
-        result[_HUMAN_DECISIONS_KEY] = ledger
-    return result
-
 
 def _applied_human_decision_ids(checkpoint: dict | None) -> set[str]:
     """Decision IDs whose bounded action is durably represented here."""
@@ -695,28 +511,10 @@ def _consume_applied_human_decisions(
 def _human_decision_resolution_context(checkpoint: dict | None):
     durable_resolutions = _human_decisions_with_status(
         checkpoint, statuses={"ready", "consumed"})
-    ready_phase33_contexts = {
-        str(row.get("context_hash") or "")
-        for row in durable_resolutions
-        if row.get("status") == "ready"
-        and row.get("kind") == "phase33_type_host_semantic_conflict"
-        and str(row.get("context_hash") or "")
-    }
     active_agent_ids = _ACTIVE_AGENT_RESOLUTION_IDS.get()
     # A settled decision stays settled — across replays AND across resumes.
-    # Reactivation used to cover only the current request's decision ids
-    # plus phase-3.3 context hashes, so a client-driven resume (a network
-    # drop re-POSTing the run) forgot every consumed 3.1/3.2 agent
-    # resolution and re-litigated it, one full replay per decision, with
-    # the identical issue id each time. Every agent-settled semantic
-    # resolution is now re-exposed to every attempt; application remains
-    # identity-guarded (context hash / unit ids), so a stale row that no
-    # longer matches the workspace simply directs nothing.
-    _REACTIVATED_AGENT_KINDS = {
-        "phase31_source_grounding_semantic_conflict",
-        "phase32_concept_blueprint_semantic_conflict",
-        "phase33_type_host_semantic_conflict",
-    }
+    # Application remains identity-guarded (context hash / unit ids), so a
+    # stale row that no longer matches the workspace simply directs nothing.
     resolutions: list[dict] = []
     effective_durable: list[dict] = []
     for raw in durable_resolutions:
@@ -724,16 +522,7 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         reactivate_agent = (
             row.get("status") == "consumed"
             and row.get("resolved_by") == "agent"
-            and (
-                str(row.get("decision_id") or "") in active_agent_ids
-                or str(row.get("kind") or "") in _REACTIVATED_AGENT_KINDS
-                or (
-                    row.get("kind")
-                    == "phase33_type_host_semantic_conflict"
-                    and str(row.get("context_hash") or "")
-                    in ready_phase33_contexts
-                )
-            )
+            and str(row.get("decision_id") or "") in active_agent_ids
         )
         if reactivate_agent:
             row["status"] = "ready"
@@ -745,18 +534,16 @@ def _human_decision_resolution_context(checkpoint: dict | None):
         yield
         return
     from . import canonical_source_phase3 as phase3
-    from . import canonical_source_phase33_preflight_contract as phase33
     with phase3.human_source_resolution_context(
         copy.deepcopy(resolutions)
     ):
-        with phase33.human_resolution_context(copy.deepcopy(resolutions)):
-            with source_topic_decision.human_resolution_context(
+        with source_topic_decision.human_resolution_context(
+            copy.deepcopy(durable_resolutions)
+        ):
+            with type_granularity_decision.human_resolution_context(
                 copy.deepcopy(durable_resolutions)
             ):
-                with type_granularity_decision.human_resolution_context(
-                    copy.deepcopy(durable_resolutions)
-                ):
-                    yield
+                yield
 
 
 def _find_concept_in_chapter(
@@ -950,10 +737,9 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=(
-                    config.use_live_generation()
-                    and not generation._rewrite_placement_authority_active()
-                ),
+                # The rewritten Phase 3 never mints per-row placement
+                # contracts; its sealed row certificates are verified above.
+                require_placement_contracts=False,
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
@@ -976,7 +762,6 @@ def _deposit_concepts(
     records = concept_cleanup.filter_review_violations(
         records, subject=chapter.subject, board=chapter.board,
         chapter_title=chapter.chapter_title)
-    records = concept_cleanup.dedupe_similar_titles_chapter_wide(records)
     records = concept_refiner.refine_chapter(records)
     # The final deposit boundary must be resilient when the API repair pass
     # fails or returns generic/misclassified learner analysis. Preserve valid
@@ -994,6 +779,13 @@ def _deposit_concepts(
             source_text,
             stage="deposit-only cleanup",
         )
+    # The Fixer (Q13, seams F38/F39/F40): the deposit twins of the
+    # final-gate blocks reach the same content-addressed decisions — a QID
+    # the Fixer placed at the final gate replays free here, so the deposit
+    # payload stays idempotent with the certified one.
+    from .phase3 import fixer as p3_fixer
+
+    deposit_fixer = p3_fixer.default_provider() if pre_post == "Post" else None
     if pre_post == "Post" and inventory is not None:
         # A final-content checkpoint is intentionally restored without another
         # model call.  The deposit-only formatting pass above can still remove
@@ -1006,7 +798,7 @@ def _deposit_concepts(
             records = generation._normalize_activity_hubs_from_inventory(
                 records, inventory, mined_types)
             records = generation._enforce_rendered_inventory_coverage(
-                records, inventory, mined_types)
+                records, inventory, mined_types, fixer=deposit_fixer)
             # Inventory repair deliberately restores exact source wording. In
             # mathematics that wording can contain bare TeX, so canonicalize
             # after the repair as well as before it. Recheck exact coverage
@@ -1014,7 +806,7 @@ def _deposit_concepts(
             # never change qid ownership or placement.
             records = generation._canonicalize_concept_rich_text(records)
             records = generation._enforce_rendered_inventory_coverage(
-                records, inventory, mined_types)
+                records, inventory, mined_types, fixer=deposit_fixer)
             records = generation._canonicalize_concept_rich_text(records)
         except RuntimeError as exc:
             raise DepositValidationError(str(exc)) from exc
@@ -1040,31 +832,10 @@ def _deposit_concepts(
                 "question/task inventory coverage failed before deposit: "
                 + "; ".join(defect_parts)
             )
-        # Topic locality is a legacy-placement expectation: under the
+        # Topic locality was a legacy-placement expectation: under the
         # rewritten Phase 3 the house routing rules deliberately move a
         # multi-concept question to a later topic (or its culmination), so
-        # the API placement is the authority and this check is legacy-only.
-        topic_violations = (
-            generation._rendered_inventory_topic_violations(
-                records, inventory, mined_types)
-            if not generation._rewrite_placement_authority_active()
-            else []
-        )
-        if topic_violations:
-            qids = sorted({
-                str(item.get("qid") or "").strip()
-                for item in topic_violations
-                if str(item.get("qid") or "").strip()
-            })
-            progress.log(
-                "Deposit inventory topic validation failed for "
-                f"{len(topic_violations)} question/task placement(s).",
-                level="error",
-            )
-            raise DepositValidationError(
-                "question/task inventory topic placement failed before "
-                "deposit: " + ",".join(qids)
-            )
+        # the API placement is the authority and no locality check runs.
         try:
             generation._validate_final_or_raise(
                 records,
@@ -1072,6 +843,7 @@ def _deposit_concepts(
                 inventory=inventory,
                 mined_types=mined_types,
                 source_text=source_text,
+                fixer=deposit_fixer,
             )
         except RuntimeError as exc:
             raise DepositValidationError(str(exc)) from exc
@@ -1098,8 +870,15 @@ def _deposit_concepts(
         strict_type_hierarchy=pre_post == "Post",
         strict_analysis_section=pre_post == "Post",
         strict_mastery_statement=pre_post == "Post",
-        strict_culmination_recap=pre_post == "Post",
         source_text=source_text if pre_post == "Post" else "",
+        # Q1 gate split (Post only): analysis existence is scoped to the
+        # rows the chapter inventory allotted items to; the Pre lane
+        # keeps the legacy every-row contract (None) until step 7.
+        analysis_allotted_keys=(
+            concept_validator.analysis_allotted_keys(records)
+            if pre_post == "Post"
+            else None
+        ),
     )
     classified_fatal = generation._fatal_errors(report)
     # Post deposit is the same terminal boundary as generation's final gate, so
@@ -1114,6 +893,17 @@ def _deposit_concepts(
             if error.get("severity") == "error"
         ]
     )
+    # Seam F40 (Q13): a fixer-accepted (row, code) pair is a recorded
+    # decision, not a silent skip — it ships flagged. Rows are sealed at
+    # this boundary, so the Fixer may only accept-with-flag here; mechanics
+    # codes are never acceptable and any remaining defect fails closed.
+    fatal = generation._without_fixer_accepted(records, fatal)
+    if fatal and deposit_fixer is not None:
+        generation._fix_validation_failures_via_fixer(
+            records, fatal, stage="deposit", fixer=deposit_fixer,
+            allow_corrections=False,
+        )
+        fatal = generation._without_fixer_accepted(records, fatal)
     progress.log(
         f"Deposit validation: {len(fatal)} fatal error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
@@ -1141,10 +931,9 @@ def _deposit_concepts(
                     else None
                 ),
                 require_semantic_graph=config.use_live_generation(),
-                require_placement_contracts=(
-                    config.use_live_generation()
-                    and not generation._rewrite_placement_authority_active()
-                ),
+                # The rewritten Phase 3 never mints per-row placement
+                # contracts; its sealed row certificates are verified above.
+                require_placement_contracts=False,
                 type_case_qid_placement_ledger=(
                     type_case_qid_placement_ledger
                 ),
@@ -1474,6 +1263,43 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
             grounding_certificate.FINAL_CERTIFICATE_FIELD
         ] = copy.deepcopy(final_grounding)
     job.question_inventory = stored
+    _store_containers(job, artifacts)
+
+
+def _store_containers(job: models.UploadJob, artifacts: dict) -> None:
+    """Persist the §4 Phase-1.2 container projections beside the run.
+
+    Pure projection of recorded verdicts (chapter-reading census, the
+    canonical + its furniture ledgers, the inventory) into
+    ``<artifact_dir>/source.containers.json`` so the views — and the
+    verbatim dropped-furniture lines of both lanes, uncapped — ship in
+    diagnostics. Best-effort: a missing canonical or artifact directory
+    never blocks the run (the projection is rebuildable from durable
+    inputs).
+    """
+    from . import canonical_source_phase2 as phase2
+    from . import containers
+
+    try:
+        canonical = phase2.active_canonical()
+        if not isinstance(canonical, dict):
+            canonical = {}
+        artifact_dir = None
+        helper = getattr(uploads, "source_artifact_directory", None)
+        if callable(helper) and getattr(job, "id", None):
+            artifact_dir = helper(int(job.id))
+        containers.persist_containers(
+            artifact_dir,
+            census=artifacts.get("chapter_reading"),
+            canonical=canonical,
+            inventory=artifacts.get("question_task_inventory") or {},
+        )
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never block
+        progress.log(
+            f"Container projections were not persisted ({exc}); the "
+            "views remain rebuildable from the durable artifacts.",
+            level="warning",
+        )
 
 
 def _stable_checkpoint_value(value) -> str:
@@ -1511,13 +1337,34 @@ def _legacy_generation_checkpoint_fingerprint(
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _run_instruction_set_sha256(instruction_set_sha256: str | None) -> str:
+    """Resolve the instruction identity a fingerprint binds to.
+
+    ``None`` (callers that do not assemble: pre-learning, tests, legacy
+    checkpoints without the stored field) resolves to the hash of the EMPTY
+    instruction set over the current frozen core — so even those
+    fingerprints move when a frozen-core prompt changes, which is the
+    governance point (docs/aegis-restructure.md §8.1).
+    """
+    if instruction_set_sha256 is None:
+        return instruction_architect.empty_set_sha256()
+    return str(instruction_set_sha256 or "")
+
+
 def _generation_checkpoint_fingerprint(
     job: models.UploadJob, chapter: models.Chapter,
+    *,
+    instruction_set_sha256: str | None = None,
 ) -> str:
-    """Semantic input fingerprint, intentionally independent of DB/git IDs."""
+    """Semantic input fingerprint, intentionally independent of DB/git IDs.
+
+    v3 appends the Architect's ``instruction_set_sha256``: a checkpoint made
+    under one instruction set can never resume a run under another
+    (validator mirror: ``checkpoints._expected_fingerprint``).
+    """
     identity = _generation_target_identity(chapter)
     payload = (
-        "concept-generation-checkpoint-v2\0"
+        "concept-generation-checkpoint-v3\0"
         + "\0".join([
             _stable_checkpoint_value(job.learning_kind or "post"),
             *(identity[field] for field in (
@@ -1525,6 +1372,7 @@ def _generation_checkpoint_fingerprint(
                 "chapter_title", "chapter_code",
             )),
             str(job.mmd_text or ""),
+            _run_instruction_set_sha256(instruction_set_sha256),
         ])
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -1534,6 +1382,7 @@ def _checkpoint_matches_generation(
     checkpoint: dict, *,
     job: models.UploadJob,
     chapter: models.Chapter,
+    instruction_set_sha256: str | None = None,
 ) -> bool:
     if not generation._valid_concept_checkpoint(checkpoint):
         return False
@@ -1541,6 +1390,7 @@ def _checkpoint_matches_generation(
         checkpoint,
         job=job,
         chapter=chapter,
+        instruction_set_sha256=instruction_set_sha256,
     )
 
 
@@ -1549,15 +1399,19 @@ def _checkpoint_identity_matches_generation(
     *,
     job: models.UploadJob,
     chapter: models.Chapter,
+    instruction_set_sha256: str | None = None,
 ) -> bool:
     """Match source/target identity independently of stage compatibility.
 
     A deployment can intentionally invalidate every saved stage contract.  A
     same-source envelope must then normalize to an empty restart instead of
-    being misreported as a different upload or chapter.
+    being misreported as a different upload or chapter. The fingerprint
+    binds the Architect's instruction identity too, so a checkpoint made
+    under a different instruction set never matches (rewind, not replay).
     """
 
-    stable_fingerprint = _generation_checkpoint_fingerprint(job, chapter)
+    stable_fingerprint = _generation_checkpoint_fingerprint(
+        job, chapter, instruction_set_sha256=instruction_set_sha256)
     target_identity = _generation_target_identity(chapter)
     if checkpoint.get("checkpoint_format") == generation._CONCEPT_CHECKPOINT_FORMAT:
         return bool(
@@ -1596,6 +1450,7 @@ def _merge_generation_checkpoint_history(
     fingerprint: str,
     target_identity: dict[str, str],
     target_chapter_id: int,
+    instruction_set_sha256: str | None = None,
 ) -> dict:
     """Keep the newest completed artifact per stage in one portable envelope.
 
@@ -1627,12 +1482,7 @@ def _merge_generation_checkpoint_history(
             if str(entry.get("stage") or "") != stage
         ]
         if not history:
-            return _phase38_control_only_envelope(
-                stored,
-                fingerprint=fingerprint,
-                target_identity=target_identity,
-                target_chapter_id=target_chapter_id,
-            )
+            return {}
         # A discard control event is not itself a checkpoint. Mirror the
         # furthest remaining durable stage so API/UI consumers immediately see
         # the checkpoint that the next retry will actually resume from.
@@ -1698,6 +1548,12 @@ def _merge_generation_checkpoint_history(
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
         "fingerprint": fingerprint,
+        # The instruction identity the fingerprint was computed under; the
+        # bundle validator recomputes the fingerprint from this stored value
+        # (checkpoints._expected_fingerprint), and resume compares against
+        # the CURRENT assembly — mismatch rewinds instead of replaying.
+        "instruction_set_sha256": _run_instruction_set_sha256(
+            instruction_set_sha256),
         "target_identity": copy.deepcopy(target_identity),
         # Informational only for schema v3; compatibility uses target_identity.
         "target_chapter_id": target_chapter_id,
@@ -1711,8 +1567,6 @@ def _merge_generation_checkpoint_history(
         "checkpoints": history,
     }
     merged = _copy_human_decision_ledger(merged, stored)
-    merged = _copy_semantic_recovery_dispatch_ledger(merged, stored)
-    merged = _copy_phase38_convergence_ledger(merged, stored)
     return _consume_applied_human_decisions(merged, checkpoint)
 
 
@@ -1722,6 +1576,7 @@ def _compatible_generation_checkpoint_envelope(
     fingerprint: str,
     target_identity: dict[str, str],
     target_chapter_id: int,
+    instruction_set_sha256: str | None = None,
 ) -> dict:
     """Prune unusable history and mirror the stage this deployment will use."""
     history = [
@@ -1736,12 +1591,7 @@ def _compatible_generation_checkpoint_envelope(
         )
     ]
     if not history:
-        return _phase38_control_only_envelope(
-            stored,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-        )
+        return {}
     candidate = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
@@ -1749,17 +1599,14 @@ def _compatible_generation_checkpoint_envelope(
     }
     newest = generation._newest_compatible_concept_checkpoint(candidate)
     if newest is None:
-        return _phase38_control_only_envelope(
-            stored,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-        )
+        return {}
     stage = str(newest.get("stage") or "")
     normalized = {
         "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
         "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
         "fingerprint": fingerprint,
+        "instruction_set_sha256": _run_instruction_set_sha256(
+            instruction_set_sha256),
         "target_identity": copy.deepcopy(target_identity),
         "target_chapter_id": target_chapter_id,
         "stage": stage,
@@ -1772,16 +1619,10 @@ def _compatible_generation_checkpoint_envelope(
         "checkpoints": history,
     }
     normalized = _copy_human_decision_ledger(normalized, stored)
-    normalized = _prune_human_decisions_after_checkpoint_fallback(
+    return _prune_human_decisions_after_checkpoint_fallback(
         normalized,
         retained_stage=stage,
     )
-    normalized = _copy_semantic_recovery_dispatch_ledger(normalized, stored)
-    normalized = _prune_semantic_recovery_dispatches_after_checkpoint_fallback(
-        normalized,
-        retained_stage=stage,
-    )
-    return _copy_phase38_convergence_ledger(normalized, stored)
 
 
 def _persist_compatible_generation_checkpoint_mirror(
@@ -1791,6 +1632,7 @@ def _persist_compatible_generation_checkpoint_mirror(
     fingerprint: str,
     target_identity: dict[str, str],
     target_chapter_id: int,
+    instruction_set_sha256: str | None = None,
 ) -> tuple[dict | None, dict]:
     """Persist the actual fallback stage before a resumed run can fail."""
     stored = copy.deepcopy(job.generation_checkpoint or {})
@@ -1799,6 +1641,7 @@ def _persist_compatible_generation_checkpoint_mirror(
         fingerprint=fingerprint,
         target_identity=target_identity,
         target_chapter_id=target_chapter_id,
+        instruction_set_sha256=instruction_set_sha256,
     )
     if not normalized and _source_replacement_required(stored):
         # A user's explicit source-authority decision remains terminal even if
@@ -1853,84 +1696,6 @@ def _checkpoint_mismatch_message(
     )
 
 
-def _persist_phase38_convergence_state(
-    db: Session,
-    job: models.UploadJob,
-    expected_state: dict | None,
-    replacement: dict | None,
-) -> None:
-    """CAS one Phase 3.8 transition into this job's durable checkpoint."""
-
-    db.refresh(job)
-    original = copy.deepcopy(job.generation_checkpoint or {})
-    expected = (
-        copy.deepcopy(expected_state)
-        if isinstance(expected_state, dict)
-        else {}
-    )
-    current = _phase38_convergence_ledger(original)
-    if current != expected:
-        db.rollback()
-        db.refresh(job)
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 stopped because another worker advanced this job's "
-            "convergence checkpoint; no stale or duplicate candidate was "
-            "dispatched"
-        )
-    durable = copy.deepcopy(original)
-    if replacement is None:
-        durable.pop(_PHASE38_CONVERGENCE_KEY, None)
-    else:
-        if not isinstance(replacement, dict):
-            raise TypeError("Phase 3.8 convergence state must be an object")
-        durable[_PHASE38_CONVERGENCE_KEY] = copy.deepcopy(replacement)
-    if durable == original:
-        return
-    claimed = db.execute(
-        update(models.UploadJob)
-        .where(
-            models.UploadJob.id == job.id,
-            models.UploadJob.generation_checkpoint == original,
-        )
-        .values(generation_checkpoint=copy.deepcopy(durable))
-        .execution_options(synchronize_session=False)
-    )
-    if claimed.rowcount != 1:
-        db.rollback()
-        db.refresh(job)
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 stopped because another worker changed this job's "
-            "convergence checkpoint; no duplicate candidate was dispatched"
-        )
-    db.commit()
-    db.refresh(job)
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
-
-
-def _semantic_recovery_topic_ids() -> dict[str, str]:
-    """Return current source-graph topic identity without requiring Phase 3."""
-    try:
-        from . import canonical_source_phase3 as phase3
-
-        graph = phase3.active_graph()
-        if not isinstance(graph, dict):
-            session = phase3.active_session()
-            graph = (
-                session.get("graph")
-                if isinstance(session, dict)
-                else None
-            )
-    except Exception:
-        graph = None
-    if not isinstance(graph, dict):
-        return {}
-    return {
-        str(topic.get("title") or "").strip():
-        str(topic.get("topic_id") or "").strip()
-        for topic in graph.get("topics") or []
-        if isinstance(topic, dict)
-        and str(topic.get("title") or "").strip()
-    }
 
 
 def _semantic_recovery_source_text(raw_source: str) -> str:
@@ -1976,257 +1741,9 @@ def _semantic_recovery_source_text(raw_source: str) -> str:
     return str(raw_source or "")
 
 
-def _semantic_recovery_validation_errors(
-    records: list[dict],
-) -> list[dict]:
-    """Expose row-local validator diagnostics to the recovery scope resolver."""
-    try:
-        report = concept_validator.validate_concept_rows(
-            records,
-            allow_types=True,
-            require_culmination=False,
-            allow_culmination=True,
-        )
-    except Exception:
-        return []
-    return [
-        error for error in report.get("errors") or []
-        if isinstance(error, dict) and error.get("severity") == "error"
-    ]
 
 
-def _semantic_recovery_issue_key(
-    checkpoint: dict,
-    context: semantic_recovery.RecoveryContext,
-) -> tuple[str, str]:
-    selected = semantic_recovery.select_recovery_checkpoint(checkpoint) or {}
-    stage = str(selected.get("stage") or "")
-    material = {
-        # Keep paid-attempt identity independent of future ledger migrations.
-        "issue_key_version": _SEMANTIC_RECOVERY_ISSUE_KEY_VERSION,
-        "failure_signature": context.failure_signature,
-        "failure_type": type(context.failure).__name__,
-        "failure_kind": context.assessment.kind.value,
-        "stage": stage,
-        "fingerprint": str(checkpoint.get("fingerprint") or ""),
-    }
-    digest = hashlib.sha256(json.dumps(
-        material,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")).hexdigest()
-    return digest, stage
 
-
-def _persist_semantic_recovery_dispatch_started(
-    db: Session,
-    job: models.UploadJob,
-    checkpoint: dict,
-    context: semantic_recovery.RecoveryContext,
-) -> str:
-    """Seal one generic semantic-repair request before provider dispatch."""
-
-    issue_key, stage = _semantic_recovery_issue_key(checkpoint, context)
-    db.refresh(job)
-    original_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
-    durable = copy.deepcopy(original_checkpoint)
-    ledger = _semantic_recovery_dispatch_ledger(durable)
-    attempts = [
-        copy.deepcopy(row)
-        for row in ledger.get("attempts") or []
-        if isinstance(row, dict)
-    ]
-    if any(str(row.get("issue_key") or "") == issue_key for row in attempts):
-        raise semantic_recovery.SemanticRecoveryExhausted(
-            "semantic recovery already dispatched one paid repair for this "
-            "exact failure and checkpoint stage; the unknown or rejected "
-            "outcome will not be billed again"
-        ) from context.failure
-    if len(attempts) >= _MAX_SEMANTIC_RECOVERY_DISPATCHES:
-        raise semantic_recovery.SemanticRecoveryExhausted(
-            "semantic recovery dispatch history reached its safety limit"
-        ) from context.failure
-    attempts.append({
-        "issue_key": issue_key,
-        "failure_signature": context.failure_signature,
-        "status": "request_started",
-        "started_at": _agent_review_timestamp(),
-        "completed_at": "",
-        "failure_type": type(context.failure).__name__,
-        "stage": stage,
-    })
-    durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
-        "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
-        "attempts": attempts,
-    }
-    claimed = db.execute(
-        update(models.UploadJob)
-        .where(
-            models.UploadJob.id == job.id,
-            models.UploadJob.generation_checkpoint == original_checkpoint,
-        )
-        .values(
-            generation_checkpoint=copy.deepcopy(durable),
-            detail=(
-                "Aegis saved a one-shot semantic repair dispatch before "
-                "contacting the model."
-            ),
-        )
-        .execution_options(synchronize_session=False)
-    )
-    if claimed.rowcount != 1:
-        db.rollback()
-        db.refresh(job)
-        raise semantic_recovery.SemanticRecoveryExhausted(
-            "another worker already claimed this one-shot semantic repair; "
-            "this worker will not start a provider request"
-        ) from context.failure
-    db.commit()
-    db.refresh(job)
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
-    return issue_key
-
-
-def _persist_semantic_recovery_checkpoint(
-    db: Session,
-    job: models.UploadJob,
-    result: semantic_recovery.RepairResult,
-    *,
-    fingerprint: str,
-    target_identity: dict[str, str],
-    target_chapter_id: int,
-    owner_sub: str | None,
-    dispatch_issue_key: str = "",
-) -> None:
-    """Replace one repaired stage and discard only its dependent later stages."""
-    repaired = copy.deepcopy(result.checkpoint)
-    repaired["saved_at"] = datetime.now(timezone.utc).isoformat()
-    if not generation._compatible_concept_checkpoint_entry(repaired):
-        raise RuntimeError(
-            "semantic recovery refused to persist an incompatible checkpoint"
-        )
-    base_order = generation._checkpoint_order(result.base_stage)
-    retained = [
-        copy.deepcopy(entry)
-        for entry in generation._concept_checkpoint_entries(
-            job.generation_checkpoint)
-        if (
-            generation._compatible_concept_checkpoint_entry(entry)
-            and generation._checkpoint_order(
-                str(entry.get("stage") or "")) < base_order
-        )
-    ]
-    durable: dict = {}
-    for entry in [*retained, repaired]:
-        durable = _merge_generation_checkpoint_history(
-            durable,
-            entry,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-        )
-    source_checkpoint = copy.deepcopy(job.generation_checkpoint or {})
-    durable = _copy_human_decision_ledger(durable, source_checkpoint)
-    # Transactional reduction: the same durable write that installs the
-    # repaired stage retires every dependent decision-ledger entry — both
-    # entries derived from the discarded later stages and entries bound to the
-    # exact rows this repair rewrote. Copying the old ledger unpruned is what
-    # allowed a stale rejection to survive a reported repair.
-    durable = _prune_human_decisions_after_checkpoint_fallback(
-        durable,
-        retained_stage=result.base_stage,
-    )
-    durable = _retire_repaired_row_decisions(
-        durable,
-        changed_row_indexes=result.changed_row_indexes,
-        repair_signature=result.repair_signature,
-    )
-    durable = _copy_semantic_recovery_dispatch_ledger(
-        durable, source_checkpoint
-    )
-    durable = _copy_phase38_convergence_ledger(
-        durable, source_checkpoint
-    )
-    if dispatch_issue_key:
-        ledger = _semantic_recovery_dispatch_ledger(durable)
-        attempts = []
-        matched = False
-        for raw in ledger.get("attempts") or []:
-            row = copy.deepcopy(raw)
-            if (
-                isinstance(row, dict)
-                and str(row.get("issue_key") or "") == dispatch_issue_key
-            ):
-                # Postcondition-first: the repair is only "applied" here. It
-                # becomes "succeeded" when the rerun passes final grounding
-                # without this issue recurring.
-                row["status"] = "applied"
-                row["completed_at"] = _agent_review_timestamp()
-                row["candidate_payload_hash"] = result.repair_signature
-                matched = True
-            attempts.append(row)
-        if not matched:
-            raise RuntimeError(
-                "semantic recovery repair result has no durable dispatch seal"
-            )
-        durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
-            "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
-            "attempts": attempts,
-        }
-    job.generation_checkpoint = durable
-    job.detail = (
-        f"Semantic recovery applied a bounded repair to "
-        f"{result.changed_count} unit(s) at '{result.base_stage}'; dependent "
-        "later stages will be replayed and the repair re-verified."
-    )
-    # Checkpoint and current provider usage are committed together. A database
-    # or filesystem failure propagates and is never converted into GPT repair.
-    uploads.persist_current_openai_usage(
-        db, job.id, owner_sub=owner_sub)
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
-
-
-def _persist_semantic_recovery_dispatch_verified(
-    db: Session,
-    job: models.UploadJob,
-    issue_keys: list[str],
-) -> None:
-    """Certify applied repairs after the rerun passed without recurrence.
-
-    This is the only place an attempt becomes ``succeeded``: the postcondition
-    (the run completed and the old rejection signature did not return) has
-    held, so the durable ledger can record the verified terminal outcome.
-    """
-
-    issue_key_set = {key for key in issue_keys if key}
-    if not issue_key_set:
-        return
-    db.refresh(job)
-    durable = copy.deepcopy(job.generation_checkpoint or {})
-    ledger = _semantic_recovery_dispatch_ledger(durable)
-    attempts = []
-    changed = False
-    for raw in ledger.get("attempts") or []:
-        row = copy.deepcopy(raw)
-        if (
-            isinstance(row, dict)
-            and str(row.get("issue_key") or "") in issue_key_set
-            and str(row.get("status") or "") == "applied"
-        ):
-            row["status"] = "succeeded"
-            row["verified_at"] = _agent_review_timestamp()
-            changed = True
-        attempts.append(row)
-    if not changed:
-        return
-    durable[_SEMANTIC_RECOVERY_DISPATCHES_KEY] = {
-        "version": _SEMANTIC_RECOVERY_DISPATCHES_VERSION,
-        "attempts": attempts,
-    }
-    job.generation_checkpoint = durable
-    db.commit()
-    drive_checkpoints.schedule_checkpoint_backup(job.id)
 
 
 def _stage_concept_workbook(
@@ -2709,6 +2226,16 @@ def _existing_human_decision_pause(
         pending,
         owner_sub=owner_sub,
     )
+    if continued_id is None:
+        # Q13 (seam F48): before the retired halt fires, The Fixer picks
+        # among ALL routes — user-only ones included — once, recorded and
+        # flagged. Only protocol impossibility falls through to the raise.
+        continued_id = _apply_fixer_resolution_choice(
+            db,
+            job,
+            pending,
+            owner_sub=owner_sub,
+        )
     if continued_id:
         if agent_resolution_ids is not None:
             agent_resolution_ids.add(continued_id)
@@ -3238,6 +2765,7 @@ def _autonomously_resolve_pending_decision(
         "reason": result.reason,
         "confidence": result.confidence,
         "evidence_refs": list(result.evidence_refs),
+        "review_flags": list(result.review_flags),
         "choice": result.choice or None,
         "instruction": result.instruction,
         "target_id": result.target_id,
@@ -3627,6 +3155,261 @@ def _carry_forward_exhausted_scope(
     return str(recorded["resolved_decision"]["decision_id"])
 
 
+def _settle_exhausted_ceiling(
+    db: Session,
+    job: models.UploadJob,
+    pending: dict,
+    *,
+    owner_sub: str | None,
+    reason: str,
+    ceiling: str,
+) -> str | None:
+    """Q13: a returned already-carried scope still continues, best-judged.
+
+    Reached when a scope's budget is spent AND it was already carried
+    forward once (or the carry itself could not be recorded). The old
+    behavior was ``SemanticResolutionCyclesExhausted`` — a halt Q13
+    retires: instead the existing best-judgement machinery applies the
+    least-destructive offered action (or carries again), flagged with the
+    ceiling's name, and generation continues. Termination stays
+    guaranteed by the ledger-safety mechanics (``_MAX_HUMAN_DECISIONS``),
+    which this deliberately does not touch. Returns ``None`` only when
+    unattended completion is off or the action cannot be recorded — the
+    original ceilings then end the run (genuine impossibility).
+    """
+
+    if not autonomous_resolution.unattended_completion_enabled():
+        return None
+    option = (
+        autonomous_resolution.best_judgement_option(pending)
+        or autonomous_resolution.carry_forward_option()
+    )
+    try:
+        recorded = _record_human_semantic_decision_locked(
+            db,
+            job,
+            str(pending.get("decision_id") or ""),
+            choice=option["choice"],
+            instruction="",
+            target_id=option["target_id"],
+            target_concept_id=option["target_concept_id"],
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+    except (HumanDecisionConflictError, ValueError) as exc:
+        progress.log(
+            "Aegis could not settle the exhausted semantic ceiling "
+            f"({type(exc).__name__}: {exc}).",
+            level="warning",
+        )
+        return None
+    # Load-bearing wording: concept_revisions scans for "placed by best
+    # judgement" to surface these placements to the reviewer.
+    progress.log(
+        "Placed by best judgement: " + reason
+        + f" [fixer: ceiling={ceiling}] Aegis applied the least-destructive "
+        f"offered action ({option['choice']}"
+        + (
+            f" -> {option['target_id'] or option['target_concept_id']}"
+            if option["target_id"] or option["target_concept_id"]
+            else ""
+        )
+        + ") for "
+        + _decision_identity_text(pending)
+        + ", and generation continued. Review this placement in the "
+        "delivered output and correct it there if it is wrong.",
+        level="warning",
+    )
+    return str(recorded["resolved_decision"]["decision_id"])
+
+
+def _apply_fixer_resolution_choice(
+    db: Session,
+    job: models.UploadJob,
+    pending: dict,
+    *,
+    owner_sub: str | None,
+) -> str | None:
+    """Q13 retires the ``UnattendedDecisionUnavailable`` halt (seam F48).
+
+    Reached when every automatic pathway declined and the safest-action
+    fallback could not be recorded — classically because only user-only
+    routes (replace_source / custom_instruction) remained. The Fixer
+    reads the decision's full context and picks among ALL choices,
+    including user-only ones, with a rationale: it may write the custom
+    instruction itself, or settle the decision by carrying it forward.
+    ``replace_source`` stays mechanically inapplicable — no automation
+    may synthesize a replacement document — so the checker refuses it
+    and a Fixer that cannot name an applicable route is protocol
+    impossibility: the caller's raise then ends the run as before.
+    """
+
+    if not autonomous_resolution.unattended_completion_enabled():
+        return None
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    provider = p3_fixer.default_provider()
+    if provider is None:
+        return None
+    options = [
+        row for row in pending.get("options") or []
+        if isinstance(row, dict)
+    ]
+    offered = sorted({
+        str(row.get("choice") or "")
+        for row in options
+        if str(row.get("choice") or "")
+    })
+    allowed = sorted(
+        (set(offered) | {autonomous_resolution.CARRY_FORWARD_CHOICE})
+        - {"replace_source"}
+    )
+    payload = {
+        "fixer": True,
+        "blocked_check": [
+            "every automatic resolution pathway declined this semantic "
+            "decision and the remaining offered routes require a person; "
+            "under Q13 the run must not stop mid-run — one recorded, "
+            "flagged decision is required"
+        ],
+        "contract": {
+            "kind": "fixer.resolution_choice",
+            "rule": (
+                "pick exactly ONE applicable route: one of the offered "
+                "choices, or carry_forward (settle the decision by "
+                "changing nothing). replace_source is never applicable "
+                "— no automation may synthesize a replacement document. "
+                "custom_instruction requires you to write the exact "
+                "instruction. Response schema: {\"choice\", "
+                "\"target_id\", \"target_concept_id\", \"instruction\", "
+                "\"rationale\"}"
+            ),
+        },
+        "decision": {
+            "kind": str(pending.get("kind") or ""),
+            "phase": str(pending.get("phase") or ""),
+            "conflict": str(pending.get("conflict") or "")[:2000],
+            "diagnosis": str(pending.get("diagnosis") or "")[:2000],
+            "decision_question": str(
+                pending.get("decision_question") or ""
+            )[:2000],
+            "options": [
+                {
+                    "choice": str(row.get("choice") or ""),
+                    "label": str(row.get("label") or ""),
+                    "target_id": str(row.get("target_id") or ""),
+                    "target_concept_id": str(
+                        row.get("target_concept_id") or ""
+                    ),
+                }
+                for row in options
+            ],
+            "candidates": [
+                {
+                    "target_id": str(row.get("target_id") or ""),
+                    "concept_id": str(row.get("concept_id") or ""),
+                    "action": str(row.get("action") or ""),
+                    "title": str(row.get("title") or "")[:200],
+                    "topic": str(row.get("topic") or "")[:200],
+                    "coverage": str(row.get("coverage") or "")[:600],
+                    "gap": str(row.get("gap") or "")[:600],
+                }
+                for row in pending.get("candidates") or []
+                if isinstance(row, dict)
+            ],
+            "evidence": [
+                {
+                    "evidence_id": str(row.get("evidence_id") or ""),
+                    "label": str(row.get("label") or "")[:200],
+                    "text": str(row.get("text") or "")[:800],
+                }
+                for row in pending.get("evidence") or []
+                if isinstance(row, dict)
+            ],
+        },
+    }
+
+    def _check(response):
+        defects: list[str] = []
+        choice = str(response.get("choice") or "").strip()
+        if choice not in allowed:
+            defects.append(
+                f"choice {choice or '<empty>'!r} is not applicable; "
+                "choose one of: " + ", ".join(allowed)
+            )
+        if choice == "custom_instruction" and not str(
+            response.get("instruction") or ""
+        ).strip():
+            defects.append(
+                "custom_instruction requires a non-empty instruction"
+            )
+        if not str(response.get("rationale") or "").strip():
+            defects.append("rationale is required")
+        return defects
+
+    try:
+        decision = p3_kernel.decide(
+            kind="fixer.resolution_choice",
+            unit_id=str(pending.get("decision_id") or "decision"),
+            envelope_sha256=str(pending.get("context_hash") or ""),
+            payload=payload,
+            provider=provider,
+            checker=_check,
+            store=generation._phase3_fixer_store(),
+            policy_version=p3_fixer.FIXER_POLICY_VERSION,
+        )
+    except p3_kernel.ContractError as exc:
+        progress.log(
+            "The Fixer could not produce a mechanically applicable "
+            f"resolution choice ({exc}); the run ends as before.",
+            level="warning",
+        )
+        return None
+    response = decision.get("response") or {}
+    choice = str(response.get("choice") or "")
+    instruction = (
+        str(response.get("instruction") or "").strip()
+        if choice == "custom_instruction"
+        else ""
+    )
+    rationale = " ".join(str(response.get("rationale") or "").split())[:240]
+    try:
+        recorded = _record_human_semantic_decision_locked(
+            db,
+            job,
+            str(pending.get("decision_id") or ""),
+            choice=choice,
+            instruction=instruction,
+            target_id=str(response.get("target_id") or ""),
+            target_concept_id=str(response.get("target_concept_id") or ""),
+            resolved_by="agent",
+            resolution_status="consumed",
+            fixer_decision=True,
+        )
+    except (HumanDecisionConflictError, ValueError) as exc:
+        progress.log(
+            "Aegis could not record the Fixer's resolution choice "
+            f"({type(exc).__name__}: {exc}).",
+            level="warning",
+        )
+        return None
+    # Load-bearing wording: concept_revisions scans for "placed by best
+    # judgement" to surface these decisions to the reviewer.
+    progress.log(
+        "Placed by best judgement: every automatic pathway declined and "
+        "only user-only routes remained. [fixer: "
+        f"decided={choice}"
+        + (f" — {rationale}" if rationale else "")
+        + "] for "
+        + _decision_identity_text(pending)
+        + ", and generation continued. Review this decision in the "
+        "delivered output and correct it there if it is wrong.",
+        level="warning",
+    )
+    return str(recorded["resolved_decision"]["decision_id"])
+
+
 def _issue_pathways_exhausted(*, attempts: int, maximum: int) -> bool:
     return attempts >= maximum
 
@@ -3639,8 +3422,10 @@ def _raise_if_issue_pathways_exhausted(
 ) -> None:
     """Stop a scope that keeps returning under regenerated identities.
 
-    Reached only when the scope could not be carried forward either, so there
-    is genuinely nothing left to do but end the run with the reason recorded.
+    Reached only when the scope could be neither carried forward nor
+    settled by best judgement (Q13, seams F46/F47) — unattended completion
+    is off, or the ledger refused every recordable action — so there is
+    genuinely nothing left to do but end the run with the reason recorded.
     """
 
     if attempts < maximum:
@@ -3704,9 +3489,10 @@ def _raise_if_equivalent_resolution_attempts_exhausted(
 def _raise_if_unattended_cannot_pause(pending: dict) -> None:
     """End an unattended run instead of parking it in ``awaiting_decision``.
 
-    Reached only when every automatic pathway declined and the decision's
-    remaining routes all require a person: replacing the uploaded document or
-    writing an instruction. Neither can be synthesized.
+    Reached only when every automatic pathway declined, the decision's
+    remaining routes all require a person, AND The Fixer (Q13, seam F48)
+    could not produce — or record — a mechanically applicable choice
+    either. A source replacement can never be synthesized.
 
     This is unconditional. Generation has no mid-run pause in any
     configuration, and no setting restores one: a stalled job is worse than a
@@ -3754,8 +3540,6 @@ def _source_replacement_required(checkpoint: dict | None) -> bool:
         str(row.get("choice") or "") == "replace_source"
         and str(row.get("kind") or "") in {
             "phase3_source_graph_review",
-            "phase31_source_grounding_semantic_conflict",
-            "phase32_concept_blueprint_semantic_conflict",
             "source_topic_coverage_review",
         }
         for row in _ready_human_decisions(checkpoint)
@@ -3772,41 +3556,6 @@ def _raise_if_source_replacement_required(
             "Replace or correct the uploaded file and convert it again; Aegis "
             "will not mutate the source automatically."
         )
-
-
-def _reconcile_phase38_decision_returned_claim(
-    checkpoint: dict,
-    pending: dict,
-) -> tuple[dict, bool]:
-    """Clear a Phase 3.8 decision claim only beside its durable pause."""
-
-    result = copy.deepcopy(checkpoint)
-    ledger = _phase38_convergence_ledger(result)
-    if not ledger:
-        return result, False
-    status = str(ledger.get("dispatch_status") or "idle")
-    if status == "request_started":
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 returned a decision without first sealing its provider "
-            "outcome; the unresolved request claim will not be replayed"
-        )
-    if status != "decision_returned":
-        return result, False
-    expected_id = str(ledger.get("dispatch_decision_id") or "")
-    expected_context = str(
-        ledger.get("dispatch_decision_context_hash") or ""
-    )
-    if (
-        expected_id != str(pending.get("decision_id") or "")
-        or expected_context != str(pending.get("context_hash") or "")
-    ):
-        raise phase38.Phase38ConvergenceExhausted(
-            "Phase 3.8 refused to clear a decision-returned claim because "
-            "the durable pause identity did not match the provider outcome"
-        )
-    phase38._clear_dispatch_claim(ledger)
-    result[_PHASE38_CONVERGENCE_KEY] = ledger
-    return result, True
 
 
 def _persist_pending_human_decision(
@@ -3838,9 +3587,6 @@ def _persist_pending_human_decision(
         pending_payload,
         cumulative_usage=openai_usage.visible_summary(),
     )
-    checkpoint, reconciled_phase38_claim = (
-        _reconcile_phase38_decision_returned_claim(checkpoint, pending)
-    )
     ledger = _human_decision_ledger(checkpoint)
     existing_pending = ledger.get("pending")
     if isinstance(existing_pending, dict):
@@ -3858,15 +3604,8 @@ def _persist_pending_human_decision(
             raise RuntimeError(
                 "the repeated semantic decision identity has different context"
             )
-        # Idempotent concurrent replay: never replace a durable dispatch claim,
-        # result, usage snapshot, or escalation with the raw exception packet.
-        # The caller will observe the saved review and cannot start a duplicate
-        # provider request.
-        if reconciled_phase38_claim:
-            job.generation_checkpoint = checkpoint
-            db.commit()
-            db.refresh(job)
-            drive_checkpoints.schedule_checkpoint_backup(job.id)
+        # Idempotent concurrent replay: the caller observes the saved review
+        # and cannot start a duplicate provider request.
         return copy.deepcopy(existing_pending)
     resolutions = [
         copy.deepcopy(entry)
@@ -4009,8 +3748,6 @@ def _run_with_human_decision_pause(
     actually retire a scope.
     """
 
-    from . import canonical_source_phase33_preflight_contract as phase33
-
     active_ids = set(initial_agent_resolution_ids or set())
     local_attempts: dict[str, int] = {}
     issue_attempts: dict[str, int] = {}
@@ -4098,6 +3835,29 @@ def _run_with_human_decision_pause(
                 active_ids.add(carried)
                 return carried
         if exhausted_reason:
+            # Q13 (seams F46/F47): a scope that returns even after being
+            # carried is settled by the least-destructive offered action
+            # — flagged with the ceiling's name — and generation
+            # continues; the ledger-safety limit still bounds the loop.
+            # The original ceilings end the run only when nothing can be
+            # recorded (unattended off, or the ledger refused the write).
+            ceiling = (
+                "equivalent_attempts"
+                if _issue_pathways_exhausted(
+                    attempts=attempts, maximum=maximum
+                )
+                else "pathway_turns"
+            )
+            settled_id = _settle_exhausted_ceiling(
+                db, job, pending,
+                owner_sub=owner_sub,
+                reason=exhausted_reason,
+                ceiling=ceiling,
+            )
+            if settled_id:
+                _charge()
+                active_ids.add(settled_id)
+                return settled_id
             _raise_if_equivalent_resolution_attempts_exhausted(
                 pending, attempts=attempts, maximum=maximum,
             )
@@ -4128,33 +3888,29 @@ def _run_with_human_decision_pause(
             _charge()
             active_ids.add(continued_id)
             return continued_id
+        # Q13 (seam F48): before the retired halt fires, The Fixer picks
+        # among ALL routes — user-only ones included — once, recorded and
+        # flagged. Only protocol impossibility falls through to the raise.
+        fixed_id = _apply_fixer_resolution_choice(
+            db,
+            job,
+            current or pending,
+            owner_sub=owner_sub,
+        )
+        if fixed_id:
+            _charge()
+            active_ids.add(fixed_id)
+            return fixed_id
         # Always raises; there is no pause to fall through to.
         _raise_if_unattended_cannot_pause(current or pending)
         raise AssertionError(  # pragma: no cover - defensive
             "generation reached a pause that no longer exists"
         )
 
-    def _settle_in_place(raw_pending: dict) -> list[dict]:
-        """Settle one Phase 3.3 conflict mid-run; return its ready rows."""
-        settled_id = _settle_pending(
-            raw_pending,
-            checkpoint_before_pause=copy.deepcopy(
-                job.generation_checkpoint or {}
-            ),
-        )
-        return [
-            copy.deepcopy(row)
-            for row in _human_decisions_with_status(
-                job.generation_checkpoint, statuses={"ready"},
-            )
-            if str(row.get("decision_id") or "") == settled_id
-        ]
-
     while True:
         token = _ACTIVE_AGENT_RESOLUTION_IDS.set(frozenset(active_ids))
         try:
-            with phase33.inline_decision_settler(_settle_in_place):
-                return None, operation()
+            return None, operation()
         except semantic_recovery.HumanDecisionRequired as exc:
             checkpoint_before_pause = copy.deepcopy(
                 job.generation_checkpoint or {}
@@ -4247,8 +4003,16 @@ def _record_human_semantic_decision_locked(
     target_concept_id: str,
     resolved_by: str = "human",
     resolution_status: str = "ready",
+    fixer_decision: bool = False,
 ) -> dict:
-    """Mutate a decision ledger while ``exclusive_job_operation`` is held."""
+    """Mutate a decision ledger while ``exclusive_job_operation`` is held.
+
+    ``fixer_decision`` marks a Fixer resolution-choice verdict (Q13, seam
+    F48): it may record a ``custom_instruction`` the Fixer wrote itself —
+    the one user-only route a model can genuinely take. ``replace_source``
+    stays forbidden for every automated caller: no automation may alter
+    the uploaded document.
+    """
     if job.status == "generated":
         raise HumanDecisionConflictError(
             "this upload has already been generated")
@@ -4272,16 +4036,26 @@ def _record_human_semantic_decision_locked(
     if choice == "custom_instruction" and not instruction:
         raise ValueError("instruction is required for custom_instruction")
     if resolved_by == "agent":
-        if not autonomous_resolution.is_automatable_choice(choice):
+        if choice == "replace_source":
             raise ValueError(
-                "an agent cannot record a source replacement or custom "
-                "instruction"
+                "an agent cannot record a source replacement"
             )
-        if instruction:
-            raise ValueError(
-                "an agent instruction must be empty; explanatory prose "
-                "belongs in the validated review reason"
-            )
+        if fixer_decision and choice == "custom_instruction":
+            # Q13 (seam F48): the Fixer may write the instruction itself;
+            # the ordinary submission validation above already required
+            # the instruction to be non-empty.
+            pass
+        else:
+            if not autonomous_resolution.is_automatable_choice(choice):
+                raise ValueError(
+                    "an agent cannot record a source replacement or custom "
+                    "instruction"
+                )
+            if instruction:
+                raise ValueError(
+                    "an agent instruction must be empty; explanatory prose "
+                    "belongs in the validated review reason"
+                )
 
     checkpoint = copy.deepcopy(job.generation_checkpoint or {})
     ledger = _human_decision_ledger(checkpoint)
@@ -4476,13 +4250,55 @@ def generate_post_learning(
         raise ValueError("convert the uploaded document to MMD before generating")
     progress.log(f"Post-learning generation into chapter '{chapter.chapter_title}'.")
     artifacts: dict = {}
-    fingerprint = _generation_checkpoint_fingerprint(job, chapter)
+    # The Architect (docs/aegis-restructure.md §8.1): assemble this run's
+    # instruction set before any fingerprint or checkpoint identity is
+    # computed — its hash joins every decision key, so a changed instruction
+    # set can never silently reuse old verdicts. Assembly failure fails
+    # closed here, pre-spend, before generation begins (The Fixer covers
+    # mid-run blocks only and deliberately does not apply). The set is
+    # persisted into the artifact directory and ships in diagnostics.
+    artifact_dir = None
+    artifact_dir_helper = getattr(uploads, "source_artifact_directory", None)
+    if callable(artifact_dir_helper):
+        try:
+            artifact_dir = artifact_dir_helper(int(job.id))
+        except Exception:  # noqa: BLE001 - diagnostics dir must never block
+            artifact_dir = None
+    instruction_set = instruction_architect.ensure_instruction_set(
+        metadata={
+            "board": chapter.board,
+            "grade": chapter.grade,
+            "subject": chapter.subject,
+            "unit": chapter.unit,
+            "chapter_title": chapter.chapter_title,
+            "chapter_id": chapter.id,
+            "chapter_code": chapter.chapter_code,
+            "learning_kind": "Post",
+            "source_book": job.source_book or "",
+        },
+        source_text=str(job.mmd_text or ""),
+        artifact_dir=artifact_dir,
+    )
+    instruction_hash = str(
+        instruction_set.get("instruction_set_sha256") or "")
+    instruction_slots = copy.deepcopy(instruction_set.get("slots") or {})
+    for flag in instruction_set.get("review_flags") or []:
+        progress.log(f"Architect review flag: {flag}", level="warning")
+    progress.log(
+        "Instruction set "
+        f"{instruction_hash[:12]} assembled "
+        f"({instruction_set.get('slots_source')}); its hash joins every "
+        "decision identity for this run."
+    )
+    fingerprint = _generation_checkpoint_fingerprint(
+        job, chapter, instruction_set_sha256=instruction_hash)
     target_identity = _generation_target_identity(chapter)
     stored_checkpoint = job.generation_checkpoint or {}
     resume_checkpoint = (
         stored_checkpoint
         if _checkpoint_identity_matches_generation(
-            stored_checkpoint, job=job, chapter=chapter)
+            stored_checkpoint, job=job, chapter=chapter,
+            instruction_set_sha256=instruction_hash)
         else None
     )
     if stored_checkpoint and resume_checkpoint is None:
@@ -4502,6 +4318,7 @@ def generate_post_learning(
                 fingerprint=fingerprint,
                 target_identity=target_identity,
                 target_chapter_id=target_chapter_id,
+                instruction_set_sha256=instruction_hash,
             )
         )
     initial_agent_resolution_ids: set[str] = set()
@@ -4539,6 +4356,7 @@ def generate_post_learning(
             fingerprint=fingerprint,
             target_identity=target_identity,
             target_chapter_id=target_chapter_id,
+            instruction_set_sha256=instruction_hash,
         )
         job.generation_checkpoint = durable
         if discarded_stage:
@@ -4610,12 +4428,14 @@ def generate_post_learning(
         "chapter_id": chapter.id,
         "chapter_code": chapter.chapter_code,
         "learning_kind": "Post",
+        # The Architect's run instructions: the hash joins the sealed
+        # envelope, the kernel decision keys, semantic_context_hash and the
+        # pre-spend gate identities; the slots render into every prompt.
+        "instruction_set_sha256": instruction_hash,
+        "instruction_slots": instruction_slots,
     }
-    recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
-    recovery_dispatch_keys: dict[str, str] = {}
-
     def generation_attempt() -> list[dict]:
-        # Every automatic checkpoint is durable. On recovery, obtain the
+        # Every automatic checkpoint is durable. On retry, obtain the
         # current envelope rather than retaining the entry captured before the
         # first attempt, and clear only non-durable in-memory artifacts.
         artifacts.clear()
@@ -4625,69 +4445,18 @@ def generate_post_learning(
                 job.generation_checkpoint or {},
                 job=job,
                 chapter=chapter,
+                instruction_set_sha256=instruction_hash,
             )
             else resume_checkpoint
         )
-        with phase38.convergence_checkpoint_context(
-            scope=f"upload-job:{job.id}:{fingerprint}",
-            state=_phase38_convergence_ledger(current_resume),
-            persist=lambda expected, replacement: (
-                _persist_phase38_convergence_state(
-                    db, job, expected, replacement
-                )
-            ),
-        ):
-            with _human_decision_resolution_context(current_resume):
-                return generation.concepts_from_mmd(
-                    job.mmd_text,
-                    **recovery_metadata,
-                    artifacts=artifacts,
-                    resume_checkpoint=current_resume,
-                    checkpoint_callback=save_checkpoint,
-                )
-
-    def repair_checkpoint(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> semantic_recovery.RepairResult | None:
-        return semantic_recovery.repair_concept_checkpoint_via_gpt(
-            checkpoint,
-            context,
-            api_call=generation._openai_json,
-            metadata=recovery_metadata,
-            source_text=_semantic_recovery_source_text(job.mmd_text),
-            topic_id_by_title=_semantic_recovery_topic_ids(),
-            validation_errors=_semantic_recovery_validation_errors,
-            max_rows=recovery_policy.max_rows_per_attempt,
-            max_source_chars=recovery_policy.max_source_chars,
-        )
-
-    def before_repair(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        recovery_dispatch_keys[context.failure_signature] = (
-            _persist_semantic_recovery_dispatch_started(
-                db, job, checkpoint, context
+        with _human_decision_resolution_context(current_resume):
+            return generation.concepts_from_mmd(
+                job.mmd_text,
+                **recovery_metadata,
+                artifacts=artifacts,
+                resume_checkpoint=current_resume,
+                checkpoint_callback=save_checkpoint,
             )
-        )
-
-    def persist_repair(
-        result: semantic_recovery.RepairResult,
-        _context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        _persist_semantic_recovery_checkpoint(
-            db,
-            job,
-            result,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-            owner_sub=owner_sub,
-            dispatch_issue_key=recovery_dispatch_keys.get(
-                _context.failure_signature, ""
-            ),
-        )
 
     def generation_and_deposit_attempt() -> tuple[
         list[dict], list[int], list[int], dict
@@ -4742,36 +4511,8 @@ def generate_post_learning(
             raise
         return records, created_ids, merged_ids, written
 
-    def on_recovery_verified(
-        contexts: tuple[semantic_recovery.RecoveryContext, ...],
-    ) -> None:
-        _persist_semantic_recovery_dispatch_verified(
-            db,
-            job,
-            [
-                recovery_dispatch_keys.get(context.failure_signature, "")
-                for context in contexts
-            ],
-        )
-
-    def run_pipeline():
-        if config.use_live_generation():
-            return semantic_recovery.run_with_semantic_recovery(
-                generation_and_deposit_attempt,
-                checkpoint_snapshot=lambda: copy.deepcopy(
-                    job.generation_checkpoint or {}),
-                repair_checkpoint=repair_checkpoint,
-                persist_repair=persist_repair,
-                before_repair=before_repair,
-                on_recovery_verified=on_recovery_verified,
-                policy=recovery_policy,
-                log=progress.log,
-            )
-        # Dry mode is test/development-only and has no GPT repair provider.
-        return generation_and_deposit_attempt()
-
     paused, pipeline_result = _run_with_human_decision_pause(
-        run_pipeline,
+        generation_and_deposit_attempt,
         db=db,
         job=job,
         fingerprint=fingerprint,
@@ -4999,22 +4740,7 @@ def generate_pre_learning_from_upload(
             level="success",
         )
 
-    recovery_metadata = {
-        "subject": chapter.subject,
-        "board": chapter.board,
-        "grade": chapter.grade,
-        "unit": chapter.unit,
-        "chapter_title": chapter.chapter_title,
-        "chapter_id": chapter.id,
-        "chapter_code": chapter.chapter_code,
-        "learning_kind": "Pre",
-    }
-    recovery_policy = semantic_recovery.RecoveryPolicy.from_environment()
-    recovery_dispatch_keys: dict[str, str] = {}
-    recovery_scope = "post_generation"
-
     def generation_attempt() -> list[dict]:
-        nonlocal recovery_scope
         artifacts.clear()
         current_resume = (
             copy.deepcopy(job.generation_checkpoint)
@@ -5025,32 +4751,22 @@ def generate_pre_learning_from_upload(
             )
             else resume_checkpoint
         )
-        recovery_scope = "post_generation"
-        with phase38.convergence_checkpoint_context(
-            scope=f"upload-job:{job.id}:{fingerprint}",
-            state=_phase38_convergence_ledger(current_resume),
-            persist=lambda expected, replacement: (
-                _persist_phase38_convergence_state(
-                    db, job, expected, replacement
-                )
-            ),
-        ):
-            with _human_decision_resolution_context(current_resume):
-                base = generation.concepts_from_mmd(
-                    job.mmd_text,
-                    subject=chapter.subject,
-                    board=chapter.board,
-                    grade=chapter.grade,
-                    unit=chapter.unit,
-                    chapter_title=chapter.chapter_title,
-                    chapter_id=chapter.id,
-                    chapter_code=chapter.chapter_code,
-                    learning_kind="Post",
-                    artifacts=artifacts,
-                    resume_checkpoint=current_resume,
-                    checkpoint_callback=save_checkpoint,
-                    completion_progress=0.98,
-                )
+        with _human_decision_resolution_context(current_resume):
+            base = generation.concepts_from_mmd(
+                job.mmd_text,
+                subject=chapter.subject,
+                board=chapter.board,
+                grade=chapter.grade,
+                unit=chapter.unit,
+                chapter_title=chapter.chapter_title,
+                chapter_id=chapter.id,
+                chapter_code=chapter.chapter_code,
+                learning_kind="Post",
+                artifacts=artifacts,
+                resume_checkpoint=current_resume,
+                checkpoint_callback=save_checkpoint,
+                completion_progress=0.98,
+            )
         _store_inventory(job, artifacts)
         # The target concept map may have advanced its checkpoint during this
         # attempt. Pre-learning must resume from that current durable envelope,
@@ -5064,7 +4780,6 @@ def generate_pre_learning_from_upload(
             )
             else current_resume
         )
-        recovery_scope = "pre_generation"
         return generation.pre_learning_from_rows(
             base,
             subject=chapter.subject,
@@ -5076,56 +4791,10 @@ def generate_pre_learning_from_upload(
             checkpoint_callback=save_checkpoint,
         )
 
-    def repair_checkpoint(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> semantic_recovery.RepairResult | None:
-        return semantic_recovery.repair_pre_learning_checkpoint_via_gpt(
-            checkpoint,
-            context,
-            api_call=generation._openai_json,
-            metadata=recovery_metadata,
-            source_text=_semantic_recovery_source_text(job.mmd_text),
-            topic_id_by_title=_semantic_recovery_topic_ids(),
-            validation_errors=_semantic_recovery_validation_errors,
-            max_rows=recovery_policy.max_rows_per_attempt,
-            max_source_chars=recovery_policy.max_source_chars,
-            failure_scope=recovery_scope,
-        )
-
-    def before_repair(
-        checkpoint: dict,
-        context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        recovery_dispatch_keys[context.failure_signature] = (
-            _persist_semantic_recovery_dispatch_started(
-                db, job, checkpoint, context
-            )
-        )
-
-    def persist_repair(
-        result: semantic_recovery.RepairResult,
-        _context: semantic_recovery.RecoveryContext,
-    ) -> None:
-        _persist_semantic_recovery_checkpoint(
-            db,
-            job,
-            result,
-            fingerprint=fingerprint,
-            target_identity=target_identity,
-            target_chapter_id=target_chapter_id,
-            owner_sub=owner_sub,
-            dispatch_issue_key=recovery_dispatch_keys.get(
-                _context.failure_signature, ""
-            ),
-        )
-
     def generation_and_deposit_attempt() -> tuple[
         list[dict], list[int], list[int], dict
     ]:
-        nonlocal recovery_scope
         pre_records = generation_attempt()
-        recovery_scope = "pre_deposit"
         try:
             created_ids, merged_ids, written = _deposit_and_publish_concepts(
                 db,
@@ -5142,35 +4811,8 @@ def generate_pre_learning_from_upload(
             raise
         return pre_records, created_ids, merged_ids, written
 
-    def on_recovery_verified(
-        contexts: tuple[semantic_recovery.RecoveryContext, ...],
-    ) -> None:
-        _persist_semantic_recovery_dispatch_verified(
-            db,
-            job,
-            [
-                recovery_dispatch_keys.get(context.failure_signature, "")
-                for context in contexts
-            ],
-        )
-
-    def run_pipeline():
-        if config.use_live_generation():
-            return semantic_recovery.run_with_semantic_recovery(
-                generation_and_deposit_attempt,
-                checkpoint_snapshot=lambda: copy.deepcopy(
-                    job.generation_checkpoint or {}),
-                repair_checkpoint=repair_checkpoint,
-                persist_repair=persist_repair,
-                before_repair=before_repair,
-                on_recovery_verified=on_recovery_verified,
-                policy=recovery_policy,
-                log=progress.log,
-            )
-        return generation_and_deposit_attempt()
-
     paused, pipeline_result = _run_with_human_decision_pause(
-        run_pipeline,
+        generation_and_deposit_attempt,
         db=db,
         job=job,
         fingerprint=fingerprint,

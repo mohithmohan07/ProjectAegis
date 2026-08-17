@@ -11,6 +11,7 @@ downloads survive.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -111,9 +112,43 @@ def snapshot_from_chapter(
     return snapshot
 
 
+def snapshot_from_staged_release(payload: Mapping) -> dict:
+    """Assemble Output 02 from the immutable staged Output-01 hierarchy."""
+
+    source = payload.get("concept_snapshot")
+    if not isinstance(source, Mapping):
+        raise ReleaseNotFound("assessment payload has no staged concept snapshot")
+    chapter = source.get("chapter")
+    topics = source.get("topics")
+    if not isinstance(chapter, Mapping) or not isinstance(topics, list):
+        raise ReleaseNotFound("staged concept snapshot has invalid hierarchy")
+    snapshot = {
+        "source_concept_release_sha256": str(
+            source.get("source_concept_release_sha256") or ""
+        ),
+        "target_chapter_id": int(source.get("target_chapter_id") or 0),
+        "concept_provenance": copy.deepcopy(
+            list(source.get("concept_provenance") or [])
+        ),
+        "chapter": copy.deepcopy(dict(chapter)),
+        "topics": copy.deepcopy(topics),
+        "groups": [dict(group) for group in payload.get("groups") or []],
+        "candidates": [
+            dict(candidate) for candidate in payload.get("candidates") or []
+        ],
+    }
+    if not snapshot["source_concept_release_sha256"]:
+        raise ReleaseNotFound("staged concept snapshot has no release seal")
+    _complete_required_shells(snapshot)
+    return snapshot
+
+
 def _machine_id(concept: Mapping) -> str:
     """Mechanical machine identity for shell naming: the ID tag embedded in
     the concept title when present, else a stable db-derived key."""
+    explicit = str(concept.get("concept_machine_id") or "").strip()
+    if explicit:
+        return explicit
     match = _TITLE_TAG_RE.search(str(concept.get("concept_title") or ""))
     if match:
         return match.group(1).strip()
@@ -123,22 +158,58 @@ def _machine_id(concept: Mapping) -> str:
 
 def _complete_required_shells(snapshot: dict) -> None:
     """Every concept carries BG01/IG01/AG01 (spec §8.1) — mechanical
-    bookkeeping: any tier the payload's groups do not already cover gets
-    its NA shell so questionless concepts survive into the Master."""
-    covered: set[tuple[str, str]] = {
-        (str(g.get("concept_key") or ""), str(g.get("group_type") or ""))
-        for g in snapshot["groups"]
-    }
+    bookkeeping: any exact required identity absent from the payload gets its
+    NA shell so questionless concepts survive into the Master."""
+    concept_names: dict[str, str] = {}
+    for topic in snapshot["topics"]:
+        for concept in topic.get("concepts") or []:
+            concept_key = str(concept.get("concept_key") or "")
+            concept_names[concept_key] = str(
+                concept.get("concept_display_name") or "")
+
+    for group in snapshot["groups"]:
+        concept_key = str(group.get("concept_key") or "")
+        concept_name = concept_names.get(concept_key)
+        if concept_name is None:
+            continue
+        visible_name = grouping.friendly_group_name(
+            concept_name, str(group.get("group_type") or ""))
+        group["group_name"] = visible_name
+        group["group_display_name"] = visible_name
+
+    groups_by_home_key: dict[tuple[str, str], list[dict]] = {}
+    for group in snapshot["groups"]:
+        home_key = (
+            str(group.get("concept_key") or ""),
+            str(group.get("group_key") or ""),
+        )
+        groups_by_home_key.setdefault(home_key, []).append(group)
     for topic in snapshot["topics"]:
         for concept in topic.get("concepts") or []:
             concept_key = str(concept.get("concept_key") or "")
             machine = _machine_id(concept)
-            for shell in grouping.required_shells(concept_key, machine):
-                if (concept_key, shell["group_type"]) in covered:
+            concept_name = concept_names[concept_key]
+            for shell in grouping.required_shells(
+                concept_key, machine, concept_name,
+            ):
+                home_key = (concept_key, shell["group_key"])
+                matches = groups_by_home_key.get(home_key, [])
+                if any(
+                    str(group.get("group_type") or "")
+                    == shell["group_type"]
+                    and int(group.get("group_sequence") or 0)
+                    == shell["group_sequence"]
+                    for group in matches
+                ):
                     continue
+                if matches:
+                    raise grouping.GroupingError(
+                        f"required shell {shell['group_key']!r} has "
+                        "inconsistent group_type or group_sequence")
                 shell = dict(shell)
                 shell["concept_key"] = concept_key
                 snapshot["groups"].append(shell)
+                groups_by_home_key.setdefault(home_key, []).append(shell)
 
 
 def create_release(
@@ -152,7 +223,28 @@ def create_release(
 ) -> models.AssessmentRelease:
     """Assemble and persist one immutable release (state: materialized)."""
     frozen = rel.freeze_payload(payload)
-    snapshot = snapshot_from_chapter(db, chapter_id, payload)
+    staged = payload.get("concept_snapshot")
+    if isinstance(staged, Mapping):
+        staged_chapter_id = int(staged.get("target_chapter_id") or 0)
+        if staged_chapter_id != int(chapter_id):
+            raise ReleaseNotFound(
+                "staged concept snapshot and assessment target disagree"
+            )
+        staged_sha = str(
+            staged.get("source_concept_release_sha256") or ""
+        )
+        payload_sha = str(
+            payload.get("source_concept_release_sha256") or staged_sha
+        )
+        if not staged_sha or payload_sha != staged_sha:
+            raise ReleaseNotFound(
+                "staged concept snapshot and assessment release seal disagree"
+            )
+    snapshot = (
+        snapshot_from_staged_release(payload)
+        if isinstance(staged, Mapping)
+        else snapshot_from_chapter(db, chapter_id, payload)
+    )
     release = models.AssessmentRelease(
         release_uid=(
             supersedes.release_uid if supersedes else rel.new_release_uid()),
@@ -382,12 +474,7 @@ def upload_master_to_database(
             "issues and publish a new version")
 
     snapshot = release.concept_snapshot
-    concept_ids: dict[str, int] = {}
-    for topic in snapshot.get("topics") or []:
-        for concept in topic.get("concepts") or []:
-            key = str(concept.get("concept_key") or "")
-            if key.startswith("db:"):
-                concept_ids[key] = int(key[3:])
+    concept_ids = _resolve_snapshot_concept_ids(db, snapshot)
     try:
         groups_by_key: dict[str, models.Group] = {}
         groups_created = 0
@@ -397,28 +484,52 @@ def upload_master_to_database(
                 raise UploadRefused(
                     f"group {group.get('group_key')!r} references a concept "
                     "outside the release snapshot")
-            record = db.query(models.Group).filter_by(
-                concept_id=concept_id,
-                group_type=str(group.get("group_type") or ""),
-                group_key=str(group.get("group_key") or ""),
-            ).one_or_none()
+            group_key = str(group.get("group_key") or "")
+            group_type = str(group.get("group_type") or "")
+            key_matches = db.query(models.Group).filter_by(
+                group_key=group_key).all()
+            exact_matches = [
+                record for record in key_matches
+                if record.concept_id == concept_id
+                and record.group_type == group_type
+            ]
+            if len(key_matches) != len(exact_matches) or len(
+                exact_matches
+            ) > 1:
+                raise UploadRefused(
+                    f"group_key {group_key!r} already belongs to a "
+                    "different or duplicate database group")
+            record = exact_matches[0] if exact_matches else None
             if record is None:
-                record = models.Group(
-                    concept_id=concept_id,
-                    group_type=str(group.get("group_type") or ""),
-                    group_key=str(group.get("group_key") or ""),
-                    group_sequence=int(group.get("group_sequence") or 0),
-                    group_name=str(group.get("group_name") or ""),
-                    group_display_name=str(
-                        group.get("group_display_name") or ""),
-                    group_status=str(group.get("group_status") or "Active"),
-                )
-                db.add(record)
-                db.flush()
-                groups_created += 1
+                blank_shells = db.query(models.Group).filter(
+                    models.Group.concept_id == concept_id,
+                    models.Group.group_type == group_type,
+                    models.Group.group_key == "",
+                ).all()
+                if len(blank_shells) > 1:
+                    raise UploadRefused(
+                        f"concept {concept_id} has duplicate blank "
+                        f"{group_type} shells; refusing ambiguous reuse"
+                    )
+                record = blank_shells[0] if blank_shells else None
+                if record is None:
+                    record = models.Group(
+                        concept_id=concept_id,
+                        group_type=group_type,
+                    )
+                    db.add(record)
+                    db.flush()
+                    groups_created += 1
+            record.group_key = group_key
+            record.group_name = str(group.get("group_name") or "")
+            record.group_display_name = str(
+                group.get("group_display_name") or "")
+            record.group_sequence = int(group.get("group_sequence") or 0)
+            record.group_status = str(
+                group.get("group_status") or "Active")
             record.group_description = str(
                 group.get("semantic_description") or "")
-            groups_by_key[str(group.get("group_key") or "")] = record
+            groups_by_key[group_key] = record
 
         existing_labels = {
             q.question_label
@@ -451,6 +562,10 @@ def upload_master_to_database(
                 question=str(candidate.get("question") or ""),
                 question_text=str(candidate.get("question_text") or ""),
                 marks=float(candidate.get("marks") or 0),
+                question_duration=float(
+                    candidate.get("question_duration") or 0
+                ),
+                math_keyboard=str(candidate.get("math_keyboard") or ""),
                 display_answer=str(candidate.get("display_answer") or ""),
                 answer_explanation=str(
                     candidate.get("answer_explanation") or ""),
@@ -497,3 +612,64 @@ def upload_master_to_database(
             f"{exc}); downloads are unaffected"
         ) from exc
     return result
+
+
+def _resolve_snapshot_concept_ids(
+    db: Session, snapshot: Mapping,
+) -> dict[str, int]:
+    """Resolve private release keys only against exact published identities.
+
+    A staged Output-01 concept is never inferred from similar text.  Until its
+    exact concept release has been explicitly uploaded, Master publication is
+    refused while both downloadable workbooks remain available.
+    """
+
+    chapter_id = int(snapshot.get("target_chapter_id") or 0)
+    concept_ids: dict[str, int] = {}
+    for topic in snapshot.get("topics") or []:
+        topic_title = str(topic.get("topic_title") or "")
+        pre_post = str(topic.get("pre_post_learning") or "")
+        for concept in topic.get("concepts") or []:
+            key = str(concept.get("concept_key") or "")
+            if not key or key in concept_ids:
+                raise UploadRefused(
+                    f"snapshot repeats or omits concept identity {key!r}"
+                )
+            if key.startswith("db:"):
+                concept_ids[key] = int(key[3:])
+                continue
+            if not chapter_id:
+                raise UploadRefused(
+                    "staged concept snapshot has no target chapter identity"
+                )
+            matches = (
+                db.query(models.Concept)
+                .join(models.Topic)
+                .filter(
+                    models.Topic.chapter_id == chapter_id,
+                    models.Topic.topic_title == topic_title,
+                    models.Topic.pre_post_learning == pre_post,
+                    models.Concept.concept_title
+                    == str(concept.get("concept_title") or ""),
+                )
+                .all()
+            )
+            exact = [
+                row for row in matches
+                if str(row.concept_display_name or "")
+                == str(concept.get("concept_display_name") or "")
+                and str(row.parent_concept or "")
+                == str(concept.get("parent_concept") or "")
+                and str(row.concept_details or "")
+                == str(concept.get("concept_details") or "")
+                and str(row.keywords or "")
+                == str(concept.get("keywords") or "")
+            ]
+            if len(exact) != 1 or len(matches) != 1:
+                raise UploadRefused(
+                    f"concept {concept.get('concept_title')!r} under "
+                    f"topic {topic_title!r} does not have one exact published "
+                    "Output-01 identity; upload that concept release first"
+                )
+            concept_ids[key] = exact[0].id
+    return concept_ids

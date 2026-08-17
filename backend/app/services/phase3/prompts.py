@@ -49,8 +49,8 @@ GROUNDING_SYSTEM = _SHARED + (
 ANALYSIS_SYSTEM = _SHARED + (
     " Task: author each concept's learner-facing content in one pass. "
     "Response schema: {\"rows\": [{\"concept_id\", "
-    "\"concept_description\", \"achieving_mastery\", "
-    "\"misconception_error_analysis\"}]}. concept_description is the "
+    "\"concept_description\", \"achieving_mastery\"}]}. "
+    "concept_description is the "
     "full teaching paragraph, grounded only on the concept's "
     "source_blocks, in original language (never a copied source "
     "passage) — it is the basis for books, worksheets, notes, slides, "
@@ -61,17 +61,10 @@ ANALYSIS_SYSTEM = _SHARED + (
     "'Description:' label and no other section inside it. "
     "achieving_mastery is one sentence naming what a learner can do "
     "once the concept is mastered — distinct for every concept, never "
-    "shared or paraphrased between concepts. "
-    "misconception_error_analysis starts directly with "
-    "'Misconceptions:' (a plausible learner belief) or 'Error "
-    "Analysis:' (the learner's concrete faulty action or reasoning "
-    "step, not another belief); state it concretely with the specific "
-    "quantity, step, or claim named — never a vague 'confuses X with "
-    "Y'; default to the ONE section carrying "
-    "the sharpest insight for the concept, and add the second ONLY "
-    "when it contributes genuinely different insight — never one "
-    "paraphrasing the other, and never reuse one concept's analysis "
-    "for another. In every field wrap EVERY mathematical expression "
+    "shared or paraphrased between concepts. Misconceptions and Error "
+    "Analysis are NOT authored here: the chapter-level inventory pass "
+    "owns them (Q1) — never emit either section in any field. In every "
+    "field wrap EVERY mathematical expression "
     "exactly as [Katex] valid LaTeX [/Katex]; never emit raw TeX, $ "
     "delimiters, bare sub/superscripts, or bare equations outside "
     "those tags. When the request carries a culminations array, also "
@@ -79,6 +72,62 @@ ANALYSIS_SYSTEM = _SHARED + (
     "for each culmination a 2-4 sentence consolidation paragraph tying "
     "the topic's member concepts together — what the learner can now "
     "do with them combined — never a list of concept names."
+)
+
+ANALYSE_INVENTORY_SYSTEM = _SHARED + (
+    " Task: Phase 2.4 — build the chapter's inventory of DISTINCT "
+    "Misconceptions and Error Analyses from the chapter-wide evidence "
+    "(source blocks + question/task inventory). Response schema: "
+    "{\"items\": [{\"item_id\", \"kind\": "
+    "\"misconception|error_analysis\", \"text\", \"evidence\", "
+    "\"rationale\"}]}. item_id is the positional mint LA-0001, "
+    "LA-0002, … in listing order. A misconception is a plausible "
+    "incorrect learner belief about this chapter's content, phrased as "
+    "the learner's belief ('The learner may believe that …' / "
+    "'Students may think that …'); an error analysis is a concrete "
+    "process error — 'Students' or 'The learner' performing a faulty "
+    "action or reasoning step, with an 'instead of'/'rather than' "
+    "contrast — typically surfacing around practical/experimental "
+    "work (entries marked practical_evidence are named evidence for "
+    "it). The two meanings are distinct; an item is never filler and "
+    "never a paraphrase of another item. Each item must be a genuine, "
+    "strong addition to the chapter's learning, grounded on the "
+    "evidence it cites, with the specific quantity, step, or claim "
+    "named. How many items the chapter supports is entirely your "
+    "judgment — a thin chapter may yield few or none; never invent an "
+    "item to fill space. An empty items list is a legitimate answer."
+)
+
+ANALYSE_ALLOT_SYSTEM = _SHARED + (
+    " Task: Phase 4.3 — allot each misconception/error-analysis "
+    "inventory item to the ONE settled concept it belongs to. Response "
+    "schema: {\"allotments\": [{\"item_id\", \"concept_id\", "
+    "\"rationale\"}]}. Decide EVERY item exactly once, citing only "
+    "concept_id values from the request. Judge purely from each "
+    "concept's description (the request deliberately carries no Types, "
+    "Examples, or hub content) against the item's text and evidence: "
+    "the misconception belongs with the concept whose teaching it "
+    "distorts; the error analysis with the concept whose application "
+    "it derails. Not every concept receives an item — never spread "
+    "items to cover concepts. rationale: one sentence naming the "
+    "content-to-teaching basis of the allotment."
+)
+
+ANALYSE_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit a proposed misconception/error-analysis "
+    "decision (a chapter inventory build, or an allotment of items to "
+    "concepts). For an inventory: judge each item's genuineness (a real "
+    "learner belief or process error grounded in this chapter's "
+    "evidence, never filler), distinctness (no item paraphrases "
+    "another), and strength (a genuine addition to the chapter's "
+    "learning); flag any near-duplicate pair, any item the evidence "
+    "does not support, and any missing insight the evidence strongly "
+    "supports. For an allotment: independently compare each item "
+    "against every candidate concept's description and flag a "
+    "plausible but less specific host. Response schema: {\"verdict\": "
+    "\"verified|rejected\", \"confidence\", \"issues\": [..]}. You are "
+    "an auditor, not a judge: your dissent is recorded on the output "
+    "for human review and does not block the run."
 )
 
 HOST_SYSTEM = _SHARED + (
@@ -135,6 +184,50 @@ HOST_SYSTEM = _SHARED + (
     "(QINV-...) are never source blocks."
 )
 
+PLACE_SYSTEM = _SHARED + (
+    " Task: Phase 2.2 — place the chapter's pooled Container-02 material. "
+    "The request pools every activity, experiment task, info hub "
+    "(\"do you know?\" boxes, facts, biography boxes, source excerpts) and "
+    "every unclaimed source figure, chapter-wide. Place each pooled item "
+    "with the settled concept whose content it depicts, exercises, or "
+    "enriches — judge purely from the item's own text, caption, and "
+    "images against what each concept teaches; the printed position is "
+    "deliberately not in the request and must play no part. Response "
+    "schema: {\"placements\": [{\"item_ref\", \"concept_id\", "
+    "\"rationale\"} | {\"item_ref\", \"disposition\": "
+    "\"decorative_or_duplicate\", \"rationale\"}]}. Decide EVERY pooled "
+    "item exactly once, citing only concept_id values from the request. "
+    "Hub items (QINV- refs) must always be placed on a concept — they "
+    "have no disposition. A figure (BLK- ref) is placed with the concept "
+    "whose teaching it illustrates; only a figure that is genuinely "
+    "decorative or a duplicate of an image already carried by a placed "
+    "item may instead record the disposition, with the rationale saying "
+    "why. Prefer the normal concept whose teaching the item practices or "
+    "illustrates; a Culmination row only when the item genuinely spans "
+    "that topic's concepts. rationale: one sentence naming the "
+    "content-to-teaching basis of the placement."
+)
+
+PLACE_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit proposed Activity/Info Hub and figure "
+    "placements. Do not defer to the proposal and do not infer that an "
+    "allowed concept is necessarily a good semantic fit. For each "
+    "placement in proposed_decision, independently compare the complete "
+    "pooled item text (and its images/captions) with the bounded core "
+    "teaching description of every candidate concept in the request. "
+    "Types, Examples, Activity/Info Hub content, and learner-error "
+    "sections are deliberately excluded from the evidence: copied task "
+    "wording there would be circular evidence. List order, physical "
+    "source location, title overlap, and mere structural eligibility are "
+    "not semantic evidence. Flag a plausible but less specific host when "
+    "another candidate teaches the item's content more directly, and "
+    "flag any figure disposition whose image genuinely illustrates a "
+    "concept's teaching. Response schema: {\"verdict\": "
+    "\"verified|rejected\", \"confidence\", \"issues\": [..]}. You are "
+    "an auditor, not a judge: your dissent is recorded on the output "
+    "for human review and does not block the run."
+)
+
 POLISH_SYSTEM = _SHARED + (
     " Task: repair concept rows that failed the terminal content gate. "
     "Response schema: {\"rows\": [{\"row_ref\", \"concept_title\", "
@@ -152,6 +245,50 @@ POLISH_SYSTEM = _SHARED + (
     "concept's meaning, and never rename it."
 )
 
+FIXER_SYSTEM = _SHARED + (
+    " Task: you are The Fixer (docs/aegis-restructure.md §8.2, Q13). You "
+    "are invoked at a blocked point in a content pipeline that must always "
+    "reach a complete release. The request carries the failing check's "
+    "defects (blocked_check), the contract the code path enforces "
+    "(contract), the prompts/rules that produced the output and the source "
+    "evidence (original_payload, or the block's own context fields), and "
+    "the produced output (last_response, when one exists). Take the most "
+    "suitable decision that resolves the block, once, grounded on the "
+    "evidence in the request. Never drop a question, block, figure, or "
+    "concept — place it or flag it instead; exact-once accounting binds "
+    "you. Never rename a concept, never invent source material, and never "
+    "propose changing code or contracts. Return the corrected artifact in "
+    "the SAME response schema the original provider was asked for (the "
+    "contract and blocked_check name it; when the request names its own "
+    "response schema, use that one), plus a \"rationale\" field: one or "
+    "two sentences stating what was blocked, what you decided, and why. "
+    "Your decision is recorded and flagged for the human reviewer — decide "
+    "honestly, never optimistically."
+)
+
+REFINER_SYSTEM = _SHARED + (
+    " Task: you are The Refiner (docs/aegis-restructure.md §8.3). You read "
+    "ONE released concept row exactly as the rendered workbook will carry "
+    "it — after assembly, before staging — and refine it to expectation: "
+    "wording polish, grade-level consistency for the stated board/grade/"
+    "subject, formatting hygiene, and description quality. The output, not "
+    "the process: never revisit a pipeline decision. Response schema: "
+    "{\"rows\": [{\"row_ref\", \"concept_details\", \"keywords\", "
+    "\"rationale\"}]}. Echo row_ref exactly as given. Identities are "
+    "untouchable: never rename the concept or its topic; never move, add, "
+    "or remove a section; never alter the Types section, any 'Type NN:', "
+    "'Case NN:' or 'Example:' text, the Activity/Info Hub section, or any "
+    "QINV- id — a mechanical check discards any response that changes "
+    "them. Edit ONLY the Description prose (its 'Achieving Mastery:' "
+    "sentence included), the Misconception/ Error Analysis wording, and "
+    "keywords, keeping every section label and the section order "
+    "byte-identical, all factual content, and every [Katex] wrapping. "
+    "concept_details must keep beginning with 'Description: '. When the "
+    "row already reads at expectation, return its fields unchanged with "
+    "rationale 'no change'. rationale: one sentence naming what was "
+    "improved and why."
+)
+
 CRITIC_SYSTEM = _SHARED + (
     " Task: independently audit the proposed_decision in the request "
     "against the source blocks. Response schema: {\"verdict\": "
@@ -163,3 +300,35 @@ CRITIC_SYSTEM = _SHARED + (
 
 def render(payload: Mapping[str, Any]) -> str:
     return json.dumps(dict(payload), ensure_ascii=False, indent=1)
+
+
+def instruction_rules_suffix(env: Mapping[str, Any]) -> str:
+    """The Architect's run-instruction texts, appended to payload rules.
+
+    Settle and Host read the ``subject_topology_guidance`` and
+    ``grade_band_vocabulary`` slots straight from the sealed envelope
+    metadata (docs/aegis-restructure.md §8.1) — no extra parameters are
+    threaded through the passes. Empty slots return an empty suffix, so
+    payloads (and therefore decision keys) are unchanged when no
+    instructions were authored.
+    """
+
+    metadata = env.get("metadata") if isinstance(env, Mapping) else None
+    slots = (
+        metadata.get("instruction_slots")
+        if isinstance(metadata, Mapping)
+        else None
+    )
+    if not isinstance(slots, Mapping):
+        return ""
+    parts: list[str] = []
+    for label, key in (
+        ("Subject topology guidance", "subject_topology_guidance"),
+        ("Grade-band vocabulary", "grade_band_vocabulary"),
+    ):
+        text = " ".join(str(slots.get(key) or "").split())
+        if text:
+            parts.append(f"{label}: {text}")
+    if not parts:
+        return ""
+    return " RUN INSTRUCTIONS (Architect): " + " ".join(parts)

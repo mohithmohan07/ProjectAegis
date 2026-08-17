@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import uuid
+from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
 
 # --------------------------------------------------------------------------- #
@@ -111,7 +113,8 @@ _BLUEPRINT_CELL_REQUIRED = (
 _CANDIDATE_REQUIRED = (
     "candidate_id", "source_atom_ids", "blueprint_cell_id", "question",
     "question_text", "sheet_kind", "question_category", "cognitive_skill",
-    "difficulty", "marks", "answer_restriction",
+    "difficulty", "marks", "question_duration", "answer_restriction",
+    "restriction_reason",
 )
 _PLACEMENT_REQUIRED = (
     "candidate_id", "concept_id", "group_key", "evidence",
@@ -155,18 +158,187 @@ def validate_blueprint_cell(cell: Mapping) -> list[str]:
 
 def validate_candidate(candidate: Mapping) -> list[str]:
     errors = [f"missing {f}" for f in _missing(candidate, _CANDIDATE_REQUIRED)]
-    if candidate.get("sheet_kind") not in SHEET_KINDS:
+    kind = candidate.get("sheet_kind")
+    if kind not in SHEET_KINDS:
         errors.append(
             f"sheet_kind must be one of {SHEET_KINDS} "
-            f"(got {candidate.get('sheet_kind')!r})")
+            f"(got {kind!r})")
     restriction = candidate.get("answer_restriction")
     if restriction not in ANSWER_RESTRICTIONS:
         # Never silently default an unknown restriction (spec §3.5).
         errors.append(
             f"answer_restriction must be one of {ANSWER_RESTRICTIONS} "
             f"(got {restriction!r})")
-    elif candidate.get("sheet_kind") == "objective" and restriction != "Specific":
-        errors.append("objective questions are always Specific (spec §3.5)")
+    if not str(candidate.get("restriction_reason") or "").strip():
+        errors.append("restriction_reason must be non-empty")
+    if candidate.get("question") != candidate.get("question_text"):
+        errors.append("question must equal question_text")
+
+    def finite(value: Any) -> Decimal | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text.startswith(("+", "-")):
+                return None
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        if not number.is_finite():
+            return None
+        try:
+            wire_number = float(number)
+        except (OverflowError, ValueError):
+            return None
+        if not math.isfinite(wire_number):
+            return None
+        if number != 0 and wire_number == 0:
+            return None
+        if Decimal(str(wire_number)) != number:
+            return None
+        return number
+
+    marks = finite(candidate.get("marks"))
+    if marks is None or marks <= 0:
+        errors.append("marks must be finite and positive")
+        marks = Decimal(0)
+    duration = finite(candidate.get("question_duration"))
+    if duration is None or duration <= 0:
+        errors.append("question_duration must be finite and positive")
+
+    raw_answers = candidate.get("answers")
+    if not isinstance(raw_answers, list):
+        errors.append("answers must be an array")
+        answers: list[Mapping] = []
+    else:
+        answers = []
+        for position, answer in enumerate(raw_answers, start=1):
+            if not isinstance(answer, Mapping):
+                errors.append(f"answer {position} is not an object")
+            else:
+                answers.append(answer)
+    raw_subquestions = candidate.get("sub_questions")
+    if not isinstance(raw_subquestions, list):
+        errors.append("sub_questions must be an array")
+        subquestions: list[Mapping] = []
+    else:
+        subquestions = []
+        for position, subquestion in enumerate(raw_subquestions, start=1):
+            if not isinstance(subquestion, Mapping):
+                errors.append(f"subquestion {position} is not an object")
+            else:
+                subquestions.append(subquestion)
+
+    keyboard = candidate.get("math_keyboard")
+    if kind == "objective":
+        if keyboard != "":
+            errors.append("objective math_keyboard must be exactly blank")
+        correct = [
+            answer for answer in answers
+            if is_correct_option(answer.get("correct_answer"))
+        ]
+        if len(correct) != 1:
+            errors.append(
+                f"objective requires exactly one correct option (got "
+                f"{len(correct)})"
+            )
+        for position, answer in enumerate(answers, start=1):
+            weight = finite(answer.get("answer_weightage"))
+            if weight is None:
+                errors.append(
+                    f"objective answer {position} weightage must be finite"
+                )
+                continue
+            expected = marks if answer in correct else Decimal(0)
+            if weight != expected:
+                errors.append(
+                    f"objective answer {position} weightage {weight:g} != "
+                    f"{expected:g}"
+                )
+        if subquestions:
+            errors.append("objective candidate must not have subquestions")
+    elif kind == "descriptive":
+        if keyboard not in {"Yes", "No"}:
+            errors.append("descriptive math_keyboard must be exactly Yes or No")
+        if not answers:
+            errors.append("descriptive candidate has no rubric blocks")
+        weights: list[Decimal] = []
+        for position, answer in enumerate(answers, start=1):
+            weight = finite(answer.get("answer_weightage"))
+            if weight is None or weight <= 0:
+                errors.append(
+                    f"descriptive answer {position} weightage must be "
+                    "finite and positive"
+                )
+            else:
+                weights.append(weight)
+        weight_sum = sum(weights, Decimal(0))
+        if len(weights) == len(answers) and weight_sum != marks:
+            errors.append(
+                f"descriptive answer weightage sum {weight_sum:g} != "
+                f"marks {marks:g}"
+            )
+        if subquestions:
+            sub_marks: list[Decimal] = []
+            for position, subquestion in enumerate(subquestions, start=1):
+                sub_mark = finite(subquestion.get("marks"))
+                if sub_mark is None or sub_mark <= 0:
+                    errors.append(
+                        f"subquestion {position} marks must be finite and "
+                        "positive"
+                    )
+                    continue
+                sub_marks.append(sub_mark)
+                keywords = subquestion.get("keywords")
+                if not isinstance(keywords, list):
+                    errors.append(
+                        f"subquestion {position} keywords must be an array"
+                    )
+                    continue
+                if not keywords:
+                    # Keyword slots are optional wire capacity.  When the
+                    # semantic rubric uses them, every weight is mandatory
+                    # and must sum to the subquestion marks below.
+                    continue
+                keyword_weights: list[Decimal] = []
+                for keyword_position, keyword in enumerate(
+                    keywords, start=1
+                ):
+                    if not isinstance(keyword, Mapping):
+                        errors.append(
+                            f"subquestion {position} keyword "
+                            f"{keyword_position} is not an object"
+                        )
+                        continue
+                    weight = finite(keyword.get("weightage"))
+                    if weight is None or weight <= 0:
+                        errors.append(
+                            f"subquestion {position} keyword "
+                            f"{keyword_position} weightage must be finite "
+                            "and positive"
+                        )
+                    else:
+                        keyword_weights.append(weight)
+                if (
+                    len(keyword_weights) == len(keywords)
+                    and sum(keyword_weights, Decimal(0)) != sub_mark
+                ):
+                    errors.append(
+                        f"subquestion {position} keyword weightage sum "
+                        f"{sum(keyword_weights, Decimal(0)):g} != "
+                        "subquestion marks "
+                        f"{sub_mark:g}"
+                    )
+            if (
+                len(sub_marks) == len(subquestions)
+                and sum(sub_marks, Decimal(0)) != marks
+            ):
+                errors.append(
+                    f"subquestion marks sum {sum(sub_marks, Decimal(0)):g} "
+                    "!= marks "
+                    f"{marks:g}"
+                )
     return errors
 
 
@@ -211,6 +383,25 @@ def duplicate_group_identities(groups: Iterable[Mapping]) -> list[tuple]:
         if identity in seen and identity not in duplicates:
             duplicates.append(identity)
         seen.add(identity)
+    return duplicates
+
+
+def duplicate_group_keys(groups: Iterable[Mapping]) -> list[str]:
+    """Return repeated internal keys, regardless of concept or tier.
+
+    ``group_key`` is the release-wide machine identity.  Reusing one key for
+    a different home is structural corruption, not a semantic concern that a
+    later judgment pass may accept with a flag.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for group in groups:
+        group_key = str(group.get("group_key") or "")
+        if not group_key:
+            continue
+        if group_key in seen and group_key not in duplicates:
+            duplicates.append(group_key)
+        seen.add(group_key)
     return duplicates
 
 
@@ -286,6 +477,8 @@ def freeze_payload(payload: Mapping) -> dict:
         errors.extend(validate_placement(placement))
     for identity in duplicate_group_identities(payload.get("groups") or []):
         errors.append(f"duplicate group identity {identity}")
+    for group_key in duplicate_group_keys(payload.get("groups") or []):
+        errors.append(f"duplicate group_key {group_key!r}")
     errors.extend(
         primary_placement_errors(payload.get("placements") or []))
     return {

@@ -20,7 +20,6 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
-from collections import Counter
 import hmac
 import json
 import os
@@ -46,7 +45,11 @@ from . import progress
 # Part of every transcription cache key: bump on any material change to the
 # extraction/verification contract so sealed pages re-derive under the new
 # rules instead of replaying stale judgments.
-FALLBACK_VERSION = "2.3.2"
+# 2.4.0: the page-extraction contract records dropped furniture — each
+# omitted running header/footer/page number ships verbatim in the page's
+# ``dropped_furniture`` (R4: dropped and listed as dropped, with what it
+# said). Bumped so cached transcriptions without the record are re-read.
+FALLBACK_VERSION = "2.4.0"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
 # The marker written into the rendered MMD header. Deliberately distinct
@@ -342,9 +345,16 @@ def extraction_schema(pages: list[PdfPage]) -> dict[str, Any]:
                                 "type": "array",
                                 "items": _block_schema(),
                             },
+                            "dropped_furniture": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
                             "confidence": {"type": "number"},
                         },
-                        "required": ["page_id", "blocks", "confidence"],
+                        "required": [
+                            "page_id", "blocks", "dropped_furniture",
+                            "confidence",
+                        ],
                         "additionalProperties": False,
                     },
                 }
@@ -398,7 +408,10 @@ may be incomplete. Return every meaningful textbook block in exact visual
 reading order. Never paraphrase, summarise, complete, or infer unseen wording.
 Verbatim includes the source's own printed spelling errors — never silently
 correct a typo the page visibly carries.
-Omit only repeated running headers, footers, and bare page numbers.
+Omit only repeated running headers, footers, and bare page numbers — and
+return every line you omit VERBATIM in the page's dropped_furniture array,
+so nothing is dropped without a record of what it said. A page with no
+omitted furniture returns an empty dropped_furniture array.
 
 Block rules:
 - heading: preserve the complete visible heading and hierarchy level.
@@ -471,7 +484,12 @@ linked_visual_orders/linked_context_orders belong to task blocks alone — an
 illustrative figure beside prose or poetry needs only its tight bbox and its
 exact visible caption, and must never be rejected for missing ownership
 links or any field the contract does not define for its kind. A candidate's
-review_flags field is Aegis bookkeeping — ignore it. Canonical
+review_flags field is Aegis bookkeeping — ignore it. A page's
+dropped_furniture array is the contract's verbatim record of omitted
+repeated running headers, footers, and bare page numbers: judge only that
+the listed lines are genuinely such furniture — never demand they return
+as blocks, and reject a candidate that silently omitted furniture without
+listing it there. Canonical
 [Katex] ... [/Katex] wrapping of visibly printed mathematics IS the
 contract's required wire format — never reject it as invented markup or an
 extraction artifact; judge only whether the wrapped content matches the
@@ -637,7 +655,15 @@ def _tokens(value: str) -> set[str]:
 # decide the chapter title, the topic outline, and per-task question
 # boundaries; deterministic code only validates references and compiles.
 
-OUTLINE_VERSION = "chapter-outline-7"
+# chapter-outline-8: the judge also rules each whole task's KIND —
+# question / activity / info_hub — so the inventory's source_kind is a
+# model verdict, never a label vocabulary (Rule 1; §4 Phase 1.2).
+OUTLINE_VERSION = "chapter-outline-8"
+# The MMD rendering shape, independent of the extraction contract: bumped
+# when the renderer changes what the same page ACSD looks like as MMD (so
+# already-converted sources are recognized as stale) without invalidating
+# the paid page-transcription caches.
+RENDER_VERSION = "task-cues-verbatim-1"
 # Task cues render as a sub-level heading under an active outline: deep
 # enough not to be read as a chapter topic, still a heading so the
 # deterministic task parser can find the block.
@@ -652,10 +678,11 @@ def source_reader_version() -> str:
     """Identifies everything that decides the SHAPE of the rendered MMD.
 
     The compiler renders blocks; the outline decides which of them open a
-    topic and where questions divide. A change to either produces different
-    MMD from the same PDF, so both belong in the stamp.
+    topic and where questions divide; the render version tracks the MMD
+    shape itself (e.g. verbatim task-cue headings). A change to any of them
+    produces different MMD from the same PDF, so all belong in the stamp.
     """
-    return f"{FALLBACK_COMPILER}+{OUTLINE_VERSION}"
+    return f"{FALLBACK_COMPILER}+{OUTLINE_VERSION}+{RENDER_VERSION}"
 
 
 def mmd_reader_version(mmd_text: object) -> str:
@@ -832,8 +859,16 @@ def _outline_schema() -> dict[str, Any]:
                         "properties": {
                             "page_id": {"type": "string"},
                             "reading_order": {"type": "integer"},
+                            "task_kind": {
+                                "type": "string",
+                                "enum": [
+                                    "question", "activity", "info_hub",
+                                ],
+                            },
                         },
-                        "required": ["page_id", "reading_order"],
+                        "required": [
+                            "page_id", "reading_order", "task_kind",
+                        ],
                         "additionalProperties": False,
                     },
                 },
@@ -916,6 +951,21 @@ your judgment IS the structure.
    question the chapter silently loses, so walk the digest and rule on each
    one. A task that is a single question, an activity, or a table to
    complete belongs here.
+   For each whole task, also rule its task_kind from the content itself
+   (a partitioned task is always a set of questions):
+   - "question" — something the learner answers or completes for
+     assessment: a question, fill-in, match, true/false, worked example's
+     problem, write/draw instruction.
+   - "activity" — a hands-on activity, experiment, project, or classroom
+     procedure the learner performs (numbered steps, materials, an
+     observe/record flow), whatever cue the book prints.
+   - "info_hub" — enrichment that informs rather than tasks: a
+     "do you know?" box, a fact or biography box, extra information the
+     book offers beside the teaching. If such a box was transcribed as a
+     task, ruling it info_hub is how it reaches the learner as
+     enrichment instead of a question.
+   Judge by what the content asks of the learner, never by the cue word
+   alone.
 
 Return JSON per the schema. notes: anything you judged worth flagging.
 """.strip()
@@ -1150,6 +1200,13 @@ def _normalize_chapter_outline(
     # it mentions in neither is not "left whole" — it is a block nobody ruled
     # on, and the questions inside it vanish without a trace. Name them.
     ruled: set[tuple[str, int]] = set(resolved_refs)
+    # The judge's per-task KIND rulings (chapter-outline-8): a partitioned
+    # task is by definition a set of questions; whole tasks carry the
+    # model's own verdict. Only schema-known kinds are recorded — this is
+    # mechanical validation of the enum, never a reclassification.
+    ruled_kinds: dict[tuple[str, int], str] = {
+        ref: "question" for ref in resolved_refs
+    }
     for whole in candidate.get("whole_tasks") or []:
         if not isinstance(whole, dict):
             continue
@@ -1164,6 +1221,9 @@ def _normalize_chapter_outline(
             )
             continue
         ruled.add(whole_ref)
+        kind = str(whole.get("task_kind") or "").strip().lower()
+        if kind in {"question", "activity", "info_hub"}:
+            ruled_kinds.setdefault(whole_ref, kind)
     unruled = [ref for ref in _task_block_refs(page_acsd) if ref not in ruled]
 
     if not topics and not partitions:
@@ -1177,6 +1237,10 @@ def _normalize_chapter_outline(
         "chapter_title": title,
         "topics": topics,
         "task_partitions": partitions,
+        "ruled_task_kinds": [
+            [ref[0], ref[1], kind]
+            for ref, kind in sorted(ruled_kinds.items())
+        ],
         "unruled_task_refs": [list(ref) for ref in unruled],
         "notes": [
             str(note) for note in candidate.get("notes") or [] if str(note).strip()
@@ -1682,7 +1746,6 @@ def _verification_rejection_reason(
     verdict = str(verification.get("verdict") or "")
     approved = sorted(str(value) for value in verification.get("approved_page_ids") or [])
     expected = sorted(page.page_id for page in pages)
-    confidence = float(verification.get("confidence") or 0.0)
     rejected = sorted(str(value) for value in verification.get("rejected_page_ids") or [])
     issues = [
         str(value).strip() for value in verification.get("issues") or []
@@ -1695,11 +1758,10 @@ def _verification_rejection_reason(
         reasons.append("verification did not approve every supplied page exactly once")
     if rejected:
         reasons.append(f"verification rejected page(s): {', '.join(rejected)}")
-    if confidence < _min_page_confidence():
-        reasons.append(
-            f"verification confidence {confidence:.3f} is below "
-            f"{_min_page_confidence():.3f}"
-        )
+    # 6E: the numeric verifier-confidence floor no longer blocks — a
+    # sub-floor confidence on an otherwise approving verification becomes a
+    # page review flag (see extract_batch_via_openai), exactly like the
+    # sibling page-transcription confidence flag in validate_page_extraction.
     return "; ".join(dict.fromkeys(reasons))
 
 
@@ -1768,6 +1830,18 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
         )
         reason = _verification_rejection_reason(pages, verification)
         if not reason:
+            verified_confidence = float(verification.get("confidence") or 0.0)
+            if verified_confidence < _min_page_confidence():
+                # 6E: sub-floor confidence flags, never rejects (the
+                # verifier itself approved every page).
+                confidence_flag = (
+                    f"verification confidence {verified_confidence:.3f} is "
+                    f"below {_min_page_confidence():.3f}"
+                )
+                for row in normalized["pages"]:
+                    row.setdefault("review_flags", []).append(
+                        f"{row.get('page_id') or 'PDF page'}: {confidence_flag}"
+                    )
             return {
                 "status": "verified",
                 "pages": normalized["pages"],
@@ -2130,15 +2204,19 @@ def _markdown_image(url: str, caption: str) -> str:
 
 
 def _canonical_task_heading(source_label: object) -> str:
-    """Map arbitrary visible task cues to a parser-stable structural heading."""
-    label = _normal(source_label)
-    if label == "project":
-        return "Project"
-    if label == "activity":
-        return "Activity"
-    if label in {"write in brief", "questions", "exercises"}:
-        return "Write in brief"
-    return "Discuss"
+    """Render the VERBATIM visible task cue as the structural heading.
+
+    §3 purge, item 4D: the retired vocabulary collapsed every unknown cue to
+    "Discuss", printing a cue the book never carried. The model-identified
+    label now renders verbatim (whitespace-normalized only — mechanics).
+    Task discoverability does not depend on the heading wording in this
+    lane: the verified page ledger is reapplied on every compile and
+    rehydrate, so no learner question hangs on a parser recognizing the cue.
+    "Task" is a neutral structural placeholder used only when the page
+    prints no cue at all.
+    """
+    label = re.sub(r"\s+", " ", str(source_label or "")).strip()
+    return label or "Task"
 
 
 _TASK_FIGURE_ISSUE_CODES = frozenset({
@@ -2381,23 +2459,42 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
     return "\n".join(parts).strip() + "\n"
 
 
+# TEXT-COMPARISON MECHANICS (§3 purge, item 4D): strips a renderer-emitted
+# cue heading so round-trips compare exactly. The alternation keeps the
+# legacy vocabulary (older artifacts rendered those cues) and additionally
+# matches ANY single-word heading, because the renderer now emits the
+# verbatim visible label. It never classifies content — multi-word labels are
+# handled by the explicit ``label`` parameter below.
 _TASK_MARKDOWN_CUE_RE = re.compile(
     r"^(?:#{1,6}\s+|\*\*)"
-    r"(?:activity|discuss|project|write\s+in\s+brief|"
-    r"think\s+about\s+it|let['’]?s\s+discuss|questions?|exercises?)"
-    r"\b[\s:—-]*\*{0,2}[\s:—-]*",
+    r"(?:(?:activity|discuss|project|write\s+in\s+brief|"
+    r"think\s+about\s+it|let['’]?s\s+discuss|questions?|exercises?)\b"
+    r"|[^\s*]+)"
+    r"[\s:—-]*\*{0,2}[\s:—-]*",
     re.IGNORECASE,
 )
 
 
-def _task_match_key(value: object) -> str:
+def _task_match_key(value: object, label: object = "") -> str:
     """Return task wording without a parser-injected Markdown cue heading.
 
-    The production task parser may flatten ``# Activity\nPrompt`` into one line.
-    A generic heading regex is unsafe there because it can greedily consume the
-    whole prompt up to its final whitespace. Strip only known task-cue headings.
+    The production task parser may flatten ``# Activity\nPrompt`` into one
+    line. A generic greedy heading regex is unsafe there, so only cue-shaped
+    single-word headings and the legacy vocabulary are stripped blindly;
+    when the model-identified ``label`` is supplied, that exact label —
+    including multi-word cues such as "What Will Happen, if…" — is stripped
+    verbatim first.
     """
     text = kr._IMAGE_TAG_RE.sub(" ", str(value or "")).strip()
+    label_text = re.sub(r"\s+", " ", str(label or "")).strip()
+    if label_text:
+        labelled = re.match(
+            rf"(?is)^(?:#{{1,6}}\s+|\*\*)?\s*{re.escape(label_text)}"
+            r"[\s:—-]*\*{0,2}[\s:—-]*",
+            text,
+        )
+        if labelled and labelled.end() < len(text):
+            return _normal(text[labelled.end():])
     text = _TASK_MARKDOWN_CUE_RE.sub("", text, count=1)
     return _normal(text)
 
@@ -2529,6 +2626,18 @@ def apply_page_acsd_relationships(
     Figure/context references, and applies page-local ownership links.
     """
     _scrub_page_acsd_escape_artifacts(page_acsd)
+    # R4 — the ACSD furniture ledger: every line the page transcriber
+    # omitted (repeated running headers, footers, bare page numbers) rides
+    # the canonical verbatim, so the containers projection, the coverage
+    # ledger, and the run report can list what was dropped and what it
+    # said. Pages transcribed before the record existed contribute nothing.
+    canonical["dropped_furniture"] = [
+        str(line)
+        for page in page_acsd.get("pages") or []
+        if isinstance(page, dict)
+        for line in page.get("dropped_furniture") or []
+        if str(line or "").strip()
+    ]
     figure_payload = _figure_payload_from_canonical(canonical)
     figures_by_id = {
         str(figure.get("figure_id") or ""): figure
@@ -2594,6 +2703,15 @@ def apply_page_acsd_relationships(
         ]
         for partition in outline.get("task_partitions") or []
         if isinstance(partition, dict)
+    }
+    # The outline judge's per-task kind rulings (chapter-outline-8): the
+    # model's verdict on whether a whole task is a question, an activity,
+    # or an info hub. This is the ONLY kind authority in this lane.
+    outline_task_kinds: dict[tuple[str, int], str] = {
+        (str(row[0]), int(row[1])): str(row[2])
+        for row in outline.get("ruled_task_kinds") or []
+        if isinstance(row, (list, tuple)) and len(row) == 3
+        and str(row[2]) in {"question", "activity", "info_hub"}
     }
     page_number_by_id = {
         str(page.get("page_id") or ""): int(page.get("page_number") or 0)
@@ -2670,7 +2788,8 @@ def apply_page_acsd_relationships(
         for block in blocks:
             if block.get("kind") != "task":
                 continue
-            prompt_key = _task_match_key(block.get("text") or "")
+            block_label = str(block.get("source_label") or "").strip()
+            prompt_key = _task_match_key(block.get("text") or "", block_label)
             if not prompt_key:
                 raise ValueError(
                     f"{page.get('page_id') or 'PDF page'} has an empty verified task"
@@ -2696,7 +2815,8 @@ def apply_page_acsd_relationships(
                 task_key = _task_match_key(
                     candidate_task.get("raw_prompt")
                     or candidate_task.get("display_prompt")
-                    or ""
+                    or "",
+                    block_label,
                 )
                 if not task_key:
                     continue
@@ -2736,9 +2856,12 @@ def apply_page_acsd_relationships(
                     "order": 0,
                     "order_index": 0,
                     "identity_key": "",
-                    "chapter_wide": _normal(label) in {
-                        "write in brief", "questions", "exercises"
-                    },
+                    # §3 purge, item 4D: chapter-wide scope is never assigned
+                    # from label wording. The chapter outline's assessment
+                    # spans (a model verdict) rule scope below; a task no
+                    # verdict scoped stays topic-scoped and carries a
+                    # not-model-ruled marker.
+                    "chapter_wide": False,
                     "requires_context": False,
                     "shared_context": "",
                     "content_objects": {},
@@ -2756,18 +2879,44 @@ def apply_page_acsd_relationships(
             task["raw_prompt"] = verified_prompt
             task["source_label"] = label
             task["parent_source_label"] = label
-            activity = _normal(label) in {"activity", "project"}
+            # Kind authority (§4 Phase 1.2, Rule 1): the chapter-outline
+            # judge's per-task ruling is the semantic kind verdict — the
+            # retired two-word label vocabulary ({"activity","project"})
+            # no longer classifies content. A ruled activity keeps its
+            # dual identity (activity_origin) so an assessable prompt
+            # inside it also rides Types; a ruled info_hub ships as
+            # Container-02 enrichment, never a question. An unruled task
+            # keeps the neutral default with a reviewable marker; the
+            # worked-example/exercise label mapping below is the
+            # pre-existing neutral-path presentation mechanics, applied
+            # only when the model ruled "question" or never ruled.
+            ruled_kind = outline_task_kinds.get((
+                str(page.get("page_id") or ""),
+                int(block.get("reading_order") or 0),
+            ), "")
+            activity = ruled_kind == "activity"
             task["activity_origin"] = activity
             worked = bool(re.fullmatch(
                 r"(?:solved\s+)?examples?\s*\d*", _normal(label)
             ))
-            task["source_kind"] = (
-                "activity" if activity else
-                "worked_example" if worked else (
-                    "exercise"
-                    if _normal(label) in {"write in brief", "questions", "exercises"}
-                    else "checkpoint_question"
+            if activity:
+                task["source_kind"] = "activity"
+            elif ruled_kind == "info_hub":
+                task["source_kind"] = "info_hub"
+            else:
+                task["source_kind"] = (
+                    "worked_example" if worked else (
+                        "exercise"
+                        if _normal(label) in {
+                            "write in brief", "questions", "exercises",
+                        }
+                        else "checkpoint_question"
+                    )
                 )
+            task["kind_ruling"] = (
+                "chapter_outline_task_kind"
+                if ruled_kind
+                else "not_model_ruled_flagged"
             )
 
             prompt_block_id = str(prompt_source_block.get("block_id") or "")
@@ -2953,12 +3102,34 @@ def apply_page_acsd_relationships(
             gpt_parts = outline_partitions.get(task_ref)
             if gpt_parts:
                 task["gpt_boundary_parts"] = copy.deepcopy(gpt_parts)
+            # Scope authority (§3 purge, item 4D): in this lane the outline's
+            # assessment spans are the ONLY ruling on chapter-wide scope. The
+            # structural MMD parser's keyword-derived chapter_wide (heading
+            # vocabularies live outside this lane) is provisional audit
+            # evidence, retained but never shipped as the decision.
+            parser_chapter_wide = bool(task.get("chapter_wide"))
             if _in_assessment_span(task_ref):
                 # Questions of an exercise/practice collection belong to the
                 # chapter, not to whichever topic happens to precede the set;
                 # the existing chapter-wide machinery assigns real topics.
+                # This IS the model-ruled scope: the outline judge marked the
+                # span kind="assessment".
                 task["chapter_wide"] = True
                 task["_topic_scope"] = "chapter"
+                task["scope_ruling"] = "chapter_outline_assessment_span"
+            elif outline_starts:
+                task["chapter_wide"] = False
+                task["_topic_scope"] = "topic"
+                task["scope_ruling"] = "chapter_outline_content_span"
+            else:
+                # No outline ruled this chapter's spans; the neutral topic
+                # scope ships with a reviewable marker instead of a
+                # keyword-derived default.
+                task["chapter_wide"] = False
+                task["_topic_scope"] = "topic"
+                task["scope_ruling"] = "not_model_ruled_flagged"
+            if parser_chapter_wide != bool(task.get("chapter_wide")):
+                task["gpt_pdf_acsd_parser_chapter_wide"] = parser_chapter_wide
             body = _without_asset_tags(verified_prompt, fallback_urls)
             tags = []
             for url in display_urls:
@@ -3252,7 +3423,7 @@ def reconstruct_pdf_to_acsd(
         page_acsd = extract_pdf_to_page_acsd(path, provider=provider)
         page_acsd["fallback_reason"] = list(fallback_reason)
         page_acsd["original_source_filename"] = path.name
-        asset_count = materialize_visual_assets(
+        materialize_visual_assets(
             path, page_acsd, job_id=job_id, artifact_dir=staging
         )
         mmd_text = render_page_acsd_to_mmd(page_acsd)
@@ -3481,7 +3652,12 @@ def transfer_outline_to_mmd(
     # 3. Task cues. A task block carries no marker in a converter's MMD, and
     #    the deterministic parser finds tasks by their cue heading, so each
     #    task the reader identified gets one at the sub-level that does not
-    #    mint a topic.
+    #    mint a topic. This lane has no page-ledger reapplication behind it,
+    #    so the marker itself is a CONSTANT structural token ("Checkpoint" —
+    #    the neutral kind) for every task alike: pure wire-format mechanics,
+    #    never a per-cue vocabulary. The book's own visible cue, where the
+    #    model identified one, is preserved verbatim as a bold line under the
+    #    marker unless the task text already opens with it.
     blocks = [
         block
         for page in (page_acsd or {}).get("pages") or []
@@ -3499,10 +3675,17 @@ def transfer_outline_to_mmd(
             flags.append("a task block was not found verbatim in the source")
             continue
         cue_used.add(index)
-        insertions[index] = _markdown_heading(
-            _TASK_CUE_HEADING_LEVEL,
-            _canonical_task_heading(block.get("source_label")),
-        )
+        marker = _markdown_heading(_TASK_CUE_HEADING_LEVEL, "Checkpoint")
+        label = re.sub(
+            r"\s+", " ", str(block.get("source_label") or "")
+        ).strip()
+        label_key = _normal(label)
+        body_key = _normal(body)
+        if label and not (
+            body_key == label_key or body_key.startswith(label_key + " ")
+        ):
+            marker = f"{marker}\n\n**{label}**"
+        insertions[index] = marker
 
     out: list[str] = []
     for index, line in enumerate(lines):

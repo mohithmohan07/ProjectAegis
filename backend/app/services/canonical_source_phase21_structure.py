@@ -7,20 +7,25 @@ from typing import Any
 
 from . import katex_rules as kr
 
+# MECHANICS ONLY (§3 purge, item 4A): this pattern detects the layout shape of
+# a cue Mathpix flattened into plain text — a known banner word alone on the
+# first line, body below. It may trigger a LOSSLESS, FLAGGED recovery of the
+# block, but the matched cue string never assigns a semantic value
+# (source_kind / chapter_wide / activity_origin all ship neutral + flagged
+# unless a model verdict ruled them).
 _CUE_RE = re.compile(
     r"(?is)^\s*(?P<cue>Discuss|Activity|Project|Write\s+in\s+brief|"
     r"Think\s+about\s+it|Let's\s+discuss)\s*(?:[:\-]\s*)?\n+"
     r"(?P<body>.+?)\s*$"
 )
+# MECHANICS ONLY: text-span selection inside a block already identified as a
+# task (see prompt_from_block). Never a veto on a model-verified recovery and
+# never a task/not-task classifier for new content.
 _IMPERATIVE_RE = re.compile(
     r"(?i)^(?:with\s+the\s+help\s+of|summari[sz]e|describe|discuss|compare|"
     r"explain|imagine|write|plot|look|examine|identify|find\s+out|trace|"
     r"choose|state|list|calculate|solve|draw|analyse|analyze|interpret|"
     r"comment|who|what|why|how|where|when|which)\b"
-)
-_GLOSSARY_RE = re.compile(
-    r"(?i)^\s*(?:new\s+words?|glossary|source\s+[A-Z0-9]+|"
-    r"some\s+important\s+dates)\b"
 )
 _MAIN_HEADING_RE = re.compile(
     r"\\section\*?\{\s*(?P<number>\d+)(?:\s+(?P<title>[^}]+))?\s*\}",
@@ -43,8 +48,12 @@ _LAYOUT_RE = re.compile(
     r"|end\{(?:figure|table|tabular)\})",
     re.IGNORECASE,
 )
+# MECHANICS ONLY (§3 purge, item 4D): matches Mathpix LaTeX layout markup — a
+# wire-format fact, not a meaning. The former "new words?" alternative was a
+# glossary-vocabulary judgment about what the book means and was removed; the
+# non-task-like span break in prompt_from_block still bounds prose tails.
 _TASK_CONTAMINATION_RE = re.compile(
-    r"(?i)(?:\bnew\s+words?\b|\\begin\{figure\}|\\captionsetup\b|"
+    r"(?i)(?:\\begin\{figure\}|\\captionsetup\b|"
     r"\\caption\b|\\includegraphics\b)"
 )
 _TABLE_HINT_RE = re.compile(
@@ -56,34 +65,20 @@ _TABLE_COLUMN_SPEC_RE = re.compile(
     r"\{\s*\|?(?:[lcrpmbX]\|?){2,}\s*\}",
     re.IGNORECASE,
 )
+# MECHANICS ONLY (§3 purge, item 4B): recognizes the banner shape of a legacy
+# plain-cue heading so the LOSSLESS follow-up recovery below can attach
+# separately printed sibling prompts to their one parent when NO chapter
+# outline exists. Under a model-judged outline the recovery never runs — the
+# outline's ruled-task ledger is the only cue authority — and the recovered
+# rows always carry a not-model-ruled flag.
 _TASK_CUE_HEADING_RE = re.compile(
     r"(?i)^\s*(?:activity|project|write\s+in\s+brief|discuss|"
     r"think\s+about\s+it|let['’]s\s+discuss)\s*$"
-)
-_INDEPENDENT_ENUMERATION_STEM_RE = re.compile(
-    # Only a stem that explicitly asks for a separate note certifies that its
-    # lettered objects are independently answerable Cases.  Generic stems
-    # such as ``answer the following`` can introduce dependent evidence or
-    # calculation subparts and must remain one atomic task.
-    r"(?i)\bwrite\s+(?:a\s+)?(?:short\s+)?notes?\s+on\b"
-    r"[^:\n]*:\s*$"
-)
-_LETTERED_SUBPART_RE = re.compile(
-    r"(?<![\w(])(?P<label>[a-z])\)\s+",
-    re.IGNORECASE,
 )
 _FIGURE_REFERENCE_RE = re.compile(
     r"\bfig(?:ure)?s?\.?\s*(?P<number>\d+(?:\.\d+)*"
     r"(?:\s*\([a-z]\))?)",
     re.IGNORECASE,
-)
-_VISUAL_TASK_CLUSTER_CUE_RE = re.compile(
-    r"(?im)(?:^|(?<=[.!?])[\t \r\n]+)"
-    r"(?P<cue>look\s+at|examine|inspect|study|observe)\s+"
-    r"fig(?:ure)?\.?\s*\d+(?:\.\d+)*(?:\s*\([a-z]\))?\b"
-)
-_COMPARATIVE_VISUAL_TASK_RE = re.compile(
-    r"(?i)\b(?:compare|contrast|similarit(?:y|ies)|differences?|both)\b"
 )
 
 
@@ -100,8 +95,23 @@ def is_task_like(value: object) -> bool:
     return bool(text and ("?" in text or _IMPERATIVE_RE.match(text)))
 
 
-def strip_leading_task_cue(value: object) -> str:
+def strip_leading_task_cue(value: object, *, label: object = None) -> str:
+    """DISPLAY MECHANICS: drop a leading banner line from task text.
+
+    When the model identified the task's visible cue (``label``, e.g. the
+    ledger/parser ``source_label``), that exact label is stripped verbatim —
+    the hardcoded legacy vocabulary is only a fallback for artifacts that
+    carry no model-identified label.
+    """
     text = str(value or "").strip()
+    label_text = re.sub(r"\s+", " ", str(label or "")).strip()
+    if label_text:
+        labelled = re.match(
+            rf"(?is)^\s*{re.escape(label_text)}\s*(?:[:\-]\s*)?\n+(?P<body>.+)$",
+            text,
+        )
+        if labelled:
+            return labelled.group("body").strip()
     match = _CUE_RE.match(text)
     return (match.group("body") if match else text).strip()
 
@@ -278,7 +288,17 @@ def recover_followup_task_prompts(canonical: dict[str, Any]) -> int:
     Recovery is intentionally bounded to a cue-heading region containing
     exactly one canonical task.  Numbered exercise groups already represented
     by several parent QIDs are therefore never collapsed into one parent.
+
+    Cue authority (§3 purge, item 4B): when a chapter outline exists, the
+    outline's ruled-task ledger is the ONLY source of task-cue semantics — no
+    follow-up region may be opened off the keyword banner match, so the pass
+    is skipped entirely (the outline audit already reports task blocks the
+    outline never ruled on). Without an outline the banner match survives as
+    recovery MECHANICS: the sibling prompt still ships (never lose a
+    question), and every recovered row is flagged as not model-ruled.
     """
+    if _model_judged_boundaries(canonical):
+        return 0
     blocks = [
         block for block in canonical.get("blocks") or []
         if isinstance(block, dict)
@@ -364,40 +384,12 @@ def recover_followup_task_prompts(canonical: dict[str, Any]) -> int:
                 "block_id": str(block.get("block_id") or ""),
                 "explicit_figure_reference_ids": _figure_reference_ids(prompt),
                 "recovery": "phase21_same_cue_followup_prompt",
+                # The banner that opened this region was matched by shape,
+                # not ruled by a model — reviewers see the provenance.
+                "cue_ruling": "not_model_ruled_flagged",
             })
             recovered += 1
     return recovered
-
-
-def _independent_enumerated_parts(
-    prompt: str,
-) -> tuple[str, list[tuple[str, str, int, int]]]:
-    """Return independently answerable lettered parts, or no decomposition.
-
-    A colon-terminated independent instruction is required.  Consequently
-    dependent constructions such as ``How would you (a) ... and (b) ...?``
-    remain one atomic task.
-    """
-    text = str(prompt or "").strip()
-    matches = list(_LETTERED_SUBPART_RE.finditer(text))
-    if len(matches) < 2:
-        return "", []
-    stem = text[:matches[0].start()].strip()
-    if not _INDEPENDENT_ENUMERATION_STEM_RE.search(stem):
-        return "", []
-    expected = [chr(ord("a") + index) for index in range(len(matches))]
-    labels = [match.group("label").casefold() for match in matches]
-    if labels != expected:
-        return "", []
-    parts: list[tuple[str, str, int, int]] = []
-    for index, match in enumerate(matches):
-        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
-        raw = text[match.start():end].strip()
-        body = text[match.end():end].strip()
-        if not raw or not body:
-            return "", []
-        parts.append((match.group("label").casefold(), raw, match.start(), end))
-    return stem, parts
 
 
 def _resolved_leaf_figures(
@@ -466,66 +458,6 @@ def _resolved_leaf_figures(
         else:
             ambiguous.append(reference)
     return figure_refs, image_urls, unresolved, ambiguous
-
-
-def _independent_visual_task_clusters(
-    canonical: dict[str, Any],
-    prompt: str,
-) -> list[tuple[str, int, int]]:
-    """Return independently answerable visual prompts folded into one block.
-
-    Mathpix can remove the paragraph break between two visual activities.  A
-    punctuation boundary by itself is not enough to infer a new Case: the
-    second sentence may merely compare two panels or continue working with the
-    same Figure.  Decomposition is therefore allowed only when every cluster:
-
-    * starts with an explicit visual-task imperative;
-    * names exactly one Figure reference;
-    * resolves unambiguously to a different canonical Figure; and
-    * is not comparative with another cluster.
-
-    The range ends at the next certified visual imperative, so all dependent
-    questions following that imperative remain inside the same Case.
-    """
-    text = str(prompt or "")
-    matches = list(_VISUAL_TASK_CLUSTER_CUE_RE.finditer(text))
-    if len(matches) < 2:
-        return []
-    first_start = matches[0].start("cue")
-    if text[:first_start].strip():
-        return []
-
-    clusters: list[tuple[str, int, int]] = []
-    resolved_figure_ids: set[str] = set()
-    reference_ids: set[str] = set()
-    for index, match in enumerate(matches):
-        start = match.start("cue")
-        end = (
-            matches[index + 1].start("cue")
-            if index + 1 < len(matches)
-            else len(text)
-        )
-        raw_cluster = text[start:end].strip()
-        if not raw_cluster or _COMPARATIVE_VISUAL_TASK_RE.search(raw_cluster):
-            return []
-        references = _figure_reference_ids(raw_cluster)
-        if len(references) != 1 or references[0] in reference_ids:
-            return []
-        figures, _urls, unresolved, ambiguous = _resolved_leaf_figures(
-            canonical,
-            prompt=raw_cluster,
-        )
-        if (
-            len(figures) != 1
-            or unresolved
-            or ambiguous
-            or figures[0] in resolved_figure_ids
-        ):
-            return []
-        reference_ids.add(references[0])
-        resolved_figure_ids.add(figures[0])
-        clusters.append((raw_cluster, start, start + len(raw_cluster)))
-    return clusters
 
 
 def _model_judged_boundaries(canonical: dict[str, Any]) -> bool:
@@ -604,59 +536,26 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
                 })
             sources = []
 
+        # §3 purge, item 4D: the deterministic enumeration and visual-cluster
+        # splitters are gone. A task the model left whole stays whole
+        # (never-split doctrine); the only in-parent decomposition left is a
+        # gpt_boundary_parts verdict. Follow-up prompts recovered from
+        # SEPARATE source blocks still become leaves so the whole-item merge
+        # in inventory_from_canonical can carry their wording and visuals —
+        # identity bookkeeping, never a deterministic re-split.
         for source in sources:
             raw_prompt = str(source.get("raw_prompt") or "").strip()
-            stem, enumerated = _independent_enumerated_parts(raw_prompt)
-            if enumerated:
-                inherited_context = str(task.get("shared_context") or "").strip()
-                leaf_context = "\n\n".join(
-                    part for part in (inherited_context, stem)
-                    if part
-                )
-                for label, raw_part, relative_start, relative_end in enumerated:
-                    provisional.append({
-                        **source,
-                        "raw_prompt": raw_part,
-                        "display_prompt": canonical_task_display(
-                            " ".join(part for part in (stem, raw_part) if part)
-                        ),
-                        "shared_context": leaf_context,
-                        "requires_context": True,
-                        "subpart_label": f"{label})",
-                        "source_start": int(source.get("source_start") or 0) + relative_start,
-                        "source_end": int(source.get("source_start") or 0) + relative_end,
-                    })
-            elif visual_clusters := _independent_visual_task_clusters(
-                canonical, raw_prompt
-            ):
-                for raw_cluster, relative_start, relative_end in visual_clusters:
-                    provisional.append({
-                        **source,
-                        # A cluster derived from the base paragraph must
-                        # resolve only its own explicit Figure, never inherit
-                        # the parent's combined Figure ownership.
-                        "base_task": False,
-                        "raw_prompt": raw_cluster,
-                        "display_prompt": canonical_task_display(raw_cluster),
-                        "shared_context": str(task.get("shared_context") or ""),
-                        "requires_context": bool(task.get("requires_context")),
-                        "subpart_label": "",
-                        "source_start": int(source.get("source_start") or 0) + relative_start,
-                        "source_end": int(source.get("source_start") or 0) + relative_end,
-                        "decomposition": "phase21_distinct_visual_task_clusters",
-                    })
-            else:
-                provisional.append({
-                    **source,
-                    "raw_prompt": raw_prompt,
-                    "display_prompt": str(
-                        source.get("display_prompt")
-                        or canonical_task_display(raw_prompt)
-                    ),
-                    "shared_context": str(task.get("shared_context") or ""),
-                    "requires_context": bool(task.get("requires_context")),
-                    "subpart_label": str(task.get("subpart_label") or ""),
-                })
+            provisional.append({
+                **source,
+                "raw_prompt": raw_prompt,
+                "display_prompt": str(
+                    source.get("display_prompt")
+                    or canonical_task_display(raw_prompt)
+                ),
+                "shared_context": str(task.get("shared_context") or ""),
+                "requires_context": bool(task.get("requires_context")),
+                "subpart_label": str(task.get("subpart_label") or ""),
+            })
 
         if len(provisional) <= 1:
             continue
@@ -793,33 +692,44 @@ def inventory_contract_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]
     issues: list[dict[str, Any]] = []
     parent_count, decomposed_count, inventory_count = inventory_shape(canonical)
 
+    # Derivation seal (mechanics, no content judgment): leaf Cases are
+    # DERIVED from inputs the ledger already records — the outline judge's
+    # gpt_boundary_parts and the recovered source_followup_prompts. A
+    # persisted artifact whose leaves no longer match those inputs has
+    # silently lost or duplicated a learner question, so it must fail closed
+    # and be rebuilt from source.
     for task in canonical.get("tasks") or []:
         if not isinstance(task, dict):
             continue
-        clusters = _independent_visual_task_clusters(
-            canonical, str(task.get("raw_prompt") or "")
-        )
-        if not clusters:
-            continue
-        actual_prompts = {
-            normal_text(leaf.get("raw_prompt") or "")
-            for leaf in task.get("leaf_cases") or []
-            if isinstance(leaf, dict)
-        }
-        missing = [
-            prompt for prompt, _start, _end in clusters
-            if normal_text(prompt) not in actual_prompts
+        gpt_parts = [
+            part for part in task.get("gpt_boundary_parts") or []
+            if isinstance(part, dict) and str(part.get("text") or "").strip()
         ]
-        if missing:
+        followups = [
+            row for row in task.get("source_followup_prompts") or []
+            if isinstance(row, dict)
+        ]
+        if gpt_parts:
+            expected_leaves = len(gpt_parts)
+        elif _model_judged_boundaries(canonical):
+            expected_leaves = 0
+        else:
+            expected_leaves = 1 + len(followups) if followups else 0
+        actual_leaves = len([
+            leaf for leaf in task.get("leaf_cases") or []
+            if isinstance(leaf, dict)
+        ])
+        if actual_leaves != expected_leaves:
             issues.append({
                 "severity": "error",
-                "code": "phase21_visual_task_cluster_coverage_mismatch",
+                "code": "phase21_leaf_derivation_stale",
                 "message": (
-                    "Distinct, source-resolvable visual task clusters were not "
-                    "materialized as independent inventory Cases."
+                    "A task's derived leaf Cases no longer match the recorded "
+                    "model verdicts and recovered follow-up prompts."
                 ),
                 "qid": str(task.get("qid") or ""),
-                "missing_cluster_count": len(missing),
+                "expected_leaf_count": expected_leaves,
+                "actual_leaf_count": actual_leaves,
             })
 
     expected = {
@@ -883,9 +793,16 @@ def inventory_contract_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]
     return issues
 
 
-def prompt_from_block(value: object) -> str:
-    """Extract only the contiguous task prompt from one source block."""
-    text = strip_leading_task_cue(value)
+def prompt_from_block(value: object, *, label: object = None) -> str:
+    """Extract only the contiguous task prompt from one source block.
+
+    MECHANICS ONLY: text-span selection for boundary repair and follow-up
+    matching. The former glossary vocabulary (``_GLOSSARY_RE``) judged what
+    the book means and was removed (§3 purge, item 4D); the span still stops
+    at LaTeX layout markup (wire-format fact) and at the first
+    non-question/non-imperative line, which never decides a block's kind.
+    """
+    text = strip_leading_task_cue(value, label=label)
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not lines:
         return ""
@@ -897,7 +814,7 @@ def prompt_from_block(value: object) -> str:
         return ""
     chosen: list[str] = []
     for line in lines[start:]:
-        if chosen and (_GLOSSARY_RE.match(line) or _LAYOUT_RE.search(line)):
+        if chosen and _LAYOUT_RE.search(line):
             break
         if chosen and not is_task_like(line):
             break
@@ -1025,7 +942,19 @@ def task_matches_prompt(task: dict[str, Any], prompt: str) -> bool:
 
 
 def recover_plain_task_cues(canonical: dict[str, Any]) -> int:
-    """Recover cues emitted by Mathpix as plain text inside a source block."""
+    """Recover cues emitted by Mathpix as plain text inside a source block.
+
+    §3 purge, item 4A: the matched cue STRING no longer assigns any semantic
+    value. Every recovered task ships LOSSLESS (the whole block body,
+    verbatim, minus only the banner line) with a NEUTRAL
+    ``source_kind="checkpoint_question"``, ``chapter_wide=False``,
+    ``activity_origin=False`` and an explicit not-model-ruled flag. The
+    chapter outline, where one exists, is the only authority that could rule
+    a cue's kind — its ledger is keyed by PDF page references and therefore
+    never reaches these MMD blocks, so a block the outline did not rule is
+    recovered flagged rather than defaulted or dropped (never lose a
+    learner question).
+    """
     tasks = [
         task for task in canonical.get("tasks") or [] if isinstance(task, dict)
     ]
@@ -1034,6 +963,7 @@ def recover_plain_task_cues(canonical: dict[str, Any]) -> int:
         for section in canonical.get("sections") or []
         if isinstance(section, dict)
     }
+    outline_present = _model_judged_boundaries(canonical)
     recovered = 0
     for block in canonical.get("blocks") or []:
         if (
@@ -1044,23 +974,34 @@ def recover_plain_task_cues(canonical: dict[str, Any]) -> int:
         match = _CUE_RE.match(str(block.get("raw_text") or ""))
         if not match:
             continue
-        prompt = prompt_from_block(block.get("raw_text") or "")
-        if not is_task_like(prompt) or any(
+        cue = str(match.group("cue") or "").strip()
+        # Lossless recovery: the WHOLE block body, verbatim, after removing
+        # only the banner line the cue printed above it (display mechanics).
+        prompt = strip_leading_task_cue(
+            block.get("raw_text") or "", label=cue
+        )
+        if not prompt.strip() or any(
             task_matches_prompt(task, prompt) for task in tasks
         ):
             continue
         section_id = str(block.get("section_id") or "")
         section = sections.get(section_id, {})
-        cue = str(match.group("cue") or "").strip()
         start_in_block = str(block.get("raw_text") or "").find(match.group("body"))
         source_start = int(block.get("source_start") or 0) + max(0, start_in_block)
-        activity = cue.casefold() in {"activity", "project"}
+        review_flag = (
+            "task cue was not ruled by the chapter outline; recovered with a "
+            "neutral kind and flagged for review"
+            if outline_present
+            else "no model verdict ruled this task cue; recovered with a "
+            "neutral kind and flagged for review"
+        )
         tasks.append({
             "task_id": "",
             "qid": "",
             "order": 0,
             "order_index": 0,
-            "source_kind": "activity" if activity else "checkpoint_question",
+            # Neutral, flagged — never derived from the cue wording.
+            "source_kind": "checkpoint_question",
             "source_label": cue,
             "parent_source_label": cue,
             "topic_hint": topic_for_position(canonical, source_start),
@@ -1075,8 +1016,10 @@ def recover_plain_task_cues(canonical: dict[str, Any]) -> int:
             "source_start": source_start,
             "source_end": int(block.get("source_end") or source_start + len(prompt)),
             "source_location_confidence": "phase21_plain_task_cue",
-            "chapter_wide": cue.casefold() in {"project", "write in brief"},
-            "activity_origin": activity,
+            "source_kind_ruling": "not_model_ruled_flagged",
+            "review_flags": [review_flag],
+            "chapter_wide": False,
+            "activity_origin": False,
             "requires_visual": False,
             "requires_context": False,
             "image_urls": [],
@@ -1088,6 +1031,7 @@ def recover_plain_task_cues(canonical: dict[str, Any]) -> int:
             "phase21_recovery": {
                 "reason": "plain_text_task_cue",
                 "block_id": block.get("block_id"),
+                "cue_ruling": "not_model_ruled_flagged",
             },
         })
         recovered += 1
@@ -1115,17 +1059,41 @@ def related_task_blocks(
     return related
 
 
+def _block_shared_with_other_tasks(
+    canonical: dict[str, Any], task: dict[str, Any], block: dict[str, Any]
+) -> bool:
+    block_start = int(block.get("source_start") or 0)
+    block_end = int(block.get("source_end") or block_start)
+    for other in canonical.get("tasks") or []:
+        if other is task or not isinstance(other, dict):
+            continue
+        start = int(other.get("source_start") or 0)
+        end = int(other.get("source_end") or start)
+        if start < block_end and end > block_start:
+            return True
+    return False
+
+
 def trim_task_boundaries(canonical: dict[str, Any]) -> int:
     """Remove glossary, narrative and layout tails swallowed by a task."""
     repaired = 0
     for task in canonical.get("tasks") or []:
         if not isinstance(task, dict):
             continue
+        model_label = task.get("source_label")
         candidates: list[tuple[int, int, str, dict[str, Any]]] = []
         for block in related_task_blocks(canonical, task):
             if block.get("kind") not in {"paragraph", "list"}:
                 continue
-            prompt = prompt_from_block(block.get("raw_text") or "")
+            # A block whose span hosts other tasks (an exercise list holds
+            # many numbered questions) cannot be this one task's boundary:
+            # rewriting to it collapses distinct questions into one prompt
+            # and silently loses the rest. Positional bookkeeping only.
+            if _block_shared_with_other_tasks(canonical, task, block):
+                continue
+            prompt = prompt_from_block(
+                block.get("raw_text") or "", label=model_label
+            )
             if is_task_like(prompt):
                 candidates.append((
                     int(block.get("source_start") or 0),
@@ -1137,7 +1105,9 @@ def trim_task_boundaries(canonical: dict[str, Any]) -> int:
             continue
         candidates.sort(key=lambda item: (item[0], item[1]))
         _start, _length, candidate, block = candidates[0]
-        current = strip_leading_task_cue(task.get("raw_prompt") or "")
+        current = strip_leading_task_cue(
+            task.get("raw_prompt") or "", label=model_label
+        )
         current_key = normal_text(current)
         candidate_key = normal_text(candidate)
         polluted = bool(_TASK_CONTAMINATION_RE.search(current))
@@ -1147,8 +1117,18 @@ def trim_task_boundaries(canonical: dict[str, Any]) -> int:
         overly_long = len(current) > max(
             len(candidate) + 160, int(len(candidate) * 1.8)
         )
-        source_kind = str(task.get("source_kind") or "").strip().lower()
-        if source_kind == "exercise" and not polluted:
+        # STRUCTURAL GUARD (§3 purge, item 4): a prompt whose location was
+        # anchored verbatim in the source, or verified against the PDF page,
+        # already has its true boundaries — only layout-markup contamination
+        # (mechanics) justifies rewriting it. Keying this on the task's kind
+        # vocabulary would be a semantic judgment; provenance is not.
+        location = str(task.get("source_location_confidence") or "").strip()
+        anchored = location in {
+            "exact_text_match",
+            "phase22_verified_pdf_page",
+            "gpt_pdf_acsd_verified_block",
+        }
+        if anchored and not polluted:
             continue
         if not (polluted or contained or overly_long or current.startswith("## ")):
             continue
@@ -1240,7 +1220,7 @@ def task_boundary_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
                 "severity": "error",
                 "code": "phase21_task_boundary_contamination",
                 "message": (
-                    "A canonical task still contains glossary or Mathpix layout content."
+                    "A canonical task still contains Mathpix layout markup."
                 ),
                 "qid": task.get("qid") or "",
             })
@@ -1283,27 +1263,37 @@ def task_boundary_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
                 })
             leaf_qids.add(leaf_qid)
             leaf_identities.add(identity)
-    for block in canonical.get("blocks") or []:
-        if (
-            not isinstance(block, dict)
-            or block.get("kind") not in {"paragraph", "list"}
-        ):
-            continue
-        if not _CUE_RE.match(str(block.get("raw_text") or "")):
-            continue
-        prompt = prompt_from_block(block.get("raw_text") or "")
-        owners = [
-            task for task in canonical.get("tasks") or []
-            if isinstance(task, dict) and task_matches_prompt(task, prompt)
-        ]
-        if len(owners) != 1:
-            issues.append({
-                "severity": "error",
-                "code": "phase21_task_cue_coverage_mismatch",
-                "message": (
-                    "A source task cue does not map to exactly one canonical task."
-                ),
-                "block_id": block.get("block_id"),
-                "owner_count": len(owners),
-            })
+    if not _model_judged_boundaries(canonical):
+        # Cue coverage under NO outline: every plain-cue block the recovery
+        # mechanics can see must map to exactly one canonical task. Under a
+        # model-judged outline this deterministic ledger stands down — the
+        # outline's ruled-task audit (unruled_task_refs) is the coverage
+        # authority there.
+        for block in canonical.get("blocks") or []:
+            if (
+                not isinstance(block, dict)
+                or block.get("kind") not in {"paragraph", "list"}
+            ):
+                continue
+            match = _CUE_RE.match(str(block.get("raw_text") or ""))
+            if not match:
+                continue
+            prompt = strip_leading_task_cue(
+                block.get("raw_text") or "",
+                label=str(match.group("cue") or "").strip(),
+            )
+            owners = [
+                task for task in canonical.get("tasks") or []
+                if isinstance(task, dict) and task_matches_prompt(task, prompt)
+            ]
+            if len(owners) != 1:
+                issues.append({
+                    "severity": "error",
+                    "code": "phase21_task_cue_coverage_mismatch",
+                    "message": (
+                        "A source task cue does not map to exactly one canonical task."
+                    ),
+                    "block_id": block.get("block_id"),
+                    "owner_count": len(owners),
+                })
     return issues

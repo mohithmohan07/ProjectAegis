@@ -157,7 +157,9 @@ def test_final_validation_uses_atomic_source_prompt(monkeypatch):
     # Isolate the closed source-inventory boundary. The concept hierarchy
     # validator deliberately interprets Type/Case tokens inside this synthetic
     # prompt as structure; production reaches this gate only after that separate
-    # validation has already passed.
+    # validation has already passed. (The retired semantic-defects family no
+    # longer runs inside _validate_final_or_raise, so only the row validator
+    # needs to be stubbed.)
     monkeypatch.setattr(
         g.cv,
         "validate_concept_rows",
@@ -165,22 +167,6 @@ def test_final_validation_uses_atomic_source_prompt(monkeypatch):
             "errors": [],
             "summary": {"warnings": 0, "errors": 0},
         },
-    )
-    for name in (
-        "_rendered_inventory_topic_violations",
-        "_rendered_type_placement_violations",
-        "_placement_certification_violations",
-        "_normal_concept_type_coverage_violations",
-        "_mined_type_topic_violations",
-        "_inventory_topic_type_coverage_violations",
-        "_activity_example_hub_alignment_violations",
-        "_hub_inventory_contract_violations",
-    ):
-        monkeypatch.setattr(g, name, lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(
-        g,
-        "_hub_inventory_examples_in_types",
-        lambda *_args, **_kwargs: set(),
     )
 
     report = g._validate_final_or_raise(records, inventory=inventory)

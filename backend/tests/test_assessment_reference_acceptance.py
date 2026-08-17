@@ -119,12 +119,16 @@ def _candidate_from_row(row, sheet: str) -> dict:
         "answer_explanation": row.get("answer_explanation", ""),
         "answers": _answers_from_row(row, sheet),
         "sub_questions": [],
+        # Objective has no public keyboard column; the accepted reference
+        # fixture records the explicit internal no-keyboard verdict here.
+        "math_keyboard": "" if sheet == "Objective" else row.get(
+            "math_keyboard", ""
+        ),
         "concept_key": row.get("concept_title", ""),
         "group_key": row.get("group_name", ""),
         "flags": [],
     }
     if sheet != "Objective":
-        candidate["math_keyboard"] = row.get("math_keyboard", "")
         candidate["display_answer"] = row.get("display_answer", "")
         candidate["sub_questions"] = _sub_questions_from_row(row)
     return candidate

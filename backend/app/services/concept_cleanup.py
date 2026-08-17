@@ -53,12 +53,6 @@ _PEDAGOGY_TOPIC_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
-_KNOWN_CONCEPT_ALIASES = {
-    "bpt": "basic proportionality theorem",
-    "basic proportionality theorem": "bpt",
-    "cbpt": "converse basic proportionality theorem",
-    "converse basic proportionality theorem": "cbpt",
-}
 # Connector words kept lowercase in Title Case (unless first/last word).
 _TITLE_SMALL_WORDS = {
     "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into",
@@ -204,102 +198,6 @@ def filter_review_violations(
     return out
 
 
-def _title_similarity_keys(title: str) -> set[str]:
-    norm = bi.normalize_question_text(title)
-    words = [w for w in norm.split() if w not in {"the", "a", "an", "and", "of"}]
-    keys = {norm, " ".join(words)}
-    if len(words) >= 2 and all(w.isalpha() for w in words):
-        keys.add("".join(w[0] for w in words))
-    tokens = set(norm.split())
-    for alias, expansion in _KNOWN_CONCEPT_ALIASES.items():
-        if alias in keys or expansion in keys or alias in tokens:
-            keys.add(alias)
-            keys.add(expansion)
-    return {k for k in keys if k}
-
-
-def titles_look_similar(a: str, b: str) -> bool:
-    """True when two concept titles restate the same idea (BPT vs. its echo)."""
-    ka, kb = _title_similarity_keys(a), _title_similarity_keys(b)
-    if ka & kb:
-        return True
-    na, nb = bi.normalize_question_text(a), bi.normalize_question_text(b)
-    if not na or not nb:
-        return False
-    if na in nb or nb in na:
-        if ("converse" in na.split()) != ("converse" in nb.split()):
-            return False
-        return True
-    return False
-
-
-def find_similar_title_groups(records: list[dict]) -> list[list[int]]:
-    """Groups of row indexes whose titles restate the same concept.
-
-    Detector only — deciding WHICH content to keep/merge is a quality call
-    that belongs to the GPT merge pass; this never modifies records.
-    """
-    groups: list[list[int]] = []
-    for i, rec in enumerate(records):
-        title = (rec.get("concept_title") or "").strip()
-        if not title or cr.is_culmination(title):
-            continue
-        for group in groups:
-            if titles_look_similar(
-                    title, (records[group[0]].get("concept_title") or "")):
-                group.append(i)
-                break
-        else:
-            groups.append([i])
-    return [g for g in groups if len(g) > 1]
-
-
-def dedupe_similar_titles_chapter_wide(records: list[dict]) -> list[dict]:
-    """Drop near-duplicate concept titles (e.g. BPT restated under two topics).
-
-    Deterministic last resort — the live pipeline first asks GPT to MERGE the
-    duplicate rows' content (``_merge_similar_concepts_via_api``); this drop
-    only runs in dry mode or when that pass failed.
-    """
-    def required(rec: dict) -> bool:
-        return bool(re.search(
-            r"\bMETHOD-[A-F0-9]{10}\b",
-            str(rec.get("source_evidence") or ""),
-            re.IGNORECASE,
-        ))
-
-    kept: list[str] = []
-    out: list[dict] = []
-    dropped = 0
-    for rec in records:
-        title = (rec.get("concept_title") or "").strip()
-        if title and not cr.is_culmination(title):
-            similar_index = next(
-                (i for i, prev in enumerate(kept)
-                 if titles_look_similar(title, prev)),
-                None,
-            )
-            if similar_index is not None:
-                if required(rec) and required(out[similar_index]):
-                    kept.append(title)
-                    out.append(rec)
-                    continue
-                if required(rec):
-                    kept[similar_index] = title
-                    out[similar_index] = rec
-                dropped += 1
-                continue
-            kept.append(title)
-        out.append(rec)
-    if dropped:
-        from . import progress as _progress
-        _progress.log(
-            f"Dropped {dropped} near-duplicate concept-title row(s) chapter-wide.",
-            level="warning",
-        )
-    return out
-
-
 def clean_concept_name(name: str) -> str:
     """Collapse 2+ space-delimited ``&`` separators into a comma list + 'and'."""
     if not name:
@@ -333,11 +231,7 @@ def _ellipsis_spacing_is_source_exact() -> bool:
     fixpoint correctly refuses. Under the rewritten pipeline the
     source-exact form wins; the legacy path keeps the tightened style.
     """
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive import ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def _tidy(text: str) -> str:

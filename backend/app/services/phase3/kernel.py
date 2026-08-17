@@ -207,8 +207,21 @@ def decide(
     policy_version: str = "",
     attempts: int = MAX_ATTEMPTS,
     provider_label: str = "",
+    fixer: Provider | None = None,
 ) -> dict[str, Any]:
-    """Make one decision, exactly once, under the written rules."""
+    """Make one decision, exactly once, under the written rules.
+
+    ``fixer`` is The Fixer seam (docs/aegis-restructure.md §8.2, Q13):
+    when the bounded corrections exhaust with structural defects still
+    standing and a fixer is provided, the block — the failing check, the
+    contract, the original payload (which carries the rules/prompts and
+    source evidence), and the last response — goes to the Fixer for one
+    recorded best-judgment decision, validated by the SAME checker. A
+    passing Fixer decision ships under the same decision key, flagged
+    per original defect; a Fixer that cannot satisfy the checker either
+    is protocol impossibility and raises ContractError exactly as a
+    fixer-less run does.
+    """
 
     key = decision_key(
         kind=kind,
@@ -240,12 +253,69 @@ def decide(
     confidence_only = defects and all(
         defect.startswith("[confidence] ") for defect in defects
     )
+    fixer_flags: list[str] = []
+    fixer_engaged = False
     if confidence_only:
         # An honest sub-floor confidence after every bounded re-ask is a
         # judgment signal, not a structural defect: the decision ships
         # with the shortfall recorded for review (a run must produce
         # output; one weak grounding must not kill a chapter).
         pass
+    elif defects and fixer is not None:
+        # The Fixer seam (Q13): one recorded, flagged best-judgment
+        # decision at the block, validated by the same checker, and the
+        # run completes. Nothing is guessed silently — every original
+        # defect becomes a review flag naming what was blocked and what
+        # was decided.
+        blocked = list(defects)
+        fixer_payload = {
+            "fixer": True,
+            "blocked_check": list(defects),
+            "contract": {
+                "kind": str(kind),
+                "unit_id": str(unit_id),
+                "policy_version": str(policy_version),
+            },
+            "original_payload": copy.deepcopy(dict(payload)),
+            "last_response": copy.deepcopy(dict(response or {})),
+        }
+        fixer_defects = list(defects)
+        for attempt in range(1, max(1, attempts) + 1):
+            request = copy.deepcopy(fixer_payload)
+            request["attempt"] = attempt
+            request["max_attempts"] = attempts
+            request["response_contract_feedback"] = list(fixer_defects)
+            candidate = fixer(request)
+            fixer_defects = [
+                str(row)
+                for row in checker(candidate or {})
+                if str(row).strip()
+            ]
+            if not any(
+                not defect.startswith("[confidence] ")
+                for defect in fixer_defects
+            ):
+                response = candidate
+                defects = list(fixer_defects)
+                confidence_only = bool(defects)
+                fixer_engaged = True
+                rationale = " ".join(
+                    str((candidate or {}).get("rationale") or "").split()
+                )[:240] or "corrected by the Fixer's best judgment"
+                fixer_flags = [
+                    f"fixer: blocked={defect}; decided={rationale}"
+                    for defect in blocked
+                ]
+                break
+        if not fixer_engaged:
+            raise ContractError(
+                f"{kind} decision for {unit_id} failed its mechanical "
+                f"response contract after {attempts} bounded correction "
+                "attempt(s), and the Fixer could not produce a "
+                "contract-satisfying decision either: "
+                + "; ".join((fixer_defects or blocked)[:8]),
+                defects=fixer_defects or blocked,
+            )
     elif defects:
         raise ContractError(
             f"{kind} decision for {unit_id} failed its mechanical response "
@@ -254,7 +324,7 @@ def decide(
             defects=defects,
         )
 
-    flags: list[str] = []
+    flags: list[str] = list(fixer_flags)
     if confidence_only:
         flags.extend(
             defect[len("[confidence] "):] + "; shipped for review after "
@@ -285,4 +355,6 @@ def decide(
         "provider": str(provider_label),
         "created_at": time.time(),
     }
+    if fixer_engaged:
+        decision["fixer"] = True
     return store.put(key, decision)

@@ -31,6 +31,8 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import math
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -195,12 +197,32 @@ def render_concept_file(snapshot: Mapping) -> bytes:
 # --------------------------------------------------------------------------- #
 
 def _question_record(candidate: Mapping, sheet: str) -> dict:
+    identity = str(
+        candidate.get("question_label")
+        or candidate.get("candidate_id")
+        or "candidate"
+    )
+    duration = _readback_decimal(candidate.get("question_duration"))
+    if duration is None or duration <= 0:
+        raise WorkbookRenderError(
+            f"{identity}: question_duration must be authored, finite, and "
+            "positive"
+        )
+    keyboard = candidate.get("math_keyboard")
+    if sheet == "Objective" and keyboard != "":
+        raise WorkbookRenderError(
+            f"{identity}: objective math_keyboard must be exactly blank"
+        )
+    if sheet == "Descriptive" and keyboard not in {"Yes", "No"}:
+        raise WorkbookRenderError(
+            f"{identity}: descriptive math_keyboard must be exactly Yes or No"
+        )
     record = {
         "question_label": candidate.get("question_label", ""),
         "question_category": candidate.get("question_category", ""),
         "cognitive_skills": candidate.get("cognitive_skill", ""),
         "question_source": candidate.get("question_source", ""),
-        "question_duration": candidate.get("question_duration", 1),
+        "question_duration": candidate["question_duration"],
         "question_appears_in": candidate.get("question_appears_in", ""),
         "answer_restriction": candidate.get("answer_restriction", ""),
         "level_of_difficulty": candidate.get("difficulty", ""),
@@ -224,7 +246,7 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
     else:  # Descriptive
-        record["math_keyboard"] = candidate.get("math_keyboard", "")
+        record["math_keyboard"] = candidate["math_keyboard"]
         record["display_answer"] = candidate.get("display_answer", "")
         if len(answers) > MAX_DESCRIPTIVE_ANSWERS:
             raise WorkbookRenderError(
@@ -286,7 +308,41 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
         for entry in _concept_rows(snapshot)
     }
     groups = [dict(g) for g in snapshot.get("groups") or []]
-    groups_by_key = {str(g.get("group_key") or ""): g for g in groups}
+    groups_by_key: dict[str, dict] = {}
+    for group in groups:
+        group_key = str(group.get("group_key") or "")
+        if not group_key:
+            raise WorkbookRenderError("group_key must not be blank")
+        if group_key in groups_by_key:
+            raise WorkbookRenderError(
+                f"duplicate group_key {group_key!r}")
+        groups_by_key[group_key] = group
+    for group_key, group in groups_by_key.items():
+        concept_key = str(group.get("concept_key") or "")
+        concept_entry = concept_entries.get(concept_key)
+        if concept_entry is None:
+            raise WorkbookRenderError(
+                f"group {group_key!r} has unknown concept home "
+                f"{concept_key!r}")
+        concept_name = str(
+            concept_entry["concept"].get("concept_display_name") or ""
+        ).strip()
+        if not concept_name:
+            raise WorkbookRenderError(
+                f"group {group_key!r} home {concept_key!r} has no explicit "
+                "concept_display_name")
+        tier = str(group.get("group_type") or "")
+        if tier not in rel.GROUP_TYPES:
+            raise WorkbookRenderError(
+                f"group {group_key!r} has invalid group_type {tier!r}")
+        visible_name = f"{concept_name} — {tier}"
+        if (
+            str(group.get("group_name") or "") != visible_name
+            or str(group.get("group_display_name") or "") != visible_name
+        ):
+            raise WorkbookRenderError(
+                f"group {group_key!r} visible names must both equal "
+                f"{visible_name!r}")
     candidates = [dict(c) for c in snapshot.get("candidates") or []]
 
     # Complete ordered label aggregates (spec §8.4).
@@ -310,12 +366,31 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
                 "flags": list(candidate.get("flags") or []),
             })
             continue
+        group_concept_key = str(
+            groups_by_key[group_key].get("concept_key") or "")
+        if group_concept_key != concept_key:
+            identity = label or str(candidate.get("candidate_id") or "")
+            raise WorkbookRenderError(
+                f"{identity}: concept_key {concept_key!r} does not match "
+                f"group {group_key!r} home {group_concept_key!r}")
         concept_labels.setdefault(concept_key, []).append(label)
         group_labels.setdefault(group_key, []).append(label)
         placed.append(candidate)
 
     wb = _new_workbook()
     represented_groups: set[str] = set()
+    group_provenance: list[dict] = []
+
+    def _append_group_row(
+        sheet: str, group_key: str, record: Mapping[str, Any],
+    ) -> None:
+        ws = wb[sheet]
+        ws.append(_row_values(sheet, record))
+        group_provenance.append({
+            "sheet": sheet,
+            "row": ws.max_row,
+            "group_key": group_key,
+        })
 
     def _full_record(candidate: Mapping, sheet: str) -> dict:
         concept_key = str(candidate.get("concept_key") or "")
@@ -343,10 +418,11 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
                 "flags": list(candidate.get("flags") or []),
             })
             continue
-        ws = wb[sheet]
-        ws.append(_row_values(sheet, _full_record(candidate, sheet)))
+        group_key = str(candidate.get("group_key") or "")
+        _append_group_row(
+            sheet, group_key, _full_record(candidate, sheet))
         question_rows += 1
-        represented_groups.add(str(candidate.get("group_key") or ""))
+        represented_groups.add(group_key)
 
     # Group catalogue rows: every created group not otherwise represented by
     # a question row — required empty shells included — appears once on the
@@ -357,28 +433,19 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
         if group_key in represented_groups:
             continue
         concept_key = str(group.get("concept_key") or "")
-        entry = concept_entries.get(concept_key)
-        if entry is None:
-            unplaced.append({
-                "candidate_id": "",
-                "question_label": "",
-                "reason": (
-                    f"group {group_key} references unknown concept "
-                    f"{concept_key!r}"),
-                "flags": list(group.get("flags") or []),
-            })
-            continue
+        entry = concept_entries[concept_key]
         record = _bands_record(entry)
         record["concept_question_labels"] = ", ".join(
             concept_labels.get(concept_key, []))
         record.update(_group_record_fields(
             group, group_labels.get(group_key, [])))
-        wb["Objective"].append(_row_values("Objective", record))
+        _append_group_row("Objective", group_key, record)
 
     issues = {
         "unplaced": unplaced,
         "placed_questions": question_rows,
         "groups": len(groups),
+        "group_provenance": group_provenance,
     }
     return _workbook_bytes(wb), issues
 
@@ -397,14 +464,20 @@ def parse_workbook(data: bytes) -> dict:
         next(rows, ())  # band row
         header = [h for h in next(rows, ()) if h is not None]
         records = []
-        for row in rows:
+        row_numbers = []
+        for row_number, row in enumerate(rows, start=3):
             if row is None or not any(row):
                 continue
             records.append({
                 field: ("" if i >= len(row) or row[i] is None else row[i])
                 for i, field in enumerate(header)
             })
-        parsed["sheets"][name] = {"fields": header, "rows": records}
+            row_numbers.append(row_number)
+        parsed["sheets"][name] = {
+            "fields": header,
+            "rows": records,
+            "row_numbers": row_numbers,
+        }
     wb.close()
     return parsed
 
@@ -421,6 +494,216 @@ def _header_errors(parsed: Mapping) -> list[str]:
             continue
         if sheet["fields"] != FIELDS[name]:
             errors.append(f"{name}: header row differs from the template")
+    return errors
+
+
+def _readback_decimal(value: Any) -> Decimal | None:
+    """Parse one exact finite workbook number without truthy-zero tricks."""
+
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.startswith(("+", "-")):
+            return None
+    elif isinstance(value, (int, float, Decimal)):
+        text = str(value)
+    else:
+        return None
+    try:
+        number = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return None
+    if not number.is_finite():
+        return None
+    try:
+        wire_number = float(number)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(wire_number):
+        return None
+    if number != 0 and wire_number == 0:
+        return None
+    if Decimal(str(wire_number)) != number:
+        return None
+    return number
+
+
+def _populated(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def _objective_marking_errors(
+    row: Mapping[str, Any], *, label: str, marks: Decimal | None,
+) -> list[str]:
+    errors: list[str] = []
+    correct_count = 0
+    weights: list[Decimal] = []
+    populated_options = 0
+    for n in range(1, MAX_OBJECTIVE_OPTIONS + 1):
+        fields = (
+            f"answer_type_{n}",
+            f"answer_content_{n}",
+            f"correct_answer_{n}",
+            f"answer_weightage_{n}",
+        )
+        if not any(_populated(row.get(field)) for field in fields):
+            continue
+        populated_options += 1
+        if not str(row.get(f"answer_content_{n}") or "").strip():
+            errors.append(f"{label}: option {n} has no answer content")
+        is_correct = rel.is_correct_option(row.get(f"correct_answer_{n}"))
+        if is_correct:
+            correct_count += 1
+        weight = _readback_decimal(row.get(f"answer_weightage_{n}"))
+        if weight is None:
+            errors.append(
+                f"{label}: option {n} weight must be finite and numeric"
+            )
+            continue
+        weights.append(weight)
+        if is_correct:
+            if weight <= 0:
+                errors.append(
+                    f"{label}: correct option {n} weight must be positive"
+                )
+            if marks is not None and weight != marks:
+                errors.append(
+                    f"{label}: correct weightage {weight} != marks {marks}"
+                )
+        elif weight != 0:
+            errors.append(
+                f"{label}: wrong option {n} weight must be exact zero"
+            )
+    if populated_options == 0:
+        errors.append(f"{label}: objective has no option/rubric blocks")
+    if correct_count != 1:
+        errors.append(f"{label}: {correct_count} correct options")
+    if (
+        marks is not None
+        and len(weights) == populated_options
+        and sum(weights, Decimal(0)) != marks
+    ):
+        errors.append(
+            f"{label}: option weights must sum exactly to marks {marks}"
+        )
+    return errors
+
+
+def _descriptive_marking_errors(
+    row: Mapping[str, Any], *, label: str, marks: Decimal | None,
+) -> list[str]:
+    errors: list[str] = []
+    answer_weights: list[Decimal] = []
+    populated_answers = 0
+    for n in range(1, MAX_DESCRIPTIVE_ANSWERS + 1):
+        fields = (
+            f"answer_type_{n}",
+            f"answer_content_{n}",
+            f"answer_weightage_{n}",
+        )
+        if not any(_populated(row.get(field)) for field in fields):
+            continue
+        populated_answers += 1
+        if not str(row.get(f"answer_content_{n}") or "").strip():
+            errors.append(
+                f"{label}: answer/rubric block {n} has no content"
+            )
+        weight = _readback_decimal(row.get(f"answer_weightage_{n}"))
+        if weight is None or weight <= 0:
+            errors.append(
+                f"{label}: answer/rubric weight {n} must be finite and positive"
+            )
+            continue
+        answer_weights.append(weight)
+    if populated_answers == 0:
+        errors.append(f"{label}: descriptive has no answer/rubric blocks")
+    if (
+        marks is not None
+        and len(answer_weights) == populated_answers
+        and sum(answer_weights, Decimal(0)) != marks
+    ):
+        errors.append(
+            f"{label}: answer/rubric weights must sum exactly to marks {marks}"
+        )
+
+    sub_marks: list[Decimal] = []
+    populated_subquestions = 0
+    for n in range(1, MAX_SUBQUESTIONS + 1):
+        keyword_fields = [
+            field
+            for m in range(1, MAX_SUBQUESTION_KEYWORDS + 1)
+            for field in (
+                f"sq{n}_answer_type_{m}",
+                f"sq{n}_weightage_{m}",
+                f"sq{n}_keyword_{m}",
+            )
+        ]
+        fields = [f"sub_question_{n}", f"sub_question_marks_{n}"]
+        if not any(
+            _populated(row.get(field)) for field in [*fields, *keyword_fields]
+        ):
+            continue
+        populated_subquestions += 1
+        if not str(row.get(f"sub_question_{n}") or "").strip():
+            errors.append(f"{label}: subquestion {n} has no text")
+        sub_mark = _readback_decimal(row.get(f"sub_question_marks_{n}"))
+        if sub_mark is None or sub_mark <= 0:
+            errors.append(
+                f"{label}: subquestion {n} marks must be finite and positive"
+            )
+        else:
+            sub_marks.append(sub_mark)
+
+        keyword_weights: list[Decimal] = []
+        populated_keywords = 0
+        for m in range(1, MAX_SUBQUESTION_KEYWORDS + 1):
+            fields = (
+                f"sq{n}_answer_type_{m}",
+                f"sq{n}_weightage_{m}",
+                f"sq{n}_keyword_{m}",
+            )
+            if not any(_populated(row.get(field)) for field in fields):
+                continue
+            populated_keywords += 1
+            if not str(row.get(f"sq{n}_keyword_{m}") or "").strip():
+                errors.append(
+                    f"{label}: subquestion {n} keyword {m} has no text"
+                )
+            weight = _readback_decimal(row.get(f"sq{n}_weightage_{m}"))
+            if weight is None or weight <= 0:
+                errors.append(
+                    f"{label}: subquestion {n} keyword {m} weight must be "
+                    "finite and positive"
+                )
+                continue
+            keyword_weights.append(weight)
+        if (
+            populated_keywords
+            and sub_mark is not None
+            and sub_mark > 0
+            and len(keyword_weights) == populated_keywords
+            and sum(keyword_weights, Decimal(0)) != sub_mark
+        ):
+            errors.append(
+                f"{label}: subquestion {n} keyword weights must sum exactly "
+                "to its marks"
+            )
+    if (
+        populated_subquestions
+        and marks is not None
+        and len(sub_marks) == populated_subquestions
+        and sum(sub_marks, Decimal(0)) != marks
+    ):
+        errors.append(
+            f"{label}: subquestion marks must sum exactly to marks {marks}"
+        )
     return errors
 
 
@@ -459,6 +742,7 @@ def validate_concept_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
 
 def validate_master_file(
     parsed: Mapping, snapshot: Mapping, profile: Mapping | str | None = None,
+    *, group_provenance: list[Mapping[str, Any]] | None = None,
 ) -> list[str]:
     profile = assessment_profile.resolve(profile)
     errors = _header_errors(parsed)
@@ -471,18 +755,145 @@ def validate_master_file(
             f"Subjective: profile {profile['name']!r} allows no data rows")
 
     groups = [dict(g) for g in snapshot.get("groups") or []]
-    expected_group_keys = {str(g.get("group_key") or "") for g in groups}
-    seen_group_names: set[str] = set()
+    groups_by_key: dict[str, dict] = {}
+    for group in groups:
+        group_key = str(group.get("group_key") or "")
+        if not group_key:
+            errors.append("snapshot contains a blank group_key")
+        elif group_key in groups_by_key:
+            errors.append(f"snapshot contains duplicate group_key {group_key!r}")
+        else:
+            groups_by_key[group_key] = group
+    expected_group_keys = set(groups_by_key)
+    keys_by_visible_name: dict[str, list[str]] = {}
+    for group_key, group in groups_by_key.items():
+        group_name = str(group.get("group_name") or "")
+        keys_by_visible_name.setdefault(group_name, []).append(group_key)
+
+    provenance_by_row: dict[tuple[str, int], str] = {}
+    if group_provenance is not None:
+        for n, item in enumerate(group_provenance, start=1):
+            sheet = str(item.get("sheet") or "")
+            try:
+                row_number = int(item.get("row"))
+            except (TypeError, ValueError):
+                errors.append(
+                    f"group provenance entry {n}: row must be an integer")
+                continue
+            group_key = str(item.get("group_key") or "")
+            coordinate = (sheet, row_number)
+            if sheet not in {"Objective", "Descriptive"} or row_number < 3:
+                errors.append(
+                    f"group provenance entry {n}: invalid coordinate "
+                    f"{coordinate!r}")
+                continue
+            if coordinate in provenance_by_row:
+                errors.append(
+                    f"group provenance repeats {sheet} row {row_number}")
+                continue
+            if group_key not in groups_by_key:
+                errors.append(
+                    f"group provenance {sheet} row {row_number}: unknown "
+                    f"group_key {group_key!r}")
+                continue
+            provenance_by_row[coordinate] = group_key
+
+    concept_entries = {
+        str(entry["concept"].get("concept_key") or ""): entry
+        for entry in _concept_rows(snapshot)
+    }
+    concept_keys = set(concept_entries)
+    expected_group_labels: dict[str, list[str]] = {}
+    for candidate in snapshot.get("candidates") or []:
+        concept_key = str(candidate.get("concept_key") or "")
+        group_key = str(candidate.get("group_key") or "")
+        label = str(candidate.get("question_label") or "")
+        if (
+            concept_key in concept_keys
+            and group_key in groups_by_key
+            and label
+        ):
+            group_concept_key = str(
+                groups_by_key[group_key].get("concept_key") or "")
+            if group_concept_key != concept_key:
+                errors.append(
+                    f"{label}: candidate concept_key {concept_key!r} does "
+                    f"not match group {group_key!r} home "
+                    f"{group_concept_key!r}")
+                continue
+            expected_group_labels.setdefault(group_key, []).append(label)
+
+    seen_group_keys: set[str] = set()
     seen_concepts: set[str] = set()
     question_rows = 0
     aggregate_by_group: dict[str, set[str]] = {}
+    visited_provenance: set[tuple[str, int]] = set()
     for name in ("Objective", "Descriptive"):
-        for i, row in enumerate(parsed["sheets"][name]["rows"], start=3):
+        sheet_rows = parsed["sheets"][name]["rows"]
+        row_numbers = parsed["sheets"][name].get("row_numbers")
+        if row_numbers is None:
+            row_numbers = list(range(3, 3 + len(sheet_rows)))
+        elif len(row_numbers) != len(sheet_rows):
+            errors.append(
+                f"{name}: read-back row number ledger differs from rows")
+            row_numbers = list(range(3, 3 + len(sheet_rows)))
+        for i, row in zip(row_numbers, sheet_rows):
             seen_concepts.add(str(row.get("concept_title") or ""))
             group_name = str(row.get("group_name") or "")
-            if group_name:
-                seen_group_names.add(group_name)
-                aggregate_by_group.setdefault(group_name, set()).add(
+            coordinate = (name, i)
+            group_key = provenance_by_row.get(coordinate, "")
+            if group_key:
+                visited_provenance.add(coordinate)
+            elif group_name and group_provenance is not None:
+                errors.append(
+                    f"{name} row {i}: group provenance is missing")
+            elif group_name:
+                matching_keys = keys_by_visible_name.get(group_name, [])
+                if len(matching_keys) == 1:
+                    group_key = matching_keys[0]
+                elif len(matching_keys) > 1:
+                    errors.append(
+                        f"{name} row {i}: group provenance required for "
+                        f"non-unique visible group name {group_name!r}")
+                else:
+                    errors.append(
+                        f"{name} row {i}: unknown group name {group_name!r}")
+            if group_key:
+                seen_group_keys.add(group_key)
+                expected_group = groups_by_key[group_key]
+                expected_name = str(expected_group.get("group_name") or "")
+                expected_display = str(
+                    expected_group.get("group_display_name") or "")
+                expected_type = str(expected_group.get("group_type") or "")
+                group_concept_key = str(
+                    expected_group.get("concept_key") or "")
+                concept_entry = concept_entries.get(group_concept_key)
+                if group_name != expected_name:
+                    errors.append(
+                        f"{name} row {i}: group_name {group_name!r} does "
+                        f"not match {group_key!r}")
+                if str(row.get("group_display_name") or "") != expected_display:
+                    errors.append(
+                        f"{name} row {i}: group_display_name does not "
+                        f"match {group_key!r}")
+                if str(row.get("group_type") or "") != expected_type:
+                    errors.append(
+                        f"{name} row {i}: group_type does not match "
+                        f"{group_key!r}")
+                if concept_entry is None:
+                    errors.append(
+                        f"{name} row {i}: {group_key!r} has unknown "
+                        f"concept home {group_concept_key!r}")
+                else:
+                    expected_concept_title = str(
+                        concept_entry["concept"].get("concept_title") or "")
+                    if str(row.get("concept_title") or "") != (
+                        expected_concept_title
+                    ):
+                        errors.append(
+                            f"{name} row {i}: concept home does not match "
+                            f"{group_key!r}")
+                aggregate_by_group.setdefault(group_key, set()).add(
                     str(row.get("group_question_labels") or ""))
             if str(row.get("chapter_duration") or "").strip():
                 errors.append(f"{name} row {i}: chapter_duration must be blank")
@@ -502,25 +913,29 @@ def validate_master_file(
             if restriction not in rel.ANSWER_RESTRICTIONS:
                 errors.append(
                     f"{label}: answer_restriction {restriction!r} invalid")
+            duration = _readback_decimal(row.get("question_duration"))
+            if duration is None or duration <= 0:
+                errors.append(
+                    f"{label}: question_duration must be finite and positive"
+                )
+            if name == "Descriptive" and row.get("math_keyboard") not in {
+                "Yes", "No",
+            }:
+                errors.append(
+                    f"{label}: descriptive math_keyboard must be exactly "
+                    "Yes or No"
+                )
+            marks = _readback_decimal(row.get("marks"))
+            if marks is None or marks <= 0:
+                errors.append(f"{label}: marks must be finite and positive")
             if name == "Objective":
-                marks = float(row.get("marks") or 0)
-                correct_weight = 0.0
-                correct_count = 0
-                for n in range(1, MAX_OBJECTIVE_OPTIONS + 1):
-                    if rel.is_correct_option(row.get(f"correct_answer_{n}")):
-                        correct_count += 1
-                        try:
-                            correct_weight = float(
-                                row.get(f"answer_weightage_{n}") or 0)
-                        except (TypeError, ValueError):
-                            correct_weight = -1.0
-                if correct_count != 1:
-                    errors.append(
-                        f"{label}: {correct_count} correct options")
-                elif abs(correct_weight - marks) > 0.01:
-                    errors.append(
-                        f"{label}: correct weightage {correct_weight:g} != "
-                        f"marks {marks:g}")
+                errors.extend(_objective_marking_errors(
+                    row, label=label, marks=marks,
+                ))
+            else:
+                errors.extend(_descriptive_marking_errors(
+                    row, label=label, marks=marks,
+                ))
 
     # Every concept (questionless included) and every created group appears.
     expected_concepts = {
@@ -529,17 +944,26 @@ def validate_master_file(
     }
     for concept_title in sorted(expected_concepts - seen_concepts):
         errors.append(f"concept missing from Master: {concept_title!r}")
-    expected_group_names = {
-        str(g.get("group_name") or "") for g in groups
-    }
-    for group_name in sorted(expected_group_names - seen_group_names):
-        errors.append(f"group missing from Master: {group_name!r}")
-    del expected_group_keys
-    for group_name, aggregates in aggregate_by_group.items():
+    for group_key in sorted(expected_group_keys - seen_group_keys):
+        errors.append(f"group missing from Master: {group_key!r}")
+    for sheet, row_number in sorted(
+        set(provenance_by_row) - visited_provenance
+    ):
+        errors.append(
+            f"group provenance {sheet} row {row_number}: no read-back row")
+    for group_key, aggregates in aggregate_by_group.items():
         if len(aggregates) > 1:
             errors.append(
-                f"{group_name}: group_question_labels differs across "
+                f"{group_key}: group_question_labels differs across "
                 "repeated rows")
+            continue
+        actual_aggregate = next(iter(aggregates), "")
+        expected_aggregate = ", ".join(
+            expected_group_labels.get(group_key, []))
+        if actual_aggregate != expected_aggregate:
+            errors.append(
+                f"{group_key}: group_question_labels {actual_aggregate!r} "
+                f"!= {expected_aggregate!r}")
     return errors
 
 
@@ -559,7 +983,8 @@ def build_dual_output(
     concept_errors = validate_concept_file(
         parse_workbook(concepts_bytes), snapshot)
     master_errors = validate_master_file(
-        parse_workbook(master_bytes), snapshot, profile)
+        parse_workbook(master_bytes), snapshot, profile,
+        group_provenance=issues["group_provenance"])
     manifest = {
         "profile": profile["name"],
         "template_source": MANIFEST.get("source", ""),

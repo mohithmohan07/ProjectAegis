@@ -122,13 +122,27 @@ def _review() -> dict:
     )
 
 
-def test_fragmentation_gate_pauses_without_a_model_diagnosis():
+def _verdict(fragmented: bool = True, **overrides) -> dict:
+    return {
+        "fragmented": fragmented,
+        "rationale": (
+            "Each Type restates one source question rather than a reusable "
+            "method." if fragmented else
+            "The Types are reusable methods that recur across questions."
+        ),
+        "review_flags": [],
+        **overrides,
+    }
+
+
+def test_fragmented_verdict_pauses_with_rationale_in_the_packet():
     with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
         gate.resolve_or_pause(
             review=_review(),
             inventory=_inventory(),
             mined_types=_types(),
             meta={"subject": "History", "chapter_title": "Nationalism"},
+            verdict=_verdict(),
         )
 
     pending = caught.value.pending_decision
@@ -142,6 +156,17 @@ def test_fragmentation_gate_pauses_without_a_model_diagnosis():
     ]
     assert validated.options[0].recommended is True
     assert len(validated.context_hash) == 64
+    # The model's rationale — not a ratio — is the shown diagnosis/evidence.
+    assert _verdict()["rationale"] in pending["diagnosis"]
+    assert any(
+        row["label"] == "Model fragmentation rationale"
+        and _verdict()["rationale"] in row["text"]
+        for row in pending["evidence"]
+    )
+    assert not any(
+        row["label"] in {"Type-to-QID ratio", "Type-to-parent-task ratio"}
+        for row in pending["evidence"]
+    )
 
 
 def test_fragmentation_gate_applies_only_the_exact_saved_resolution():
@@ -151,6 +176,7 @@ def test_fragmentation_gate_applies_only_the_exact_saved_resolution():
             inventory=_inventory(),
             mined_types=_types(),
             meta={"subject": "History"},
+            verdict=_verdict(),
         )
     pending = caught.value.pending_decision
     resolution = {
@@ -165,6 +191,7 @@ def test_fragmentation_gate_applies_only_the_exact_saved_resolution():
             inventory=_inventory(),
             mined_types=_types(),
             meta={"subject": "History"},
+            verdict=_verdict(),
         )
 
     assert directive == {
@@ -192,6 +219,7 @@ def test_carry_forward_keeps_the_types_it_declined_to_judge():
             inventory=_inventory(),
             mined_types=_types(),
             meta={"subject": "History"},
+            verdict=_verdict(),
         )
     pending = caught.value.pending_decision
     resolution = {
@@ -206,6 +234,7 @@ def test_carry_forward_keeps_the_types_it_declined_to_judge():
             inventory=_inventory(),
             mined_types=_types(),
             meta={"subject": "History"},
+            verdict=_verdict(),
         )
 
     assert directive["choice"] == "carry_forward"
@@ -219,6 +248,7 @@ def test_consumed_type_resolution_requires_fresh_decision_through_orchestrator()
             inventory=_inventory(),
             mined_types=_types(),
             meta={"subject": "History"},
+            verdict=_verdict(),
         )
     pending = caught.value.pending_decision
     consumed = {
@@ -246,6 +276,7 @@ def test_consumed_type_resolution_requires_fresh_decision_through_orchestrator()
                 inventory=_inventory(),
                 mined_types=_types(),
                 meta={"subject": "History"},
+                verdict=_verdict(),
             )
 
     fresh = replay.value.pending_decision
@@ -253,102 +284,145 @@ def test_consumed_type_resolution_requires_fresh_decision_through_orchestrator()
     assert "already used" in fresh["diagnosis"]
 
 
-def test_fragmentation_gate_does_not_pause_small_or_materially_merged_taxonomy():
-    small = gate.build_review(
-        raw_type_count=8,
-        consolidated_type_count=8,
-        inventory_count=9,
-        sufficiency_added_concepts=0,
-    )
-    merged = gate.build_review(
-        raw_type_count=12,
-        consolidated_type_count=7,
-        inventory_count=12,
-        sufficiency_added_concepts=0,
-    )
-    assert gate.resolve_or_pause(
-        review=small,
-        inventory=_inventory(9),
-        mined_types=_types(8),
-        meta={},
-    ) == {"action": "continue"}
-    assert gate.resolve_or_pause(
-        review=merged,
-        inventory=_inventory(),
-        mined_types=_types(7),
-        meta={},
-    ) == {"action": "continue"}
-
-
-def test_fragmentation_gate_pauses_when_one_of_24_raw_types_was_merged():
-    review = gate.build_review(
-        raw_type_count=24,
-        consolidated_type_count=23,
-        inventory_count=24,
-        sufficiency_added_concepts=0,
-    )
-
-    assert review["consolidation_merged_count"] == 1
-    assert gate.is_anomalously_fragmented(review)
-    with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
-        gate.resolve_or_pause(
-            review=review,
-            inventory=_inventory(24),
-            mined_types=_types(23),
-            meta={"subject": "History"},
-        )
-
-    pending = caught.value.pending_decision
-    assert pending["kind"] == "type_granularity_review"
-    assert pending["item"]["type_title"] == "23 Types for 24 QIDs"
-
-
-def test_parent_aware_denominator_keeps_leaf_expansion_anomalous():
-    inventory = _parent_expanded_inventory()
-    assert len(inventory["items"]) == 31
-    assert gate.inventory_parent_task_count(inventory) == 26
-
+def test_healthy_verdict_continues_regardless_of_counts():
+    """No type/QID arithmetic decides: a healthy model verdict continues even
+    at exactly one Type per question."""
     review = gate.build_review(
         raw_type_count=24,
         consolidated_type_count=24,
-        inventory_count=31,
-        parent_task_count=gate.inventory_parent_task_count(inventory),
+        inventory_count=24,
         sufficiency_added_concepts=0,
     )
+    assert gate.resolve_or_pause(
+        review=review,
+        inventory=_inventory(24),
+        mined_types=_types(24),
+        meta={"subject": "History"},
+        verdict=_verdict(fragmented=False),
+    ) == {"action": "continue"}
 
-    assert review["parent_task_count"] == 26
-    assert review["type_comparison_count"] == 26
-    assert review["type_qid_ratio"] == pytest.approx(24 / 31)
-    assert review["type_comparison_ratio"] == pytest.approx(24 / 26)
-    assert review["type_qid_ratio"] < 0.80
-    assert gate.is_anomalously_fragmented(review)
 
+def test_missing_verdict_fails_closed_into_the_pause():
+    """A non-decision never continues silently: the run pauses and asks."""
     with pytest.raises(semantic_recovery.HumanDecisionRequired) as caught:
         gate.resolve_or_pause(
-            review=review,
-            inventory=inventory,
-            mined_types=_types(24),
+            review=_review(),
+            inventory=_inventory(),
+            mined_types=_types(),
             meta={"subject": "History"},
         )
+    assert "failing closed" in caught.value.pending_decision["diagnosis"]
 
-    pending = caught.value.pending_decision
-    assert pending["item"]["type_title"] == (
-        "24 Types for 26 parent tasks (31 leaf QIDs)"
+
+def test_fragmentation_verdict_author_decides_and_critic_confirms():
+    calls: list[tuple[str, str]] = []
+
+    def api(system, user, **kwargs):
+        calls.append((system, user))
+        if len(calls) == 1:
+            return {
+                "verdict": "healthy",
+                "rationale": "Methods recur across questions.",
+            }
+        return {"verdict": "confirmed", "rationale": ""}
+
+    out = gate.fragmentation_verdict(
+        _review(),
+        mined_types=_types(),
+        inventory=_inventory(),
+        api_call=api,
     )
-    assert pending["evidence"][0]["label"] == (
-        "Type-to-parent-task ratio"
+
+    assert out == {
+        "fragmented": False,
+        "rationale": "Methods recur across questions.",
+        "review_flags": [],
+    }
+    assert len(calls) == 2
+    # Both calls carry the mined taxonomy and the raw counts as evidence.
+    for _system, user in calls:
+        assert "Distinct assessment method 1" in user
+        assert "raw_type_count" in user
+    assert "healthy" in calls[1][1]
+
+
+def test_fragmentation_verdict_author_non_decision_fails_closed():
+    def api(system, user, **kwargs):
+        return {"verdict": "maybe"}
+
+    out = gate.fragmentation_verdict(
+        _review(),
+        mined_types=_types(),
+        inventory=_inventory(),
+        api_call=api,
+    )
+
+    assert out["fragmented"] is True
+    assert "failing closed" in out["rationale"]
+    assert "fragmentation_author_non_decision" in out["review_flags"]
+
+    def broken(system, user, **kwargs):
+        raise RuntimeError("provider unavailable")
+
+    out = gate.fragmentation_verdict(
+        _review(),
+        mined_types=_types(),
+        inventory=_inventory(),
+        api_call=broken,
+    )
+    assert out["fragmented"] is True
+    assert "fragmentation_author_unavailable" in out["review_flags"]
+
+
+def test_fragmentation_critic_dissent_is_advisory_only():
+    calls = {"count": 0}
+
+    def api(system, user, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"verdict": "healthy", "rationale": "Reusable methods."}
+        return {
+            "verdict": "not_confirmed",
+            "rationale": "Several Types look near-identical.",
+        }
+
+    out = gate.fragmentation_verdict(
+        _review(),
+        mined_types=_types(),
+        inventory=_inventory(),
+        api_call=api,
+    )
+
+    # The author's verdict stands; the dissent rides as a review flag.
+    assert out["fragmented"] is False
+    assert any(
+        flag.startswith("fragmentation_critic_dissent")
+        and "near-identical" in flag
+        for flag in out["review_flags"]
     )
 
 
-def test_parent_count_prefers_valid_sealed_source_contract():
-    inventory = _parent_expanded_inventory()
-    inventory["source_contract"] = {"parent_task_count": 26}
-    # Deliberately remove leaf parent links: the Phase-2 seal remains the
-    # authoritative denominator on a backwards-compatible inventory payload.
-    for item in inventory["items"]:
-        item.pop("parent_qid", None)
+def test_fragmentation_critic_failure_only_flags():
+    calls = {"count": 0}
 
-    assert gate.inventory_parent_task_count(inventory) == 26
+    def api(system, user, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return {"verdict": "fragmented", "rationale": "One per question."}
+        raise RuntimeError("critic transport error")
+
+    out = gate.fragmentation_verdict(
+        _review(),
+        mined_types=_types(),
+        inventory=_inventory(),
+        api_call=api,
+    )
+
+    assert out["fragmented"] is True
+    assert any(
+        flag.startswith("fragmentation_critic_unavailable")
+        for flag in out["review_flags"]
+    )
 
 
 def test_applied_result_identity_rejects_source_or_taxonomy_drift():
@@ -571,9 +645,12 @@ def test_human_directed_consolidation_requires_independent_confident_acceptance(
     assert '"requires_visual": true' in calls[1]
 
 
-def test_human_directed_consolidation_repauses_on_critic_review_band(
+def test_human_directed_consolidation_applies_with_flag_on_critic_dissent(
     monkeypatch,
 ):
+    """The critic is an auditor (Q10): its review-band or reject dissent is
+    recorded on the applied result, never a gate — the deterministic safety
+    gates already certified the consolidation's source contracts."""
     inventory = _inventory(2)
     original = _types(2)
     candidate = _merged_candidate(original)
@@ -596,9 +673,49 @@ def test_human_directed_consolidation_repauses_on_critic_review_band(
         instruction="Merge only identical assessed methods.",
     )
 
-    assert result is None
-    assert "threshold 0.920" in failure
+    assert failure == ""
+    assert result is not None
+    assert len(result["types"]) == 1
     assert audit["critic_confidence"] == 0.91
+    assert any(
+        "dissent" in flag and "The two methods may still differ." in flag
+        for flag in audit["review_flags"]
+    )
+
+
+def test_human_directed_consolidation_applies_with_flag_on_critic_reject(
+    monkeypatch,
+):
+    inventory = _inventory(2)
+    original = _types(2)
+    candidate = _merged_candidate(original)
+    responses = [
+        {"types": candidate},
+        {
+            "verdict": "reject",
+            "confidence": 0.99,
+            "reason": "The merged Cases assess different methods.",
+        },
+    ]
+    monkeypatch.setattr(
+        g, "_openai_json", lambda *_args, **_kwargs: responses.pop(0))
+
+    result, failure, audit = g._human_directed_type_consolidation_via_api(
+        original,
+        inventory=inventory,
+        meta={"subject": "History"},
+        instruction="Merge only identical assessed methods.",
+    )
+
+    assert failure == ""
+    assert result is not None
+    assert len(result["types"]) == 1
+    assert audit["critic_verdict"] == "reject"
+    assert any(
+        "verdict=reject" in flag
+        and "The merged Cases assess different methods." in flag
+        for flag in audit["review_flags"]
+    )
 
 
 @pytest.mark.parametrize(

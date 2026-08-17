@@ -208,7 +208,6 @@ BOARDS = ["CBSE", "ICSE", "Maharashtra", "Karnataka"]
 GRADES = ["06", "07", "08", "09", "10"]
 QUESTION_TYPES = ["objective", "subjective", "descriptive"]
 GROUP_TYPES = ["Basic", "Intermediate", "Advanced"]
-GROUP_TYPE_CODE = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
 
 # Common book sources for multi-source tagging (free text is also allowed).
 BOOK_SOURCES = [

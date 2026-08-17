@@ -858,11 +858,7 @@ def figure_citations_ship_for_review() -> bool:
     pipeline the citation ships as a review flag on its task instead of
     blocking generation; the legacy path keeps the hard gate.
     """
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive import ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
+    return True
 
 
 def _validate(

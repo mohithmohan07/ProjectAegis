@@ -97,6 +97,7 @@ class ResolutionResult:
     offered_candidate_count: int = 0
     inspected_candidate_count: int = 0
     supporting_target_ids: tuple[str, ...] = ()
+    review_flags: tuple[str, ...] = ()
 
     @property
     def resolved(self) -> bool:
@@ -1958,12 +1959,13 @@ def _response_schema(
                 # malformed provider response fail its strict contract before
                 # it can be mistaken for a custom human direction.
                 "instruction": {"type": "string", "enum": [""]},
+                # No numeric acceptance minimum: the schema asks for the
+                # model's honest score, and a sub-floor confidence on an
+                # otherwise-valid final decision ships flagged for review
+                # instead of being forced upward by the response contract.
                 "confidence": {
                     "type": "number",
-                    "minimum": (
-                        confidence_policy.minimum(_gate_for(pending))
-                        if final else 0
-                    ),
+                    "minimum": 0,
                     "maximum": 1,
                 },
                 "reason": {
@@ -2111,12 +2113,10 @@ def _provider_call(
 
 def _gate_for(pending: Mapping[str, Any], *, choice: str = ""):
     kind = _normal(pending.get("kind"))
-    phase = _normal(pending.get("phase")).replace("phase ", "")
     if (
         any(token in kind for token in (
             "source", "grounding", "blueprint", "topology"
         ))
-        or phase in {"3.1", "3.2", "31", "32"}
         or choice == "create_new"
     ):
         return confidence_policy.ConfidenceGate.SOURCE_CRITICAL
@@ -2129,6 +2129,7 @@ def _validate_response(
     pending: Mapping[str, Any],
     evidence_refs: set[str],
     packet: Mapping[str, Any] | None = None,
+    final: bool = False,
 ) -> ResolutionResult:
     reason = _compact_text(response.get("reason"), 8_000).strip()
     try:
@@ -2224,14 +2225,29 @@ def _validate_response(
             confidence,
             refs,
         )
+    review_flags: tuple[str, ...] = ()
     if not confidence_policy.accepts(confidence, gate):
-        threshold = confidence_policy.threshold_text(gate)
-        return ResolutionResult(
-            "escalated",
-            reason or f"Confidence did not meet the {threshold} safety threshold.",
-            confidence,
-            refs,
-        )
+        if not final:
+            # A low-confidence first proposal earns one bounded, deterministic
+            # evidence expansion before the final call — a spend guard, not a
+            # user-facing gate.
+            return ResolutionResult(
+                "escalated",
+                reason
+                or "First-pass confidence was low; the bounded evidence "
+                "expansion re-asks once before the final decision.",
+                confidence,
+                refs,
+            )
+        # A sub-floor confidence on an otherwise-valid final decision is a
+        # judgment signal, not a mechanical defect: the decision applies and
+        # ships flagged for review.
+        review_flags = ((
+            f"final resolution confidence {confidence:.3f} is below the "
+            f"{gate.value} acceptance floor; the decision was applied and "
+            "is flagged for review"
+            + (f". {reason}" if reason else "")
+        ),)
 
     option = offered[choice]
     candidate_target_ids = {
@@ -2456,6 +2472,7 @@ def _validate_response(
         target_id=target_id,
         target_concept_id=target_concept_id,
         supporting_target_ids=supporting_target_ids,
+        review_flags=review_flags,
     )
 
 
@@ -2777,6 +2794,7 @@ def resolve_pending(
             pending=pending,
             evidence_refs=final_refs,
             packet=final_packet,
+            final=final_raw is not raw,
         )
         return replace(
             result,

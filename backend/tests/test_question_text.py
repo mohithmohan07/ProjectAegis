@@ -73,10 +73,16 @@ def test_generated_questions_populate_question_text(client, first_concept, db):
     s = client.post("/build-assessments/sessions", json={
         "scope_type": "concept", "scope_ids": [first_concept["id"]],
     }).json()
+    categories = {
+        "objective": "Multiple Choice Question",
+        "subjective": "Short Answer",
+        "descriptive": "Long Answer",
+    }
     for q_type in ("objective", "subjective", "descriptive"):
         client.post(f"/build-assessments/sessions/{s['id']}/batches", json={
             "cognitive_skills": ["Apply"], "difficulty_levels": ["Moderate"],
-            "categories": [], "question_type": q_type, "num_questions": 1,
+            "categories": [categories[q_type]], "question_type": q_type,
+            "num_questions": 1,
         })
     from tests.conftest import stream_result
     gen = stream_result(client.post(f"/build-assessments/sessions/{s['id']}/generate"))

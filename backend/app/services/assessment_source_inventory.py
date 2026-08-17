@@ -13,6 +13,7 @@ that cannot be carried forward stops the run rather than disappearing
 """
 from __future__ import annotations
 
+import copy
 from typing import Any, Mapping
 
 from . import assessment_release as rel
@@ -20,6 +21,48 @@ from . import assessment_release as rel
 
 class SourceInventoryError(ValueError):
     """The inventory cannot be carried into a release without loss."""
+
+
+_POSITION_FIELDS = frozenset({
+    "bbox",
+    "example_number",
+    "page",
+    "page_hint",
+    "position",
+    "printer_page",
+    "row",
+    "row_index",
+    "row_number",
+    "source_end",
+    "source_order",
+    "source_page",
+    "source_paper_number",
+    "source_start",
+    "_phase32_segment_order",
+    "_phase32_source_order",
+})
+
+
+def _semantic_evidence(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _semantic_evidence(raw)
+            for key, raw in value.items()
+            if str(key) not in _POSITION_FIELDS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_semantic_evidence(raw) for raw in value]
+    return copy.deepcopy(value)
+
+
+def _mentions_qid(value: Any, qid: str) -> bool:
+    """Whether a staged evidence tree names this exact source identity."""
+
+    if isinstance(value, Mapping):
+        return any(_mentions_qid(raw, qid) for raw in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_mentions_qid(raw, qid) for raw in value)
+    return isinstance(value, str) and value.strip() == qid
 
 
 def _subpart_of(qid: str, parent_qid: str) -> str:
@@ -56,20 +99,46 @@ def _assets_of(item: Mapping) -> list[dict]:
     return assets
 
 
-def _route_evidence(qid: str, mined_types: Any) -> dict:
-    """Type/Case placement evidence for one QID, carried verbatim."""
-    if not isinstance(mined_types, Mapping):
-        return {}
-    certifications = (
-        (mined_types.get("placement_certifications") or {}).get("hosts")
-        if isinstance(mined_types.get("placement_certifications"), Mapping)
-        else None
-    )
-    if isinstance(certifications, Mapping) and qid in certifications:
-        host = certifications.get(qid)
-        if isinstance(host, Mapping):
-            return dict(host)
-    return {}
+def _route_evidence(
+    qid: str, mined_types: Any, type_case_rows: Any = None,
+) -> dict:
+    """Complete staged Type/Case evidence for one QID, without coordinates."""
+
+    evidence: dict[str, Any] = {}
+    if isinstance(mined_types, Mapping):
+        certifications = (
+            (mined_types.get("placement_certifications") or {}).get("hosts")
+            if isinstance(
+                mined_types.get("placement_certifications"), Mapping
+            )
+            else None
+        )
+        if isinstance(certifications, Mapping) and qid in certifications:
+            host = certifications.get(qid)
+            if isinstance(host, Mapping):
+                evidence.update(_semantic_evidence(host))
+        raw_types = mined_types.get("types") or []
+    elif isinstance(mined_types, list):
+        raw_types = mined_types
+    else:
+        raw_types = []
+
+    relevant_types = [
+        _semantic_evidence(type_row)
+        for type_row in raw_types
+        if isinstance(type_row, Mapping) and _mentions_qid(type_row, qid)
+    ]
+    if relevant_types:
+        evidence["mined_types"] = relevant_types
+
+    relevant_rows = [
+        _semantic_evidence(row)
+        for row in type_case_rows or []
+        if isinstance(row, Mapping) and _mentions_qid(row, qid)
+    ]
+    if relevant_rows:
+        evidence["type_case_rows"] = relevant_rows
+    return evidence
 
 
 def source_atom_from_item(
@@ -77,6 +146,7 @@ def source_atom_from_item(
     *,
     source_document_hash: str,
     mined_types: Any = None,
+    type_case_rows: Any = None,
 ) -> dict:
     """One inventory item -> one AssessmentSourceAtom (spec §5.1)."""
     qid = str(item.get("qid") or "").strip()
@@ -108,7 +178,9 @@ def source_atom_from_item(
         "topic_hint": str(item.get("topic_hint") or ""),
         "polish_flag": str(item.get("polish_flag") or ""),
         "assets": _assets_of(item),
-        "route_evidence": _route_evidence(qid, mined_types),
+        "route_evidence": _route_evidence(
+            qid, mined_types, type_case_rows
+        ),
     }
 
 
@@ -124,11 +196,18 @@ def build_source_atoms(
     the run with the exact identities named.
     """
     inventory = question_inventory or {}
-    items = [
-        item for item in (inventory.get("items") or [])
-        if isinstance(item, Mapping)
-    ]
+    raw_items = inventory.get("items") or []
+    if not isinstance(raw_items, list):
+        raise SourceInventoryError("source inventory items are not an array")
+    items: list[Mapping] = []
+    for position, item in enumerate(raw_items, start=1):
+        if not isinstance(item, Mapping):
+            raise SourceInventoryError(
+                f"source inventory item {position} is not an object"
+            )
+        items.append(item)
     mined_types = inventory.get("mined_types")
+    type_case_rows = inventory.get("type_case_rows")
     atoms: list[dict] = []
     ledger: dict[str, int] = {}
     for item in items:
@@ -148,6 +227,7 @@ def build_source_atoms(
             item,
             source_document_hash=source_document_hash,
             mined_types=mined_types,
+            type_case_rows=type_case_rows,
         ))
 
     report = rel.zero_loss_report(

@@ -442,9 +442,19 @@ Two model passes finish every question row:
   Question-Paper Blueprint and produces the mark decomposition: step marks,
   diagram marks, sub-question marks (each sub-question enumerated to match
   the stem), keyword weightages summing exactly to the total, no marks for
-  redundant steps. The arithmetic identities are checked mechanically at
-  write time — a mismatch flags the row; nothing rewrites the model's
-  marking. **The Blueprint is canonical for mark decomposition**; the
+  redundant steps. The arithmetic identities are checked mechanically and
+  **fail closed** — a weightage-sum or decomposition mismatch is a
+  mechanical defect, not a judgment call: it is never accepted with a flag,
+  and the run does not proceed on corrupt marking. The model owns the
+  decomposition; the check only re-asks it (through the same checker, and
+  through The Fixer on exhaustion per Q13, which is likewise re-validated by
+  that checker) and refuses to ship arithmetic that does not balance —
+  nothing rewrites the model's marking. **The recorded blueprint cell is
+  canonical for a question's total marks; the decomposition of that total is
+  the model's per-item verdict.** Decided 17 Aug 2026: the API authors the
+  breakdown — there is no external marking-rubric document and none is
+  required (the *Question Paper Blueprint & Analysis* is not adopted as
+  runtime evidence; it stays only in this document's §11 provenance). The
   registry's worked mark-scheme examples are calibration evidence for
   Open/Specific only.
 
@@ -677,7 +687,7 @@ reviewer's, applied without ever re-entering the pipeline.
 | Groups for Build Concepts master files | New | Reuses the MES grouping engine (level verdict + variant clustering); its critic becomes advisory per Q10. |
 | Critic-gated retry loops in the assessment lane (MAX_ATTEMPTS acceptance gates) | Rebuild | Q10: decide-once everywhere — one verdict plus one correction; critic dissent flags, never retries. |
 | Open/Specific (`answer_restriction`) classification pass | New | Policy Registry v2.0 as model evidence, Math/Physics families Open (Q11). |
-| Marking-scheme pass (blueprint rubrics, sub-question marks) | New | Arithmetic identities checked mechanically at write time; mismatch flags. |
+| Marking-scheme pass (blueprint rubrics, sub-question marks) | New | Arithmetic identities checked mechanically and fail closed; a mismatch is a mechanical defect, never accepted with a flag. |
 | Language mode (poem/prose topology, Detailed Analysis topic, grammar threading) | New | Subject adapter within Phase 2.1; in scope per Q9. |
 | The Architect (per-run instruction assembly: frozen core + subject/grade slots) | New | §8.1; subject adapters and the prompt registry are its base material. |
 | The Fixer (block resolution: one recorded, flagged decision, always passes through) | New | §8.2, ruling Q13; supersedes all halt paths, dormant pause machinery, and legacy semantic recovery. |

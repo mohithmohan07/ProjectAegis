@@ -58,7 +58,10 @@ def test_complete_rne_is_phase21_ready_with_six_sections_and_26_tasks():
     assert "AEGIS CANONICAL SOURCE PHASE 2.1" in compiled.aegis_mmd
 
 
-def test_only_certified_note_lists_split_and_each_leaf_inherits_context_and_visual():
+def test_no_deterministic_enumeration_split_ever_a_task_left_whole_stays_whole():
+    """§3 purge, item 4D: the enumeration-stem splitter is gone. Lettered
+    note lists that the model never partitioned stay ONE atomic task — the
+    wording is not lost, it lives whole in the parent prompt."""
     canonical = {
         "tasks": [{
             "task_id": "TASK-00001",
@@ -83,16 +86,11 @@ def test_only_certified_note_lists_split_and_each_leaf_inherits_context_and_visu
         }],
     }
 
-    assert phase21_structure.materialize_task_leaf_cases(canonical) == 2
-    leaves = canonical["tasks"][0]["leaf_cases"]
-    assert [leaf["qid"] for leaf in leaves] == ["QINV-0001.1", "QINV-0001.2"]
-    assert all(
-        "Use the supplied biographical source excerpt." in leaf["shared_context"]
-        for leaf in leaves
-    )
-    assert all("Write short notes on Fig. 7:" in leaf["shared_context"] for leaf in leaves)
-    assert all(leaf["figure_refs"] == ["FIG-00001"] for leaf in leaves)
-    assert all(leaf["explicit_figure_reference_ids"] == ["7"] for leaf in leaves)
+    assert phase21_structure.materialize_task_leaf_cases(canonical) == 1
+    parent = canonical["tasks"][0]
+    assert not parent.get("leaf_cases")
+    assert "a) Giuseppe Mazzini" in parent["raw_prompt"]
+    assert "b) Count Camillo de Cavour" in parent["raw_prompt"]
 
     dependent = {
         "tasks": [{
@@ -112,7 +110,13 @@ def test_only_certified_note_lists_split_and_each_leaf_inherits_context_and_visu
     assert not dependent["tasks"][0].get("leaf_cases")
 
 
-def test_folded_distinct_visual_prompts_are_two_cases_with_all_questions():
+def test_folded_distinct_visual_prompts_ship_whole_with_every_question_and_visual():
+    """§3 purge, item 4D: the deterministic visual-cluster splitter is gone.
+
+    When Mathpix folds the two Fig. 14 prompts into ONE source block, no
+    model verdict partitioned that block, so it stays ONE whole inventory
+    item — and the whole item must carry BOTH prompts' wording and BOTH
+    map visuals (never lose a learner question)."""
     source = _rne_source()
     first = (
         "Look at Fig. 14(a). Do you think that the people living in any of "
@@ -136,94 +140,20 @@ def test_folded_distinct_visual_prompts_are_two_cases_with_all_questions():
         )
 
         assert compiled.canonical["phase2_inventory_ready"] is True
-        assert len(inventory["items"]) == 31
-        assert [leaf["qid"] for leaf in parent["leaf_cases"]] == [
-            "QINV-0011.1", "QINV-0011.2",
-        ]
-        assert parent["leaf_cases"][0]["raw_prompt"] == first
-        assert parent["leaf_cases"][1]["raw_prompt"] == second
-        assert parent["leaf_cases"][0]["figure_refs"] == ["FIG-00015"]
-        assert parent["leaf_cases"][1]["figure_refs"] == ["FIG-00016"]
-        assert parent["leaf_cases"][1]["raw_prompt"].count("?") == 3
-        assert all(
-            leaf["decomposition"] == "phase21_distinct_visual_task_clusters"
-            for leaf in parent["leaf_cases"]
+        assert len(inventory["items"]) == 26
+        # No deterministic split: the model never partitioned the folded
+        # block, so it has no leaf cases at all.
+        assert not parent.get("leaf_cases")
+        item = next(
+            row for row in inventory["items"] if row["qid"] == "QINV-0011"
         )
-
-
-def test_visual_cluster_guard_does_not_split_same_figure_or_comparative_tasks():
-    standard_figures = [
-        {
-            "figure_id": "FIG-A",
-            "reference_ids": ["14(a)"],
-            "image_urls": ["https://example.test/14-a.png"],
-        },
-        {
-            "figure_id": "FIG-B",
-            "reference_ids": ["14(b)", "14(a)"],
-            "image_urls": ["https://example.test/14-b.png"],
-        },
-    ]
-
-    def materialized(prompt: str, figures: list[dict] | None = None) -> dict:
-        canonical = {
-            "tasks": [{
-                "task_id": "TASK-00001",
-                "qid": "QINV-0001",
-                "identity_key": "visual-parent",
-                "raw_prompt": prompt,
-                "display_prompt": prompt,
-                "source_start": 0,
-                "source_end": len(prompt),
-            }],
-            "figures": figures or standard_figures,
-        }
-        phase21_structure.materialize_task_leaf_cases(canonical)
-        return canonical["tasks"][0]
-
-    same_figure = materialized(
-        "Look at Fig. 14(a). Identify the region. "
-        "Examine Fig. 14(a). Explain that same region."
-    )
-    comparative = materialized(
-        "Look at Fig. 14(a). Identify the regions. "
-        "Examine Fig. 14(b). Compare it with Fig. 14(a)."
-    )
-    generic = materialized(
-        "Look at Fig. 14(a) and Fig. 14(b). Compare both maps."
-    )
-    narrative = materialized(
-        "The source first asks us to examine Fig. 14(a). It then describes "
-        "why historians examine Fig. 14(b) for chronology."
-    )
-    same_figure_aliases = materialized(
-        "Look at Fig. 14(a). Identify the region. "
-        "Examine Fig. 15(a). Explain the year.",
-        figures=[{
-            "figure_id": "FIG-ALIASED",
-            "reference_ids": ["14(a)", "15(a)"],
-            "image_urls": ["https://example.test/aliased.png"],
-        }],
-    )
-    ambiguous = materialized(
-        "Look at Fig. 14(a). Identify the region. "
-        "Examine Fig. 14(b). Explain the year.",
-        figures=[
-            *standard_figures,
-            {
-                "figure_id": "FIG-B-DUPLICATE",
-                "reference_ids": ["14(b)"],
-                "image_urls": ["https://example.test/14-b-duplicate.png"],
-            },
-        ],
-    )
-
-    assert not same_figure.get("leaf_cases")
-    assert not comparative.get("leaf_cases")
-    assert not generic.get("leaf_cases")
-    assert not narrative.get("leaf_cases")
-    assert not same_figure_aliases.get("leaf_cases")
-    assert not ambiguous.get("leaf_cases")
+        text = generation._inventory_task_text(item)
+        assert first in text
+        assert "Examine Fig. 14(b)." in text
+        assert second.split("Examine Fig. 14(b). ", 1)[1] in text
+        # Both map panels stay owned by the whole item.
+        assert parent["figure_refs"] == ["FIG-00015", "FIG-00016"]
+        assert len(item["image_urls"]) == 2
 
 
 def test_phase21_loader_rebuilds_a_self_consistent_but_incomplete_leaf_artifact(
@@ -231,20 +161,10 @@ def test_phase21_loader_rebuilds_a_self_consistent_but_incomplete_leaf_artifact(
     monkeypatch,
 ):
     source = _rne_source()
-    first = (
-        "Look at Fig. 14(a). Do you think that the people living in any of "
-        "these regions thought of themselves as Italians?"
-    )
-    second = (
-        "Examine Fig. 14(b). Which was the first region to become a part of "
-        "unified Italy? Which was the last region to join? In which year did "
-        "the largest number of states join?"
-    )
-    folded = source.replace(f"{first}\n\n{second}", f"{first} {second}", 1)
     artifact_dir = tmp_path / "artifacts"
     phase2.write_phase2_artifacts(
         artifact_dir,
-        mmd_text=folded,
+        mmd_text=source,
         source_filename="RNE.mmd",
         consumer_module="build_concepts",
     )
@@ -257,19 +177,21 @@ def test_phase21_loader_rebuilds_a_self_consistent_but_incomplete_leaf_artifact(
     parent = next(
         task for task in canonical["tasks"] if task["qid"] == "QINV-0011"
     )
+    # Drop the second follow-up leaf but reseal every count so the artifact
+    # looks internally consistent while silently missing a learner question.
     parent["leaf_cases"] = parent["leaf_cases"][:1]
     parent["inventory_leaf_count"] = 1
     for container in (
         canonical["phase21_hardening"], canonical["source_contract"],
     ):
         container["parent_task_count"] = 26
-        container["decomposed_parent_task_count"] = 2
-        container["inventory_item_count"] = 30
+        container["decomposed_parent_task_count"] = 1
+        container["inventory_item_count"] = 26
     canonical["statistics"]["parent_tasks"] = 26
-    canonical["statistics"]["decomposed_parent_tasks"] = 2
-    canonical["statistics"]["inventory_leaf_tasks"] = 30
+    canonical["statistics"]["decomposed_parent_tasks"] = 1
+    canonical["statistics"]["inventory_leaf_tasks"] = 26
     report["phase21_hardening"] = dict(canonical["phase21_hardening"])
-    report["summary"]["inventory_items"] = 30
+    report["summary"]["inventory_items"] = 26
     canonical_path.write_text(json.dumps(canonical), encoding="utf-8")
     report_path.write_text(json.dumps(report), encoding="utf-8")
 
@@ -281,11 +203,13 @@ def test_phase21_loader_rebuilds_a_self_consistent_but_incomplete_leaf_artifact(
     loaded, loaded_report = phase2._load_or_refresh_for_job(SimpleNamespace(
         id=312,
         filename="RNE.mmd",
-        mmd_text=folded,
+        mmd_text=source,
     ))
 
     assert phase21.hardening_artifact_valid(loaded, loaded_report)
-    assert len(phase2.inventory_from_canonical(loaded)["items"]) == 31
+    # Never-split: whole parents only — the rebuild is visible in the
+    # ledger's restored leaf_cases, not as extra inventory items.
+    assert len(phase2.inventory_from_canonical(loaded)["items"]) == 26
     loaded_parent = next(
         task for task in loaded["tasks"] if task["qid"] == "QINV-0011"
     )
@@ -316,7 +240,10 @@ def test_all_inventory_bearing_checkpoint_stages_reject_previous_versions():
         assert not generation._compatible_concept_checkpoint_entry(stale)
 
 
-def test_plain_text_discuss_cue_recovers_renan_without_reordering():
+def test_plain_text_discuss_cue_recovers_renan_flagged_and_neutral():
+    """§3 purge, item 4A: the cue STRING no longer decides anything — the
+    recovery is lossless and the task ships with a neutral kind and an
+    explicit not-model-ruled flag."""
     source = _rne_source()
     old = (
         "\\section*{Discuss}\n\n"
@@ -337,6 +264,114 @@ def test_plain_text_discuss_cue_recovers_renan_without_reordering():
     renan = _task(compiled.canonical, "Summarise the attributes of a nation")
     assert renan["source_location_confidence"] == "phase21_plain_task_cue"
     assert renan["raw_prompt"].startswith("Summarise the attributes")
+    # The visible cue is preserved verbatim; the kind is neutral + flagged.
+    assert renan["source_label"] == "Discuss"
+    assert renan["source_kind"] == "checkpoint_question"
+    assert renan["chapter_wide"] is False
+    assert renan["activity_origin"] is False
+    assert renan["source_kind_ruling"] == "not_model_ruled_flagged"
+    assert any("ruled" in flag for flag in renan["review_flags"])
+
+
+def test_plain_activity_and_project_cues_ship_neutral_flagged_not_keyword_kinds():
+    """The retired vocabulary made 'Activity'/'Project' decide source_kind,
+    activity_origin and chapter_wide. Now every plain-cue recovery ships the
+    whole block verbatim with the neutral kind, flagged."""
+    canonical = {
+        "tasks": [],
+        "sections": [{"section_id": "SEC-0001", "order": 1, "source_start": 0}],
+        "blocks": [
+            {
+                "kind": "paragraph",
+                "block_id": "BLK-00001",
+                "section_id": "SEC-0001",
+                "source_start": 100,
+                "source_end": 220,
+                "raw_text": (
+                    "Activity\n"
+                    "Collect pictures of national symbols and paste them in "
+                    "your scrapbook.\nDiscuss what each symbol stands for."
+                ),
+            },
+            {
+                "kind": "paragraph",
+                "block_id": "BLK-00002",
+                "section_id": "SEC-0001",
+                "source_start": 300,
+                "source_end": 380,
+                "raw_text": (
+                    "Project\n"
+                    "Prepare a wall chart on the unification of Germany."
+                ),
+            },
+        ],
+    }
+
+    assert phase21_structure.recover_plain_task_cues(canonical) == 2
+    activity, project = canonical["tasks"]
+
+    assert activity["source_label"] == "Activity"
+    assert project["source_label"] == "Project"
+    for task in (activity, project):
+        assert task["source_kind"] == "checkpoint_question"
+        assert task["activity_origin"] is False
+        assert task["chapter_wide"] is False
+        assert task["source_kind_ruling"] == "not_model_ruled_flagged"
+        assert task["review_flags"]
+    # Lossless: the whole block body ships verbatim, not a trimmed span.
+    assert activity["raw_prompt"] == (
+        "Collect pictures of national symbols and paste them in "
+        "your scrapbook.\nDiscuss what each symbol stands for."
+    )
+    assert project["raw_prompt"] == (
+        "Prepare a wall chart on the unification of Germany."
+    )
+
+
+def test_cue_coverage_and_followup_regions_stand_down_under_an_outline():
+    """§3 purge, items 4A/4B: under a model-judged chapter outline the
+    keyword cue machinery must not offer a competing answer — the outline's
+    ruled-task audit is the coverage authority."""
+    canonical = {
+        "chapter_outline": {"version": "chapter-outline-7"},
+        "tasks": [],
+        "sections": [{"section_id": "SEC-0001", "order": 1, "source_start": 0}],
+        "blocks": [{
+            "kind": "paragraph",
+            "block_id": "BLK-00001",
+            "section_id": "SEC-0001",
+            "source_start": 100,
+            "source_end": 200,
+            "raw_text": "Discuss\nWhy do rivers flood in the plains?",
+        }],
+    }
+
+    # No keyword-driven follow-up region may open under an outline.
+    assert phase21_structure.recover_followup_task_prompts(canonical) == 0
+    # The deterministic cue-coverage ledger stands down (no blocking issue
+    # for the unowned cue block) — the outline audit owns coverage there.
+    codes = {
+        issue["code"]
+        for issue in phase21_structure.task_boundary_issues(canonical)
+    }
+    assert "phase21_task_cue_coverage_mismatch" not in codes
+
+    # And the block is still not lost: recovery ships it flagged.
+    assert phase21_structure.recover_plain_task_cues(canonical) == 1
+    recovered = canonical["tasks"][0]
+    assert recovered["source_kind_ruling"] == "not_model_ruled_flagged"
+    assert any("outline" in flag for flag in recovered["review_flags"])
+
+    without_outline = {
+        key: value for key, value in canonical.items()
+        if key != "chapter_outline"
+    }
+    without_outline["tasks"] = []
+    codes = {
+        issue["code"]
+        for issue in phase21_structure.task_boundary_issues(without_outline)
+    }
+    assert "phase21_task_cue_coverage_mismatch" in codes
 
 
 def test_mathpix_missing_section_and_club_question_fail_before_generation():
@@ -380,6 +415,87 @@ def test_rne_task_boundaries_drop_glossary_and_narrative_tails():
     women = _task(compiled.canonical, "positions on the question of women's rights")
     assert "New words" not in women["raw_prompt"]
     assert "Ideology -" not in women["display_prompt"]
+
+
+def test_trim_never_rewrites_from_a_block_shared_by_several_tasks():
+    # An exercise list is one block holding many numbered questions. Using
+    # its prompt to "repair" any single task collapses distinct questions
+    # into duplicate identities and silently loses the rest — the guard is
+    # positional bookkeeping, independent of any task-kind vocabulary.
+    block_text = (
+        "1. In which of the following lists is a pattern present ?\n"
+        "2. Which of the following are APs ?"
+    )
+    block_start = 100
+    block_end = block_start + len(block_text)
+    canonical = {
+        "blocks": [{
+            "block_id": "BLK-00001",
+            "kind": "list",
+            "raw_text": block_text,
+            "source_start": block_start,
+            "source_end": block_end,
+        }],
+        "tasks": [
+            {
+                "task_id": "TASK-00001",
+                "source_kind": "intext_question",
+                "raw_prompt": (
+                    "In which of the following lists is a pattern present ?"
+                ),
+                "source_start": block_start,
+                "source_end": block_start + 58,
+                "source_location_confidence": "parser_position_estimate",
+            },
+            {
+                "task_id": "TASK-00002",
+                "source_kind": "intext_question",
+                "raw_prompt": "Which of the following are APs ?",
+                "source_start": block_start + 58,
+                "source_end": block_end,
+                "source_location_confidence": "parser_position_estimate",
+            },
+        ],
+    }
+    before = [task["raw_prompt"] for task in canonical["tasks"]]
+
+    assert phase21_structure.trim_task_boundaries(canonical) == 0
+
+    assert [task["raw_prompt"] for task in canonical["tasks"]] == before
+    assert not any(
+        task.get("phase21_boundary_repairs") for task in canonical["tasks"]
+    )
+
+
+def test_trim_leaves_exactly_anchored_prompts_alone_unless_markup_polluted():
+    # A prompt found verbatim in the source already has its true boundaries;
+    # shape triggers (containment, length) must not rewrite it. Only layout
+    # markup contamination — a wire-format fact — justifies a repair.
+    inner = "Which term of the AP: 3, 8, 13, 18, ... is 78 ?"
+    prompt = inner + " A narrative sentence the parser kept on purpose."
+    canonical = {
+        "blocks": [{
+            "block_id": "BLK-00001",
+            "kind": "paragraph",
+            "raw_text": inner,
+            "source_start": 200,
+            "source_end": 200 + len(inner),
+        }],
+        "tasks": [{
+            "task_id": "TASK-00001",
+            "source_kind": "intext_question",
+            "raw_prompt": prompt,
+            "source_start": 200,
+            "source_end": 200 + len(prompt),
+            "source_location_confidence": "exact_text_match",
+        }],
+    }
+
+    assert phase21_structure.trim_task_boundaries(canonical) == 0
+    assert canonical["tasks"][0]["raw_prompt"] == prompt
+    assert canonical["tasks"][0]["source_location_confidence"] == (
+        "exact_text_match"
+    )
 
 
 def test_visual_repairs_are_person_surname_only_and_context_is_linked():
@@ -520,7 +636,7 @@ def test_taxonomy_restore_replaces_question_fragment_titles_losslessly():
     assert first in details and second in details
 
 
-def test_final_normalization_preserves_global_type_and_case_numbers_across_hosts():
+def test_final_normalization_keeps_authored_types_and_renumbers_cases_per_host():
     first = "Write a short note on Giuseppe Mazzini."
     second = "Write a short note on Count Camillo de Cavour."
     inventory = {"items": [
@@ -592,15 +708,17 @@ def test_final_normalization_preserves_global_type_and_case_numbers_across_hosts
         generation, records, inventory, mined
     )
 
+    # Under the rewrite, normalize_final_records never rebuilds Types from
+    # the mined taxonomy: the Assemble pass's per-question rendering is
+    # authoritative, so the authored Type text (global Type numbers and
+    # Case titles included) survives verbatim; only Case numbering is
+    # renumbered continuously within each host, plus cleanup.
     assert "Type 01:" in normalized[0]["concept_details"]
-    assert "Case 01: Revolutionary organiser" in normalized[0][
-        "concept_details"
-    ]
-    assert "Type 01:" in normalized[1]["concept_details"]
-    assert "Case 02: Diplomatic architect" in normalized[1][
-        "concept_details"
-    ]
-    assert "Type 02:" not in normalized[1]["concept_details"]
+    assert "Case 01: Mazzini" in normalized[0]["concept_details"]
+    assert "Revolutionary organiser" not in normalized[0]["concept_details"]
+    assert "Type 02:" in normalized[1]["concept_details"]
+    assert "Case 01: Cavour" in normalized[1]["concept_details"]
+    assert "Case 02:" not in normalized[1]["concept_details"]
     assert all("_origin_type_id" not in record for record in normalized)
 
 

@@ -89,21 +89,103 @@ def test_duplicate_group_identity_is_rejected_but_multiple_tiers_are_not():
     assert duplicates == [(1, "Basic", "(A) BG01")]
 
 
+def test_duplicate_group_key_is_rejected_globally_in_frozen_payload():
+    groups = [
+        {
+            "concept_id": 1,
+            "group_type": "Basic",
+            "group_key": "(A) BG01",
+            "group_sequence": 1,
+            "group_name": "Alpha — Basic",
+            "group_display_name": "Alpha — Basic",
+        },
+        {
+            "concept_id": 2,
+            "group_type": "Advanced",
+            "group_key": "(A) BG01",
+            "group_sequence": 1,
+            "group_name": "Beta — Advanced",
+            "group_display_name": "Beta — Advanced",
+        },
+    ]
+
+    assert rel.duplicate_group_identities(groups) == []
+    assert rel.duplicate_group_keys(groups) == ["(A) BG01"]
+    frozen = rel.freeze_payload({"groups": groups})
+    assert "duplicate group_key '(A) BG01'" in frozen["errors"]
+    assert not any(
+        error.startswith("duplicate group identity")
+        for error in frozen["errors"]
+    )
+
+
 def test_answer_restriction_is_never_silently_defaulted():
     base = {
         "candidate_id": "C1", "source_atom_ids": ["QINV-0001"],
         "blueprint_cell_id": "CELL-01", "question": "Q?",
         "question_text": "Q?", "sheet_kind": "objective",
         "question_category": "MCQ", "cognitive_skill": "Remember",
-        "difficulty": "Less", "marks": 1,
+        "difficulty": "Less", "marks": 1, "question_duration": 2,
+        "math_keyboard": "", "restriction_reason": "Authored evidence.",
+        "answers": [
+            {
+                "answer_type": "Phrases", "answer_content": "A",
+                "correct_answer": "Yes", "answer_weightage": 1,
+            },
+            {
+                "answer_type": "Phrases", "answer_content": "B",
+                "correct_answer": "No", "answer_weightage": 0,
+            },
+        ],
+        "sub_questions": [],
     }
     missing = rel.validate_candidate(dict(base))
     assert any("answer_restriction" in e for e in missing)
     open_objective = rel.validate_candidate(
         dict(base, answer_restriction="Open"))
-    assert any("always Specific" in e for e in open_objective)
+    assert open_objective == []
     assert rel.validate_candidate(
         dict(base, answer_restriction="Specific")) == []
+
+    near_match = dict(
+        base,
+        answer_restriction="Open",
+        answers=[dict(answer) for answer in base["answers"]],
+    )
+    near_match["answers"][0]["answer_weightage"] = "0.999"
+    assert any(
+        "objective answer 1 weightage 0.999 != 1" in error
+        for error in rel.validate_candidate(near_match)
+    )
+
+    for out_of_range in ("1e-10000", "1e1000000"):
+        invalid_duration = dict(
+            base,
+            answer_restriction="Open",
+            question_duration=out_of_range,
+        )
+        assert any(
+            "question_duration must be finite and positive" in error
+            for error in rel.validate_candidate(invalid_duration)
+        )
+
+    invalid_weight = dict(
+        base,
+        answer_restriction="Open",
+        answers=[dict(answer) for answer in base["answers"]],
+    )
+    invalid_weight["answers"][0]["answer_weightage"] = "1e1000000"
+    assert any(
+        "objective answer 1 weightage must be finite" in error
+        for error in rel.validate_candidate(invalid_weight)
+    )
+
+    invalid_weight["answers"][0]["answer_weightage"] = "+1"
+    invalid_weight["answers"][1]["answer_weightage"] = "-0"
+    assert any(
+        "weightage must be finite" in error
+        for error in rel.validate_candidate(invalid_weight)
+    )
 
 
 def test_release_model_persists_with_hashes(db):

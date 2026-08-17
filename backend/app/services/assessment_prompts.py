@@ -20,6 +20,8 @@ six production sheets):
 """
 from __future__ import annotations
 
+import math
+
 from . import katex_rules as kr
 from . import prompts
 
@@ -401,15 +403,32 @@ def combo_warning(question_type: str, skill: str) -> str | None:
 def build_prompt(
     *, question_type: str, difficulty: str, skill: str,
     subject: str = "", grade: str = "", board: str = "",
-    marks: float = 1, category: str = "", purpose: str = "",
+    marks: float | None = None, category: str = "", purpose: str = "",
 ) -> str:
     """Assemble the per-batch system prompt from the modular blocks.
 
     Every block is read fresh from the prompt registry, so Admin-tab edits take
     effect on the next generation without a restart.
     """
-    diff_key = difficulty if difficulty in DIFFICULTY_BLOCKS else "Moderate"
-    skill_key = skill if skill in SKILL_BLOCKS else "Understand"
+    if question_type not in TYPE_BLOCKS:
+        raise ValueError(f"unknown recorded question_type {question_type!r}")
+    if difficulty not in DIFFICULTY_BLOCKS:
+        raise ValueError(f"unknown recorded difficulty {difficulty!r}")
+    if skill not in SKILL_BLOCKS:
+        raise ValueError(f"unknown recorded cognitive skill {skill!r}")
+    if not str(category or "").strip():
+        raise ValueError("question_category must be recorded before prompting")
+    if isinstance(marks, bool):
+        raise ValueError("marks must be a recorded finite positive number")
+    try:
+        recorded_marks = float(marks)
+    except (TypeError, ValueError):
+        raise ValueError(
+            "marks must be a recorded finite positive number") from None
+    if not math.isfinite(recorded_marks) or recorded_marks <= 0:
+        raise ValueError("marks must be a recorded finite positive number")
+    diff_key = difficulty
+    skill_key = skill
     parts = [
         prompts.get_text("assessment.base"),
         prompts.get_text(f"assessment.type.{question_type}"),
@@ -435,7 +454,8 @@ def build_prompt(
         prompts.render(
             "assessment.context_footer",
             board=board or "CBSE/ICSE", grade=grade or "school",
-            subject=subject or "general", category=category, marks=f"{marks:g}",
+            subject=subject or "general", category=category,
+            marks=f"{recorded_marks:g}",
         ),
     ]
     return "\n\n".join(parts)

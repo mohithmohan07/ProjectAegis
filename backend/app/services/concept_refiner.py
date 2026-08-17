@@ -1,5 +1,10 @@
 """Deterministic chapter-level refinement of concept-mapping output.
 
+Name note: this is the deterministic pre-deposit FORMATTER (numbering,
+section shape) — distinct from ``app/services/release_refiner.py``, The
+Refiner of docs/aegis-restructure.md §8.3, which polishes the RENDERED
+release output through the model before staging.
+
 Runs on the full, ordered list of concept records for a chapter right before
 they are deposited, so the stored Bulk Import rows carry the exact format the
 team requires regardless of which extractor produced them:
@@ -640,60 +645,6 @@ def renumber_types_continuously(records: list[dict]) -> list[dict]:
     return records
 
 
-def recap_text(concept_titles: list[str]) -> str:
-    """Detailed culmination Description listing the merged concepts."""
-    names = [n.strip() for n in concept_titles if n and n.strip()]
-    if not names:
-        return "Recap"
-    if len(names) == 1:
-        joined = names[0]
-    else:
-        joined = ", ".join(names[:-1]) + " and " + names[-1]
-    return f"Recap of {joined}."
-
-
-def set_culmination_recap(records: list[dict]) -> list[dict]:
-    """Give every culmination row a detailed "Recap of <A>, <B> and <C>."
-    Description naming the topic's merged (non-culmination) concepts.
-
-    Types, Misconceptions, and Error Analysis are left untouched. A culmination
-    with no Description section gets one prepended.
-    """
-    titles_by_topic: dict[str, list[str]] = {}
-    for rec in records:
-        title = rec.get("concept_title", "")
-        if not is_culmination(title):
-            titles_by_topic.setdefault(rec.get("topic", ""), []).append(title)
-    for rec in records:
-        if not is_culmination(rec.get("concept_title", "")):
-            continue
-        recap = recap_text(titles_by_topic.get(rec.get("topic", ""), []))
-        sections = split_sections(rec.get("concept_details") or "")
-        found = False
-        for i, (label, content) in enumerate(sections):
-            if label.strip().lower().startswith("description"):
-                # An authored consolidation paragraph after a recap-led
-                # description survives the re-stamp: only the recap
-                # sentence itself is replaced with the canonical form.
-                tail = ""
-                match = re.match(
-                    r"^Recap of\s.*?\.(?:\s+(?=\S)|$)",
-                    str(content or "").strip(),
-                    re.DOTALL,
-                )
-                if match:
-                    tail = str(content or "").strip()[match.end():].strip()
-                sections[i] = (
-                    "Description", recap + (f" {tail}" if tail else "")
-                )
-                found = True
-                break
-        if not found:
-            sections.insert(0, ("Description", recap))
-        rec["concept_details"] = join_sections(sections)
-    return records
-
-
 # A mastery statement at the tail of a Description. Accepts the label variants
 # models produce ("Achieving Mastery:", "Mastery:", "Mastery indicator:") and
 # normalizes all of them to a line-broken "Achieving Mastery: ..." format.
@@ -816,22 +767,6 @@ def _error_analysis_index(sections: list[tuple[str, str]]) -> int:
         if is_error_analysis_label(label):
             return i
     return -1
-
-
-def _fallback_misconception(title: str) -> str:
-    concept = (title or "this concept").strip().rstrip(".")
-    return (
-        f"Students may assume {concept} is a rule that always applies without "
-        "checking its conditions, context, or representation."
-    )
-
-
-def _fallback_error_analysis(title: str) -> str:
-    concept = (title or "this concept").strip().rstrip(".")
-    return (
-        f"Students may apply {concept} as a memorized rule without checking "
-        "the conditions, context, or representation given in the problem."
-    )
 
 
 def _is_generic_misconception(text: str) -> bool:
@@ -1221,22 +1156,13 @@ def analysis_components(details: str) -> tuple[str, str]:
     return _analysis_components(split_sections(details or ""))
 
 
-def _authored_analysis_is_authoritative() -> bool:
-    # Under the rewritten pipeline learner analysis is model-authored and
-    # either section alone is complete: deterministic filler is exactly what
-    # the terminal gate rejects, and a wholly missing analysis is the Polish
-    # pass's to author with a real model call. The legacy path keeps its
-    # historical backfill.
-    try:
-        from .phase3 import runner as _phase3_runner
-    except ImportError:  # pragma: no cover - defensive ordering
-        return False
-    return _phase3_runner.rewrite_enabled()
-
-
 def ensure_analysis_sections(records: list[dict]) -> list[dict]:
-    """Ensure one combined section carrying the learner-analysis content."""
-    authored = _authored_analysis_is_authoritative()
+    """Normalize the one combined learner-analysis section.
+
+    Learner analysis is model-authored: either authored section alone is
+    complete, and a wholly missing analysis is the Polish pass's to author
+    with a real model call — never deterministic filler.
+    """
     for rec in records:
         if is_culmination(rec.get("concept_title", "")):
             continue
@@ -1245,31 +1171,7 @@ def ensure_analysis_sections(records: list[dict]) -> list[dict]:
         # validation is responsible for missing Description content.
         if not details.strip():
             continue
-        details = normalize_analysis_sections(details)
-        rec["concept_details"] = details
-        sections = split_sections(details)
-        misconception, error_analysis = _analysis_components(sections)
-        if misconception and error_analysis:
-            continue
-        if authored:
-            # Either authored section alone is complete; neither present is
-            # model work, never filler. normalize_analysis_sections already
-            # rendered the canonical one-sided combined section.
-            continue
-        sections = [
-            (label, content)
-            for label, content in sections
-            if not is_learner_analysis_label(label)
-        ]
-        title = rec.get("concept_title", "")
-        misconception = misconception or _fallback_misconception(title)
-        error_analysis = error_analysis or _fallback_error_analysis(title)
-        sections.append((
-            _ANALYSIS_LABEL,
-            f"Misconceptions: {misconception}; "
-            f"Error Analysis: {error_analysis}",
-        ))
-        rec["concept_details"] = join_sections(sections)
+        rec["concept_details"] = normalize_analysis_sections(details)
     return records
 
 
@@ -1289,5 +1191,4 @@ def refine_chapter(records: list[dict]) -> list[dict]:
             details = normalize_analysis_sections(details)
             rec["concept_details"] = details
     records = ensure_analysis_sections(records)
-    records = renumber_types_continuously(records)
-    return set_culmination_recap(records)
+    return renumber_types_continuously(records)

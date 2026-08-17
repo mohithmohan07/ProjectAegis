@@ -25,6 +25,30 @@ from app.services import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _null_architect_assembly(monkeypatch):
+    """Stub The Architect's live assembly like every other model seam here.
+
+    Tests in this module flip ``use_live_generation`` on with fake
+    providers; the Architect's assembly call is a live model call too, so
+    it is stubbed to the deterministic empty (offline-defaults) set — whose
+    hash is exactly the default identity the fingerprint helpers bind.
+    """
+    architect = build_concepts.instruction_architect
+    empty = architect._finalize(
+        architect._identity_metadata({}),
+        architect._empty_slots(),
+        architect._frozen_core_entries(),
+        slots_source="offline-defaults",
+        review_flags=[],
+    )
+    monkeypatch.setattr(
+        architect,
+        "ensure_instruction_set",
+        lambda **kwargs: copy.deepcopy(empty),
+    )
+
+
 def _malformed_source(count: int = 1) -> str:
     paragraphs = "\n\n".join(
         f"Source item {index} has $value{index}+1"

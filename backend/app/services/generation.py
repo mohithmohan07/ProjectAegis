@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -18,6 +19,7 @@ import threading
 import unicodedata
 from collections import Counter
 from datetime import datetime, timezone
+from typing import Callable
 
 from aegis_pipeline.openai_policy import (
     OpenAIPurpose,
@@ -30,6 +32,7 @@ from .. import bulk_import as bi
 from .. import config, models
 from . import concept_cleanup
 from . import concept_validator as cv
+from . import containers
 from . import katex_rules as kr
 from . import concept_refiner as cr
 from . import grounding_certificate
@@ -44,6 +47,7 @@ from .semantic_recovery import (
 )
 # Imported for its prompt registrations (assessment.* keys used by _identify_system).
 from . import assessment_prompts as _assessment_prompts_registration  # noqa: F401
+del _assessment_prompts_registration
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9]")
 _MATH_SUBJECTS = {"Mathematics", "Physics", "Chemistry"}
@@ -137,10 +141,6 @@ def _descriptive_answers(concept: models.Concept, marks: float) -> tuple[list[di
     return answers, sub
 
 
-def _default_marks(kind: str) -> float:
-    return {"objective": 1, "subjective": 3, "descriptive": 5}[kind]
-
-
 # Varied question stems per cognitive skill (anti-monotony: rotated per
 # question index so a batch never repeats one opening pattern). {t} = concept
 # title, {d} = short concept description.
@@ -216,7 +216,7 @@ _RUBRIC_POINTS = {
 
 
 def _stem_for(skill: str, difficulty: str, concept: models.Concept, idx: int) -> str:
-    stems = _DRY_STEMS.get(skill, _DRY_STEMS["Understand"])
+    stems = _DRY_STEMS[skill]
     details = (concept.concept_details or "").split("//")[0]
     details = details.replace("Description:", "").strip()[:140] or concept.concept_title
     if not details.endswith((".", "?", "!")):
@@ -231,7 +231,7 @@ def _stem_for(skill: str, difficulty: str, concept: models.Concept, idx: int) ->
 
 def _rubric_points(marks: float, difficulty: str, concept: models.Concept) -> list[str]:
     n = max(int(marks), 1)
-    pool = _RUBRIC_POINTS.get(difficulty, _RUBRIC_POINTS["Moderate"])
+    pool = _RUBRIC_POINTS[difficulty]
     return [pool[i % len(pool)].format(t=concept.concept_title) for i in range(n)]
 
 
@@ -259,20 +259,38 @@ def generate_questions_for_concept(
     difficulty: str,
     category: str,
     count: int,
+    marks: float | None = None,
+    question_duration: float | None = None,
+    math_keyboard: str | None = None,
     start_index: int = 1,
     live: bool | None = None,
     appears_in: str = "",
 ) -> list[dict]:
     """Return ``count`` question dicts for one concept under one blueprint cell."""
     use_live = config.use_live_generation() if live is None else live
+    if not use_live:
+        config.require_generation_live()
+    if question_type not in _SHEET_KINDS:
+        raise ValueError(f"unknown recorded question_type {question_type!r}")
+    if cognitive_skill not in bi.COGNITIVE_SKILLS:
+        raise ValueError(
+            f"unknown recorded cognitive skill {cognitive_skill!r}")
+    if difficulty not in bi.DIFFICULTY_LEVELS:
+        raise ValueError(f"unknown recorded difficulty {difficulty!r}")
+    if not str(category or "").strip():
+        raise ValueError("question_category must be recorded before generation")
+    marks = _positive_recorded_number(marks, "marks")
+    question_duration = _positive_recorded_number(
+        question_duration, "question_duration")
+    math_keyboard = _recorded_math_keyboard(math_keyboard, question_type)
     if use_live:
         return _live_questions_for_concept(
             concept, question_type=question_type, cognitive_skill=cognitive_skill,
             difficulty=difficulty, category=category, count=count,
-            start_index=start_index, appears_in=appears_in,
+            marks=marks, question_duration=question_duration,
+            math_keyboard=math_keyboard, start_index=start_index,
+            appears_in=appears_in,
         )
-    config.require_generation_live()
-    marks = _default_marks(question_type)
     out: list[dict] = []
     details = (concept.concept_details or "").split("//")[0].strip()[:160]
     for i in range(count):
@@ -292,6 +310,8 @@ def generate_questions_for_concept(
             "question_source": bi.QUESTION_SOURCE_DEFAULT,
             "level_of_difficulty": difficulty,
             "marks": marks,
+            "question_duration": question_duration,
+            "math_keyboard": math_keyboard,
             "question": question_text,
             "question_appears_in": appears_in,
             # Plain-text question (+ concept context) for the AI evaluator.
@@ -330,8 +350,6 @@ def generate_questions_for_concept(
                  "weightage": "1", "placeholder": "answer"}
                 for n, point in enumerate(_rubric_points(marks, difficulty, concept))
             ]
-            record["math_keyboard"] = "Yes" if concept.topic.chapter.subject in {
-                "Mathematics", "Physics", "Chemistry"} else ""
         else:  # descriptive
             # display_answer = clean model answer; answer_content = rubric points.
             record["display_answer"] = model_answer
@@ -359,14 +377,13 @@ def generate_questions_for_concept(
 def _live_questions_for_concept(
     concept: models.Concept, *, question_type: str, cognitive_skill: str,
     difficulty: str, category: str, count: int, start_index: int,
+    marks: float, question_duration: float, math_keyboard: str,
     appears_in: str = "",
 ) -> list[dict]:
-    """Live generation: modular prompt assembly + review/repair before accept."""
-    import json as _json
+    """Live generation: one author call with exact blueprint-cell coverage."""
     from . import assessment_prompts as ap
 
     chapter = concept.topic.chapter
-    marks = _default_marks(question_type)
     system = ap.build_prompt(
         question_type=question_type, difficulty=difficulty, skill=cognitive_skill,
         subject=chapter.subject, grade=chapter.grade, board=chapter.board,
@@ -406,13 +423,15 @@ def _live_questions_for_concept(
             rec = {
                 "sheet_kind": question_type,
                 "question_label": question_label(concept, start_index + n),
-                "question_category": row.get("question_category") or category,
-                "cognitive_skills": bi.normalize_cognitive_skills(
-                    row.get("cognitive_skills") or cognitive_skill),
+                "question_category": category,
+                "cognitive_skills": cognitive_skill,
                 "question_source": bi.QUESTION_SOURCE_DEFAULT,
-                "level_of_difficulty": bi.normalize_difficulty(
-                    row.get("level_of_difficulty") or difficulty),
-                "marks": float(row.get("marks") or marks),
+                "level_of_difficulty": difficulty,
+                # The blueprint-cell kernel owns these three semantic values.
+                # Model output cannot silently replace or default them.
+                "marks": marks,
+                "question_duration": question_duration,
+                "math_keyboard": math_keyboard,
                 "question": row.get("question", ""),
                 "question_appears_in": appears_in,
                 "question_text": (row.get("question_text", "").strip()
@@ -426,41 +445,20 @@ def _live_questions_for_concept(
             records.append(rec)
         return records
 
-    records = _parse(_openai_json(
-        system, user, purpose="assessment_generation"))
-    # Deterministic review; one repair round for failing questions.
-    failing = {i: ap.review_question(r) for i, r in enumerate(records)}
-    failing = {i: p for i, p in failing.items() if p}
-    if failing or len(records) < count:
-        feedback = "; ".join(
-            f"question {i + 1}: {', '.join(p)}" for i, p in failing.items())
-        retry = _openai_json(
-            system,
-            user + "\n\nREVIEW FEEDBACK — regenerate the FULL batch fixing these "
-            f"problems and keep everything else compliant: {feedback or 'wrong count'}",
-            purpose="assessment_generation",
+    authored = _openai_json(system, user, purpose="assessment_generation")
+    raw_questions = authored.get("questions") if isinstance(authored, dict) else None
+    if not isinstance(raw_questions, list) or len(raw_questions) != count:
+        raise RuntimeError(
+            "assessment generation did not fulfill the exact blueprint cell "
+            f"count ({len(raw_questions) if isinstance(raw_questions, list) else 0}"
+            f"/{count}); refusing partial persistence"
         )
-        retry_records = _parse(retry)
-        if retry_records:
-            for i, r in enumerate(retry_records):
-                if i < len(records) and (i in failing or len(records) < count):
-                    records[i] = r
-            if len(retry_records) > len(records):
-                records = retry_records[:count]
-    # Anti-monotony: regenerate once if the batch repeats one stem too much.
-    report = ap.stem_monotony_report([r["question"] for r in records])
-    if report["monotonous"]:
-        varied = _openai_json(
-            system,
-            user + "\n\nThe previous batch was too repetitive (opening "
-            f"'{report['worst']}' used {report['worst_count']}x). Regenerate "
-            "with clearly varied framings/patterns per question.",
-            purpose="assessment_generation",
+    records = _parse(authored)
+    if len(records) != count:
+        raise RuntimeError(
+            "assessment generation lost a blueprint-cell obligation while "
+            "normalizing the recorded author response"
         )
-        varied_records = _parse(varied)
-        if varied_records and not ap.stem_monotony_report(
-                [r["question"] for r in varied_records])["monotonous"]:
-            records = varied_records[:count]
     return records
 
 
@@ -473,13 +471,38 @@ def _live_questions_for_concept(
 _SHEET_KINDS = ("objective", "subjective", "descriptive")
 
 
-def _default_category_for(kind: str) -> str:
-    return {"objective": "Multiple Choice Question",
-            "subjective": "Short Answer",
-            "descriptive": "Long Answer"}.get(kind, "Multiple Choice Question")
+def _positive_recorded_number(value: object, field: str) -> float:
+    """Validate a recorded positive finite number without manufacturing it."""
+
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a recorded finite positive number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"{field} must be a recorded finite positive number") from None
+    if not math.isfinite(number) or number <= 0:
+        raise ValueError(f"{field} must be a recorded finite positive number")
+    return number
 
 
-def _normalize_sheet_kind(value: str, default: str = "objective") -> str:
+def _recorded_math_keyboard(value: object, question_type: str) -> str:
+    """Validate the recorded keyboard contract for a generated question."""
+
+    recorded = str(value or "").strip()
+    if question_type in {"subjective", "descriptive"}:
+        if recorded not in {"Yes", "No"}:
+            raise ValueError(
+                "math_keyboard must be a recorded Yes/No value for "
+                f"{question_type} questions"
+            )
+        return recorded
+    if recorded and recorded not in {"Yes", "No"}:
+        raise ValueError("math_keyboard must be blank, Yes, or No")
+    return recorded
+
+
+def _normalize_sheet_kind(value: str) -> str:
     v = (value or "").strip().lower()
     if v in _SHEET_KINDS:
         return v
@@ -488,7 +511,24 @@ def _normalize_sheet_kind(value: str, default: str = "objective") -> str:
                "short answer": "subjective", "short": "subjective",
                "long answer": "descriptive", "long": "descriptive",
                "essay": "descriptive"}
-    return aliases.get(v, default)
+    normalized = aliases.get(v)
+    if normalized is None:
+        raise ValueError(
+            "sheet_kind must be a recorded objective, subjective, or "
+            f"descriptive value (got {value!r})"
+        )
+    return normalized
+
+
+def _offline_assessment_identification_authority():
+    """Production has no local semantic author for uploaded questions.
+
+    Tests may replace this seam with an explicit fixture authority.  Returning
+    ``None`` here is deliberate: a dry production request must fail closed
+    instead of manufacturing type, category, axes, marks, or timing.
+    """
+
+    return None
 
 
 def identify_questions_from_mmd(
@@ -508,49 +548,34 @@ def identify_questions_from_mmd(
             textbook_mode=textbook_mode,
         )
     config.require_generation_live()
-    # Dry: split the MMD body into question-like chunks. Dry mode can't truly
-    # classify, so "auto" falls back to objective for a deterministic stub.
-    effective = "objective" if question_type == "auto" else question_type
-    chunks = [c.strip() for c in re.split(r"\n\s*\n+", mmd_text) if c.strip()]
-    chunks = [c for c in chunks if not c.startswith("#")] or ["(no question content detected)"]
-
-    # Shared-context handling: when a question references surrounding context
-    # ("based on the above passage", "from the conversation", "refer to the
-    # diagram"...), the preceding block is attached into question_text so the
-    # AI evaluator receives the full context.
-    context_triggers = re.compile(
-        r"based on the (above|following)|from the (conversation|passage|dialogue)|"
-        r"refer(ring)? to the (diagram|table|figure|graph)|using the table|"
-        r"according to the (case study|passage)|answer the following",
-        re.IGNORECASE,
-    )
-    records: list[dict] = []
-    prev_chunk = ""
-    for i, chunk in enumerate(chunks[:25], start=1):
-        q_text = bi.to_plain_text(chunk[:400])
-        if prev_chunk and context_triggers.search(chunk):
-            q_text = f"Context: {bi.to_plain_text(prev_chunk[:600])}\n\n{q_text}"
-        rec = {
-            "sheet_kind": effective,
-            "question_category": _default_category_for(effective),
-            "cognitive_skills": "Understand",
-            "question_source": bi.QUESTION_SOURCE_DEFAULT,
-            "level_of_difficulty": "Moderate",
-            "marks": _default_marks(effective),
-            "question": chunk[:400],
-            "question_text": q_text,
-            "answer_explanation": "",
-            "answers": [],
-            "sub_questions": [],
-            "origin": "upload",
-        }
-        prev_chunk = chunk
-        if upload_type in {"questions_and_answers", "textbook"} and effective == "objective":
-            rec["answers"] = [
-                {"answer_type": "Phrases", "answer_content": "Extracted option",
-                 "correct_answer": "Yes", "answer_weightage": "1"},
-            ]
-        records.append(rec)
+    authority = _offline_assessment_identification_authority()
+    if authority is None:
+        raise config.LiveRequiredError(
+            "Uploaded assessment identification requires a live semantic "
+            "authority; no local type, category, axis, marks, duration, or "
+            "keyboard defaults are permitted."
+        )
+    authored = authority({
+        "mmd_text": mmd_text,
+        "upload_type": upload_type,
+        "question_type": question_type,
+        "textbook_mode": textbook_mode,
+    })
+    rows = authored.get("questions") if isinstance(authored, dict) else authored
+    if not isinstance(rows, list):
+        raise RuntimeError(
+            "offline assessment identification authority returned no rows")
+    auto = question_type == "auto"
+    records = [
+        record
+        for row in rows
+        if (record := _identify_row_to_record(
+            row, auto=auto, question_type=question_type)) is not None
+    ]
+    if not records:
+        raise RuntimeError(
+            "offline assessment identification authority returned no questions"
+        )
     return records
 
 
@@ -695,19 +720,32 @@ def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dic
         return None
     kind = (_normalize_sheet_kind(row.get("sheet_kind") or row.get("question_type"))
             if auto else question_type)
-    try:
-        marks = float(row.get("marks") or _default_marks(kind))
-    except (TypeError, ValueError):
-        marks = _default_marks(kind)
+    category = str(row.get("question_category") or "").strip()
+    if not category:
+        raise ValueError("identified question has no recorded question_category")
+    skill = bi.normalize_cognitive_skills(row.get("cognitive_skills") or "")
+    if skill not in bi.COGNITIVE_SKILLS:
+        raise ValueError(
+            "identified question has no valid recorded cognitive_skills")
+    difficulty = bi.normalize_difficulty(
+        row.get("level_of_difficulty") or "")
+    if difficulty not in bi.DIFFICULTY_LEVELS:
+        raise ValueError(
+            "identified question has no valid recorded level_of_difficulty")
+    marks = _positive_recorded_number(row.get("marks"), "marks")
+    duration = _positive_recorded_number(
+        row.get("question_duration"), "question_duration")
+    math_keyboard = _recorded_math_keyboard(
+        row.get("math_keyboard"), kind)
     return {
         "sheet_kind": kind,
-        "question_category": row.get("question_category") or _default_category_for(kind),
-        "cognitive_skills": bi.normalize_cognitive_skills(
-            row.get("cognitive_skills") or "Understand") or "Understand",
+        "question_category": category,
+        "cognitive_skills": skill,
         "question_source": bi.QUESTION_SOURCE_DEFAULT,
-        "level_of_difficulty": bi.normalize_difficulty(
-            row.get("level_of_difficulty") or "Moderate") or "Moderate",
+        "level_of_difficulty": difficulty,
         "marks": marks,
+        "question_duration": duration,
+        "math_keyboard": math_keyboard,
         "question": question,
         "question_appears_in": "",
         "question_text": (str(row.get("question_text", "")).strip()
@@ -715,7 +753,10 @@ def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dic
         "display_answer": row.get("display_answer", ""),
         "answer_explanation": row.get("answer_explanation", ""),
         "answers": _coerce_answers(row.get("answers", []), kind),
-        "sub_questions": row.get("sub_questions") or [] if kind == "descriptive" else [],
+        "sub_questions": (
+            row.get("sub_questions") or []
+            if kind == "descriptive" else []
+        ),
         "origin": "upload",
     }
 
@@ -738,6 +779,13 @@ def _live_identify_questions_from_mmd(
         if auto else
         f"Return EVERY {question_type} question in this section as specified "
         "above, as a JSON object with a \"questions\" array."
+    )
+    tail += (
+        " Every question must also contain a nonempty question_category, one "
+        "exact standard cognitive_skills value, one exact standard "
+        "level_of_difficulty value, finite positive marks, finite positive "
+        "question_duration, and math_keyboard='Yes' or 'No' for subjective "
+        "and descriptive questions (blank is allowed only for objective)."
     )
     chunks = _split_mmd_into_chunks(mmd_text)
     progress.log(
@@ -765,11 +813,12 @@ def _live_identify_questions_from_mmd(
             records.append(rec)
             added += 1
             if len(records) >= _IDENTIFY_SAFETY_CAP:
-                break
+                raise RuntimeError(
+                    "uploaded question identification reached its safety cap "
+                    f"of {_IDENTIFY_SAFETY_CAP}; refusing a truncated success "
+                    "because source-question coverage is not proven complete"
+                )
         progress.log(f"  chunk {i}/{len(chunks)}: {added} new questions")
-        if len(records) >= _IDENTIFY_SAFETY_CAP:
-            progress.log("Reached safety cap; stopping.", level="warn")
-            break
     if not records:
         raise RuntimeError("live question identification returned no questions")
     progress.set_progress(1.0, label="Question identification complete")
@@ -2292,32 +2341,6 @@ Rules:
 """)
 
 prompts.register(
-    "concepts.merge_duplicates.system", category=_CONCEPTS_CAT,
-    label="Near-duplicate concept merge system prompt",
-    default="""\
-Merge concept rows that restate the SAME idea under different titles
-(e.g. "Basic Proportionality Theorem" appearing again as "BPT" or
-"The Basic Proportionality Theorem" under another topic).
-Return ONLY strict JSON:
-{"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
-
-Rules:
-- You receive one GROUP of rows that all describe the same concept. Return
-  EXACTLY ONE merged row for the group.
-- Keep the clearest, most textbook-faithful title.
-- Keep the topic where the textbook actually TEACHES the concept (usually the
-  first row's topic in reading order).
-- MERGE the content — never discard it: combine the Descriptions into one
-  coherent Description (no repetition), keep the union of all Types/Cases/
-  Examples, and retain all specific learner-analysis items.
-- Keep the single mastery line and canonical order:
-  ``Description: ... // Types: ... // Misconception/ Error Analysis:
-  Misconceptions: ...; Error Analysis: ...``. Both distinct labelled parts are
-  required inside that one top-level section.
-- Never invent new content; only reorganize what the rows carry.
-""")
-
-prompts.register(
     "concepts.method_worked_example.system", category=_CONCEPTS_CAT,
     label="Derivation/method worked-example prompt",
     default="""\
@@ -2479,6 +2502,8 @@ def _metadata(
     chapter_title: str = "", chapter_id: int | str | None = None,
     chapter_code: str = "", learning_kind: str = "Post",
     finalized_duration_minutes: int = 0,
+    instruction_set_sha256: str = "",
+    instruction_slots: dict | None = None,
 ) -> dict:
     return {
         "subject": subject or "",
@@ -2490,7 +2515,51 @@ def _metadata(
         "chapter_code": chapter_code or "",
         "learning_kind": learning_kind or "Post",
         "finalized_duration_minutes": int(finalized_duration_minutes or 0),
+        # The Architect's run instructions (docs/aegis-restructure.md §8.1):
+        # the hash joins the sealed envelope and every decision identity; the
+        # slots render into every prompt through _metadata_block.
+        "instruction_set_sha256": str(instruction_set_sha256 or ""),
+        "instruction_slots": copy.deepcopy(dict(instruction_slots or {})),
     }
+
+
+def _instruction_slot_lines(slots: dict) -> list[str]:
+    """Render the Architect's authored slots; empty slots render nothing."""
+    if not isinstance(slots, dict):
+        return []
+    lines: list[str] = []
+    for label, key in (
+        ("Subject topology guidance", "subject_topology_guidance"),
+        ("Grade-band vocabulary", "grade_band_vocabulary"),
+        ("Board/publication conventions", "board_publication_conventions"),
+    ):
+        text = " ".join(str(slots.get(key) or "").split())
+        if text:
+            lines.append(f"- {label}: {text}")
+    mode = slots.get("language_mode") or {}
+    mode_name = " ".join(str(
+        (mode.get("mode") or "") if isinstance(mode, dict) else ""
+    ).split())
+    if mode_name:
+        rationale = " ".join(str(
+            (mode.get("rationale") or "") if isinstance(mode, dict) else ""
+        ).split())
+        lines.append(
+            f"- Language mode: {mode_name}"
+            + (f" — {rationale}" if rationale else "")
+        )
+    cautions = [
+        " ".join(str(row).split())
+        for row in (
+            slots.get("chapter_cautions")
+            if isinstance(slots.get("chapter_cautions"), list)
+            else []
+        )
+        if str(row).strip()
+    ]
+    if cautions:
+        lines.append("- Chapter cautions: " + " | ".join(cautions))
+    return lines
 
 
 def _metadata_block(meta: dict) -> str:
@@ -2506,6 +2575,9 @@ def _metadata_block(meta: dict) -> str:
     finalized = int(meta.get("finalized_duration_minutes") or 0)
     if finalized > 0:
         block += f"\nFinalized chapter duration (minutes): {finalized}"
+    slot_lines = _instruction_slot_lines(meta.get("instruction_slots") or {})
+    if slot_lines:
+        block += "\nRUN INSTRUCTIONS (Architect):\n" + "\n".join(slot_lines)
     return block
 
 
@@ -3124,16 +3196,13 @@ def _pack_section_chunks(
 def _section_aware_chunks(mmd_text: str, max_chars: int | None = None) -> list[dict]:
     """Pack parsed sections into chunks while preserving heading context.
 
-    Filler umbrella sections (Overview / Summary / Basics / …) are omitted
-    entirely so their preview/recap prose is not re-extracted into neighboring
-    topics.
+    Every section reaches the model — including Overview/Summary umbrella
+    sections. What (if anything) a preview or recap teaches is the model's
+    judgment, never a heading-vocabulary filter's (§3 purge).
     """
     sections = [
         section for section in parse_mmd_sections(mmd_text)
-        if (
-            not _is_filler_source_topic(section.get("heading") or "")
-            and not _is_answer_key_source_section(section)
-        )
+        if not _is_answer_key_source_section(section)
     ]
     return _pack_section_chunks(sections, max_chars)
 
@@ -3143,10 +3212,9 @@ def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]
 
     Structural OCR headings such as ``Solution`` and ``EXERCISE 5.2`` inherit
     the preceding main topic. This association is the source of truth for
-    question inventory and mined-Type placement.
-
-    Filler umbrella headings (Overview / Summary / Basics / …) are skipped
-    entirely — their bodies are not attached to neighboring topics.
+    question inventory and mined-Type placement. Every section is paired —
+    Overview/Summary umbrella bodies included; what their prose means for a
+    topic is the model's judgment downstream.
     """
     headings = _topic_headings(sections)
     canonical: dict[str, str] = {}
@@ -3159,8 +3227,6 @@ def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]
     paired: list[tuple[str, dict]] = []
     for section in sections:
         heading = section.get("heading") or ""
-        if _is_filler_source_topic(heading):
-            continue
         key = _topic_comparison_key(heading)
         if key in canonical:
             current = canonical[key]
@@ -3168,35 +3234,18 @@ def _sections_with_source_topics(sections: list[dict]) -> list[tuple[str, dict]]
     return paired
 
 
-_NON_TEACHING_TOPIC_CONTEXT_RE = re.compile(
-    r"^(?:chapter\s+)?(?:summary|recap(?:itulation)?)\b|"
-    r"^(?:a\s+)?note\s+to\s+(?:the\s+)?reader\b|"
-    r"^(?:glossary|references?|bibliography|acknowledg(?:e)?ments?)\b",
-    re.IGNORECASE,
-)
-
-
 def _group_source_topic_excerpts(sections: list[dict]) -> list[dict]:
     """Group source sections under their canonical main topic in reading order.
 
     ``_sections_with_source_topics`` supplies the structural inheritance:
     Example/Solution/Exercise-style headings stay attached to the nearest real
-    main section instead of becoming standalone topics.
+    main section instead of becoming standalone topics. No section body is
+    withheld from its excerpt — what a recap or editorial note contributes to
+    a topic is a model judgment, not a heading-vocabulary decision.
     """
     grouped: list[dict] = []
     index_by_key: dict[str, int] = {}
     for topic, section in _sections_with_source_topics(sections):
-        # Chapter-level recaps/editorial notes have no reliable main-topic
-        # ownership. Treating their repeated or postscript content as evidence
-        # for the preceding topic would be a semantic guess.
-        section_heading = (section.get("heading") or "").strip()
-        if _is_filler_source_topic(section_heading):
-            continue
-        if (
-            _is_non_topic_heading(section_heading)
-            and _NON_TEACHING_TOPIC_CONTEXT_RE.match(section_heading)
-        ):
-            continue
         key = _topic_comparison_key(topic)
         if not key:
             continue
@@ -3324,22 +3373,6 @@ def _inventory_chunks_by_topic(
             chunk["chapter_wide_tasks"] = chapter_wide
             chunks.append(chunk)
     return chunks
-
-
-def _source_for_topic(topic: str, sections: list[dict]) -> str:
-    """Return source/exercise context most relevant to a topic."""
-    topic_n = _topic_comparison_key(topic)
-    selected = [
-        s for s in sections
-        if topic_n and (
-            topic_n == _topic_comparison_key(s.get("heading") or "")
-            or topic_n in _topic_comparison_key(
-                " > ".join(s.get("heading_path") or []))
-        )
-    ]
-    if not selected:
-        selected = sections
-    return _format_section_chunk(selected)
 
 
 def _record_key(rec: dict) -> tuple[str, str]:
@@ -3543,9 +3576,10 @@ def _append_activity_hub(details: str, hub_text: str) -> str:
 # Inventory kinds that belong in Activity/Info Hub. Assessable prompts originating
 # in an Activity also appear in Types, while reusing the same inventory identity.
 # info_hub covers enrichment boxes (asides, "do you know?", biography boxes,
-# source excerpts): pooled and placed with the material they enrich (Step 3),
-# never treated as questions.
-_HUB_INVENTORY_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
+# source excerpts): pooled and placed with the material they enrich, never
+# treated as questions. The vocabulary lives in ``containers`` (the single
+# container home); this name is a consumer alias, pinned by a lockstep test.
+_HUB_INVENTORY_KINDS = containers.HUB_INVENTORY_KINDS
 _PLACEMENT_CERTIFICATION_VERSION = 1
 _PLACEMENT_CERTIFICATIONS_KEY = "placement_certifications"
 
@@ -3941,26 +3975,11 @@ def _inventory_item_owner_topic(item: dict) -> tuple[str, str]:
         and str(raw.get("version") or "")
         == str(_TYPE_CASE_PLACEMENT_CONTRACT_VERSION)
     )
-    # A live run must not revive ``topic_hint`` as a second semantic
-    # authority: that would turn physical source location back into
-    # ownership, which is the whole thing Phase 3.3 exists to stop. But an
-    # incomplete contract is also not a reason to end the run. Derive the
-    # owner from source text in teaching order instead, exactly as Phase 3.3
-    # does when its certification pair fails.
+    # Under the rewritten Phase 3 no item ever meets the old 3.3
+    # certification pair, so its absence is not an integrity fault;
+    # placement authority is the Host pass's API decision and the
+    # printed topic here is provenance only (hub-note alignment).
     live_without_owner = False
-    if config.use_live_generation() and not (
-        # Under the rewritten Phase 3 no item ever met the old 3.3
-        # certification pair, so its absence is not an integrity fault;
-        # placement authority is the Host pass's API decision and the
-        # printed topic here is provenance only (hub-note alignment).
-        _rewrite_placement_authority_active()
-    ):
-        from . import canonical_source_phase3 as _phase3
-
-        live_without_owner = bool(
-            isinstance(_phase3.active_graph(), dict)
-            and str(item.get("qid") or "").strip()
-        )
     if isinstance(raw, dict) and str(
         raw.get("basis") or ""
     ) == _unplaced_placement_basis():
@@ -4009,17 +4028,73 @@ def _activity_record_matches_owner(record: dict, item: dict) -> bool:
     )
 
 
+def _figure_hub_note(figure: dict) -> str:
+    """Render one placed source figure for the Activity/Info Hub.
+
+    ``figure`` is a recorded ``_aegis_figure_placements`` entry — the
+    Phase 2.2 placement pass's stamped block_id + url + caption. The note
+    is deterministic rendering of that recorded verdict: the caption text
+    (info) followed by its canonical ``[img]`` embed.
+    """
+    caption = re.sub(r"\s+", " ", str(figure.get("caption") or "")).strip()
+    url = str(figure.get("url") or "").strip()
+    marker = caption[:100].strip(" .:-") or str(
+        figure.get("block_id") or ""
+    ).strip()
+    note = f"Figure — {marker}: {caption}".rstrip() if caption else (
+        f"Figure — {marker}: Source figure."
+    )
+    if not note.endswith((".", "!", "?")):
+        note += "."
+    if url:
+        try:
+            alt = caption or "Source figure"
+            note = f"{note} {kr.image(url, alt)}"
+        except ValueError:
+            # A non-https/malformed URL cannot ship as an embed; the
+            # caption note still records the placement.
+            pass
+    return kr.canonicalize_rich_text(note)
+
+
+def _figure_placement_markers(record: dict) -> list[dict]:
+    """The row's recorded placed-figure entries, in stable block order."""
+    markers = [
+        dict(entry)
+        for entry in record.get("_aegis_figure_placements") or []
+        if isinstance(entry, dict) and str(entry.get("block_id") or "")
+    ]
+    markers.sort(key=lambda entry: (
+        str(entry.get("block_id") or ""), str(entry.get("url") or "")
+    ))
+    return markers
+
+
 def _normalize_activity_hubs_from_inventory(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
+    placements: dict | None = None,
 ) -> list[dict]:
     """Rebuild source-owned Hub notes exactly once from authoritative items.
 
-    GPT still chooses the best normal concept.  The public note itself is
-    regenerated from the source-owned inventory so a saved checkpoint cannot
-    retain answer/result prose, a stale Figure URL, or duplicated full activity
-    instructions.  Private qid markers make the compact notes auditable even
-    when two activities have similar labels.
+    The model chooses the concept; this pass only re-renders. The public
+    note itself is regenerated from the source-owned inventory so a saved
+    checkpoint cannot retain answer/result prose, a stale Figure URL, or
+    duplicated full activity instructions.  Private qid markers make the
+    compact notes auditable even when two activities have similar labels.
+
+    Binding authority (doc §4 Phase 2.2): the placement pass's verdict —
+    passed explicitly as ``placements`` ({qid: row placement}) by Assemble
+    or riding the rows as ``_aegis_hub_placements`` markers — places the
+    hub note; a hub qid the pass never ruled falls back to the question's
+    own ``_aegis_release_qids`` route (the Host pass's placement of the
+    Type-riding activity qid). A hub item that ends bound by NEITHER
+    authority is a defect: hub items have no disposition escape, so this
+    fails closed instead of silently dropping a learner's material
+    (upstream, the placement pass with its Fixer prevents this).
+    Placed figures recorded in ``_aegis_figure_placements`` are re-rendered
+    as canonical Figure notes the same way, keeping the deposit pipeline a
+    fixpoint over them.
     """
     items: list[dict] = []
     seen_qids: set[str] = set()
@@ -4032,90 +4107,60 @@ def _normalize_activity_hubs_from_inventory(
     if inventory is None or not records:
         return records
 
-    def eligible(index: int, item: dict) -> bool:
-        if not 0 <= index < len(records):
-            return False
-        record = records[index]
-        if cr.is_culmination(record.get("concept_title") or ""):
-            return False
-        return _activity_record_matches_owner(record, item)
+    # The Phase 2.2 placement pass's verdicts: the explicit mapping from
+    # Assemble, plus the markers Assemble stamped onto the rows (which is
+    # how every later deterministic replay of this pass — deposit parity,
+    # the Refiner's parity pipeline, checkpoint restores — sees the same
+    # binding without re-threading the mapping).
+    placed_by_qid: dict[str, int] = {}
+    for index, record in enumerate(records):
+        for qid in record.get("_aegis_hub_placements") or []:
+            placed_by_qid.setdefault(str(qid).strip(), index)
+    for qid, target in (placements or {}).items():
+        qid = str(qid or "").strip()
+        if qid and isinstance(target, int) and 0 <= target < len(records):
+            placed_by_qid.setdefault(qid, target)
 
     target_by_qid: dict[str, int] = {}
-    certification_declared = (
-        isinstance(mined_types, dict)
-        and _PLACEMENT_CERTIFICATIONS_KEY in mined_types
-    )
-    if _rewrite_placement_authority_active() and items:
-        # Under the rewritten Phase 3 the Host pass's API placement is the
-        # hub's authority: the released rows record every question's
-        # destination in _aegis_release_qids (a Culmination row included,
-        # when the house routing rules put it there). The certified-host
-        # ledger this function otherwise demands does not exist.
-        for item in items:
-            qid = str(item.get("qid") or "").strip()
-            bound = next(
-                (
-                    index
-                    for index, record in enumerate(records)
-                    if qid in (record.get("_aegis_release_qids") or [])
-                ),
-                -1,
-            )
-            if bound >= 0:
-                target_by_qid[qid] = bound
-    elif certification_declared and items:
-        ledger = _placement_certification_ledger(mined_types)
-        if not ledger:
-            raise RuntimeError(
-                "activity hub normalization refused a malformed placement "
-                "certification ledger"
-            )
-        concept_payload = _scope_payload_from_records(records)
-        index_by_cid = {
-            f"CONCEPT-{index + 1:04d}": index
-            for index in range(len(records))
-        }
-        for item in items:
-            qid = str(item.get("qid") or "").strip()
-            cid = _certified_host_cid(
-                mined_types, qid, concept_payload)
-            target = index_by_cid.get(cid, -1)
-            if not eligible(target, item):
-                raise RuntimeError(
-                    "activity hub normalization could not resolve the "
-                    f"certified exact-topic normal host for {qid}"
-                )
-            target_by_qid[qid] = target
-    else:
-        for item in items:
-            qid = str(item.get("qid") or "").strip()
-            hub_locations = [
-                index for index in _activity_hub_locations(records, item)
-                if eligible(index, item)
-            ]
-            example_locations = [
-                index for index in _rendered_inventory_example_locations(
-                    records, item)
-                if eligible(index, item)
-            ]
-            target = next(
-                (
-                    index for index in example_locations
-                    if index in hub_locations
-                ),
-                -1,
-            )
-            if target < 0 and len(hub_locations) == 1:
-                target = hub_locations[0]
-            if target < 0 and example_locations:
-                target = example_locations[0]
-            if target < 0:
-                candidate = _best_record_index_for_inventory_item(
-                    records, item, allow_culmination=False)
-                if eligible(candidate, item):
-                    target = candidate
-            if target >= 0:
-                target_by_qid[qid] = target
+    for item in items:
+        qid = str(item.get("qid") or "").strip()
+        if qid in placed_by_qid:
+            # The pooled placement pass ruled this item; its verdict is
+            # the hub's authority ("never where the printer put it").
+            target_by_qid[qid] = placed_by_qid[qid]
+            continue
+        # Fallback: the Host pass's API placement of the question — the
+        # released rows record every question's destination in
+        # _aegis_release_qids (a Culmination row included, when the house
+        # routing rules put it there).
+        bound = next(
+            (
+                index
+                for index, record in enumerate(records)
+                if qid in (record.get("_aegis_release_qids") or [])
+            ),
+            -1,
+        )
+        if bound >= 0:
+            target_by_qid[qid] = bound
+
+    unbound = [
+        str(item.get("qid") or "").strip()
+        for item in items
+        if str(item.get("qid") or "").strip() not in target_by_qid
+    ]
+    if unbound:
+        # R4, fail closed: a hub item with no recorded placement has no
+        # disposition escape — dropping it silently would lose a
+        # learner's enrichment material. Stopping is recoverable.
+        raise RuntimeError(
+            "Activity/Info Hub item(s) have no recorded placement and no "
+            "disposition is available for hub items: "
+            + ", ".join(unbound[:8])
+            + ("…" if len(unbound) > 8 else "")
+            + ". The Phase 2.2 placement pass (phase3/place.py) must rule "
+            "every pooled hub item before the deposit boundary."
+        )
 
     out: list[dict] = []
     for record in records:
@@ -4131,13 +4176,20 @@ def _normalize_activity_hubs_from_inventory(
 
     for item in items:
         qid = str(item.get("qid") or "").strip()
-        target = target_by_qid.get(qid, -1)
-        if target < 0:
-            continue
+        target = target_by_qid[qid]
         note = _compact_activity_hub_note(item)
         out[target]["concept_details"] = _append_activity_hub(
             out[target].get("concept_details") or "", note)
         _mark_activity_hub_placement(out[target], item)
+
+    # Placed source figures (Phase 2.2): re-render each row's recorded
+    # figure placements as canonical Figure notes, after the item notes.
+    for record in out:
+        for figure in _figure_placement_markers(record):
+            record["concept_details"] = _append_activity_hub(
+                record.get("concept_details") or "",
+                _figure_hub_note(figure),
+            )
 
     out = _align_activity_examples_with_hubs(out, inventory)
     if out != records:
@@ -4145,11 +4197,7 @@ def _normalize_activity_hubs_from_inventory(
             progress.log(
                 f"Normalized {len(target_by_qid)}/{len(items)} source-owned "
                 "Activity/Info Hub item(s).",
-                level=(
-                    "success"
-                    if len(target_by_qid) == len(items)
-                    else "warning"
-                ),
+                level="success",
             )
         else:
             progress.log(
@@ -4179,34 +4227,10 @@ def _hub_inventory_contract_violations(
                 "locations": locations,
             })
             continue
-        index = locations[0]
-        record = records[index]
         # Under the rewritten Phase 3 a hub legitimately lives wherever
         # the API placed its question — a Culmination row or a later
         # topic included, per the house routing rules — so host-locality
-        # opinions are legacy-only; presence/duplication checks remain.
-        if _rewrite_placement_authority_active():
-            continue
-        if cr.is_culmination(record.get("concept_title") or ""):
-            violations.append({
-                "qid": qid,
-                "reason": "culmination_host",
-                "locations": locations,
-            })
-        if not _activity_record_matches_owner(record, item):
-            owner_topic_id, expected_topic_title = (
-                _inventory_item_owner_topic(item)
-            )
-            violations.append({
-                "qid": qid,
-                "reason": "wrong_topic",
-                "expected_topic_id": owner_topic_id,
-                "expected_topic": expected_topic_title,
-                "actual_topic_id": str(
-                    record.get("_semantic_topic_id") or ""
-                ),
-                "actual_topic": record.get("topic") or "",
-            })
+        # opinions are retired; presence/duplication checks remain.
 
     known_qids = set(items_by_qid)
     for index, record in enumerate(records):
@@ -4226,6 +4250,9 @@ def _hub_inventory_contract_violations(
             _compact_activity_hub_note(items_by_qid[qid])
             for qid in tagged_qids
             if qid in items_by_qid
+        ] + [
+            _figure_hub_note(figure)
+            for figure in _figure_placement_markers(record)
         ]
         actual_body = cr.activity_hub_body(
             record.get("concept_details") or "")
@@ -4331,427 +4358,6 @@ def _place_activity_inventory_into_hubs(
     return out
 
 
-def _populate_activity_hubs_via_api(
-    records: list[dict], inventory: dict | None, *, meta: dict,
-    mined_types: dict | None = None, max_attempts: int = 2,
-) -> list[dict]:
-    """Certify every Activity Hub host; never guess an ambiguous destination."""
-    import json as _json
-    import math as _math
-
-    # One primary verdict plus one unresolved-QID correction is the complete
-    # paid budget. Configuration/callers cannot restore a broad retry loop.
-    max_attempts = max(1, min(2, int(max_attempts or 1)))
-
-    items_by_qid: dict[str, dict] = {}
-    for item in _hub_inventory_items(inventory):
-        qid = str(item.get("qid") or "").strip()
-        if qid:
-            items_by_qid.setdefault(qid, item)
-    items = list(items_by_qid.values())
-    if not records:
-        if items:
-            raise RuntimeError(
-                "activity hub placement failed: no concept hosts available")
-        return records
-    if not items:
-        return _normalize_activity_hubs_from_inventory(
-            records, inventory, mined_types)
-
-    certification_owner = (
-        mined_types if isinstance(mined_types, dict) else {"types": []}
-    )
-    if _PLACEMENT_CERTIFICATIONS_KEY not in certification_owner:
-        _reset_placement_certifications(certification_owner)
-    elif not _placement_certification_ledger(certification_owner):
-        raise RuntimeError(
-            "activity hub placement refused a malformed placement "
-            "certification ledger"
-        )
-
-    concept_payload: list[dict] = []
-    for i, rec in enumerate(records, start=1):
-        cid = f"CONCEPT-{i:04d}"
-        concept_payload.append({
-            "concept_id": cid,
-            "topic_id": str(rec.get("_semantic_topic_id") or ""),
-            "topic": rec.get("topic", ""),
-            "parent_concept": rec.get("parent_concept", ""),
-            "concept": rec.get("concept_title", ""),
-            # A candidate is semantically represented by its bounded core
-            # teaching Description.  Full concept_details can contain this
-            # same QID in a Type Example or Hub, which would circularly let an
-            # earlier placement ratify itself and can make the prompt huge.
-            "teaching_description": _concept_description_only(
-                rec.get("concept_details", "")
-            ),
-            "is_culmination": cr.is_culmination(rec.get("concept_title", "")),
-            "existing_activity_hub": cr.activity_hub_body(
-                rec.get("concept_details") or ""),
-        })
-    concept_payload_by_id = {
-        row["concept_id"]: row for row in concept_payload
-    }
-    allowed_cids_by_qid: dict[str, tuple[str, ...]] = {}
-    ambiguous: dict[str, dict] = {}
-    deterministic = 0
-    ledger = _placement_certification_ledger(certification_owner)
-    if not ledger:
-        raise RuntimeError(
-            "activity hub placement could not initialize its placement "
-            "certification ledger"
-        )
-    for qid, item in items_by_qid.items():
-        owner_topic_id, expected_topic_title = (
-            _inventory_item_owner_topic(item)
-        )
-        expected_topic = _topic_comparison_key(expected_topic_title)
-        allowed = tuple(
-            row["concept_id"]
-            for row in concept_payload
-            if (
-                not row["is_culmination"]
-                and (
-                    (
-                        bool(owner_topic_id)
-                        and str(row.get("topic_id") or "") == owner_topic_id
-                    )
-                    or (
-                        not owner_topic_id
-                        and (
-                            not expected_topic
-                            or _topic_comparison_key(row.get("topic") or "")
-                            == expected_topic
-                        )
-                    )
-                )
-            )
-        )
-        if not allowed:
-            raise RuntimeError(
-                "activity hub placement failed: no certified-owner normal "
-                f"concept host for {qid}"
-            )
-        allowed_cids_by_qid[qid] = allowed
-
-        existing_certification = ledger["hosts"].get(qid)
-        if existing_certification is not None:
-            if not _placement_certification_entry_is_valid(
-                existing_certification
-            ):
-                raise RuntimeError(
-                    "activity hub placement failed: malformed existing "
-                    f"certification for {qid}"
-                )
-            certified_cid = _certified_host_cid(
-                certification_owner, qid, concept_payload_by_id)
-            if not certified_cid:
-                raise RuntimeError(
-                    "activity hub placement failed: existing certification "
-                    f"for {qid} does not resolve to one current concept"
-                )
-            if certified_cid not in allowed:
-                raise RuntimeError(
-                    "activity hub placement failed: existing certification "
-                    f"for {qid} is not a certified-owner normal host"
-                )
-            continue
-
-        existing_locations = _activity_hub_locations(records, item)
-        existing_cid = (
-            f"CONCEPT-{existing_locations[0] + 1:04d}"
-            if len(existing_locations) == 1 else ""
-        )
-        if existing_cid not in allowed:
-            existing_cid = ""
-        if existing_cid and len(allowed) == 1:
-            proven_cid = existing_cid
-        elif len(allowed) == 1:
-            proven_cid = allowed[0]
-        else:
-            # More than one structurally valid host is a semantic choice.  A
-            # lexical/title heuristic or a pre-existing Hub location may help
-            # the provider propose a host, but neither is independent evidence
-            # and neither may certify this placement without the critic.
-            proven_cid = ""
-        if proven_cid:
-            _certify_inventory_host(
-                certification_owner,
-                qid,
-                concept_payload_by_id[proven_cid],
-                basis=(
-                    "existing_activity_hub"
-                    if existing_cid
-                    else "sole_exact_topic_host"
-                ),
-            )
-            deterministic += 1
-            continue
-        ambiguous[qid] = item
-
-    if deterministic:
-        progress.log(
-            f"Deterministically certified {deterministic} Activity/Info Hub "
-            "host(s) from an exact existing placement or sole owner-topic "
-            "host.",
-            level="success",
-        )
-
-    # Step 3 of the manual process: hubs place by what they exercise, under
-    # the same shared placement rules every other placement prompt carries.
-    from . import placement_policy
-
-    provider_system = (
-        prompts.get_text("concepts.activity_hub.system")
-        + placement_policy.PLACEMENT_RULES
-    )
-    critic_system = (
-        prompts.get_text("concepts.activity_hub_critic.system")
-        + placement_policy.PLACEMENT_RULES
-    )
-    rejection_reason_by_qid: dict[str, str] = {}
-    api_certified = 0
-    for attempt in range(1, max(1, max_attempts) + 1):
-        if not ambiguous:
-            break
-        inventory_payload = []
-        for qid, item in ambiguous.items():
-            payload = {
-                "qid": qid,
-                "source_kind": (
-                    item.get("source_kind") or "").strip().lower(),
-                "source_label": item.get("source_label") or "",
-                "topic_hint": _inventory_item_owner_topic(item)[1],
-                "raw_task": _inventory_task_text(item),
-                "allowed_concept_ids": list(
-                    allowed_cids_by_qid[qid]),
-            }
-            if qid in rejection_reason_by_qid:
-                payload["previous_rejection"] = (
-                    rejection_reason_by_qid[qid])
-            inventory_payload.append(payload)
-        user = (
-            _metadata_block(meta)
-            + "\nPlace every pending activity/experiment/discussion inventory "
-            "item into Activity/Info Hub on exactly one allowed normal "
-            "concept. Return one verdict for every qid:\n"
-            + _json.dumps({
-                "concepts": concept_payload,
-                "pending_inventory": inventory_payload,
-            }, ensure_ascii=False)
-        )
-        progress.log(
-            "Reviewing semantic Activity/Info Hub hosts via API for "
-            f"{len(inventory_payload)} inventory item(s), attempt {attempt}.")
-        data = _openai_json(
-            provider_system, user, purpose="concept_detailing")
-        proposed: dict[str, str] = {}
-        invalid: set[str] = set()
-        raw_placements = (
-            data.get("placements") if isinstance(data, dict) else None
-        )
-        provider_batch_error = not isinstance(raw_placements, list)
-        for placement in (
-            raw_placements if isinstance(raw_placements, list) else []
-        ):
-            if not isinstance(placement, dict):
-                provider_batch_error = True
-                continue
-            qid = str(placement.get("qid") or "").strip()
-            cid = str(placement.get("concept_id") or "").strip()
-            if qid not in ambiguous:
-                provider_batch_error = True
-                continue
-            if qid in proposed:
-                invalid.add(qid)
-                continue
-            if cid not in allowed_cids_by_qid[qid]:
-                invalid.add(qid)
-                rejection_reason_by_qid[qid] = (
-                    "concept_id was not an allowed certified-owner normal host")
-                continue
-            proposed[qid] = cid
-        if provider_batch_error:
-            proposed.clear()
-            for qid in ambiguous:
-                rejection_reason_by_qid[qid] = (
-                    "provider returned an unknown qid or malformed placement "
-                    "batch"
-                )
-        for qid in invalid:
-            proposed.pop(qid, None)
-            rejection_reason_by_qid.setdefault(
-                qid, "duplicate or invalid verdict")
-        for qid in set(ambiguous) - set(proposed):
-            rejection_reason_by_qid.setdefault(
-                qid, "missing verdict")
-
-        # A structurally valid provider proposal is not authority.  Send the
-        # exact source task, its complete allowed same-owner candidate records,
-        # and the proposal to a separate semantic critic.  The critic response
-        # is batch-exhaustive: any extra, missing, duplicate, mismatched, or
-        # malformed review invalidates the whole critic batch, leaving every
-        # proposal unresolved for the bounded correction attempt.
-        accepted: dict[str, str] = {}
-        if proposed:
-            critic_items = []
-            for qid, cid in proposed.items():
-                item = ambiguous[qid]
-                critic_items.append({
-                    "qid": qid,
-                    "exact_source_task": _inventory_task_text(item),
-                    "certified_owner_topic_id": (
-                        _inventory_item_owner_topic(item)[0]
-                    ),
-                    "certified_owner_topic": (
-                        _inventory_item_owner_topic(item)[1]
-                    ),
-                    "allowed_candidates": [
-                        {
-                            field: concept_payload_by_id[allowed_cid][field]
-                            for field in (
-                                "concept_id",
-                                "topic_id",
-                                "topic",
-                                "parent_concept",
-                                "concept",
-                                "teaching_description",
-                                "is_culmination",
-                            )
-                        }
-                        for allowed_cid in allowed_cids_by_qid[qid]
-                    ],
-                    "provider_proposal": {
-                        "concept_id": cid,
-                    },
-                })
-            critic_user = (
-                _metadata_block(meta)
-                + "\nIndependently review every pending provider proposal. "
-                "The exact source task and every structurally allowed "
-                "same-owner normal concept are supplied for each qid:\n"
-                + _json.dumps(
-                    {"pending_reviews": critic_items},
-                    ensure_ascii=False,
-                )
-            )
-            progress.log(
-                "Independently criticising semantic Activity/Info Hub hosts "
-                f"for {len(critic_items)} inventory item(s), attempt "
-                f"{attempt}."
-            )
-            critic_data = _openai_json(
-                critic_system,
-                critic_user,
-                purpose="concept_validation",
-            )
-            reviews = (
-                critic_data.get("reviews")
-                if isinstance(critic_data, dict)
-                else None
-            )
-            review_by_qid: dict[str, dict] = {}
-            critic_schema_error = not isinstance(reviews, list)
-            if isinstance(reviews, list):
-                for review in reviews:
-                    if not isinstance(review, dict):
-                        critic_schema_error = True
-                        continue
-                    qid = str(review.get("qid") or "").strip()
-                    cid = str(review.get("concept_id") or "").strip()
-                    verdict = str(review.get("verdict") or "").strip().casefold()
-                    reason = str(review.get("reason") or "").strip()
-                    try:
-                        confidence = float(review.get("confidence"))
-                    except (TypeError, ValueError):
-                        confidence = float("nan")
-                    if (
-                        qid not in proposed
-                        or qid in review_by_qid
-                        or cid != proposed.get(qid)
-                        or verdict not in {"accept", "reject"}
-                        or not reason
-                        or not _math.isfinite(confidence)
-                        or not 0.0 <= confidence <= 1.0
-                    ):
-                        critic_schema_error = True
-                        continue
-                    review_by_qid[qid] = {
-                        "concept_id": cid,
-                        "verdict": verdict,
-                        "confidence": confidence,
-                        "reason": reason,
-                    }
-            if set(review_by_qid) != set(proposed):
-                critic_schema_error = True
-
-            if critic_schema_error:
-                for qid in proposed:
-                    rejection_reason_by_qid[qid] = (
-                        "independent critic returned a missing, duplicate, "
-                        "unknown, mismatched, or malformed exhaustive review"
-                    )
-            else:
-                for qid, review in review_by_qid.items():
-                    confidence = review["confidence"]
-                    if (
-                        review["verdict"] == "accept"
-                        and confidence_policy.semantic_band(confidence)
-                        == "accepted"
-                    ):
-                        accepted[qid] = review["concept_id"]
-                    else:
-                        rejection_reason_by_qid[qid] = (
-                            "independent critic did not certify the proposed "
-                            f"host: verdict={review['verdict']}, "
-                            f"confidence={confidence:.3f}; "
-                            f"{review['reason']}"
-                        )
-
-        for qid, cid in accepted.items():
-            _certify_inventory_host(
-                certification_owner,
-                qid,
-                concept_payload_by_id[cid],
-                basis="activity_host_provider_critic",
-            )
-            ambiguous.pop(qid, None)
-            rejection_reason_by_qid.pop(qid, None)
-            api_certified += 1
-        if ambiguous:
-            progress.log(
-                f"Activity host review left {len(ambiguous)} uncertified "
-                "item(s); retrying only those qids.",
-                level="warning",
-            )
-
-    if ambiguous:
-        details = ", ".join(
-            f"{qid} ({rejection_reason_by_qid.get(qid, 'missing verdict')})"
-            for qid in sorted(ambiguous)
-        )
-        raise RuntimeError(
-            "activity hub placement review did not certify every inventory "
-            "item: " + details
-        )
-
-    if api_certified:
-        progress.log(
-            f"API-certified {api_certified} Activity/Info Hub host(s).",
-            level="success",
-        )
-    return _normalize_activity_hubs_from_inventory(
-        records, inventory, certification_owner)
-
-
-def _types_assign_system(subject: str) -> str:
-    return prompts.get_text("concepts.types_assign.system")
-
-
-def _description_refine_system(subject: str) -> str:
-    return prompts.get_text("concepts.description_refine.system")
-
-
 def _empty_inventory() -> dict:
     return {
         "items": [],
@@ -4817,6 +4423,17 @@ _CHECKPOINT_CONTAINER_HEADING_RE = re.compile(
     r"activity|project)\b",
     re.IGNORECASE,
 )
+# Structural parser gate only: recognizes headings that introduce a numbered
+# task-list container, so the numbered-list parser knows WHERE to anchor
+# source tasks (a numbered line in ordinary prose is not a task). It decides
+# nothing about what any task means — in particular the exercise-vs-intext
+# KIND of a list item is a model verdict (the chapter-outline / page
+# verification passes write ``source_kind`` on ACSD items), never wording.
+_TASK_LIST_CONTAINER_RE = re.compile(
+    r"\b(?:exercises?|ex\.|review|practice|problems?|"
+    r"figure\s+it\s+out)\b",
+    re.IGNORECASE,
+)
 _QUESTION_SENTENCE_RE = re.compile(
     r"(?:^|(?<=[.!?:])\s+)"
     r"(?P<question>(?:(?:and|but|or|now)\s+)?"
@@ -4857,11 +4474,6 @@ def _normalized_inventory_heading(heading: str) -> str:
     # the module is fully loaded.
     value = _collapse_spaced_heading_word(value)
     return re.sub(r"\s+", " ", value).strip().lower()
-
-
-def _is_question_list_heading(heading: str) -> bool:
-    """True for in-text QUESTION(S) blocks, never final exercises."""
-    return _normalized_inventory_heading(heading) in {"question", "questions"}
 
 
 def _inventory_task_without_solution(text: str, *, aggressive: bool = False) -> str:
@@ -4911,10 +4523,21 @@ def _is_chapter_wide_task_section(
     ):
         return False
     # A generic task block followed by another real source topic is local to
-    # the current teaching unit. A final generic block is chapter-wide.
+    # the current teaching unit. A final generic block is chapter-wide. A
+    # later section that is itself a generic chapter-final task container
+    # (unfiltered structure can surface one as its own topic) does not make
+    # the current block local — a run of final task blocks stays chapter-wide.
+    def _is_generic_task_topic(topic: str) -> bool:
+        normalized = _normalized_inventory_heading(topic)
+        return bool(
+            _CHAPTER_WIDE_TASK_HEADING_RE.match(normalized)
+            or _DISCOVER_PROJECT_HEADING_RE.match(normalized)
+        )
+
     current_topic = paired_sections[section_index][0]
     return not any(
         later_topic != current_topic
+        and not _is_generic_task_topic(later_topic)
         for later_topic, _ in paired_sections[section_index + 1:]
     )
 
@@ -5683,7 +5306,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
     def section_task_topic(default_topic: str, heading: str) -> str:
         """Use a clear subheading-to-main-topic family match for task scope."""
         heading_family = topic_word_family(heading)
-        if not heading_family or _is_non_topic_heading(heading):
+        if not heading_family:
             return default_topic
         matches = [
             candidate
@@ -5850,6 +5473,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         *, section_index: int, position: int, topic: str, kind: str,
         label: str, parent_label: str, task: str, chapter_wide: bool = False,
         activity_origin: bool = False, prefer_task_boundary: bool = False,
+        kind_is_default: bool = False,
     ) -> None:
         task = _strip_leading_source_task_label(
             _inventory_task_without_solution(task, aggressive=(
@@ -5863,6 +5487,9 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
         )
         ordered.append((section_index, position, {
             "source_kind": kind,
+            # Neutral placeholder marker: a default kind must never overwrite
+            # a model-decided ``source_kind`` during inventory reconciliation.
+            "_kind_is_default": bool(kind_is_default),
             "source_label": label,
             "parent_source_label": parent_label,
             "topic_hint": "" if chapter_wide else topic,
@@ -6066,20 +5693,19 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     prefer_task_boundary=True,
                 )
             continue
-        is_question_list_heading = _is_question_list_heading(heading)
-        is_exercise_list_heading = bool(
-            re.search(
-                r"\b(?:exercises?|ex\.|review|practice|problems?|"
-                r"figure\s+it\s+out)\b",
-                f"{heading} {container_heading}",
-                re.IGNORECASE,
-            )
-            or (chapter_wide and not is_question_list_heading)
+        # Structural container gate (mechanics): decides only WHERE the
+        # numbered-list parser applies — a named task container, a literal
+        # QUESTION(S) block, or a chapter-final task section. The KIND of a
+        # list item is NOT guessed from this wording: every list item records
+        # the neutral "intext_question" default, and the model-side verdict
+        # (chapter outline / page verification writing ``source_kind`` on
+        # ACSD items) owns the real exercise-vs-intext classification.
+        is_task_list_heading = bool(
+            _TASK_LIST_CONTAINER_RE.search(f"{heading} {container_heading}")
+            or container_heading in {"question", "questions"}
+            or chapter_wide
         )
-        is_task_list_heading = (
-            is_exercise_list_heading or is_question_list_heading)
-        list_item_kind = (
-            "exercise" if is_exercise_list_heading else "intext_question")
+        list_item_kind = "intext_question"
         if is_task_list_heading:
             task_matches = list(_NUMBERED_TASK_START_RE.finditer(
                 _mask_non_task_numbered_blocks(body)))
@@ -6100,6 +5726,7 @@ def _source_task_anchors(sections: list[dict]) -> list[dict]:
                     parent_label=heading,
                     task=task_text,
                     chapter_wide=chapter_wide,
+                    kind_is_default=True,
                 )
             if not task_matches and body.strip():
                 append_anchor(
@@ -7138,8 +6765,18 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
             "raw_solution_or_answer", "_topic_scope", "_activity_origin",
             "_source_section_index", "_source_position", "_source_task_boundary",
         ):
-            if anchor.get(field) not in (None, ""):
-                existing[field] = anchor.get(field)
+            if anchor.get(field) in (None, ""):
+                continue
+            if (
+                field == "source_kind"
+                and anchor.get("_kind_is_default")
+                and str(existing.get("source_kind") or "").strip().lower()
+                not in ("", "other")
+            ):
+                # The anchor carries only the neutral list-item default; the
+                # model's kind verdict on the matched row stands.
+                continue
+            existing[field] = anchor.get(field)
         existing["raw_task"] = authoritative_task
         existing["normalized_task"] = authoritative_task
         if anchor.get("_source_task_boundary") == "direct_prompt":
@@ -7727,8 +7364,6 @@ def _assign_chapter_wide_inventory_topics_via_api(
 def _extract_question_task_inventory_via_api(
     *, meta: dict, sections: list[dict], records: list[dict] | None = None,
 ) -> dict:
-    import json as _json
-
     def sanitized_items(data: dict, chunk: dict) -> list[dict]:
         return [
             _sanitize_inventory_item(
@@ -8493,11 +8128,17 @@ def _attach_explicit_figure_images(
             resolved.extend(embedded)
         elif (
             embedded
-            and str(item.get("source_kind") or "").strip().lower()
-            == "exercise"
+            and (
+                str(item.get("source_kind") or "").strip().lower()
+                == "exercise"
+                or item.get("_kind_is_default")
+            )
         ):
-            # A figure physically inside one numbered exercise boundary belongs
-            # to that atomic question even when its stem says only "the setup".
+            # A figure physically inside one numbered task-list item boundary
+            # belongs to that atomic question even when its stem says only
+            # "the setup". Structural containment decides here — parse-time
+            # list items carry the neutral kind, so this must not key off the
+            # exercise-vs-intext verdict the model owns.
             resolved.extend(embedded)
         elif owned_embedded:
             resolved.extend(owned_embedded)
@@ -11609,19 +11250,23 @@ def _human_directed_type_consolidation_via_api(
             "verdict/confidence schema"
         )
     critic_band = confidence_policy.semantic_band(critic_confidence)
+    review_flags: list[str] = []
     if verdict != "accept" or critic_band != "accepted":
-        minimum = confidence_policy.threshold_text()
-        failure = (
-            "The independent critic did not certify the merge at the ordinary "
-            f"semantic threshold {minimum}: verdict={verdict or '<missing>'}, "
-            f"confidence={critic_confidence!r}. {reason}"
-        ).strip()
-        progress.log(failure, level="warning")
-        return None, failure, {
-            "critic_verdict": verdict,
-            "critic_confidence": critic_confidence,
-            "critic_reason": reason,
-        }
+        # The critic is an auditor: its dissent is recorded on the applied
+        # result for review, never a gate. Every deterministic safety gate
+        # (exact QIDs, Example wording, immutable per-QID semantics) has
+        # already passed, so the human-authorized consolidation stands.
+        review_flags.append(
+            "independent critic dissent on the human-directed Type "
+            f"consolidation: verdict={verdict or '<missing>'}, confidence="
+            f"{critic_confidence!r} (band: {critic_band}). {reason}".strip()
+        )
+        progress.log(
+            "The independent critic dissented from the human-directed Type "
+            "consolidation; the consolidation stands with its dissent "
+            "recorded for review: " + review_flags[-1],
+            level="warning",
+        )
     audit = {
         "proposal_type_count": len(candidate),
         "merged_type_count": len(original) - len(candidate),
@@ -11629,12 +11274,15 @@ def _human_directed_type_consolidation_via_api(
         "critic_confidence": critic_confidence,
         "critic_reason": reason,
     }
-    progress.log(
-        "Human-directed Type consolidation accepted: "
-        f"{len(original)} to {len(candidate)} Type(s), with exact source "
-        "contracts preserved and independent semantic approval.",
-        level="success",
-    )
+    if review_flags:
+        audit["review_flags"] = review_flags
+    else:
+        progress.log(
+            "Human-directed Type consolidation accepted: "
+            f"{len(original)} to {len(candidate)} Type(s), with exact source "
+            "contracts preserved and independent semantic approval.",
+            level="success",
+        )
     return {"types": candidate}, "", audit
 
 
@@ -12003,87 +11651,29 @@ def _has_valid_terminal_mastery(details: str) -> bool:
 def _ensure_mastery_lines_via_api(
     records: list[dict], *, meta: dict, use_api: bool = True,
 ) -> list[dict]:
-    """Guarantee every normal concept Description ends with the line-broken
-    "Achieving Mastery: ..." statement.
+    """Normalize each normal concept's "Achieving Mastery: ..." line format.
 
-    The description-refine prompt asks for it, but models skip it on a
-    fraction of rows; this pass sends ONLY the missing Descriptions back for
-    completion, and falls back to a deterministic statement so the required
-    format is always present.
+    Settle's content-authoring pass owns mastery under the rewrite: this
+    pass is pure format normalization (mechanics). A row still missing its
+    mastery statement is a content defect for the Polish pass to repair
+    with a real model call — never a template backfill.
     """
-    import json as _json
-
-    if use_api and _rewrite_placement_authority_active():
-        # Settle's content-authoring pass owns mastery under the rewrite;
-        # this pass only normalizes format and backfills deterministically.
-        use_api = False
-
-    targets: list[int] = []
-    for i, rec in enumerate(records):
+    del meta, use_api
+    missing = 0
+    for rec in records:
         if cr.is_culmination(rec.get("concept_title", "")):
             continue
         rec["concept_details"] = cr.format_mastery_statement(
             rec.get("concept_details", ""))
         if not _has_valid_terminal_mastery(rec.get("concept_details", "")):
-            targets.append(i)
-    if not targets:
-        return records
-    progress.log(
-        f"Adding the missing 'Achieving Mastery' line to {len(targets)} concept(s).")
-    system = prompts.get_text("concepts.mastery_line.system")
-    rows = [
-        {
-            "topic": records[i].get("topic", ""),
-            "parent_concept": records[i].get("parent_concept", ""),
-            "concept": records[i].get("concept_title", ""),
-            "concept_description": "Description: "
-            + _concept_description_only(records[i].get("concept_details", "")),
-            "keywords": records[i].get("keywords", ""),
-        }
-        for i in targets
-    ]
-    user = (
-        _metadata_block(meta)
-        + "\nDescriptions missing their final mastery statement:\n"
-        + _json.dumps({"rows": rows}, ensure_ascii=False)
-    )
-    by_title: dict[str, str] = {}
-    if use_api:
-        try:
-            data = _openai_json(
-                system, user, purpose="concept_detailing")
-            for row in _concept_rows_to_records(data):
-                desc = _concept_description_only(row.get("concept_details", ""))
-                candidate_details = cr.format_mastery_statement(
-                    "Description: " + desc)
-                if _has_valid_terminal_mastery(candidate_details):
-                    by_title[bi.normalize_question_text(row["concept_title"])] = desc
-        except Exception as exc:  # noqa: BLE001 — fall back deterministically
-            progress.log(f"Mastery-line pass failed ({exc}) — using fallback lines.",
-                         level="warning")
-    completed = 0
-    for i in targets:
-        rec = records[i]
-        desc = by_title.get(bi.normalize_question_text(rec.get("concept_title", "")))
-        if not desc:
-            title = (rec.get("concept_title") or "this concept").strip().rstrip(".")
-            current_description = _concept_description_only(
-                rec.get("concept_details", ""))
-            existing_mastery = cr._MASTERY_LABEL_RE.search(
-                current_description)
-            if existing_mastery:
-                current_description = current_description[
-                    :existing_mastery.start()
-                ].rstrip()
-            desc = (
-                current_description
-                + f"\nAchieving Mastery: Applying {title} correctly in new problems."
-            )
-        rec["concept_details"] = cr.format_mastery_statement(
-            _set_description(rec.get("concept_details", ""), desc))
-        completed += 1
-    progress.log(f"Mastery lines completed for {completed} concept(s).",
-                 level="success")
+            missing += 1
+    if missing:
+        progress.log(
+            f"{missing} concept(s) lack an authored 'Achieving Mastery' "
+            "line after format normalization; the Polish pass repairs "
+            "missing mastery with a model call, never a template.",
+            level="warning",
+        )
     return records
 
 
@@ -12206,61 +11796,6 @@ def _ensure_method_worked_examples_via_api(
         level="success",
     )
     return records
-
-
-def _merge_similar_concepts_via_api(records: list[dict], *, meta: dict) -> list[dict]:
-    """Merge near-duplicate concept rows via GPT instead of dropping them.
-
-    ``concept_cleanup.find_similar_title_groups`` only DETECTS suspects; the
-    content decision (which title/topic survives, how Descriptions, Types,
-    Misconceptions, and Error Analysis combine) is GPT's. On failure the deterministic drop is the
-    last resort so duplicates never ship.
-    """
-    import json as _json
-
-    groups = concept_cleanup.find_similar_title_groups(records)
-    if not groups:
-        return records
-    progress.log(
-        f"Merging {len(groups)} group(s) of near-duplicate concepts via API.")
-    system = prompts.get_text("concepts.merge_duplicates.system")
-    merged_by_first: dict[int, dict] = {}
-    drop: set[int] = set()
-    for group in groups:
-        rows = [records[i] for i in group]
-        user = (
-            _metadata_block(meta)
-            + "\nRows restating the same concept — merge into ONE row:\n"
-            + _json.dumps({"rows": _records_to_api_rows(rows)}, ensure_ascii=False)
-        )
-        try:
-            data = _openai_json(system, user, purpose="concept_mapping")
-            merged_rows = _concept_rows_to_records(data)
-        except Exception as exc:  # noqa: BLE001 — deterministic drop still guards
-            progress.log(
-                f"Duplicate-merge pass failed ({exc}) — deterministic dedupe "
-                "will handle this group.",
-                level="warning")
-            continue
-        if len(merged_rows) != 1:
-            progress.log(
-                f"Duplicate-merge returned {len(merged_rows)} row(s) for a "
-                f"group of {len(group)} — keeping deterministic dedupe.",
-                level="warning")
-            continue
-        merged_by_first[group[0]] = merged_rows[0]
-        drop.update(group[1:])
-    if not merged_by_first:
-        return records
-    out: list[dict] = []
-    for i, rec in enumerate(records):
-        if i in drop:
-            continue
-        out.append(merged_by_first.get(i, rec))
-    progress.log(
-        f"Merged {len(drop)} duplicate row(s) into {len(merged_by_first)} concept(s).",
-        level="success")
-    return out
 
 
 def _misconception_body(details: str) -> str:
@@ -13307,386 +12842,6 @@ def _consolidate_reusable_type_hosts(
     return copy.deepcopy(per_concept)
 
 
-def _assign_mined_types_via_api(
-    records: list[dict], *, meta: dict, mined_types: dict, max_attempts: int = 2,
-) -> list[dict]:
-    """Embed every mined Case within its source topic using exact API IDs.
-
-    Exact inventory coverage belongs to the original mined Types. Multi-Case
-    Types are expanded only for assignment into one internal unit per Case, with
-    all Examples in that Case kept together. Source-topic-scoped units are
-    grouped by canonical topic and allowed concept IDs. Ordinary and same-topic
-    synthesis units stay in that source topic. Explicit cross-topic synthesis
-    units additionally see only later-topic Culminations. Omitted IDs are
-    retried against the same candidate list. Placement is joined by exact IDs
-    only — no regex, token, or word matching.
-    """
-    import json as _json
-
-    # One complete assignment plus one correction containing only unresolved
-    # IDs retains quality feedback without the former four-call retry loop.
-    max_attempts = max(1, min(2, int(max_attempts or 1)))
-
-    types = (mined_types or {}).get("types") or []
-    if not types:
-        return records
-    # A reassignment is a new review boundary. Never carry host verdicts from
-    # an earlier row topology into the freshly materialized concept map.
-    _reset_placement_certifications(mined_types)
-
-    # Culmination rows are included so mixed/synthesis Types mined from the
-    # source can be placed on them (this pass runs after the culmination pass).
-    cid_map: dict[str, dict] = {}
-    concept_payload: list[dict] = []
-    for i, rec in enumerate(records, start=1):
-        cid = f"CONCEPT-{i:04d}"
-        cid_map[cid] = rec
-        concept_payload.append({
-            "concept_id": cid,
-            "topic_id": str(rec.get("_semantic_topic_id") or ""),
-            "topic": rec.get("topic", ""),
-            "parent_concept": rec.get("parent_concept", ""),
-            "concept": rec.get("concept_title", ""),
-            "concept_description": _concept_description_only(rec.get("concept_details", "")),
-            "is_culmination": cr.is_culmination(rec.get("concept_title", "")),
-            # Reading-order position — placements must not jump ahead of the
-            # chapter (e.g. heating-effect questions under resistivity).
-            "chapter_position": i,
-        })
-    concept_payload_by_id = {
-        row["concept_id"]: row for row in concept_payload
-    }
-
-    original_types_by_id: dict[str, dict] = {}
-    for i, t in enumerate(types, start=1):
-        tid = (t.get("type_id") or f"TYPE-{i:04d}").strip() or f"TYPE-{i:04d}"
-        t = copy.deepcopy(t)
-        t["type_id"] = tid
-        if tid in original_types_by_id:
-            raise RuntimeError(
-                "type embedding failed: duplicate mined Type ID "
-                f"{tid} prevents exact-once assignment")
-        original_types_by_id[tid] = t
-
-    assignment_units = _expand_mined_types_to_assignment_units(
-        list(original_types_by_id.values()))
-    types_by_id = {
-        unit["type_id"]: unit
-        for unit in assignment_units
-    }
-    if len(types_by_id) != len(assignment_units):
-        raise RuntimeError(
-            "type embedding failed: duplicate case-scoped assignment-unit ID")
-
-    concept_ids_by_topic: dict[str, list[str]] = {}
-    concept_ids_by_topic_id: dict[str, list[str]] = {}
-    topic_position: dict[str, int] = {}
-    for row in concept_payload:
-        topic_key = _topic_comparison_key(row.get("topic", ""))
-        concept_ids_by_topic.setdefault(topic_key, []).append(row["concept_id"])
-        topic_id = str(row.get("topic_id") or "")
-        if topic_id:
-            concept_ids_by_topic_id.setdefault(topic_id, []).append(
-                row["concept_id"])
-        topic_position.setdefault(topic_key, row["chapter_position"])
-
-    all_concept_ids = tuple(cid_map)
-    topic_key_by_tid: dict[str, str] = {}
-    allowed_cids_by_tid: dict[str, set[str]] = {}
-    candidate_cids_by_tid: dict[str, tuple[str, ...]] = {}
-    missing_scopes: list[tuple[str, str, str]] = []
-    for tid, mtype in types_by_id.items():
-        placement = _certified_type_case_placement_contract(
-            mtype.get("_type_case_placement_contract"))
-        source_topic = (mtype.get("topic_match_hint") or "").strip()
-        if placement is not None:
-            owner_topic_id = str(
-                placement.get("owner_topic_id") or "").strip()
-            topic_key = f"owner:{owner_topic_id}"
-            topic_candidates = set(
-                concept_ids_by_topic_id.get(owner_topic_id, []))
-        else:
-            topic_key = _topic_comparison_key(source_topic)
-            if topic_key:
-                topic_candidates = set(
-                    concept_ids_by_topic.get(topic_key, []))
-            else:
-                topic_candidates = set(all_concept_ids)
-        topic_key_by_tid[tid] = topic_key
-        normal_candidates = {
-            cid for cid in topic_candidates
-            if not cr.is_culmination(
-                cid_map[cid].get("concept_title", ""))
-        }
-        placement_scope = _assignment_placement_scope(
-            mtype, concept_payload_by_id)
-        allowed = normal_candidates
-        if not mtype.get("is_activity") and placement_scope in {
-            "mixed_synthesis", "cross_topic_synthesis",
-        }:
-            allowed = set(topic_candidates)
-        if (
-            not mtype.get("is_activity")
-            and placement_scope == "cross_topic_synthesis"
-            and placement is None
-            and topic_key in topic_position
-        ):
-            source_position = topic_position[topic_key]
-            allowed.update(
-                row["concept_id"]
-                for row in concept_payload
-                if row["is_culmination"]
-                and row["chapter_position"] > source_position
-                and _topic_comparison_key(row.get("topic", "")) != topic_key
-            )
-        allowed_cids_by_tid[tid] = allowed
-        candidate_cids_by_tid[tid] = tuple(
-            cid for cid in all_concept_ids if cid in allowed)
-        if not allowed:
-            missing_scopes.append((tid, source_topic, topic_key))
-
-    if missing_scopes:
-        failures = "; ".join(
-            f"{tid} source topic {topic!r} normalizes to {topic_key!r}"
-            for tid, topic, topic_key in missing_scopes
-        )
-        available_topics = sorted({
-            (
-                (row.get("topic") or "").strip(),
-                _topic_comparison_key(row.get("topic", "")),
-            )
-            for row in concept_payload
-            if _topic_comparison_key(row.get("topic", ""))
-        })
-        available = ", ".join(
-            f"{topic!r} -> {topic_key!r}"
-            for topic, topic_key in available_topics
-        ) or "(none)"
-        raise RuntimeError(
-            "type embedding eligibility failed: no allowed normal/mixed "
-            f"concept candidates for {failures}; available normalized concept "
-            f"topics: {available}"
-        )
-
-    if not all_concept_ids:
-        raise RuntimeError(
-            "type embedding failed: no concept candidates for mined Types "
-            + ", ".join(types_by_id)
-        )
-
-    system = prompts.get_text("concepts.type_embedding.system")
-    groups: dict[tuple[str, tuple[str, ...]], list[str]] = {}
-    for tid in types_by_id:
-        group_key = (topic_key_by_tid[tid], candidate_cids_by_tid[tid])
-        groups.setdefault(group_key, []).append(tid)
-
-    per_concept: dict[str, list[dict]] = {}
-    unassigned: set[str] = set()
-    rejections_by_tid: dict[str, list[dict]] = {}
-    for (_, candidate_cids), group_type_ids in groups.items():
-        scoped_concepts = [
-            concept_payload_by_id[cid] for cid in candidate_cids
-        ]
-        candidate_cid_set = set(candidate_cids)
-        remaining_in_group = set(group_type_ids)
-        override_by_tid = {
-            tid: cid
-            for tid in group_type_ids
-            for cid in [_high_confidence_assignment_override(
-                types_by_id[tid], candidate_cids, concept_payload_by_id)
-            ]
-            if cid
-        }
-        overridden: set[str] = set()
-        scope_label = (
-            types_by_id[group_type_ids[0]].get("topic_match_hint")
-            or "unscoped chapter"
-        )
-        for attempt in range(1, max_attempts + 1):
-            if not remaining_in_group:
-                break
-            pending = []
-            for tid in group_type_ids:
-                if tid not in remaining_in_group:
-                    continue
-                item = dict(types_by_id[tid])
-                allowed = allowed_cids_by_tid[tid]
-                item["allowed_concept_ids"] = sorted(allowed)
-                item["placement_scope"] = _assignment_placement_scope(
-                    item, concept_payload_by_id)
-                if rejections_by_tid.get(tid):
-                    item["previous_rejections"] = rejections_by_tid[tid][-3:]
-                pending.append(item)
-            user = (
-                _metadata_block(meta)
-                + "\nCONCEPTS (assign every mined Type assignment unit to "
-                "exactly one concept_id):\n"
-                + _json.dumps({"concepts": scoped_concepts}, ensure_ascii=False)
-                + "\n\nMINED TYPE ASSIGNMENT UNITS "
-                "(every type_id MUST be assigned):\n"
-                + _json.dumps({"types": pending}, ensure_ascii=False)
-            )
-            data = _openai_json(system, user, purpose="concept_mapping")
-            rejected_counts: dict[str, int] = {}
-            responded_tids: set[str] = set()
-            for assignment in data.get("assignments") or []:
-                if not isinstance(assignment, dict):
-                    continue
-                cid = (assignment.get("concept_id") or "").strip()
-                for tid in assignment.get("type_ids") or []:
-                    tid = (tid or "").strip()
-                    if tid not in remaining_in_group:
-                        continue
-                    responded_tids.add(tid)
-                    allowed = allowed_cids_by_tid.get(tid)
-                    effective_cid = override_by_tid.get(tid) or cid
-                    target_is_culmination = concept_payload_by_id.get(
-                        effective_cid, {}).get("is_culmination")
-                    type_allows_culmination = (
-                        not types_by_id[tid].get("is_activity")
-                        and _assignment_placement_scope(
-                            types_by_id[tid], concept_payload_by_id)
-                        in {"mixed_synthesis", "cross_topic_synthesis"}
-                    )
-                    reason = ""
-                    if effective_cid not in cid_map:
-                        reason = "unknown_concept_id"
-                    elif effective_cid not in candidate_cid_set:
-                        reason = "not_in_eligible_scope"
-                    elif effective_cid not in allowed:
-                        reason = "not_in_allowed_concept_ids"
-                    elif target_is_culmination and not type_allows_culmination:
-                        reason = "culmination_not_eligible"
-                    if reason:
-                        rejected_counts[reason] = (
-                            rejected_counts.get(reason, 0) + 1)
-                        rejections_by_tid.setdefault(tid, []).append({
-                            "attempt": attempt,
-                            "concept_id": cid,
-                            "reason": reason,
-                        })
-                        continue
-                    per_concept.setdefault(effective_cid, []).append(
-                        types_by_id[tid])
-                    if effective_cid != cid:
-                        overridden.add(tid)
-                    remaining_in_group.discard(tid)
-            for tid in sorted(remaining_in_group - responded_tids):
-                rejected_counts["omitted_from_response"] = (
-                    rejected_counts.get("omitted_from_response", 0) + 1)
-                rejections_by_tid.setdefault(tid, []).append({
-                    "attempt": attempt,
-                    "concept_id": "",
-                    "reason": "omitted_from_response",
-                })
-            if rejected_counts:
-                summary = ", ".join(
-                    f"{reason}={count}"
-                    for reason, count in sorted(rejected_counts.items())
-                )
-                progress.log(
-                    "Rejected/unresolved mined Type assignment-unit "
-                    f"placement(s) ({summary}); retrying only those type IDs "
-                    "with rejection feedback.",
-                    level="warning",
-                )
-            placed = len(group_type_ids) - len(remaining_in_group)
-            progress.log(
-                f"Type embedding scope {scope_label!r} attempt {attempt}: "
-                f"{placed}/{len(group_type_ids)} assignment units assigned.")
-        for tid in list(remaining_in_group):
-            cid = override_by_tid.get(tid)
-            if not cid:
-                continue
-            per_concept.setdefault(cid, []).append(types_by_id[tid])
-            remaining_in_group.discard(tid)
-            overridden.add(tid)
-        deferred_activities = {
-            tid for tid in remaining_in_group
-            if types_by_id[tid].get("is_activity")
-        }
-        if deferred_activities:
-            remaining_in_group.difference_update(deferred_activities)
-            progress.log(
-                f"Deferred {len(deferred_activities)} ambiguous activity "
-                "assignment unit(s) to Activity/Info Hub inventory placement.",
-                level="warning",
-            )
-        if overridden:
-            progress.log(
-                f"Corrected {len(overridden)} Type assignment unit(s) using "
-                "unambiguous source/concept evidence.")
-        unassigned.update(remaining_in_group)
-
-    if unassigned:
-        progress.log(
-            f"{len(unassigned)} mined Type assignment unit(s) unassigned after "
-            f"{max_attempts} attempt(s); failing instead of filing questions "
-            "under the wrong concept.",
-            level="error",
-        )
-        raise RuntimeError(
-            "type embedding failed: unassigned mined Types/case units "
-            + ", ".join(sorted(unassigned))
-        )
-
-    per_concept = _review_case_unit_hosts_via_api(
-        assignment_units=assignment_units,
-        per_concept=per_concept,
-        concept_payload=concept_payload,
-        allowed_cids_by_tid=allowed_cids_by_tid,
-        meta=meta,
-    )
-    per_concept = _consolidate_reusable_type_hosts(
-        per_concept=per_concept,
-        original_types_by_id=original_types_by_id,
-        allowed_cids_by_tid=allowed_cids_by_tid,
-        concept_payload=concept_payload,
-        meta=meta,
-    )
-    for cid, units in per_concept.items():
-        host = concept_payload_by_id[cid]
-        for unit in units:
-            if unit.get("is_activity"):
-                continue
-            for qid in unit.get("source_question_ids") or []:
-                _certify_inventory_host(
-                    mined_types,
-                    qid,
-                    host,
-                    basis="type_host_review",
-                )
-
-    for cid, tlist in per_concept.items():
-        rec = cid_map[cid]
-        fragments: list[str] = []
-        rendered_origin_ids: list[str] = []
-        hub_fragments: list[str] = []
-        counter = 0
-        for mtype in _collapse_assignment_units_for_render(tlist):
-            if mtype.get("is_activity"):
-                # Activity procedures are placed from their authoritative
-                # inventory item by the dedicated compact Hub pass. Do not
-                # duplicate the full source task here or emit it as a Type.
-                continue
-            body, counter = _mined_type_to_body(mtype, counter)
-            if body:
-                fragments.append(body)
-                rendered_origin_ids.append(str(
-                    mtype.get("_origin_type_id")
-                    or mtype.get("type_id")
-                    or ""
-                ).split("::", 1)[0])
-        details = rec.get("concept_details", "")
-        if fragments:
-            details = _inject_types(details, " ".join(fragments))
-            rec["_origin_type_id"] = rendered_origin_ids
-        for hub in hub_fragments:
-            details = _append_activity_hub(details, hub)
-        rec["concept_details"] = details
-    return cr.renumber_types_continuously(records)
-
-
 def _topic_first_positions(records: list[dict]) -> dict[str, int]:
     """Reading-order position of each canonical source topic."""
     positions: dict[str, int] = {}
@@ -13746,124 +12901,6 @@ def _mined_type_allows_record(
     )
 
 
-def _mined_type_topic_violations(
-    records: list[dict], mined_types: dict | None,
-) -> list[dict]:
-    """Return missing or unexpected placements, grouped by normalized Type title."""
-    violations: list[dict] = []
-    expected_by_title: dict[str, list[dict]] = {}
-    source_types = [
-        mtype for mtype in (mined_types or {}).get("types") or []
-        if isinstance(mtype, dict)
-    ]
-    expected_units = (
-        _expand_mined_types_to_assignment_units(source_types)
-        if source_types else []
-    )
-    for mtype in expected_units:
-        if mtype.get("is_activity"):
-            continue
-        topic = (mtype.get("topic_match_hint") or "").strip()
-        title = _canonical_mined_type_title(
-            mtype, include_definition=False)
-        if not topic or not title:
-            continue
-        topic_key = _topic_comparison_key(topic)
-        title_key = bi.normalize_question_text(title)
-        expected_by_title.setdefault(title_key, []).append({
-            "mtype": mtype,
-            "title": title,
-            "topic": topic,
-            "topic_key": topic_key,
-        })
-
-    # Parse rendered Type headers rather than matching title text in Case/Example
-    # prose. Match longest normalized titles first because the rendered header
-    # may append a description after the title.
-    type_header_re = re.compile(
-        r"\b(?:Miscellaneous\s+)?Type\s+\d+\s*:\s*(?P<title>.*?)"
-        r"(?=\s+\bCase\s+\d+\s*:)",
-        re.IGNORECASE | re.DOTALL,
-    )
-    actual_by_title: dict[str, list[dict]] = {
-        title_key: [] for title_key in expected_by_title
-    }
-    known_title_keys = sorted(expected_by_title, key=len, reverse=True)
-    for rec in records:
-        body = _types_body(rec.get("concept_details", ""))
-        for match in type_header_re.finditer(body):
-            rendered_key = bi.normalize_question_text(match.group("title"))
-            title_key = rendered_key if rendered_key in expected_by_title else next(
-                (
-                    known_key for known_key in known_title_keys
-                    if rendered_key.startswith(f"{known_key} ")
-                ),
-                "",
-            )
-            if title_key:
-                actual_by_title[title_key].append(rec)
-
-    scope_payload = _scope_payload_from_records(records)
-    for title_key, expected in expected_by_title.items():
-        remaining_matches = list(actual_by_title[title_key])
-        # Reserve exact-topic rows for ordinary/same-topic Types before a
-        # cross-topic Type is allowed to consume its optional source-topic
-        # placement. This makes repeated identical Type titles deterministic.
-        ordered_expected = sorted(
-            expected,
-            key=lambda entry: (
-                _assignment_placement_scope(
-                    entry["mtype"], scope_payload)
-                == "cross_topic_synthesis"
-            ),
-        )
-        for entry in ordered_expected:
-            mtype = entry["mtype"]
-            title = entry["title"]
-            topic = entry["topic"]
-            match_index = next(
-                (
-                    index for index, record in enumerate(remaining_matches)
-                    if _mined_type_allows_record(records, mtype, record)
-                ),
-                -1,
-            )
-            if match_index >= 0:
-                remaining_matches.pop(match_index)
-                continue
-
-            violations.append({
-                "type_id": mtype.get("type_id") or "",
-                "type_title": title,
-                "expected_topic": topic,
-                "actual_topic": "",
-                "reason": "missing",
-            })
-
-        representative = expected[0]
-        for rec in remaining_matches:
-            # One mined Type may render on several concepts after Case-scoped
-            # assignment. Additional rows are valid when each stays within an
-            # allowed topic target for that original Type.
-            if any(
-                _mined_type_allows_record(records, entry["mtype"], rec)
-                for entry in expected
-            ):
-                continue
-            actual = (rec.get("topic") or "").strip()
-            mtype = representative["mtype"]
-            title = representative["title"]
-            topic = representative["topic"]
-            violations.append({
-                "type_id": mtype.get("type_id") or "",
-                "type_title": title,
-                "expected_topic": topic,
-                "actual_topic": actual,
-                "reason": "wrong_topic",
-            })
-    return violations
-
-
 def _expected_normal_type_host_cid(
     unit: dict,
     topic_cids: tuple[str, ...],
@@ -13912,356 +12949,6 @@ def _expected_normal_type_host_cid(
     return ""
 
 
-def _rendered_type_placement_violations(
-    records: list[dict], inventory: dict | None,
-    mined_types: dict | None,
-) -> list[dict]:
-    """Case-scoped mined Types rendered on an ineligible concept host.
-
-    Topic equality alone is insufficient: a normal single-concept task may not
-    be parked on that topic's Culmination.  When the mined hint or the same
-    deterministic evidence used during assignment identifies one unique normal
-    concept, the terminal gate also preserves that exact host.
-    """
-    if _reviewed_placement_authority_declared(mined_types):
-        return []
-
-    units_by_qid = _mined_assignment_units_by_qid(mined_types)
-
-    concept_payload_by_id: dict[str, dict] = {}
-    cid_by_index: dict[int, str] = {}
-    cids_by_topic: dict[str, list[str]] = {}
-    index_by_cid: dict[str, int] = {}
-    for index, record in enumerate(records):
-        cid = f"CONCEPT-{index + 1:04d}"
-        cid_by_index[index] = cid
-        index_by_cid[cid] = index
-        payload = {
-            "concept_id": cid,
-            "topic_id": str(record.get("_semantic_topic_id") or ""),
-            "topic": record.get("topic") or "",
-            "parent_concept": record.get("parent_concept") or "",
-            "concept": record.get("concept_title") or "",
-            "is_culmination": cr.is_culmination(
-                record.get("concept_title") or ""),
-        }
-        concept_payload_by_id[cid] = payload
-        cids_by_topic.setdefault(
-            _topic_comparison_key(record.get("topic") or ""), []).append(cid)
-
-    violations: list[dict] = []
-    for item in (inventory or {}).get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        qid = str(item.get("qid") or "").strip()
-        unit = units_by_qid.get(qid)
-        if not qid:
-            continue
-        task_text = _inventory_task_text(item)
-        if unit is None:
-            placement_scope = "normal"
-            if (
-                _INVENTORY_CROSS_TOPIC_SYNTHESIS_CUE_RE.search(task_text)
-                or (
-                    item.get("_chapter_wide_task")
-                    and _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(task_text)
-                )
-            ):
-                placement_scope = "cross_topic_synthesis"
-            elif (
-                _INVENTORY_SYNTHESIS_CUE_RE.search(task_text)
-                or (
-                    item.get("_chapter_wide_task")
-                    and _MIXED_ASSIGNMENT_CUE_RE.search(task_text)
-                )
-            ):
-                placement_scope = "mixed_synthesis"
-            # Older final checkpoints can carry a partial or empty mined
-            # taxonomy. The source inventory still proves that an ordinary
-            # task/activity may not be parked on a Culmination; infer only that
-            # conservative rule and an unambiguous sole normal host.
-            unit = {
-                "type_id": "",
-                "topic_match_hint": item.get("topic_hint") or "",
-                "concept_match_hint": "",
-                "parent_concept_match_hint": "",
-                "placement_scope": placement_scope,
-                "is_activity": bool(item.get("_activity_origin")),
-                "_source_task_evidence": task_text,
-            }
-        else:
-            # A mined Type may contain a stale or self-consistent wrong routing
-            # hint. Terminal host proof must include the authoritative source
-            # task and must not let that hint certify itself.
-            unit = copy.deepcopy(unit)
-            unit["_source_task_evidence"] = task_text
-        unit["_source_topic_evidence"] = item.get("topic_hint") or ""
-        locations = _rendered_inventory_example_locations(records, item)
-        if not locations:
-            continue
-        scope = _assignment_placement_scope(
-            unit, concept_payload_by_id)
-        source_topic_key = _topic_comparison_key(
-            unit.get("topic_match_hint")
-            or item.get("topic_hint")
-            or ""
-        )
-        topic_cids = tuple(cids_by_topic.get(source_topic_key, ()))
-        normal_cids = tuple(
-            cid for cid in topic_cids
-            if not concept_payload_by_id[cid]["is_culmination"]
-        )
-
-        expected_cid = ""
-        if scope == "normal" or unit.get("is_activity"):
-            expected_cid = _expected_normal_type_host_cid(
-                unit,
-                topic_cids,
-                concept_payload_by_id,
-                allow_model_hints=False,
-            )
-        elif scope == "mixed_synthesis":
-            expected_cid = _high_confidence_assignment_override(
-                unit, topic_cids, concept_payload_by_id)
-
-        for index in locations:
-            actual_cid = cid_by_index[index]
-            actual = concept_payload_by_id[actual_cid]
-            if (
-                (scope == "normal" or unit.get("is_activity"))
-                and actual["is_culmination"]
-            ):
-                violations.append({
-                    "qid": qid,
-                    "type_id": unit.get("type_id") or "",
-                    "reason": "normal_scope_on_culmination",
-                    "concept": actual["concept"],
-                })
-                continue
-            if expected_cid and actual_cid != expected_cid:
-                expected = concept_payload_by_id[expected_cid]
-                violations.append({
-                    "qid": qid,
-                    "type_id": unit.get("type_id") or "",
-                    "reason": "high_confidence_wrong_host",
-                    "expected_concept": expected["concept"],
-                    "actual_concept": actual["concept"],
-                })
-    return violations
-
-
-def _normal_concept_type_coverage_violations(
-    records: list[dict], inventory: dict | None,
-    mined_types: dict | None,
-) -> list[dict]:
-    """Applicable normal concepts missing their source-backed Type coverage.
-
-    This is deliberately item-driven rather than a blanket "Types on every
-    concept" rule. A theory-only concept with no assessable source task remains
-    valid. When the authoritative task text (or a structurally unique sole
-    normal host) proves one normal concept, however, that concept must contain
-    a real Type/Case hierarchy and the exact source item as one of its
-    Examples.
-    """
-    if _reviewed_placement_authority_declared(mined_types):
-        return []
-
-    units_by_qid = _mined_assignment_units_by_qid(mined_types)
-    concept_payload_by_id: dict[str, dict] = {}
-    cids_by_topic: dict[str, list[str]] = {}
-    index_by_cid: dict[str, int] = {}
-    for index, record in enumerate(records):
-        cid = f"CONCEPT-{index + 1:04d}"
-        index_by_cid[cid] = index
-        payload = {
-            "concept_id": cid,
-            "topic": record.get("topic") or "",
-            "parent_concept": record.get("parent_concept") or "",
-            "concept": record.get("concept_title") or "",
-            "is_culmination": cr.is_culmination(
-                record.get("concept_title") or ""),
-        }
-        concept_payload_by_id[cid] = payload
-        cids_by_topic.setdefault(
-            _topic_comparison_key(record.get("topic") or ""), []).append(cid)
-
-    violations: list[dict] = []
-    for item in (inventory or {}).get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        if (
-            str(item.get("source_kind") or "").strip().lower()
-            in _HUB_INVENTORY_KINDS
-        ):
-            continue
-        qid = str(item.get("qid") or "").strip()
-        task_text = _inventory_task_text(item)
-        if not qid or not task_text:
-            continue
-
-        mined_unit = units_by_qid.get(qid)
-        if mined_unit is not None:
-            unit = copy.deepcopy(mined_unit)
-        else:
-            placement_scope = "normal"
-            if (
-                _INVENTORY_CROSS_TOPIC_SYNTHESIS_CUE_RE.search(task_text)
-                or (
-                    item.get("_chapter_wide_task")
-                    and _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(task_text)
-                )
-            ):
-                placement_scope = "cross_topic_synthesis"
-            elif (
-                _INVENTORY_SYNTHESIS_CUE_RE.search(task_text)
-                or (
-                    item.get("_chapter_wide_task")
-                    and _MIXED_ASSIGNMENT_CUE_RE.search(task_text)
-                )
-            ):
-                placement_scope = "mixed_synthesis"
-            unit = {
-                "type_id": "",
-                "placement_scope": placement_scope,
-                "is_activity": bool(item.get("_activity_origin")),
-            }
-        # The inventory prompt is authoritative evidence. Routing hints stay
-        # available on ``unit`` for diagnostics but are explicitly disabled as
-        # a certifying signal below.
-        unit["_source_task_evidence"] = task_text
-        unit["_source_topic_evidence"] = item.get("topic_hint") or ""
-        if (
-            _assignment_placement_scope(
-                unit, concept_payload_by_id) != "normal"
-            and not unit.get("is_activity")
-        ):
-            continue
-
-        topic_key = _topic_comparison_key(
-            item.get("topic_hint")
-            or unit.get("topic_match_hint")
-            or ""
-        )
-        topic_cids = tuple(cids_by_topic.get(topic_key, ()))
-        # Prove the destination from the authoritative source task alone.
-        # Mined Type labels and Case summaries are model output too, so they
-        # must not turn a self-consistent but wrong taxonomy into terminal
-        # evidence for its own host.
-        host_evidence_unit = {
-            "type_id": unit.get("type_id") or "",
-            "placement_scope": "normal",
-            "is_activity": bool(unit.get("is_activity")),
-            "_source_task_evidence": task_text,
-        }
-        expected_cid = _expected_normal_type_host_cid(
-            host_evidence_unit,
-            topic_cids,
-            concept_payload_by_id,
-            allow_model_hints=False,
-        )
-        if not expected_cid:
-            continue
-        expected_index = index_by_cid[expected_cid]
-        expected_record = records[expected_index]
-        locations = _rendered_inventory_example_locations(records, item)
-        if not _has_meaningful_types(
-            expected_record.get("concept_details") or ""
-        ):
-            reason = "missing_meaningful_types"
-        elif expected_index not in locations:
-            reason = "source_qid_not_on_expected_host"
-        else:
-            continue
-        violations.append({
-            "qid": qid,
-            "type_id": unit.get("type_id") or "",
-            "reason": reason,
-            "expected_concept": (
-                concept_payload_by_id[expected_cid]["concept"]
-            ),
-            "actual_concepts": [
-                records[index].get("concept_title") or ""
-                for index in locations
-            ],
-        })
-    return violations
-
-
-def _inventory_topic_type_coverage_violations(
-    records: list[dict], inventory: dict | None,
-) -> list[dict]:
-    """Semantic owner topics with assessable inventory but no Types.
-
-    Physical ``topic_hint`` remains source provenance after placement v2. A
-    correctly moved Case therefore counts toward its certified owner topic,
-    rather than forcing an unrelated Type onto the page where it was printed.
-    Legacy/offline inventory retains title-based source-topic routing.
-    """
-    task_counts: dict[str, dict] = {}
-    for item in (inventory or {}).get("items") or []:
-        if (
-            (item.get("source_kind") or "").strip().lower()
-            in _HUB_INVENTORY_KINDS
-        ):
-            # Pure classroom activities are represented in Activity/Info Hub,
-            # not as artificial assessment Types. Assessable questions that
-            # originated inside an activity carry a non-Hub source_kind and
-            # remain covered by this gate.
-            continue
-        owner_topic_id, topic = _inventory_item_owner_topic(item)
-        topic_key = _topic_comparison_key(topic)
-        if not owner_topic_id and not topic_key:
-            continue
-        key = (
-            f"owner:{owner_topic_id}"
-            if owner_topic_id
-            else f"legacy:{topic_key}"
-        )
-        entry = task_counts.setdefault(
-            key,
-            {
-                "topic": topic or owner_topic_id,
-                "inventory_items": 0,
-                **(
-                    {"topic_id": owner_topic_id}
-                    if owner_topic_id else {}
-                ),
-            },
-        )
-        entry["inventory_items"] += 1
-    covered: set[str] = set()
-    for record in records:
-        if not _has_meaningful_types(record.get("concept_details", "")):
-            continue
-        topic_id = str(record.get("_semantic_topic_id") or "").strip()
-        if topic_id:
-            covered.add(f"owner:{topic_id}")
-        topic_key = _topic_comparison_key(record.get("topic") or "")
-        if topic_key:
-            covered.add(f"legacy:{topic_key}")
-    return [
-        entry for key, entry in task_counts.items()
-        if key not in covered
-    ]
-
-
-def _accept_topic_safe_type_review(
-    original: list[dict], candidate: list[dict], mined_types: dict | None,
-) -> list[dict]:
-    """Reject an alignment review that moves/drops source-topic-scoped Types."""
-    candidate = _carry_type_origin_metadata(original, candidate)
-    violations = _mined_type_topic_violations(candidate, mined_types)
-    if violations:
-        progress.log(
-            f"Rejected Type alignment review with {len(violations)} "
-            "source-topic placement violation(s); keeping constrained "
-            "pre-review assignments.",
-            level="warning",
-        )
-        return original
-    return candidate
-
-
 def _merge_types_from_fallback(
     records: list[dict], fallback: list[dict],
 ) -> list[dict]:
@@ -14286,82 +12973,6 @@ def _merge_types_from_fallback(
     if restored:
         progress.log(f"Restored Types on {restored} concept(s) from pre-pass snapshot.")
     return records
-
-
-def _review_type_concept_alignment_via_api(
-    records: list[dict], *, meta: dict,
-    question_task_inventory: dict | None = None,
-    mined_types: dict | None = None,
-    source_context: str = "",
-) -> list[dict]:
-    """Ask GPT to verify Type/Case/Example placement against the inventory.
-
-    This is the quality pass for the user's core issue: Types and concepts must
-    go hand in hand; every source question must appear exactly once; no later
-    section question should be filed under an earlier concept.
-    """
-    import json as _json
-
-    if not records:
-        return records
-    inventory = question_task_inventory or _empty_inventory()
-    if not inventory.get("items"):
-        return records
-    system = prompts.get_text("concepts.type_alignment_review.system")
-    payload = {
-        "rows": _records_to_api_rows(records),
-        "question_task_inventory": inventory,
-        "mined_types": mined_types or {"types": []},
-    }
-    user = (
-        _metadata_block(meta)
-        + "\nReview this concept map for Type/Case/Example placement defects:\n"
-        + _json.dumps(payload, ensure_ascii=False)
-    )
-    if source_context:
-        user += "\n\nCHAPTER SOURCE CONTEXT:\n" + _trim(source_context, 160_000)
-    progress.log("Reviewing Type/concept alignment via API.")
-    try:
-        data = _openai_json(
-            system, user, purpose="concept_validation")
-    except Exception as exc:  # noqa: BLE001 — keep best output; validator follows
-        progress.log(
-            f"Type/concept alignment review failed ({exc}) — keeping best output.",
-            level="warning",
-        )
-        return records
-    reviewed = _concept_rows_to_records(data)
-    if not reviewed:
-        progress.log("Type/concept alignment review returned no rows.", level="warning")
-        return records
-    if len(reviewed) != len(records):
-        progress.log(
-            f"Type/concept alignment review returned {len(reviewed)} row(s) for "
-            f"{len(records)} input row(s); merging by concept key.",
-            level="warning",
-        )
-        candidate = _merge_repaired_rows(records, reviewed)
-        return _accept_topic_safe_type_review(
-            records, candidate, mined_types)
-    out: list[dict] = []
-    for original, updated in zip(records, reviewed):
-        # Contract says only Types may move; enforce stable non-Type fields.
-        updated["topic"] = original.get("topic", "")
-        updated["parent_concept"] = original.get("parent_concept", "")
-        updated["concept_title"] = original.get("concept_title", "")
-        updated["keywords"] = original.get("keywords", "")
-        new_types = _types_body(updated.get("concept_details", ""))
-        if new_types:
-            updated["concept_details"] = _inject_types(
-                _strip_types_from_records([dict(original)])[0].get("concept_details", ""),
-                new_types,
-            )
-        else:
-            updated["concept_details"] = _strip_types_from_records([dict(original)])[0].get(
-                "concept_details", "")
-        cr.carry_type_origin_metadata(original, updated)
-        out.append(updated)
-    return _accept_topic_safe_type_review(records, out, mined_types)
 
 
 def _ensure_parent_concepts(records: list[dict]) -> list[dict]:
@@ -14404,7 +13015,6 @@ def _validation_options(stage: str) -> dict:
             "strict_type_hierarchy": True,
             "strict_analysis_section": True,
             "strict_mastery_statement": True,
-            "strict_culmination_recap": True,
         },
     }.get(stage, {"allow_types": True, "require_culmination": False, "allow_culmination": True})
 
@@ -14510,6 +13120,9 @@ _FATAL_CODES = {
     "generic_error_analysis", "error_analysis_framing",
     "issue_section_overlap",
     "analysis_section_format", "missing_learner_analysis",
+    # Q1 marker accounting: a learner-analysis section on a row the
+    # chapter inventory never allotted an item to.
+    "unallotted_analysis_section",
     "figure_reference_without_image",
     "figure_reference_image_mismatch", "generic_case_definition",
     "missing_case_definition", "case_without_example",
@@ -14521,8 +13134,20 @@ _FATAL_CODES = {
     "duplicate_type_definition", "missing_mastery_statement",
     "mastery_statement_format", "mastery_statement_not_substantive",
     "duplicate_mastery_statement", "mastery_marker_outside_description",
-    "culmination_recap_format", "culmination_recap_missing_concepts",
 }
+
+
+# Mechanics, not meaning (CLAUDE.md Rule 1, Q13): schema/ID/duplicate-identity
+# codes name defects in the artifact's *identity*, not judgment calls about
+# content. The Fixer may correct the row, but these codes are NEVER
+# acceptable-with-flag — shipping two rows with one identity, or a row with
+# no identity at all, is data corruption the reviewer cannot repair.
+_FIXER_UNACCEPTABLE_CODES = frozenset({
+    "required",              # schema: a mandatory field is absent
+    "required_parent",       # schema: row lost its parent identity
+    "duplicate_title",       # identity: two rows share one concept title
+    "duplicate_topic_concept",  # identity: duplicate (topic, concept) pair
+})
 
 
 _DIAGNOSTIC_SECRET_RE = re.compile(
@@ -14597,7 +13222,15 @@ def _repair_records_via_api(
         report = cv.validate_concept_rows(
             records, **opts,
             allowed_source_examples=allowed_source_examples,
-            source_text=source_context)
+            source_text=source_context,
+            # Q1 gate split at the terminal stage: analysis existence is
+            # scoped to the rows the chapter inventory allotted items to.
+            analysis_allotted_keys=(
+                cv.analysis_allotted_keys(records)
+                if stage == "final"
+                else None
+            ),
+        )
         hard = [e for e in report["errors"] if e["severity"] == "error"]
         progress.log(
             f"{stage}: validation found {len(hard)} error(s), "
@@ -14673,31 +13306,6 @@ def _repair_records_via_api(
     return records
 
 
-def _artifact_match_snippet(rec: dict) -> str:
-    """Return the first source_artifact substring in a row (for diagnostics)."""
-    row_text = " ".join([
-        str(rec.get("topic") or ""),
-        str(rec.get("parent_concept") or ""),
-        str(rec.get("concept_title") or ""),
-        str(rec.get("concept_details") or ""),
-    ])
-    details = str(rec.get("concept_details") or "")
-    artifact_re = (
-        cv._SOURCE_ARTIFACT_NO_FIG_RE if cv._IMAGE_URL_RE.search(details)
-        else cv._SOURCE_ARTIFACT_RE
-    )
-    m = artifact_re.search(row_text)
-    return m.group(0) if m else ""
-
-
-_INVENTORY_EXAMPLE_SEGMENT_RE = re.compile(
-    r"(\bExamples?(?:\s+0*\d+)?\s*:\s*)(.*?)"
-    r"(?=\bExamples?(?:\s+0*\d+)?\s*:|"
-    r"\b(?:Case|Type)\s+\d{1,2}:|\s+//\s+|$)",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
 def _inventory_source_examples(inventory: dict | None) -> list[str]:
     """Canonical public prompts that are identity-linked to inventory qids."""
     return [
@@ -14708,108 +13316,6 @@ def _inventory_source_examples(inventory: dict | None) -> list[str]:
         if text
     ]
 
-
-def _mask_inventory_examples(
-    details: str, inventory: dict | None,
-) -> tuple[str, dict[str, str]]:
-    """Protect exact inventory-owned Examples during destructive cleanup."""
-    source_by_key = {
-        bi.normalize_question_text(text): text
-        for text in _inventory_source_examples(inventory)
-    }
-    replacements: dict[str, str] = {}
-
-    def replace(match: re.Match) -> str:
-        source = source_by_key.get(
-            bi.normalize_question_text(match.group(2)))
-        if not source:
-            return match.group(0)
-        token = f"__INVENTORY_SOURCE_EXAMPLE_{len(replacements):04d}__"
-        replacements[token] = source
-        return match.group(1) + token
-
-    return _INVENTORY_EXAMPLE_SEGMENT_RE.sub(
-        replace, details or ""), replacements
-
-
-def _neutralize_unrepaired_rows(
-    records: list[dict], *, inventory: dict | None = None,
-) -> list[dict]:
-    """Destructively neutralize source artifacts ONLY where GPT repair failed.
-
-    Rows that validate cleanly keep their GPT-authored wording verbatim; the
-    deterministic rewriter is a per-row last resort, never a blanket pass.
-    Re-runs once if a cleaned row still matches (regex drift / OCR forms).
-    """
-    allowed_source_examples = _inventory_source_examples(inventory)
-    report = cv.validate_concept_rows(
-        records, allow_types=True, require_culmination=True,
-        allow_culmination=True,
-        allowed_source_examples=allowed_source_examples)
-    failing = {
-        e["row_index"] for e in report["errors"]
-        if e.get("severity") == "error" and e.get("row_index", -1) >= 0
-        and e.get("code") == "source_artifact"
-    }
-    out: list[dict] = []
-    for i, rec in enumerate(records):
-        candidate = dict(rec)
-        replacements: dict[str, str] = {}
-        if i in failing and candidate.get("concept_details"):
-            candidate["concept_details"], replacements = (
-                _mask_inventory_examples(
-                    candidate["concept_details"], inventory))
-        cleaned = concept_cleanup.clean_concept_record(
-            candidate, neutralize_artifacts=i in failing)
-        for token, source in replacements.items():
-            cleaned["concept_details"] = cleaned["concept_details"].replace(
-                token, source)
-        out.append(cleaned)
-    if failing:
-        snippets = []
-        for idx in sorted(failing)[:5]:
-            if 0 <= idx < len(records):
-                snip = _artifact_match_snippet(records[idx])
-                if snip:
-                    snippets.append(snip)
-        progress.log(
-            f"Neutralized source artifacts on {len(failing)} unrepaired row(s); "
-            f"{len(records) - len(failing)} row(s) kept verbatim"
-            + (f" (matched: {', '.join(repr(s) for s in snippets)})" if snippets else "")
-            + ".",
-            level="warning",
-        )
-        # Second pass: any row that STILL fails after neutralize (regex gap)
-        # gets cleaned again so final validation is not blocked.
-        again = cv.validate_concept_rows(
-            out, allow_types=True, require_culmination=True,
-            allow_culmination=True,
-            allowed_source_examples=allowed_source_examples)
-        still = {
-            e["row_index"] for e in again["errors"]
-            if e.get("severity") == "error" and e.get("row_index", -1) >= 0
-            and e.get("code") == "source_artifact"
-        }
-        if still:
-            for idx in still:
-                if 0 <= idx < len(out):
-                    snip = _artifact_match_snippet(out[idx])
-                    candidate = dict(out[idx])
-                    candidate["concept_details"], replacements = (
-                        _mask_inventory_examples(
-                            candidate.get("concept_details", ""), inventory))
-                    cleaned = concept_cleanup.clean_concept_record(
-                        candidate, neutralize_artifacts=True)
-                    for token, source in replacements.items():
-                        cleaned["concept_details"] = (
-                            cleaned["concept_details"].replace(token, source))
-                    out[idx] = cleaned
-                    progress.log(
-                        f"  re-scrubbed row {idx} after neutralize residual"
-                        + (f" ({snip!r})" if snip else "") + ".",
-                        level="warning",
-                    )
-    return out
 
 
 _TYPE_SPLIT_RE = re.compile(r"(?=\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:)", re.IGNORECASE)
@@ -15660,20 +14166,6 @@ def _resolved_type_case_qid_placement_ledger(
     return copy.deepcopy(reference)
 
 
-def _rewrite_placement_authority_active() -> bool:
-    """Whether the rewritten Phase 3 is the placement authority.
-
-    The old 3.2/3.3 machinery minted per-row placement contracts and a
-    certified QID placement ledger; the terminal gates verify those
-    artifacts. The rewritten pipeline replaces that machinery with its own
-    sealed chain (envelope seal, decide-once store, row certificates,
-    ordered lineage, closed-world QID coverage), so under the rewrite flag
-    the old-artifact gates must not demand what no longer exists.
-    """
-    from .phase3 import runner as _phase3_runner
-
-    return _phase3_runner.rewrite_enabled()
-
 
 def _final_type_case_qid_host_manifests(
     records: list[dict],
@@ -15694,18 +14186,9 @@ def _final_type_case_qid_host_manifests(
         inventory, mined_types
     )
     if ledger is None:
-        from . import canonical_source_phase3 as _phase3
-
-        if (
-            config.use_live_generation()
-            and isinstance(_phase3.active_graph(), dict)
-            and (inventory or {}).get("items")
-            and not _rewrite_placement_authority_active()
-        ):
-            raise RuntimeError(
-                "type_case_owner_uncertified: live finalization has no "
-                "certified QID placement ledger"
-            )
+        # The rewritten Phase 3 never mints the legacy certified QID
+        # placement ledger; its closed-world QID coverage is sealed by
+        # Assemble instead.
         return records, None
     placements = ledger.get("placements") or {}
     items = {
@@ -16063,7 +14546,10 @@ def _dedupe_rendered_inventory_examples(
     if not expected_keys:
         return records, 0
 
-    seen: set[str] = set()
+    # Q2/R4: the first render of a key is its carrier; a later duplicate
+    # is removed and any Case the removal empties is dropped WITH a
+    # review flag naming where its Examples live — never silently.
+    seen: dict[str, str] = {}
     removed = 0
     out: list[dict] = []
     for record in records:
@@ -16105,21 +14591,45 @@ def _dedupe_rendered_inventory_examples(
                 case_title = (pieces[0] or "").strip() or "Source-based question"
                 examples = [piece.strip() for piece in pieces[1:] if piece.strip()]
                 kept: list[str] = []
+                removed_carriers: list[str] = []
                 for example in examples:
                     key = _inventory_coverage_key(example)
                     if key in expected_keys:
                         if key in seen:
                             removed += 1
                             changed = True
+                            carrier = seen[key]
+                            if carrier and carrier not in removed_carriers:
+                                removed_carriers.append(carrier)
                             continue
-                        seen.add(key)
+                        seen[key] = str(
+                            record.get("concept_title") or ""
+                        ).strip()
                     kept.append(example)
                 if kept:
                     cases.append((case_title, kept))
+                elif examples:
+                    # Dedupe emptied this Case: dropping the shell is the
+                    # Q2 repair, and the removal is flagged with where the
+                    # Example(s) render — never a silent mask (R4).
+                    changed = True
+                    rec["review_flags"] = [
+                        *(rec.get("review_flags") or []),
+                        "Q2: removed the example-less Case shell "
+                        f"{case_title[:80]!r} left by exact-once Example "
+                        "dedupe; its Example(s) render under: "
+                        + (
+                            ", ".join(
+                                repr(title[:60])
+                                for title in removed_carriers
+                            )
+                            or "another concept row"
+                        ),
+                    ]
                 else:
-                    # A deduplicated Case with no remaining Example violates
-                    # the public Case -> Example hierarchy, so drop it rather
-                    # than leave an empty shell behind.
+                    # A Case that arrived with no Example at all violates
+                    # the public Case -> Example hierarchy, so drop it
+                    # rather than leave an empty shell behind.
                     changed = True
             if cases:
                 header = type_header.strip()
@@ -16196,105 +14706,6 @@ def _align_activity_examples_with_hubs(
         progress.log(
             f"Aligned {moved} assessable Activity Example(s) with their "
             "GPT-selected Activity/Info Hub concept.",
-            level="success",
-        )
-    return cr.renumber_types_continuously(out)
-
-
-def _relocate_chapter_wide_examples_from_culminations(
-    records: list[dict], inventory: dict | None,
-    mined_types: dict | None = None,
-) -> list[dict]:
-    """Keep ordinary chapter-review questions off an unrelated Culmination.
-
-    Chapter-end task lists are initially scoped to the whole chapter, so an
-    early Type assignment can temporarily place them under one Culmination.
-    Once a semantic topic hint exists, normal (non-synthesis) tasks belong on
-    a normal concept in that topic.  Add the authoritative Example there
-    first, then exact-dedupe with the target first so the earlier Culmination
-    copy cannot win merely because it occurs first in chapter order.
-    """
-    if _rewrite_placement_authority_active():
-        # A question on a Culmination is a deliberate decision under the
-        # house routing rules (multi-concept questions pool there); moving
-        # its rendered Example back to a mined-hint concept both overrides
-        # that decision and duplicates the Type heading onto a second host,
-        # which the workbook writer then rejects.
-        return [dict(record) for record in records]
-    out = [dict(record) for record in records]
-    mined_by_qid = _mined_assignment_units_by_qid(mined_types)
-    moved = 0
-    for item in (inventory or {}).get("items") or []:
-        if not isinstance(item, dict) or not item.get("_chapter_wide_task"):
-            continue
-        if (item.get("source_kind") or "").strip().lower() in _HUB_INVENTORY_KINDS:
-            continue
-        qid = (item.get("qid") or "").strip()
-        mined_type = mined_by_qid.get(qid)
-        task_text = _inventory_task_text(item)
-        if mined_type is not None:
-            mined_type = copy.deepcopy(mined_type)
-            mined_type["_source_task_evidence"] = task_text
-            mined_type["_source_topic_evidence"] = (
-                item.get("topic_hint") or "")
-        scope = (
-            _assignment_placement_scope(
-                mined_type, _scope_payload_from_records(out))
-            if mined_type is not None
-            else ""
-        )
-        if (
-            scope in {"mixed_synthesis", "cross_topic_synthesis"}
-            or (
-                not scope
-                and (
-                    _MIXED_ASSIGNMENT_CUE_RE.search(task_text)
-                    or _CROSS_TOPIC_ASSIGNMENT_CUE_RE.search(task_text)
-                )
-            )
-        ):
-            continue
-        locations = _rendered_inventory_example_locations(out, item)
-        if not any(
-            cr.is_culmination(out[index].get("concept_title") or "")
-            for index in locations
-        ):
-            continue
-        certified_cid = _certified_host_cid(
-            mined_types,
-            qid,
-            _scope_payload_from_records(out),
-        )
-        target = (
-            int(certified_cid.rsplit("-", 1)[-1]) - 1
-            if certified_cid else
-            _best_record_index_for_inventory_item(
-                out, item, allow_culmination=False, mined_type=None)
-        )
-        if target < 0 or target >= len(out):
-            continue
-        if cr.is_culmination(out[target].get("concept_title") or ""):
-            continue
-        candidate = [dict(record) for record in out]
-        if target not in locations:
-            candidate[target] = _append_inventory_example_to_record(
-                candidate[target], task_text, item)
-        order = [target] + [
-            index for index in range(len(candidate)) if index != target
-        ]
-        ordered, _removed = _dedupe_rendered_inventory_examples(
-            [candidate[index] for index in order], {"items": [item]})
-        rebuilt = [dict(record) for record in candidate]
-        for position, index in enumerate(order):
-            rebuilt[index] = ordered[position]
-        if _rendered_inventory_example_locations(rebuilt, item) != [target]:
-            continue
-        out = rebuilt
-        moved += 1
-    if moved:
-        progress.log(
-            f"Relocated {moved} chapter-wide Example(s) from Culmination "
-            "to their assigned normal concept.",
             level="success",
         )
     return cr.renumber_types_continuously(out)
@@ -16407,14 +14818,36 @@ def _repair_rendered_inventory_coverage(
 def _enforce_rendered_inventory_coverage(
     records: list[dict], inventory: dict | None,
     mined_types: dict | None = None,
+    *, fixer=None, fixer_store=None,
 ) -> list[dict]:
-    """Repair coverage and hard-fail on any residual placeable defect."""
+    """Repair coverage and hard-fail on any residual placeable defect.
+
+    ``fixer`` is The Fixer seam for F18-F21 (Q13): when the deterministic
+    repair/dedupe/force-place ladder still leaves a defect, each blocked
+    QID gets one recorded placement decision before the gate may raise.
+    The default (None) keeps this function fully deterministic — the
+    assemble fixpoint pipeline and tests rely on that.
+    """
+
+    def _via_fixer(current, defect_map):
+        if fixer is None or not (
+            defect_map["missing"] or defect_map["duplicate"]
+        ):
+            return current, defect_map
+        fixed = _fix_inventory_coverage_via_fixer(
+            current, inventory, mined_types,
+            fixer=fixer, store=fixer_store,
+        )
+        return fixed, _rendered_inventory_coverage_defects(fixed, inventory)
+
     out = _repair_rendered_inventory_coverage(
         records, inventory, mined_types)
     defects = _rendered_inventory_coverage_defects(out, inventory)
     if defects["duplicate"]:
         out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
         defects = _rendered_inventory_coverage_defects(out, inventory)
+    if defects["duplicate"]:
+        out, defects = _via_fixer(out, defects)
     if defects["duplicate"]:
         raise RuntimeError(
             "rendered Types failed exact inventory coverage: "
@@ -16430,6 +14863,8 @@ def _enforce_rendered_inventory_coverage(
         if defects["duplicate"]:
             out, _removed = _dedupe_rendered_inventory_examples(out, inventory)
             defects = _rendered_inventory_coverage_defects(out, inventory)
+        if defects["duplicate"] or defects["missing"]:
+            out, defects = _via_fixer(out, defects)
         if defects["duplicate"]:
             raise RuntimeError(
                 "rendered Types failed exact inventory coverage: "
@@ -16448,10 +14883,12 @@ def _enforce_rendered_inventory_coverage(
     # Coverage may already be exact while later merge/refinement passes have
     # moved an assessable Activity Example away from its Hub. Reassert that
     # identity-based placement invariant at this terminal repair boundary.
+    # (Chapter-wide Examples stay wherever the Host pass routed them — a
+    # Culmination row included; the legacy relocation pass is retired.)
     out = _align_activity_examples_with_hubs(out, inventory)
-    out = _relocate_chapter_wide_examples_from_culminations(
-        out, inventory, mined_types)
     terminal_defects = _rendered_inventory_coverage_defects(out, inventory)
+    if terminal_defects["missing"] or terminal_defects["duplicate"]:
+        out, terminal_defects = _via_fixer(out, terminal_defects)
     if terminal_defects["missing"] or terminal_defects["duplicate"]:
         raise RuntimeError(
             "rendered Types failed exact inventory coverage after final "
@@ -16803,43 +15240,12 @@ def _disambiguate_certified_split_type_cases(
     return out
 
 
-def _rebuild_types_after_final_placement_drift(
-    records: list[dict], inventory: dict | None, mined_types: dict | None,
-    *, meta: GenerationMetadata,
-) -> list[dict]:
-    """Re-run ID-constrained GPT assignment on the final concept rows.
-
-    Row merges and method-anchor restoration can preserve exact Example coverage
-    while moving a Type away from its source topic. Rebuilding only the Types
-    sections retains the final concept map and the mined taxonomy, while letting
-    the semantic assignment pass choose again from its proven topic-scoped IDs.
-    """
-    rebuilt = _strip_types_from_records(copy.deepcopy(records))
-    rebuilt = _assign_mined_types_via_api(
-        rebuilt, meta=meta, mined_types=mined_types)
-    rebuilt = _populate_activity_hubs_via_api(
-        rebuilt,
-        inventory,
-        meta=meta,
-        mined_types=mined_types,
-    )
-    # Reassignment re-renders the original mined wording after the ordinary
-    # terminal cleanup boundary. Apply the same source-artifact and short
-    # Example cleanup before rechecking coverage and placement.
-    rebuilt = _salvage_short_case_examples(rebuilt, inventory=inventory)
-    rebuilt = _neutralize_unrepaired_rows(rebuilt, inventory=inventory)
-    rebuilt = _enforce_rendered_inventory_coverage(
-        rebuilt, inventory, mined_types)
-    return _disambiguate_certified_split_type_cases(
-        rebuilt, inventory, mined_types)
-
-
 def _normalize_activity_hubs_at_final_boundary(
     records: list[dict],
     inventory: dict | None,
     mined_types: dict | None,
     *,
-    meta: GenerationMetadata | None = None,
+    meta: dict | None = None,
 ) -> list[dict]:
     """Resolve certified-host drift before rebuilding canonical Hub notes.
 
@@ -16853,18 +15259,16 @@ def _normalize_activity_hubs_at_final_boundary(
     certification_violations = _placement_certification_violations(
         records, inventory, mined_types)
     if certification_violations:
-        if meta is None:
-            raise RuntimeError(
-                "saved final checkpoint contains unresolved certified "
-                "inventory hosts"
+        # The legacy Type-rebuild lane is retired; a checkpoint whose
+        # certified hosts no longer resolve is a stale payload either way.
+        raise RuntimeError(
+            "saved final checkpoint contains unresolved certified "
+            "inventory hosts: "
+            + "; ".join(
+                f"{row.get('qid')}={row.get('reason')}"
+                for row in certification_violations[:6]
             )
-        progress.log(
-            "Final cleanup changed a certified inventory host; rebuilding "
-            "Types and Activity/Info Hubs before normalization.",
-            level="warning",
         )
-        records = _rebuild_types_after_final_placement_drift(
-            records, inventory, mined_types, meta=meta)
     return _normalize_activity_hubs_from_inventory(
         records, inventory, mined_types)
 
@@ -16934,168 +15338,550 @@ def _rebuild_types_body(
     return " ".join(parts)
 
 
-def _salvage_short_case_examples(
-    records: list[dict], *, inventory: dict | None = None,
-) -> list[dict]:
-    """Expand truncated Case Examples from inventory; drop irrecoverable stubs.
 
-    GPT repair sometimes leaves ``Example: q`` / one-word stubs that hard-fail
-    final validation. Prefer inventory wording; if none matches, drop the stub
-    Example (and empty Cases) so the chapter can still deposit.
+
+# ---------------------------------------------------------------------------
+# The Fixer seams at the terminal gates (docs/aegis-restructure.md §8.2, Q13)
+# ---------------------------------------------------------------------------
+
+
+_FIXER_FALLBACK_STORE = None
+
+
+def _phase3_fixer_store():
+    """The decision store Fixer verdicts share with the phase-3 kernel.
+
+    Directory-backed beside the run's other phase-3 decisions when an
+    artifact session is active (so a resumed or deposited run replays
+    every Fixer verdict free, and the deposit twin of a final-gate block
+    reaches the same recorded decision); process-local otherwise.
     """
-    inventory_texts = _inventory_lookup_texts(inventory)
-    inventory_texts_by_topic: dict[str, list[str]] = {}
-    unscoped_inventory_texts: list[str] = []
-    for item in (inventory or {}).get("items") or []:
-        if not isinstance(item, dict):
+
+    from pathlib import Path
+
+    from . import canonical_source_phase3 as phase3
+    from .phase3 import kernel as p3_kernel
+
+    session = phase3.active_session()
+    artifact_dir = (
+        session.get("artifact_dir") if isinstance(session, dict) else None
+    )
+    if artifact_dir:
+        return p3_kernel.DecisionStore(Path(artifact_dir) / "phase3-decisions")
+    global _FIXER_FALLBACK_STORE
+    if _FIXER_FALLBACK_STORE is None:
+        _FIXER_FALLBACK_STORE = p3_kernel.DecisionStore()
+    return _FIXER_FALLBACK_STORE
+
+
+def _fixer_flag_row(row: dict, flag: str) -> None:
+    """Append one Fixer review flag exactly once (replays must not stack)."""
+
+    flags = list(row.get("review_flags") or [])
+    if flag not in flags:
+        flags.append(flag)
+    row["review_flags"] = flags
+
+
+def _without_fixer_accepted(records: list[dict], errors: list[dict]) -> list[dict]:
+    """Drop validator errors whose exact (row, code) pair the Fixer accepted.
+
+    An accepted defect is a *recorded decision*, never a silent skip: the
+    acceptance lives in the row's ``_fixer_accepted_codes`` release-audit
+    field and its ``review_flags``. Mechanics codes are never dropped.
+    """
+
+    remaining: list[dict] = []
+    for error in errors:
+        index = error.get("row_index", -1)
+        code = str(error.get("code") or "")
+        row = (
+            records[index]
+            if isinstance(index, int) and 0 <= index < len(records)
+            else None
+        )
+        if (
+            row is not None
+            and code
+            and code not in _FIXER_UNACCEPTABLE_CODES
+            and code in (row.get("_fixer_accepted_codes") or [])
+        ):
+            continue
+        remaining.append(error)
+    return remaining
+
+
+def _fix_validation_failures_via_fixer(
+    records: list[dict], fatal: list[dict], *, stage: str,
+    fixer, store=None, allow_corrections: bool = True,
+) -> bool:
+    """One recorded Fixer decision per failing row at a validation gate.
+
+    The Fixer either returns corrected row content (final gate only —
+    deposit rows are certificate-sealed and cannot be rewritten) or
+    explicitly accepts the defect with a flag. Mechanics codes
+    (``_FIXER_UNACCEPTABLE_CODES``) can never be accepted. Rows the
+    Fixer cannot unblock keep their defects and the gate raises exactly
+    as before. Returns whether any row content changed.
+    """
+
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    store = store or _phase3_fixer_store()
+    by_row: dict[int, list[dict]] = {}
+    for error in fatal:
+        index = error.get("row_index", -1)
+        if isinstance(index, int) and 0 <= index < len(records):
+            by_row.setdefault(index, []).append(error)
+
+    def _identity(value: object) -> str:
+        return " ".join(str(value or "").split()).casefold()
+
+    changed_any = False
+    for row_index in sorted(by_row):
+        row = records[row_index]
+        errors = by_row[row_index]
+        codes = sorted({str(e.get("code") or "") for e in errors if e.get("code")})
+        mechanics = sorted(set(codes) & _FIXER_UNACCEPTABLE_CODES)
+        if not allow_corrections and mechanics:
+            # Sealed row + identity defect: nothing the Fixer may do.
+            continue
+        blocked_check = []
+        for error in errors:
+            _index, _title, field, snippet = _validation_error_context(
+                records, error)
+            blocked_check.append({
+                "code": str(error.get("code") or ""),
+                "field": field,
+                "message": _diagnostic_snippet(
+                    error.get("message"), limit=400),
+                "row_text_snippet": snippet,
+            })
+        payload = {
+            "fixer": True,
+            "stage": stage,
+            "blocked_check": blocked_check,
+            "contract": {
+                "kind": "fixer.validation",
+                "rule": (
+                    "this concept row failed the terminal validator; "
+                    "EITHER return a corrected row — {\"row\": "
+                    "{\"concept_details\", \"keywords\"}, \"rationale\"} "
+                    "— that clears the named codes while keeping the "
+                    "concept's identity (topic, parent, title) and its "
+                    "meaning, OR — only when the content is genuinely "
+                    "right as written and the code misfires on it — "
+                    "return {\"accept_with_flag\": true, \"rationale\"} "
+                    "and the row ships flagged for review"
+                    if allow_corrections
+                    else "this certificate-sealed row failed the deposit "
+                    "validator; sealed content cannot be rewritten at "
+                    "this boundary — when the content is acceptable as "
+                    "written return {\"accept_with_flag\": true, "
+                    "\"rationale\"}; otherwise return "
+                    "{\"accept_with_flag\": false, \"rationale\"} and "
+                    "the gate fails closed"
+                ),
+                "mechanics_codes_never_acceptable": sorted(
+                    _FIXER_UNACCEPTABLE_CODES
+                ),
+            },
+            "row": {
+                "topic": row.get("topic"),
+                "parent_concept": row.get("parent_concept"),
+                "concept_title": row.get("concept_title"),
+                "concept_details": row.get("concept_details"),
+                "keywords": row.get("keywords"),
+            },
+            "source_evidence": str(row.get("source_evidence") or "")[:2000],
+        }
+
+        def _check(response, *, _row=row, _mechanics=mechanics):
+            defects: list[str] = []
+            if not str(response.get("rationale") or "").strip():
+                defects.append("rationale is required")
+            accept = response.get("accept_with_flag")
+            corrected = response.get("row")
+            if accept is True:
+                if _mechanics:
+                    defects.append(
+                        "mechanics code(s) "
+                        + ", ".join(_mechanics)
+                        + " can never be accepted with a flag; return a "
+                        "corrected row instead"
+                    )
+            elif isinstance(corrected, dict):
+                if not allow_corrections:
+                    defects.append(
+                        "this boundary cannot rewrite sealed rows; only "
+                        "accept_with_flag is available"
+                    )
+                for field in ("topic", "parent_concept", "concept_title"):
+                    if field in corrected and _identity(
+                        corrected.get(field)
+                    ) != _identity(_row.get(field)):
+                        defects.append(
+                            f"the corrected row must not change {field}"
+                        )
+                if not str(corrected.get("concept_details") or "").strip():
+                    defects.append(
+                        "the corrected row must carry concept_details"
+                    )
+            elif accept is False:
+                pass  # an explicit decline; the gate fails closed
+            else:
+                defects.append(
+                    "return either {\"accept_with_flag\": true|false} or "
+                    "a corrected {\"row\": {...}} object"
+                )
+            return defects
+
+        try:
+            decision = p3_kernel.decide(
+                kind="fixer.validation",
+                unit_id=f"{stage}#row{row_index}",
+                envelope_sha256=str(
+                    row.get("_source_grounding_record_sha256") or ""
+                ),
+                payload=payload,
+                provider=fixer,
+                checker=_check,
+                store=store,
+                policy_version=p3_fixer.FIXER_POLICY_VERSION,
+            )
+        except p3_kernel.ContractError:
+            continue  # protocol impossibility: the defect stands, gate raises
+        response = decision.get("response") or {}
+        rationale = " ".join(
+            str(response.get("rationale") or "").split()
+        )[:240]
+        if response.get("accept_with_flag") is True:
+            accepted = list(row.get("_fixer_accepted_codes") or [])
+            for code in codes:
+                if code in _FIXER_UNACCEPTABLE_CODES:
+                    continue
+                if code not in accepted:
+                    accepted.append(code)
+                _fixer_flag_row(
+                    row,
+                    f"fixer: blocked={code} at {stage} validation; "
+                    f"decided=accepted with flag — {rationale}",
+                )
+            row["_fixer_accepted_codes"] = accepted
+        elif isinstance(response.get("row"), dict):
+            corrected = response["row"]
+            row["concept_details"] = str(
+                corrected.get("concept_details") or ""
+            )
+            if str(corrected.get("keywords") or "").strip():
+                row["keywords"] = str(corrected.get("keywords"))
+            for code in codes:
+                _fixer_flag_row(
+                    row,
+                    f"fixer: blocked={code} at {stage} validation; "
+                    f"decided=corrected row content — {rationale}",
+                )
+            changed_any = True
+    return changed_any
+
+
+def _fix_invalid_inventory_via_fixer(
+    records: list[dict], inventory: dict | None, invalid: list[dict], *,
+    stage: str, fixer, store=None,
+) -> list[dict]:
+    """Fixer judgment over ``invalid_source_inventory`` rows (seam F23).
+
+    Only the content-judgment reasons (``empty_task``/``stub_task`` —
+    "is this a real task or an extraction stub?" is exactly the question
+    Rule 1 forbids deciding by threshold) may be accepted-with-flag; the
+    identity reasons (missing/duplicate/typed qid) are mechanics and
+    keep failing closed. Returns the invalid rows that remain blocking.
+    """
+
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    acceptable_reasons = {"empty_task", "stub_task"}
+    store = store or _phase3_fixer_store()
+    items = (inventory or {}).get("items") or []
+    remaining: list[dict] = []
+    for entry in invalid:
+        reason = str(entry.get("reason") or "")
+        qid = str(entry.get("qid") or "")
+        index = entry.get("index", -1)
+        item = (
+            items[index]
+            if isinstance(index, int) and 0 <= index < len(items)
+            and isinstance(items[index], dict)
+            else None
+        )
+        if reason not in acceptable_reasons or item is None:
+            remaining.append(entry)
+            continue
+        payload = {
+            "fixer": True,
+            "stage": stage,
+            "blocked_check": [
+                f"inventory row {qid or index} is invalid ({reason}): its "
+                "task text cannot participate in the exact public "
+                "coverage contract, and the terminal gate refuses to "
+                "certify an inventory containing it"
+            ],
+            "contract": {
+                "kind": "fixer.validation",
+                "rule": (
+                    "read the row's own text and context and decide: is "
+                    "this a genuine extraction stub/banner the release "
+                    "may ship without rendering (accept_with_flag: "
+                    "true), or a real learner question that must not be "
+                    "lost (accept_with_flag: false — the run then fails "
+                    "closed so the source can be re-extracted)? "
+                    "Response schema: {\"accept_with_flag\", "
+                    "\"rationale\"}"
+                ),
+            },
+            "item": {
+                "qid": qid,
+                "source_kind": str(item.get("source_kind") or ""),
+                "raw_task": str(item.get("raw_task") or "")[:800],
+                "normalized_task": str(item.get("normalized_task") or "")[:800],
+                "polished_task": str(item.get("polished_task") or "")[:800],
+                "shared_context": str(item.get("shared_context") or "")[:800],
+            },
+        }
+
+        def _check(response):
+            defects: list[str] = []
+            if not isinstance(response.get("accept_with_flag"), bool):
+                defects.append(
+                    "accept_with_flag must be true or false"
+                )
+            if not str(response.get("rationale") or "").strip():
+                defects.append("rationale is required")
+            return defects
+
+        try:
+            decision = p3_kernel.decide(
+                kind="fixer.validation",
+                unit_id=f"inventory#{qid or index}",
+                envelope_sha256="",
+                payload=payload,
+                provider=fixer,
+                checker=_check,
+                store=store,
+                policy_version=p3_fixer.FIXER_POLICY_VERSION,
+            )
+        except p3_kernel.ContractError:
+            remaining.append(entry)
+            continue
+        response = decision.get("response") or {}
+        if response.get("accept_with_flag") is not True:
+            remaining.append(entry)
+            continue
+        rationale = " ".join(
+            str(response.get("rationale") or "").split()
+        )[:240]
+        host_index = 0
+        if records:
+            best = _best_record_index_for_inventory_item(records, item)
+            if isinstance(best, int) and 0 <= best < len(records):
+                host_index = best
+        if records:
+            _fixer_flag_row(
+                records[host_index],
+                f"fixer: blocked=invalid inventory row {qid or index} "
+                f"({reason}); decided=accepted with flag — {rationale}",
+            )
+    return remaining
+
+
+def _fix_inventory_coverage_via_fixer(
+    records: list[dict], inventory: dict | None,
+    mined_types: dict | None = None, *, fixer, store=None,
+) -> list[dict]:
+    """Place every unhoused QID by one recorded Fixer decision (R4).
+
+    Seams F18-F21/F24/F38: exact-once coverage is the central R4
+    collision — a question the mechanics cannot place must be PLACED by
+    judgment, never dropped. One decision per QID (unit_id = the QID):
+    the Fixer reads the question's full wording against the concept rows
+    and names the host; the existing force-place helper is the apply
+    mechanism. A duplicate render gets one decision naming the canonical
+    placement; mechanics remove only the extra renders — the QID stays
+    placed exactly once. QIDs the Fixer cannot place keep their defects
+    and the caller raises exactly as before.
+    """
+
+    from .phase3 import fixer as p3_fixer
+    from .phase3 import kernel as p3_kernel
+
+    store = store or _phase3_fixer_store()
+    defects = _rendered_inventory_coverage_defects(records, inventory)
+    if not defects["missing"] and not defects["duplicate"]:
+        return records
+    out = [dict(record) for record in records]
+    items_by_qid = {
+        (item.get("qid") or "").strip(): item
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and (item.get("qid") or "").strip()
+    }
+
+    def _concept_summaries(indexes=None):
+        chosen = (
+            indexes
+            if indexes is not None
+            else range(len(out))
+        )
+        return [
+            {
+                "row_index": index,
+                "topic": str(out[index].get("topic") or ""),
+                "concept_title": str(
+                    out[index].get("concept_title") or ""
+                ),
+                "types_summary": _types_body(
+                    str(out[index].get("concept_details") or "")
+                )[:500],
+            }
+            for index in chosen
+        ]
+
+    def _decide_row_index(qid, item, blocked, candidate_indexes=None):
+        text = _inventory_task_text(item)
+        allowed = (
+            set(candidate_indexes)
+            if candidate_indexes is not None
+            else set(range(len(out)))
+        )
+        payload = {
+            "fixer": True,
+            "blocked_check": [blocked],
+            "contract": {
+                "kind": "fixer.qid_placement",
+                "rule": (
+                    "every source question renders exactly once (R4: "
+                    "never dropped); read the question against the "
+                    "concept rows and name the row_index of the concept "
+                    "that hosts it"
+                    + (
+                        " — choose among candidate_row_indexes only"
+                        if candidate_indexes is not None
+                        else ""
+                    )
+                    + ". Response schema: {\"row_index\", \"rationale\"}"
+                ),
+            },
+            "question": {
+                "qid": qid,
+                "kind": str(item.get("source_kind") or ""),
+                "text": text[:900],
+                "shared_context": str(item.get("shared_context") or "")[:400],
+            },
+            "concepts": _concept_summaries(
+                sorted(allowed) if candidate_indexes is not None else None
+            ),
+        }
+        if candidate_indexes is not None:
+            payload["candidate_row_indexes"] = sorted(allowed)
+
+        def _check(response):
+            check_defects: list[str] = []
+            chosen = response.get("row_index")
+            if not isinstance(chosen, int) or chosen not in allowed:
+                check_defects.append(
+                    f"row_index {chosen!r} does not name an available "
+                    "concept row"
+                )
+            if not str(response.get("rationale") or "").strip():
+                check_defects.append("rationale is required")
+            return check_defects
+
+        decision = p3_kernel.decide(
+            kind="fixer.qid_placement",
+            unit_id=str(qid),
+            envelope_sha256="",
+            payload=payload,
+            provider=fixer,
+            checker=_check,
+            store=store,
+            policy_version=p3_fixer.FIXER_POLICY_VERSION,
+        )
+        response = decision.get("response") or {}
+        rationale = " ".join(
+            str(response.get("rationale") or "").split()
+        )[:240]
+        return int(response.get("row_index")), rationale
+
+    # Duplicates first: one decision names the canonical placement, then
+    # the exact-key dedupe helper removes only the extra renders.
+    for qid in list(defects["duplicate"]):
+        item = items_by_qid.get(qid)
+        if not item:
+            continue
+        locations = _rendered_inventory_example_locations(out, item)
+        if len(locations) <= 1:
+            continue
+        try:
+            target, rationale = _decide_row_index(
+                qid,
+                item,
+                f"source question {qid} renders {len(locations)} times; "
+                "exact-once coverage (R4) requires exactly one placement",
+                candidate_indexes=locations,
+            )
+        except p3_kernel.ContractError:
+            continue  # the defect stands; the caller raises
+        candidate = [dict(record) for record in out]
+        order = [target] + [
+            index for index in range(len(candidate)) if index != target
+        ]
+        ordered, _removed = _dedupe_rendered_inventory_examples(
+            [candidate[index] for index in order],
+            {"items": [item]},
+        )
+        rebuilt = [dict(record) for record in candidate]
+        for position, index in enumerate(order):
+            rebuilt[index] = ordered[position]
+        if _rendered_inventory_example_locations(rebuilt, item) != [target]:
+            continue
+        out = rebuilt
+        _fixer_flag_row(
+            out[target],
+            f"fixer: blocked=duplicate render of {qid}; decided=kept the "
+            f"placement under "
+            f"'{str(out[target].get('concept_title') or '')[:60]}' — "
+            f"{rationale}",
+        )
+
+    # Missing QIDs: one decision per QID names the host concept; the
+    # existing force-place helper appends the exact inventory wording.
+    covered_keys = _rendered_inventory_keys_present(out, inventory)
+    for qid in _rendered_inventory_coverage_defects(out, inventory)["missing"]:
+        item = items_by_qid.get(qid)
+        if not item:
             continue
         text = _inventory_task_text(item)
-        if not text or text not in inventory_texts:
+        key = _inventory_coverage_key(text)
+        if not text or not key or key in covered_keys:
             continue
-        topic_key = _topic_comparison_key(item.get("topic_hint") or "")
-        if topic_key:
-            inventory_texts_by_topic.setdefault(topic_key, []).append(text)
-        else:
-            unscoped_inventory_texts.append(text)
-    # Never expand a stub into an inventory prompt already rendered elsewhere;
-    # that creates the exact missing+duplicate coverage failure seen when
-    # short Case Examples fuzzy-match already-placed source questions.
-    used: set[str] = set(_rendered_inventory_keys_present(records, inventory))
-    expanded = 0
-    dropped = 0
-    out: list[dict] = []
-    for record in records:
-        rec = dict(record)
-        record_topic_key = _topic_comparison_key(rec.get("topic") or "")
-        topic_inventory_texts = inventory_texts_by_topic.get(record_topic_key)
-        scoped_inventory_texts = (
-            list(dict.fromkeys(
-                [*(topic_inventory_texts or []), *unscoped_inventory_texts]))
-            if topic_inventory_texts
-            else inventory_texts
-        )
-        details = rec.get("concept_details") or ""
-        sections = cr.split_sections(details)
-        types_idx = next(
-            (i for i, (label, _) in enumerate(sections)
-             if label.strip().lower().startswith("type")),
-            -1,
-        )
-        if types_idx < 0:
-            out.append(rec)
-            continue
-        label, body = sections[types_idx]
-        type_chunks = [c.strip() for c in _TYPE_SPLIT_RE.split(body) if c.strip()]
-        rebuilt_types: list[tuple[str, list[tuple[str, list[str]]]]] = []
-        changed = False
-        for chunk in type_chunks:
-            case_parts = [p.strip() for p in _CASE_SPLIT_RE.split(chunk) if p.strip()]
-            if not case_parts:
-                continue
-            type_header = case_parts[0]
-            # If the first piece is itself a Case, there is no Type header.
-            if re.match(r"^Case\s+\d{1,2}:", type_header, re.IGNORECASE):
-                type_header = "Type 01: Assessment pattern"
-                case_parts = case_parts
-            else:
-                case_parts = case_parts[1:]
-            cases: list[tuple[str, list[str]]] = []
-            for case_chunk in case_parts:
-                m = re.match(
-                    r"^Case\s+\d{1,2}:\s*(.*)$", case_chunk, re.IGNORECASE | re.DOTALL)
-                case_body = (m.group(1) if m else case_chunk).strip()
-                pieces = _EXAMPLE_LINE_RE.split(case_body)
-                case_title = (pieces[0] or "").strip() or "Source-based question"
-                examples = [p.strip() for p in pieces[1:] if p.strip()]
-                match_context = " ".join([
-                    case_title,
-                    rec.get("concept_title") or "",
-                    rec.get("parent_concept") or "",
-                    rec.get("topic") or "",
-                ])
-                # Legacy: question lived in the Case line with no Example: label.
-                if not examples and case_title:
-                    if cv._example_too_short(case_title):
-                        replacement = _match_inventory_for_short_example(
-                            case_title, scoped_inventory_texts, used=used,
-                            context=match_context,
-                        )
-                        if replacement:
-                            examples = [replacement]
-                            _, case_title = _semantic_fallback_wording(
-                                {}, replacement)
-                            expanded += 1
-                            changed = True
-                        else:
-                            dropped += 1
-                            changed = True
-                            continue
-                    else:
-                        examples = [case_title]
-                        _, case_title = _semantic_fallback_wording(
-                            {}, examples[0])
-                        changed = True
-                new_examples: list[str] = []
-                for ex in examples:
-                    needs_source = (
-                        cv._example_too_short(ex)
-                        or bool(_CASE_SOURCE_ARTIFACT_RE.search(ex or ""))
-                    )
-                    if not needs_source:
-                        new_examples.append(ex)
-                        used.add(bi.normalize_question_text(ex))
-                        continue
-                    replacement = _match_inventory_for_short_example(
-                        ex, scoped_inventory_texts, used=used,
-                        context=match_context,
-                    )
-                    if replacement:
-                        new_examples.append(replacement)
-                        expanded += 1
-                        changed = True
-                    elif cv._example_too_short(ex):
-                        dropped += 1
-                        changed = True
-                    else:
-                        # Keep longer artifact-bearing text for neutralize/repair.
-                        new_examples.append(ex)
-                        used.add(bi.normalize_question_text(ex))
-                if new_examples:
-                    if _case_title_needs_definition(
-                        case_title,
-                        [{"example_prompt": example} for example in new_examples],
-                    ):
-                        _, case_title = _semantic_fallback_wording(
-                            {}, new_examples[0])
-                        changed = True
-                    cases.append((case_title, new_examples))
-                elif case_title:
-                    # A public Case without a usable Example violates the
-                    # hierarchy. Drop it; coverage repair can restore a
-                    # source-owned Example when one exists.
-                    dropped += 1
-                    changed = True
-            if cases:
-                # Keep the original Type NN: title from the header line.
-                header = type_header.strip()
-                if not re.match(
-                        r"^(?:Miscellaneous\s+)?Type\s+\d{1,2}:", header, re.IGNORECASE):
-                    header = f"Type 01: {header}" if header else "Type 01: Assessment pattern"
-                rebuilt_types.append((header, cases))
-        if changed:
-            new_body = _rebuild_types_body(rebuilt_types)
-            if new_body.strip():
-                sections[types_idx] = (label, new_body)
-            else:
-                sections.pop(types_idx)
-            rec["concept_details"] = cr.join_sections(sections)
-            cr.carry_type_origin_metadata(record, rec)
-        out.append(rec)
-    if expanded or dropped:
-        progress.log(
-            f"Short Case Example salvage: expanded {expanded} from inventory, "
-            f"dropped {dropped} irrecoverable stub(s).",
-            level="warning" if dropped else "success",
+        try:
+            target, rationale = _decide_row_index(
+                qid,
+                item,
+                f"source question {qid} is missing from the rendered "
+                "Types; no mechanical placement resolved a host for it",
+            )
+        except p3_kernel.ContractError:
+            continue  # the defect stands; the caller raises
+        out[target] = _append_inventory_example_to_record(
+            out[target], text, item)
+        covered_keys.add(key)
+        _fixer_flag_row(
+            out[target],
+            f"fixer: placed unhoused question {qid} under "
+            f"'{str(out[target].get('concept_title') or '')[:60]}' — "
+            f"{rationale}",
         )
     return out
 
@@ -17106,18 +15892,41 @@ def _validate_final_or_raise(
     mined_types: dict | None = None,
     method_anchors: list[dict] | None = None,
     source_text: str = "",
+    fixer=None, fixer_store=None,
 ) -> dict:
-    report = cv.validate_concept_rows(
-        records, allow_types=True, require_culmination=True,
-        allow_culmination=True,
-        allowed_source_examples=_inventory_source_examples(inventory),
-        strict_type_hierarchy=True,
-        strict_analysis_section=True,
-        strict_mastery_statement=True,
-        strict_culmination_recap=True,
-        source_text=source_text,
-    )
-    fatal = _fatal_errors(report)
+    def _run_report() -> dict:
+        return cv.validate_concept_rows(
+            records, allow_types=True, require_culmination=True,
+            allow_culmination=True,
+            allowed_source_examples=_inventory_source_examples(inventory),
+            strict_type_hierarchy=True,
+            strict_analysis_section=True,
+            strict_mastery_statement=True,
+            source_text=source_text,
+            # Q1 gate split: existence codes fire only for rows the
+            # chapter inventory allotted an item to (marker-derived).
+            analysis_allotted_keys=cv.analysis_allotted_keys(records),
+        )
+
+    report = _run_report()
+    fatal = _without_fixer_accepted(records, _fatal_errors(report))
+    if fatal and fixer is not None:
+        # The Fixer seam F22 (Q13): one recorded decision per failing row
+        # — a corrected row (final gate; deposit rows are sealed) or an
+        # explicit acceptance-with-flag — then the gate re-measures.
+        changed = _fix_validation_failures_via_fixer(
+            records, fatal, stage=stage, fixer=fixer, store=fixer_store,
+            allow_corrections=stage != "deposit",
+        )
+        if changed and stage == "final":
+            # A corrected Description is a new source claim: re-ground
+            # and re-seal exactly the drifted rows before re-validating,
+            # so the certificate chain attests the corrected content.
+            records[:] = _reground_drifted_final_source_claims(
+                list(records))
+        if changed:
+            report = _run_report()
+        fatal = _without_fixer_accepted(records, _fatal_errors(report))
     progress.log(
         f"{stage}: final validation found {len(fatal)} fatal error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
@@ -17145,6 +15954,14 @@ def _validate_final_or_raise(
         _invalid_inventory_items(inventory)
         if inventory is not None else []
     )
+    if invalid_inventory and fixer is not None:
+        # The Fixer seam F23 (Q13): stub/empty inventory rows are a
+        # judgment call only the source can answer; identity defects
+        # (missing/duplicate qid) stay mechanics and keep failing closed.
+        invalid_inventory = _fix_invalid_inventory_via_fixer(
+            records, inventory, invalid_inventory,
+            stage=stage, fixer=fixer, store=fixer_store,
+        )
     if invalid_inventory:
         reasons = ", ".join(
             f"{item.get('qid') or 'row-' + str(item.get('index'))}:"
@@ -17165,6 +15982,19 @@ def _validate_final_or_raise(
         if inventory is not None
         else {"missing": [], "duplicate": []}
     )
+    if (
+        (coverage_defects["missing"] or coverage_defects["duplicate"])
+        and fixer is not None
+        and inventory is not None
+    ):
+        # The Fixer seam F24 (Q13): place every unhoused QID by one
+        # recorded decision (R4 — never dropped), then re-measure.
+        records[:] = _fix_inventory_coverage_via_fixer(
+            records, inventory, mined_types,
+            fixer=fixer, store=fixer_store,
+        )
+        coverage_defects = _rendered_inventory_coverage_defects(
+            records, inventory)
     if coverage_defects["missing"] or coverage_defects["duplicate"]:
         progress.log(
             f"{stage}: exact source inventory coverage failed with "
@@ -17178,61 +16008,13 @@ def _validate_final_or_raise(
             f"{len(coverage_defects['duplicate'])} duplicate source "
             "question(s)"
         )
-    # The semantic ownership family verifies Phase 3.3's certified
+    # The retired semantic ownership family verified Phase 3.3's certified
     # placement artifacts (owner topics, hub contracts, certified hosts).
     # Under the rewritten Phase 3 those artifacts do not exist: question
     # ownership is the Host pass's API placement (checker-complete, with
     # the deterministic rule reading as an advisory flag), and the exact
     # rendered-coverage check above still guarantees every inventory
     # question appears exactly once.
-    semantic_defects = (
-        {
-            "unexpected_examples": _unexpected_rendered_type_examples(
-                records, inventory),
-            "topic_placements": _rendered_inventory_topic_violations(
-                records, inventory, mined_types),
-            "type_hosts": _rendered_type_placement_violations(
-                records, inventory, mined_types),
-            "certified_hosts": _placement_certification_violations(
-                records, inventory, mined_types),
-            "concept_type_coverage": (
-                _normal_concept_type_coverage_violations(
-                    records, inventory, mined_types)
-            ),
-            "mined_types": _mined_type_topic_violations(
-                records, mined_types),
-            "uncovered_topics": _inventory_topic_type_coverage_violations(
-                records, inventory),
-            "activity_alignment": _activity_example_hub_alignment_violations(
-                records, inventory),
-            "hub_contract": _hub_inventory_contract_violations(
-                records, inventory),
-            "hub_items_in_types": sorted(
-                _hub_inventory_examples_in_types(records, inventory)),
-        }
-        if inventory is not None
-        and not _rewrite_placement_authority_active()
-        else {}
-    )
-    nonempty_semantic = {
-        name: defects
-        for name, defects in semantic_defects.items()
-        if defects
-    }
-    if nonempty_semantic:
-        summary = ", ".join(
-            f"{name}={len(defects)}"
-            for name, defects in nonempty_semantic.items()
-        )
-        progress.log(
-            f"{stage}: closed source-inventory validation failed "
-            f"({summary}).",
-            level="error",
-        )
-        raise RuntimeError(
-            f"{stage} validation failed: source_inventory_semantics; "
-            + summary
-        )
     missing_method_anchors = [
         anchor for anchor in (method_anchors or [])
         if (
@@ -17249,213 +16031,17 @@ def _validate_final_or_raise(
             str(anchor.get("anchor_id") or "")
             for anchor in missing_method_anchors[:10]
         )
-        if _rewrite_placement_authority_active():
-            # The rewritten Settle authors clean prose without the legacy
-            # [METHOD-...] markers, so tag-based coverage cannot hold and
-            # a content-match miss on one worked method must not kill the
-            # chapter: it ships as a review item in the release audit.
-            progress.log(
-                f"{stage}: {len(missing_method_anchors)} worked method(s) "
-                f"were not recognized in the final rows ({anchor_ids}); "
-                "shipping flagged for review.",
-                level="warning",
-            )
-        else:
-            progress.log(
-                f"{stage}: mandatory method anchors are missing: "
-                f"{anchor_ids}.",
-                level="error",
-            )
-            raise RuntimeError(
-                f"{stage} validation failed: method_anchor_coverage; "
-                f"{len(missing_method_anchors)} missing anchor(s)"
-            )
-    return report
-
-
-def _refine_descriptions_via_api(
-    records: list[dict], *, subject: str, mmd_text: str = "",
-    meta: dict | None = None, sections: list[dict] | None = None,
-) -> list[dict]:
-    """Dedicated Description-only API pass for source-grounded concept details."""
-    import json as _json
-
-    if not records:
-        return records
-    if _rewrite_placement_authority_active():
-        # Settle's single content-authoring pass writes the final
-        # Description (with mastery and learner analysis) grounded on each
-        # concept's own source blocks — a second dedicated pass here would
-        # be redundant API load under concurrent creator runs.
+        # The rewritten Settle authors clean prose without the legacy
+        # [METHOD-...] markers, so tag-based coverage cannot hold and
+        # a content-match miss on one worked method must not kill the
+        # chapter: it ships as a review item in the release audit.
         progress.log(
-            "Description authoring deferred to Settle's single content "
-            "pass (description, mastery, and learner analysis in one "
-            "decision).")
-        return records
-    if not (mmd_text or "").strip():
-        progress.log("Description refinement skipped — no chapter source text.", level="warning")
-        return records
-
-    meta = meta or _metadata(subject=subject)
-    sections = sections or parse_mmd_sections(mmd_text)
-    system = _description_refine_system(subject)
-    progress.log(f"Refining descriptions for {len(records)} concepts (dedicated API pass).")
-    topics: dict[str, list[dict]] = {}
-    for rec in records:
-        topics.setdefault(rec.get("topic", ""), []).append(rec)
-    refined_rows: list[dict] = []
-    for topic, topic_records in topics.items():
-        payload = _json.dumps({"rows": _records_to_api_rows(topic_records)}, ensure_ascii=False)
-        source = _source_for_topic(topic, sections)
-        user = (
-            _metadata_block(meta)
-            + f"\nTopic: {topic}\nConcept map — refine Description only:\n"
-            + payload
-            + "\n\nRELEVANT SOURCE TEXT:\n"
-            + _trim(source, 220_000)
-        )
-        data = _openai_json(system, user, purpose="concept_detailing")
-        refined_rows.extend(_concept_rows_to_records(data))
-    if not refined_rows:
-        raise RuntimeError("description refinement returned no rows")
-
-    by_key = {_record_key(r): r for r in refined_rows}
-    merged: list[dict] = []
-    for rec in records:
-        updated = by_key.get(_record_key(rec))
-        if not updated:
-            merged.append(rec)
-            continue
-        # Description pass must not preserve or introduce Types in the new architecture.
-        updated = _strip_types_from_records([updated])[0]
-        updated["topic"] = rec.get("topic", "")
-        updated["parent_concept"] = rec.get("parent_concept", "")
-        updated["concept_title"] = rec.get("concept_title", "")
-        updated["keywords"] = rec.get("keywords", "")
-        updated["source_evidence"] = rec.get("source_evidence", "")
-        merged.append(updated)
-
-    before_repair = merged
-    merged = _repair_records_via_api(
-        merged, meta=meta, stage="description", source_context=mmd_text)
-    merged = _preserve_required_method_rows(before_repair, merged)
-    progress.log(f"Descriptions refined: {len(merged)}.", level="success")
-    return merged
-
-
-def _assign_types_via_api(
-    records: list[dict], *, subject: str, mmd_text: str = "",
-    meta: dict | None = None, sections: list[dict] | None = None,
-    question_task_inventory: dict | None = None,
-    mined_types: dict | None = None,
-) -> list[dict]:
-    """Dedicated Types-only API pass — mirrors manual types-first workflow.
-
-    When mined Types are available they are embedded via a pure-API ID
-    assignment (``_assign_mined_types_via_api``): the model maps each legacy
-    single-Type or case-scoped internal ``type_id`` to a concept and we join by
-    exact IDs, guaranteeing every refined Case is embedded without any
-    regex/word matching. When no mined Types exist (e.g. no source/inventory),
-    the model authors Types per topic.
-    """
-    import json as _json
-
-    if not records:
-        return records
-    meta = meta or _metadata(subject=subject)
-    mined_types = mined_types or {"types": []}
-    if mined_types.get("types"):
-        progress.log(
-            f"Embedding {len(mined_types['types'])} mined Types into concepts "
-            "via API ID assignment.")
-        merged = _assign_mined_types_via_api(records, meta=meta, mined_types=mined_types)
-        before_repair = merged
-        repaired = _repair_records_via_api(
-            merged, meta=meta, stage="types", source_context=mmd_text,
-            allowed_source_examples=_inventory_source_examples(
-                question_task_inventory))
-        repaired = _accept_topic_safe_type_review(
-            before_repair, repaired, mined_types)
-        merged = _accept_exact_inventory_type_review(
-            before_repair, repaired, question_task_inventory, mined_types)
-        with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
-        progress.log(
-            f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
-            level="success" if with_types else "warning",
-        )
-        return merged
-    if not (mmd_text or "").strip():
-        progress.log("Types assignment skipped — no chapter source text.", level="warning")
-        return records
-    sections = sections or parse_mmd_sections(mmd_text)
-    question_task_inventory = question_task_inventory or _empty_inventory()
-    system = _types_assign_system(subject)
-    progress.log(f"Assigning Types to {len(records)} concepts (dedicated API pass).")
-    topics: dict[str, list[dict]] = {}
-    for rec in records:
-        topics.setdefault(rec.get("topic", ""), []).append(rec)
-    out: list[dict] = []
-    for topic, topic_records in topics.items():
-        payload = _json.dumps({"rows": _records_to_api_rows(topic_records)}, ensure_ascii=False)
-        source = _source_for_topic(topic, sections)
-        user = (
-            _metadata_block(meta)
-            + f"\nTopic: {topic}\nConcept map — add Types to assessable concepts:\n"
-            + payload
-            + "\n\nQUESTION / TASK INVENTORY (debug trace, do not copy source labels into concept_details):\n"
-            + _json.dumps(question_task_inventory, ensure_ascii=False)
-            + "\n\nMINED REUSABLE TYPES TO EMBED:\n"
-            + _json.dumps(mined_types, ensure_ascii=False)
-            + "\n\nRELEVANT TOPIC SOURCE + EXERCISE BLOCKS:\n"
-            + _trim(source, 220_000)
-        )
-        data = _openai_json(system, user, purpose="concept_mapping")
-        out.extend(_concept_rows_to_records(data))
-    if not out:
-        raise RuntimeError("Types assignment returned no rows")
-    # Match by key; keep original row if API omitted it.
-    by_key = {_record_key(r): r for r in out}
-    merged: list[dict] = []
-    for rec in records:
-        updated = by_key.get(_record_key(rec))
-        if not updated:
-            merged.append(rec)
-            continue
-        # This pass is Types-only: keep the refined Description and any existing
-        # useful Misconceptions or Error Analysis from the incoming record, and
-        # take only the Types body returned by the API.
-        types_body = _types_body(updated.get("concept_details", ""))
-        if types_body:
-            rec = dict(rec)
-            rec["concept_details"] = _inject_types(rec.get("concept_details", ""), types_body)
-        merged.append(rec)
-    merged = _repair_records_via_api(
-        merged, meta=meta, stage="types", source_context=mmd_text,
-        allowed_source_examples=_inventory_source_examples(
-            question_task_inventory))
-    merged = _review_type_concept_alignment_via_api(
-        merged,
-        meta=meta,
-        question_task_inventory=question_task_inventory,
-        mined_types=mined_types,
-        source_context=mmd_text,
-    )
-    merged = _repair_records_via_api(
-        merged, meta=meta, stage="types", source_context=mmd_text,
-        allowed_source_examples=_inventory_source_examples(
-            question_task_inventory))
-    with_types = sum(1 for r in merged if _has_meaningful_types(r.get("concept_details", "")))
-    progress.log(
-        f"Types assignment complete: {with_types}/{len(merged)} concepts have Types.",
-        level="success" if with_types else "warning",
-    )
-    if with_types < len(merged) // 2:
-        progress.log(
-            "Fewer than half the concepts have Types — check chapter source or "
-            "raise AEGIS_OPENAI_MAX_OUTPUT_TOKENS.",
+            f"{stage}: {len(missing_method_anchors)} worked method(s) "
+            f"were not recognized in the final rows ({anchor_ids}); "
+            "shipping flagged for review.",
             level="warning",
         )
-    return merged
+    return report
 
 
 def _records_to_api_rows(records: list[dict]) -> list[dict]:
@@ -18055,51 +16641,63 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
     return out
 
 
-def _expected_min_skeleton_rows(chunk_text: str) -> int:
-    """Minimum plausible concept count for a chunk, from its content size.
-
-    Only a failed-extraction guard: a substantial chunk that comes back with
-    one or two rows almost certainly collapsed whole sections. Concept count
-    is otherwise the model's judgment — reviewers found char-density floors
-    produced many thin micro-concepts, so no per-character quota applies.
-    """
-    content = len((chunk_text or "").strip())
-    if content < 2_000:
-        return 1
-    return 3 if content >= 15_000 else 2
-
-
-def _expected_max_skeleton_rows(chunk_text: str, headings: list[str]) -> int:
-    """Maximum useful skeleton density before a chunk is clearly micro-split."""
-    content = len((chunk_text or "").strip())
-    heading_count = max(1, len(headings or []))
-    by_headings = heading_count * 4
-    by_size = max(8, content // 900) if content >= 2_000 else 8
-    return max(8, min(45, max(by_headings, by_size)))
-
-
-def _compact_skeleton_floor(
+def _skeleton_chunk_verdict_via_api(
+    chunk_text: str,
     records: list[dict],
-    *,
-    expected_min: int,
-    expected_max: int,
-) -> int:
-    """Lower bound for a retry that compacts an over-dense skeleton.
+) -> dict:
+    """Independent model audit of one chunk's extracted skeleton.
 
-    Landing anywhere above the very conservative under-extraction floor is not
-    enough: a retry can otherwise swing from dozens of source-backed rows to a
-    handful of umbrella concepts.  Preserve every distinct parent family when
-    feasible and require at least sixty percent of the compact ceiling.
+    Replaces the retired character-count floors and ceilings
+    (docs/aegis-restructure.md §3): whether a skeleton under-covers its
+    source or splits it into micro-concepts is a judgment about what the
+    text teaches, so the model makes it — the extraction call is the
+    author, this audit is the independent second pass, and its verdict
+    triggers at most one bounded correction. A verdict that cannot be
+    obtained keeps the extraction unchanged: content is never dropped on
+    a failed check.
     """
-    density_floor = (expected_max * 3 + 4) // 5
-    family_floor = min(
-        expected_max,
-        len(_skeleton_family_labels(records)),
+    import json as _json
+
+    system = (
+        "You audit a concept-skeleton extraction against its source text. "
+        "Judge two things about the skeleton as a whole. (1) coverage: "
+        "does the skeleton cover every main teaching objective from the "
+        "first line of the source to the last, including chapter-opening "
+        "framing ideas? (2) grain: is each row a durable, teacher-facing "
+        "mastery objective, or has the teaching been carved into thin "
+        "micro-concepts (terms, cases, examples, sub-types, or question "
+        "headings standing alone as rows)? Judge only from what the text "
+        "teaches — never from row counts, text length, or how many "
+        "concepts you would have expected. Return STRICT JSON only: "
+        '{"coverage": "complete" | "under_extracted", '
+        '"missing_objectives": ["<objective the skeleton missed>", ...], '
+        '"grain": "sound" | "micro_split", "reason": "<one sentence>"}'
     )
-    return min(
-        expected_max,
-        max(expected_min, density_floor, family_floor),
+    user = (
+        "SOURCE TEXT:\n"
+        + str(chunk_text or "")
+        + "\n\nEXTRACTED SKELETON (concept titles, in order):\n"
+        + _json.dumps(
+            [
+                str(row.get("concept_title") or "").strip()
+                for row in records
+            ],
+            ensure_ascii=False,
+        )
     )
+    data = _openai_json(system, user, purpose="concept_validation")
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "coverage": str(data.get("coverage") or "").strip().lower(),
+        "missing_objectives": [
+            str(value).strip()
+            for value in data.get("missing_objectives") or []
+            if str(value or "").strip()
+        ],
+        "grain": str(data.get("grain") or "").strip().lower(),
+        "reason": str(data.get("reason") or "").strip(),
+    }
 
 
 _METHOD_CUE_RE = re.compile(
@@ -18170,7 +16768,7 @@ def _method_coverage_anchors(sections: list[dict]) -> list[dict]:
     seen: set[str] = set()
     for topic, section in _sections_with_source_topics(sections):
         heading = section.get("heading") or ""
-        if _EXERCISE_RE.search(heading) or _is_non_topic_heading(heading):
+        if _EXERCISE_RE.search(heading):
             continue
         body = section.get("body") or ""
         example = _WORKED_EXAMPLE_START_RE.search(body)
@@ -18974,22 +17572,44 @@ def _extract_skeleton_via_api(
             r for r in chunk_records
             if not cr.is_culmination(r.get("concept_title", ""))
         ]
-        expected_min = _expected_min_skeleton_rows(chunk["text"])
-        if len(chunk_records) < expected_min:
+        # Coverage and grain are judged by an independent model audit —
+        # never by character counts or row-count ladders (§3 purge). One
+        # bounded correction per verdict; an unavailable verdict keeps
+        # the extraction exactly as returned.
+        verdict: dict = {}
+        try:
+            verdict = _skeleton_chunk_verdict_via_api(
+                chunk["text"], chunk_records)
+        except Exception as exc:  # noqa: BLE001 - audit is advisory
             progress.log(
-                f"  chunk {i}/{len(chunks)} returned only {len(chunk_records)} "
-                f"concept(s) for {len(chunk['text']):,} chars (expected >= "
-                f"{expected_min}) — retrying with a density instruction.",
+                f"  chunk {i}/{len(chunks)} skeleton audit unavailable "
+                f"({exc}); keeping the extraction as returned.",
+                level="warning",
+            )
+        if verdict.get("coverage") == "under_extracted":
+            missing = verdict.get("missing_objectives") or []
+            progress.log(
+                f"  chunk {i}/{len(chunks)}: the audit judged the skeleton "
+                "under-extracted"
+                + (f" ({verdict.get('reason')})" if verdict.get("reason") else "")
+                + " — retrying with the missed objectives named.",
                 level="warning",
             )
             retry_user = (
                 user
-                + f"\n\nYOUR PREVIOUS ANSWER HAD ONLY {len(chunk_records)} CONCEPTS — "
-                "whole sections of this text appear to be missing from the "
-                "map. Re-read the section text and COVER every main teaching "
+                + "\n\nAN INDEPENDENT AUDIT judged your previous answer "
+                "under-extracted — whole teaching objectives of this text "
+                "are missing from the map."
+                + (
+                    "\nOBJECTIVES THE AUDIT NAMED AS MISSING:\n- "
+                    + "\n- ".join(missing[:12])
+                    if missing
+                    else ""
+                )
+                + "\nRe-read the section text and COVER every main teaching "
                 "objective from the first line to the last, including "
-                "chapter-opening framing ideas. Keep each concept substantial "
-                "— do not pad the count with thin micro-concepts; missing "
+                "chapter-opening framing ideas. Keep each concept "
+                "substantial — do not pad with thin micro-concepts; missing "
                 "coverage is the defect being corrected here, not concept "
                 "size."
             )
@@ -19000,18 +17620,12 @@ def _extract_skeleton_via_api(
                 r for r in retry_records
                 if not cr.is_culmination(r.get("concept_title", ""))
             ]
-            if len(retry_records) > len(chunk_records):
+            if retry_records:
                 chunk_records = retry_records
-        expected_max = _expected_max_skeleton_rows(chunk["text"], chunk_headings)
-        if len(chunk_records) > expected_max:
-            compact_floor = _compact_skeleton_floor(
-                chunk_records,
-                expected_min=expected_min,
-                expected_max=expected_max,
-            )
+        elif verdict.get("grain") == "micro_split":
             family_labels = _skeleton_family_labels(chunk_records)
             family_instruction = ""
-            if family_labels and len(family_labels) <= expected_max:
+            if family_labels:
                 family_instruction = (
                     "\nMUST-PRESERVE SOURCE-BACKED PARENT FAMILIES "
                     "(retain at least one coherent concept for each):\n- "
@@ -19019,22 +17633,25 @@ def _extract_skeleton_via_api(
                     + "\n"
                 )
             progress.log(
-                f"  chunk {i}/{len(chunks)} returned {len(chunk_records)} "
-                f"concept(s) (target {compact_floor}-{expected_max}) — "
-                "retrying as a compact teaching skeleton.",
+                f"  chunk {i}/{len(chunks)}: the audit judged the skeleton "
+                "micro-split"
+                + (f" ({verdict.get('reason')})" if verdict.get("reason") else "")
+                + " — retrying as a coherent teaching skeleton.",
                 level="warning",
             )
             retry_user = (
                 user
                 + family_instruction
-                + f"\n\nYOUR PREVIOUS ANSWER HAD {len(chunk_records)} CONCEPTS — "
-                "that is too granular. Merge terms, cases, examples, sub-types, "
+                + "\n\nAN INDEPENDENT AUDIT judged your previous answer too "
+                "granular — the teaching was carved into thin "
+                "micro-concepts. Merge terms, cases, examples, sub-types, "
                 "and question headings into their parent teaching concepts. "
                 "Keep only durable teacher-facing mastery objectives, retain "
-                "at least one coherent concept for every must-preserve family, "
-                "and never combine disjoint subject domains into one row. Do "
-                "not lose main coverage. Return between "
-                f"{compact_floor} and {expected_max} concepts for this chunk."
+                "at least one coherent concept for every must-preserve "
+                "family, and never combine disjoint subject domains into one "
+                "row. Do not lose main coverage. The right number of "
+                "concepts is YOUR judgment of what the text teaches — there "
+                "is no target count."
             )
             retry_data = _openai_json(
                 system, retry_user, purpose="concept_validation")
@@ -19043,14 +17660,8 @@ def _extract_skeleton_via_api(
                 r for r in retry_records
                 if not cr.is_culmination(r.get("concept_title", ""))
             ]
-            if compact_floor <= len(retry_records) < len(chunk_records):
+            if retry_records:
                 chunk_records = retry_records
-            elif retry_records:
-                progress.log(
-                    f"  rejected compact skeleton with {len(retry_records)} "
-                    f"concept(s); the source-backed floor is {compact_floor}.",
-                    level="warning",
-                )
         missing_method_anchors = _missing_method_anchors(
             chunk_records, method_anchors)
         if missing_method_anchors:
@@ -19133,78 +17744,12 @@ def _extract_skeleton_via_api(
     return _preserve_required_method_rows(out, repaired)
 
 
-def _culmination_title(topic_records: list[dict]) -> str:
-    """Concise, complete-title contract for one topic culmination.
-
-    The Description already carries the exhaustive ``Recap of A, B, ...``
-    inventory. Repeating an arbitrary first three concept names in the title
-    made titles both very long and semantically incomplete. The stable topic
-    name is the correct public label for the complete recap.
-    """
-    topic = next((
-        re.sub(r"\s+", " ", str(record.get("topic") or "")).strip()
-        for record in topic_records
-        if str(record.get("topic") or "").strip()
-    ), "")
-    if not topic:
-        return "Culmination - Topic Recap"
-    # Topic model columns allow 255 chars, but a title should stay readily
-    # scannable in the workbook. Preserve words when bounding an anomalous OCR
-    # heading rather than silently overflowing the cell with concept names.
-    body = topic
-    if len(body) > 96:
-        body = body[:96].rsplit(" ", 1)[0].rstrip(" ,;:-") or body[:96]
-    return f"Culmination - {body}"
-
-
 # Deterministic final normalization: these two failure modes kept surviving
 # LLM repair attempts in live runs, so they are fixed mechanically instead of
 # failing the whole job (multi-user rule: output quality is never compromised,
 # and a job must not die on formatting the code can fix itself).
 _SECTION_NUMBER_SCRUB_RE = re.compile(
     r"\b(?:exercise|ex)?\s*\d+(?:\.\d+)+\b", re.IGNORECASE)
-_EXERCISE_ONLY_RE = re.compile(
-    r"^\s*(?:exercise|exercises|ex|intext(?:\s+questions?)?|review|practice|"
-    r"problems?|questions?)\b[\s\d.:()\-]*$",
-    re.IGNORECASE,
-)
-# OCR'd textbooks mark structural blocks as headings too ("Solution",
-# "Example", "Summary", "Note to the Reader", activity prompts...). These are
-# NEVER topics — their content belongs to the preceding real section.
-_NON_TOPIC_RE = re.compile(
-    r"^\s*(?:solutions?|examples?|summary|answers?|"
-    r"alternative\s+solutions?|remarks?|"
-    r"(?:a\s+)?notes?\s+to\s+the\s+reader|"
-    r"learning\s+outcomes?|questions?\s+to\s+ponder|"
-    r"check\s+your\s+understanding|quick\s+camp|"
-    r"tick\s+the\s+correct\s+answer(?:\s+and\s+justify)?|"
-    r"what\s+have\s+we\s+(?:learnt|learned|discussed)|"
-    r"try\s+these|think\s+and\s+discuss|think,?\s+discuss\s+and\s+write|"
-    r"(?:very\s+)?short\s+answer(?:\s+type)?(?:\s+questions?)?|"
-    r"long\s+answer(?:\s+type)?(?:\s+questions?)?|"
-    r"multiple\s+choice(?:\s+questions?)?|objective(?:\s+type)?(?:\s+questions?)?|"
-    r"subjective(?:\s+questions?)?|descriptive(?:\s+questions?)?|"
-    r"fill\s+in\s+the\s+blanks?|true\s*/?\s*false|match(?:ing)?(?:\s+the\s+following)?|"
-    r"assertion\s*(?:and|&)?\s*reason(?:s)?|case\s+based(?:\s+questions?)?|"
-    r"passage[-\s]+based(?:\s+questions?)?|source[-\s]+based(?:\s+questions?)?|"
-    r"map\s+(?:work|skills?|questions?)|"
-    r"do\s+this|write\s+in\s+brief|discuss|.*\bactivity\b.*|activities|"
-    r"probe\s+and\s+ponder|keep\s+the\s+curiosity\s+alive|"
-    r"discover\s*,?\s*design\s*,?\s*and\s*debate|happy\s+investigating|"
-    r"(?:\?\s*)?figure\s+it\s+out|"
-    r"projects?(?:\s+work)?|things\s+to\s+remember|"
-    r"points\s+to\s+remember|key\s+points|glossary)\b[\s\d.!?:()\-]*$",
-    re.IGNORECASE,
-)
-# Filler umbrella headings that cleanup remaps away from the concept map.
-# Requiring them as "structurally proven source topics" aborts deposit after
-# they are intentionally omitted (Overview / Summary / Basics, etc.).
-# Classroom discussion cases and Activity blocks are classified by the GPT
-# Activity/Info Hub pass — not by chapter-named deterministic filters.
-_FILLER_SOURCE_TOPIC_KEYS = {
-    "overview", "basics", "basic concepts", "general",
-    "summary", "misc", "miscellaneous",
-}
 
 
 def _collapse_spaced_heading_word(heading: str) -> str:
@@ -19212,17 +17757,6 @@ def _collapse_spaced_heading_word(heading: str) -> str:
     if re.fullmatch(r"(?:[A-Za-z]\s+){2,}[A-Za-z]s?", text):
         return re.sub(r"\s+", "", text).lower()
     return text.lower()
-
-
-def _is_filler_source_topic(heading: str) -> bool:
-    """True for umbrella filler headings that must not be mandatory topics."""
-    key = _topic_comparison_key(heading)
-    if key in _FILLER_SOURCE_TOPIC_KEYS:
-        return True
-    stripped = bi.normalize_question_text(_strip_section_number(heading))
-    if stripped in _FILLER_SOURCE_TOPIC_KEYS:
-        return True
-    return False
 
 
 def _is_answer_key_source_section(section: dict) -> bool:
@@ -19240,29 +17774,13 @@ def _is_answer_key_source_section(section: dict) -> bool:
     )
 
 
-def _is_non_topic_heading(heading: str) -> bool:
-    # "(Optional)" suffixes and asterisks ("EXERCISE 6.6 (Optional)*") must not
-    # hide an exercise heading from the match.
-    h = re.sub(r"\(\s*optional\s*\)|\*", " ", heading or "", flags=re.IGNORECASE)
-    if re.fullmatch(r"\s*(?:\d+|[ivxlcdm]+)\s*", h, re.IGNORECASE):
-        return True
-    if _collapse_spaced_heading_word(h) in {"questions", "exercises"}:
-        return True
-    if _is_filler_source_topic(h):
-        return True
-    return bool(_EXERCISE_ONLY_RE.match(h) or _NON_TOPIC_RE.match(h))
-
-
 def _scrub_section_numbers(records: list[dict]) -> list[dict]:
     """Remove section/exercise numbering from topics and titles.
 
-    Rows whose topic is a bare exercise or structural heading (e.g.
-    "EXERCISE 1.2", "Solution", "Tick the Correct Answer" — these slip through
-    when OCR'd chapters mark such blocks as headings) are merged into the
-    preceding real topic so exercise/solution content is not dropped.
-
-    Filler umbrella topics (Overview / Summary / Basics / …) are dropped
-    entirely so preview/recap rows are not reassigned into neighboring topics.
+    Pure mechanics: numbering artifacts ("EXERCISE 1.2", "5.3") are stripped;
+    a topic left empty by the scrub inherits the preceding row's topic so the
+    row is never orphaned. No row is dropped and no heading vocabulary decides
+    what a topic means — the model's topic assignment stands (§3 purge).
     """
 
     def _scrub(text: str) -> str:
@@ -19271,14 +17789,10 @@ def _scrub_section_numbers(records: list[dict]) -> list[dict]:
 
     prev_topic = ""
     out: list[dict] = []
-    dropped = 0
     for rec in records:
         topic = rec.get("topic", "")
         scrubbed = _scrub(topic)
-        if _is_filler_source_topic(topic) or _is_filler_source_topic(scrubbed):
-            dropped += 1
-            continue
-        if _is_non_topic_heading(topic) or not scrubbed or _is_non_topic_heading(scrubbed):
+        if not scrubbed:
             rec["topic"] = prev_topic or "General"
         elif scrubbed != topic:
             rec["topic"] = scrubbed
@@ -19288,11 +17802,6 @@ def _scrub_section_numbers(records: list[dict]) -> list[dict]:
         if scrubbed_title and scrubbed_title != title:
             rec["concept_title"] = scrubbed_title
         out.append(rec)
-    if dropped:
-        progress.log(
-            f"Dropped {dropped} Overview/Summary/filler concept row(s).",
-            level="warning",
-        )
     return out
 
 
@@ -19314,14 +17823,13 @@ def _culmination_starter_types(topic_records: list[dict]) -> str:
 
 
 def _enforce_culminations(records: list[dict]) -> list[dict]:
-    """Guarantee exactly one culmination row at the end of every topic.
+    """Normalize the order/count of AUTHORED culmination rows per topic.
 
-    Keeps the authored culmination (first one when the model produced
-    duplicates), appends the deterministic fallback when a topic has none,
-    and always positions it last. Its title is rebuilt deterministically from
-    the normal concepts in that exact topic, so foreign-topic metadata cannot
-    survive. Inventory-backed Types already assigned to it are preserved;
-    synthetic starter Types are never invented. Normal rows are never touched.
+    Mechanics only: keeps the authored culmination (first one when the model
+    produced duplicates) and always positions it last in its topic. A topic
+    the model left without a culmination ships without one — the validator
+    report records that as a warning for review; no row, title, or recap is
+    ever synthesized from code. Normal rows are never touched.
     """
     normal: dict[str, list[dict]] = {}
     culms: dict[str, list[dict]] = {}
@@ -19351,7 +17859,6 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
         if topic_culms:
             keep = dict(topic_culms[0])
             keep["parent_concept"] = "Culmination"
-            keep["concept_title"] = _culmination_title(normal[topic])
             out.append(keep)
             if len(topic_culms) > 1:
                 progress.log(
@@ -19360,36 +17867,33 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
                     level="warning",
                 )
         else:
-            fallback = _ensure_culmination_rows(normal[topic])
-            out.extend(fallback[len(normal[topic]):])
             progress.log(
-                f"Added deterministic culmination for topic '{topic}'.",
+                f"Topic '{topic}' ships without a culmination row: the "
+                "model authored none, and Aegis never invents one; the "
+                "validator report flags it for review.",
                 level="warning",
             )
-    return cr.set_culmination_recap(out)
+    return out
 
 
 def _ensure_terminal_culmination_contract(
     records: list[dict],
 ) -> list[dict]:
-    """Repair culmination structure/recaps only when the current rows need it.
+    """Normalize culmination order/count only when the current rows need it.
 
-    Rebuilding an already-valid recap from a title containing raw LaTeX can
-    discard its canonical ``[Katex]`` wrappers. Avoid that non-idempotent
-    rewrite on resumed final checkpoints.
+    Mechanics over AUTHORED rows: duplicates and misplaced culminations are
+    normalized; a missing culmination stays a validator warning and is
+    never synthesized.
     """
     report = cv.validate_concept_rows(
         records,
         require_culmination=True,
         allow_culmination=True,
-        strict_culmination_recap=True,
     )
     culmination_codes = {
         "culmination_description",
         "culmination_count",
         "culmination_order",
-        "culmination_recap_format",
-        "culmination_recap_missing_concepts",
     }
     if any(
         error.get("severity") == "error"
@@ -19400,40 +17904,37 @@ def _ensure_terminal_culmination_contract(
     return records
 
 
-def _ensure_culmination_rows(records: list[dict]) -> list[dict]:
-    """Deterministic safety net: exactly one culmination row at each topic end."""
-    out: list[dict] = []
-    topics: dict[str, list[dict]] = {}
-    order: list[str] = []
-    for rec in records:
-        topic = rec.get("topic", "")
-        if topic not in topics:
-            topics[topic] = []
-            order.append(topic)
-        if not cr.is_culmination(rec.get("concept_title", "")):
-            topics[topic].append(rec)
-    for topic in order:
-        topic_records = topics[topic]
-        out.extend(topic_records)
-        if len(topic_records) < 2:
-            # Nothing to consolidate in a single-concept topic.
-            continue
-        out.append({
-            "topic": topic,
-            "parent_concept": "Culmination",
-            "concept_title": _culmination_title(topic_records),
-            "concept_details": "Description: Recap",
-            "keywords": "culmination, recap, mixed application",
-        })
+def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict]:
+    import json as _json
+
+    if not records:
+        return records
+    system = prompts.get_text("concepts.culmination.system")
+    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
+    user = (
+        _metadata_block(meta)
+        + "\nFinal normal concept map — return ONLY one culmination row per topic:\n"
+        + payload
+    )
+    progress.log("Building topic culmination rows.")
+    data = _openai_json(system, user, purpose="concept_detailing")
+    authored = _concept_rows_to_records(data)
+    # The model authors ONLY the culmination rows; the normal rows are merged
+    # back programmatically so this pass can never drop chapter content.
+    out = _merge_culmination_rows(records, authored)
+    out = _repair_records_via_api(out, meta=meta, stage="culmination")
+    culms = sum(1 for r in out if cr.is_culmination(r.get("concept_title", "")))
+    progress.log(f"Culminations added: {culms}.", level="success")
     return out
 
 
 def _merge_culmination_rows(records: list[dict], culms: list[dict]) -> list[dict]:
     """Insert one authored culmination row at the end of each topic.
 
-    The normal rows are NEVER touched — the model only authors the culmination
-    rows, so no chapter content can be lost in this pass. Topics the model
-    missed get the deterministic fallback culmination.
+    The normal rows are NEVER touched — the model only authors the
+    culmination rows, so no chapter content can be lost in this pass. A
+    topic the model authored no culmination for ships without one (the
+    validator report flags it); no fallback row is synthesized.
     """
     normal = [r for r in records if not cr.is_culmination(r.get("concept_title", ""))]
     culm_by_topic: dict[str, dict] = {}
@@ -19459,37 +17960,15 @@ def _merge_culmination_rows(records: list[dict], culms: list[dict]) -> list[dict
             authored = dict(authored)
             authored["topic"] = topic
             authored["parent_concept"] = "Culmination"
-            authored["concept_title"] = _culmination_title(topic_records)
             authored = _strip_types_from_records([authored])[0]
             out.append(authored)
-        else:
-            out.extend(
-                _ensure_culmination_rows(topic_records)[len(topic_records):])
-    return out
-
-
-def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict]:
-    import json as _json
-
-    if not records:
-        return records
-    system = prompts.get_text("concepts.culmination.system")
-    payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
-    user = (
-        _metadata_block(meta)
-        + "\nFinal normal concept map — return ONLY one culmination row per topic:\n"
-        + payload
-    )
-    progress.log("Building topic culmination rows.")
-    data = _openai_json(system, user, purpose="concept_detailing")
-    authored = _concept_rows_to_records(data)
-    # The model authors ONLY the culmination rows; the normal rows are merged
-    # back programmatically so this pass can never drop chapter content.
-    out = _merge_culmination_rows(records, authored)
-    out = cr.set_culmination_recap(out)
-    out = _repair_records_via_api(out, meta=meta, stage="culmination")
-    culms = sum(1 for r in out if cr.is_culmination(r.get("concept_title", "")))
-    progress.log(f"Culminations added: {culms}.", level="success")
+        elif len(topic_records) > 1:
+            progress.log(
+                f"Topic '{topic}' received no authored culmination row; it "
+                "ships without one and the validator report flags it for "
+                "review.",
+                level="warning",
+            )
     return out
 
 
@@ -19527,8 +18006,6 @@ def _topic_headings(sections: list[dict]) -> list[str]:
         # OCR sometimes promotes a displayed equation to a heading
         # (e.g. "$ AMC PNR $") — math fragments are never topics.
         if _looks_like_math_fragment_heading(heading):
-            continue
-        if _is_non_topic_heading(heading):
             continue
         key = _topic_comparison_key(heading)
         if not key:
@@ -19741,55 +18218,8 @@ def _missing_source_topic_excerpts(
     }
     return [
         group for group in source_topic_excerpts or []
-        if (
-            not _is_filler_source_topic(group.get("topic") or "")
-            and not _is_non_topic_heading(group.get("topic") or "")
-            and _topic_comparison_key(group.get("topic") or "") not in covered
-        )
+        if _topic_comparison_key(group.get("topic") or "") not in covered
     ]
-
-
-def _accept_source_topic_complete_candidate(
-    baseline: list[dict],
-    candidate: list[dict],
-    source_topic_excerpts: list[dict],
-    *,
-    stage: str,
-) -> list[dict]:
-    """Reject a later transformation that drops a proven source topic.
-
-    Once the 35% human gate has established a complete topology, later repair
-    and cleanup passes have no authority to remove it. Keeping the newest
-    complete snapshot is deterministic, costs nothing, and avoids a retry loop
-    or a second semantic recovery request for a non-ambiguous regression.
-    """
-
-    missing = _missing_source_topic_excerpts(
-        candidate, source_topic_excerpts)
-    if not missing:
-        return candidate
-    baseline_missing = _missing_source_topic_excerpts(
-        baseline, source_topic_excerpts)
-    if baseline_missing:
-        raise RuntimeError(
-            "source-topic safety baseline is incomplete at "
-            f"{stage}: "
-            + ", ".join(
-                str(group.get("topic") or "").strip()
-                for group in baseline_missing
-            )
-        )
-    names = [
-        str(group.get("topic") or "").strip()
-        for group in missing
-        if str(group.get("topic") or "").strip()
-    ]
-    progress.log(
-        f"Rejected {stage} output because it dropped structurally proven "
-        "source topic(s): " + ", ".join(names),
-        level="warning",
-    )
-    return copy.deepcopy(baseline)
 
 
 def _recover_missing_topic_concepts_via_api(
@@ -20054,8 +18484,6 @@ def _chapter_opening_excerpt(
         heading = (section.get("heading") or "").strip()
         if heading and _topic_comparison_key(heading) == first_key:
             break
-        if _is_filler_source_topic(heading):
-            continue
         body = (section.get("body") or "").strip()
         if body:
             opening_parts.append(
@@ -20118,11 +18546,12 @@ def _recover_chapter_opening_concepts_via_api(
     for candidate in candidates:
         title = (candidate.get("concept_title") or "").strip()
         title_key = bi.normalize_question_text(title)
+        # The recovery model already judged these titles worth adding; only
+        # mechanical duplicates/culminations are screened out here.
         if (
             not title_key
             or title_key in existing_titles
             or cr.is_culmination(title)
-            or _is_filler_source_topic(title)
         ):
             continue
         candidate["topic"] = opening["topic"]
@@ -21048,17 +19477,26 @@ def _final_checkpoint_refresh_reasons(
         # another semantic field changes. Such a checkpoint must replay the
         # reviewed host decision even when its question wording still matches.
         reasons.append("source inventory semantics changed")
+    checkpoint_records = checkpoint.get("records") or []
     analysis_report = cv.validate_concept_rows(
-        checkpoint.get("records") or [], strict_analysis_section=True)
+        checkpoint_records, strict_analysis_section=True,
+        # Q1: a checkpoint's analysis contract is judged under the
+        # allotment markers its own rows carry — a pre-Q1 checkpoint
+        # (sections everywhere, no markers) is refreshed, never reused.
+        analysis_allotted_keys=cv.analysis_allotted_keys(
+            checkpoint_records),
+    )
     malformed_analysis = [
         error for error in analysis_report["errors"]
-        if error.get("code") == "analysis_section_format"
+        if error.get("code") in (
+            "analysis_section_format", "unallotted_analysis_section",
+        )
         and error.get("severity") == "error"
     ]
     if malformed_analysis:
         reasons.append(
             f"{len(malformed_analysis)} final learner-analysis section(s) "
-            "need canonical normalization"
+            "violate the canonical Q1 contract"
         )
     source_text = "\n\n".join(
         str(group.get("excerpt") or "")
@@ -21586,11 +20024,10 @@ def _run_live_concept_pre_final_stages(
         )
 
     if saved_order < _checkpoint_order("description_method_snapshot"):
-        progress.step(
-            "Concept extraction — refining descriptions", value=0.42)
-        out = _refine_descriptions_via_api(
-            out, subject=subject, mmd_text=mmd_text, meta=meta,
-            sections=sections)
+        # Description authoring belongs to Settle's single content pass
+        # (description, mastery, and learner analysis in one decision);
+        # the retired dedicated pre-81% Description pass was redundant
+        # API load under concurrent creator runs.
         out = _ensure_method_worked_examples_via_api(
             out, anchors=method_anchors, meta=meta)
         out = _ensure_mastery_lines_via_api(out, meta=meta)
@@ -21670,13 +20107,20 @@ def _run_live_concept_pre_final_stages(
             consolidated_type_count=consolidated_type_count,
             inventory_count=len(
                 (question_task_inventory or {}).get("items") or []),
-            parent_task_count=(
-                type_granularity_decision.inventory_parent_task_count(
-                    question_task_inventory
-                )
-            ),
             sufficiency_added_concepts=0,
             sufficiency_audit_complete=False,
+        )
+        # The fragmentation question is the model's judgment (§3 purge), and
+        # its verdict is computed here — before the durable checkpoint — so a
+        # pause/resume replays the same recorded verdict instead of respending
+        # the author/critic pair.
+        review["fragmentation_verdict"] = (
+            type_granularity_decision.fragmentation_verdict(
+                review,
+                mined_types=mined_types,
+                inventory=question_task_inventory,
+                api_call=_openai_json,
+            )
         )
         mined_types["_granularity_review"] = copy.deepcopy(review)
         progress.set_progress(
@@ -21704,7 +20148,9 @@ def _run_live_concept_pre_final_stages(
         if not review:
             # Checkpoints created before this gate did not persist raw-vs-
             # consolidated counts. Treat the saved taxonomy as the baseline;
-            # a strong near-one-Type-per-QID signal still merits one human look.
+            # the model fragmentation audit below still gets one human look.
+            # (Reviews saved by older gate versions may carry retired ratio
+            # keys — readers use .get(), so those keys are inert.)
             current_type_count = len(
                 (mined_types or {}).get("types") or [])
             review = type_granularity_decision.build_review(
@@ -21712,47 +20158,12 @@ def _run_live_concept_pre_final_stages(
                 consolidated_type_count=current_type_count,
                 inventory_count=len(
                     (question_task_inventory or {}).get("items") or []),
-                parent_task_count=(
-                    type_granularity_decision.inventory_parent_task_count(
-                        question_task_inventory
-                    )
-                ),
                 sufficiency_added_concepts=0,
                 sufficiency_audit_complete=(
                     saved_order
                     >= _checkpoint_order(_CONCEPT_CHECKPOINT_STAGE)
                 ),
             )
-            mined_types["_granularity_review"] = copy.deepcopy(review)
-
-        # Reviews saved before independently routed leaf Cases used leaf-QID
-        # count as the fragmentation denominator. Upgrade their deterministic
-        # metrics in place while preserving any audit/decision bookkeeping.
-        if "type_comparison_count" not in review:
-            current_type_count = len(
-                (mined_types or {}).get("types") or []
-            )
-            upgraded_metrics = type_granularity_decision.build_review(
-                raw_type_count=int(
-                    review.get("raw_type_count") or current_type_count
-                ),
-                consolidated_type_count=current_type_count,
-                inventory_count=len(
-                    (question_task_inventory or {}).get("items") or []
-                ),
-                parent_task_count=(
-                    type_granularity_decision.inventory_parent_task_count(
-                        question_task_inventory
-                    )
-                ),
-                sufficiency_added_concepts=int(
-                    review.get("sufficiency_added_concepts") or 0
-                ),
-                sufficiency_audit_complete=bool(
-                    review.get("sufficiency_audit_complete", True)
-                ),
-            )
-            review.update(upgraded_metrics)
             mined_types["_granularity_review"] = copy.deepcopy(review)
 
         applied = review.get("human_resolution")
@@ -21782,11 +20193,6 @@ def _run_live_concept_pre_final_stages(
                     consolidated_type_count=current_type_count,
                     inventory_count=len(
                         (question_task_inventory or {}).get("items") or []),
-                    parent_task_count=(
-                        type_granularity_decision.inventory_parent_task_count(
-                            question_task_inventory
-                        )
-                    ),
                     sufficiency_added_concepts=int(
                         review.get("sufficiency_added_concepts") or 0),
                     sufficiency_audit_complete=bool(
@@ -21798,6 +20204,28 @@ def _run_live_concept_pre_final_stages(
             pending_followup = review.get("pending_followup")
             if not isinstance(pending_followup, dict):
                 pending_followup = {}
+            fragmentation = review.get("fragmentation_verdict")
+            if (
+                not str(pending_followup.get("failure") or "").strip()
+                and not (
+                    isinstance(fragmentation, dict)
+                    and "fragmented" in fragmentation
+                )
+            ):
+                # Restored/rebuilt reviews without a recorded verdict spend
+                # the author/critic pair once here. The decision identity
+                # binds only the stable counts, so a re-spent verdict cannot
+                # orphan a human answer.
+                fragmentation = (
+                    type_granularity_decision.fragmentation_verdict(
+                        review,
+                        mined_types=mined_types,
+                        inventory=question_task_inventory,
+                        api_call=_openai_json,
+                    )
+                )
+                review["fragmentation_verdict"] = copy.deepcopy(fragmentation)
+                mined_types["_granularity_review"] = copy.deepcopy(review)
             directive = type_granularity_decision.resolve_or_pause(
                 review=review,
                 inventory=question_task_inventory,
@@ -21806,6 +20234,10 @@ def _run_live_concept_pre_final_stages(
                 prior_decision_id=str(
                     pending_followup.get("prior_decision_id") or ""),
                 failure=str(pending_followup.get("failure") or ""),
+                verdict=(
+                    fragmentation
+                    if isinstance(fragmentation, dict) else None
+                ),
             )
             action = str(directive.get("action") or "continue")
             resolution_audit: dict = {}
@@ -21918,33 +20350,29 @@ def _run_live_concept_pre_final_stages(
                 }
                 review["type_count"] = len(mined_types["types"])
                 inventory_count = int(review.get("inventory_count") or 0)
-                review["type_qid_ratio"] = (
-                    len(mined_types["types"]) / inventory_count
-                    if inventory_count else 0.0
-                )
-                comparison_count = int(
-                    review.get("type_comparison_count")
-                    or review.get("parent_task_count")
-                    or inventory_count
-                )
-                review["type_comparison_ratio"] = (
-                    len(mined_types["types"]) / comparison_count
-                    if comparison_count else 0.0
-                )
                 review["consolidation_merged_count"] = max(
                     int(review.get("consolidation_merged_count") or 0),
                     int(review.get("raw_type_count") or 0)
                     - len(mined_types["types"]),
                 )
-                if type_granularity_decision.is_anomalously_fragmented(
-                    review
-                ):
+                # Re-judge the ACCEPTED taxonomy with a fresh model verdict —
+                # the consolidation changed the Types the earlier verdict saw.
+                post_verdict = (
+                    type_granularity_decision.fragmentation_verdict(
+                        review,
+                        mined_types=mined_types,
+                        inventory=question_task_inventory,
+                        api_call=_openai_json,
+                    )
+                )
+                review["fragmentation_verdict"] = copy.deepcopy(post_verdict)
+                if post_verdict.get("fragmented"):
                     failure = (
                         "The bounded consolidation was source-safe, but the "
-                        "taxonomy remains strongly fragmented at "
-                        f"{len(mined_types['types'])} Types for "
-                        f"{comparison_count} parent task(s) "
-                        f"({inventory_count} leaf QIDs)."
+                        "model fragmentation audit still judges the "
+                        f"{len(mined_types['types'])}-Type result fragmented "
+                        f"for {inventory_count} inventory QID(s): "
+                        f"{str(post_verdict.get('rationale') or '')[:1200]}"
                     )
                     review["pending_followup"] = {
                         "prior_decision_id": str(
@@ -22084,44 +20512,41 @@ def _run_live_concept_pre_final_stages(
         artifacts["mined_types"] = copy.deepcopy(mined_types)
 
     if saved_order < _checkpoint_order("post_type_assignment"):
+        # Type allocation belongs to the rewritten Phase 3 (the Host pass
+        # decides, Assemble renders), so the pre-final stages ship a
+        # stripped topology carrying no source-owned allocations. The 81%
+        # checkpoint above remains the durable resume boundary — no
+        # misleading 91% artifact is persisted before allocation exists.
+        import sys as _sys
+
+        from . import concept_topology_contract as _topology
+
         progress.step(
-            "Concept extraction — assigning Types within source topics",
+            "Concept extraction — preparing final topology before Type "
+            "allocation",
             value=0.85,
         )
-        out = _assign_types_via_api(
-            out,
-            subject=subject,
-            mmd_text=mmd_text,
-            meta=meta,
-            sections=sections,
-            question_task_inventory=question_task_inventory,
-            mined_types=mined_types,
+        progress.log(
+            "Deferred Type allocation until semantic concept topology is "
+            "final.",
+            level="success",
         )
-        out = _populate_activity_hubs_via_api(
-            out,
-            question_task_inventory,
-            meta=meta,
-            mined_types=mined_types,
+        out = _topology._strip_source_owned_allocations(
+            _sys.modules[__name__], out
         )
-        if not _placement_certification_contract_complete(
-            mined_types, question_task_inventory
-        ):
-            raise RuntimeError(
-                "post-Type assignment did not certify every source inventory "
-                "qid to one durable concept host"
-            )
+        _reset_placement_certifications(mined_types)
+        mined_types["_topology_allocation_contract"] = {
+            "version": _topology._CONTRACT_VERSION,
+            "state": "deferred",
+        }
         if artifacts is not None:
             artifacts["mined_types"] = copy.deepcopy(mined_types)
         progress.set_progress(
-            0.91, label="Concept extraction — Type assignment complete")
-        _emit_concept_checkpoint(
-            checkpoint_callback,
-            "post_type_assignment",
-            records=out,
-            question_task_inventory=question_task_inventory,
-            mined_types=mined_types,
-            method_row_snapshot=_serialize_method_row_snapshot(
-                method_row_snapshot),
+            0.91,
+            label=(
+                "Concept extraction — topology ready for final Type "
+                "allocation"
+            ),
         )
     else:
         progress.log(
@@ -22133,407 +20558,20 @@ def _run_live_concept_pre_final_stages(
     return out, question_task_inventory, mined_types, method_row_snapshot
 
 
-def _prepare_final_concept_content(
-    out: list[dict], *,
-    subject: str,
-    board: str,
-    chapter_title: str,
-    meta: dict,
-    mmd_text: str,
-    source_sections: list[dict],
-    question_task_inventory: dict,
-    mined_types: dict,
-    method_row_snapshot: dict[tuple[str, str], dict],
-    method_anchors: list[dict],
-    headings: list[str],
-    source_topic_excerpts: list[dict],
-    refresh_chapter_wide_assignments: bool = False,
-) -> list[dict]:
-    """Run every semantic/API finalizer before the deterministic final gate."""
-    # Missing structural topics are resolved only at the durable human gate in
-    # ``_run_live_concept_pre_final_stages``.  Never hide a stale checkpoint by
-    # starting an automatic paid recovery from the finalizer.
-    missing_source_topics = _missing_source_topic_excerpts(
-        out, source_topic_excerpts)
-    if missing_source_topics:
-        raise RuntimeError(
-            "source-topic review must complete before finalization: "
-            + ", ".join(
-                str(group.get("topic") or "").strip()
-                for group in missing_source_topics
-            )
-        )
-    topology_safe_snapshot = copy.deepcopy(out)
-    out = _scrub_section_numbers(out)
-    out = _merge_concept_records(out)
-    out = _dedupe_titles_chapter_wide(out)
-    out = _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="initial final cleanup",
-    )
-    topology_safe_snapshot = copy.deepcopy(out)
-    progress.step(
-        "Concept extraction — validating and repairing final map",
-        value=0.93,
-    )
-    before_duplicate_merge = copy.deepcopy(out)
-    out = _merge_similar_concepts_via_api(out, meta=meta)
-    out = _preserve_required_method_rows(before_duplicate_merge, out)
-    out = _accept_exact_inventory_type_review(
-        before_duplicate_merge,
-        out,
-        question_task_inventory,
-        mined_types,
-    )
-    out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
-    out = concept_cleanup.filter_review_violations(
-        out, subject=subject, board=board, chapter_title=chapter_title)
-    out = [
-        concept_cleanup.clean_concept_record(
-            dict(record), neutralize_artifacts=False)
-        for record in out
-    ]
-    out = _enforce_culminations(out)
-    out = _ensure_misconceptions_via_api(out, meta=meta)
-    out = _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="concept merge and cleanup",
-    )
-    topology_safe_snapshot = copy.deepcopy(out)
-    before_final_repair = out
-    out = _repair_records_via_api(
-        out, meta=meta, stage="final", source_context=mmd_text, strict=False,
-        max_attempts=3,
-        allowed_source_examples=_inventory_source_examples(
-            question_task_inventory))
-    out = _preserve_required_method_rows(before_final_repair, out)
-    out = _accept_exact_inventory_type_review(
-        before_final_repair, out, question_task_inventory, mined_types)
-    out = _neutralize_unrepaired_rows(
-        out, inventory=question_task_inventory)
-    out = _salvage_short_case_examples(
-        out, inventory=question_task_inventory)
-    out = _neutralize_unrepaired_rows(
-        out, inventory=question_task_inventory)
-    out = _repair_rendered_inventory_coverage(
-        out, question_task_inventory, mined_types)
-    out = _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="final semantic repair",
-    )
-    topology_safe_snapshot = copy.deepcopy(out)
-    coverage_safe_snapshot = copy.deepcopy(out)
-    out = cr.refine_chapter(out)
-    out = _dedupe_titles_chapter_wide(out)
-    out = concept_cleanup.dedupe_similar_titles_chapter_wide(out)
-    out = concept_cleanup.filter_review_violations(
-        out, subject=subject, board=board, chapter_title=chapter_title)
-    out = _ensure_mastery_lines_via_api(out, meta=meta)
-    out = _ensure_misconceptions_via_api(out, meta=meta)
-    out = _enforce_culminations(out)
-    out = _neutralize_unrepaired_rows(
-        out, inventory=question_task_inventory)
-    out = _accept_topic_safe_type_review(
-        coverage_safe_snapshot, out, mined_types)
-    out = _accept_exact_inventory_type_review(
-        coverage_safe_snapshot, out, question_task_inventory, mined_types)
-    out = _restore_method_anchor_rows(out, method_row_snapshot)
-    out = _ensure_mastery_lines_via_api(
-        out, meta=meta, use_api=False)
-    out = _ensure_misconceptions_via_api(out, meta=meta)
-    out = cv.ensure_valid_learner_analysis(out)
-    out = _enforce_method_anchor_topics(out, method_anchors)
-    out = _enforce_culminations(out)
-    out = _reorder_records_by_source_topics(out, headings)
-    out = cr.renumber_types_continuously(out)
-    out = _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="chapter refinement",
-    )
-    topology_safe_snapshot = copy.deepcopy(out)
-    missing_method_anchors = [
-        anchor for anchor in method_anchors
-        if (
-            not _method_anchor_tagged_in_topic(
-                out,
-                str(anchor.get("anchor_id") or ""),
-                anchor.get("topic_hint", ""),
-            )
-            or not _method_anchor_covered(out, anchor)
-        )
-    ]
-    if missing_method_anchors:
-        raise RuntimeError(
-            "final concept map lost mandatory derivation/method anchors: "
-            + ", ".join(
-                anchor["anchor_id"] for anchor in missing_method_anchors)
-        )
-    if refresh_chapter_wide_assignments:
-        # Old final checkpoints may have a valid-but-stale topic assignment
-        # that sent every chapter-end question to one Culmination. Re-run the
-        # constrained semantic distribution after restored topics are present,
-        # then let exact inventory coverage place each source prompt once.
-        question_task_inventory = _assign_chapter_wide_inventory_topics_via_api(
-            meta=meta,
-            inventory=question_task_inventory,
-            records=out,
-            source_topic_excerpts=source_topic_excerpts,
-        )
-        for item in question_task_inventory.get("items") or []:
-            item.pop("_topic_scope", None)
-    type_topic_violations = _mined_type_topic_violations(
-        out, mined_types)
-    if type_topic_violations:
-        summary = ", ".join(
-            f"{item['type_id']}:{item['reason']}"
-            for item in type_topic_violations[:10]
-        )
-        raise RuntimeError(
-            "mined Type source-topic validation failed: " + summary)
-    uncovered_type_topics = _inventory_topic_type_coverage_violations(
-        out, question_task_inventory)
-    if uncovered_type_topics:
-        raise RuntimeError(
-            "source topics with assessable inventory lost all Types: "
-            + ", ".join(
-                f"{item['topic']} ({item['inventory_items']} items)"
-                for item in uncovered_type_topics)
-        )
-    out = _salvage_short_case_examples(
-        out, inventory=question_task_inventory)
-    out = _canonicalize_concept_rich_text(out)
-    # Final API/salvage passes can emit a learner-analysis label on a newline
-    # after the earlier chapter refinement. Normalize that contract immediately
-    # before validation without re-running the full chapter refiner: full
-    # refinement can structurally alter rows after the immutable METHOD-row
-    # snapshot has just been restored.
-    out = cv.ensure_valid_learner_analysis(out)
-    out = _canonicalize_concept_rich_text(out)
-    out = _disambiguate_certified_split_type_cases(
-        out, question_task_inventory, mined_types)
-    out = cr.renumber_types_continuously(out)
-    out = _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="pre-boundary normalization",
-    )
-    topology_safe_snapshot = copy.deepcopy(out)
+def _prepare_final_concept_content(out: list[dict], **kwargs) -> list[dict]:
+    """Everything after the 81% boundary runs through the rewritten Phase 3.
 
-    def final_boundary_report(value: list[dict]) -> dict:
-        return cv.validate_concept_rows(
-            value,
-            **_validation_options("final"),
-            allowed_source_examples=_inventory_source_examples(
-                question_task_inventory),
-            source_text=mmd_text,
-        )
+    Seals the boundary envelope from the active session/graph state and
+    runs Settle → Host → Polish → Assemble with the decision store in the
+    job's artifact directory (docs/phase3-rewrite-spec.md). The legacy
+    3.1–3.11 allocation lane this function used to drive is deleted.
+    """
+    import sys as _sys
 
-    boundary_report = final_boundary_report(out)
-    if _fatal_errors(boundary_report):
-        # Refinement, row restoration, and deterministic cleanup occur after
-        # the first final repair pass. Give every terminal contract—not only
-        # copied prose—one last targeted repair window before the closed-world
-        # deterministic rebuild/gate below.
-        before_boundary_repair = out
-        repaired_boundary = _repair_records_via_api(
-            out,
-            meta=meta,
-            stage="final",
-            source_context=mmd_text,
-            max_attempts=2,
-            allowed_source_examples=_inventory_source_examples(
-                question_task_inventory),
-        )
-        out = _accept_exact_inventory_type_review(
-            before_boundary_repair,
-            repaired_boundary,
-            question_task_inventory,
-            mined_types,
-        )
-        out = _preserve_required_method_rows(
-            before_boundary_repair, out)
-        out = cv.ensure_valid_learner_analysis(out)
-        out = _ensure_mastery_lines_via_api(
-            out, meta=meta, use_api=False)
-        out = _ensure_terminal_culmination_contract(out)
-        out = _canonicalize_concept_rich_text(out)
-        boundary_report = final_boundary_report(out)
-    out = _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="terminal boundary repair",
-    )
-    topology_safe_snapshot = copy.deepcopy(out)
-    boundary_report = final_boundary_report(out)
-    if any(
-        error.get("code") == "source_artifact"
-        and error.get("severity") == "error"
-        for error in boundary_report["errors"]
-    ):
-        out = _neutralize_unrepaired_rows(
-            out, inventory=question_task_inventory)
-    out = _enforce_rendered_inventory_coverage(
-        out, question_task_inventory, mined_types)
-    out = _normalize_activity_hubs_at_final_boundary(
-        out, question_task_inventory, mined_types, meta=meta)
-    out = _disambiguate_certified_split_type_cases(
-        out, question_task_inventory, mined_types)
-    out = cr.renumber_types_continuously(out)
-    out = _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="terminal inventory normalization",
-    )
-    topology_safe_snapshot = copy.deepcopy(out)
+    from . import concept_topology_contract as _topology
 
-    type_contract_codes = {
-        "missing_type_definition",
-        "generic_type_definition",
-        "duplicate_type_definition",
-    }
-
-    def type_contract_errors(value: list[dict]) -> list[dict]:
-        report = cv.validate_concept_rows(
-            value,
-            allow_types=True,
-            require_culmination=True,
-            allow_culmination=True,
-            allowed_source_examples=_inventory_source_examples(
-                question_task_inventory),
-            strict_type_hierarchy=True,
-        )
-        return [
-            error for error in report["errors"]
-            if error.get("severity") == "error"
-            and error.get("code") in type_contract_codes
-        ]
-
-    strict_type_errors = type_contract_errors(out)
-    inventory_topic_violations = _rendered_inventory_topic_violations(
-        out, question_task_inventory, mined_types)
-    activity_alignment_violations = (
-        _activity_example_hub_alignment_violations(
-            out, question_task_inventory)
-    )
-    type_placement_violations = _rendered_type_placement_violations(
-        out, question_task_inventory, mined_types)
-    placement_certification_violations = (
-        _placement_certification_violations(
-            out, question_task_inventory, mined_types)
-    )
-    concept_type_coverage_violations = (
-        _normal_concept_type_coverage_violations(
-            out, question_task_inventory, mined_types)
-    )
-    unexpected_examples = _unexpected_rendered_type_examples(
-        out, question_task_inventory)
-    misplaced_hub_items = _hub_inventory_examples_in_types(
-        out, question_task_inventory)
-    hub_contract_violations = _hub_inventory_contract_violations(
-        out, question_task_inventory)
-    if (
-        inventory_topic_violations
-        or activity_alignment_violations
-        or type_placement_violations
-        or placement_certification_violations
-        or concept_type_coverage_violations
-        or unexpected_examples
-        or misplaced_hub_items
-        or hub_contract_violations
-        or strict_type_errors
-    ):
-        progress.log(
-            "Final cleanup drifted from the closed source inventory or strict "
-            "Type contract; rebuilding Types with the ID-constrained "
-            "assignment pass.",
-            level="warning",
-        )
-        out = _rebuild_types_after_final_placement_drift(
-            out,
-            question_task_inventory,
-            mined_types,
-            meta=meta,
-        )
-        out = _normalize_activity_hubs_from_inventory(
-            out, question_task_inventory, mined_types)
-        out = cr.renumber_types_continuously(out)
-        out = _accept_source_topic_complete_candidate(
-            topology_safe_snapshot,
-            out,
-            source_topic_excerpts,
-            stage="terminal Type rebuild",
-        )
-        topology_safe_snapshot = copy.deepcopy(out)
-        inventory_topic_violations = _rendered_inventory_topic_violations(
-            out, question_task_inventory, mined_types)
-        activity_alignment_violations = (
-            _activity_example_hub_alignment_violations(
-                out, question_task_inventory)
-        )
-        type_placement_violations = _rendered_type_placement_violations(
-            out, question_task_inventory, mined_types)
-        placement_certification_violations = (
-            _placement_certification_violations(
-                out, question_task_inventory, mined_types)
-        )
-        concept_type_coverage_violations = (
-            _normal_concept_type_coverage_violations(
-                out, question_task_inventory, mined_types)
-        )
-        unexpected_examples = _unexpected_rendered_type_examples(
-            out, question_task_inventory)
-        misplaced_hub_items = _hub_inventory_examples_in_types(
-            out, question_task_inventory)
-        hub_contract_violations = _hub_inventory_contract_violations(
-            out, question_task_inventory)
-        strict_type_errors = type_contract_errors(out)
-    if (
-        inventory_topic_violations
-        or activity_alignment_violations
-        or type_placement_violations
-        or placement_certification_violations
-        or concept_type_coverage_violations
-        or unexpected_examples
-        or misplaced_hub_items
-        or hub_contract_violations
-        or strict_type_errors
-    ):
-        raise RuntimeError(
-            "final inventory placement validation failed: "
-            f"{len(inventory_topic_violations)} Example(s) outside their "
-            "source topic, "
-            f"{len(activity_alignment_violations)} assessable Activity "
-            "Example(s) separated from their Activity/Info Hub, "
-            f"{len(type_placement_violations)} Type host violation(s), "
-            f"{len(placement_certification_violations)} certified host "
-            "violation(s), "
-            f"{len(concept_type_coverage_violations)} applicable concept "
-            "Type coverage violation(s), "
-            f"{len(unexpected_examples)} unowned Example(s), "
-            f"{len(misplaced_hub_items)} Hub item(s) rendered as Types, "
-            f"{len(hub_contract_violations)} Hub contract violation(s), "
-            f"{len(strict_type_errors)} strict Type definition error(s)"
-        )
-    # Semantic repair can preserve a stale but syntactically valid image tag.
-    # Reconcile the final public Examples to the source registry before this
-    # exact map is checkpointed, so a later resume does not reintroduce it.
-    out = _reconcile_explicit_figure_images(out, source_sections)[0]
-    return _accept_source_topic_complete_candidate(
-        topology_safe_snapshot,
-        out,
-        source_topic_excerpts,
-        stage="source-image reconciliation",
+    return _topology._run_rewritten_phase3(
+        _sys.modules[__name__], out, kwargs
     )
 
 
@@ -23021,7 +21059,9 @@ def _reground_drifted_final_source_claims(
         row.pop("_semantic_subtopic_id", None)
         row.pop("_semantic_subtopic_ids", None)
 
-    from . import canonical_source_phase31_grounding_contract as phase31
+    from pathlib import Path
+
+    from .phase3 import reground as p3_reground
 
     session = phase3.active_session()
     canonical = (
@@ -23029,25 +21069,33 @@ def _reground_drifted_final_source_claims(
         if isinstance(session, dict)
         else {}
     )
+    artifact_dir = (
+        session.get("artifact_dir") if isinstance(session, dict) else None
+    )
+    store_dir = (
+        Path(artifact_dir) / "phase3-decisions" if artifact_dir else None
+    )
     progress.log(
         "Final source-claim integrity check found "
         f"{len(drifted)} row-local change(s); re-running exact grounding "
         "once before certification.",
         level="warning",
     )
-    regrounded = phase31.ground_concepts(
+    regrounded = p3_reground.reground_rows(
         candidate,
+        drifted,
         graph=graph,
         canonical=canonical,
+        store_dir=store_dir,
     )
     try:
-        # Phase 3.1 must return one completely sealed ordered payload. Do not
-        # loop or mint a partial certificate when a provider/critic result was
-        # absent, deterministic-only, or otherwise unverified.  The complete
-        # Type/Case QID ledger is attached only at the terminal allocation
-        # boundary, so this row-local re-grounding check deliberately verifies
-        # row seals and lineage rather than minting an intermediate final
-        # certificate from a partial normal-host manifest.
+        # Re-grounding must return one completely sealed ordered payload. Do
+        # not loop or mint a partial certificate when a provider/critic result
+        # was absent, deterministic-only, or otherwise unverified.  The
+        # complete Type/Case QID ledger is attached only at the terminal
+        # allocation boundary, so this row-local re-grounding check
+        # deliberately verifies row seals and lineage rather than minting an
+        # intermediate final certificate from a partial normal-host manifest.
         grounding_certificate.verify_lineage(regrounded)
         for row_index, record in enumerate(regrounded):
             grounding_certificate.verify_row(
@@ -23074,6 +21122,8 @@ def concepts_from_mmd(
     resume_checkpoint: dict | None = None,
     checkpoint_callback=None,
     completion_progress: float = 1.0,
+    instruction_set_sha256: str = "",
+    instruction_slots: dict | None = None,
 ) -> list[dict]:
     """Parse an MMD document into concept records (post-learning).
 
@@ -23089,6 +21139,8 @@ def concepts_from_mmd(
         subject=subject, board=board, grade=grade, unit=unit,
         chapter_title=chapter_title, chapter_id=chapter_id,
         chapter_code=chapter_code, learning_kind=learning_kind,
+        instruction_set_sha256=instruction_set_sha256,
+        instruction_slots=instruction_slots,
     )
     if use_live:
         progress.step("Concept extraction — parsing source structure", value=0.01)
@@ -23241,6 +21293,8 @@ def concepts_from_mmd(
         # valid.  This is a deterministic placement repair only: no API call is
         # made and no question wording is invented.  Fresh maps already pass
         # through this exact repair in their finalizer.
+        from .phase3 import fixer as p3_fixer
+
         resumed_coverage_repaired = False
         if saved_final:
             pre_resume_repair = copy.deepcopy(out)
@@ -23248,7 +21302,8 @@ def concepts_from_mmd(
                 _rendered_inventory_coverage_defects(
                     out, question_task_inventory))
             out = _enforce_rendered_inventory_coverage(
-                out, question_task_inventory, mined_types)
+                out, question_task_inventory, mined_types,
+                fixer=p3_fixer.default_provider())
             resumed_coverage_repaired = out != pre_resume_repair
             if resumed_coverage_repaired:
                 progress.log(
@@ -23277,7 +21332,8 @@ def concepts_from_mmd(
             # exact-once gate so the corrected copies are deterministically
             # deduplicated before the terminal checkpoint is validated.
             out = _enforce_rendered_inventory_coverage(
-                out, question_task_inventory, mined_types)
+                out, question_task_inventory, mined_types,
+                fixer=p3_fixer.default_provider())
             out = cr.renumber_types_continuously(out)
             out = cv.ensure_valid_learner_analysis(out)
             out = _canonicalize_concept_rich_text(out)
@@ -23354,6 +21410,7 @@ def concepts_from_mmd(
                 mined_types=mined_types,
                 method_anchors=method_anchors,
                 source_text=mmd_text,
+                fixer=p3_fixer.default_provider(),
             )
             out, final_type_case_qid_placement_ledger = (
                 _final_type_case_qid_host_manifests(
@@ -23384,10 +21441,9 @@ def concepts_from_mmd(
                     type_case_qid_placement_ledger=(
                         final_type_case_qid_placement_ledger
                     ),
-                    require_placement_contracts=(
-                        production_grounding_required
-                        and not _rewrite_placement_authority_active()
-                    ),
+                    # The rewritten Phase 3 never mints per-row placement
+                    # contracts; row certificates carry the authority.
+                    require_placement_contracts=False,
                 )
                 if grounding_certificate_required
                 else None
@@ -23494,17 +21550,10 @@ def concepts_from_mmd(
                 f"{missing} non-culmination concept(s) still lack Types after all passes.",
                 level="warning",
             )
-        normal_count = sum(
-            1 for r in out if not cr.is_culmination(r.get("concept_title", "")))
-        expected_min = _expected_min_skeleton_rows(mmd_text)
-        if normal_count < expected_min:
-            progress.log(
-                f"Only {normal_count} concept(s) extracted from "
-                f"{len(mmd_text):,} chars of source (expected >= {expected_min}). "
-                "The chapter was likely under-extracted — check the per-stage "
-                "row counts above to see which pass lost rows.",
-                level="warning",
-            )
+        # The character-length "expected row count" warning is purged
+        # (docs/aegis-restructure.md §3): source volume never judges
+        # whether a chapter's concept count is right — the model does,
+        # at extraction time, from what the book teaches.
         progress.set_progress(
             max(0.0, min(1.0, float(completion_progress))),
             label="Concept extraction complete",
@@ -23539,15 +21588,17 @@ def concepts_from_mmd(
         "concept_details": "Description: (empty document)",
         "keywords": "",
     }]
-    return cr.refine_chapter(_ensure_culmination_rows(_ensure_parent_concepts(out)))
+    # Dry path: no culmination synthesis — a culmination is model work.
+    return cr.refine_chapter(_ensure_parent_concepts(out))
 
 
-# Pre-learning derivation: ported from the vendored
-# concept_mapping_to_prelearning engine — dependency-architecture prompt with
-# CRITICAL SYLLABUS FILTER, naming patterns, cognitive tags (FL/NU/VC/RS/GR),
-# strict topic/concept counts, and a second "syllabus boundary" auditor pass.
-_PRE_MIN_T, _PRE_MAX_T = 4, 6
-_PRE_MIN_CT, _PRE_MAX_CT = 5, 7
+# Pre-learning derivation: dependency-architecture prompt with CRITICAL
+# SYLLABUS FILTER, naming patterns, cognitive tags (FL/NU/VC/RS/GR), and a
+# second "syllabus boundary" auditor pass. The legacy 4–6 topic / 5–7
+# concept quota is purged (docs/aegis-restructure.md §3): the model sizes
+# the pre-learning structure from the prerequisites actually captured — a
+# thin chapter is never padded to satisfy arithmetic, and a
+# prerequisite-heavy one is never conflated to fit a ceiling.
 
 
 def _board_guidance(board: str) -> str:
@@ -23568,10 +21619,9 @@ _PRELEARN_CAT = "Build Concepts · pre-learning derivation"
 prompts.register(
     "prelearning.system", category=_PRELEARN_CAT,
     label="Pre-learning derivation system prompt",
-    description="Variables: {{subject}} {{grade}} {{board}} {{board_guidance}} "
-                "{{min_t}} {{max_t}} {{min_ct}} {{max_ct}}.",
-    variables=("subject", "grade", "board", "board_guidance",
-               "min_t", "max_t", "min_ct", "max_ct"),
+    description="Variables: {{subject}} {{grade}} {{board}} "
+                "{{board_guidance}}.",
+    variables=("subject", "grade", "board", "board_guidance"),
     default="""\
 You are an expert curriculum designer specializing in dependency-based learning
 architecture aligned with formal school syllabi (ICSE/CBSE and equivalents).
@@ -23607,8 +21657,11 @@ COGNITIVE TAGGING (MANDATORY): one primary tag per concept:
 FL=Foundational Logic | NU=Numerical Handling | VC=Vocabulary Concept |
 RS=Real-world Sense | GR=Graphical Reasoning.
 
-COUNTS (STRICT): {{min_t}}-{{max_t}} topics; every topic has
-{{min_ct}}-{{max_ct}} concepts. Order by dependency. No duplicates.
+STRUCTURE: the number of topics and of concepts per topic is YOUR judgment,
+sized from the prerequisites this chapter actually needs — there is no quota.
+A chapter with few real prerequisites gets a small map; never pad, invent, or
+split thin material to reach a count, and never conflate distinct
+prerequisites to stay under one. Order by dependency. No duplicates.
 
 CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, sections separated by " // ".
 Every concept ends with exactly one learner-analysis section (Types may be
@@ -23659,8 +21712,10 @@ chapter context. REMOVE or REPLACE any concept that is taught as new in the
 current grade, introduced in this chapter or later in the same course, or
 fails "was this already expected knowledge before this grade?" (unsure or
 borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
-STRUCTURE: output exactly the same number of topics, and per topic exactly
-the same number of concepts — substitute rejected rows, never delete slots.
+STRUCTURE: the map's size is the prerequisite evidence's, not the draft's —
+when a rejected concept has a genuine safer prior-grade replacement,
+substitute it; when it does not, remove the row (and an emptied topic) rather
+than inventing filler to preserve slot counts. Never pad.
 Keep the same schema and canonical ``Description: ... // Types: ... //
 Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...``
 order. Types is optional. Every concept must contain both distinct labelled
@@ -23679,8 +21734,6 @@ def _prelearning_system(subject: str, grade: str, board: str) -> str:
         "prelearning.system",
         subject=subject, grade=grade, board=board,
         board_guidance=_board_guidance(board),
-        min_t=_PRE_MIN_T, max_t=_PRE_MAX_T,
-        min_ct=_PRE_MIN_CT, max_ct=_PRE_MAX_CT,
     )
 
 

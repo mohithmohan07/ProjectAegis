@@ -26,13 +26,6 @@ def _citation_issues(mmd: str) -> dict[str, str]:
     }
 
 
-def test_citation_blocks_on_the_legacy_path(monkeypatch):
-    monkeypatch.delenv("AEGIS_PHASE3_REWRITE", raising=False)
-    codes = _citation_issues(_MMD)
-    assert codes.get("unresolved_explicit_figure_reference") == "error"
-
-
-def test_citation_ships_for_review_under_the_rewrite(monkeypatch):
-    monkeypatch.setenv("AEGIS_PHASE3_REWRITE", "1")
+def test_citation_ships_for_review_under_the_rewrite():
     codes = _citation_issues(_MMD)
     assert codes.get("unresolved_explicit_figure_reference") == "warning"

@@ -30,6 +30,7 @@ import threading
 from typing import Any, Callable
 
 from .. import config
+from . import containers
 from . import progress, prompts
 
 POLISHING_VERSION = 2
@@ -43,9 +44,9 @@ FLAG_KEPT = "kept_original"
 
 # Hub rows (Activities / experiment tasks / info hubs) are placed as hub
 # notes, not test questions, and Phase 3.9 compares their wire text exactly —
-# never polished.
-# Kept in lockstep with ``generation._HUB_INVENTORY_KINDS`` by a drift test.
-SKIP_KINDS = frozenset({"activity", "experiment_task", "info_hub"})
+# never polished. The vocabulary is ``containers.HUB_INVENTORY_KINDS`` —
+# the single container home; a lockstep test pins every consumer to it.
+SKIP_KINDS = containers.HUB_INVENTORY_KINDS
 
 _BATCH_SIZE = 12
 
@@ -153,21 +154,15 @@ def _squash(value: str) -> str:
     return " ".join(str(value or "").split())
 
 
-def _too_short(text: str) -> bool:
-    try:
-        from . import concept_validator as cv
-
-        return bool(cv._example_too_short(text))
-    except Exception:  # noqa: BLE001 — the validator is advisory here
-        return not str(text or "").strip()
-
-
 def _polish_is_usable(item: dict[str, Any], polished: str) -> str:
-    """Empty string when usable, else the reason it is not."""
+    """Empty string when usable, else the reason it is not.
+
+    Only mechanical defects revert a polish: an empty rewrite, or a dropped
+    MCQ option. Whether short wording is a usable test item is a judgment
+    the polish model and its critic own — no length check second-guesses it.
+    """
     if not str(polished or "").strip():
         return "empty polished wording"
-    if _too_short(polished):
-        return "polished wording too short"
     for option in item.get("options") or []:
         text = str(option or "").strip()
         if text and text not in polished:

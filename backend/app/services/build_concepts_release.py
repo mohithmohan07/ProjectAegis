@@ -15,6 +15,7 @@ schema migration is required and checkpoint export retains the complete audit.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ RELEASE_ROW_ERRORS_FIELD = "_aegis_release_errors"
 RELEASE_ROW_QIDS_FIELD = "_aegis_release_qids"
 RELEASE_ROW_BLOCKS_FIELD = "_aegis_release_block_ids"
 RELEASE_ROW_ROUTES_FIELD = "_aegis_release_type_case_routes"
+RELEASE_ROW_REFINED_FIELD = "_aegis_release_refined"
 
 _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_STATUS_FIELD,
@@ -42,6 +44,39 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_QIDS_FIELD,
     RELEASE_ROW_BLOCKS_FIELD,
     RELEASE_ROW_ROUTES_FIELD,
+    # The Refiner's per-row mark (docs/aegis-restructure.md §8.3): rides the
+    # release for the reviewer's audit, stripped before DB upload.
+    RELEASE_ROW_REFINED_FIELD,
+    # Fixer-accepted validator codes (Q13, seams F22/F39/F40): a recorded
+    # acceptance ships in the release payload for the reviewer's audit and
+    # is stripped before DB upload like every other audit field.
+    "_fixer_accepted_codes",
+    # The Phase 2.2 placement pass's stamped verdicts (place.py): which
+    # hub qids and which source figures (block_id + url + caption) the
+    # model placed on this row. They ride the release for the reviewer's
+    # audit and are stripped before DB upload.
+    "_aegis_hub_placements",
+    "_aegis_figure_placements",
+    # The Phase 2.4/4.3 chapter analysis inventory's allotments (Q1,
+    # phase3/assemble.py): the LA-item ids this row received. Rides the
+    # release for the reviewer's audit (every LA-id accounted, allotted
+    # to exactly one concept) and is stripped before DB upload.
+    "_aegis_analysis_allotments",
+    # Assessment grouping verdicts (step 6): private release audit carried by
+    # candidates/groups and stripped before concept-row database publication.
+    # The assessment renderer has no visible slots for these records.
+    "_aegis_assessment_level_verdict",
+    "_aegis_assessment_cell_verdict",
+    "_aegis_assessment_materialization",
+    "_aegis_assessment_answer_restriction",
+    "_aegis_assessment_marking",
+    "_aegis_assessment_route",
+    "_aegis_assessment_variant_cluster",
+    "_aegis_assessment_group_description",
+    "_aegis_assessment_group_quality",
+    # Slice-5 Master Refiner decisions. Candidate and group units share one
+    # private audit marker while retaining distinct decision kinds/policies.
+    "_aegis_assessment_master_refinement",
 })
 
 _UNIT_ID_RE = re.compile(
@@ -54,6 +89,38 @@ _QID_RE = re.compile(r"\bQINV-[A-Za-z0-9_.-]+\b")
 
 class ReleaseUnavailableError(ValueError):
     """No staged release exists for the requested operation."""
+
+
+def _instruction_set_summary(job: models.UploadJob) -> dict[str, Any]:
+    """The Architect's assembled set for this job, summarized for the payload.
+
+    Reads the persisted ``source.instruction-set.json`` from the job's
+    artifact directory (written at generate time). Empty when no set was
+    assembled (legacy runs, pre-learning).
+    """
+    from . import instruction_architect
+
+    helper = getattr(uploads, "source_artifact_directory", None)
+    if not callable(helper):
+        return {}
+    try:
+        stored = instruction_architect.load_instruction_set(
+            helper(int(job.id)))
+    except Exception:  # noqa: BLE001 - a missing artifact never blocks release
+        stored = None
+    if not isinstance(stored, dict):
+        return {}
+    return {
+        key: copy.deepcopy(stored.get(key))
+        for key in (
+            "architect_version",
+            "instruction_set_sha256",
+            "slots_source",
+            "slots",
+            "review_flags",
+        )
+        if key in stored
+    }
 
 
 def _json_safe(value: Any) -> Any:
@@ -669,6 +736,56 @@ def _repeated_question_issues(
     return issues
 
 
+def _case_uniqueness_issues(
+    records: Sequence[Mapping[str, Any]],
+    mined_types: object,
+) -> list[dict[str, Any]]:
+    """Q2 deterministic uniqueness audit over the released rows.
+
+    Runs ``phase3.assemble.audit_case_uniqueness`` (mechanics: rendered
+    Case identities exactly-once, QID-keyed Example exactly-once, no
+    example-less Case shells) and converts its findings into release
+    issues — the release audit fails visibly, nothing is silently
+    repaired.
+    """
+
+    from .phase3 import assemble as p3_assemble
+
+    rows = [dict(row) for row in records if isinstance(row, Mapping)]
+    if not rows:
+        return []
+    try:
+        _types, cases = p3_assemble._type_catalog(
+            {"mined_types": dict(mined_types or {})
+             if isinstance(mined_types, Mapping) else {}}
+        )
+    except Exception:  # noqa: BLE001 - a malformed catalog never blocks release
+        cases = {}
+    prompt_by_qid: dict[str, str] = {}
+    for case in cases.values():
+        for example in case.get("examples") or []:
+            qid = _normal(example.get("qid"))
+            if qid and qid not in prompt_by_qid:
+                prompt_by_qid[qid] = str(example.get("prompt") or "")
+    findings = p3_assemble.audit_case_uniqueness(
+        rows,
+        cases=cases or None,
+        expected_examples=[
+            {"qid": qid, "prompt": prompt}
+            for qid, prompt in sorted(prompt_by_qid.items())
+        ],
+    )
+    return [
+        _issue(
+            code=f"case_uniqueness_{finding.get('code')}",
+            message=str(finding.get("message") or ""),
+            phase="type_case_release",
+            qids=finding.get("qids") or [],
+        )
+        for finding in findings
+    ]
+
+
 def _issue_matches_record(issue: Mapping[str, Any], record: Mapping[str, Any]) -> bool:
     unit_id = _normal(issue.get("unit_id"))
     origin_ids = {
@@ -902,6 +1019,37 @@ def _chapter_meta_for_release(
         return {}
 
 
+def _directory_metadata_for_release(
+    db: Session, target_chapter_id: int,
+) -> dict[str, Any]:
+    """Freeze the target Chapter fields later projections may consume.
+
+    Topic and Concept meaning comes from the released records. The Chapter is
+    only a directory anchor, but even that metadata must travel with the staged
+    Output-01 payload: rereading a mutable Chapter after staging would let the
+    same release seal produce different workbooks and model decisions.
+    """
+
+    if not target_chapter_id:
+        return {}
+    chapter = db.get(models.Chapter, int(target_chapter_id))
+    if chapter is None:
+        return {}
+    return {
+        "chapter_code": str(chapter.chapter_code or ""),
+        "board": str(chapter.board or ""),
+        "grade": str(chapter.grade or ""),
+        "subject": str(chapter.subject or ""),
+        "unit": str(chapter.unit or ""),
+        "chapter_title": str(chapter.chapter_title or ""),
+        "chapter_display_name": str(chapter.chapter_display_name or ""),
+        "chapter_description": str(chapter.chapter_description or ""),
+        "chapter_duration": str(chapter.chapter_duration or ""),
+        "pre_topics": str(chapter.pre_topics or ""),
+        "post_topics": str(chapter.post_topics or ""),
+    }
+
+
 def stage_release(
     db: Session,
     job: models.UploadJob,
@@ -915,8 +1063,15 @@ def stage_release(
     pending_decision: Mapping[str, Any] | None = None,
     error: Exception | None = None,
     reason: str = "",
+    refinements: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Persist one release payload and clear every manual decision gate."""
+    """Persist one release payload and clear every manual decision gate.
+
+    ``refinements`` is The Refiner's recorded diff on this release
+    (docs/aegis-restructure.md §8.3): its changes, summary, review flags,
+    and re-seal marker. ``None`` (callers that never entered the Refiner
+    seam) stores no key; the payload stays byte-compatible.
+    """
 
     checkpoint_value = copy.deepcopy(
         dict(checkpoint)
@@ -966,6 +1121,7 @@ def stage_release(
         types_value, inventory_value
     )
     issues.extend(type_case_issues)
+    issues.extend(_case_uniqueness_issues(record_rows, types_value))
     if not record_rows:
         issues.append(_issue(
             code="no_materialized_concept_rows",
@@ -1000,6 +1156,16 @@ def stage_release(
         or (job.deposit_scope_ids or [0])[0]
         or 0
     )
+    directory_metadata = _directory_metadata_for_release(db, target)
+    source_document_hash = "sha256:" + hashlib.sha256(
+        str(job.mmd_text or "").encode("utf-8")
+    ).hexdigest()
+    chapter_meta = _chapter_meta_for_release(
+        db,
+        target,
+        annotated,
+        pre_post="Pre" if job.learning_kind == "pre" else "Post",
+    )
     released_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "version": RELEASE_VERSION,
@@ -1013,7 +1179,9 @@ def stage_release(
         "learning_kind": job.learning_kind,
         "source_book": job.source_book,
         "filename": job.filename,
+        "source_document_hash": source_document_hash,
         "target_chapter_id": target,
+        "directory_metadata": _json_safe(directory_metadata),
         "target_identity": _json_safe(
             checkpoint_value.get("target_identity") or {}
         ),
@@ -1035,14 +1203,19 @@ def stage_release(
         "final_grounding_certificate": _json_safe(
             final_grounding_certificate or {}
         ),
-        "chapter_meta": _json_safe(_chapter_meta_for_release(
-            db,
-            target,
-            annotated,
-            pre_post="Pre" if job.learning_kind == "pre" else "Post",
-        )),
+        "chapter_meta": _json_safe(chapter_meta),
+        # The Architect's assembled instruction set for this run
+        # (docs/aegis-restructure.md §8.1): version, hash, authored slots,
+        # and the critic's advisory flags, for the reviewer's audit. The
+        # full set (frozen-core hashes included) ships in the diagnostics
+        # zip via the artifact directory.
+        "instruction_set": _json_safe(_instruction_set_summary(job)),
         "summary": summary,
     }
+    if refinements is not None:
+        # The Refiner's diff on the release (§8.3): every refinement is a
+        # recorded change beside the rows it polished.
+        payload["refinements"] = _json_safe(dict(refinements))
 
     durable_inventory = copy.deepcopy(dict(job.question_inventory or {}))
     durable_inventory[RELEASE_KEY] = copy.deepcopy(payload)
@@ -1123,4 +1296,3 @@ def _strip_release_fields(record: Mapping[str, Any]) -> dict[str, Any]:
         for key, value in record.items()
         if key not in _RELEASE_AUDIT_FIELDS
     }
-

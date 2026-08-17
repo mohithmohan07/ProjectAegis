@@ -10,6 +10,23 @@ from app.bulk_import import writer
 from tests.conftest import convert_concept_upload, stream_result
 
 
+def _mark_allotted(records):
+    """Q1 re-baseline: a fixture row carrying the learner-analysis section
+    models an allotted row (the marker assemble stamps rides with it); a
+    row without the section models an unallotted row and carries none."""
+    counter = 0
+    for row in records:
+        title = str(row.get("concept_title") or "")
+        if title.lower().startswith("culmination"):
+            continue
+        if "Misconception" in str(row.get("concept_details") or ""):
+            counter += 1
+            row.setdefault(
+                "_aegis_analysis_allotments", [f"LA-{counter:04d}"]
+            )
+    return records
+
+
 def test_strip_helpers():
     assert bi.strip_title_tag("Number System (09_Mathematics_CBSE_RS)") \
         == "Number System"
@@ -80,7 +97,9 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
         {"topic": "operations on numbers", "concept_title": "addition of integers",
          "parent_concept": "integer operations",
          "concept_details": (
-             "Description: a // Types: Type 01: Direct "
+             "Description: a\nAchieving Mastery: Adding signed integers "
+             "correctly across positive and negative addends. "
+             "// Types: Type 01: Direct "
              "Case 01: Direct addition of two positive integers. "
              "Example 01: Add 2 and 3 using integer addition rules. "
              "Case 02: Direct addition with a two-digit total. "
@@ -99,7 +118,9 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
         {"topic": "powers and roots", "concept_title": "squares of numbers",
          "parent_concept": "powers",
          "concept_details": (
-             "Description: b // Types: Type 01: Compute "
+             "Description: b\nAchieving Mastery: Computing squares by "
+             "multiplying a base by itself rather than doubling. "
+             "// Types: Type 01: Compute "
              "Case 01: Computing a square by repeated multiplication. "
              "Example 01: Calculate 4 squared and explain the multiplication. // "
              "Misconception/ Error Analysis: Misconceptions: Students may "
@@ -114,7 +135,8 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
              "Example 01: Combine square and square-root facts in one review problem. // "
              "Misconception: Students may believe roots and powers cannot appear together."), "keywords": ""},
     ]
-    build_concepts._deposit_concepts(db, chapter, records, "Post", "")
+    build_concepts._deposit_concepts(
+        db, chapter, _mark_allotted(records), "Post", "")
     build_concepts._sync_chapter_topic_summary(chapter)
     db.commit()
 
@@ -135,12 +157,12 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
     assert "Type 04: Mixed" in by_title[
         "Culmination - Powers and Roots"].concept_details
 
-    # Culmination: shares the chapter Type sequence, Description collapses
-    # to "Recap", and no row carries the old "Miscellaneous" prefix.
+    # Culmination: shares the chapter Type sequence, the authored synthesis
+    # Description survives (no code-composed "Recap" stamp), and no row
+    # carries the old "Miscellaneous" prefix.
     culm = by_title["Culmination - Operations on Numbers"].concept_details
     assert "Miscellaneous" not in culm
-    assert "Description: Recap" in culm
-    assert "long synthesis" not in culm
+    assert "long synthesis" in culm
     assert "Misconceptions: Students may believe mixed review tasks use only one operation." in culm
 
     # Column E (post_topics) lists tagged Topic Titles (with the code).
@@ -176,7 +198,9 @@ def test_post_deposit_keeps_math_recap_rich_text_canonical(db):
             "parent_concept": "Finite Sums",
             "concept_details": (
                 "Description: The finite-sum formula combines the first and "
-                "last terms of an arithmetic progression. // Misconception/ "
+                "last terms of an arithmetic progression.\nAchieving "
+                "Mastery: Applying the finite-sum formula from the first "
+                "and last terms of a progression. // Misconception/ "
                 "Error Analysis: Misconceptions: Students may believe the "
                 "factor n can be omitted.; Error Analysis: Students may "
                 "use the common difference instead of the last term."
@@ -187,13 +211,19 @@ def test_post_deposit_keeps_math_recap_rich_text_canonical(db):
             "topic": "Sequences",
             "concept_title": f"Culmination - {raw_title}",
             "parent_concept": "Culmination",
-            "concept_details": "Description: Recap",
+            # A model-authored consolidation carrying raw TeX: the deposit
+            # boundary canonicalizes the math without rewriting the prose.
+            "concept_details": (
+                r"Description: Together these ideas let the learner apply "
+                r"S_n = \frac{n}{2}(a+l) to any finite arithmetic "
+                r"progression from its first and last terms."
+            ),
             "keywords": "",
         },
     ]
 
     created, _merged = build_concepts._deposit_concepts(
-        db, chapter, records, "Post", "")
+        db, chapter, _mark_allotted(records), "Post", "")
     db.flush()
 
     culmination = next(
@@ -201,6 +231,7 @@ def test_post_deposit_keeps_math_recap_rich_text_canonical(db):
         if concept.parent_concept == "Culmination"
     )
     assert "[Katex]" in culmination.concept_details
+    assert "Together these ideas" in culmination.concept_details
     assert not build_concepts.generation.kr.rich_text_issues(
         culmination.concept_details)
 
@@ -222,7 +253,9 @@ def test_post_deposit_rejects_cases_without_numbered_examples(db):
             "concept_title": "Adding Integers",
             "parent_concept": "Integer Operations",
             "concept_details": (
-                "Description: Addition combines signed integer quantities. // "
+                "Description: Addition combines signed integer quantities.\n"
+                "Achieving Mastery: Adding signed integer quantities with "
+                "correct signs. // "
                 "Types: Type 01: Direct calculation "
                 "Case 01: Direct addition of two positive integers. // "
                 "Misconceptions: Students may believe signed addition always "
@@ -241,10 +274,14 @@ def test_post_deposit_rejects_cases_without_numbered_examples(db):
 
     with pytest.raises(ValueError, match="case_without_example"):
         build_concepts._deposit_concepts(
-            db, chapter, records, "Post", "")
+            db, chapter, _mark_allotted(records), "Post", "")
 
 
-def test_post_deposit_treats_explicit_empty_inventory_as_closed_world(db):
+def test_post_deposit_ships_extra_examples_with_explicit_empty_inventory(db):
+    """The closed-world unexpected-examples gate is retired with the phase-3
+    rewrite: an explicit empty inventory no longer blocks a deposit whose
+    Types carry examples the inventory does not own — exact rendered
+    inventory coverage (trivially satisfied here) is the surviving gate."""
     from app.services import build_concepts
 
     chapter = models.Chapter(
@@ -265,7 +302,9 @@ def test_post_deposit_treats_explicit_empty_inventory_as_closed_world(db):
             "concept_title": "Balancing Linear Equations",
             "concept_details": (
                 "Description: A linear equation remains balanced when the same "
-                "valid operation is applied to both sides. // "
+                "valid operation is applied to both sides.\nAchieving "
+                "Mastery: Solving a linear equation by applying the same "
+                "inverse operation to both sides. // "
                 "Types: Type 01: Solving linear balance equations "
                 "Case 01: Isolate the unknown using inverse operations. "
                 "Example 01: Solve 3x + 5 = 20 and explain each balancing step. "
@@ -285,20 +324,27 @@ def test_post_deposit_treats_explicit_empty_inventory_as_closed_world(db):
         },
     ]
 
-    with pytest.raises(
-        ValueError,
-        match=r"source_inventory_semantics; unexpected_examples=1",
-    ):
-        build_concepts._deposit_concepts(
-            db,
-            chapter,
-            records,
-            "Post",
-            "",
-            inventory={"items": [], "stats": {}},
-        )
+    created, _merged = build_concepts._deposit_concepts(
+        db,
+        chapter,
+        _mark_allotted(records),
+        "Post",
+        "",
+        inventory={"items": [], "stats": {}},
+    )
+    db.flush()
 
-    assert not chapter.topics
+    assert chapter.topics
+    deposited = next(
+        concept
+        for concept in (db.get(models.Concept, cid) for cid in created)
+        if concept.parent_concept != "Culmination"
+    )
+    # The extra example ships (math canonicalized into Katex wrappers).
+    assert "Type 01: Solving linear balance equations" in (
+        deposited.concept_details)
+    assert "Solve 3x +" in deposited.concept_details
+    assert "explain each balancing step" in deposited.concept_details
 
 
 def test_post_deposit_without_inventory_uses_generation_fatal_policy(db):
@@ -326,7 +372,9 @@ def test_post_deposit_without_inventory_uses_generation_fatal_policy(db):
             "parent_concept": "Visual Nationalism",
             "concept_title": "Representing the Nation",
             "concept_details": (
-                f"Description: {copied_description} // "
+                f"Description: {copied_description}\nAchieving Mastery: "
+                "Reading a national allegory and naming what it "
+                "personifies. // "
                 "Misconception/ Error Analysis: Misconceptions: Students may "
                 "believe every allegory represents the same nation.; Error "
                 "Analysis: Students may name a figure without connecting its "
@@ -351,7 +399,7 @@ def test_post_deposit_without_inventory_uses_generation_fatal_policy(db):
         build_concepts._deposit_concepts(
             db,
             chapter,
-            records,
+            _mark_allotted(records),
             "Post",
             "",
             inventory=None,
@@ -389,7 +437,9 @@ def test_post_deposit_preserves_inventory_example_and_image_in_export(db):
             "concept_title": "Reading Circuit Diagrams",
             "parent_concept": "Electric Circuits",
             "concept_details": (
-                "Description: Circuit diagrams show connected paths for current. // "
+                "Description: Circuit diagrams show connected paths for "
+                "current.\nAchieving Mastery: Tracing a circuit diagram to "
+                "predict which components operate. // "
                 "Types: Type 01: Diagram interpretation "
                 "Case 01: Comparisons based on a visible circuit configuration. "
                 f"Example 01: {prompt} // "
@@ -412,7 +462,7 @@ def test_post_deposit_preserves_inventory_example_and_image_in_export(db):
     created, merged = build_concepts._deposit_concepts(
         db,
         chapter,
-        records,
+        _mark_allotted(records),
         "Post",
         "",
         inventory=inventory,
@@ -477,7 +527,9 @@ def test_post_deposit_refreshes_existing_concept_with_current_contract(db):
             "parent_concept": "Democratic Nationhood",
             "concept_details": (
                 "Description: Popular sovereignty locates political authority "
-                "with citizens who participate in shaping public institutions. // "
+                "with citizens who participate in shaping public "
+                "institutions.\nAchieving Mastery: Explaining how citizens "
+                "hold and exercise political authority. // "
                 "Misconception/ Error Analysis: Misconceptions: Students may "
                 "believe sovereignty belongs only to a monarch.; Error Analysis: "
                 "Students may omit citizens' role when explaining political "
@@ -495,7 +547,7 @@ def test_post_deposit_refreshes_existing_concept_with_current_contract(db):
     ]
 
     created, merged = build_concepts._deposit_concepts(
-        db, chapter, records, "Post", "NCERT")
+        db, chapter, _mark_allotted(records), "Post", "NCERT")
 
     assert legacy_id in merged
     assert len(created) == 1
@@ -527,7 +579,9 @@ def test_post_deposit_repairs_missing_inventory_question_before_writes(db):
         "parent_concept": "Nation States",
         "concept_details": (
             "Description: Popular sovereignty places political authority with "
-            "the people. // Misconception/ Error Analysis: Misconceptions: "
+            "the people.\nAchieving Mastery: Explaining how popular "
+            "sovereignty relocates political authority to citizens. // "
+            "Misconception/ Error Analysis: Misconceptions: "
             "Students may believe sovereignty belongs only to a monarch.; Error "
             "Analysis: Students may treat political authority as hereditary "
             "rather than civic."
@@ -550,7 +604,7 @@ def test_post_deposit_repairs_missing_inventory_question_before_writes(db):
     created, merged = build_concepts._deposit_concepts(
         db,
         chapter,
-        records,
+        _mark_allotted(records),
         "Post",
         "",
         inventory=inventory,
@@ -663,24 +717,6 @@ def test_roundtrip_recovers_clean_titles(db):
 
 
 def test_deposit_fills_required_fields(client, db, monkeypatch):
-    from app.services import concept_refiner
-
-    monkeypatch.setattr(
-        concept_refiner,
-        "_fallback_misconception",
-        lambda title: (
-            f"Students may believe {title} applies to every social situation "
-            "in the same way."
-        ),
-    )
-    monkeypatch.setattr(
-        concept_refiner,
-        "_fallback_error_analysis",
-        lambda title: (
-            f"Students may omit a relevant source detail when explaining "
-            f"{title}."
-        ),
-    )
     # A fresh chapter with blank (NA-equivalent) required fields.
     chapter = models.Chapter(
         chapter_code="09CBSS_ReqTest", board="CBSE", grade="09",

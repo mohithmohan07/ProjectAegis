@@ -147,13 +147,14 @@ def _providers(mapping: dict[str, list[dict]]):
         rows = []
         for concept in request["concepts"]:
             row = _segment(concept["concept_id"])
-            parts = _ANALYSIS_SPLIT.split(row["concept_details"], maxsplit=1)
-            assert len(parts) == 2, (
-                "golden normal row lacks learner analysis: "
-                + row["concept_title"]
-            )
+            # Q1: the golden settled rows carry Description + Mastery
+            # only; learner analysis lives in rne_analysis.json (the
+            # chapter inventory fixture) and is stamped by Assemble.
+            body = _ANALYSIS_SPLIT.split(
+                row["concept_details"], maxsplit=1
+            )[0]
             description, mastery = re.split(
-                r"\nAchieving Mastery:\s*", parts[0], maxsplit=1
+                r"\nAchieving Mastery:\s*", body, maxsplit=1
             )
             rows.append({
                 "concept_id": concept["concept_id"],
@@ -161,7 +162,6 @@ def _providers(mapping: dict[str, list[dict]]):
                     r"^Description:\s*", "", description
                 ),
                 "achieving_mastery": mastery,
-                "misconception_error_analysis": parts[1],
             })
         response: dict = {"rows": rows}
         culms = request.get("culminations") or []
@@ -230,7 +230,10 @@ def test_settle_reproduces_job_23s_validated_topology(
             assert _normal(produced["concept_details"]) == _normal(
                 golden["concept_details"]
             ), label
-            assert "Misconception" in produced["concept_details"], label
+            # Q1: Settle mints no learner-analysis section — the chapter
+            # inventory (rne_analysis.json) owns it, stamped at Assemble.
+            assert "Misconception" not in produced["concept_details"], label
+            assert "Achieving Mastery:" in produced["concept_details"], label
         else:
             # Culminations derive their grounding from their topic's rows.
             assert produced["_source_block_ids"], label
@@ -399,10 +402,6 @@ def _authored_row(concept_id: str = "C-1", **overrides) -> dict:
             "Learners can express any terminating decimal as p/q in "
             "standard form."
         ),
-        "misconception_error_analysis": (
-            "Misconceptions: Learners believe every fraction bar means a "
-            "value below one."
-        ),
     }
     row.update(overrides)
     return row
@@ -413,32 +412,42 @@ def test_authoring_checker_accepts_a_complete_authored_batch():
     assert check({"rows": [_authored_row()]}) == []
 
 
-def test_authoring_checker_rejects_repeated_mastery_and_analysis():
+def test_authoring_checker_rejects_repeated_mastery():
     check = settle._authoring_checker(["C-1", "C-2"])
     first = _authored_row("C-1")
     second = _authored_row(
         "C-2",
         achieving_mastery=first["achieving_mastery"],
-        misconception_error_analysis=first["misconception_error_analysis"],
     )
     defects = check({"rows": [first, second]})
     assert any("distinct mastery statement" in d for d in defects)
-    assert any("its own content" in d for d in defects)
 
 
-def test_authoring_checker_rejects_the_repeated_outer_label():
-    """A leading outer label is stripped by normalization; one embedded
-    in the body would render the tag twice and must be a defect."""
+def test_authoring_checker_demands_no_learner_analysis():
+    """Q1: the every-concept analysis contract is retired — a row
+    without any misconception_error_analysis field is complete, and a
+    description smuggling an analysis label is the defect."""
     check = settle._authoring_checker(["C-1"])
-    row = _authored_row(
-        misconception_error_analysis=(
-            "Misconceptions: Learners believe every fraction bar means a "
-            "value below one. Misconception/ Error Analysis: The learner "
-            "also inverts the wrong fraction."
-        ),
+    assert check({"rows": [_authored_row()]}) == []
+    smuggled = _authored_row(
+        concept_description=_authored_row()["concept_description"]
+        + " Misconceptions: learners think fractions are always below one."
     )
-    defects = check({"rows": [row]})
-    assert any("repeats the" in d and "label" in d for d in defects)
+    defects = check({"rows": [smuggled]})
+    assert any("never authored here" in d for d in defects)
+
+
+def test_settle_author_policy_version_is_rekeyed_for_q1():
+    """The Q1 schema change must mint new settle.author decision keys so
+    a stored pre-Q1 authoring decision (with analysis bundled) can never
+    replay past the unbundled checker."""
+    from app.services import semantic_confidence_policy as confidence_policy
+
+    assert settle.AUTHOR_POLICY_SUFFIX == "-q1"
+    author_policy = confidence_policy.POLICY_VERSION + (
+        settle.AUTHOR_POLICY_SUFFIX
+    )
+    assert author_policy != confidence_policy.POLICY_VERSION
 
 
 def test_authoring_checker_rejects_a_thin_description():
@@ -478,15 +487,76 @@ def test_authoring_checker_rejects_raw_math_outside_katex_tags():
     assert check({"rows": [wrappable]}) == []
 
 
-def test_authoring_checker_accepts_either_analysis_section_alone():
-    check = settle._authoring_checker(["C-1"])
-    row = _authored_row(
-        misconception_error_analysis=(
-            "Error Analysis: The learner cross-multiplies without first "
-            "matching the denominators' signs."
-        ),
+def test_culmination_description_is_the_authored_consolidation(
+    golden_envelope, golden_rows,
+):
+    """The culmination Description is exactly the model-authored
+    consolidation paragraph — no code-composed 'Recap of <titles>' prefix
+    is ever prepended (the recap machinery is deleted)."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, grounding, analysis, critic = _providers(mapping)
+
+    settled = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
     )
-    assert check({"rows": [row]}) == []
+
+    culminations = [
+        row for row in settled if not row.get("_phase32_topology_decision")
+    ]
+    assert culminations
+    for row in culminations:
+        details = str(row["concept_details"])
+        assert details.startswith(
+            "Description: Together these concepts let the learner connect"
+        ), row["concept_title"]
+        assert "Recap of" not in details
+        # The authored consolidation is mandatory, so no culmination ships
+        # with the empty-consolidation review flag on this golden replay.
+        assert not row.get("review_flags")
+
+
+def test_authoring_critic_dissent_flags_the_authored_rows(
+    golden_envelope, golden_rows,
+):
+    """Settle's content-authoring decision now runs under the live advisory
+    critic: its dissent lands as review flags on the authored rows and
+    never blocks or rewrites the authored content."""
+    mapping = _replay_map(golden_envelope, golden_rows)
+    topology, grounding, analysis, _critic = _providers(mapping)
+
+    def critic(request: dict) -> dict:
+        if request.get("stage") == "content_authoring":
+            return {
+                "verdict": "rejected",
+                "confidence": 0.95,
+                "issues": ["the analysis restates the description"],
+            }
+        return {"verdict": "verified", "confidence": 0.999, "issues": []}
+
+    settled = settle.settle(
+        golden_envelope,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=analysis,
+        critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    assert len(settled) == 53
+    assert any(
+        "restates the description" in flag
+        for row in settled
+        for flag in row.get("review_flags") or []
+    )
+    # Authored content stands despite the dissent.
+    for row in settled:
+        if row.get("_phase32_topology_decision"):
+            assert "Achieving Mastery:" in row["concept_details"]
 
 
 def test_critic_dissent_ships_flags_on_the_settled_rows(

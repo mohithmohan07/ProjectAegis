@@ -30,11 +30,12 @@ _LAYOUT_RE = re.compile(
     r"|end\{(?:figure|table|tabular)\})",
     re.IGNORECASE,
 )
+# MECHANICS: an explicit printed reference ("Box 3") resolved like a Figure
+# number. The retired `_CONTEXT_CUE_RE` phrase vocabulary (§3 purge, item 4D)
+# guessed shared-context linkage from wording; verified page relationships
+# (linked_context_orders) are the model-ruled source of such links now, and
+# where nothing provides one the deterministic link is simply not made.
 _BOX_REF_RE = re.compile(r"\bbox\s*(?P<number>\d+)\b", re.IGNORECASE)
-_CONTEXT_CUE_RE = re.compile(
-    r"(?i)\b(?:with\s+the\s+help\s+of|cited\s+above|viewpoint\s+of\s+the\s+"
-    r"journalist|chart|table)\b"
-)
 _VISUAL_WORDS: dict[str, frozenset[str]] = {
     "map": frozenset({"map"}),
     "caricature": frozenset({"caricature", "cartoon"}),
@@ -49,11 +50,6 @@ _PERSON_NAME_SEQUENCE_RE = re.compile(
     r"\b(?:[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]{2,}\s+){1,3}"
     r"(?P<surname>[A-ZÀ-ÖØ-Þ][A-Za-zÀ-ÖØ-öø-ÿ'’.-]{3,})\b"
 )
-_PERSON_SURNAME_STOPWORDS = frozenset({
-    "activity", "allegory", "britannia", "congress", "europe", "figure",
-    "frankfurt", "germania", "italia", "marianne", "parliament",
-    "republic", "source", "visualising", "vienna",
-})
 
 
 def unique(values: list[str]) -> list[str]:
@@ -167,6 +163,25 @@ def replace_figure_ids(value: str, repairs: list[dict[str, Any]]) -> str:
     return text
 
 
+def strip_labelled_cue_heading(value: object, label: object) -> str:
+    """DISPLAY MECHANICS: strip a leading cue heading the MODEL identified.
+
+    Only the task's own model-identified ``source_label`` is stripped — the
+    retired hardcoded ``Activity|Discuss|Project`` vocabulary (§3 purge,
+    item 4D) is gone; without a model label the text is left intact.
+    """
+    text = str(value or "")
+    label_text = re.sub(r"\s+", " ", str(label or "")).strip()
+    if not label_text:
+        return text
+    return re.sub(
+        rf"(?i)^\s*#{{1,6}}\s*{re.escape(label_text)}\s*",
+        " ",
+        text,
+        count=1,
+    )
+
+
 def strip_public_layout(value: object) -> str:
     text = str(value or "")
     text = _IMAGE_TAG_RE.sub(" ", text)
@@ -176,12 +191,6 @@ def strip_public_layout(value: object) -> str:
         " ",
         text,
         flags=re.IGNORECASE | re.DOTALL,
-    )
-    text = re.sub(
-        r"^\s*##+\s*(?:Activity|Discuss|Project)\s*",
-        " ",
-        text,
-        flags=re.IGNORECASE,
     )
     text = _LAYOUT_RE.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
@@ -197,10 +206,16 @@ def name_key(value: object) -> str:
 
 
 def caption_person_surnames(value: object) -> set[str]:
+    # §3 purge, item 4D: the RNE-specific `_PERSON_SURNAME_STOPWORDS`
+    # vocabulary is deleted. The name-sequence shape alone selects candidate
+    # tokens; the acceptance rules below (uniqueness across nearby captions,
+    # zero affinity with the printed reference, strict subset checks) are the
+    # only remaining filters, and a repair that cannot clear them is simply
+    # not made — the printed reference always survives in the raw ledger.
     surnames: set[str] = set()
     for match in _PERSON_NAME_SEQUENCE_RE.finditer(str(value or "")):
         surname = name_key(match.group("surname"))
-        if surname and surname not in _PERSON_SURNAME_STOPWORDS:
+        if surname:
             surnames.add(surname)
     return surnames
 
@@ -249,7 +264,9 @@ def normalize_visual_ownership(canonical: dict[str, Any]) -> int:
         original_image_urls = [
             str(value) for value in task.get("image_urls") or [] if value
         ]
-        raw_prompt = strip_public_layout(task.get("raw_prompt") or "")
+        raw_prompt = strip_public_layout(strip_labelled_cue_heading(
+            task.get("raw_prompt") or "", task.get("source_label")
+        ))
         raw_reference_ids = figure_reference_ids(raw_prompt)
         candidate_repairs = [
             copy.deepcopy(item) for item in task.get("display_overrides") or []
@@ -398,7 +415,7 @@ def link_shared_context(canonical: dict[str, Any]) -> int:
         if not isinstance(task, dict):
             continue
         prompt = str(task.get("raw_prompt") or "")
-        if not _CONTEXT_CUE_RE.search(prompt) and not _BOX_REF_RE.search(prompt):
+        if not _BOX_REF_RE.search(prompt):
             continue
         task_start = int(task.get("source_start") or 0)
         candidates = [
@@ -510,7 +527,7 @@ def strict_named_figure_repair(generation, item: dict, layout: list[dict]) -> di
     )
     unique_task_surnames = {
         token for token in task_tokens
-        if frequency.get(token) == 1 and token not in _PERSON_SURNAME_STOPWORDS
+        if frequency.get(token) == 1
     }
     if not unique_task_surnames:
         return None

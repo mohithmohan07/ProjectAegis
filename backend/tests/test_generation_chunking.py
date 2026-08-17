@@ -1,4 +1,6 @@
 """MMD is chunked (never trimmed) so no content is lost on long chapters."""
+import pytest
+
 from app.services import generation as g
 
 
@@ -26,7 +28,7 @@ def test_split_small_doc_single_chunk():
     assert g._split_mmd_into_chunks("   ", max_chars=10) == []
 
 
-def test_dry_concepts_include_parent_and_culmination():
+def test_dry_concepts_include_parent_and_never_synthesize_culminations():
     records = g.concepts_from_mmd(
         "## Ratios\nEquivalent ratios\nRatio word problems",
         subject="Mathematics",
@@ -35,13 +37,13 @@ def test_dry_concepts_include_parent_and_culmination():
         unit="Numbers",
         chapter_title="Ratios",
     )
+    assert records
     assert all("parent_concept" in r for r in records)
-    topics = {r["topic"] for r in records}
-    for topic in topics:
-        assert sum(
-            1 for r in records
-            if r["topic"] == topic and r["concept_title"].startswith("Culmination -")
-        ) == 1
+    # A culmination is model-authored content; the dry path never invents
+    # one from code.
+    assert not any(
+        r["concept_title"].startswith("Culmination -") for r in records
+    )
 
 
 def test_skeleton_pass_strips_types_and_culminations(monkeypatch):
@@ -202,104 +204,129 @@ def test_canonicalize_accepts_a_granular_map_without_compacting(monkeypatch):
     assert len(out) == 80
 
 
-def test_skeleton_retries_only_a_collapsed_extraction(monkeypatch):
-    """The retry is a failed-extraction guard, not a density push: a big
-    chunk collapsing to a single row retries for COVERAGE (never asking for
-    micro-splits), while a modest-but-plausible count is accepted as the
-    model's judgment."""
-    calls = {"n": 0}
+def _audit_aware_openai(script):
+    """Stub ``_openai_json`` splitting audit calls from extraction calls.
+
+    ``script`` maps call kinds to a list of responses consumed in order:
+    ``{"extract": [...], "audit": [...]}`` — an Exception instance in the
+    audit list is raised.
+    """
+    calls = {"extract": [], "audit": []}
 
     def fake_openai(system, user, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"rows": _to_api_rows(_rows(1))}
-        assert "COVER every main teaching objective" in user
-        assert "micro-concepts" in user
-        return {"rows": _to_api_rows(_rows(8))}
+        if "audit a concept-skeleton extraction" in system:
+            calls["audit"].append(user)
+            step = script["audit"].pop(0)
+            if isinstance(step, Exception):
+                raise step
+            return step
+        calls["extract"].append(user)
+        return script["extract"].pop(0)
 
+    return fake_openai, calls
+
+
+def test_sound_audit_verdict_accepts_the_extraction_without_retry(monkeypatch):
+    """(a) A complete/sound audit: exactly one extraction call plus one audit
+    call — the model's extraction is the answer; no count-driven retry."""
+    fake_openai, calls = _audit_aware_openai({
+        "extract": [{"rows": _to_api_rows(_rows(2))}],
+        "audit": [{"coverage": "complete", "grain": "sound", "reason": ""}],
+    })
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
-    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 2000)  # ~34k chars
+    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 2000)
     records = g._extract_skeleton_via_api(
         [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
-    assert calls["n"] == 2
+    assert len(calls["extract"]) == 1
+    assert len(calls["audit"]) == 1
+    # However small the extraction, the sound verdict stands (no char floor).
+    assert len(records) == 2
+
+
+def test_under_extracted_audit_verdict_retries_with_named_objectives(
+    monkeypatch,
+):
+    """(b) An under-extracted verdict triggers ONE retry whose user text names
+    the missed objectives, and the retry is adopted."""
+    fake_openai, calls = _audit_aware_openai({
+        "extract": [
+            {"rows": _to_api_rows(_rows(1))},
+            {"rows": _to_api_rows(_rows(8))},
+        ],
+        "audit": [{
+            "coverage": "under_extracted",
+            "missing_objectives": [
+                "how gradation reshapes landforms",
+                "the chapter-opening framing of slow change",
+            ],
+            "grain": "sound",
+            "reason": "whole objectives are missing",
+        }],
+    })
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 2000)
+    records = g._extract_skeleton_via_api(
+        [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
+    assert len(calls["extract"]) == 2
+    assert len(calls["audit"]) == 1
+    retry_user = calls["extract"][1]
+    assert "how gradation reshapes landforms" in retry_user
+    assert "chapter-opening framing of slow change" in retry_user
+    assert "COVER every main teaching objective" in retry_user
     assert len(records) == 8
 
 
-def test_skeleton_accepts_a_modest_concept_count_without_retry(monkeypatch):
-    """Seven substantial concepts for a large chunk is a judgment call, not
-    under-extraction; no density retry fires."""
-    calls = {"n": 0}
-
-    def fake_openai(system, user, **kw):
-        calls["n"] += 1
-        return {"rows": _to_api_rows(_rows(7))}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
-    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 1500)  # ~25k chars
-    records = g._extract_skeleton_via_api(
-        [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
-    assert calls["n"] == 1
-    assert len(records) == 7
-
-
-def test_skeleton_retries_overdense_chunks(monkeypatch):
-    """A chunk yielding dozens of micro-concepts is compacted before merging."""
-    calls = {"n": 0}
-
-    def fake_openai(system, user, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"rows": _to_api_rows(_rows(50))}
-        assert "too granular" in user
-        return {"rows": _to_api_rows(_rows(20))}
-
+def test_micro_split_audit_verdict_retries_without_a_numeric_target(
+    monkeypatch,
+):
+    """(c) A micro-split verdict triggers ONE consolidation retry that is
+    adopted — and the retry prompt names NO numeric concept target."""
+    fake_openai, calls = _audit_aware_openai({
+        "extract": [
+            {"rows": _to_api_rows(_rows_with_families(27, family_count=9))},
+            {"rows": _to_api_rows(_rows(9))},
+        ],
+        "audit": [{
+            "coverage": "complete",
+            "grain": "micro_split",
+            "reason": "terms and cases stand alone as rows",
+        }],
+    })
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
     chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 1500)
     records = g._extract_skeleton_via_api(
-        [{
-            "text": chunk_text,
-            "sections": [
-                {"heading": "Main Topic A", "heading_level": 2},
-                {"heading": "Main Topic B", "heading_level": 2},
-                {"heading": "Main Topic C", "heading_level": 2},
-                {"heading": "Main Topic D", "heading_level": 2},
-            ],
-        }],
-        meta=g._metadata(subject="Math"),
-    )
-    assert calls["n"] == 2
-    assert len(records) == 20
+        [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
+    assert len(calls["extract"]) == 2
+    assert len(calls["audit"]) == 1
+    retry_user = calls["extract"][1]
+    assert "micro-concepts" in retry_user
+    assert "no target count" in retry_user
+    # The must-preserve families are named, but never a number of concepts.
+    assert "MUST-PRESERVE SOURCE-BACKED PARENT FAMILIES" in retry_user
+    import re as _re
+    assert not _re.search(
+        r"(?i)\breturn\s+(?:between\s+)?\d+", retry_user)
+    assert len(records) == 9
 
 
-def test_skeleton_rejects_overdense_retry_that_collapses_parent_families(
-    monkeypatch,
-):
-    calls = {"n": 0}
-    dense_rows = _rows_with_families(27, family_count=9)
-
-    def fake_openai(system, user, **kw):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return {"rows": _to_api_rows(dense_rows)}
-        assert "MUST-PRESERVE SOURCE-BACKED PARENT FAMILIES" in user
-        assert "Return between 11 and 18 concepts" in user
-        return {"rows": _to_api_rows(_rows(6))}
-
+def test_unavailable_audit_keeps_the_extraction_unchanged(monkeypatch):
+    """(d) An audit exception is advisory-only: the extraction is kept exactly
+    as returned and no retry is spent."""
+    fake_openai, calls = _audit_aware_openai({
+        "extract": [{"rows": _to_api_rows(_rows(3))}],
+        "audit": [RuntimeError("audit transport failure")],
+    })
     monkeypatch.setattr(g, "_openai_json", fake_openai)
-    monkeypatch.setattr(
-        g, "_repair_records_via_api", lambda records, **kw: records)
-    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 985)
-
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+    chunk_text = "SECTION TEXT:\n" + ("alpha beta gamma " * 1500)
     records = g._extract_skeleton_via_api(
-        [{"text": chunk_text, "sections": []}],
-        meta=g._metadata(subject="Science"),
-    )
-
-    assert calls["n"] == 2
-    assert len(records) == 27
+        [{"text": chunk_text, "sections": []}], meta=g._metadata(subject="Math"))
+    assert len(calls["extract"]) == 1
+    assert len(calls["audit"]) == 1
+    assert len(records) == 3
 
 
 def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
@@ -327,10 +354,13 @@ def test_culmination_pass_cannot_drop_normal_rows(monkeypatch):
     assert {r["concept_details"] for r in normal if r["topic"] == "Topic A"} == {
         f"Description: about concept {i}" for i in range(1, 5)
     }  # the rewritten fragment was ignored
-    assert len(culms) == 2  # authored one for A, deterministic fallback for B
+    # Only the authored culmination ships; Topic B (which the model left
+    # without one) ships without a culmination — nothing is synthesized —
+    # and the validator report flags it for review.
+    assert len(culms) == 1
     assert culms[0]["topic"] == "Topic A"
-    assert culms[0]["concept_title"] == "Culmination - Topic A"
-    assert culms[1]["topic"] == "Topic B"
+    # The authored title survives; it is never rebuilt from code.
+    assert culms[0]["concept_title"] == "Culmination - Topic A Ideas"
 
 
 def test_inventory_extraction_retries_underextracted_chunks(monkeypatch):
@@ -463,6 +493,12 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     def fake_openai_json(system, user, **kw):
         if "inventory-completeness reviewer" in system:
             return {"verdict": "complete", "reason": ""}
+        if "audit a concept-skeleton extraction" in system:
+            return {"coverage": "complete", "grain": "sound", "reason": ""}
+        if "mined assessment-Type taxonomy" in system:
+            return {"verdict": "healthy", "rationale": "reusable methods"}
+        if "another auditor's verdict" in system:
+            return {"verdict": "confirmed", "rationale": ""}
         calls["n"] += 1
         if "clean teachable concept skeleton" in system:
             calls["skeleton"] += 1
@@ -485,27 +521,10 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
         g, "_topic_segregation_verdict_via_api",
         lambda records, **kw: {"restructure": False, "reason": ""})
 
-    def refine_with_specific_analysis(records, **kw):
-        refined = []
-        for record in records:
-            current = dict(record)
-            title = current["concept_title"]
-            description = current["concept_details"].split(" // ", 1)[0]
-            current["concept_details"] = (
-                f"{description} // Misconception/ Error Analysis: "
-                f"Misconceptions: Students may believe {title} is "
-                "interchangeable with every other concept in Topic A.; Error "
-                f"Analysis: Students may omit the source evidence when "
-                f"distinguishing {title}."
-            )
-            refined.append(current)
-        return refined
-
+    # Everything after the 81% boundary runs through the rewritten Phase 3;
+    # this test is about chunked extraction, so pass its output through.
     monkeypatch.setattr(
-        g, "_refine_descriptions_via_api",
-        refine_with_specific_analysis)
-    monkeypatch.setattr(
-        g, "_assign_types_via_api",
+        g, "_prepare_final_concept_content",
         lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
@@ -541,9 +560,21 @@ def test_identify_questions_live_merges_and_dedupes(monkeypatch):
     def fake_openai_json(system, user, **kw):
         calls["n"] += 1
         n = calls["n"]
+        def row(question):
+            return {
+                "question": question,
+                "sheet_kind": "objective",
+                "question_category": "Multiple Choice Question",
+                "cognitive_skills": "Understand",
+                "level_of_difficulty": "Moderate",
+                "marks": 1,
+                "question_duration": 2,
+                "math_keyboard": "",
+            }
+
         return {"questions": [
-            {"question": f"Unique question {n}?", "sheet_kind": "objective"},
-            {"question": "Shared duplicate question?", "sheet_kind": "objective"},
+            row(f"Unique question {n}?"),
+            row("Shared duplicate question?"),
         ]}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai_json)
@@ -556,3 +587,31 @@ def test_identify_questions_live_merges_and_dedupes(monkeypatch):
     assert questions.count("Shared duplicate question?") == 1
     # Every chunk's unique question is present (no trimming/cap loss).
     assert sum(1 for q in questions if q.startswith("Unique question")) == calls["n"]
+
+
+def test_identify_questions_safety_cap_fails_closed(monkeypatch):
+    monkeypatch.setattr(g, "_IDENTIFY_SAFETY_CAP", 2)
+    monkeypatch.setattr(g, "_split_mmd_into_chunks", lambda _text: ["section"])
+
+    def row(question):
+        return {
+            "question": question,
+            "sheet_kind": "objective",
+            "question_category": "Multiple Choice Question",
+            "cognitive_skills": "Understand",
+            "level_of_difficulty": "Moderate",
+            "marks": 1,
+            "question_duration": 2,
+            "math_keyboard": "",
+        }
+
+    monkeypatch.setattr(
+        g,
+        "_openai_json",
+        lambda *_args, **_kwargs: {
+            "questions": [row("Question one?"), row("Question two?")]
+        },
+    )
+    with pytest.raises(RuntimeError, match="refusing a truncated success"):
+        g._live_identify_questions_from_mmd(
+            "source", upload_type="questions", question_type="auto")

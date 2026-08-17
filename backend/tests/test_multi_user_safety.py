@@ -243,9 +243,13 @@ def test_culminations_are_enforced_mechanically():
     d_rows = [r for r in out if r["topic"] == "D"]
     a_culms = [r for r in a_rows if r["concept_title"].startswith("Culmination")]
     b_culms = [r for r in b_rows if r["concept_title"].startswith("Culmination")]
+    # Duplicates normalize to the first AUTHORED row, positioned last; its
+    # authored title is never rebuilt from code.
     assert len(a_culms) == 1 and a_rows[-1] is a_culms[0]
-    assert a_culms[0]["concept_title"] == "Culmination - A"
-    assert len(b_culms) == 1 and b_rows[-1] is b_culms[0]
+    assert a_culms[0]["concept_title"] == "Culmination - First"
+    # A topic the model left without a culmination ships WITHOUT one — the
+    # validator report flags it; no row is invented.
+    assert b_culms == []
     # A topic teaching one concept gets no culmination, and a stray one is
     # dropped rather than kept.
     assert [r["concept_title"] for r in c_rows] == ["Concept C1"]
@@ -253,7 +257,7 @@ def test_culminations_are_enforced_mechanically():
     # Normal rows all survive.
     assert [r["concept_title"] for r in a_rows[:-1]] == [
         "Concept A1", "Concept A2"]
-    assert [r["concept_title"] for r in b_rows[:-1]] == [
+    assert [r["concept_title"] for r in b_rows] == [
         "Concept B1", "Concept B2"]
 
 
