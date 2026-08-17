@@ -194,6 +194,34 @@ Math/Physics families stay Open), Q12 (group naming).
 These were raised by the step-6 map and are **decided**; treat them as part of
 the brief above.
 
+**Slice 3 carry-forward (audited clean; act on these when next in the lane).**
+Slices 1–3 landed and were independently audited clean (grouping, then routing
++ cells + materialization; both slice-2 carryovers retired, concepts pipeline
+untouched). Three non-blocking follow-ups for slice 4/5 or a later touch of the
+assessment lane:
+
+1. **`_FIXER_UNACCEPTABLE_CODES` does not exist** — an earlier version of this
+   handoff referenced it as the fail-closed pattern. It was never needed: the
+   kernel re-validates the Fixer's output against the *same* checker and raises
+   `ContractError` on any surviving structural defect, so every marking /
+   identity / arithmetic defect is unacceptable-with-flag by construction. That
+   is stronger than a code list. Document this in the assessment audit-registry
+   notes so a future reader isn't surprised the named set is absent.
+2. **Two schemas share `kind="assessment.cell"`** — the legacy
+   `build_assessments._recorded_cell_marks` and the MES `assessment_cells`
+   `decide_cells` use the same decision kind with different response schemas and
+   checkers. Replay is safe today because their `policy_version` strings differ
+   (`assessment-legacy-cell-contract-1` vs `assessment-cell-1`), but two schemas
+   under one kind is an audit-registry smell. Separate the kinds when next
+   touching that lane, preserving replay compatibility (a new kind changes the
+   decision key, so only rename alongside a policy-version bump or a recorded
+   re-decide).
+3. **`cell_id` uniqueness is implicit** — `assessment_cells.decide_cells`
+   derives `cell_id = "CELL-" + decision_key[:16]` (64-bit) with no explicit
+   output-uniqueness assertion; a collision is caught only downstream by the
+   materialization duplicate-`candidate_id` raise. Add an explicit uniqueness
+   assertion and a collision regression when next editing that module.
+
 **The Open/Specific registry — now in the repo (AUTHORITATIVE).** The owner
 supplied the corrected v2.0 workbook; it is committed as
 `docs/open-specific-registry-v2.xlsx` (the binary source of truth), with a
