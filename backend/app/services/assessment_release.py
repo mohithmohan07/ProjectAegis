@@ -110,12 +110,26 @@ _BLUEPRINT_CELL_REQUIRED = (
     "cell_id", "sheet_kind", "question_category", "cognitive_skill",
     "difficulty", "marks", "count", "appears_in", "source_policy",
 )
+# ``source_atom_ids`` is deliberately NOT in this tuple.  ``_missing``
+# tests ``str(record.get(field)).strip() == ""``, and ``str([])`` is
+# ``"[]"`` — non-empty — so an empty list passed this check by string
+# coercion rather than by design.  A generated candidate legitimately
+# carries ``[]`` (it reuses no source question), and resting that lane on
+# a coercion accident means a future tightening of ``_missing`` breaks it
+# silently.  The field is therefore checked explicitly below, where the
+# rule is written down: a list of non-empty ids, empty only when the
+# candidate declares ``source_policy == "generate"``.
 _CANDIDATE_REQUIRED = (
-    "candidate_id", "source_atom_ids", "blueprint_cell_id", "question",
+    "candidate_id", "blueprint_cell_id", "question",
     "question_text", "sheet_kind", "question_category", "cognitive_skill",
     "difficulty", "marks", "question_duration", "answer_restriction",
     "restriction_reason",
 )
+
+# The one value of a candidate's ``source_policy`` that permits an empty
+# ``source_atom_ids``. Read here and in ``assessment_release_run``'s
+# generated lane from this single owner so the two can never drift.
+GENERATED_SOURCE_POLICY = "generate"
 _PLACEMENT_REQUIRED = (
     "candidate_id", "concept_id", "group_key", "evidence",
 )
@@ -158,6 +172,22 @@ def validate_blueprint_cell(cell: Mapping) -> list[str]:
 
 def validate_candidate(candidate: Mapping) -> list[str]:
     errors = [f"missing {f}" for f in _missing(candidate, _CANDIDATE_REQUIRED)]
+    # Explicit, deliberate, and independent of ``_missing``'s string
+    # coercion (see ``_CANDIDATE_REQUIRED``).  Identity accounting only:
+    # it reads no meaning out of the ids, it just states which lane may
+    # carry none.
+    atom_ids = candidate.get("source_atom_ids")
+    if not isinstance(atom_ids, list):
+        errors.append("source_atom_ids must be a list")
+    elif any(not str(value or "").strip() for value in atom_ids):
+        errors.append("source_atom_ids must not contain an empty id")
+    elif not atom_ids and str(
+        candidate.get("source_policy") or ""
+    ) != GENERATED_SOURCE_POLICY:
+        errors.append(
+            "source_atom_ids may be empty only on a candidate that declares "
+            f"source_policy {GENERATED_SOURCE_POLICY!r}"
+        )
     kind = candidate.get("sheet_kind")
     if kind not in SHEET_KINDS:
         errors.append(

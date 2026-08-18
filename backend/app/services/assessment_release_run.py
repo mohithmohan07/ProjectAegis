@@ -24,6 +24,7 @@ chain.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -91,8 +92,35 @@ _MASTER_REFINEMENTS_SNAPSHOT = (
 )
 
 
+GENERATED_SOURCE_POLICY = rel.GENERATED_SOURCE_POLICY
+
+# The explicit marker a generated pre-learning item carries out of this
+# lane and into ``models.Question.origin``.  Until now the de-facto
+# "this was generated" marker was an EMPTY ``source_qid`` string, which
+# is far too weak to rest a barrier on: every field is empty before it is
+# filled.  This value is positively minted, only ever by the generated
+# lane, and the barrier checks for it.
+GENERATED_QUESTION_ORIGIN = release_service.QUESTION_ORIGIN_PRE_LEARNING
+
+
 class ReleaseRunError(ValueError):
     """The job cannot enter the release pipeline at all."""
+
+
+class GeneratedLaneError(ReleaseRunError):
+    """A generated-question release cannot be bound mechanically."""
+
+
+class SourceQuestionLeak(ReleaseRunError):
+    """A generated release carries a current-chapter source question.
+
+    Fail-closed, and it is allowed to be: this is identity accounting
+    over ids this pipeline minted — "a gate that refuses to accept a
+    broken artifact" (CLAUDE.md) — never a judgment about what any
+    question means.  The semantic half of the same question ("is this
+    generated item a source question reworded?") is a model verdict whose
+    dissent flags, and lives in the generation pass's critic.
+    """
 
 
 def _authority_pair(
@@ -720,6 +748,427 @@ def _bind_explicit_cells(
     return cells
 
 
+def source_inventory_qids(inventory: Mapping[str, Any]) -> list[str]:
+    """Every current-chapter QID, read through the Pre lane's own reader.
+
+    ``premap.inventory_qids`` is the one owner of "which fields of an
+    inventory item carry a question identity" (it also reads the umbrella
+    ``parent_qid`` a sub-part hangs under), so it is reused rather than
+    re-derived here. A known set of minted ids — never a pattern over
+    anything QID-shaped.
+    """
+
+    from .phase3 import premap
+
+    return premap.inventory_qids({"inventory": dict(inventory or {})})
+
+
+def generated_question_records(
+    pre_questions: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Flatten ``phase3.prequestions.build``'s result into release order.
+
+    Its ``questions`` map is keyed by pre-concept and each concept's list
+    is already in the authored order its own coverage plan asked for;
+    this preserves both. Mechanics only — it selects and orders, it
+    decides nothing. Blocked pre-concepts simply have no questions to
+    carry; they already ship flagged from the generation pass.
+    """
+
+    records: list[dict[str, Any]] = []
+    questions = (pre_questions or {}).get("questions")
+    if not isinstance(questions, Mapping):
+        return records
+    for pre_concept_id in questions:
+        for row in questions.get(pre_concept_id) or []:
+            if not isinstance(row, Mapping):
+                continue
+            records.append({
+                "pre_question_id": str(row.get("pre_question_id") or ""),
+                "pre_concept_id": str(
+                    row.get("pre_concept_id") or pre_concept_id
+                ),
+                "question_id": str(row.get("question_id") or ""),
+                "question_text": str(row.get("question_text") or ""),
+                "answer": str(row.get("answer") or ""),
+                "rationale": str(row.get("rationale") or ""),
+            })
+    return records
+
+
+def _generated_cell_id(pre_question_id: str) -> str:
+    """One cell identity per generated question — minted, never supplied.
+
+    Spec T6's first trap: ``assessment_materialization._candidate_id``
+    seeds on ``(source_qid, cell_id)``, so with ``atom=None`` every
+    question sharing a cell collapses onto ONE candidate_id and
+    materialization raises "obligations repeat candidate_id".  The
+    decided sidestep is one cell per generated question, and it is pinned
+    here structurally rather than left to a caller convention: the cell's
+    identity IS the generated question's identity, so two questions can
+    never share a cell and one question can never own two.  (The other
+    route — an instance seed inside ``_candidate_id``, which
+    ``assessment_blueprint.obligations`` already anticipates with
+    ``#{instance}`` — is deliberately NOT taken: it would move a seed
+    every recorded Output-02 candidate id depends on.)
+    """
+
+    return "CELL-" + hashlib.sha256(
+        rel.canonical_json(["generated", pre_question_id]).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def _bind_generated_cells(
+    questions: list[Mapping],
+    blueprint_cells: list[Mapping] | None,
+    *,
+    profile: Mapping,
+    concept_keys: set[str],
+) -> list[dict]:
+    """Bind one blueprint cell to each GENERATED question, without spend.
+
+    The parallel of ``_bind_explicit_cells`` for the generated lane, and
+    deliberately its parallel rather than a widening of it: the atom
+    binding is absent (there is no source question to bind), the concept
+    constraint it validates optionally is REQUIRED here so routing stays
+    mechanical and free, ``accepted_source_qids`` must be empty, and the
+    cell records ``source_policy`` "generate".
+    """
+
+    cells_in = [dict(cell) for cell in blueprint_cells or []]
+    if len(cells_in) != len(questions):
+        raise GeneratedLaneError(
+            f"blueprint provides {len(cells_in)} cells for "
+            f"{len(questions)} generated question(s); the generated lane "
+            "pairs them one-to-one"
+        )
+    appears_in = str(profile.get("appears_in") or "").strip()
+    defects: list[str] = []
+    if not appears_in:
+        defects.append("assessment profile has no appears_in value")
+    allowed_kinds = tuple(rel.SHEET_KINDS)
+
+    cells: list[dict] = []
+    seen_question_ids: set[str] = set()
+    for position, (question, cell) in enumerate(
+        zip(questions, cells_in), start=1
+    ):
+        if not isinstance(question, Mapping):
+            defects.append(f"generated question {position} is not an object")
+            continue
+        pre_question_id = str(question.get("pre_question_id") or "").strip()
+        if not pre_question_id:
+            defects.append(
+                f"generated question {position} has no pre_question_id"
+            )
+            continue
+        if pre_question_id in seen_question_ids:
+            defects.append(
+                f"generated question id {pre_question_id!r} appears twice"
+            )
+            continue
+        seen_question_ids.add(pre_question_id)
+        for field in ("question_text", "answer"):
+            if not str(question.get(field) or "").strip():
+                defects.append(f"{pre_question_id}: empty {field}")
+
+        cell_id = _generated_cell_id(pre_question_id)
+        cell["cell_id"] = cell_id
+        # Guarded because this runs BEFORE ``validate_cells`` (which owns
+        # the robust integer check, ``assessment_blueprint.py:112-116``);
+        # ``_bind_explicit_cells`` can call ``int()`` bare only because it
+        # validates first.  An unguarded ``int()`` here would leave a bare
+        # ValueError out of a path documented as fail-closed, and
+        # ``api/build_assessments.py:437`` maps only ``ReleaseRunError``,
+        # so a non-numeric count would surface as a 500 instead of a 400
+        # naming the broken cell.
+        try:
+            declared_count = int(cell.get("count") or 1)
+        except (TypeError, ValueError):
+            defects.append(
+                f"{cell_id}: count {cell.get('count')!r} is not an integer"
+            )
+        else:
+            if declared_count != 1:
+                defects.append(
+                    f"{cell_id}: a generated cell carries exactly one question"
+                )
+        cell["count"] = 1
+        if cell.get("sheet_kind") not in allowed_kinds:
+            defects.append(
+                f"{cell_id}: sheet_kind is not allowed by the profile"
+            )
+        if not str(cell.get("question_category") or "").strip():
+            defects.append(f"{cell_id}: missing question_category")
+        if cell.get("cognitive_skill") not in bi.COGNITIVE_SKILLS:
+            defects.append(f"{cell_id}: unknown cognitive_skill")
+        if cell.get("difficulty") not in bi.DIFFICULTY_LEVELS:
+            defects.append(f"{cell_id}: unknown difficulty")
+        accepted = [
+            str(value) for value in cell.get("accepted_source_qids") or []
+            if str(value).strip()
+        ]
+        if accepted:
+            # Fail closed, not "ignore and overwrite": a generated cell
+            # that names a source question is a broken artifact.
+            defects.append(
+                f"{cell_id}: a generated cell accepts no source question, "
+                f"but names {accepted!r}"
+            )
+        cell["accepted_source_qids"] = []
+        cell["appears_in"] = [appears_in]
+        constraint = cell.get("concept_key")
+        if constraint is None:
+            constraint = cell.get("concept_id")
+        if not isinstance(constraint, str) or constraint not in concept_keys:
+            defects.append(
+                f"{cell_id}: a generated cell must name one staged release "
+                "concept key, so its question routes mechanically"
+            )
+        else:
+            cell["concept_key"] = constraint
+        authority = {
+            "decision_key": "",
+            "policy_version": cell_decisions.CELL_POLICY_VERSION,
+            "review_flags": [],
+            "mechanical_basis": "generated_question",
+        }
+        cell["source_policy"] = GENERATED_SOURCE_POLICY
+        # The generated question rides its own cell, which is what the
+        # materializer is handed as ``blueprint_cell``.  It is the
+        # obligation's content: with no source atom there is nowhere else
+        # per-obligation evidence can travel, and inventing a pseudo-atom
+        # to carry it was explicitly rejected (spec T7) because
+        # ``validate_source_atom`` requires a source_qid, a document hash
+        # and a source kind — a pseudo-atom either fails honestly or is
+        # filled with lies about provenance.
+        cell["generated_question"] = {
+            "pre_question_id": pre_question_id,
+            "pre_concept_id": str(question.get("pre_concept_id") or ""),
+            "question_id": str(question.get("question_id") or ""),
+            "question_text": str(question.get("question_text") or ""),
+            "answer": str(question.get("answer") or ""),
+            "rationale": str(question.get("rationale") or ""),
+        }
+        cell["flags"] = []
+        cell["authority"] = authority
+        cell[_CELL_AUDIT_FIELD] = {
+            "rationale": "generated pre-learning question cell",
+            "flags": [],
+            "authority": authority,
+        }
+        cells.append(cell)
+
+    if defects:
+        raise GeneratedLaneError(
+            "generated assessment blueprint failed validation: "
+            + "; ".join(defects[:20])
+        )
+    assessment_blueprint.validate_cells(cells, strict_profile=True)
+    return cells
+
+
+# --------------------------------------------------------------------------- #
+# The leak barrier (owner steer, 17 Aug 2026, point 3)
+# --------------------------------------------------------------------------- #
+
+# Channels the barrier deliberately does NOT scan, each for a recorded
+# reason rather than by omission.  ``premap``/``prequestions`` record the
+# same rule for the same reason and slice C1 fixed a real bug here: a
+# critic asked "is this generated item a source question reworded?" may
+# answer most usefully by naming the source question it resembles, and a
+# guard that scanned critic prose would turn that ADVISORY dissent into
+# the hardest gate in the pipeline — replaying the refusal forever, at
+# zero spend, out of a content-addressed decision store, which Q10
+# forbids in as many words.  So the barrier runs over the AUTHORED
+# artefact and never over the auditor's account of it.  Nothing a learner
+# would see rides any of these: they carry review and audit prose about
+# the artefact, never its content.
+_LEAK_GUARD_SKIPPED_KEYS = frozenset({
+    "authority",
+    "flags",
+    "refinements",
+    "review_flags",
+})
+
+
+def _authored_surface(value: Any) -> Any:
+    """Project a release payload onto the content it authored.
+
+    Drops every review/audit channel (see ``_LEAK_GUARD_SKIPPED_KEYS``
+    and the row-private ``_aegis_*`` markers, which hold each pass's
+    rationale, critic dissent and decision authority).  The Refiner's
+    ``refinements`` diff goes with them: it is an audit of changes whose
+    authored values are already present on the candidates themselves,
+    which ARE scanned — so nothing escapes accounting by being refined.
+    """
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _authored_surface(entry)
+            for key, entry in value.items()
+            if str(key) not in _LEAK_GUARD_SKIPPED_KEYS
+            and not str(key).startswith("_aegis_")
+        }
+    if isinstance(value, (list, tuple)):
+        return [_authored_surface(entry) for entry in value]
+    return value
+
+
+def _redact_audit_source_qids(
+    value: Any, source_qids: list[str], *, inside_audit: bool = False,
+) -> Any:
+    """Drop source-QID tokens from the audit channels the barrier skips.
+
+    The other half of the ordering rule, and the reason skipping those
+    channels does not weaken the steer's "no QID anywhere in the Pre
+    release payload".  Refusing on auditor prose would brick a finished
+    run forever (Q10, and the reason ``_LEAK_GUARD_SKIPPED_KEYS``
+    exists); dropping an id token from it is plainly mechanically
+    applicable, which is the test CLAUDE.md sets for acting instead of
+    stopping.  This is the SAME act ``premap._redact_ids`` performs on
+    upstream provenance and ``prequestions`` performs on a recorded
+    block, reused rather than re-implemented.
+
+    Only string VALUES are rewritten. Every audit map in this payload is
+    keyed by a fixed field name, never by an id, so nothing is keyed out
+    of existence.
+    """
+
+    from .phase3 import premap
+
+    if isinstance(value, Mapping):
+        return {
+            str(key): _redact_audit_source_qids(
+                entry,
+                source_qids,
+                inside_audit=(
+                    inside_audit
+                    or str(key) in _LEAK_GUARD_SKIPPED_KEYS
+                    or str(key).startswith("_aegis_")
+                ),
+            )
+            for key, entry in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _redact_audit_source_qids(
+                entry, source_qids, inside_audit=inside_audit
+            )
+            for entry in value
+        ]
+    if inside_audit and isinstance(value, str):
+        return premap._redact_ids(value, list(source_qids))
+    return value
+
+
+def _refuse_source_questions(
+    payload: Mapping[str, Any],
+    *,
+    source_qids: list[str],
+    where: str,
+) -> None:
+    """Refuse any current-chapter source question in a generated release.
+
+    Two mechanical halves, both identity accounting over ids this
+    pipeline minted:
+
+    * every candidate carries ``source_atom_ids == []``, an empty
+      ``source_qid``, and positively declares ``source_policy
+      "generate"`` — a marker minted only by ``_bind_generated_cells``,
+      never an absence;
+    * no QID from the chapter's own question/task inventory appears
+      anywhere in the authored artefact (``premap._refuse_source_qids``,
+      the SAME guard the rest of the Pre lane draws, not a second one).
+
+    Fail-closed, which CLAUDE.md explicitly permits for "gates that
+    refuse to accept a broken artifact": a source QID with two final
+    homes also breaks Q2's exactly-once, and there is no correction that
+    keeps both.
+
+    **That fail-closed choice is deliberate, and this is its cost.**  The
+    owner steer of 17 Aug 2026 states it directly for this check —
+    "identity accounting, not judgment … and it fails closed" — and spec
+    T7 decided it.  Recorded here rather than left as an omission: the
+    marker half reads values this function's own lane minted, so it can
+    only fire on a coding fault; the id half reads authored model text,
+    and a model verdict is content-addressed, so if the materialization
+    author ever emitted a chapter QID the refusal would replay at zero
+    spend on every retry until an operator bumps the pass's
+    ``policy_version`` or clears the affected decision from the store.
+    Two things keep that a provider fault rather than a reachable one.
+    First, the generated lane hands the author no channel carrying a
+    chapter QID: its inputs are the generated question (``premap``
+    already redacts ids out of it) and the concept snapshot, which is now
+    refused PRE-SPEND in ``run_release_for_job`` precisely so it cannot
+    become that channel.  Second, the refusal names the QID it found, so
+    the operator step is mechanical.
+
+    The alternative considered and NOT taken was moving this accounting
+    into the per-unit ``checker`` handed to ``kernel.decide``, which would
+    buy correction attempts and Fixer routing.  It is rejected because it
+    would widen the SHARED materialization pass that Output 02 also runs
+    — the widening spec T7 replaced with a bypass — to carry a Pre-lane
+    concern, and because spending Fixer calls to re-author around a
+    leaked identity treats as negotiable the one thing the steer made
+    mechanical.
+    """
+
+    from .phase3 import premap
+
+    defects: list[str] = []
+    for candidate in payload.get("candidates") or []:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        if list(candidate.get("source_atom_ids") or []):
+            defects.append(
+                f"{candidate_id} reuses source atom(s) "
+                f"{list(candidate.get('source_atom_ids'))!r}"
+            )
+        if str(candidate.get("source_qid") or "").strip():
+            defects.append(
+                f"{candidate_id} carries source_qid "
+                f"{candidate.get('source_qid')!r}"
+            )
+        if str(
+            candidate.get("source_policy") or ""
+        ) != GENERATED_SOURCE_POLICY:
+            defects.append(
+                f"{candidate_id} does not declare source_policy "
+                f"{GENERATED_SOURCE_POLICY!r}"
+            )
+        if str(candidate.get("origin") or "") != GENERATED_QUESTION_ORIGIN:
+            defects.append(
+                f"{candidate_id} does not declare origin "
+                f"{GENERATED_QUESTION_ORIGIN!r}"
+            )
+    for cell in payload.get("blueprint_cells") or []:
+        if list(cell.get("accepted_source_qids") or []):
+            defects.append(
+                f"{cell.get('cell_id')!r} accepts source question(s) "
+                f"{list(cell.get('accepted_source_qids'))!r}"
+            )
+        if str(cell.get("source_policy") or "") != GENERATED_SOURCE_POLICY:
+            defects.append(
+                f"{cell.get('cell_id')!r} does not declare source_policy "
+                f"{GENERATED_SOURCE_POLICY!r}"
+            )
+    if list(payload.get("source_atoms") or []):
+        defects.append(
+            "the release carries "
+            f"{len(list(payload.get('source_atoms')))} source atom(s)"
+        )
+    if defects:
+        raise SourceQuestionLeak(
+            f"{where} carries current-chapter source material: "
+            + "; ".join(defects[:20])
+            + "; no question is ever lifted out of the source into a "
+            "Pre-Learning artefact (owner steer, 17 Aug 2026)"
+        )
+    premap._refuse_source_qids(
+        _authored_surface(payload), list(source_qids), where=where,
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Label reservation (spec §8.5): source order, append-only continuation
 # --------------------------------------------------------------------------- #
@@ -762,6 +1211,7 @@ def run_release_for_job(
     *,
     owner_sub: str,
     blueprint_cells: list[dict] | None = None,
+    generated_questions: list[Mapping] | None = None,
     profile: Mapping | str | None = None,
     authorities: Mapping[str, Any] | None = None,
     envelope_sha256: str | None = None,
@@ -778,8 +1228,21 @@ def run_release_for_job(
     the job's sealed envelope and uses its durable store.
     Returns the published release; its readiness says whether the database
     upload is open, and its manifest carries every flag and unplaced item.
+
+    ``generated_questions`` selects the GENERATED lane (Output 04, spec
+    T7): the items are authored questions — ``phase3.prequestions``'
+    output, flattened by ``generated_question_records`` — rather than the
+    chapter's own. That lane skips stages 1-3 entirely (source-atom
+    freeze and per-atom cell verdicts) instead of widening them, because
+    both of those hard-assume a source QID and a pseudo-atom carrying a
+    fabricated one was explicitly rejected. Every stage after
+    materialization is already source-agnostic and runs unchanged. The
+    chapter's question/task inventory is read in this lane for ONE
+    purpose only — as the set of identities the leak barrier accounts
+    against — and never as a source of items.
     """
     authorities = dict(authorities or {})
+    generate_lane = generated_questions is not None
     profile = assessment_profile.resolve(profile)
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
@@ -794,7 +1257,55 @@ def run_release_for_job(
     except release_snapshot.SnapshotError as exc:
         raise ReleaseRunError(str(exc)) from exc
     inventory = bridge["question_task_inventory"]
-    if not (inventory.get("items") or []):
+    # The identity set the leak barrier accounts against. In the generated
+    # lane this is the ONLY thing the chapter's inventory is used for:
+    # the staged release carries it (build_concepts stores it on every
+    # job, Pre included), and it is precisely the material that must not
+    # reach Output 04.
+    source_qids = source_inventory_qids(inventory)
+    # The lane is read from the STAGED release, never from the job row:
+    # ``learning_kind`` is mutable on the job and Output 02/04 route
+    # against the immutable staged payload by design (the step-6 finding
+    # recorded in docs/restructure-handoff.md).
+    # ``.strip().lower()`` because the two other readers of this same key
+    # in this same staged payload normalise it that way
+    # (``build_concepts_release_publication.py:74``,
+    # ``build_concepts_release_files.py:142``).  An exact-match test here
+    # would let a payload reading ``"Pre"`` render as Pre in the files and
+    # publication lanes while slipping past this gate into the source lane
+    # — the barrier's predicate must not be narrower than the lane's own
+    # definition elsewhere in the tree.
+    staged_learning_kind = str(
+        staged_release.get("learning_kind") or ""
+    ).strip().lower()
+    if staged_learning_kind == "pre" and not generate_lane:
+        # The defect this barrier exists to close, refused at its root. A
+        # staged PRE release carries the CURRENT chapter's question/task
+        # inventory (build_concepts stores it on every job), and the source
+        # lane is driven entirely off that inventory — so pointing this
+        # pipeline at a Pre job unchanged materialises current-chapter
+        # SOURCE questions into Output 04, which
+        # docs/aegis-restructure.md §4 Phase 03 and the owner steer of
+        # 17 Aug 2026 both forbid.
+        #
+        # What this covers, precisely, so no later reader over-reads it: a
+        # staged release that SAYS it is Pre.  It is not a lane detector.
+        # Since slice A no live path mints ``learning_kind="pre"`` (every
+        # creation site hardwires "post" — build_concepts.py:4217/:4251,
+        # api/build_concepts.py:531 — and spec T2 keeps it that way), so
+        # today this covers legacy/restored ``pre`` jobs only.  The Pre
+        # release slice E will stage rides a POST job, and it must either
+        # stamp ``learning_kind: "pre"`` into its own payload or thread the
+        # lane here explicitly, with a regression; otherwise a caller that
+        # forgets ``generated_questions=`` gets the source lane with no
+        # barrier at all.  Recorded here rather than discovered there.
+        raise SourceQuestionLeak(
+            "this is a Pre-Learning job, whose assessment questions are "
+            "GENERATED for the prerequisite: pass generated_questions. The "
+            "chapter's own question/task inventory is never a source of "
+            "Pre-Learning items (owner steer, 17 Aug 2026)"
+        )
+    if not generate_lane and not (inventory.get("items") or []):
         raise ReleaseRunError(
             "the staged Output-01 release has no question/task inventory"
         )
@@ -802,6 +1313,35 @@ def run_release_for_job(
     if not chapter_id:
         raise ReleaseRunError(
             "the staged Output-01 release has no target chapter identity"
+        )
+    if generate_lane:
+        # PRE-SPEND source-integrity check, and deliberately here rather
+        # than only at the barrier's last run.  ``bridge["snapshot"]``
+        # becomes ``payload["concept_snapshot"]`` verbatim (see the
+        # payload assembly below), so a source QID already present in the
+        # STAGED concept release is a defect the final barrier is certain
+        # to refuse — but it would refuse it only after every stage,
+        # including the Master Refiner, had spent, and it would refuse
+        # again on every retry, since the staged payload is immutable and
+        # the model verdicts replay out of a content-addressed store.
+        # That is a full-cost permanent refusal for a defect that is
+        # fully knowable before the first call.  CLAUDE.md reserves
+        # stopping a run for exactly this — "the pre-spend
+        # source-integrity pauses" — so it is checked once, here, over
+        # the same projection the final barrier uses.  It is also the
+        # only channel by which the materialization author could ever SEE
+        # a chapter QID (the snapshot rides its context), which is what
+        # keeps an authored leak a provider fault rather than a
+        # reachable one.
+        from .phase3 import premap
+
+        premap._refuse_source_qids(
+            _authored_surface(bridge["snapshot"]),
+            list(source_qids),
+            where=(
+                "the staged concept release this generated lane routes "
+                "against"
+            ),
         )
 
     envelope_sha, store, snapshot_directory = _decision_context(
@@ -819,43 +1359,86 @@ def run_release_for_job(
     concept_keys = set(concept_records_by_key)
     fixer = _authority_pair(authorities, "fixer")[0]
 
-    # Stage 1-2 — freeze the lossless source inventory.
-    progress.log("Assessment release: freezing the source inventory.")
-    built = source_inventory.build_source_atoms(
-        inventory,
-        source_document_hash=str(bridge["source_document_hash"]),
-    )
-    atoms = built["atoms"]
-
-    # Stage 3 — explicit cells are a mechanically validated zero-spend path;
-    # otherwise each source atom receives one cached kernel verdict.
-    if blueprint_cells is not None:
-        cells = _bind_explicit_cells(
-            atoms,
+    if generate_lane:
+        # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
+        # is built and none is classified: both of those stages hard-assume
+        # a source QID, and the only ways to widen them are to accept an
+        # atom without an identity or to fabricate one. One cell per
+        # generated question; the questions themselves ride their cells.
+        questions = list(generated_questions or [])
+        progress.log(
+            f"Assessment release: binding {len(questions)} generated "
+            "question(s); no source question enters this lane."
+        )
+        atoms = []
+        cells = _bind_generated_cells(
+            questions,
             blueprint_cells,
             profile=profile,
             concept_keys=concept_keys,
         )
     else:
-        progress.log(
-            f"Classifying {len(atoms)} source atom(s) into blueprint cells.")
-        cell_provider, cell_critic = _authority_pair(authorities, "cells")
-        cells = cell_decisions.decide_cells(
-            atoms,
-            meta=meta,
-            profile=profile,
-            envelope_sha256=envelope_sha,
-            provider=cell_provider,
-            critic=cell_critic,
-            store=store,
-            fixer=fixer,
+        # Stage 1-2 — freeze the lossless source inventory.
+        progress.log("Assessment release: freezing the source inventory.")
+        built = source_inventory.build_source_atoms(
+            inventory,
+            source_document_hash=str(bridge["source_document_hash"]),
         )
-        for cell in cells:
-            cell[_CELL_AUDIT_FIELD] = {
-                "rationale": str(cell.get("rationale") or ""),
-                "flags": list(cell.get("flags") or []),
-                "authority": dict(cell.get("authority") or {}),
-            }
+        atoms = built["atoms"]
+
+        # Stage 3 — explicit cells are a mechanically validated zero-spend
+        # path; otherwise each source atom receives one cached kernel verdict.
+        if blueprint_cells is not None:
+            cells = _bind_explicit_cells(
+                atoms,
+                blueprint_cells,
+                profile=profile,
+                concept_keys=concept_keys,
+            )
+        else:
+            progress.log(
+                f"Classifying {len(atoms)} source atom(s) into blueprint "
+                "cells.")
+            cell_provider, cell_critic = _authority_pair(authorities, "cells")
+            cells = cell_decisions.decide_cells(
+                atoms,
+                meta=meta,
+                profile=profile,
+                envelope_sha256=envelope_sha,
+                provider=cell_provider,
+                critic=cell_critic,
+                store=store,
+                fixer=fixer,
+            )
+            for cell in cells:
+                cell[_CELL_AUDIT_FIELD] = {
+                    "rationale": str(cell.get("rationale") or ""),
+                    "flags": list(cell.get("flags") or []),
+                    "authority": dict(cell.get("authority") or {}),
+                }
+    # One obligation per cell in both lanes; the generated lane simply has
+    # no atom on its side of the pair, which ``materialize_candidates``
+    # accepts by design (``atom=None`` throughout).
+    if not generate_lane and len(atoms) != len(cells):
+        # ``zip`` truncates, so this must be asserted BEFORE the pairing:
+        # otherwise the source lane's obligation list silently absorbs the
+        # mismatch and the cardinality gate below — which HEAD wrote as
+        # ``len(candidates) != len(atoms)`` — stops detecting the
+        # atoms-longer-than-cells direction entirely.  What that direction
+        # loses is trailing SOURCE questions, dropped with no flag, which
+        # is the R4 silent-loss shape.  Both Post cell producers already
+        # guarantee one cell per atom, so this is defence in depth against
+        # a bug in them, which is exactly why it must not be quietly
+        # dissolved into ``zip``.
+        raise ReleaseRunError(
+            f"assessment cell classification produced {len(cells)} cell(s) "
+            f"for {len(atoms)} source atom(s); every source question owns "
+            "exactly one cell"
+        )
+    obligations: list[tuple[Mapping | None, Mapping]] = (
+        [(None, cell) for cell in cells] if generate_lane
+        else list(zip(atoms, cells))
+    )
     _snapshot_cells(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -863,12 +1446,12 @@ def run_release_for_job(
     )
 
     # Stage 4 — materialize complete semantic candidates (zero-loss inside).
-    progress.log(f"Materializing {len(atoms)} assessment candidate(s).")
+    progress.log(f"Materializing {len(obligations)} assessment candidate(s).")
     materialize_provider, materialize_critic = _authority_pair(
         authorities, "materialize"
     )
     materialized = materialization.materialize_candidates(
-        list(zip(atoms, cells)),
+        obligations,
         meta=meta,
         context={
             "source_concept_release_sha256": source_release_sha,
@@ -881,12 +1464,13 @@ def run_release_for_job(
         fixer=fixer,
     )
     candidates = materialized["candidates"]
-    if len(candidates) != len(atoms) or len(candidates) != len(cells):
+    if len(candidates) != len(obligations) or len(candidates) != len(cells):
         raise ReleaseRunError(
             "assessment materialization did not preserve atom/cell cardinality"
         )
-    for candidate, atom, cell in zip(candidates, atoms, cells):
-        if candidate.get("source_atom_ids") != [atom.get("source_qid")] or (
+    for candidate, (atom, cell) in zip(candidates, obligations):
+        expected_atom_ids = [atom.get("source_qid")] if atom is not None else []
+        if candidate.get("source_atom_ids") != expected_atom_ids or (
             str(candidate.get("blueprint_cell_id") or "")
             != str(cell.get("cell_id") or "")
         ):
@@ -894,16 +1478,39 @@ def run_release_for_job(
                 "assessment materialization changed an obligation identity"
             )
         materialization_needs_review = _needs_review(candidate)
-        candidate["route_evidence"] = atom.get("route_evidence") or {}
+        candidate["route_evidence"] = (atom or {}).get("route_evidence") or {}
         candidate[_CELL_AUDIT_FIELD] = dict(
             cell.get(_CELL_AUDIT_FIELD) or {}
         )
+        if generate_lane:
+            # Positive markers, minted here and nowhere else. The barrier
+            # below checks for their PRESENCE rather than for the absence
+            # of a source id, because an absence is what every unfilled
+            # field looks like.
+            candidate["source_policy"] = GENERATED_SOURCE_POLICY
+            candidate["origin"] = GENERATED_QUESTION_ORIGIN
+            candidate["generated_question"] = dict(
+                cell.get("generated_question") or {}
+            )
         if cell.get("concept_key"):
             candidate["blueprint_concept_key"] = str(cell["concept_key"])
         if _needs_review(cell):
             _append_warning(candidate, _CELL_WARNING)
         if materialization_needs_review:
             _append_warning(candidate, _MATERIALIZATION_WARNING)
+    if generate_lane:
+        # The barrier's first run, before a single later stage has spent
+        # anything: a leak is cheapest to refuse here, and every remaining
+        # pass is source-agnostic.
+        _refuse_source_questions(
+            {
+                "candidates": candidates,
+                "blueprint_cells": cells,
+                "source_atoms": atoms,
+            },
+            source_qids=source_qids,
+            where="the generated assessment materialization",
+        )
     _snapshot_materializations(
         snapshot_directory,
         envelope_sha256=envelope_sha,
@@ -1532,6 +2139,30 @@ def run_release_for_job(
         envelope_sha256=envelope_sha,
         payload=payload,
     )
+    if generate_lane:
+        # The barrier's second and last run, over the complete release
+        # payload immediately before it is frozen — so nothing added
+        # between materialization and here (labels, groups, placements,
+        # refined prose) can carry a source question in. Redaction of the
+        # audit channels runs FIRST and never raises; the refusal then
+        # runs over the authored artefact, in that order, so an advisory
+        # critic can flag freely and can never brick the run.
+        #
+        # Deliberate, not incidental: the phase-3 SNAPSHOTS above are
+        # written from the PRE-redaction payload, so a critic's dissent
+        # keeps the id it named on disk. That is the same audit fidelity
+        # the decision store itself holds — an auditor's account of the
+        # artefact, not the artefact — and no download route ships it
+        # (``build_concepts_release_files.build_diagnostics_zip`` writes
+        # the run report, coverage ledger, release payload and blocks,
+        # never this directory). The property the steer asks for is about
+        # the Pre RELEASE, and that is what is redacted and then refused.
+        payload = _redact_audit_source_qids(payload, source_qids)
+        _refuse_source_questions(
+            payload,
+            source_qids=source_qids,
+            where="the generated assessment release payload",
+        )
     release = release_service.create_release(
         db,
         chapter_id=chapter_id,

@@ -141,7 +141,10 @@ class Question(Base):
     answers: Mapped[list] = mapped_column(JSON, default=list)
     # sub_questions: descriptive only; list of {text, marks, keywords:[{answer_type,weightage,keyword}]}
     sub_questions: Mapped[list] = mapped_column(JSON, default=list)
-    origin: Mapped[str] = mapped_column(String(32), default="seed")  # seed|concept_mapping|upload
+    # seed|concept_mapping|upload|assessment_release|pre_learning_generated
+    # (the last two are minted by the assessment release lane; see
+    # assessment_release_service.QUESTION_ORIGINS)
+    origin: Mapped[str] = mapped_column(String(32), default="seed")
     # --- MES release identity (spec §5.7). Model-level only for now: the
     # workbook's positional columns stay untouched until the authoritative MES
     # Bulk Import Format template is inspected (spec §12/§23). ---

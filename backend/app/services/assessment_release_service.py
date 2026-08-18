@@ -39,6 +39,21 @@ READY = "ready"
 RELEASED_WITH_WARNINGS = "released_with_warnings"
 BLOCKED = "blocked_for_database_upload"
 
+# ``models.Question.origin`` values this release lane may mint.  A
+# reused source question keeps the long-standing value; a GENERATED
+# pre-learning question carries its own explicit one.  Before this, the
+# only way to tell them apart on an uploaded row was an empty
+# ``source_qid`` — an absence, which is exactly what every unfilled
+# field looks like, and far too weak to carry the owner steer's
+# "generated questions only" property (docs/aegis-restructure.md §4
+# Phase 03).
+QUESTION_ORIGIN_ASSESSMENT_RELEASE = "assessment_release"
+QUESTION_ORIGIN_PRE_LEARNING = "pre_learning_generated"
+QUESTION_ORIGINS = (
+    QUESTION_ORIGIN_ASSESSMENT_RELEASE,
+    QUESTION_ORIGIN_PRE_LEARNING,
+)
+
 
 class ReleaseNotFound(ValueError):
     """Absent or foreign releases look identical (no ID probing)."""
@@ -418,6 +433,29 @@ def published_artifact(
 # Explicit database upload (spec §13.4)
 # --------------------------------------------------------------------------- #
 
+def _question_origin(candidate: Mapping) -> str:
+    """The explicit provenance marker one candidate carries to the database.
+
+    Mechanics: a candidate either declares one of the values this lane
+    mints, or declares nothing and keeps the long-standing default. An
+    unrecognised declaration is refused rather than written through —
+    ``origin`` is how a later reader tells a generated pre-learning
+    question from a reused source one, so an unknown value there is a
+    broken artifact, not a judgment call.
+    """
+
+    declared = str(candidate.get("origin") or "").strip()
+    if not declared:
+        return QUESTION_ORIGIN_ASSESSMENT_RELEASE
+    if declared not in QUESTION_ORIGINS:
+        raise UploadRefused(
+            f"candidate {candidate.get('candidate_id')!r} declares unknown "
+            f"question origin {declared!r}; this lane mints "
+            f"{QUESTION_ORIGINS!r}"
+        )
+    return declared
+
+
 def upload_master_to_database(
     db: Session, release: models.AssessmentRelease, *, owner_sub: str,
 ) -> dict:
@@ -571,7 +609,7 @@ def upload_master_to_database(
                     candidate.get("answer_explanation") or ""),
                 answers=list(candidate.get("answers") or []),
                 sub_questions=list(candidate.get("sub_questions") or []),
-                origin="assessment_release",
+                origin=_question_origin(candidate),
                 answer_restriction=str(
                     candidate.get("answer_restriction") or ""),
                 source_qid=", ".join(
