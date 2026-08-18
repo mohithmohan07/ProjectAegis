@@ -77,15 +77,36 @@ def _version_dir(release: models.AssessmentRelease) -> Path:
 
 def snapshot_from_chapter(
     db: Session, chapter_id: int, payload: Mapping,
+    *,
+    pre_post: str | None = None,
 ) -> dict:
     """Project one chapter's accepted hierarchy plus the release payload
     into the immutable renderer snapshot. DB rows are read exactly once,
-    here — never again during rendering or upload."""
+    here — never again during rendering or upload.
+
+    THE SECOND SNAPSHOT WRITER. ``snapshot_from_staged_release`` below is
+    the first, and it carries each topic's lane through from the staged
+    payload; this one reads live Topic ORM rows, and a chapter holds BOTH
+    lanes' topics at once. Output 04 must therefore be able to say which
+    lane it is projecting — without that, a Pre Master built through this
+    path would carry the chapter's POST topics and resolve its concepts
+    against them. ``pre_post=None`` keeps every existing caller's
+    projection byte-identical (both lanes, as before); naming a lane
+    restricts the projection to it.
+    """
     chapter = db.get(models.Chapter, chapter_id)
     if chapter is None:
         raise ReleaseNotFound("chapter not found")
+    lane = str(pre_post or "").strip()
     topics = sorted(
-        chapter.topics, key=lambda t: (t.source_order, t.id))
+        (
+            topic for topic in chapter.topics
+            if not lane
+            or str(topic.pre_post_learning or "").strip().casefold()
+            == lane.casefold()
+        ),
+        key=lambda t: (t.source_order, t.id),
+    )
     snapshot_topics = []
     for topic in topics:
         concepts = sorted(
@@ -258,7 +279,14 @@ def create_release(
     snapshot = (
         snapshot_from_staged_release(payload)
         if isinstance(staged, Mapping)
-        else snapshot_from_chapter(db, chapter_id, payload)
+        # The lane a release DECLARES, when it declares one. Output 04
+        # always carries a staged snapshot and takes the branch above; a
+        # legacy Build Assessments payload declares nothing and keeps the
+        # both-lanes projection it has always had.
+        else snapshot_from_chapter(
+            db, chapter_id, payload,
+            pre_post=str(payload.get("pre_post_learning") or "") or None,
+        )
     )
     release = models.AssessmentRelease(
         release_uid=(

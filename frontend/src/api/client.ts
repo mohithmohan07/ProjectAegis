@@ -329,9 +329,21 @@ export const api = {
   /** Released rows in the canonical Bulk Import workbook format. */
   conceptReleaseBulkImportUrl: (jobId: number) =>
     `${BASE}/build-concepts/uploads/${jobId}/release-bulk-import.xlsx`,
-  uploadConceptRelease: (jobId: number) =>
+  /**
+   * Publish ONE staged release lane to the database (Rule G: a separate,
+   * explicit, authenticated act).
+   *
+   * `lane` is required, and deliberately has no default. One job stages two
+   * releases — Outputs 01/02 under "post" and Outputs 03/04 under "pre" —
+   * and the server's own `lane` query defaults to "post", so a call that
+   * omits it does not fail, it publishes the OTHER lane. A wrong-lane
+   * publication is an authenticated write the reviewer did not authorise,
+   * which is worse than an error; making the argument mandatory means the
+   * type checker asks the question at every call site.
+   */
+  uploadConceptRelease: (jobId: number, lane: "post" | "pre") =>
     http<Record<string, unknown>>(
-      `/build-concepts/uploads/${jobId}/upload-release`,
+      `/build-concepts/uploads/${jobId}/upload-release?lane=${lane}`,
       { method: "POST" },
     ),
 

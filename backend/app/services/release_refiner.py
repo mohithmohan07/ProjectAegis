@@ -24,16 +24,15 @@ Name note: this module is distinct from ``app/services/concept_refiner.py``,
 the deterministic pre-deposit FORMATTER (numbering, section shape). This
 module is §8.3's model-driven pre-stage output Refiner.
 
-Scope exclusions this round (later steps of docs/aegis-restructure.md §10):
+Scope exclusion still standing (a later step of docs/aegis-restructure.md
+§10): the DB-deposit (non-release) path.
 
-* the Phase 03 prerequisite (Pre) outputs — step 7 retired the legacy
-  pre-learning derivation lane and its release wrapper; the replacement
-  outputs 03/04 join this seam when step 7 builds them;
-* the DB-deposit (non-release) path.
-
-The seam accepts an ``output_kind`` parameter so those lanes join without
+The seam accepts an ``output_kind`` parameter so each lane joins without
 redesign. ``"assessment_master"`` delegates lazily to the assessment-only
-module; the original ``"concepts_release"`` implementation below is unchanged.
+module; ``"concepts_release"`` (Output 01) and ``"pre_concepts_release"``
+(Output 03, joined in step 7) share the one implementation below, which is
+unchanged — the Pre rows carry the same rendered house format, so the same
+whitelist mechanics apply to them verbatim.
 """
 from __future__ import annotations
 
@@ -54,6 +53,14 @@ _BATCH_SIZE = 1
 # titles, topics, placements, audit fields, seals, QIDs, Types — is identity
 # and is never swapped, whatever the model returns.
 EDITABLE_FIELDS = ("concept_details", "keywords")
+
+# The rendered CONCEPT outputs this implementation refines: Output 01
+# (Post) and, since step 7, Output 03 (Pre). They share one rendered house
+# format and one whitelist, so the Pre lane joins by NAME only — no branch
+# below reads the output kind again, and nothing about the refinement is
+# widened for it. The kind rides the decision payload, so each lane keys
+# its own decisions and a Post refinement is never replayed onto a Pre row.
+_CONCEPT_OUTPUT_KINDS = ("concepts_release", "pre_concepts_release")
 
 _QID_RE = re.compile(r"\bQINV-[A-Za-z0-9_.-]+\b")
 
@@ -607,7 +614,7 @@ def _refine(
     from . import grounding_certificate as gc
     from . import progress
 
-    if output_kind != "concepts_release":
+    if output_kind not in _CONCEPT_OUTPUT_KINDS:
         # Later steps of §10 route the other rendered outputs through this
         # same seam; refusing to guess about them is mechanics, not judgment.
         return _fallback(

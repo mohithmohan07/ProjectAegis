@@ -18,11 +18,14 @@ from . import containers
 from . import coverage_ledger
 from . import uploads
 from .build_concepts_release import (
+    LANE_POST,
+    LANE_PRE,
     RELEASE_ROW_BLOCKS_FIELD,
     RELEASE_ROW_ERRORS_FIELD,
     RELEASE_ROW_QIDS_FIELD,
     RELEASE_ROW_ROUTES_FIELD,
     RELEASE_ROW_STATUS_FIELD,
+    normalize_lane,
     release_payload,
 )
 
@@ -38,7 +41,9 @@ _EXAMPLE_FILL = PatternFill("solid", fgColor="F3F3F3")
 _BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
 
 
-def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
+def build_release_bulk_import_workbook(
+    db, job: models.UploadJob, *, lane: object = LANE_POST,
+) -> bytes:
     """The released rows in the canonical Bulk Import workbook format.
 
     After the explicit database upload the released rows exist as real
@@ -48,13 +53,28 @@ def build_release_bulk_import_workbook(db, job: models.UploadJob) -> bytes:
     payload — creators get the Bulk Import file the moment a run completes,
     with the authored chapter/topic metadata applied, and the database stays
     untouched.
+
+    ``lane`` names the staged slot: ``"post"`` projects Output 01, ``"pre"``
+    Output 03. The published-concept shortcut reads the ids the lane's OWN
+    publication recorded — ``job.result_ids`` belongs to the Post lane, so
+    serving the Pre workbook from it would hand a reviewer the Post rows
+    under a Pre filename.
     """
     from ..bulk_import import writer as bi_writer
-    payload = release_payload(job)
+    resolved = normalize_lane(lane)
+    payload = release_payload(job, lane=resolved)
     if payload is None:
         raise ValueError("this upload has no staged release")
     summary = payload.get("summary") or {}
-    result_ids = [int(v) for v in (job.result_ids or []) if v]
+    result_ids = [
+        int(v)
+        for v in (
+            summary.get("concept_ids")
+            if resolved == LANE_PRE
+            else job.result_ids
+        ) or []
+        if v
+    ]
     if bool(summary.get("database_uploaded")) and result_ids:
         return bi_writer.write_concepts_workbook(db, result_ids)
 
@@ -285,8 +305,10 @@ def _provenance_manifest_rows(payload: Mapping[str, Any]) -> dict[str, Any]:
     return rows
 
 
-def build_release_workbook(job: models.UploadJob) -> bytes:
-    payload = release_payload(job)
+def build_release_workbook(
+    job: models.UploadJob, *, lane: object = LANE_POST,
+) -> bytes:
+    payload = release_payload(job, lane=normalize_lane(lane))
     if payload is None:
         raise ValueError("this upload has no staged release")
 
@@ -478,8 +500,10 @@ def build_release_workbook(job: models.UploadJob) -> bytes:
     return buffer.getvalue()
 
 
-def release_payload_bytes(job: models.UploadJob) -> bytes:
-    payload = release_payload(job)
+def release_payload_bytes(
+    job: models.UploadJob, *, lane: object = LANE_POST,
+) -> bytes:
+    payload = release_payload(job, lane=normalize_lane(lane))
     if payload is None:
         raise ValueError("this upload has no staged release")
     return _json_bytes(payload)
@@ -570,11 +594,14 @@ def _original_source(job: models.UploadJob) -> Path | None:
     return path if path.is_file() else None
 
 
-def build_diagnostics_zip(job: models.UploadJob) -> bytes:
-    payload = release_payload(job)
+def build_diagnostics_zip(
+    job: models.UploadJob, *, lane: object = LANE_POST,
+) -> bytes:
+    resolved = normalize_lane(lane)
+    payload = release_payload(job, lane=resolved)
     if payload is None:
         raise ValueError("this upload has no staged release")
-    release_workbook = build_release_workbook(job)
+    release_workbook = build_release_workbook(job, lane=resolved)
     source_manifest = (
         uploads.source_artifact_manifest(job)
         if callable(getattr(uploads, "source_artifact_manifest", None))
@@ -627,6 +654,14 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
     prelearn_snapshot = _artifact_snapshot(
         "source.phase3-prelearn-capture.json"
     )
+    # Outputs 03/04 as SHIPPED: the coverage plan and generated questions
+    # the run authored, and the staged Pre release that carries them. With
+    # these the reviewer sees what the Pre lane produced AND what actually
+    # shipped, in RUN_REPORT.txt, without opening any artifact JSON.
+    pre_questions_snapshot = _artifact_snapshot(
+        "source.phase3-prelearn-questions.json"
+    )
+    pre_release = release_payload(job, lane=LANE_PRE)
 
     coverage = coverage_ledger.build_coverage_ledger(
         question_inventory=job.question_inventory or {},
@@ -640,6 +675,8 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         analysis_snapshot=analysis_snapshot,
         pre_map_snapshot=pre_map_snapshot,
         prelearn_snapshot=prelearn_snapshot,
+        pre_questions_snapshot=pre_questions_snapshot,
+        pre_release_payload=pre_release,
     )
     run_report = concept_run_report.build_run_report(
         payload,
@@ -648,6 +685,7 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         dropped_furniture=coverage.get("dropped_furniture"),
         pre_map=pre_map_snapshot,
         coverage=coverage,
+        release_lane=resolved,
     )
 
     buffer = io.BytesIO()
@@ -693,6 +731,16 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
             archive.writestr(
                 "context/pre_learning_capture.json",
                 _json_bytes(prelearn_snapshot),
+            )
+        if pre_questions_snapshot is not None:
+            archive.writestr(
+                "context/pre_learning_questions.json",
+                _json_bytes(pre_questions_snapshot),
+            )
+        if pre_release is not None:
+            archive.writestr(
+                "release/pre_release_payload.json",
+                _json_bytes(pre_release),
             )
         archive.writestr("release/released_concepts.xlsx", release_workbook)
         archive.writestr("release/release_payload.json", _json_bytes(payload))
@@ -742,6 +790,92 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
                         + str(path.relative_to(directory)).replace("\\", "/"),
                     )
     return buffer.getvalue()
+
+
+def _pre_release_entries(
+    job: models.UploadJob,
+    *,
+    sizes: bool,
+) -> list[dict[str, Any]]:
+    """Outputs 03/04's manifest rows, or none when the run built no Pre lane.
+
+    NOTE FOR ANY LATER EDITOR: this function has a TWIN in
+    ``build_concepts_release_manifest.py``, whose ``install()`` rebinds
+    ``release_artifact_entries`` in THIS module for the whole process.
+    Production therefore always serves the twin, and this eager version
+    is reached only through ``eager_release_artifact_entries`` (defined
+    below the function it aliases) — including by the pin in
+    ``tests/test_pre_release_lane_wiring.py``. Editing one alone is a
+    silent no-op; the pin exists so that fails loudly.
+    """
+
+    payload = release_payload(job, lane=LANE_PRE)
+    if payload is None:
+        return []
+    stem = _safe_filename(job.filename, "concepts")
+    query = f"?lane={LANE_PRE}"
+    uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
+    return [
+        {
+            "kind": "released_pre_concepts",
+            "label": "Download released Pre-Learning output",
+            "filename": f"{stem}_pre_released.xlsx",
+            "media_type": (
+                "application/vnd.openxmlformats-officedocument"
+                ".spreadsheetml.sheet"
+            ),
+            "size_bytes": (
+                len(build_release_workbook(job, lane=LANE_PRE)) if sizes else 0
+            ),
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}/release.xlsx{query}"
+            ),
+            "action": "download",
+        },
+        {
+            "kind": "pre_release_diagnostics",
+            "label": "Export full Pre-Learning issue context",
+            "filename": f"{stem}_pre_diagnostics.zip",
+            "media_type": "application/zip",
+            "size_bytes": (
+                len(build_diagnostics_zip(job, lane=LANE_PRE)) if sizes else 0
+            ),
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}/diagnostics.zip{query}"
+            ),
+            "action": "download",
+        },
+        {
+            "kind": "pre_release_payload",
+            "label": "Download Pre-Learning release JSON",
+            "filename": f"{stem}_pre_release.json",
+            "media_type": "application/json",
+            "size_bytes": (
+                len(release_payload_bytes(job, lane=LANE_PRE)) if sizes else 0
+            ),
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}/release.json{query}"
+            ),
+            "action": "download",
+        },
+        {
+            "kind": "pre_database_upload",
+            "label": (
+                "Already uploaded to database"
+                if uploaded
+                else "Upload released Pre-Learning output to database"
+            ),
+            "filename": "",
+            "media_type": "application/json",
+            "size_bytes": 0,
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}/upload-release{query}"
+            ),
+            "action": "post",
+            "disabled": uploaded,
+            "requires_confirmation": True,
+        },
+    ]
 
 
 def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
@@ -798,4 +932,22 @@ def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
             ),
             "requires_confirmation": True,
         },
-    ]
+    ] + _pre_release_entries(job, sizes=True)
+
+
+# The stable handle on the EAGER implementation.
+#
+# ``build_concepts_release_manifest.install()`` rebinds the module
+# attribute ``release_artifact_entries`` above to its own lazy twin, for
+# the whole process — ``app.main.bootstrap()`` does it at startup, and a
+# test that calls ``install()`` does it for the rest of the session. So
+# after install, ``release_files.release_artifact_entries`` IS the lazy
+# one, and a pin that reaches the two implementations through their
+# module attributes ends up comparing one function with itself and
+# passes no matter how far the two have drifted.
+#
+# This name is never rebound. The twin pin in
+# tests/test_pre_release_lane_wiring.py goes through it, which is what
+# makes "an entry added to only one of them fails loudly" true rather
+# than aspirational.
+eager_release_artifact_entries = release_artifact_entries

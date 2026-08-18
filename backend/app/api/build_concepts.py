@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
@@ -19,6 +19,35 @@ from ..services import (
 from .upload_limits import read_limited_upload
 
 router = APIRouter(prefix="/build-concepts", tags=["build-concepts"])
+
+
+# --------------------------------------------------------------------------- #
+# Release lane (spec T3): which of the job's two staged outputs a download or
+# an explicit publication acts on. Defaults to the Post lane, so every
+# existing caller and every recorded URL keeps serving Outputs 01/02 exactly
+# as before; Outputs 03/04 are reached only by asking for them.
+# --------------------------------------------------------------------------- #
+
+LANE_QUERY = Query(
+    release_svc.LANE_POST,
+    description=(
+        "Which staged release to serve: 'post' (Outputs 01/02) or 'pre' "
+        "(Outputs 03/04, the Phase 03 Pre-Learning outputs)."
+    ),
+)
+
+
+def _lane(value: str) -> str:
+    try:
+        return release_svc.normalize_lane(value)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+def _tag(value: str) -> str:
+    """Filename infix: empty for Post, so Post filenames are unchanged."""
+
+    return "pre_" if _lane(value) == release_svc.LANE_PRE else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -259,6 +288,7 @@ def release_latest_output(
 @router.get("/uploads/{job_id}/release-bulk-import.xlsx")
 def download_release_bulk_import(
     job_id: int,
+    lane: str = LANE_QUERY,
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
@@ -266,7 +296,9 @@ def download_release_bulk_import(
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
-        content = release_files.build_release_bulk_import_workbook(db, job)
+        content = release_files.build_release_bulk_import_workbook(
+            db, job, lane=_lane(lane)
+        )
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -278,7 +310,8 @@ def download_release_bulk_import(
         ),
         headers={
             "Content-Disposition":
-                f'attachment; filename="bulk_import_job_{job_id}.xlsx"',
+                f'attachment; filename="bulk_import_{_tag(lane)}job_'
+                f'{job_id}.xlsx"',
         },
     )
 
@@ -286,13 +319,14 @@ def download_release_bulk_import(
 @router.get("/uploads/{job_id}/release.xlsx")
 def download_released_workbook(
     job_id: int,
+    lane: str = LANE_QUERY,
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
-        content = release_files.build_release_workbook(job)
+        content = release_files.build_release_workbook(job, lane=_lane(lane))
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -304,7 +338,8 @@ def download_released_workbook(
         ),
         headers={
             "Content-Disposition":
-                f'attachment; filename="concept_release_job_{job_id}.xlsx"',
+                f'attachment; filename="concept_release_{_tag(lane)}job_'
+                f'{job_id}.xlsx"',
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
@@ -314,13 +349,14 @@ def download_released_workbook(
 @router.get("/uploads/{job_id}/diagnostics.zip")
 def download_release_diagnostics(
     job_id: int,
+    lane: str = LANE_QUERY,
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
-        content = release_files.build_diagnostics_zip(job)
+        content = release_files.build_diagnostics_zip(job, lane=_lane(lane))
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -330,7 +366,8 @@ def download_release_diagnostics(
         media_type="application/zip",
         headers={
             "Content-Disposition":
-                f'attachment; filename="concept_diagnostics_job_{job_id}.zip"',
+                f'attachment; filename="concept_diagnostics_{_tag(lane)}'
+                f'job_{job_id}.zip"',
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
@@ -340,13 +377,14 @@ def download_release_diagnostics(
 @router.get("/uploads/{job_id}/release.json")
 def download_release_payload(
     job_id: int,
+    lane: str = LANE_QUERY,
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
-        content = release_files.release_payload_bytes(job)
+        content = release_files.release_payload_bytes(job, lane=_lane(lane))
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -356,7 +394,8 @@ def download_release_payload(
         media_type="application/json; charset=utf-8",
         headers={
             "Content-Disposition":
-                f'attachment; filename="concept_release_job_{job_id}.json"',
+                f'attachment; filename="concept_release_{_tag(lane)}job_'
+                f'{job_id}.json"',
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
         },
@@ -366,15 +405,22 @@ def download_release_payload(
 @router.post("/uploads/{job_id}/upload-release")
 def upload_released_output_to_database(
     job_id: int,
+    lane: str = LANE_QUERY,
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Explicitly publish the staged rows; generation never calls this route."""
+    """Explicitly publish the staged rows; generation never calls this route.
+
+    Rule G is unchanged by the Pre lane: publication stays one separate,
+    explicit, authenticated act — ``lane`` only says WHICH staged output
+    this act publishes, and each lane needs its own act.
+    """
     try:
         return release_publication.upload_release_to_database(
             db,
             job_id,
             owner_sub=user.sub,
+            lane=_lane(lane),
         )
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))

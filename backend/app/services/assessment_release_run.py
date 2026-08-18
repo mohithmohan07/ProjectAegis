@@ -763,6 +763,44 @@ def source_inventory_qids(inventory: Mapping[str, Any]) -> list[str]:
     return premap.inventory_qids({"inventory": dict(inventory or {})})
 
 
+def _generated_lane_source_qids(
+    job: models.UploadJob, staged: list[str],
+) -> list[str]:
+    """The chapter QIDs the Pre lane's leak accounting runs against.
+
+    The source lane reads this set out of the release it routes against,
+    because for that lane the inventory IS the material. The generated
+    lane cannot: the Pre release payload deliberately carries no chapter
+    question identity at all — "no QID from the chapter's question/task
+    inventory may appear anywhere in a Pre row or the Pre release
+    payload" (owner steer, 17 Aug 2026), which
+    ``build_concepts_release.stage_pre_release`` implements by staging an
+    empty ``question_task_inventory``.
+
+    So the set is read from the two places that hold it WITHOUT putting a
+    source question in a Pre artefact: the job's own question/task
+    inventory column, and the POST sibling slot staged on the same job —
+    an accepted, immutable snapshot of the same chapter inventory. Both
+    are unioned with whatever the staged payload carried, so the
+    accounting set can only ever GROW. That direction is the one that
+    matters: a barrier reading a narrower set than the chapter actually
+    has is blind, and blind is the failure the barrier exists to prevent.
+    """
+
+    qids: list[str] = list(staged)
+    inventories: list[Mapping[str, Any]] = [dict(job.question_inventory or {})]
+    post = build_concepts_release.release_payload(
+        job, lane=build_concepts_release.LANE_POST
+    )
+    if post:
+        inventories.append(dict(post.get("question_task_inventory") or {}))
+    for inventory in inventories:
+        for qid in source_inventory_qids(inventory):
+            if qid not in qids:
+                qids.append(qid)
+    return qids
+
+
 def generated_question_records(
     pre_questions: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
@@ -992,7 +1030,9 @@ _LEAK_GUARD_SKIPPED_KEYS = frozenset({
 })
 
 
-def _authored_surface(value: Any) -> Any:
+def _authored_surface(
+    value: Any, *, audit_keys: frozenset[str] = _LEAK_GUARD_SKIPPED_KEYS,
+) -> Any:
     """Project a release payload onto the content it authored.
 
     Drops every review/audit channel (see ``_LEAK_GUARD_SKIPPED_KEYS``
@@ -1001,22 +1041,37 @@ def _authored_surface(value: Any) -> Any:
     ``refinements`` diff goes with them: it is an audit of changes whose
     authored values are already present on the candidates themselves,
     which ARE scanned — so nothing escapes accounting by being refined.
+
+    ``audit_keys`` names those channels, and is a parameter because the
+    two Pre outputs have different ones: this payload records dissent
+    under ``flags``, while Output 03's records it under ``issues``.  Both
+    boundaries share this one projection rather than each growing its own
+    notion of "authored", so the two can never drift into disagreeing
+    about what a source identity is.  It is always paired with the same
+    set handed to ``_redact_audit_source_qids`` — a channel skipped by
+    one and not redacted by the other would be a hole.
     """
 
     if isinstance(value, Mapping):
         return {
-            str(key): _authored_surface(entry)
+            str(key): _authored_surface(entry, audit_keys=audit_keys)
             for key, entry in value.items()
-            if str(key) not in _LEAK_GUARD_SKIPPED_KEYS
+            if str(key) not in audit_keys
             and not str(key).startswith("_aegis_")
         }
     if isinstance(value, (list, tuple)):
-        return [_authored_surface(entry) for entry in value]
+        return [
+            _authored_surface(entry, audit_keys=audit_keys) for entry in value
+        ]
     return value
 
 
 def _redact_audit_source_qids(
-    value: Any, source_qids: list[str], *, inside_audit: bool = False,
+    value: Any,
+    source_qids: list[str],
+    *,
+    inside_audit: bool = False,
+    audit_keys: frozenset[str] = _LEAK_GUARD_SKIPPED_KEYS,
 ) -> Any:
     """Drop source-QID tokens from the audit channels the barrier skips.
 
@@ -1033,6 +1088,12 @@ def _redact_audit_source_qids(
     Only string VALUES are rewritten. Every audit map in this payload is
     keyed by a fixed field name, never by an id, so nothing is keyed out
     of existence.
+
+    ``audit_keys`` must be the SAME set handed to ``_authored_surface``
+    for the same payload: this function decides what gets redacted and
+    that one decides what gets refused, and a channel that one treats as
+    audit while the other treats as authored is either an unredacted leak
+    or a run bricked by auditor prose.
     """
 
     from .phase3 import premap
@@ -1044,16 +1105,20 @@ def _redact_audit_source_qids(
                 source_qids,
                 inside_audit=(
                     inside_audit
-                    or str(key) in _LEAK_GUARD_SKIPPED_KEYS
+                    or str(key) in audit_keys
                     or str(key).startswith("_aegis_")
                 ),
+                audit_keys=audit_keys,
             )
             for key, entry in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [
             _redact_audit_source_qids(
-                entry, source_qids, inside_audit=inside_audit
+                entry,
+                source_qids,
+                inside_audit=inside_audit,
+                audit_keys=audit_keys,
             )
             for entry in value
         ]
@@ -1205,11 +1270,61 @@ def _next_label_index(db: Session, base: str) -> int:
 # The run
 # --------------------------------------------------------------------------- #
 
+def run_pre_release_for_job(
+    db: Session,
+    job_id: int,
+    *,
+    owner_sub: str,
+    **kwargs,
+) -> models.AssessmentRelease:
+    """Output 04 — the Pre Master, from this job's staged Pre release.
+
+    The one supported way to run the Pre lane: it reads the GENERATED
+    questions out of the staged Output-03 payload (where
+    ``build_concepts_release.stage_pre_release`` put them, projected from
+    the same accepted snapshot as Output 03 itself) and hands them to the
+    generated lane. No path here can reach the chapter's own questions.
+
+    Refuses when the job has no staged Pre release at all. It does NOT
+    refuse a Pre release that authored zero questions, and the two states
+    are kept distinguishable rather than collapsed: a Pre release with
+    concept rows and no generated question runs here and ships an empty
+    Output 04.
+
+    Stated precisely, because the obvious illustration is wrong: a
+    chapter that assumes NOTHING stages a Pre release with no rows at
+    all, and that one does not reach an empty Output 04 — the export
+    refuses it ("the release contains no concept rows to export"), which
+    is the same refusal the Post lane has always made for a release with
+    nothing in it, and its database write is blocked anyway. Zero
+    QUESTIONS is the case this tolerates; zero ROWS is a release with
+    nothing to project.
+    """
+
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts")
+    questions = build_concepts_release.staged_generated_questions(job)
+    if questions is None:
+        raise ReleaseRunError(
+            "this job has no staged Output-03 Pre-Learning concept release; "
+            "stage the Pre release before building Output 04"
+        )
+    return run_release_for_job(
+        db,
+        job_id,
+        owner_sub=owner_sub,
+        lane=build_concepts_release.LANE_PRE,
+        generated_questions=questions,
+        **kwargs,
+    )
+
+
 def run_release_for_job(
     db: Session,
     job_id: int,
     *,
     owner_sub: str,
+    lane: object = build_concepts_release.LANE_POST,
     blueprint_cells: list[dict] | None = None,
     generated_questions: list[Mapping] | None = None,
     profile: Mapping | str | None = None,
@@ -1229,6 +1344,13 @@ def run_release_for_job(
     Returns the published release; its readiness says whether the database
     upload is open, and its manifest carries every flag and unplaced item.
 
+    ``lane`` names which staged concept release this run routes against:
+    ``"post"`` reads Output 01's slot and builds Output 02, ``"pre"`` reads
+    the sibling Output-03 slot and builds Output 04. It is a slot name, not
+    a mode: it does NOT by itself select the generated lane, deliberately,
+    so that a caller naming the Pre slot without supplying its questions is
+    REFUSED rather than quietly served the source lane.
+
     ``generated_questions`` selects the GENERATED lane (Output 04, spec
     T7): the items are authored questions — ``phase3.prequestions``'
     output, flattened by ``generated_question_records`` — rather than the
@@ -1246,11 +1368,24 @@ def run_release_for_job(
     profile = assessment_profile.resolve(profile)
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
-    staged_release = build_concepts_release.release_payload(job)
+    # WHICH SLOT this release routes against, and therefore which lane it
+    # is. ``staged_lane`` is decided by the KEY the payload came out of —
+    # see the barrier below for why that binding, and not any field, is
+    # the one that holds.
+    staged_release, staged_lane = (
+        build_concepts_release.staged_release_for_lane(job, lane)
+    )
     if staged_release is None:
         raise ReleaseRunError(
-            "this job has no staged Output-01 concept release; stage the "
-            "concept release before building Output 02"
+            "this job has no staged "
+            + (
+                "Output-03 Pre-Learning concept release; stage the Pre "
+                "release before building Output 04"
+                if build_concepts_release.normalize_lane(lane)
+                == build_concepts_release.LANE_PRE
+                else "Output-01 concept release; stage the concept release "
+                "before building Output 02"
+            )
         )
     try:
         bridge = release_snapshot.build(db, job, staged_release)
@@ -1263,42 +1398,51 @@ def run_release_for_job(
     # job, Pre included), and it is precisely the material that must not
     # reach Output 04.
     source_qids = source_inventory_qids(inventory)
-    # The lane is read from the STAGED release, never from the job row:
-    # ``learning_kind`` is mutable on the job and Output 02/04 route
-    # against the immutable staged payload by design (the step-6 finding
-    # recorded in docs/restructure-handoff.md).
-    # ``.strip().lower()`` because the two other readers of this same key
-    # in this same staged payload normalise it that way
-    # (``build_concepts_release_publication.py:74``,
-    # ``build_concepts_release_files.py:142``).  An exact-match test here
-    # would let a payload reading ``"Pre"`` render as Pre in the files and
-    # publication lanes while slipping past this gate into the source lane
-    # — the barrier's predicate must not be narrower than the lane's own
-    # definition elsewhere in the tree.
-    staged_learning_kind = str(
-        staged_release.get("learning_kind") or ""
-    ).strip().lower()
-    if staged_learning_kind == "pre" and not generate_lane:
+    if generate_lane:
+        # The Pre release payload holds none of this set, by design (see
+        # the helper): it is read from the job column and the Post
+        # sibling instead, so that Output 03 can obey the steer's "no QID
+        # anywhere in the Pre release payload" without leaving this
+        # barrier with nothing to account against.
+        source_qids = _generated_lane_source_qids(job, source_qids)
+    # THE BARRIER, AND WHAT IT IS BOUND TO.
+    #
+    # It is bound to the SLOT the staged payload was read out of, never to
+    # ``learning_kind`` on the job and never to ``learning_kind`` inside the
+    # payload.  That binding is the whole point, and the reason is
+    # structural rather than stylistic: the Pre release is a SIBLING KEY on
+    # a POST job (spec T2/T3 — every live creation site hardwires
+    # ``learning_kind="post"``, and since slice A no live path mints
+    # anything else).  So on a real run the job column says "post", and any
+    # barrier keyed on it answers "post" for a payload that is
+    # unambiguously the Pre one.  A caller that reads the sibling slot and
+    # forgets ``generated_questions=`` would then take the SOURCE lane with
+    # no barrier at all — which is exactly the leak this barrier exists to
+    # close, reintroduced through the front door.
+    #
+    # ``staged_release_for_lane`` therefore resolves the lane from the key,
+    # and unions in the payload's self-declared markers so a Pre payload
+    # mis-staged into the POST slot is still caught.  ``payload_lane``
+    # normalises those markers the way the rest of the tree does
+    # (``build_concepts_release_publication`` and
+    # ``build_concepts_release_files`` both ``.strip().lower()`` the same
+    # key off the same payload), so the predicate here is never narrower
+    # than the lane's own definition elsewhere.
+    #
+    # Pinned by tests/test_pre_release_lane_wiring.py, which stages a Pre
+    # payload whose ``learning_kind`` reads "post" and requires the refusal
+    # anyway — that test fails the moment anyone rebinds this to
+    # ``learning_kind``.
+    if staged_lane == build_concepts_release.LANE_PRE and not generate_lane:
         # The defect this barrier exists to close, refused at its root. A
         # staged PRE release carries the CURRENT chapter's question/task
-        # inventory (build_concepts stores it on every job), and the source
-        # lane is driven entirely off that inventory — so pointing this
-        # pipeline at a Pre job unchanged materialises current-chapter
-        # SOURCE questions into Output 04, which
-        # docs/aegis-restructure.md §4 Phase 03 and the owner steer of
-        # 17 Aug 2026 both forbid.
-        #
-        # What this covers, precisely, so no later reader over-reads it: a
-        # staged release that SAYS it is Pre.  It is not a lane detector.
-        # Since slice A no live path mints ``learning_kind="pre"`` (every
-        # creation site hardwires "post" — build_concepts.py:4217/:4251,
-        # api/build_concepts.py:531 — and spec T2 keeps it that way), so
-        # today this covers legacy/restored ``pre`` jobs only.  The Pre
-        # release slice E will stage rides a POST job, and it must either
-        # stamp ``learning_kind: "pre"`` into its own payload or thread the
-        # lane here explicitly, with a regression; otherwise a caller that
-        # forgets ``generated_questions=`` gets the source lane with no
-        # barrier at all.  Recorded here rather than discovered there.
+        # inventory (build_concepts stores it on every job, and the Pre
+        # release keeps it deliberately, as the identity set this lane's
+        # leak accounting runs against), and the source lane is driven
+        # entirely off that inventory — so pointing this pipeline at the
+        # Pre payload unchanged materialises current-chapter SOURCE
+        # questions into Output 04, which docs/aegis-restructure.md §4
+        # Phase 03 and the owner steer of 17 Aug 2026 both forbid.
         raise SourceQuestionLeak(
             "this is a Pre-Learning job, whose assessment questions are "
             "GENERATED for the prerequisite: pass generated_questions. The "
@@ -1333,16 +1477,36 @@ def run_release_for_job(
         # a chapter QID (the snapshot rides its context), which is what
         # keeps an authored leak a provider fault rather than a
         # reachable one.
+        #
+        # BOTH inputs are checked, not one. The generated lane has exactly
+        # two: the staged concept snapshot, and ``generated_questions`` —
+        # a plain argument already in hand at this point, just as
+        # knowable, and the one the authored artefact actually trips (a
+        # chapter QID inside a staged generated question is refused by the
+        # final barrier only after materialization and the critic have
+        # spent, and then replays that refusal at zero spend on every
+        # retry, because the decisions are content-addressed and the
+        # staged payload is immutable). Checking the second alongside the
+        # first is free and makes the pre-spend guard cover the lane's
+        # whole input surface rather than half of it.
         from .phase3 import premap
 
-        premap._refuse_source_qids(
-            _authored_surface(bridge["snapshot"]),
-            list(source_qids),
-            where=(
+        for surface, where in (
+            (
+                bridge["snapshot"],
                 "the staged concept release this generated lane routes "
-                "against"
+                "against",
             ),
-        )
+            (
+                {"generated_questions": list(generated_questions or [])},
+                "the generated questions this lane was handed",
+            ),
+        ):
+            premap._refuse_source_qids(
+                _authored_surface(surface),
+                list(source_qids),
+                where=where,
+            )
 
     envelope_sha, store, snapshot_directory = _decision_context(
         job.id,
@@ -2000,6 +2164,16 @@ def run_release_for_job(
         "groups": groups,
         "placements": placements,
     }
+    if staged_lane == build_concepts_release.LANE_PRE:
+        # Which lane this Master belongs to, stated rather than inferred —
+        # and stated only by the lane that needs to state it, so the
+        # Output-02 payload keeps the exact shape it has on record.
+        # ``concept_snapshot`` already carries the lane per topic; this
+        # says it once at the top so the SECOND snapshot writer
+        # (``release_service.snapshot_from_chapter``, which reads live
+        # Topic rows holding BOTH lanes) can scope itself if a payload
+        # ever reaches it without a staged snapshot.
+        payload["pre_post_learning"] = "Pre"
 
     # Stage 12 — read the actual rendered Master and polish only the explicit
     # answer/rubric/group-description whitelist.  The assessment-only module

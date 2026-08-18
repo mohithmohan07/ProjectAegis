@@ -391,6 +391,84 @@ def _pre_needed_for_rows(
     return rows
 
 
+def _pre_generated_question_counts(
+    pre_rows: list[Mapping[str, Any]],
+    pre_questions: Mapping[str, Any],
+) -> dict[str, Any]:
+    """What Output 04 actually authored, per pre-concept (R4).
+
+    Counting only, and deliberately no expectation: Q4's adaptive target
+    is a target and never a quota, so a pre-concept with fewer authored
+    questions than its own plan asked for is REPORTED, never charged as
+    incompleteness — the variance carries the authored rationale the
+    generation pass already recorded. Nothing here derives a number from
+    volume; every number is read back from what the model decided.
+    """
+
+    authored = pre_questions.get("questions")
+    authored = authored if isinstance(authored, Mapping) else {}
+    plans = pre_questions.get("plans")
+    plans = plans if isinstance(plans, Mapping) else {}
+    blocked = pre_questions.get("blocked")
+    blocked = blocked if isinstance(blocked, Mapping) else {}
+    per_concept: list[dict[str, Any]] = []
+    for row in pre_rows:
+        pre_id = str(row.get(_PRE_CONCEPT_ID_FIELD) or "")
+        plan = plans.get(pre_id)
+        plan = plan if isinstance(plan, Mapping) else {}
+        planned = plan.get("total")
+        per_concept.append({
+            "pre_concept_id": pre_id,
+            "concept_title": str(row.get("concept_title") or "")[:160],
+            "planned": int(planned) if isinstance(planned, int) else None,
+            "authored": len([
+                item for item in authored.get(pre_id) or []
+                if isinstance(item, Mapping)
+            ]),
+            "blocked": str(blocked.get(pre_id) or ""),
+        })
+    return {
+        "total": sum(row["authored"] for row in per_concept),
+        "pre_concepts_with_questions": len([
+            row for row in per_concept if row["authored"]
+        ]),
+        "pre_concepts_blocked": len([
+            row for row in per_concept if row["blocked"]
+        ]),
+        "refused": str(pre_questions.get("refused") or ""),
+        "per_concept": per_concept,
+    }
+
+
+def _pre_release_counts(
+    pre_release: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Whether Outputs 03/04 were STAGED, and in which state.
+
+    Distinct from what the run built: a map can exist while the release
+    that carries it does not, and the reviewer needs to see the
+    difference without opening any artifact JSON.
+    """
+
+    if not pre_release:
+        return {"staged": False}
+    from . import build_concepts_release as release
+
+    summary = pre_release.get("summary") or {}
+    return {
+        "staged": True,
+        "release_state": release.release_state(pre_release),
+        "structural_defects": release.structural_defects(pre_release),
+        "rows": int(summary.get("row_count") or 0),
+        "rows_with_issues": int(summary.get("affected_row_count") or 0),
+        "issues": int(summary.get("issue_count") or 0),
+        "generated_questions": len(
+            pre_release.get("generated_questions") or []
+        ),
+        "database_uploaded": bool(summary.get("database_uploaded")),
+    }
+
+
 def _analysis_item_rows(
     analysis_snapshot: Mapping[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -443,6 +521,8 @@ def build_coverage_ledger(
     analysis_snapshot: Mapping[str, Any] | None = None,
     pre_map_snapshot: Mapping[str, Any] | None = None,
     prelearn_snapshot: Mapping[str, Any] | None = None,
+    pre_questions_snapshot: Mapping[str, Any] | None = None,
+    pre_release_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Account for every source item and every shipped concept.
 
@@ -454,7 +534,13 @@ def build_coverage_ledger(
     (``source.phase3-analysis.json``, Q1); ``pre_map_snapshot`` the
     Phase 03 Pre-Learning map (``source.phase3-prelearn-map.json``) and
     ``prelearn_snapshot`` the merged prerequisite capture it was built
-    from (``source.phase3-prelearn-capture.json``). All are optional — a
+    from (``source.phase3-prelearn-capture.json``);
+    ``pre_questions_snapshot`` the Q4 coverage plan and the GENERATED
+    questions authored to it
+    (``source.phase3-prelearn-questions.json``); and
+    ``pre_release_payload`` the STAGED Output-03 release, so the ledger
+    can say what actually shipped rather than only what the run built.
+    All are optional — a
     legacy job without them keeps the item/URL accounting (and the
     legacy every-row analysis expectation), and a run with no Pre lane
     gets an empty Pre accounting rather than a false debt.
@@ -477,6 +563,8 @@ def build_coverage_ledger(
         if isinstance(item, dict)
     ]
     pre_map = dict(pre_map_snapshot or {})
+    pre_questions = dict(pre_questions_snapshot or {})
+    pre_release = dict(pre_release_payload or {})
     # A Pre row can never carry a source qid, a Type/Case route or a
     # figure url (premap's guard fails closed on the first, and the lane
     # mints neither of the others), so it can only ever ADD false
@@ -640,6 +728,16 @@ def build_coverage_ledger(
             ]),
         },
         "rows_missing_learner_analysis": len(pre_analysis_rows),
+        # WHAT SHIPPED (Outputs 03/04), so a reviewer never has to open
+        # artifact JSON to see it. Counting and identities only: how many
+        # GENERATED questions each pre-concept received against the plan
+        # it authored, which pre-concepts were blocked and why, and
+        # whether the Pre release was staged at all. Nothing here judges
+        # a question; the flags it counts are already recorded verdicts.
+        "generated_questions": _pre_generated_question_counts(
+            pre_rows, pre_questions
+        ),
+        "released": _pre_release_counts(pre_release),
     }
     summary = {
         "questions": channel_counts("question"),
@@ -813,6 +911,60 @@ def _render_pre_learning(ledger: Mapping[str, Any]) -> list[str]:
             if links.get("pre_concepts_without_links") else ""
         )
     )
+    generated = summary.get("generated_questions") or {}
+    released = summary.get("released") or {}
+    if generated.get("refused"):
+        lines.append(
+            "    generated questions REFUSED and not shipped: "
+            + str(generated["refused"])[:300]
+        )
+    else:
+        lines.append(
+            f"    generated questions: {generated.get('total', 0)} authored "
+            f"on {generated.get('pre_concepts_with_questions', 0)} of "
+            f"{summary.get('rows', 0)} pre-concept(s) — GENERATED for the "
+            "prerequisite, never lifted from the source"
+            + (
+                f"; {generated['pre_concepts_blocked']} pre-concept(s) "
+                "blocked (each named below)"
+                if generated.get("pre_concepts_blocked") else ""
+            )
+        )
+    for row in generated.get("per_concept") or []:
+        if row.get("blocked"):
+            lines.append(
+                f"      blocked {row.get('pre_concept_id')} "
+                f"{str(row.get('concept_title'))!r}: "
+                f"{str(row.get('blocked'))[:160]}"
+            )
+        elif (
+            isinstance(row.get("planned"), int)
+            and row["planned"] != row.get("authored")
+        ):
+            # Q4's target is a target, never a quota: variance is reported
+            # with the plan beside it and is not incompleteness.
+            lines.append(
+                f"      {row.get('pre_concept_id')} authored "
+                f"{row.get('authored')} of the {row['planned']} its own "
+                "coverage plan asked for (an adaptive target, not a quota)"
+            )
+    if released.get("staged"):
+        lines.append(
+            f"    staged Pre release: {released.get('release_state')} — "
+            f"{released.get('rows', 0)} row(s), "
+            f"{released.get('generated_questions', 0)} generated question(s), "
+            f"{released.get('issues', 0)} issue(s); "
+            f"database_uploaded={released.get('database_uploaded')}"
+        )
+        for defect in released.get("structural_defects") or []:
+            lines.append(
+                f"      database upload BLOCKED: {str(defect)[:200]}"
+            )
+    else:
+        lines.append(
+            "    no Pre release is staged for this run, so Outputs 03/04 "
+            "are not downloadable from it"
+        )
     missing = detail.get("rows_missing_learner_analysis") or []
     if missing:
         lines.append(

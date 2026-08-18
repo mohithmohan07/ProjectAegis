@@ -430,10 +430,61 @@ def run_release_from_job(
     database upload stays a separate explicit action."""
     from ..services import assessment_release_run
     from ..services import assessment_release_service as release_svc
+    from ..services.phase3 import premap
 
     try:
         release = assessment_release_run.run_release_for_job(
             db, job_id, owner_sub=user.sub)
+    except assessment_release_run.SourceQuestionLeak as e:
+        raise HTTPException(409, str(e))
+    except premap.PreExtractionError as e:
+        # The source-question barrier's OTHER exception type. It is not a
+        # ``ReleaseRunError`` and not a ``SourceQuestionLeak`` — the QID
+        # half of the barrier raises ``premap``'s own error, reusing the
+        # Pre lane's one guard rather than wrapping it — so without this
+        # arm a refusal, which is a deliberate fail-closed verdict,
+        # surfaces as an unhandled 500. Same 409 as its sibling: the
+        # request was well-formed and the artefact was refused.
+        raise HTTPException(409, str(e))
+    except assessment_release_run.ReleaseRunError as e:
+        raise HTTPException(400, str(e))
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except release_svc.UploadRefused as e:
+        raise HTTPException(409, str(e))
+    return _release_summary(release)
+
+
+@router.post("/releases/from-job/{job_id}/pre")
+def run_pre_release_from_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Output 04 — the Pre Master — from one Build Concepts job.
+
+    Its own route rather than a flag on the Post one: the two outputs are
+    separate artefacts with separate publications, and a lane is never a
+    default anyone can fall into. The generated questions come from the
+    staged Output-03 payload; the chapter's own questions cannot reach
+    this lane (assessment_release_run's leak barrier, bound to the Pre
+    slot).
+    """
+    from ..services import assessment_release_run
+    from ..services import assessment_release_service as release_svc
+    from ..services.phase3 import premap
+
+    try:
+        release = assessment_release_run.run_pre_release_for_job(
+            db, job_id, owner_sub=user.sub)
+    except assessment_release_run.SourceQuestionLeak as e:
+        raise HTTPException(409, str(e))
+    except premap.PreExtractionError as e:
+        # The barrier's REACHABLE half (see the Post route above): the
+        # marker half can only fire on a coding fault, while this one
+        # reads authored model text and is what a staged artefact
+        # actually trips. It gets the same 409 its sibling does.
+        raise HTTPException(409, str(e))
     except assessment_release_run.ReleaseRunError as e:
         raise HTTPException(400, str(e))
     except uploads.UploadJobNotFound as e:

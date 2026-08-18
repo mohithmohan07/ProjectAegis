@@ -618,6 +618,7 @@ def build_run_report(
     dropped_furniture: Mapping[str, Any] | None = None,
     pre_map: Mapping[str, Any] | None = None,
     coverage: Mapping[str, Any] | None = None,
+    release_lane: str = "post",
 ) -> dict[str, Any]:
     """Return the reproducible explanation of how this run ended.
 
@@ -629,6 +630,11 @@ def build_run_report(
     ledger built beside it, so the report can surface the Pre lane the
     way it already surfaces the Post one. Both optional: a run without a
     Pre lane reports no Pre section at all.
+
+    ``release_lane`` names which of the job's two staged releases
+    ``payload`` is — the report is generated per lane, and a reviewer
+    holding the Pre diagnostics must not have to infer which output they
+    are reading.
     """
 
     log = list(generation_log or [])
@@ -658,6 +664,7 @@ def build_run_report(
         },
         "stopped": bool(issue),
         "outcome": "stopped" if issue else "completed",
+        "release_lane": str(release_lane or "post"),
         "job_id": payload.get("job_id"),
         "stage": _normal(payload.get("checkpoint_stage")),
         "stage_label": _normal(_stage_checkpoint(checkpoint).get("stage_label")),
@@ -724,6 +731,22 @@ def _render_furniture(report: Mapping[str, Any]) -> list[str]:
             f"  … {len(rows) - 60} more line(s) in context/run_report.json"
         )
     return lines
+
+
+def _render_lane(report: Mapping[str, Any]) -> list[str]:
+    """Name the lane, and ONLY when it is not the long-standing default.
+
+    A Post report renders byte-identically to every recorded one; a Pre
+    report says so on its first line, because a reviewer holding two
+    diagnostics archives from one run must be able to tell them apart.
+    """
+
+    if str(report.get("release_lane") or "post") == "post":
+        return []
+    return [
+        "Output     : 03/04 — the Phase 03 Pre-Learning outputs "
+        "(this run's Post-Learning outputs 01/02 have their own report)",
+    ]
 
 
 def _render_pre_learning(report: Mapping[str, Any]) -> list[str]:
@@ -897,10 +920,12 @@ def _render_accepted(report: Mapping[str, Any]) -> list[str]:
 def render_run_report(report: Mapping[str, Any]) -> str:
     """Render the same facts as the first thing a human opens."""
 
+    lane_line = _render_lane(report)
     if not report.get("stopped"):
         return "\n".join([
             "Project Aegis run report",
             "",
+            *lane_line,
             f"Stage      : {report.get('stage')} ({report.get('stage_label')})",
             f"Progress   : {report.get('progress')}",
             f"Released   : {report.get('released_row_count')} row(s); "
@@ -925,6 +950,7 @@ def render_run_report(report: Mapping[str, Any]) -> str:
     lines = [
         "Project Aegis run report",
         "",
+        *lane_line,
         f"Stage      : {report.get('stage')} ({report.get('stage_label')})",
         f"Progress   : {report.get('progress')}",
         f"Released   : {report.get('released_row_count')} row(s); "

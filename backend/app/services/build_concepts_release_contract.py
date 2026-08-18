@@ -142,6 +142,43 @@ def _refine_captured_records(
         }
 
 
+def _stage_pre_sibling(
+    db,
+    job,
+    target_chapter_id: int,
+    *,
+    inventory: Mapping[str, Any] | None,
+    reason: str,
+) -> None:
+    """Stage Outputs 03/04 beside whatever the Post lane just released.
+
+    Called after EVERY ``stage_release`` on this path, not only after a
+    clean capture. That is the point: this function's inputs are the
+    Phase 03 snapshots already on disk (``phase3.runner`` writes them as
+    phase 3 finishes), not the captured rows — so a run that completed
+    Phase 03 and then failed after the deposit boundary, or reached an
+    unresolved semantic boundary and released a checkpoint instead, HAS a
+    Pre map available and its Outputs 03/04 should ship beside the Post
+    release rather than vanish. Staged from only one of the four exits,
+    their absence on the other three is indistinguishable from a chapter
+    with no Pre lane at all — the same R4 confusion ``_run_snapshot``'s
+    three states exist to prevent, one level up.
+
+    Never raises, and always runs AFTER the Post release is staged:
+    ``stage_pre_release_from_run`` logs and returns ``None`` on any
+    failure, so a Pre-lane problem can never cost the finished Post rows.
+    """
+
+    db.refresh(job)
+    release.stage_pre_release_from_run(
+        db,
+        job,
+        target_chapter_id=target_chapter_id,
+        inventory=inventory or {},
+        reason=reason,
+    )
+
+
 def _release_after_result(
     db,
     job_id: int,
@@ -169,7 +206,7 @@ def _release_after_result(
             target_chapter_id,
             captured,
         )
-        return release.stage_release(
+        staged = release.stage_release(
             db,
             job,
             target_chapter_id=target_chapter_id,
@@ -187,7 +224,23 @@ def _release_after_result(
             ),
             refinements=refinements,
         )
-    return release.stage_release(
+        # Outputs 03/04 (§5, spec T3): the SIBLING slot on this same job.
+        # One run produces all four outputs (Q3), so the Pre release is
+        # staged here beside the Post one rather than on a job of its own
+        # — ``learning_kind`` stays "post" on the row and the lane rides
+        # the key.
+        _stage_pre_sibling(
+            db,
+            job,
+            target_chapter_id,
+            inventory=captured.get("inventory") or {},
+            reason=(
+                "Generation completed. The Phase 03 Pre-Learning outputs "
+                "were staged and were not uploaded to the database."
+            ),
+        )
+        return staged
+    staged = release.stage_release(
         db,
         job,
         target_chapter_id=target_chapter_id,
@@ -198,6 +251,18 @@ def _release_after_result(
             "user to choose during generation."
         ),
     )
+    _stage_pre_sibling(
+        db,
+        job,
+        target_chapter_id,
+        inventory=None,
+        reason=(
+            "Generation reached an unresolved semantic boundary. The "
+            "Phase 03 Pre-Learning outputs this run had already recorded "
+            "were staged beside the released checkpoint."
+        ),
+    )
+    return staged
 
 
 def _run_generation_release(
@@ -233,7 +298,7 @@ def _run_generation_release(
                 module="build_concepts",
             )
             if captured:
-                return release.stage_release(
+                staged = release.stage_release(
                     db,
                     job,
                     target_chapter_id=target_chapter_id,
@@ -255,7 +320,20 @@ def _run_generation_release(
                         "to an older or empty checkpoint."
                     ),
                 )
-            return release.stage_release(
+                _stage_pre_sibling(
+                    db,
+                    job,
+                    target_chapter_id,
+                    inventory=captured.get("inventory") or {},
+                    reason=(
+                        "Generation failed after its final rows were "
+                        "materialized. The Phase 03 Pre-Learning outputs "
+                        "this run had already recorded were staged beside "
+                        "the released rows."
+                    ),
+                )
+                return staged
+            staged = release.stage_release(
                 db,
                 job,
                 target_chapter_id=target_chapter_id,
@@ -266,6 +344,18 @@ def _run_generation_release(
                     "failure attached instead of returning no output."
                 ),
             )
+            _stage_pre_sibling(
+                db,
+                job,
+                target_chapter_id,
+                inventory=None,
+                reason=(
+                    "Generation failed after creating a durable checkpoint. "
+                    "The Phase 03 Pre-Learning outputs this run had already "
+                    "recorded were staged beside the released rows."
+                ),
+            )
+            return staged
         captured = copy.deepcopy(_RELEASE_CAPTURE.get())
         return _release_after_result(
             db,

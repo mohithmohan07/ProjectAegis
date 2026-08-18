@@ -653,19 +653,34 @@ function SourceArtifactsCard({
 
   async function publishRelease(artifact: ActionableArtifact) {
     if (actionBusy || artifact.disabled) return;
+    // WHICH LANE THIS BUTTON PUBLISHES, read off the entry the button was
+    // rendered from. One job stages two releases (Outputs 01/02 and
+    // Outputs 03/04) and the manifest offers a publish entry for each; the
+    // lane rides the entry's own download_url, exactly as the four
+    // download links do. This used to call the lane-less endpoint, so the
+    // Pre button published the POST lane — a wrong-lane, authenticated,
+    // explicitly-confirmed write, and if Post was already published it was
+    // a silent no-op that still reported success while Output 03 stayed
+    // unpublished.
+    const lane: "post" | "pre" =
+      new URLSearchParams(artifact.download_url.split("?")[1] ?? "").get("lane") === "pre"
+        ? "pre"
+        : "post";
+    const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
     if (
       artifact.requires_confirmation
       && !window.confirm(
-        "Upload the released rows to the database now? Highlighted rows and their audit remain in the release export.",
+        `Upload the released ${laneLabel} rows to the database now? `
+        + "Highlighted rows and their audit remain in the release export.",
       )
     ) return;
     setActionBusy(true);
     setActionMessage(null);
     try {
-      await api.uploadConceptRelease(jobId);
+      await api.uploadConceptRelease(jobId, lane);
       const fresh = await api.getUploadJob("concepts", jobId);
       onPublished(fresh);
-      setActionMessage("Released rows were uploaded to the database.");
+      setActionMessage(`Released ${laneLabel} rows were uploaded to the database.`);
     } catch (e) {
       setActionMessage(String(e));
     } finally {
