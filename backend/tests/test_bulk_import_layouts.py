@@ -59,6 +59,31 @@ def _post(client, path):
     )
 
 
+@pytest.fixture(autouse=True)
+def _drop_chapters_this_file_imports(db):
+    """Leave the session database exactly as this file found it.
+
+    ``conftest._prepare`` seeds the fixture workbook ONCE per session and
+    never resets between tests, so a file that imports workbooks adds
+    chapters every other test then sees. That is not hypothetical: without
+    this fixture, ``test_data_io`` fails four ways when it runs after this
+    file and passes when it runs alone — an order-dependent flake that the
+    full suite happens to hide.
+
+    Deleting the chapter is enough: ``Chapter.topics`` cascades
+    ``all, delete-orphan`` through Topic, Concept, Group and Question
+    (models.py:40, :59, :83, :111), so nothing this file imported survives.
+    """
+    before = {chapter_id for (chapter_id,) in db.query(models.Chapter.id)}
+    yield
+    db.expire_all()
+    for chapter in db.query(models.Chapter).filter(
+        ~models.Chapter.id.in_(before) if before else True
+    ):
+        db.delete(chapter)
+    db.commit()
+
+
 # --------------------------------------------------------------------------- #
 # The registry itself
 # --------------------------------------------------------------------------- #
@@ -307,6 +332,7 @@ def test_reader_answer_blocks_are_read_by_name(db, tmp_path):
         ("topic", "topic_title"): "Topic 01: Vibrations",
         ("topic", "pre_post_learning"): "Post",
         ("concept", "concept_title"): "Amplitude and loudness",
+        ("concept", "concept_display_name"): "Amplitude and loudness",
         ("group", "group_name"): "Basic Group 01",
         ("group", "group_type"): "Basic",
         ("question", "question_label"): "07CBSC_Sound_PL_T01_C01 Q01",
@@ -343,6 +369,7 @@ def test_canonical_current_and_legacy_workbooks_still_import(db, tmp_path):
             ("topic", "topic_title"): "Topic 01: Registry Topic",
             ("topic", "pre_post_learning"): "Post",
             ("concept", "concept_title"): f"{marker} Concept",
+            ("concept", "concept_display_name"): f"{marker} Concept",
             ("group", "group_name"): "Basic Group 01",
             ("group", "group_type"): "Basic",
             ("question", "question_label"): label,
@@ -372,6 +399,7 @@ def test_an_unrecognised_header_refuses_the_whole_import(client, db, tmp_path):
         ("chapter", "chapter_title"): "Unreadable Chapter (09_Physics_CBSE_NCERT)",
         ("topic", "topic_title"): "Topic 01: Unreadable Topic",
         ("concept", "concept_title"): "Unreadable Concept",
+        ("concept", "concept_display_name"): "Unreadable Concept",
         ("group", "group_type"): "Basic",
         ("question", "question_label"): "09CBPH_Unread_PL_T01_C01 Q01",
         ("question", "question"): "Does a half-read workbook import?",
@@ -410,6 +438,7 @@ def test_a_trailing_space_sheet_name_is_a_different_layout_not_a_skip(
         ("chapter", "chapter_title"): "Trailing Space Chapter (09_Physics_CBSE_NCERT)",
         ("topic", "topic_title"): "Topic 01: Trailing Space Topic",
         ("concept", "concept_title"): "Trailing Space Concept",
+        ("concept", "concept_display_name"): "Trailing Space Concept",
         ("group", "group_type"): "Basic",
         ("question", "question_label"): "09CBPH_Trail_PL_T01_C01 Q01",
         ("question", "question"): "Is a renamed sheet a skip?",
@@ -475,6 +504,7 @@ def test_two_chapters_whose_codes_collide_are_not_merged(db, tmp_path):
             ("topic", "topic_title"): f"Topic 01: Nationalism in {region}",
             ("topic", "pre_post_learning"): "Post",
             ("concept", "concept_title"): f"Nationalism in {region}",
+            ("concept", "concept_display_name"): f"Nationalism in {region}",
             ("group", "group_name"): "Basic Group 01",
             ("group", "group_type"): "Basic",
             ("question", "question_label"): f"10CBSS_Nat{region}_PL_T01_C01 Q01",
@@ -528,6 +558,7 @@ def test_a_pre_topic_and_a_post_topic_with_one_title_import_as_two_topics(
             ("topic", "topic_title"): "Topic 04: Culmination",
             ("topic", "pre_post_learning"): "Post",
             ("concept", "concept_title"): "Post culmination concept",
+            ("concept", "concept_display_name"): "Post culmination concept",
             ("group", "group_type"): "Basic",
             ("group", "group_name"): "Basic Group 01",
         },
@@ -536,6 +567,7 @@ def test_a_pre_topic_and_a_post_topic_with_one_title_import_as_two_topics(
             ("topic", "topic_title"): "Culmination",
             ("topic", "pre_post_learning"): "Pre",
             ("concept", "concept_title"): "Pre culmination concept",
+            ("concept", "concept_display_name"): "Pre culmination concept",
             ("group", "group_type"): "Basic",
             ("group", "group_name"): "Basic Group 01",
         },
@@ -544,6 +576,7 @@ def test_a_pre_topic_and_a_post_topic_with_one_title_import_as_two_topics(
             ("topic", "topic_title"): "culmination",
             ("topic", "pre_post_learning"): "Post",
             ("concept", "concept_title"): "Second post culmination concept",
+            ("concept", "concept_display_name"): "Second post culmination concept",
             ("group", "group_type"): "Basic",
             ("group", "group_name"): "Basic Group 01",
         },
@@ -633,6 +666,7 @@ def test_the_reader_appears_in_default_does_not_come_from_the_profile(
         ("topic", "topic_title"): "Topic 01: Appears In Topic",
         ("topic", "pre_post_learning"): "Post",
         ("concept", "concept_title"): "Appears In Concept",
+        ("concept", "concept_display_name"): "Appears In Concept",
         ("group", "group_type"): "Basic",
         ("group", "group_name"): "Basic Group 01",
         ("question", "question_label"): "09CBPH_Appear_PL_T01_C01 Q01",
@@ -647,3 +681,87 @@ def test_the_reader_appears_in_default_does_not_come_from_the_profile(
     question = db.query(models.Question).filter_by(
         question_label="09CBPH_Appear_PL_T01_C01 Q01").one()
     assert question.question_appears_in == bi.APPEARS_IN_ALL
+
+
+def test_a_content_sheet_the_file_omits_is_recorded_not_silent(db, tmp_path):
+    """R4: the defect this gate replaced was the SILENCE, not the drop.
+
+    The old reader skipped an unmatched sheet with a bare ``continue`` and no
+    flag, so an entire missing Objective sheet read back as a clean import.
+    An absent sheet loses no row -- it has none -- but a reviewer must be able
+    to tell "this file has no Subjective questions" from "this file's
+    Subjective sheet went missing", and only a recorded issue carries that.
+    """
+    layout = layouts.layout("canonical-current")
+    cells = {
+        ("chapter", "chapter_title"): "Omitted Sheet Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Only Descriptive",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Only Descriptive Concept",
+        ("concept", "concept_display_name"): "Only Descriptive Concept",
+        ("group", "group_type"): "Basic",
+        ("group", "group_name"): "Basic Group 01",
+    }
+    workbook = _new_workbook_for(layout, {"descriptive": [cells]})
+    for sheet_name in ("Objective ", "Subjective"):
+        workbook.remove(workbook[sheet_name])
+    path = _save(workbook, tmp_path, "only_descriptive.xlsx")
+
+    counts = reader.import_workbook(db, path)
+
+    assert counts["layout_id"] == "canonical-current"
+    # The sheets that ARE present still import.
+    assert counts["concepts"] >= 1
+    # And the two that are absent are named, each exactly once.
+    for sheet_name in ("Objective ", "Subjective"):
+        named = [i for i in counts["issues"] if i.startswith(f"{sheet_name}:")]
+        assert len(named) == 1, (sheet_name, counts["issues"])
+        assert "not present" in named[0]
+
+
+def test_a_declared_non_content_tab_is_recorded_rather_than_passed_over(db, tmp_path):
+    """The Doc Link tab is legitimately skipped -- and says so.
+
+    ``canonical-current`` declares it non-content, so it is not a refusal.
+    Recording it is what keeps "read past" distinguishable from "read".
+    """
+    layout = layouts.layout("canonical-current")
+    workbook = _new_workbook_for(layout, {})
+    workbook.create_sheet("Doc Link <> Each fields ").append(["anything"])
+    path = _save(workbook, tmp_path, "with_doc_link.xlsx")
+
+    counts = reader.import_workbook(db, path)
+
+    ignored = [i for i in counts["issues"] if i.startswith("Doc Link")]
+    assert len(ignored) == 1, counts["issues"]
+    assert "not a content sheet" in ignored[0]
+
+
+def test_a_blank_lane_cell_stores_a_lane_rather_than_an_empty_string(db, tmp_path):
+    """T6.4: the topic identity key needs a total lane, so blank means Post.
+
+    Pinned because it is a stored-value change: before the lane joined the
+    key, a present-but-empty ``pre_post_learning`` cell persisted ``""``. An
+    unlaned Topic row is worse than a Post one -- it cannot be told apart from
+    either lane on the round trip -- but nothing pinned the choice.
+    """
+    layout = layouts.layout("canonical-current")
+    cells = {
+        ("chapter", "chapter_title"): "Blank Lane Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Blank Lane",
+        ("topic", "pre_post_learning"): "",
+        ("concept", "concept_title"): "Blank Lane Concept",
+        ("concept", "concept_display_name"): "Blank Lane Concept",
+        ("group", "group_type"): "Basic",
+        ("group", "group_name"): "Basic Group 01",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"objective": [cells]}),
+        tmp_path, "blank_lane.xlsx")
+
+    reader.import_workbook(db, path)
+
+    # The reader strips the ``Topic NN:`` ordinal prefix when it stores the
+    # title, so query the stored form rather than the authored one.
+    topic = db.query(models.Topic).filter_by(topic_title="Blank Lane").one()
+    assert topic.pre_post_learning == "Post"

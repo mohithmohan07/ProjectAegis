@@ -199,6 +199,23 @@ def import_workbook(db: Session, path: Path) -> dict:
         if len(counts["issues"]) < _MAX_ISSUES:
             counts["issues"].append(msg)
 
+    # A content sheet the layout declares but the file does not carry, and a
+    # tab the layout declares non-content, are both RECORDED. Neither loses a
+    # row -- an absent sheet has none, and an ignored tab carries none -- but
+    # the defect this slice replaced was never the drop, it was the SILENCE:
+    # the old reader skipped an unmatched sheet with a bare ``continue`` and
+    # no flag, so a whole missing Objective sheet read as a clean import. A
+    # reviewer must be able to tell "this file has no Subjective questions"
+    # from "this file's Subjective sheet went missing" (R4).
+    for missing in sorted(
+        set(identified.layout.sheets) - {f.kind for f in identified.sheets}
+    ):
+        _flag(f"{identified.layout.sheet(missing).sheet_name}: sheet not present "
+              f"in this workbook; nothing was imported for it")
+    for ignored in identified.ignored_sheets:
+        _flag(f"{ignored}: tab is not a content sheet in layout "
+              f"{identified.layout_id!r}; it was read past, not imported")
+
     # Caches keyed by natural keys for de-duplication within one import.
     chapters: dict[str, models.Chapter] = {}
     topics: dict[tuple, models.Topic] = {}
