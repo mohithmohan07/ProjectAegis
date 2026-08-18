@@ -26,6 +26,7 @@ from . import polish as polish_mod
 from . import preanalyse as preanalyse_mod
 from . import prelearn as prelearn_mod
 from . import premap as premap_mod
+from . import prequestions as prequestions_mod
 from . import settle as settle_mod
 
 
@@ -167,6 +168,32 @@ def _snapshot_premap(
         pass  # snapshotting is best-effort; the store already has decisions
 
 
+def _snapshot_prequestions(
+    pre_questions: Mapping[str, Any],
+    store_dir: str | Path | None,
+) -> None:
+    """Persist the Phase 03 coverage plan and its generated questions (Q4).
+
+    Written beside the decision store so each pre-concept's authored
+    plan — its total, its split and the rationale EVERY plan carries —
+    and the questions generated to it survive the run for the later
+    assessment-lane slice and the diagnostics export.
+    """
+
+    if not store_dir:
+        return
+    import json
+
+    try:
+        path = Path(store_dir).parent / "source.phase3-prelearn-questions.json"
+        path.write_text(
+            json.dumps(dict(pre_questions), ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass  # snapshotting is best-effort; the store already has decisions
+
+
 def run(
     env: Mapping[str, Any],
     *,
@@ -178,22 +205,26 @@ def run(
     ``providers`` is test-only injection ({"topology", "grounding",
     "analysis", "host", "place", "analyse", "analyse_allot", "prelearn",
     "prelearn_merge", "premap", "premap_links", "preanalyse",
-    "preanalyse_allot", "critic", "fixer"} — "analysis" is Settle's
+    "preanalyse_allot", "prequestions", "prequestions_author", "critic",
+    "fixer"} — "analysis" is Settle's
     content-authoring provider, "analyse" the Q1 chapter-inventory pass,
     "prelearn" the Phase 03 per-stage pre-requisite capture, "premap" the
     Pre-Learning map build, "preanalyse" the Pre lane's own Q1
-    inventory);
+    inventory, "prequestions" the Q4 coverage plan and
+    "prequestions_author" the generated questions authored to it);
     production omits it and the passes use their live API adapters —
     including the live Fixer (Q13) — failing closed if no API is live.
 
     The Phase 03 capture (doc §4, Q3) runs alongside the passes: one
     decision at each stage boundary over THAT stage's own evidence, then
-    one merge. It rides out on the ``prerequisites`` key, and the Pre map
-    built from it on ``pre_map``; ``records`` is untouched by both. A Pre
-    map that fails the no-extraction guard is refused and recorded on
-    ``pre_map["refused"]`` — the finished Post map still ships, because
-    a Pre-lane fault must not discard work that is already done and paid
-    for (see the call site).
+    one merge. It rides out on the ``prerequisites`` key, the Pre map
+    built from it on ``pre_map``, and the Q4 coverage plan with the
+    questions generated to it on ``pre_questions``; ``records`` is
+    untouched by all three. A Pre map that fails the no-extraction guard
+    is refused and recorded on ``pre_map["refused"]`` — the finished Post
+    map still ships, because a Pre-lane fault must not discard work that
+    is already done and paid for (see the call site); the questions carry
+    the same property one level down, on ``pre_questions["refused"]``.
     """
 
     from .. import progress
@@ -409,6 +440,46 @@ def run(
             level="error",
         )
     _snapshot_premap(pre_map, store_dir)
+    # Phase 03 (doc §4, Q4 per D3): the adaptive coverage plan and the
+    # GENERATED questions authored to it. Its own try, deliberately not
+    # the map's: a leak in the questions must not discard a finished Pre
+    # map any more than a leak in the Pre map discards a finished Post
+    # one. The map ships without questions, loudly, and the run
+    # completes.
+    progress.step(
+        "Phase 3 — Pre-Learning: coverage plan and generated questions",
+        value=0.975,
+    )
+    try:
+        pre_questions = prequestions_mod.build(
+            env,
+            pre_map,
+            provider=injected.get("prequestions"),
+            author_provider=injected.get("prequestions_author"),
+            critic=injected.get("critic"),
+            store=store,
+            fixer=injected.get("fixer"),
+        )
+    except (
+        premap_mod.PreExtractionError,
+        prequestions_mod.PreQuestionError,
+    ) as error:
+        pre_questions = {
+            "plans": {},
+            "questions": {},
+            "blocked": {},
+            "review_flags": {},
+            "decision_flags": {},
+            "refused": str(error),
+        }
+        progress.log(
+            "Pre-Learning questions REFUSED and not shipped: " + str(error)
+            + " The chapter's finished Post-Learning and Pre-Learning maps "
+            "are unaffected and ship; the questions must be regenerated "
+            "once the leak is corrected.",
+            level="error",
+        )
+    _snapshot_prequestions(pre_questions, store_dir)
     flagged = sum(1 for row in rows if row.get("review_flags"))
     return {
         "records": rows,
@@ -418,6 +489,7 @@ def run(
         "analysis": analysis,
         "prerequisites": prerequisites,
         "pre_map": pre_map,
+        "pre_questions": pre_questions,
         "coverage": assembled["coverage"],
         "summary": {
             "row_count": len(rows),

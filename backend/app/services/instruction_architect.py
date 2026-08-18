@@ -30,9 +30,11 @@ ships in the release diagnostics automatically.
 
 Frozen-core hash material (see :func:`_frozen_core_entries`): the
 registered prompt keys generation actually reads during a Build Concepts
-run, plus the Phase 3 system-prompt module constants hashed directly —
-``app/services/phase3/prompts.py`` bypasses the prompt registry today, so
-its constants are hashed from the module rather than through the registry.
+run, plus the enumerated Phase 3 system-prompt module constants hashed
+directly — ``app/services/phase3/prompts.py`` bypasses the prompt registry
+today, so its constants are hashed from the module rather than through the
+registry. The enumeration is explicit and is not yet every constant in that
+module (see ``_FROZEN_CORE_PHASE3_CONSTANTS``).
 """
 from __future__ import annotations
 
@@ -82,7 +84,23 @@ _FROZEN_CORE_PROMPT_KEYS = (
 )
 
 # Phase 3 system prompts are module constants (no registry backing yet); they
-# are hashed directly from the module, in this order.
+# are hashed directly from the module, in this order. A constant listed here
+# re-keys every cached verdict when its text changes, which is the point: the
+# prompt that decides a pass's output is part of the instructions that pass
+# decided under. Names are appended, never reordered.
+#
+# The Pre lane's capture, map, inventory and question prompts were added
+# together, in the same commit that first moved this hash for the question
+# pass - one re-key rather than two. Before that, editing PREMAP_* or
+# PREANALYSE_* replayed old verdicts, which was a real cache-invalidation
+# defect in the slices that introduced them.
+#
+# STILL ABSENT, and named so the gap is tracked rather than assumed closed:
+# ANALYSE_INVENTORY_SYSTEM, ANALYSE_ALLOT_SYSTEM, ANALYSE_CRITIC_SYSTEM,
+# PLACE_SYSTEM, PLACE_CRITIC_SYSTEM, REFINER_SYSTEM. Editing any of those
+# replays verdicts made under the old text. They are POST-lane prompts, so
+# listing them re-keys every stored Post decision - a blast radius the Pre
+# lane has no business spending. It belongs with the step-8 release work.
 _FROZEN_CORE_PHASE3_CONSTANTS = (
     "TOPOLOGY_SYSTEM",
     "GROUNDING_SYSTEM",
@@ -91,6 +109,18 @@ _FROZEN_CORE_PHASE3_CONSTANTS = (
     "POLISH_SYSTEM",
     "CRITIC_SYSTEM",
     "FIXER_SYSTEM",
+    "PRELEARN_CAPTURE_SYSTEM",
+    "PRELEARN_MERGE_SYSTEM",
+    "PRELEARN_CRITIC_SYSTEM",
+    "PREMAP_SYSTEM",
+    "PREMAP_NEEDED_FOR_SYSTEM",
+    "PREMAP_CRITIC_SYSTEM",
+    "PREANALYSE_INVENTORY_SYSTEM",
+    "PREANALYSE_ALLOT_SYSTEM",
+    "PREANALYSE_CRITIC_SYSTEM",
+    "PREQUESTIONS_PLAN_SYSTEM",
+    "PREQUESTIONS_AUTHOR_SYSTEM",
+    "PREQUESTIONS_CRITIC_SYSTEM",
 )
 
 

@@ -18,6 +18,7 @@ from tests import test_phase3_analyse as analyse_golden
 from tests import test_phase3_host_golden as host_golden
 from tests import test_phase3_preanalyse as preanalyse_golden
 from tests import test_phase3_premap as premap_golden
+from tests import test_phase3_prequestions as prequestions_golden
 from tests import test_phase3_prelearn as prelearn_golden
 from tests import test_phase3_settle_golden as settle_golden
 
@@ -112,6 +113,11 @@ def replay_providers(golden_envelope):
             encoding="utf-8"
         )
     )
+    golden_prequestions = json.loads(
+        (settle_golden.GOLDEN / "rne_prequestions.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mapping = settle_golden._replay_map(golden_envelope, golden_rows)
     topology, grounding, analysis, critic = settle_golden._providers(mapping)
 
@@ -139,6 +145,9 @@ def replay_providers(golden_envelope):
         "premap": premap_golden.premap_replay_provider(golden_premap),
         "preanalyse": preanalyse_golden.preanalyse_replay_provider(
             golden_preanalysis
+        ),
+        "prequestions": prequestions_golden.prequestions_replay_provider(
+            golden_prequestions
         ),
         "critic": critic,
     }
@@ -569,3 +578,69 @@ def test_the_migration_flag_is_retired():
     # PR 4: the rewritten Phase 3 is the only post-81% path; the
     # AEGIS_PHASE3_REWRITE flag no longer exists anywhere.
     assert not hasattr(runner, "rewrite_enabled")
+
+
+def test_the_pre_learning_questions_ship_on_their_own_carry_channel(
+    golden_envelope, replay_providers, tmp_path_factory,
+):
+    """Phase 03, Q4 per D3: the coverage plan and the generated questions.
+
+    End to end on the recorded chain: every one of the 15 pre-concepts is
+    planned, every plan carries its own rationale, every question set is
+    exactly the size its own plan authored, and nothing about it touches
+    the Post records the publication chain consumes.
+    """
+    import json as _json
+
+    artifact_dir = tmp_path_factory.mktemp("artifacts")
+    store_dir = artifact_dir / "phase3-decisions"
+    result = runner.run(
+        golden_envelope, store_dir=store_dir, providers=replay_providers,
+    )
+
+    pre_questions = result["pre_questions"]
+    assert len(pre_questions["plans"]) == 15
+    assert pre_questions["blocked"] == {}
+    assert pre_questions["decision_flags"] == {}
+    assert "refused" not in pre_questions
+    for concept_id, plan in pre_questions["plans"].items():
+        assert plan["rationale"].strip(), concept_id
+        assert sum(entry["count"] for entry in plan["split"]) == plan["total"]
+        assert len(pre_questions["questions"][concept_id]) == plan["total"]
+    # 71 generated questions across 15 pre-concepts, from a plan that runs
+    # 2..10 — an adaptive target, not a quota, and nothing at 40.
+    minted = [
+        row["pre_question_id"]
+        for rows in pre_questions["questions"].values()
+        for row in rows
+    ]
+    assert len(minted) == len(set(minted)) == 71
+    assert sorted({
+        plan["total"] for plan in pre_questions["plans"].values()
+    }) == [2, 3, 4, 5, 6, 8, 10]
+
+    # NO EXTRACTION: not one of the chapter's own question ids appears in
+    # a generated question, its answer, or its rationale.
+    from app.services.phase3 import premap as premap_mod
+
+    raw = _json.dumps(
+        {
+            "plans": pre_questions["plans"],
+            "questions": pre_questions["questions"],
+        },
+        ensure_ascii=False,
+    )
+    for qid in premap_mod.inventory_qids(golden_envelope):
+        assert qid not in raw
+
+    # The Post release records are untouched by the whole lane.
+    assert not any("pre_question" in _json.dumps(row) for row in result["records"])
+
+    # And the plan is durable, not just in-process.
+    snapshot = _json.loads(
+        (artifact_dir / "source.phase3-prelearn-questions.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert snapshot["plans"] == pre_questions["plans"]
+    assert snapshot["questions"] == pre_questions["questions"]

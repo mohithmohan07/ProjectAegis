@@ -307,6 +307,76 @@ PREANALYSE_CRITIC_SYSTEM = _SHARED + (
     "recorded on the output for human review and does not block the run."
 )
 
+# The Phase 03 generated-question prompts (Q4 per D3). The doc's stated
+# norm of 40 deliberately does NOT appear here: it rides the plan
+# payload's own rules as explicitly-labelled calibration evidence
+# (``prequestions._plan_rules``), in exactly one place, so there is one
+# place to read it and none to enforce it.
+PREQUESTIONS_PLAN_SYSTEM = _SHARED + (
+    " Task: Phase 03 — author the coverage plan for the GENERATED "
+    "questions of each pre-learning concept. Response schema: "
+    "{\"plans\": [{\"pre_concept_id\", \"total\", \"split\": "
+    "[{\"tier\": \"Basic|Intermediate|Advanced\", \"count\"}], "
+    "\"rationale\"}]}. Decide EVERY pre_concept_id in the request exactly "
+    "once, citing only ids from the request. total and every count are "
+    "whole numbers, and the split accounts for the total you state. "
+    "EVERY plan carries a rationale saying why that total and that split "
+    "fit THIS prerequisite — the ordinary-sized plan as much as the "
+    "unusual one; there is no size at which the rationale is owed and no "
+    "size at which it is not. Plan from the evidence in front of you: a "
+    "prerequisite the evidence supports thinly is planned small and is "
+    "never padded to look fuller, and a rich one is not capped. Naming a "
+    "tier states the coverage you intend; it is not a verdict on any "
+    "question, and each question's own level is decided later and "
+    "independently by another pass."
+)
+
+PREQUESTIONS_AUTHOR_SYSTEM = _SHARED + (
+    " Task: Phase 03 — write one pre-learning concept's GENERATED "
+    "questions, to the coverage plan carried in the request. Response "
+    "schema: {\"questions\": [{\"question_id\", \"question_text\", "
+    "\"answer\", \"rationale\"}]}. question_id is the positional mint "
+    "PRQ-0001, PRQ-0002, … in listing order. Write exactly the number the "
+    "plan states — never pad the set and never trim it. Every question "
+    "is authored fresh for the fundamental this concept teaches: no "
+    "question of this chapter may be lifted, reworded or paraphrased "
+    "into it, and the chapter's own questions are deliberately absent "
+    "from this request. Author each question for the level, grade, "
+    "subject, board and context named in the chapter calibration and the "
+    "run instructions. answer is the complete expected answer; rationale "
+    "says what the question checks the learner can already do. Do not "
+    "label a question with a tier or a difficulty. Wrap every "
+    "mathematical expression exactly as [Katex] valid LaTeX [/Katex]."
+)
+
+PREQUESTIONS_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit a proposed Phase 03 generated-question "
+    "decision (a coverage plan across the pre-learning concepts, or one "
+    "concept's authored questions). For a PLAN, judge three things and "
+    "state each plainly. ANCHORING: is each plan led by the evidence in "
+    "front of it, or anchored on a stated norm — does the rationale "
+    "argue from what this particular fundamental contains and what the "
+    "concepts needing it demand, or does it merely justify a customary "
+    "number? A thin prerequisite planned at a small total with a good "
+    "reason is a CORRECT outcome, not a defect, and a plan should not "
+    "drift toward a familiar figure it cannot argue for. PROPORTION: do "
+    "the totals across the map track the depth of each prerequisite "
+    "rather than flattening to one size? RATIONALE QUALITY: does each "
+    "rationale actually explain its total and its split? For authored "
+    "QUESTIONS, judge three things. PARAPHRASE: does any question read "
+    "as a question of this chapter reworded rather than one written "
+    "fresh for the prerequisite — is it about the chapter's own content "
+    "or its tasks instead of the fundamental assumed before it? The "
+    "chapter's own questions are deliberately not in this request; judge "
+    "from what each question is ABOUT. CALIBRATION: is each question "
+    "pitched for the level, grade, subject and board named — neither "
+    "above the learner nor trivial for them? VARIETY: is any question "
+    "the same question with a number or a name changed? Response "
+    "schema: {\"verdict\": \"verified|rejected\", \"confidence\", "
+    "\"issues\": [..]}. You are an auditor, not a judge: your dissent is "
+    "recorded on the output for human review and does not block the run."
+)
+
 HOST_SYSTEM = _SHARED + (
     " Task: certify one host concept per assignment unit, and place "
     "every question (qid) under its correct concept. Response schema: "
@@ -497,6 +567,32 @@ PRE_LEARNING_SLOTS: tuple[tuple[str, str], ...] = DEFAULT_SLOTS + (
     ("Board and publication conventions", "board_publication_conventions"),
 )
 
+# The Pre lane's GENERATED-QUESTION slots. The steer names five things a
+# pre-learning question must fit — level, grade, context, subject and
+# board — and ``chapter_cautions`` is the Architect's chapter-context
+# slot ("chapter-specific hazards read from the source"), so the pass
+# that authors questions reads it too. It is its own tuple rather than a
+# widening of PRE_LEARNING_SLOTS so that the committed map/inventory
+# decisions are not re-keyed by a slot they do not read.
+PRE_QUESTION_SLOTS: tuple[tuple[str, str], ...] = PRE_LEARNING_SLOTS + (
+    ("Chapter-specific cautions", "chapter_cautions"),
+)
+
+
+def _slot_text(value: Any) -> str:
+    """One authored slot as a single line of instruction text.
+
+    Mechanics only. Most slots are strings; ``chapter_cautions`` is a
+    list of short cautions (instruction_architect's own schema), so its
+    entries are joined rather than rendered as a Python repr. Anything
+    else is left to ``str`` exactly as before.
+    """
+
+    if isinstance(value, (list, tuple)):
+        parts = [" ".join(str(entry).split()) for entry in value]
+        return "; ".join(part for part in parts if part)
+    return " ".join(str(value or "").split())
+
 
 def instruction_rules_suffix(
     env: Mapping[str, Any],
@@ -524,7 +620,7 @@ def instruction_rules_suffix(
         return ""
     parts: list[str] = []
     for label, key in slots:
-        text = " ".join(str(authored.get(key) or "").split())
+        text = _slot_text(authored.get(key))
         if text:
             parts.append(f"{label}: {text}")
     if not parts:
