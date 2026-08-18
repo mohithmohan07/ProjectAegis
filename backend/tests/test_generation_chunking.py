@@ -1,4 +1,6 @@
 """MMD is chunked (never trimmed) so no content is lost on long chapters."""
+import inspect
+
 import pytest
 
 from app.services import generation as g
@@ -97,39 +99,457 @@ def _to_api_rows(records: list[dict]) -> list[dict]:
     ]
 
 
-def test_canonicalize_falls_back_when_model_over_merges(monkeypatch):
-    """A canonicalize response that collapses the chapter must not be accepted."""
-    calls = {"n": 0}
+_FAMILIES = ("Rational Numbers", "Integers", "Decimal Representation")
+
+
+def _family_skeleton() -> list[dict]:
+    """A headingless-chapter skeleton whose branches live in ``parent_concept``.
+
+    Deliberately digit-free: the "no target count" regressions below assert
+    that the correction prompt contains no digits at all, so a family label
+    must not smuggle one in.
+    """
+    return [
+        {
+            "topic": "Number Systems",
+            "parent_concept": family,
+            "concept_title": f"{family} idea {'one' if i == 0 else 'two'}",
+            "concept_details": f"Description: about {family}.",
+            "keywords": "",
+        }
+        for family in _FAMILIES
+        for i in (0, 1)
+    ]
+
+
+def _family_row(family: str, title: str) -> dict:
+    return {
+        "topic": "Number Systems",
+        "parent_concept": family,
+        "concept_title": title,
+        "concept_details": f"Description: canonical {family}.",
+        "keywords": "",
+    }
+
+
+def test_missing_skeleton_families_accounts_identities_never_counts():
+    """"Family X is gone" is accounting; "fewer families" is a count."""
+    records = _family_skeleton()
+
+    # Every family still named as a parent: nothing is missing, even though
+    # the map is far smaller than the skeleton.
+    kept_as_parents = [_family_row(f, f"{f} core") for f in _FAMILIES]
+    assert g._missing_skeleton_families(records, kept_as_parents) == []
+
+    # A family merged UP into a concept of its own name is still present --
+    # the identity survived, only the row shape changed.
+    merged_up = [
+        {
+            "topic": "Number Systems",
+            "parent_concept": "Number Systems",
+            "concept_title": family,
+            "concept_details": "Description: merged.",
+            "keywords": "",
+        }
+        for family in _FAMILIES
+    ]
+    assert g._missing_skeleton_families(records, merged_up) == []
+
+    # One identity actually absent is named -- and named, not counted.
+    dropped = [_family_row(f, f"{f} core") for f in _FAMILIES if f != "Integers"]
+    assert g._missing_skeleton_families(records, dropped) == ["Integers"]
+
+    # A single row that keeps every family identity is accepted. There is no
+    # floor left for a small map to fall under.
+    assert g._missing_skeleton_families(records, kept_as_parents[:1]) == [
+        "Integers", "Decimal Representation",
+    ]
+
+
+def test_canonicalize_reasks_by_naming_the_lost_family_not_a_row_count(
+    monkeypatch,
+):
+    """The bounded correction is evidence: it names the family, never a count."""
+    records = _family_skeleton()
+    seen: list[str] = []
 
     def fake_openai(system, user, **kw):
-        calls["n"] += 1
-        # Model keeps over-merging on both the first pass and the retry.
-        return {"rows": _to_api_rows(_rows(1))}
+        seen.append(user)
+        if len(seen) == 1:
+            return {"rows": _to_api_rows(
+                [_family_row(f, f"{f} core") for f in _FAMILIES
+                 if f != "Integers"])}
+        return {"rows": _to_api_rows(
+            [_family_row(f, f"{f} core") for f in _FAMILIES])}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
-    records = _rows(20)
+
     out = g._consolidate_concepts_via_api(records, subject="Math")
-    assert calls["n"] == 2  # first pass + over-merge retry
-    # The full de-duplicated skeleton is kept instead of the collapsed map.
-    assert len(out) == 20
+
+    assert len(seen) == 2
+    correction = seen[1][len(seen[0]):]
+    # The missing family is named in the correction ...
+    assert "Integers" in correction
+    assert "LOST THESE SOURCE-BACKED PARENT FAMILIES" in correction
+    # ... and no number is asked for. Not "roughly N-M rows", not any digit.
+    assert "Return roughly" not in correction
+    assert not any(character.isdigit() for character in correction), correction
+    assert "There is no target number of rows" in correction
+    # The correction was accepted on identity: every family is back.
+    assert g._missing_skeleton_families(records, out) == []
+    assert len(out) == 3
 
 
-def test_canonicalize_retry_recovers_row_count(monkeypatch):
+def test_canonicalize_records_a_flagged_decision_when_a_family_stays_lost(
+    monkeypatch,
+):
+    """Q13: one recorded, flagged decision, nothing lost, the run completes.
+
+    The old behaviour threw the whole canonicalization away and reverted to
+    the raw skeleton because the row count came in under ``topics x 2``. Now
+    only the lost family's own rows come back, flagged by name, and everything
+    the model actually decided stands.
+    """
+    records = _family_skeleton()
+    kept = [_family_row(f, f"{f} core") for f in _FAMILIES if f != "Integers"]
     calls = {"n": 0}
 
     def fake_openai(system, user, **kw):
         calls["n"] += 1
-        if calls["n"] == 1:
-            return {"rows": _to_api_rows(_rows(1))}
-        assert "over-merging" in user
-        return {"rows": _to_api_rows(_rows(6))}
+        return {"rows": _to_api_rows(kept)}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
-    out = g._consolidate_concepts_via_api(_rows(20), subject="Math")
-    assert calls["n"] == 2
-    assert len(out) == 6
+
+    out = g._consolidate_concepts_via_api(records, subject="Math")
+
+    assert calls["n"] == 2  # first pass + one bounded, family-named re-ask
+    titles = [row["concept_title"] for row in out]
+    # The model's canonicalization of the surviving families stands: two rows,
+    # not the four skeleton rows they were merged from.
+    assert "Rational Numbers core" in titles
+    assert "Decimal Representation core" in titles
+    assert "Rational Numbers idea one" not in titles
+    # The lost family is carried back from the skeleton, not invented ...
+    restored = [row for row in out if row["parent_concept"] == "Integers"]
+    assert [row["concept_title"] for row in restored] == [
+        "Integers idea one", "Integers idea two",
+    ]
+    # ... and every restored row is flagged for review, naming the family.
+    for row in restored:
+        flags = row.get("review_flags") or []
+        assert any("Integers" in flag for flag in flags), flags
+    # Never a revert to the raw skeleton.
+    assert len(out) == len(kept) + len(restored)
+    assert len(out) != len(records)
+    assert g._missing_skeleton_families(records, out) == []
+
+
+def test_a_q13_flag_survives_the_repair_pass_that_runs_after_it(monkeypatch):
+    """The Fixer is never silent — repair rewrites the row, not the decision.
+
+    ``_restore_lost_skeleton_families`` is the only ``_fixer_flag_row`` caller
+    upstream of ``_repair_records_via_api``, and the rows it carries back are
+    raw draft-skeleton rows that never passed the canonicalize-stage
+    validator, so tripping a repair is the expected case rather than the edge
+    one. The repair pass replaces a failing row wholesale with the repair
+    response; it must carry ``review_flags`` across or the reviewer is told
+    nothing (docs/aegis-restructure.md §8.2).
+    """
+    records = [
+        _family_row("Rational Numbers", "RN idea"),
+        # No "Description:" prefix: the canonicalize-stage validator will
+        # fail this row once it is carried back, and repair will rewrite it.
+        {
+            "topic": "Number Systems",
+            "parent_concept": "Integers",
+            "concept_title": "Walking the number line",
+            "concept_details": "no house prefix here",
+            "keywords": "",
+        },
+    ]
+    kept = [_family_row("Rational Numbers", "Rational Numbers core")]
+
+    def fake_openai(system, user, **kw):
+        if "Validation errors" in user:
+            return {"rows": _to_api_rows([{
+                "topic": "Number Systems",
+                "parent_concept": "Integers",
+                "concept_title": "Walking the number line",
+                "concept_details": "Description: adding on the number line.",
+                "keywords": "",
+            }])}
+        return {"rows": _to_api_rows(kept)}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+
+    out = g._consolidate_concepts_via_api(records, subject="Math")
+
+    restored = [r for r in out if r["concept_title"] == "Walking the number line"]
+    assert len(restored) == 1
+    # The repair did run — the row was rewritten ...
+    assert restored[0]["concept_details"].startswith("Description:")
+    # ... and the recorded decision survived it.
+    assert any(
+        "Integers" in flag for flag in (restored[0].get("review_flags") or [])
+    ), restored[0].get("review_flags")
+
+
+def test_a_q13_flag_survives_the_title_dedupe_that_runs_after_it(monkeypatch):
+    """A carried-back row that restates a kept concept still tells the reviewer.
+
+    A family disappears from the identity ledger most naturally when the model
+    re-parents its rows under another family, keeping the concept titles. The
+    carried-back rows then collide with rows the model kept, and chapter-wide
+    title de-duplication drops them — the validator refuses two rows with one
+    title, so keeping both was never an option. What may not happen is the
+    decision vanishing with the row: the flag moves to the row that keeps the
+    title, and ``_account_shipped_families`` verifies that against the map
+    that actually ships.
+    """
+    records = [
+        _family_row("Rational Numbers", "Number line"),
+        _family_row("Integers", "Number line"),
+        _family_row("Integers", "Negative numbers"),
+    ]
+    # Every title survives; the "Integers" branch does not.
+    reparented = [
+        _family_row("Rational Numbers", "Number line"),
+        _family_row("Rational Numbers", "Negative numbers"),
+    ]
+
+    monkeypatch.setattr(
+        g, "_openai_json", lambda s, u, **kw: {"rows": _to_api_rows(reparented)})
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kw: records)
+
+    out = g._consolidate_concepts_via_api(records, subject="Math")
+
+    # No duplicate title ships, so the map still validates ...
+    titles = [row["concept_title"] for row in out]
+    assert len(titles) == len(set(titles))
+    # ... and the lost family is named to the reviewer on a shipped row.
+    assert any(
+        "Integers" in flag
+        for row in out
+        for flag in (row.get("review_flags") or [])
+    ), out
+
+
+def test_every_lost_family_ships_placed_or_flagged(monkeypatch):
+    """R4 over the returned map, not over an intermediate.
+
+    ``_missing_skeleton_families`` on the shipped rows may still name a family
+    — that is honest, the model genuinely re-parented its concepts — but no
+    family may be both absent and unmentioned.
+    """
+    records = [
+        _family_row("Rational Numbers", "Number line"),
+        _family_row("Integers", "Number line"),
+        _family_row("Decimal Representation", "Place value"),
+    ]
+    reparented = [
+        _family_row("Rational Numbers", "Number line"),
+        _family_row("Rational Numbers", "Place value"),
+    ]
+
+    monkeypatch.setattr(
+        g, "_openai_json", lambda s, u, **kw: {"rows": _to_api_rows(reparented)})
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kw: records)
+
+    out = g._consolidate_concepts_via_api(records, subject="Math")
+
+    flags = [
+        flag for row in out for flag in (row.get("review_flags") or [])
+    ]
+    for family in ("Integers", "Decimal Representation"):
+        placed = g._topic_comparison_key(family) in g._concept_identity_keys(out)
+        flagged = any(family in flag for flag in flags)
+        assert placed or flagged, f"{family} shipped neither placed nor flagged"
+
+
+def test_account_shipped_families_flags_a_family_nothing_else_recorded():
+    """The ledger records rather than halts, and invents nothing (Q13)."""
+    records = [
+        _family_row("Integers", "Negative numbers"),
+        _family_row("Rational Numbers", "Number line"),
+    ]
+    shipped = [_family_row("Rational Numbers", "Number line")]
+
+    out = g._account_shipped_families(records, shipped, ["Integers"])
+
+    # No row invented, no row dropped ...
+    assert len(out) == 1
+    assert out[0]["concept_title"] == "Number line"
+    # ... one recorded decision the reviewer will see, naming the family.
+    assert any("Integers" in flag for flag in out[0]["review_flags"])
+
+    # A family that IS present is left alone.
+    present = [_family_row("Integers", "Negative numbers")]
+    assert g._account_shipped_families(
+        records, present, ["Integers"]) == present
+    assert not present[0].get("review_flags")
+
+
+def test_the_must_preserve_block_asks_for_exactly_what_is_checked(monkeypatch):
+    """The ledger may only hold the model to what the prompt asked of it.
+
+    ``_missing_skeleton_families`` scores survival by the family's own name
+    appearing as a ``parent_concept`` or a ``concept_title``. If the prompt
+    only said "keep a coherent concept for each", a model that complied
+    exactly — one well-named concept per branch, renamed in teaching words —
+    would be scored as having lost every family, re-asked, and then have its
+    thin chapter re-inflated with the raw fragments it had just merged. So the
+    instruction names the check.
+    """
+    records = _family_skeleton()
+    seen: list[str] = []
+
+    def fake_openai(system, user, **kw):
+        seen.append(user)
+        return {"rows": _to_api_rows(
+            [_family_row(f, f"{f} core") for f in _FAMILIES])}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(
+        g, "_repair_records_via_api", lambda records, **kw: records)
+
+    g._consolidate_concepts_via_api(records, subject="Math")
+
+    assert len(seen) == 1
+    block = seen[0]
+    assert "MUST-PRESERVE SOURCE-BACKED PARENT FAMILIES" in block
+    assert "NAMEABLE" in block
+    assert "parent_concept of a row" in block
+    # The payload is evidence, not a target: the model is told what the rows
+    # are, never how many of them there are or should be.
+    assert "Draft skeleton map:" in block
+
+
+def test_a_family_teaching_under_two_topics_is_named_once():
+    """One branch is one identity to preserve, so it is listed once.
+
+    Keying the label list on (topic, parent) printed the same family twice in
+    the MUST-PRESERVE block while the accounting deduplicated it, so the model
+    was handed a list that said less than it appeared to.
+    """
+    records = [
+        {
+            "topic": topic,
+            "parent_concept": "Forces",
+            "concept_title": f"{topic} forces",
+            "concept_details": "Description: forces.",
+            "keywords": "",
+        }
+        for topic in ("Motion", "Gravitation")
+    ]
+
+    assert g._skeleton_family_labels(records) == ["Forces"]
+
+
+def test_canonicalize_accepts_an_over_merge_that_loses_no_family(monkeypatch):
+    """An aggressive merge that keeps every identity ships as decided."""
+    records = _family_skeleton()
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        return {"rows": _to_api_rows(
+            [_family_row(family, family) for family in _FAMILIES])}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+
+    out = g._consolidate_concepts_via_api(records, subject="Math")
+
+    assert calls["n"] == 1  # six rows to three, and nothing objects
+    assert len(out) == 3
+
+
+def test_a_thin_low_grade_chapter_is_never_padded_to_a_row_count(monkeypatch):
+    """The exact case CLAUDE.md names as a past mis-read.
+
+    ``topic_count * MIN_PER_TOPIC`` pressured thin lower-grade chapters into
+    inventing concepts to satisfy arithmetic. Five thin grade-3 headings put
+    the old floor at five rows (``max(4, 5 x 2, 0)`` clamped to the skeleton
+    size), so a two-row canonicalization was retried and then discarded back
+    to five. Now it ships.
+    """
+    headings = [
+        "Counting to Hundred", "Tens and Ones", "Adding Up",
+        "Taking Away", "Shapes Around Us",
+    ]
+    records = [
+        {
+            "topic": heading,
+            "parent_concept": heading,
+            "concept_title": f"{heading} — the idea",
+            "concept_details": f"Description: {heading}, in one short page.",
+            "keywords": "",
+        }
+        for heading in headings
+    ]
+    # The model reads the chapter as teaching two durable ideas.
+    canonical = [
+        {
+            "topic": "Counting to Hundred",
+            "parent_concept": "Counting to Hundred",
+            "concept_title": "Reading and writing numbers to hundred",
+            "concept_details": "Description: place value to hundred.",
+            "keywords": "",
+        },
+        {
+            "topic": "Adding Up",
+            "parent_concept": "Adding Up",
+            "concept_title": "Adding and taking away within hundred",
+            "concept_details": "Description: addition and subtraction.",
+            "keywords": "",
+        },
+    ]
+    calls = {"n": 0}
+
+    def fake_openai(system, user, **kw):
+        calls["n"] += 1
+        return {"rows": _to_api_rows(canonical)}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai)
+    monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
+
+    out = g._consolidate_concepts_via_api(records, subject="Mathematics")
+
+    assert calls["n"] == 1, "a floor retried a thin chapter for more rows"
+    assert len(out) == 2, "a thin chapter was padded back up"
+    assert [row["concept_title"] for row in out] == [
+        row["concept_title"] for row in canonical
+    ]
+
+
+def test_canonicalization_keeps_no_row_count_bound_anywhere():
+    """No numeric bound on row counts in the bounds, the prompt, or the gate."""
+    assert not hasattr(g, "_canonicalize_target_bounds")
+    for name in (
+        "_CANONICALIZE_MIN_CHAPTER_ROWS",
+        "_CANONICALIZE_MIN_PER_TOPIC",
+        "_CANONICALIZE_MAX_PER_TOPIC",
+        "_CANONICALIZE_MAX_CHAPTER_ROWS",
+    ):
+        assert not hasattr(g, name), f"{name} survived the purge"
+
+    # Comments narrate what was purged; the executable body must not.
+    source = "\n".join(
+        line for line in
+        inspect.getsource(g._consolidate_concepts_via_api).splitlines()
+        if not line.lstrip().startswith("#")
+    )
+    for token in ("min_keep", "max_keep", "Return roughly", "over-merging"):
+        assert token not in source, f"{token} survived in canonicalization"
+
+    # The accounting itself never measures size: no len(), no comparison.
+    for function in (g._missing_skeleton_families, g._concept_identity_keys):
+        body = inspect.getsource(function)
+        assert "len(" not in body, function.__name__
 
 
 def test_canonicalize_accepts_reasonable_compaction(monkeypatch):
@@ -146,28 +566,39 @@ def test_canonicalize_accepts_reasonable_compaction(monkeypatch):
     assert len(out) == 10
 
 
-def test_canonicalize_bounds_preserve_source_backed_parent_families():
+def test_canonicalize_names_every_source_backed_family_to_the_model():
     records = _rows_with_families(18, family_count=9)
 
-    min_keep, max_keep = g._canonicalize_target_bounds(records)
+    labels = g._skeleton_family_labels(records)
 
-    assert min_keep == 9
-    assert max_keep >= min_keep
+    assert labels == [f"Source Family {i:02d}" for i in range(1, 10)]
+    # Every one of them is accounted for afterwards, by identity.
+    assert g._missing_skeleton_families(records, []) == labels
 
 
-def test_canonicalize_rejects_compaction_below_parent_family_floor(
+def test_canonicalize_carries_back_only_the_families_that_stayed_lost(
     monkeypatch,
 ):
+    """Eight of nine families survive; the ninth is restored and flagged."""
     calls = {"n": 0}
     records = _rows_with_families(18, family_count=9)
+    survivors = [
+        {
+            "topic": "T",
+            "parent_concept": f"Source Family {i:02d}",
+            "concept_title": f"Family {i:02d} canonical",
+            "concept_details": "Description: canonical.",
+            "keywords": "",
+        }
+        for i in range(1, 9)
+    ]
 
     def fake_openai(system, user, **kw):
         calls["n"] += 1
         assert "MUST-PRESERVE SOURCE-BACKED PARENT FAMILIES" in user
-        if calls["n"] == 1:
-            return {"rows": _to_api_rows(_rows(6))}
-        assert "over-merging" in user
-        return {"rows": _to_api_rows(_rows(8))}
+        if calls["n"] == 2:
+            assert "Source Family 09" in user
+        return {"rows": _to_api_rows(survivors)}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     monkeypatch.setattr(
@@ -176,7 +607,16 @@ def test_canonicalize_rejects_compaction_below_parent_family_floor(
     out = g._consolidate_concepts_via_api(records, subject="Science")
 
     assert calls["n"] == 2
-    assert len(out) == 18
+    # Eight canonical rows stand; only family 09's own skeleton rows return.
+    assert len(out) == len(survivors) + 2
+    restored = [r for r in out if r["parent_concept"] == "Source Family 09"]
+    assert [r["concept_title"] for r in restored] == ["Concept 09", "Concept 18"]
+    for row in restored:
+        assert any(
+            "Source Family 09" in flag
+            for flag in (row.get("review_flags") or [])
+        )
+    assert g._missing_skeleton_families(records, out) == []
 
 
 def test_canonicalize_accepts_a_granular_map_without_compacting(monkeypatch):

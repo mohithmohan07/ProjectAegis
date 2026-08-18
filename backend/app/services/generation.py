@@ -1460,8 +1460,8 @@ Rules:
 - Preserve textbook/topic order.
 - Rewrite repetitive names.
 - Parent concepts should group related concepts where possible, but a topic may
-  legitimately have only 2-3 concepts when the source is thin — never invent
-  filler to pad a parent.
+  legitimately have very few concepts — even a single one — when the source is
+  thin; never invent filler to pad a parent.
 - Do not create culmination rows.
 - Do not generate Types.
 - Do not rewrite good concepts unnecessarily.
@@ -12765,6 +12765,34 @@ def _carry_type_origin_metadata(
     return candidate
 
 
+def _carry_review_flags(before: dict, after: dict) -> dict:
+    """Carry recorded review flags onto the row that replaces or survives.
+
+    A review flag is a *recorded decision about content*, not a property of
+    the dict that happens to hold it. The Fixer contract is "never silent":
+    every Fixer decision is recorded on the affected rows so the reviewer sees
+    every intervention before publication (docs/aegis-restructure.md §8.2,
+    Q13). Mechanics that swap one row object for another — the validation
+    repair pass, which replaces a failing row wholesale with the repair
+    response, and chapter-wide title de-duplication, which drops a duplicate —
+    must therefore carry the flags across, or a decision that was recorded
+    ceases to exist between the log line and the workbook.
+
+    Repair rewrites the row's text; it does not un-make the decision that was
+    taken about the content, so the flag still belongs to the reviewer.
+    """
+
+    incoming = [flag for flag in (before.get("review_flags") or []) if flag]
+    if not incoming:
+        return after
+    flags = list(after.get("review_flags") or [])
+    for flag in incoming:
+        if flag not in flags:
+            flags.append(flag)
+    after["review_flags"] = flags
+    return after
+
+
 def _carry_source_grounding_attestation(
     before: dict, after: dict,
 ) -> dict:
@@ -12807,7 +12835,22 @@ def _carry_source_grounding_attestation(
 
 def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict]:
     if len(repaired) == len(records):
-        return _carry_type_origin_metadata(records, repaired)
+        merged = _carry_type_origin_metadata(records, repaired)
+        # Same identity match the metadata carry just used — a repair response
+        # may reorder rows, so position alone would move a recorded decision
+        # onto the wrong concept.
+        by_key = {_record_key(row): row for row in records}
+        by_title = {
+            bi.normalize_question_text(row.get("concept_title", "")): row
+            for row in records
+        }
+        for index, row in enumerate(merged):
+            original = by_key.get(_record_key(row)) or by_title.get(
+                bi.normalize_question_text(row.get("concept_title", "")))
+            if original is None:
+                original = records[index]
+            _carry_review_flags(original, row)
+        return merged
     by_key = {_record_key(r): r for r in repaired}
     by_title = {bi.normalize_question_text(r.get("concept_title", "")): r for r in repaired}
     out: list[dict] = []
@@ -12820,6 +12863,7 @@ def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict
         replacement = dict(replacement)
         cr.carry_type_origin_metadata(rec, replacement)
         _carry_source_grounding_attestation(rec, replacement)
+        _carry_review_flags(rec, replacement)
         out.append(replacement)
     return out
 
@@ -13015,6 +13059,7 @@ def _repair_records_via_api(
                         next_records[idx], repaired_row)
                     _carry_source_grounding_attestation(
                         next_records[idx], repaired_row)
+                    _carry_review_flags(next_records[idx], repaired_row)
                     next_records[idx] = repaired_row
             records = next_records
         else:
@@ -15809,12 +15854,6 @@ def _records_to_api_rows(records: list[dict]) -> list[dict]:
     ]
 
 
-_CANONICALIZE_MIN_CHAPTER_ROWS = 4
-_CANONICALIZE_MIN_PER_TOPIC = 2
-_CANONICALIZE_MAX_PER_TOPIC = 6
-_CANONICALIZE_MAX_CHAPTER_ROWS = 50
-
-
 _GENERIC_SKELETON_FAMILY_RE = re.compile(
     r"^(?:general|chapter|concepts?|content|misc(?:ellaneous)?|"
     r"introduction|overview|summary|recap|culmination)$",
@@ -15827,12 +15866,31 @@ def _skeleton_family_labels(records: list[dict]) -> list[str]:
 
     A headingless chapter still has pedagogical branches.  Skeleton extraction
     expresses those branches through ``parent_concept`` even when every row has
-    the selected chapter title as its topic.  Treating topic count alone as the
-    compaction floor can therefore collapse several independently teachable
-    domains into one broad row.
+    the selected chapter title as its topic.  These labels are the identities
+    named to the model as MUST-PRESERVE, and the identities accounted for again
+    afterwards by :func:`_missing_skeleton_families` — evidence the model reads
+    and a ledger it is held to, never a number it has to reach.
+
+    One label per family, deduplicated on the family itself: a branch that
+    teaches under two topics is one identity to preserve, so listing it twice
+    printed the same line twice in the MUST-PRESERVE block and told the
+    accounting nothing it did not already know. The accounting that follows is
+    family-scoped for the same reason, so a family that survives under one of
+    its topics counts as present; whether it also had to survive under the
+    other is a placement question, and placement is settled downstream against
+    the source, not here.
+
+    A skeleton whose ``parent_concept`` is everywhere identical to its
+    ``topic`` names no branch distinct from the topic and yields no labels.
+    That is deliberate: what a topic's rows should merge into is exactly the
+    judgment this pass asks the model to make, and topic identity itself is
+    accounted one stage later by
+    :func:`_recover_missing_topics_after_human_direction` against the source
+    excerpts. See :func:`_consolidate_concepts_via_api` for what that does and
+    does not cover.
     """
     labels: list[str] = []
-    seen: set[tuple[str, str]] = set()
+    seen: set[str] = set()
     for record in records:
         topic = str(record.get("topic") or "").strip()
         parent = str(record.get("parent_concept") or "").strip()
@@ -15844,64 +15902,219 @@ def _skeleton_family_labels(records: list[dict]) -> list[str]:
             or _GENERIC_SKELETON_FAMILY_RE.fullmatch(parent_key)
         ):
             continue
-        key = (topic_key, parent_key)
-        if key in seen:
+        if parent_key in seen:
             continue
-        seen.add(key)
+        seen.add(parent_key)
         labels.append(parent)
     return labels
 
 
-def _canonicalize_target_bounds(records: list[dict]) -> tuple[int, int]:
-    """Return the enforced floor and the advisory guide for a chapter map.
+def _concept_identity_keys(records: list[dict]) -> set[str]:
+    """Every parent-family and concept identity a map carries, as keys.
 
-    Distinct parent families are structural evidence, especially for a
-    headingless source whose selected chapter title is the only legal topic.
-    Canonicalization may merge aliases and narrow fragments inside a family,
-    but it must retain room for at least one coherent concept per family.
-
-    ``min_keep`` is **enforced**: falling below it means the map collapsed and
-    content was lost, which nothing downstream can undo.
-
-    ``max_keep`` is **advisory only** -- it is logged, never acted on. It used
-    to trigger a compaction retry, which merged concepts to satisfy
-    ``topics x _CANONICALIZE_MAX_PER_TOPIC`` rather than because the source
-    said they were the same idea.
+    A family survives canonicalization either as a parent family still named
+    on some row, or as the concept its members were merged up into. Both are
+    the same identity, so both count as present.
     """
-    if not records:
-        return 0, 0
-    topics = {
-        bi.normalize_question_text(r.get("topic", ""))
-        for r in records
-        if (r.get("topic") or "").strip()
-    }
-    topic_count = max(1, len(topics))
-    family_count = len(_skeleton_family_labels(records))
-    structural_floor = min(
-        len(records),
-        _CANONICALIZE_MAX_CHAPTER_ROWS,
-        family_count,
+    keys: set[str] = set()
+    for record in records:
+        for field in ("parent_concept", "concept_title"):
+            key = _topic_comparison_key(str(record.get(field) or "").strip())
+            if key:
+                keys.add(key)
+    return keys
+
+
+def _missing_skeleton_families(
+    before: list[dict], after: list[dict],
+) -> list[str]:
+    """Source-backed parent families the canonicalized map no longer carries.
+
+    Identity accounting, never counting. This asks one question per family
+    named to the model as MUST-PRESERVE: *is family X still here, under any
+    name?* "Fewer families than before" is a count and is never computed;
+    "family X is gone" is the R4 exact-once accounting the QID ledger already
+    does elsewhere in this file.
+
+    Nothing here is derived from volume. There is no floor on rows, no target
+    per topic, and no arithmetic over topic or chunk counts, so a thin
+    lower-grade chapter whose source genuinely teaches few concepts
+    canonicalizes to few rows and ships exactly as the model decided it — the
+    ``topic_count * MIN_PER_TOPIC`` floor that used to sit here is what
+    pressured those chapters into inventing concepts to satisfy arithmetic
+    (CLAUDE.md Rule 1; docs/aegis-restructure.md §3 R1).
+    """
+    present = _concept_identity_keys(after)
+    missing: list[str] = []
+    seen: set[str] = set()
+    for label in _skeleton_family_labels(before):
+        key = _topic_comparison_key(label)
+        if not key or key in present or key in seen:
+            continue
+        seen.add(key)
+        missing.append(label)
+    return missing
+
+
+def _restore_lost_skeleton_families(
+    records: list[dict], out: list[dict], families: list[str],
+) -> list[dict]:
+    """The Q13 route when a named family survives neither canonical pass.
+
+    Never silent, never destructive, never a halt (docs/aegis-restructure.md
+    §8.2, Q13 amending Q7): the draft skeleton's own rows for each lost family
+    are carried back into the canonicalized map, each flagged for the reviewer
+    by the family it restores, and the run completes.
+
+    Deliberately NOT a kernel Fixer verdict, and it does not claim to be one.
+    ``kernel.decide`` exists for a *judgment* the run cannot proceed without —
+    bounded attempts, a content-addressed decide-once store, an advisory
+    critic (``phase3/fixer.py``, and ``_fix_validation_failures_via_fixer``
+    in this file). Nothing here is a judgment: no row is dropped, merged,
+    rewritten or invented, so there is no verdict to cache and none to
+    second-guess. The conservative move — keep the source-backed rows, flag
+    them, let the reviewer read the merge — loses nothing, which is exactly
+    why it needs no model. Asking the model which of a lost family's fragments
+    best represents it *would* be a judgment and would have to go through the
+    kernel; that is a larger change than this purge and is not taken here.
+
+    Everything the model *did* decide stands. The behaviour this replaces threw
+    the whole canonicalization away and reverted to the raw skeleton because a
+    row count came in under ``topic_count * 2`` — a repair keyed to volume,
+    not to anything that was actually lost.
+
+    This runs before the canonicalize-stage repair and the chapter-wide title
+    de-duplication, both of which are entitled to rewrite or drop a row — a
+    carried-back row that restates a concept the model already kept is a
+    genuine duplicate title and the validator refuses both copies. Neither may
+    destroy the *decision*: repair carries ``review_flags`` onto the rewritten
+    row and de-duplication moves them onto the row that keeps the title, and
+    :func:`_account_shipped_families` then verifies the guarantee against what
+    actually ships rather than against this intermediate.
+    """
+    wanted = {_topic_comparison_key(label) for label in families}
+    restored_by_topic: dict[str, list[dict]] = {}
+    restore_order: list[str] = []
+    for record in records:
+        family_key = _topic_comparison_key(
+            str(record.get("parent_concept") or ""))
+        if family_key not in wanted:
+            continue
+        row = dict(record)
+        _fixer_flag_row(
+            row,
+            "fixer: canonicalization dropped source-backed parent family "
+            f"'{str(record.get('parent_concept') or '').strip()}'. Its "
+            "draft-skeleton teaching is carried in this row rather than "
+            "lost. Review the merge.",
+        )
+        topic_key = _topic_comparison_key(str(record.get("topic") or ""))
+        if topic_key not in restored_by_topic:
+            restored_by_topic[topic_key] = []
+            restore_order.append(topic_key)
+        restored_by_topic[topic_key].append(row)
+    if not restored_by_topic:
+        return out
+    last_index_by_topic: dict[str, int] = {}
+    for index, row in enumerate(out):
+        last_index_by_topic[
+            _topic_comparison_key(str(row.get("topic") or ""))] = index
+    merged: list[dict] = []
+    placed: set[str] = set()
+    for index, row in enumerate(out):
+        merged.append(row)
+        topic_key = _topic_comparison_key(str(row.get("topic") or ""))
+        if (
+            topic_key in restored_by_topic
+            and topic_key not in placed
+            and last_index_by_topic.get(topic_key) == index
+        ):
+            merged.extend(restored_by_topic[topic_key])
+            placed.add(topic_key)
+    for topic_key in restore_order:
+        if topic_key not in placed:
+            merged.extend(restored_by_topic[topic_key])
+    progress.log(
+        "Recorded and flagged (Q13 route, nothing guessed): canonicalization "
+        "dropped source-backed parent families the source names — "
+        + ", ".join(f"'{label}'" for label in families)
+        + ". Their draft-skeleton rows are carried back into the chapter map "
+        "and flagged for review; the rest of the canonicalization stands and "
+        "the run continues.",
+        level="warning",
     )
-    min_keep = max(
-        _CANONICALIZE_MIN_CHAPTER_ROWS,
-        topic_count * _CANONICALIZE_MIN_PER_TOPIC,
-        structural_floor,
-    )
-    max_keep = max(
-        12,
-        min(
-            _CANONICALIZE_MAX_CHAPTER_ROWS,
-            max(
-                topic_count * _CANONICALIZE_MAX_PER_TOPIC,
-                structural_floor,
-            ),
-        ),
-    )
-    max_keep = min(len(records), max_keep)
-    min_keep = min(len(records), min_keep)
-    if min_keep > max_keep:
-        min_keep = max(1, max_keep)
-    return min_keep, max_keep
+    return merged
+
+
+def _account_shipped_families(
+    records: list[dict], out: list[dict], families: list[str],
+) -> list[dict]:
+    """Placed-or-Flagged (R4) over the map that actually ships.
+
+    :func:`_restore_lost_skeleton_families` decides; this verifies. The
+    decision is taken several passes before the function returns, and the
+    passes in between — validation repair, method-row restoration, chapter-wide
+    title de-duplication — may legitimately rewrite or drop the row it was
+    written on. So the guarantee is checked here, against the returned rows:
+    every family that went to the Q13 route is either **present** as an
+    identity in the shipped map, or **flagged by name** on a shipped row the
+    reviewer will see.
+
+    A family that is neither is a defect this can detect but must not guess
+    about, and mid-run a detected defect routes to a recorded decision rather
+    than a halt (CLAUDE.md; Q13). So it is recorded — on the shipped rows
+    teaching under that family's own source topic, or on the first row if the
+    topic did not survive either — and the run completes. Nothing is
+    fabricated here: no row is invented, no row is dropped, no count is
+    consulted in either direction.
+    """
+
+    if not families or not out:
+        return out
+    present = _concept_identity_keys(out)
+    topic_keys_by_family: dict[str, set[str]] = {}
+    for record in records:
+        family_key = _topic_comparison_key(
+            str(record.get("parent_concept") or ""))
+        if family_key:
+            topic_keys_by_family.setdefault(family_key, set()).add(
+                _topic_comparison_key(str(record.get("topic") or "")))
+    unaccounted: list[str] = []
+    for label in families:
+        family_key = _topic_comparison_key(label)
+        if family_key in present:
+            continue
+        if any(
+            f"'{label}'" in flag
+            for row in out
+            for flag in (row.get("review_flags") or [])
+        ):
+            continue
+        unaccounted.append(label)
+        home_topics = topic_keys_by_family.get(family_key, set())
+        targets = [
+            row for row in out
+            if _topic_comparison_key(str(row.get("topic") or "")) in home_topics
+        ] or [out[0]]
+        for row in targets[:1]:
+            _fixer_flag_row(
+                row,
+                "fixer: canonicalization dropped source-backed parent family "
+                f"'{label}' and the carried-back row for it did not survive "
+                "the repair and de-duplication passes — its teaching is "
+                "restated by the rows kept under this topic. Review the "
+                "merge against the source.",
+            )
+    if unaccounted:
+        progress.log(
+            "Recorded and flagged (Q13 route, nothing guessed): source-backed "
+            "parent families the canonicalized map no longer names — "
+            + ", ".join(f"'{label}'" for label in unaccounted)
+            + " — are flagged on the shipped rows for their topic; the run "
+            "continues.",
+            level="warning",
+        )
+    return out
 
 
 def _consolidate_concepts_via_api(
@@ -15912,7 +16125,34 @@ def _consolidate_concepts_via_api(
 
     The input comes from section chunks and can contain many term/example/case
     fragments. Canonicalization is expected to merge those into durable
-    teaching concepts while staying above a minimum count per main topic.
+    teaching concepts. How many rows that leaves is the model's judgment of
+    what the chapter teaches: there is NO count quota of any kind here — no
+    floor, no per-topic target, no ceiling — so a thin chapter may canonicalize
+    to very few rows and is never padded (Rule 1: no volume-derived
+    structure).
+
+    What *is* enforced is identity, not volume, and the guarantee is
+    Placed-or-Flagged (R4): every source-backed parent family named to the
+    model as MUST-PRESERVE is, in the returned map, either still present as an
+    identity or flagged by name on a row the reviewer sees. A lost family gets
+    one bounded re-ask that NAMES it; if it is still lost, one recorded flagged
+    Q13 decision carries its skeleton rows back — never a revert of the model's
+    whole canonicalization, and never a halt. Because the passes after that
+    decision may rewrite or drop the row it was written on,
+    :func:`_account_shipped_families` re-checks the guarantee against what
+    actually ships.
+
+    What this pass does NOT defend, stated plainly so the trade is made
+    knowingly: a skeleton whose ``parent_concept`` is everywhere identical to
+    its ``topic`` — the shape ``_ensure_parent_concepts`` produces whenever
+    extraction named no branch — carries no family identity, so such a chapter
+    has nothing here to lose and its rows may be merged as far as the model
+    judges right. That is deliberate. Deciding a merge went too far by counting
+    what came back is the ``topic_count * MIN_PER_TOPIC`` floor this replaced,
+    and it is the anti-pattern CLAUDE.md names. Topic identity is accounted one
+    stage later by :func:`_recover_missing_topics_after_human_direction`, which
+    recovers a source topic left with no concept at all — it does not, and
+    cannot, recover a distinction collapsed inside a topic that still has one.
     """
     import json as _json
 
@@ -15921,79 +16161,103 @@ def _consolidate_concepts_via_api(
     meta = meta or _metadata(subject=subject)
     system = prompts.get_text("concepts.canonicalize.system")
     payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
-    min_keep, max_keep = _canonicalize_target_bounds(records)
     family_labels = _skeleton_family_labels(records)
     family_block = ""
     if family_labels:
         family_block = (
-            "\nMUST-PRESERVE SOURCE-BACKED PARENT FAMILIES "
-            "(keep at least one coherent concept for each; merge only aliases "
-            "or near-duplicates within a family):\n- "
+            "\nMUST-PRESERVE SOURCE-BACKED PARENT FAMILIES — the branches the "
+            "draft skeleton reads out of the source. Keep at least one "
+            "coherent concept for each, merging only aliases or "
+            "near-duplicates within a family, and keep each family NAMEABLE "
+            "in your answer: it must still be the parent_concept of a row, or "
+            "be the title of the concept its rows were merged into. Rewriting "
+            "a family out of existence loses a branch the source teaches, and "
+            "is the one thing checked afterwards:\n- "
             + "\n- ".join(family_labels)
             + "\n"
         )
     user = (
         _metadata_block(meta)
         + family_block
-        + f"\nDraft skeleton map ({len(records)} rows):\n"
+        + "\nDraft skeleton map:\n"
         + payload
     )
     progress.log(f"Canonicalizing {len(records)} skeleton concepts via API pass.")
     data = _openai_json(system, user, purpose="concept_mapping")
     out = _concept_rows_to_records(data)
-    if out and len(out) < min_keep:
+    missing_families = _missing_skeleton_families(records, out) if out else []
+    if missing_families:
         progress.log(
-            f"Canonicalization returned {len(out)} rows for {len(records)} "
-            f"input rows (target {min_keep}-{max_keep}) — over-merging "
-            "detected, retrying.",
+            "Canonicalization no longer carries source-backed parent families "
+            "the draft skeleton named — "
+            + ", ".join(f"'{label}'" for label in missing_families)
+            + ". Re-asking with the missing families named.",
             level="warning",
         )
         retry_user = (
             user
-            + f"\n\nYOUR PREVIOUS ANSWER KEPT ONLY {len(out)} OF {len(records)} ROWS — "
-            "that is over-merging. Keep the main teaching objectives for every "
-            "topic and every MUST-PRESERVE SOURCE-BACKED PARENT FAMILY, but "
-            "still merge duplicates, examples, cases, and narrow fragments. "
-            "Never combine disjoint subject domains merely to reach a numeric "
-            f"limit. Return roughly {min_keep}-{max_keep} rows."
+            + "\n\nYOUR PREVIOUS ANSWER LOST THESE SOURCE-BACKED PARENT "
+            "FAMILIES. Each was in the draft skeleton above and none of them "
+            "survives anywhere in your map — not as a parent family, not as a "
+            "concept they were merged into:\n- "
+            + "\n- ".join(missing_families)
+            + "\nRestore every family listed here: keep at least one coherent "
+            "concept for each, merging only aliases, near-duplicates, cases, "
+            "examples, and narrow fragments within a family, and never "
+            "combining disjoint subject domains into one row. Name each one "
+            "so it can be found: every family listed here must be the "
+            "parent_concept of a row, or the title of the concept its rows "
+            "were merged into. Everything else "
+            "in your answer stands. There is no target number of rows and "
+            "none is being asked for — how many concepts this chapter needs "
+            "is your judgment of what the source teaches."
         )
         retry_data = _openai_json(
             system, retry_user, purpose="concept_validation")
         retry_out = _concept_rows_to_records(retry_data)
-        if len(retry_out) > len(out):
-            out = retry_out
-    # There is deliberately no matching retry for "too many rows". The system
-    # prompt already asks for a compact teacher-facing map and carries no
-    # numeric target; a second pass demanding a row count merges on arithmetic
-    # rather than on meaning. It cost real content: a 44-row skeleton whose
-    # canonicalization kept 43 rows -- the model judging almost all of them
-    # distinct -- was compacted to 30 purely to satisfy topics x 6.
+        if retry_out:
+            retry_missing = _missing_skeleton_families(records, retry_out)
+            # Identity, not arithmetic: adopt the correction when it loses no
+            # family the first answer had kept. A subset relation over family
+            # identities — never "the retry returned more rows".
+            first_keys = {
+                _topic_comparison_key(label) for label in missing_families}
+            retry_keys = {
+                _topic_comparison_key(label) for label in retry_missing}
+            if retry_keys <= first_keys:
+                out = retry_out
+                missing_families = retry_missing
+    # No row count is checked in either direction here, and none ever will be.
     #
-    # The asymmetry with over-merging above is the point. A concept merged away
-    # here is gone: later stages split and add, but they cannot recover a
-    # distinction that was already collapsed. A concept kept that should have
-    # been merged survives to where it can still be fixed -- Rule 3 splitting,
-    # the granularity audit, and the reviewer, who can merge two rows but
-    # cannot restore one that was never written.
-    # See docs/concept-placement-rules.md Rule 3: concept count is expected to
-    # rise, so enforcing a ceiling here worked against the stated policy.
+    # There was once a floor (max of a flat 4, topics x 2, and a family count)
+    # and an advisory ceiling (topics x 6). The floor triggered the retry, put
+    # "Return roughly N-M rows" into the prompt, and discarded the whole
+    # canonicalization when the number came in low; the ceiling only logged.
+    # Both are the anti-pattern CLAUDE.md names by name: volume-derived
+    # structure that pressured thin lower-grade chapters into inventing
+    # concepts to satisfy arithmetic. The ceiling had already cost real
+    # content once -- a 44-row skeleton whose canonicalization kept 43 rows,
+    # the model judging almost all of them distinct, compacted to 30 purely to
+    # satisfy topics x 6. Both are gone.
+    #
+    # What replaced the floor is the family-identity accounting above: not
+    # "how many rows came back" but "is family X still here". That is the real
+    # risk the floor was groping at, checked against the source's own named
+    # branches instead of against a number.
+    #
+    # The asymmetry is still the point, and it is now purely about
+    # recoverability. A concept merged away here is gone: later stages split
+    # and add, but they cannot recover a distinction that was already
+    # collapsed. A concept kept that should have been merged survives to where
+    # it can still be fixed -- Rule 3 splitting, the granularity audit, and the
+    # reviewer, who can merge two rows but cannot restore one that was never
+    # written. See docs/concept-placement-rules.md Rule 3: concept count is
+    # expected to rise, so enforcing a ceiling here worked against the stated
+    # policy.
     if not out:
         raise RuntimeError("concept consolidation returned no rows")
-    if len(out) < min_keep:
-        progress.log(
-            f"Canonicalization still over-merged ({len(out)}/{len(records)} rows) — "
-            "keeping the full de-duplicated skeleton instead.",
-            level="warning",
-        )
-        out = [dict(r) for r in records]
-    elif len(out) > max_keep:
-        progress.log(
-            f"Canonicalization kept {len(out)} rows, above the advisory "
-            f"guide of {max_keep}. Accepted: the model judged these "
-            "distinct, and merging on a row count rather than on meaning "
-            "loses teaching content that no later stage can recover.",
-            level="info",
-        )
+    if missing_families:
+        out = _restore_lost_skeleton_families(records, out, missing_families)
     out = _preserve_required_method_rows(records, out)
     out = _strip_types_from_records(_ensure_parent_concepts(out))
     out = _dedupe_titles_chapter_wide(out)
@@ -16002,6 +16266,8 @@ def _consolidate_concepts_via_api(
         out, meta=meta, stage="canonicalize")
     out = _preserve_required_method_rows(before_repair, out)
     out = _dedupe_titles_chapter_wide(out)
+    if missing_families:
+        out = _account_shipped_families(records, out, missing_families)
     progress.log(f"Rows after canonicalization: {len(out)}.", level="success")
     return out
 
@@ -16364,6 +16630,13 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
     rewrite them. The duplicate is therefore dropped mechanically (the first
     statement of a concept is its teaching home) so a whole finished chapter
     never fails final validation on a duplicate title.
+
+    Dropping the row never drops its recorded decisions: whatever
+    ``review_flags`` the duplicate carried move onto the row that keeps the
+    title, so a Fixer decision taken upstream — a Q13 family restoration, say,
+    whose carried-back row turns out to restate a concept the model already
+    kept — still reaches the reviewer on the row that ends up carrying that
+    teaching (docs/aegis-restructure.md §8.2, "Never silent").
     """
     seen: dict[str, int] = {}
     out: list[dict] = []
@@ -16376,7 +16649,10 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
                 _method_anchor_ids(rec)
                 and not _method_anchor_ids(out[kept_index])
             ):
+                _carry_review_flags(out[kept_index], rec)
                 out[kept_index] = rec
+            else:
+                _carry_review_flags(rec, out[kept_index])
             dropped += 1
             continue
         if key:
