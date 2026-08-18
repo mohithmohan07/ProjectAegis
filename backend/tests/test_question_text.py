@@ -6,6 +6,7 @@ import openpyxl
 
 from app import bulk_import as bi
 from app import models
+from app.bulk_import import layouts
 from app.db import _backfill_and_normalize
 from app.services import generation
 
@@ -111,20 +112,20 @@ def test_export_workbook_has_question_text_as_last_column(client):
 
 def test_legacy_import_backfills_question_text(client, db, tmp_path):
     """Template WITHOUT question_text imports safely; backfill = plain question."""
-    legacy_fields = (
-        bi.CHAPTER_FIELDS + bi.TOPIC_FIELDS + bi.CONCEPT_FIELDS[:bi.LEGACY_CONCEPT_LEN]
-        + bi.OBJECTIVE_GROUP_FIELDS
-        + [f for f in bi.OBJECTIVE_FIELDS[
-            len(bi.CHAPTER_FIELDS) + len(bi.TOPIC_FIELDS) + len(bi.CONCEPT_FIELDS)
-            + len(bi.OBJECTIVE_GROUP_FIELDS):] if f != "question_text"]
-    )
+    # Built from the FROZEN registry entry for the pre-question_text template,
+    # never from ``writer._write_headers`` (that writer moves in S7). Every
+    # sheet carries its real header: the layout gate identifies a WORKBOOK,
+    # and a one-column stub sheet is not a layout.
+    legacy = layouts.layout("canonical-no-question-text")
+    legacy_fields = list(legacy.sheet("objective").fields)
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    for sheet in (bi.SHEET_OBJECTIVE, bi.SHEET_SUBJECTIVE, bi.SHEET_DESCRIPTIVE):
-        ws = wb.create_sheet(sheet)
+    for kind in ("objective", "subjective", "descriptive"):
+        sheet_layout = legacy.sheet(kind)
+        ws = wb.create_sheet(sheet_layout.sheet_name)
         ws.append(["Chapter"])
-        ws.append(legacy_fields if sheet == bi.SHEET_OBJECTIVE else ["chapter_title"])
-    ws = wb[bi.SHEET_OBJECTIVE]
+        ws.append(list(sheet_layout.fields))
+    ws = wb[legacy.sheet("objective").sheet_name]
     row = [""] * len(legacy_fields)
     row[0] = "Legacy QT Chapter (09CBPH_LegacyQT)"
     row[6] = "Legacy QT Topic"
@@ -205,14 +206,19 @@ def test_context_attached_to_question_text():
 # ------------------------------ validation ----------------------------------- #
 
 def test_import_validation_reports_issues(client, tmp_path):
-    fields = bi.OBJECTIVE_FIELDS
+    # Real headers on all three sheets, from the frozen registry entry: the
+    # one-column stubs this fixture used to write match no layout, and the
+    # reader now refuses a workbook whose geometry it cannot establish.
+    current = layouts.layout("canonical-current")
+    fields = list(current.sheet("objective").fields)
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    for sheet in (bi.SHEET_OBJECTIVE, bi.SHEET_SUBJECTIVE, bi.SHEET_DESCRIPTIVE):
-        ws = wb.create_sheet(sheet)
+    for kind in ("objective", "subjective", "descriptive"):
+        sheet_layout = current.sheet(kind)
+        ws = wb.create_sheet(sheet_layout.sheet_name)
         ws.append(["Chapter"])
-        ws.append(list(fields) if sheet == bi.SHEET_OBJECTIVE else ["chapter_title"])
-    ws = wb[bi.SHEET_OBJECTIVE]
+        ws.append(list(sheet_layout.fields))
+    ws = wb[current.sheet("objective").sheet_name]
     row = [""] * len(fields)
     row[0] = "Validation Chapter (09CBPH_Validate)"
     row[6] = "T"

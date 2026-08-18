@@ -22,6 +22,7 @@ from . import (
     SHEET_DOC_LINK, SECTION_BANDS, OBJECTIVE_GROUP_FIELDS, DESCRIPTIVE_GROUP_FIELDS,
     merge_sources, normalize_question_text, strip_title_tag, strip_topic_title,
 )
+from . import layouts
 from . import workbook_sync
 from .. import models
 from ..services import directory
@@ -49,27 +50,40 @@ def _q_start(kind: str) -> int:
     return _IDX_CONCEPT_TITLE + len(CONCEPT_FIELDS) + len(_group_fields(kind))
 
 
-def _sheet_concept_len(header_row: tuple) -> int:
-    return len(_sheet_concept_fields(header_row))
+def _identify(sheet_name: str, header_row: tuple) -> layouts.SheetIdentity | None:
+    """Identify one sheet through the shared registry (spec-step8 T6).
 
-
-def _sheet_concept_fields(header_row: tuple) -> list[str]:
-    """Concept-band fields present in a workbook (detected from the header).
-
-    New workbooks use the canonical band (with ``parent_concept``, without the
-    dropped ``keywords``/``related_concepts`` columns); legacy workbooks keep
-    their own column positions and are appended to without shifting bands.
+    The writer's own header-shape detection is gone: it was the twin of
+    ``reader._concept_fields``, two functions deciding the same column
+    geometry of the same file under the same ``output_workbook_lock()``.
     """
-    group_markers = set(OBJECTIVE_GROUP_FIELDS + DESCRIPTIVE_GROUP_FIELDS)
-    fields: list[str] = []
-    for idx in range(_IDX_CONCEPT_TITLE, len(header_row)):
-        name = str(header_row[idx] or "").strip()
-        if not name:
-            continue
-        if name in group_markers:
-            break
-        fields.append(name)
-    return fields or CONCEPT_FIELDS
+    return layouts.identify_sheet(sheet_name, header_row)
+
+
+def _identified_concept_fields(
+    sheet_name: str, header_row: tuple, *, mismatches: list[dict] | None = None,
+) -> list[str]:
+    """Concept-band columns of an identified sheet.
+
+    An unidentified sheet is a RECORDED mismatch, never a raise: the writer is
+    reached mid-run with the model budget already spent, so T6's fail-closed
+    asymmetry stops at the reader. The fallback is the layout this writer
+    itself emits.
+    """
+    found = _identify(sheet_name, header_row)
+    if found is not None:
+        return list(found.sheet.block_fields("concept"))
+    if mismatches is not None:
+        mismatches.append({
+            "code": "sheet_layout_unidentified",
+            "sheet": sheet_name,
+            "column_count": len([h for h in header_row if h is not None]),
+            "detail": (
+                "no registered layout matches this sheet's header row; the "
+                "writer's own concept band was assumed"
+            ),
+        })
+    return list(CONCEPT_FIELDS)
 
 
 def _cell_str(row: tuple, idx: int) -> str:
@@ -185,14 +199,18 @@ def concept_placement_key(concept: models.Concept, topic: models.Topic) -> tuple
     )
 
 
-def _row_question_placement_key(row: tuple, kind: str, concept_len: int) -> tuple | None:
-    qs = _IDX_CONCEPT_TITLE + concept_len + len(_group_fields(kind))
+def _row_question_placement_key(
+    row: tuple, sheet_layout: layouts.SheetLayout,
+) -> tuple | None:
+    """Placement identity of one workbook row, addressed BY NAME."""
+    qs = sheet_layout.column("question", "question_label")
+    g_type = sheet_layout.column("group", "group_type")
+    g_name = sheet_layout.column("group", "group_name")
+    if qs is None or g_type is None or g_name is None:
+        return None
     label = _cell_str(row, qs)
     if not label:
         return None
-    group_fields = _group_fields(kind)
-    g_type = _IDX_CONCEPT_TITLE + concept_len + group_fields.index("group_type")
-    g_name = _IDX_CONCEPT_TITLE + concept_len + group_fields.index("group_name")
     # Strip the title-column tags so keys match the clean DB-derived keys.
     return (label,
             strip_title_tag(_cell_str(row, _IDX_CHAPTER_TITLE)),
@@ -229,7 +247,7 @@ class WorkbookIndex:
     """
 
     __slots__ = ("q_placements", "labels", "c_placements", "concept_titles",
-                 "q_rows", "concept_rows", "sheet_meta")
+                 "q_rows", "concept_rows", "sheet_meta", "mismatches")
 
     def __init__(self) -> None:
         self.q_placements: set[tuple] = set()
@@ -239,6 +257,10 @@ class WorkbookIndex:
         self.q_rows: dict[tuple, tuple] = {}
         self.concept_rows: dict[tuple, list[tuple]] = {}
         self.sheet_meta: dict[str, dict] = {}
+        # Sheets whose header row matched no registered layout. Recorded, not
+        # skipped in silence: the unflagged ``continue`` here was the writer's
+        # twin of the reader hole S2 closes.
+        self.mismatches: list[dict] = []
 
 
 def scan_workbook(path: Path) -> WorkbookIndex:
@@ -246,34 +268,45 @@ def scan_workbook(path: Path) -> WorkbookIndex:
     if not path.exists():
         return idx
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
-    for kind, sheet_name in SHEET_BY_KIND.items():
-        if sheet_name not in wb.sheetnames:
-            continue
+    for sheet_name in wb.sheetnames:
         ws = wb[sheet_name]
         header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-        concept_fields = _sheet_concept_fields(header)
-        concept_len = len(concept_fields)
-        q_start = _IDX_CONCEPT_TITLE + concept_len + len(_group_fields(kind))
+        found = _identify(sheet_name, header)
+        if found is None:
+            # A sheet with no header row at all carries no columns to place
+            # anything in (the Doc Link tab). A sheet that HAS a header and
+            # still matches nothing is the recorded mismatch.
+            if any(cell is not None for cell in header):
+                idx.mismatches.append({
+                    "code": "sheet_layout_unidentified",
+                    "sheet": sheet_name,
+                    "column_count": len(
+                        [cell for cell in header if cell is not None]),
+                    "detail": (
+                        "no registered layout matches this sheet's header "
+                        "row; it was not scanned for existing placements"
+                    ),
+                })
+            continue
+        sheet_layout = found.sheet
+        concept_fields = list(sheet_layout.block_fields("concept"))
+        concept_start = sheet_layout.block_start("concept")
         idx.sheet_meta[sheet_name] = {
-            "concept_len": concept_len,
+            "layout_id": found.layout_id,
+            "kind": found.kind,
+            "concept_len": len(concept_fields),
             "concept_fields": concept_fields,
-            "q_start": q_start,
-            # question_source is the 4th question-band field on every sheet.
-            "q_src_col": q_start + 3,
-            # concept_source only exists in the current layout.
-            "c_src_col": (
-                _IDX_CONCEPT_TITLE + concept_fields.index("concept_source")
-                if "concept_source" in concept_fields else None
-            ),
-            "parent_col": (
-                _IDX_CONCEPT_TITLE + concept_fields.index("parent_concept")
-                if "parent_concept" in concept_fields else None
-            ),
+            "q_start": sheet_layout.block_start("question"),
+            "q_src_col": sheet_layout.column("question", "question_source"),
+            # concept_source only exists in some layouts.
+            "c_src_col": sheet_layout.column("concept", "concept_source"),
+            "parent_col": sheet_layout.column("concept", "parent_concept"),
         }
+        idx.sheet_meta[sheet_name]["concept_start"] = concept_start
         for row_i, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
             if not row or not any(row):
                 continue
-            qk = _row_question_placement_key(row, kind, concept_len)
+            qk = _row_question_placement_key(row, sheet_layout)
             if qk:
                 idx.q_placements.add(qk)
                 idx.labels.add(qk[0])
@@ -425,10 +458,11 @@ def _validate_concepts_workbook_bytes(
     workbook = openpyxl.load_workbook(
         io.BytesIO(data), data_only=True, read_only=True)
     try:
-        ws = workbook[SHEET_BY_KIND["objective"]]
+        sheet_name = SHEET_BY_KIND["objective"]
+        ws = workbook[sheet_name]
         header = next(
             ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-        concept_fields = _sheet_concept_fields(header)
+        concept_fields = _identified_concept_fields(sheet_name, header)
         details_index = (
             _IDX_CONCEPT_TITLE + concept_fields.index("concept_details"))
         seen: dict[tuple[str, str, str, str], int] = {}
@@ -1057,9 +1091,11 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
     """
     index = scan_workbook(path)
     wb = openpyxl.load_workbook(path) if path.exists() else _new_workbook()
-    ws = wb[SHEET_BY_KIND["objective"]]
+    sheet_name = SHEET_BY_KIND["objective"]
+    ws = wb[sheet_name]
     header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-    concept_fields = _sheet_concept_fields(header)
+    concept_fields = _identified_concept_fields(
+        sheet_name, header, mismatches=index.mismatches)
     concepts = (
         db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
         .all()
@@ -1362,9 +1398,12 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                 # duplicate question arriving from another book accumulates
                 # sources instead of duplicating the row.
                 loc = index.q_rows.get(existing_key)
-                if loc and q.question_source:
+                col = (
+                    (index.sheet_meta.get(loc[0]) or {}).get("q_src_col")
+                    if loc else None
+                )
+                if loc and q.question_source and col is not None:
                     sheet_name, row_i = loc
-                    col = index.sheet_meta[sheet_name]["q_src_col"]
                     cell = wb[sheet_name].cell(row=row_i, column=col + 1)
                     merged = merge_sources(str(cell.value or ""), q.question_source)
                     if merged != str(cell.value or ""):
@@ -1379,7 +1418,9 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
             concept_fields = meta.get("concept_fields")
             if concept_fields is None:
                 header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-                concept_fields = _sheet_concept_fields(header)
+                concept_fields = _identified_concept_fields(
+                    SHEET_BY_KIND[q.sheet_kind], header,
+                    mismatches=index.mismatches)
             target = ws.max_row + 1 if ws.max_row >= 2 else 3
             for i, value in enumerate(
                 _question_to_row(q, q.sheet_kind, group, concept_fields=concept_fields),

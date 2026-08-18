@@ -5,7 +5,7 @@ import openpyxl
 
 from app import bulk_import as bi
 from app import config, models
-from app.bulk_import import writer
+from app.bulk_import import layouts, writer
 
 
 def _use_specific_dry_learner_analysis(monkeypatch):
@@ -32,22 +32,26 @@ def test_vocab_exposes_book_sources(client):
 
 
 def test_legacy_workbook_without_concept_source_still_imports(client, db, tmp_path):
-    """Old-layout files (no concept_source column) must not mis-align bands."""
-    legacy_fields = (
-        bi.CHAPTER_FIELDS + bi.TOPIC_FIELDS + bi.CONCEPT_FIELDS[:bi.LEGACY_CONCEPT_LEN]
-        + bi.OBJECTIVE_GROUP_FIELDS + bi.OBJECTIVE_QUESTION_FIELDS
-    )
+    """Old-layout files (no concept_source column) must not mis-align bands.
+
+    The header rows are built from the FROZEN registry entry, never from
+    ``writer._write_headers``: that writer migrates to the reference layout in
+    S7 and a fixture built from it would follow the writer instead of pinning
+    the legacy layout this test exists for. All three sheets carry their real
+    header — the reader's layout gate identifies a workbook, not a sheet, and
+    a one-column stub is not a layout.
+    """
+    legacy = layouts.layout("canonical-legacy-concept-band")
+    legacy_fields = list(legacy.sheet("objective").fields)
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    for sheet in (bi.SHEET_OBJECTIVE, bi.SHEET_SUBJECTIVE, bi.SHEET_DESCRIPTIVE):
-        ws = wb.create_sheet(sheet)
+    for kind in ("objective", "subjective", "descriptive"):
+        sheet_layout = legacy.sheet(kind)
+        ws = wb.create_sheet(sheet_layout.sheet_name)
         ws.append(["Chapter"])  # band row (content irrelevant)
-        if sheet == bi.SHEET_OBJECTIVE:
-            ws.append(legacy_fields)
-        else:
-            ws.append(["chapter_title"])
+        ws.append(list(sheet_layout.fields))
 
-    ws = wb[bi.SHEET_OBJECTIVE]
+    ws = wb[legacy.sheet("objective").sheet_name]
     row = [""] * len(legacy_fields)
     # Group band now has 8 fields (added group_question_labels) -> question
     # band starts one column later than the old layout.

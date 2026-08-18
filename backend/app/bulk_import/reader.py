@@ -1,9 +1,15 @@
-"""Read a canonical Bulk Import workbook and normalize it into the DB hierarchy.
+"""Read a Bulk Import workbook and normalize it into the DB hierarchy.
 
-Columns are addressed positionally because the canonical layout repeats
-``question_label`` across bands. Rows that only carry chapter/topic/concept/
-group context (no question) still create the hierarchy nodes; a Question is
-created only when the Question band carries text or a label.
+The workbook's layout is IDENTIFIED first, by exact sheet name + header-row
+equality against ``bulk_import.layouts``; every column is then addressed **by
+name** through that layout. A workbook whose header matches no registered
+layout is refused whole (``WorkbookLayoutError`` -> 422) before anything is
+written: reading part of a file whose column geometry is unknown is how 342 of
+344 question-band positions were silently mis-read (spec-step8 T6).
+
+Rows that only carry chapter/topic/concept/group context (no question) still
+create the hierarchy nodes; a Question is created only when the Question band
+carries text or a label.
 """
 from __future__ import annotations
 
@@ -14,122 +20,80 @@ import openpyxl
 from sqlalchemy.orm import Session
 
 from . import (
-    ANSWER_TYPES, CHAPTER_FIELDS, COGNITIVE_SKILLS, CONCEPT_FIELDS,
-    DESCRIPTIVE_GROUP_FIELDS, DIFFICULTY_LEVELS, FIELDS_BY_KIND,
-    OBJECTIVE_GROUP_FIELDS, SHEET_BY_KIND, TOPIC_FIELDS,
+    ANSWER_TYPES, APPEARS_IN_ALL, COGNITIVE_SKILLS, DIFFICULTY_LEVELS,
     merge_sources, normalize_answer_type, normalize_appears_in,
     normalize_cognitive_skills, normalize_difficulty, normalize_question_text,
     split_multi, strip_title_tag, strip_topic_title, to_plain_text,
 )
+from . import layouts
+from .layouts import WorkbookLayoutError  # noqa: F401  (re-exported for api)
 from .. import models
-from ..services import directory, katex_rules
-
-# Front bands are identical across sheets.
-_CHAPTER_SLICE = slice(0, len(CHAPTER_FIELDS))
-_TOPIC_SLICE = slice(len(CHAPTER_FIELDS), len(CHAPTER_FIELDS) + len(TOPIC_FIELDS))
-_CONCEPT_START = len(CHAPTER_FIELDS) + len(TOPIC_FIELDS)
+from ..services import directory, identity, katex_rules
 
 
-def _concept_fields(header_row: tuple) -> list[str]:
-    """Concept-band fields in this workbook, including optional additions.
+def _parse_answers(
+    qd: dict, kind: str, sheet_layout: layouts.SheetLayout,
+) -> tuple[list[dict], list[dict]]:
+    """Return (answers, sub_questions) read BY NAME from the question band.
 
-    The canonical template may not yet contain ``parent_concept``. If a workbook
-    does include it in the Concept band, read it without shifting legacy columns.
+    The block COUNT comes from the identified layout (how many
+    ``answer_type_N`` / ``sub_question_N`` columns it declares), never from a
+    literal: the canonical Subjective sheet carries 10 answer blocks and the
+    reference one carries 20, and the old ``range(10)`` made blocks 11-20
+    unreadable by construction.
     """
-    group_markers = set(OBJECTIVE_GROUP_FIELDS + DESCRIPTIVE_GROUP_FIELDS)
-    fields: list[str] = []
-    for idx in range(_CONCEPT_START, len(header_row)):
-        name = str(header_row[idx] or "").strip()
-        if not name:
-            continue
-        if name in group_markers:
-            break
-        fields.append(name)
-    if not fields:
-        return CONCEPT_FIELDS
-    return fields
-
-
-def _concept_len(header_row: tuple) -> int:
-    return len(_concept_fields(header_row))
-
-
-def _group_slice(kind: str, concept_len: int) -> slice:
-    gf = DESCRIPTIVE_GROUP_FIELDS if kind == "descriptive" else OBJECTIVE_GROUP_FIELDS
-    start = _CONCEPT_START + concept_len
-    return slice(start, start + len(gf))
-
-
-def _cell(row: tuple, idx: int) -> str:
-    if idx >= len(row):
-        return ""
-    v = row[idx]
-    return "" if v is None else str(v).strip()
-
-
-def _band(row: tuple, fields: list[str], sl: slice) -> dict:
-    values = list(row[sl])
-    return {
-        f: ("" if values[i] is None else str(values[i]).strip())
-        for i, f in enumerate(fields)
-        if i < len(values)
-    }
-
-
-def _parse_answers(row: tuple, kind: str, q_start: int) -> tuple[list[dict], list[dict]]:
-    """Return (answers, sub_questions) from the question band of a row."""
     answers: list[dict] = []
     sub_questions: list[dict] = []
 
+    def cell(name: str) -> str:
+        return qd.get(name, "")
+
     if kind == "objective":
-        base = q_start + 10  # after the 10 scalar question fields
-        for n in range(6):
-            o = base + n * 4
-            atype, content = _cell(row, o), _cell(row, o + 1)
+        for n in sheet_layout.answer_block_numbers:
+            atype, content = cell(f"answer_type_{n}"), cell(f"answer_content_{n}")
             if not (atype or content):
                 continue
             answers.append({
                 "answer_type": atype, "answer_content": content,
-                "correct_answer": _cell(row, o + 2), "answer_weightage": _cell(row, o + 3),
+                "correct_answer": cell(f"correct_answer_{n}"),
+                "answer_weightage": cell(f"answer_weightage_{n}"),
             })
     elif kind == "subjective":
-        base = q_start + 11
-        for n in range(10):
-            o = base + n * 5
-            atype, ans = _cell(row, o), _cell(row, o + 1)
+        for n in sheet_layout.answer_block_numbers:
+            atype, ans = cell(f"answer_type_{n}"), cell(f"answer_{n}")
             if not (atype or ans):
                 continue
             answers.append({
                 "answer_type": atype, "answer": ans,
-                "answer_display": _cell(row, o + 2), "weightage": _cell(row, o + 3),
-                "placeholder": _cell(row, o + 4),
+                "answer_display": cell(f"answer_display_{n}"),
+                "weightage": cell(f"weightage_{n}"),
+                "placeholder": cell(f"placeholder_{n}"),
             })
     else:  # descriptive
-        base = q_start + 12  # after 12 scalar fields incl. display_answer
-        for n in range(10):
-            o = base + n * 3
-            atype, content = _cell(row, o), _cell(row, o + 2)
+        for n in sheet_layout.answer_block_numbers:
+            atype, content = cell(f"answer_type_{n}"), cell(f"answer_content_{n}")
             if not (atype or content):
                 continue
             answers.append({
-                "answer_type": atype, "answer_weightage": _cell(row, o + 1),
+                "answer_type": atype,
+                "answer_weightage": cell(f"answer_weightage_{n}"),
                 "answer_content": content,
             })
-        subq_base = base + 30 + 1  # +30 answer cells, +1 answer_explanation
-        for n in range(15):
-            o = subq_base + n * 20
-            text = _cell(row, o)
+        for n in sheet_layout.sub_question_numbers:
+            text = cell(f"sub_question_{n}")
             if not text:
                 continue
             keywords = []
-            for m in range(6):
-                ko = o + 2 + m * 3
-                atype, weight, kw = _cell(row, ko), _cell(row, ko + 1), _cell(row, ko + 2)
+            for m in sheet_layout.sub_question_keyword_numbers(n):
+                atype = cell(f"sq{n}_answer_type_{m}")
+                weight = cell(f"sq{n}_weightage_{m}")
+                kw = cell(f"sq{n}_keyword_{m}")
                 if not (atype or kw):
                     continue
                 keywords.append({"answer_type": atype, "weightage": weight, "keyword": kw})
             sub_questions.append({
-                "text": text, "marks": _cell(row, o + 1), "keywords": keywords,
+                "text": text, "marks": cell(f"sub_question_marks_{n}"),
+                "keywords": keywords,
             })
     return answers, sub_questions
 
@@ -204,11 +168,32 @@ def _weightage_sum(answers: list[dict], kind: str) -> float | None:
     return total if found else None
 
 
+def _sheet_headers(wb) -> dict[str, tuple]:
+    """Row 2 of every sheet, in workbook order."""
+    headers: dict[str, tuple] = {}
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        headers[sheet_name] = next(
+            ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
+    return headers
+
+
 def import_workbook(db: Session, path: Path) -> dict:
-    """Import every content sheet; returns counts of created nodes + issues."""
+    """Import every content sheet; returns counts of created nodes + issues.
+
+    Raises ``WorkbookLayoutError`` (mapped to 422 by ``api/data.py``) when the
+    workbook matches no registered layout. The refusal happens before any
+    ``db.add``, so an unidentified file imports nothing at all.
+    """
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    try:
+        identified = layouts.identify_workbook(_sheet_headers(wb))
+    except WorkbookLayoutError:
+        wb.close()
+        raise
     counts: dict = {"chapters": 0, "topics": 0, "concepts": 0, "groups": 0,
-                    "questions": 0, "question_tags": 0, "issues": []}
+                    "questions": 0, "question_tags": 0, "issues": [],
+                    "layout_id": identified.layout_id}
 
     def _flag(msg: str) -> None:
         if len(counts["issues"]) < _MAX_ISSUES:
@@ -242,28 +227,19 @@ def import_workbook(db: Session, path: Path) -> dict:
             }
         return qtext_cache[chapter_id]
 
-    for kind, sheet_name in SHEET_BY_KIND.items():
-        if sheet_name not in wb.sheetnames:
-            continue
+    for found in identified.sheets:
+        kind = found.kind
+        sheet_name = found.sheet_name
+        sheet_layout = found.sheet
         ws = wb[sheet_name]
-        fields = FIELDS_BY_KIND[kind]
-        header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-        concept_fields = _concept_fields(header)
-        concept_len = len(concept_fields)
-        concept_slice = slice(_CONCEPT_START, _CONCEPT_START + concept_len)
-        gf = DESCRIPTIVE_GROUP_FIELDS if kind == "descriptive" else OBJECTIVE_GROUP_FIELDS
-        gslice = _group_slice(kind, concept_len)
-        q_start = gslice.stop
-        # Question-band field NAMES are canonical regardless of sheet layout.
-        q_band_fields = fields[_CONCEPT_START + len(CONCEPT_FIELDS) + len(gf):]
 
         for row_i, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
             if row is None or not any(row):
                 continue
-            chap = _band(row, CHAPTER_FIELDS, _CHAPTER_SLICE)
-            top = _band(row, TOPIC_FIELDS, _TOPIC_SLICE)
-            con = _band(row, concept_fields, concept_slice)
-            grp = _band(row, gf, gslice)
+            chap = sheet_layout.block_values(row, "chapter")
+            top = sheet_layout.block_values(row, "topic")
+            con = sheet_layout.block_values(row, "concept")
+            grp = sheet_layout.block_values(row, "group")
 
             if not chap.get("chapter_title"):
                 _flag(f"{sheet_name!r} row {row_i}: skipped — missing chapter_title")
@@ -279,17 +255,42 @@ def import_workbook(db: Session, path: Path) -> dict:
                 con.get("concept_title", ""), con.get("concept_display_name", ""),
                 chap.get("post_topics", ""), chap.get("pre_topics", ""),
             )
-            ch_key = meta["chapter_code"]
+            chapter_code = meta["chapter_code"]
             # Recover CLEAN titles (strip embedded tags / "Topic NN:" prefix).
             chap_title = strip_title_tag(chap["chapter_title"])
             t_title_clean = strip_topic_title(top.get("topic_title", ""))
             c_title_clean = strip_title_tag(con.get("concept_title", ""))
+            # T6.2: the chapter code truncates ('The Rise of Nationalism in
+            # Europe' and '... in Asia' both derive 10CBSS_TheRiseOfNat), so
+            # the code alone silently MERGED two chapters. The identity
+            # carries the title as well; a code collision with a different
+            # title is recorded and the rows are not merged.
+            chap_title_key = normalize_question_text(
+                chap_title or chap["chapter_title"])
+            ch_key = (chapter_code, chap_title_key)
             chapter = chapters.get(ch_key)
             if chapter is None:
-                chapter = db.query(models.Chapter).filter_by(chapter_code=ch_key).first()
+                same_code = db.query(models.Chapter).filter_by(
+                    chapter_code=chapter_code).all()
+                chapter = next(
+                    (
+                        row_chapter for row_chapter in same_code
+                        if normalize_question_text(strip_title_tag(
+                            row_chapter.chapter_title)) == chap_title_key
+                    ),
+                    None,
+                )
+                if chapter is None and same_code:
+                    _flag(
+                        f"chapter code {chapter_code!r} is already used by "
+                        f"{same_code[0].chapter_title!r}; "
+                        f"{(chap_title or chap['chapter_title'])!r} imports as "
+                        "a separate chapter (chapter_code_collision)"
+                    )
             if chapter is None:
                 chapter = models.Chapter(
-                    chapter_code=ch_key, board=meta["board"], grade=meta["grade"],
+                    chapter_code=chapter_code,
+                    board=meta["board"], grade=meta["grade"],
                     subject=meta["subject"], unit=meta["unit"],
                     chapter_title=chap_title or chap["chapter_title"],
                     chapter_display_name=chap.get("chapter_display_name", ""),
@@ -304,17 +305,49 @@ def import_workbook(db: Session, path: Path) -> dict:
             chapters[ch_key] = chapter
 
             # ---- Topic ----
+            # T6.4: the identity carries the LANE and goes through the one
+            # shared normaliser. Without the lane a Pre topic and a Post topic
+            # sharing a title merged into whichever row was created first and
+            # the other lane's concepts were re-parented under it, silently.
+            # The stored ``topic_title`` is NEVER rewritten to the incoming
+            # casing (T4-6: exact-match-plus-lenient-write is what created the
+            # UploadRefused class).
             t_title = t_title_clean or "Topic 01"
-            t_key = (chapter.id, t_title)
+            t_lane = top.get("pre_post_learning", "") or "Post"
+            t_ident = identity.topic_identity(t_title)
+            t_key = (chapter.id, t_ident, t_lane)
             topic = topics.get(t_key)
             if topic is None:
-                topic = db.query(models.Topic).filter_by(
-                    chapter_id=chapter.id, topic_title=t_title).first()
+                topic = next(
+                    (
+                        row_topic for row_topic in db.query(models.Topic)
+                        .filter_by(chapter_id=chapter.id,
+                                   pre_post_learning=t_lane).all()
+                        if identity.topic_identity(row_topic.topic_title)
+                        == t_ident
+                    ),
+                    None,
+                )
             if topic is None:
+                other_lane = next(
+                    (
+                        row_topic for row_topic in db.query(models.Topic)
+                        .filter_by(chapter_id=chapter.id).all()
+                        if identity.topic_identity(row_topic.topic_title)
+                        == t_ident and row_topic.pre_post_learning != t_lane
+                    ),
+                    None,
+                )
+                if other_lane is not None:
+                    _flag(
+                        f"{t_title!r}: a {other_lane.pre_post_learning!r} topic "
+                        f"already carries this title; the {t_lane!r} row "
+                        "imports as a separate topic (topic_lane_conflict)"
+                    )
                 topic = models.Topic(
                     chapter_id=chapter.id, topic_title=t_title,
                     topic_display_name=top.get("topic_display_name", ""),
-                    pre_post_learning=top.get("pre_post_learning", "Post"),
+                    pre_post_learning=t_lane,
                     related_topics=top.get("related_topics", ""),
                     topic_description=top.get("topic_description", ""),
                 )
@@ -361,11 +394,11 @@ def import_workbook(db: Session, path: Path) -> dict:
 
             # ---- Question band (parsed before the Group so a pure Concept
             # row can be recognized without minting a default group) ----
-            q_values = list(row[q_start:])
-            qd = {
-                q_band_fields[i]: ("" if q_values[i] is None else str(q_values[i]).strip())
-                for i in range(min(len(q_band_fields), len(q_values)))
-            }
+            # Names AND values now come from the same identified layout. They
+            # used to decouple by construction: the names were taken from the
+            # canonical FIELDS_BY_KIND while the values were sliced from the
+            # detected geometry.
+            qd = sheet_layout.block_values(row, "question")
             label = qd.get("question_label", "")
             has_question = bool(label or qd.get("question"))
 
@@ -451,7 +484,7 @@ def import_workbook(db: Session, path: Path) -> dict:
                     continue
             seen_labels.add(label)
 
-            answers, sub_questions = _parse_answers(row, kind, q_start)
+            answers, sub_questions = _parse_answers(qd, kind, sheet_layout)
             try:
                 marks = float(qd.get("marks") or 0)
             except ValueError:
@@ -503,7 +536,11 @@ def import_workbook(db: Session, path: Path) -> dict:
                 question_disclaimer=qd.get("question_disclaimer", ""),
                 question_duration=duration,
                 math_keyboard=qd.get("math_keyboard", ""),
-                question_appears_in=appears or "Pre-test, Post-test, Worksheet, Test",
+                # T6.3: the READER's default is the one its own layout
+                # implies, never the active school profile's wire value —
+                # sourcing it from the profile would stamp one school's
+                # convention onto every other school's imported rows.
+                question_appears_in=appears or APPEARS_IN_ALL,
                 level_of_difficulty=difficulty,
                 question=qd.get("question", ""),
                 question_text=question_text,

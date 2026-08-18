@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from .. import config, models, schemas
-from ..bulk_import import reader, workbook_sync, writer
+from ..bulk_import import layouts, reader, workbook_sync, writer
 from ..db import get_db
 from ..services import data_reset as reset_svc
 from . import admin as admin_api
@@ -44,6 +44,12 @@ async def import_workbook(file: UploadFile = File(...), db: Session = Depends(ge
         tmp_path = Path(tmp.name)
     try:
         counts = reader.import_workbook(db, tmp_path)
+    except layouts.WorkbookLayoutError as exc:
+        # The workbook's column geometry could not be established, so nothing
+        # was read and nothing was written. Refusing the upload loses nothing
+        # and is instantly actionable; reading it wrongly would silently
+        # corrupt every identity on every row (spec-step8 T6).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         tmp_path.unlink(missing_ok=True)
     return counts
