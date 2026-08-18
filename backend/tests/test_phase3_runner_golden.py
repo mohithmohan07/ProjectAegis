@@ -16,6 +16,7 @@ from app.services import concept_cleanup
 from app.services.phase3 import runner
 from tests import test_phase3_analyse as analyse_golden
 from tests import test_phase3_host_golden as host_golden
+from tests import test_phase3_preanalyse as preanalyse_golden
 from tests import test_phase3_premap as premap_golden
 from tests import test_phase3_prelearn as prelearn_golden
 from tests import test_phase3_settle_golden as settle_golden
@@ -106,6 +107,11 @@ def replay_providers(golden_envelope):
             encoding="utf-8"
         )
     )
+    golden_preanalysis = json.loads(
+        (settle_golden.GOLDEN / "rne_preanalysis.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mapping = settle_golden._replay_map(golden_envelope, golden_rows)
     topology, grounding, analysis, critic = settle_golden._providers(mapping)
 
@@ -131,6 +137,9 @@ def replay_providers(golden_envelope):
             golden_prelearn
         ),
         "premap": premap_golden.premap_replay_provider(golden_premap),
+        "preanalyse": preanalyse_golden.preanalyse_replay_provider(
+            golden_preanalysis
+        ),
         "critic": critic,
     }
 
@@ -273,7 +282,6 @@ def test_runner_produces_publication_ready_output(
         assert row["concept_details"].startswith("Description: ")
         assert "\nAchieving Mastery: " in row["concept_details"]
         assert "// Types:" not in row["concept_details"]
-        assert "Misconception" not in row["concept_details"]
         # Grounded on the prerequisite capture, never on this chapter's
         # blocks (spec T4, the Sorrieu passage).
         assert row["_source_block_ids"] == []
@@ -281,6 +289,46 @@ def test_runner_produces_publication_ready_output(
             "derived-from-prerequisite-capture"
         )
         assert row["_source_grounding_record_sha256"]
+    # Q1 in the PRE lane (slice C2): the Pre map has its own inventory,
+    # over its own evidence, with its own item mint — 19 items, each
+    # allotted to exactly one pre-concept (R4). Twelve of the fifteen
+    # pre-concepts receive one; three receive none, which is Q1's design
+    # and not a gap. Achieving Mastery stays owed by, and present on,
+    # every one of the fifteen.
+    pre_analysis = pre_map["analysis"]
+    assert [item["item_id"] for item in pre_analysis["inventory"]] == [
+        f"PLA-{index:04d}" for index in range(1, 20)
+    ]
+    assert set(pre_analysis["allotments"]) == {
+        item["item_id"] for item in pre_analysis["inventory"]
+    }
+    assert len(set(pre_analysis["allotments"].values())) == 12
+    assert {
+        _normal(row["concept_title"])
+        for row in pre_map["rows"]
+        if not row.get("_aegis_analysis_allotments")
+    } == {
+        "Reading a Figure's Number and Caption",
+        "Writing a First-Person Eyewitness Account",
+        "Finding Information Beyond the Textbook",
+    }
+    for row in pre_map["rows"]:
+        has_section = "Misconception/ Error Analysis" in row["concept_details"]
+        assert has_section == bool(row.get("_aegis_analysis_allotments"))
+        assert "\nAchieving Mastery: " in row["concept_details"]
+    # The Pre inventory never touched the POST lane's inventory: the two
+    # mints are disjoint, and neither lane carries the other's item ids.
+    assert not any(
+        item_id.startswith("PLA-")
+        for row in result["records"]
+        for item_id in row.get("_aegis_analysis_allotments") or []
+    )
+    assert not any(
+        item_id.startswith("LA-")
+        for row in pre_map["rows"]
+        for item_id in row.get("_aegis_analysis_allotments") or []
+    )
+
     # Every needed-for link resolves to a real Post concept of this run.
     from app.services.phase3 import place as place_mod
 
@@ -289,8 +337,8 @@ def test_runner_produces_publication_ready_output(
         for link in row["_aegis_needed_for"]:
             assert link["post_concept_id"] in post_ids
             assert link["post_concept_title"]
-    # Exactly three advisory flags on the golden chapter, and every one
-    # of them is honest:
+    # Exactly four flagged pre-concepts on the golden chapter, and every
+    # flag is honest:
     #  * PRC-0015 ("Finding Information Beyond the Textbook") is linked to
     #    nothing — no post concept of this chapter genuinely requires
     #    independent research. Necessity is a CRITIC dimension (Q10), so
@@ -298,19 +346,40 @@ def test_runner_produces_publication_ready_output(
     #  * PRC-0001 and PRC-0013 trip concept_validator's `placeholder`
     #    code, whose PLACEHOLDERS vocabulary contains the word "none" and
     #    fires on the ordinary English "faces none at all" / "almost
-    #    none". That is a keyword vocabulary classifying content in the
-    #    SHARED validator (Rule 1) — recorded here, not authored around,
-    #    and advisory in this lane so it can never gate a row.
+    #    none".
+    #  * PRC-0003 trips `misconception_framing` and PRC-0013 also trips
+    #    `error_analysis_framing`. Both are decided by VERB VOCABULARIES
+    #    in the shared validator: a belief framed as "may take 'utopian'
+    #    to mean …" is not in _MISCONCEPTION_BELIEF_RE's list, and an
+    #    error framed as "carry a claim … across a whole continent" is
+    #    not in _ERROR_ANALYSIS_ACTION_RE's. Both items are well-framed
+    #    prerequisite analysis; the vocabulary simply does not contain
+    #    their verbs.
+    #
+    # All three codes are keyword vocabularies classifying content in the
+    # SHARED validator (Rule 1). They are recorded here, NOT authored
+    # around: rewording a recorded fixture item to satisfy a verb list
+    # would hide the defect rather than purge it (premap.py's §3 purge
+    # doctrine), and their real purge is replacing each with a model
+    # verdict, which moves the Post lane and belongs to its own change.
+    # In this lane they are advisory, so none of them can gate a row.
     assert sorted(pre_map["review_flags"]) == [
-        "PRC-0001", "PRC-0013", "PRC-0015",
+        "PRC-0001", "PRC-0003", "PRC-0013", "PRC-0015",
     ]
     assert any(
         "its necessity needs review" in flag
         for flag in pre_map["review_flags"]["PRC-0015"]
     )
     assert {finding["code"] for finding in pre_map["validation"]} == {
-        "placeholder"
+        "placeholder", "misconception_framing", "error_analysis_framing",
     }
+    # Advisory means advisory: every flagged row still ships, with its
+    # analysis section intact.
+    flagged_pre_rows = [
+        row for row in pre_map["rows"]
+        if row["_pre_concept_id"] in pre_map["review_flags"]
+    ]
+    assert len(flagged_pre_rows) == 4
     # No decision drew a critic dissent on the golden replay.
     assert pre_map["decision_flags"] == {}
     # And the Pre map rides its own key: no Pre row leaks into the Post

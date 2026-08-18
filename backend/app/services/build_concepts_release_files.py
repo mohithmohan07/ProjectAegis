@@ -617,6 +617,16 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
     # Q1: the chapter analysis inventory's recorded build + allotments
     # (phase3/analyse.py) — lets the ledger account every LA-item.
     analysis_snapshot = _artifact_snapshot("source.phase3-analysis.json")
+    # Phase 03 (doc §4): the Pre-Learning map this run built and the
+    # merged prerequisite capture it was built from. They let the ledger
+    # account the PRE lane's own obligations — every prerequisite carried
+    # into the map exactly once, every Pre inventory item allotted
+    # exactly once, every needed-for link resolved — and let the run
+    # report say what the Pre lane produced.
+    pre_map_snapshot = _artifact_snapshot("source.phase3-prelearn-map.json")
+    prelearn_snapshot = _artifact_snapshot(
+        "source.phase3-prelearn-capture.json"
+    )
 
     coverage = coverage_ledger.build_coverage_ledger(
         question_inventory=job.question_inventory or {},
@@ -628,12 +638,16 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         container_projections=projections,
         place_snapshot=place_snapshot,
         analysis_snapshot=analysis_snapshot,
+        pre_map_snapshot=pre_map_snapshot,
+        prelearn_snapshot=prelearn_snapshot,
     )
     run_report = concept_run_report.build_run_report(
         payload,
         generation_log=job.generation_log or [],
         generation_checkpoint=job.generation_checkpoint or {},
         dropped_furniture=coverage.get("dropped_furniture"),
+        pre_map=pre_map_snapshot,
+        coverage=coverage,
     )
 
     buffer = io.BytesIO()
@@ -670,6 +684,16 @@ def build_diagnostics_zip(job: models.UploadJob) -> bytes:
         )
         archive.writestr("context/run_report.json", _json_bytes(run_report))
         archive.writestr("context/coverage_ledger.json", _json_bytes(coverage))
+        if pre_map_snapshot is not None:
+            archive.writestr(
+                "context/pre_learning_map.json",
+                _json_bytes(pre_map_snapshot),
+            )
+        if prelearn_snapshot is not None:
+            archive.writestr(
+                "context/pre_learning_capture.json",
+                _json_bytes(prelearn_snapshot),
+            )
         archive.writestr("release/released_concepts.xlsx", release_workbook)
         archive.writestr("release/release_payload.json", _json_bytes(payload))
         archive.writestr(

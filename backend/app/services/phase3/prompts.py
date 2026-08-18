@@ -250,6 +250,63 @@ PREMAP_CRITIC_SYSTEM = _SHARED + (
     "human review and does not block the run."
 )
 
+PREANALYSE_INVENTORY_SYSTEM = _SHARED + (
+    " Task: Phase 2.4, PRE-LEARNING lane — build the inventory of "
+    "DISTINCT Misconceptions and Error Analyses for this chapter's "
+    "PREREQUISITES, from the captured prerequisite set and the "
+    "pre-learning concepts' own teaching. Response schema: {\"items\": "
+    "[{\"item_id\", \"kind\": \"misconception|error_analysis\", "
+    "\"text\", \"evidence\", \"rationale\"}]}. item_id is the positional "
+    "mint PLA-0001, PLA-0002, … in listing order. A misconception is a "
+    "plausible incorrect learner belief about the prerequisite itself, "
+    "phrased as the learner's belief ('The learner may believe that …' / "
+    "'Students may think that …'); an error analysis is a concrete "
+    "process error — 'Students' or 'The learner' performing a faulty "
+    "action or reasoning step while APPLYING the prerequisite, with an "
+    "'instead of'/'rather than' contrast. The two meanings are distinct; "
+    "never restate one as the other, and never let an item be a "
+    "paraphrase of another. The current chapter's own content is "
+    "deliberately absent from this request: an item about what this "
+    "chapter goes on to teach belongs to the post-learning inventory, "
+    "not this one, and no question of this chapter appears anywhere in "
+    "this lane. Name the specific quantity, step, term, or claim the "
+    "item is about. How many items the evidence supports is entirely "
+    "your judgment — a thin pre-learning map may yield few or none; "
+    "never invent an item to fill space. An empty items list is a "
+    "legitimate answer."
+)
+
+PREANALYSE_ALLOT_SYSTEM = _SHARED + (
+    " Task: Phase 4.3, PRE-LEARNING lane — allot each prerequisite "
+    "misconception/error-analysis item to the ONE pre-learning concept "
+    "it belongs to. Response schema: {\"allotments\": [{\"item_id\", "
+    "\"pre_concept_id\", \"rationale\"}]}. Decide EVERY item exactly "
+    "once, citing only pre_concept_id values from the request. Judge "
+    "purely from each pre-learning concept's description against the "
+    "item's text and evidence: the misconception belongs with the "
+    "concept whose teaching it distorts; the error analysis with the "
+    "concept whose application it derails. Not every concept receives an "
+    "item — never spread items to cover concepts. rationale: one "
+    "sentence naming the content-to-teaching basis of the allotment."
+)
+
+PREANALYSE_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit a proposed PRE-LEARNING "
+    "misconception/error-analysis decision (a prerequisite inventory "
+    "build, or an allotment of items to pre-learning concepts). For an "
+    "inventory: judge each item's genuineness (a real learner belief or "
+    "process error about the PREREQUISITE, grounded in the captured "
+    "evidence, never filler), distinctness (no item paraphrases "
+    "another), and strength; flag any item that is really about what "
+    "this chapter goes on to teach rather than what it assumes, and any "
+    "item the evidence does not support. For an allotment: independently "
+    "compare each item against every candidate pre-learning concept's "
+    "description and flag a plausible but less specific host. Response "
+    "schema: {\"verdict\": \"verified|rejected\", \"confidence\", "
+    "\"issues\": [..]}. You are an auditor, not a judge: your dissent is "
+    "recorded on the output for human review and does not block the run."
+)
+
 HOST_SYSTEM = _SHARED + (
     " Task: certify one host concept per assignment unit, and place "
     "every question (qid) under its correct concept. Response schema: "

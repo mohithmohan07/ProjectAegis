@@ -424,3 +424,146 @@ def test_without_furniture_the_heading_stays_absent():
         "chapter_reading": [], "acsd": [],
     }
     assert "DROPPED FURNITURE" not in run_report.render_run_report(report)
+
+
+# ---------------------------------------------------------------------------
+# lane awareness (step-7 slice C2; map §6.6)
+
+
+def _pre_map() -> dict:
+    return {
+        "rows": [
+            {
+                "topic": "Political Vocabulary",
+                "concept_title": "Sovereignty",
+                "concept_details": (
+                    "Description: The highest law-making authority."
+                    "\nAchieving Mastery: Saying who holds it."
+                    " // Misconception/ Error Analysis: Misconceptions: "
+                    "learners may believe a sovereign is merely powerful."
+                ),
+                "_pre_concept_id": "PRC-0001",
+                "_aegis_pre_prerequisites": [
+                    {"prerequisite_id": "PR-0001", "text": "what sovereignty is"},
+                ],
+                "_aegis_analysis_allotments": ["PLA-0001"],
+                "_aegis_needed_for": [
+                    {"post_concept_id": "CONCEPT-0001",
+                     "post_concept_title": "Sovereignty After 1789"},
+                ],
+                "review_flags": ["Pre validator [placeholder]: …"],
+            },
+            {
+                "topic": "Reading the Sources",
+                "concept_title": "Reading a Map",
+                "concept_details": (
+                    "Description: A map shows territory at one moment."
+                    "\nAchieving Mastery: Locating states on it."
+                ),
+                "_pre_concept_id": "PRC-0002",
+                "_aegis_pre_prerequisites": [
+                    {"prerequisite_id": "PR-0002", "text": "reading a map"},
+                ],
+                "_aegis_needed_for": [],
+            },
+        ],
+        "topics": [
+            {"pre_topic_id": "PRT-0001", "title": "Political Vocabulary",
+             "pre_concept_ids": ["PRC-0001"]},
+            {"pre_topic_id": "PRT-0002", "title": "Reading the Sources",
+             "pre_concept_ids": ["PRC-0002"]},
+        ],
+        "analysis": {
+            "inventory": [{"item_id": "PLA-0001", "kind": "misconception",
+                           "text": "a prerequisite belief"}],
+            "allotments": {"PLA-0001": "PRC-0001"},
+            "rationales": {},
+            "review_flags": {},
+        },
+        "review_flags": {"PRC-0001": ["Pre validator [placeholder]: …"]},
+        "decision_flags": {},
+        "validation": [{"row_index": 0, "code": "placeholder"}],
+    }
+
+
+def test_the_report_surfaces_what_the_pre_lane_produced():
+    """§6.6: the run report had zero lane awareness, so a run carrying a
+    Pre-Learning map read exactly like one that never built one. A
+    reviewer must be able to see what the Pre lane produced without
+    opening the artifact JSON."""
+    report = run_report.build_run_report(_payload(issues=[]), pre_map=_pre_map())
+    pre = report["pre_learning"]
+    assert [row["pre_concept_id"] for row in pre["pre_concepts"]] == [
+        "PRC-0001", "PRC-0002",
+    ]
+    assert pre["analysis_item_count"] == 1
+    assert pre["allotted_item_count"] == 1
+    assert pre["flagged_pre_concept_count"] == 1
+    assert pre["validation_codes"] == ["placeholder"]
+    assert pre["pre_concepts"][0]["prerequisite_ids"] == ["PR-0001"]
+    assert pre["pre_concepts"][0]["analysis_item_ids"] == ["PLA-0001"]
+    assert pre["pre_concepts"][1]["analysis_item_ids"] == []
+
+    rendered = run_report.render_run_report(report)
+    assert "PRE-LEARNING MAP (Phase 03)" in rendered
+    assert "2 pre-concept(s) across 2 pre-topic(s)" in rendered
+    assert "1/1 inventory item(s) allotted, on 1 pre-concept(s)" in rendered
+    # Q1's law is stated where the reviewer reads it, so a pre-concept
+    # without a section is not mistaken for a gap.
+    assert "Q1's design and not a gap" in rendered
+    assert "[PRT-0001] Political Vocabulary" in rendered
+    assert "PRC-0002 Reading a Map" in rendered
+    assert "pre-concepts carrying a review flag: 1" in rendered
+
+
+def test_a_stopped_run_still_reports_its_pre_lane():
+    report = run_report.build_run_report(_payload(), pre_map=_pre_map())
+    rendered = run_report.render_run_report(report)
+    assert "WHAT STOPPED THE RUN" in rendered
+    assert "PRE-LEARNING MAP (Phase 03)" in rendered
+
+
+def test_a_refused_pre_map_says_the_post_map_is_unaffected():
+    refused = {**_pre_map(), "rows": [], "topics": [],
+               "refused": "a Pre-Learning concept row carries QINV-0004"}
+    report = run_report.build_run_report(_payload(issues=[]), pre_map=refused)
+    rendered = run_report.render_run_report(report)
+    assert "REFUSED and not shipped: a Pre-Learning concept row" in rendered
+    assert "finished Post-Learning map is unaffected" in rendered
+
+
+def test_a_run_with_no_pre_lane_reports_no_pre_section():
+    report = run_report.build_run_report(_payload(issues=[]))
+    assert report["pre_learning"] == {}
+    assert "PRE-LEARNING" not in run_report.render_run_report(report)
+
+
+def test_a_lost_pre_map_is_reported_not_silently_skipped():
+    """The report is silent only when the Pre lane has NOTHING to say. A
+    run whose map snapshot never landed while its capture holds
+    prerequisites is the one state in which prerequisites are lost: the
+    ledger already marks it incomplete, so the report must say why rather
+    than skip the section because no row reached it (R4)."""
+    from app.services import coverage_ledger
+
+    coverage = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        prelearn_snapshot={"prerequisites": [
+            {"prerequisite_id": "PR-0001", "text": "what sovereignty is"},
+            {"prerequisite_id": "PR-0002", "text": "reading a map"},
+        ]},
+    )
+    assert coverage["complete"] is False
+
+    report = run_report.build_run_report(
+        _payload(issues=[]), pre_map=None, coverage=coverage,
+    )
+    assert report["pre_learning"]["coverage"]["prerequisites"] == {
+        "total": 2, "mapped": 0, "unaccounted": 2}
+
+    rendered = run_report.render_run_report(report)
+    assert "PRE-LEARNING MAP (Phase 03)" in rendered
+    assert "no Pre-Learning map is recorded for this run" in rendered
+    assert "2 of 2 captured prerequisite(s) reached no pre-concept" in rendered
+    # …and the identities themselves are one section further down.
+    assert "unmapped PR-0001" in coverage_ledger.render_coverage(coverage)

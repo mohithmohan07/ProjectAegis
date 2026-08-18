@@ -285,13 +285,37 @@ DEFAULT_LINKS = {
 }
 
 
-def _provider(map_response=None, links=None):
+def _analysis_answer(request: dict, inventory=None, allotments=None) -> dict:
+    """Answer the Pre lane's own Q1 inventory stages (preanalyse.py).
+
+    The default is an EMPTY inventory — the legal answer for a Pre map
+    this thin, and the one that keeps every map-shape assertion below
+    about Description + Achieving Mastery only. Slice C2's inventory
+    behaviour has its own module (test_phase3_preanalyse.py).
+    """
+    if request.get("stage") == "prelearn.analyse.inventory":
+        return {"items": copy.deepcopy(list(inventory or []))}
+    allotments = dict(allotments or {})
+    return {"allotments": [
+        {
+            "item_id": item["item_id"],
+            "pre_concept_id": allotments.get(item["item_id"], ""),
+            "rationale": "replayed",
+        }
+        for item in request.get("items") or []
+    ]}
+
+
+def _provider(map_response=None, links=None, inventory=None, allotments=None):
     map_response = map_response if map_response is not None else MAP_RESPONSE
     links = DEFAULT_LINKS if links is None else links
 
     def provider(request: dict) -> dict:
-        if request.get("stage") == "premap.map":
+        stage = str(request.get("stage") or "")
+        if stage == "premap.map":
             return copy.deepcopy(map_response)
+        if stage.startswith("prelearn.analyse."):
+            return _analysis_answer(request, inventory, allotments)
         return _links_for(request, links)
 
     return provider
@@ -409,7 +433,11 @@ def test_no_count_quota_rides_the_prompt_the_payload_or_the_code(
         return base(request)
 
     _build(golden_envelope, provider=capturing)
-    assert len(seen) == 2
+    # map, needed-for links, and the Pre lane's own Q1 inventory (which
+    # answers empty here, so no allot decision follows).
+    assert [request["stage"] for request in seen] == [
+        "premap.map", "premap.needed_for", "prelearn.analyse.inventory",
+    ]
 
     quota_language = re.compile(
         r"at least \d|at most \d|minimum of|maximum of|exactly \d+ |"
@@ -428,6 +456,9 @@ def test_no_count_quota_rides_the_prompt_the_payload_or_the_code(
         prompts.PREMAP_SYSTEM,
         prompts.PREMAP_NEEDED_FOR_SYSTEM,
         prompts.PREMAP_CRITIC_SYSTEM,
+        prompts.PREANALYSE_INVENTORY_SYSTEM,
+        prompts.PREANALYSE_ALLOT_SYSTEM,
+        prompts.PREANALYSE_CRITIC_SYSTEM,
     ):
         assert not quota_language.search(system)
 
@@ -489,6 +520,12 @@ def test_an_empty_capture_yields_an_empty_map_without_spending_a_decision(
         "rows": [],
         "topics": [],
         "needed_for": {},
+        "analysis": {
+            "inventory": [],
+            "allotments": {},
+            "rationales": {},
+            "review_flags": {},
+        },
         "review_flags": {},
         "decision_flags": {},
         "validation": [],
@@ -582,7 +619,10 @@ def test_upstream_evidence_naming_a_qid_is_redacted_never_refused(
     seen: list[dict] = []
 
     def provider(request: dict) -> dict:
-        if request.get("stage") != "premap.map":
+        stage = str(request.get("stage") or "")
+        if stage.startswith("prelearn.analyse."):
+            return _analysis_answer(request)
+        if stage != "premap.map":
             return _links_for(request, DEFAULT_LINKS)
         seen.append(copy.deepcopy(request))
         return copy.deepcopy(MAP_RESPONSE)
@@ -767,7 +807,10 @@ def test_a_model_authored_types_section_is_a_contract_defect(
     attempts = {"n": 0}
 
     def provider(request: dict) -> dict:
-        if request.get("stage") != "premap.map":
+        stage = str(request.get("stage") or "")
+        if stage.startswith("prelearn.analyse."):
+            return _analysis_answer(request)
+        if stage != "premap.map":
             return _links_for(request, DEFAULT_LINKS)
         attempts["n"] += 1
         return copy.deepcopy(
@@ -977,8 +1020,11 @@ def test_an_unresolvable_link_routes_to_the_fixer_and_is_never_dropped(
     corrections and goes to The Fixer for one recorded, flagged decision
     — the pre-concept still ships."""
     def broken(request: dict) -> dict:
-        if request.get("stage") == "premap.map":
+        stage = str(request.get("stage") or "")
+        if stage == "premap.map":
             return copy.deepcopy(MAP_RESPONSE)
+        if stage.startswith("prelearn.analyse."):
+            return _analysis_answer(request)
         return {"links": [
             {
                 "pre_concept_id": row["pre_concept_id"],
@@ -1007,8 +1053,11 @@ def test_an_unresolvable_link_routes_to_the_fixer_and_is_never_dropped(
 
 def test_an_unresolvable_link_without_a_fixer_fails_closed(golden_envelope):
     def broken(request: dict) -> dict:
-        if request.get("stage") == "premap.map":
+        stage = str(request.get("stage") or "")
+        if stage == "premap.map":
             return copy.deepcopy(MAP_RESPONSE)
+        if stage.startswith("prelearn.analyse."):
+            return _analysis_answer(request)
         return {"links": [
             {
                 "pre_concept_id": row["pre_concept_id"],
@@ -1219,7 +1268,7 @@ def test_decide_once_replays_the_whole_map_for_free(golden_envelope):
         golden_envelope, provider=counted, critic=counted_critic,
         store=store, fixer=fixer,
     )
-    assert calls["n"] == 2  # one map decision + one link batch
+    assert calls["n"] == 3  # map + one link batch + the Pre inventory
     after = calls["n"], critic_calls["n"]
     second = _build(
         golden_envelope, provider=counted, critic=counted_critic,

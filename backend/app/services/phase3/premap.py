@@ -20,12 +20,16 @@ distinction is in the regressions.
 docs/restructure-handoff.md).** No question is ever lifted out of the
 source into any Pre artefact. Concretely:
 
-* a Pre row ships **Description and Achieving Mastery only** — the same
-  two sections Settle mints for a Post row (``settle.py``: *"Q1: Settle
-  mints Description + Achieving Mastery only"*). Types, Cases and
-  Examples reach the Pre detailing only once GENERATED questions exist
-  to fill them, which is a later slice's work. There is no code path
-  here that can mint one;
+* a Pre row ships **Description and Achieving Mastery only**, plus the
+  ``Misconception/ Error Analysis`` section on the rows the Pre lane's
+  own Q1 inventory allotted an item to (``preanalyse.py``, stamped
+  below) — the same shape Settle + Analyse produce for a Post row
+  (``settle.py``: *"Q1: Settle mints Description + Achieving Mastery
+  only"*). Types, Cases and Examples reach the Pre detailing only once
+  GENERATED questions exist to fill them, which is a later slice's work.
+  There is no code path here that can mint one, and the map decision
+  itself may author neither those nor an analysis section — the only
+  writer of the analysis section is the inventory's allotment;
 * Post's Examples ARE source questions (Rule C: every QID has exactly
   one final Type/Case assignment), so lifting one onto a Pre concept
   would ALSO double-route that QID and break Q2's exactly-once — the
@@ -105,19 +109,27 @@ omissions:
   ``require_culmination=False`` and ``strict_type_hierarchy=False``.
 * **The validator's findings are advisory here.** They are stamped onto
   their row as review flags; nothing is dropped and nothing raises.
-  Three of the reachable codes are inherited Rule 1 residues in the
+  Five of the reachable codes are inherited Rule 1 residues in the
   SHARED validator, recorded here rather than authored around:
   ``description_length`` is a word-count band and ``thin_description`` a
-  word-count floor (both decide meaning by counting words), and
+  word-count floor (both decide meaning by counting words);
   ``placeholder`` is a keyword vocabulary — ``PLACEHOLDERS`` contains
   the word "none", tested as a whole-word scan over the whole detailing,
   so ordinary English ("faces none at all") is classified as placeholder
-  text; it fires on 2 of the golden chapter's 15 Pre rows. All three
-  can fire on a perfectly well-authored prerequisite row, which is why
-  promoting Pre warnings to fatals wholesale would fail exactly the rows
-  the format asks for. They are NOT scoped away here — hiding a Rule 1
-  defect is not purging it (spec T4's §3 purge doctrine) — and they are
-  not fixed here either: all three are pre-existing shared Post-lane
+  text; it fires on 2 of the golden chapter's 15 Pre rows. Since the Pre
+  lane grew its own Q1 inventory (``preanalyse.py``) two more are
+  reachable, both VERB vocabularies over the rendered analysis section:
+  ``misconception_framing`` (``_MISCONCEPTION_BELIEF_RE``'s verb list
+  does not contain "take … to mean") and ``error_analysis_framing``
+  (``_ERROR_ANALYSIS_ACTION_RE``'s does not contain "carry a claim …
+  across"); each fires on 1 of the golden chapter's 15 Pre rows over a
+  well-framed item. All five can fire on a perfectly well-authored
+  prerequisite row, which is why promoting Pre warnings to fatals
+  wholesale would fail exactly the rows the format asks for. They are
+  NOT scoped away here — hiding a Rule 1 defect is not purging it (spec
+  T4's §3 purge doctrine) — and no authored item is ever reworded to
+  satisfy one, which would hide it just as effectively. They are not
+  fixed here either: all five are pre-existing shared Post-lane
   machinery whose real purge is replacing each with a model verdict,
   which moves the Post lane and belongs to its own change. The deposit
   gate is a later slice's, and it inherits these recorded flags.
@@ -197,12 +209,21 @@ _LINK_BATCH_SIZE = 8
 #   ``\nAchieving Mastery: <text>`` shape that flag also checks is
 #   guaranteed here by construction — this module mints the line — which
 #   is a stronger guarantee than a validator flag.
-# * ``strict_analysis_section=False`` and ``analysis_allotted_keys=set()``
-#   — Q1: a concept's Misconception/ Error Analysis section exists only
-#   where an inventory item was allotted to it. No Pre-scoped inventory
-#   exists yet (the next slice's work), so no Pre row is allotted one.
-#   The empty key set scopes the existence codes to nothing while keeping
-#   ``unallotted_analysis_section`` live as marker accounting.
+# * ``strict_analysis_section=False`` and ``analysis_allotted_keys`` —
+#   Q1: a concept's Misconception/ Error Analysis section exists only
+#   where an inventory item was allotted to it. The Pre lane now has its
+#   own inventory (``preanalyse.py``), so the key set is DERIVED from the
+#   rows' own allotment markers at validation time
+#   (``validate_rows``) rather than pinned empty here: it scopes the
+#   existence codes to the allotted rows and keeps
+#   ``unallotted_analysis_section`` live as marker accounting over the
+#   rest. ``strict_analysis_section`` stays DECIDED OFF: it activates the
+#   shared validator's Post-lane analysis QUALITY codes, and the Pre
+#   lane's validation is advisory in this slice, so turning them on would
+#   add Post-flavoured prose judgments to a prerequisite row without
+#   gating anything. The canonical section SHAPE is guaranteed here by
+#   construction — ``preanalyse.stamp`` mints it — which is the stronger
+#   guarantee.
 # * ``source_text=""`` — the verbatim-source check compares against the
 #   CURRENT chapter's prose. A prerequisite description is about material
 #   from before this chapter, so that comparison has no meaning here.
@@ -216,6 +237,8 @@ PRE_VALIDATOR_FLAGS: dict[str, Any] = {
     "strict_analysis_section": False,
     "strict_mastery_statement": False,
     "source_text": "",
+    # Derived per call from the rows' own allotment markers; the constant
+    # keeps the default the Pre lane means when nothing was allotted.
     "analysis_allotted_keys": frozenset(),
 }
 
@@ -803,6 +826,8 @@ def build(
     *,
     provider: kernel.Provider | None = None,
     links_provider: kernel.Provider | None = None,
+    analysis_provider: kernel.Provider | None = None,
+    analysis_allot_provider: kernel.Provider | None = None,
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
@@ -815,13 +840,15 @@ def build(
 
     Returns ``{"rows": [Pre concept rows], "topics": [{"pre_topic_id",
     "title", "pre_concept_ids"}], "needed_for": {pre_concept_id:
-    [post_concept_id]}, "review_flags": {pre_concept_id: [flags]},
+    [post_concept_id]}, "analysis": {the Pre-scoped Q1 inventory and its
+    allotments}, "review_flags": {pre_concept_id: [flags]},
     "decision_flags": {decision: [flags]}, "validation": [findings]}``.
     An empty capture returns an empty map without spending a decision —
     a chapter that genuinely assumes nothing is never padded.
     """
     from . import fixer as fixer_mod
     from . import place as place_mod
+    from . import preanalyse as preanalyse_mod
     from . import prompts as prompts_mod
     from .. import concept_refiner as cr
 
@@ -836,6 +863,12 @@ def build(
         "rows": [],
         "topics": [],
         "needed_for": {},
+        "analysis": {
+            "inventory": [],
+            "allotments": {},
+            "rationales": {},
+            "review_flags": {},
+        },
         "review_flags": {},
         "decision_flags": {},
         "validation": [],
@@ -847,13 +880,29 @@ def build(
         )
         return empty
 
+    analysis_critic = critic
     if provider is None:
         envelope_mod.require_live_api()
         provider = _live_map
         links_provider = links_provider or _live_links
+        analysis_provider = analysis_provider or preanalyse_mod._live_build
+        analysis_allot_provider = (
+            analysis_allot_provider or preanalyse_mod._live_allot
+        )
         critic = critic if critic is not None else _live_critic
+        # The Pre inventory has its own audit dimensions (genuineness,
+        # distinctness, and "is this really about what the chapter goes
+        # on to teach"), so it gets its own critic prompt rather than the
+        # map critic's four verifications.
+        analysis_critic = (
+            analysis_critic
+            if analysis_critic is not None
+            else preanalyse_mod._live_critic
+        )
         fixer = fixer or fixer_mod.live_fixer
     links_provider = links_provider or provider
+    analysis_provider = analysis_provider or provider
+    analysis_allot_provider = analysis_allot_provider or analysis_provider
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     rules_suffix = prompts_mod.instruction_rules_suffix(
@@ -1088,6 +1137,36 @@ def build(
                 "review (the concept ships either way)"
             )
 
+    # ---- the Pre lane's own Q1 inventory, and its allotted sections ---
+    #
+    # Q1 reaches this lane through an inventory of its OWN
+    # (``preanalyse.py``, own kinds and own POLICY_VERSION): the Post
+    # pass cannot be pointed at these rows — its evidence is the current
+    # chapter's source blocks and question inventory, its allot target
+    # set is the Post ordering, and widening either would re-key every
+    # stored Post analysis decision. The section exists only where an
+    # item was allotted, NOT every pre-concept receives one, and
+    # Achieving Mastery (minted above, inside the Description section)
+    # is untouched by any of it.
+    #
+    # It runs HERE — after the rows exist, before the guard — so the
+    # stamped item text is inside the surface ``_refuse_source_qids``
+    # scans, and inside the seal that follows.
+    analysis = preanalyse_mod.analyse(
+        env,
+        {"prerequisites": captured},
+        rows,
+        qids=qids,
+        rules_suffix=rules_suffix,
+        provider=analysis_provider,
+        allot_provider=analysis_allot_provider,
+        critic=analysis_critic,
+        store=store,
+        fixer=fixer,
+    )
+    for pre_id, flags in preanalyse_mod.stamp(rows, analysis).items():
+        review_flags.setdefault(pre_id, []).extend(flags)
+
     # ---- the fail-closed guard, then advisory validation, then the seal
     #
     # The guard runs over the AUTHORED artefact and it runs FIRST, before
@@ -1109,8 +1188,26 @@ def build(
     #   content-addressed, so the refusal would replay forever at zero
     #   spend. Q10 says a critic's dissent is "an advisory review flag,
     #   never a gate"; scanning before stamping is how that stays true.
+    # * ``analysis`` is guarded for exactly the reason ``topics`` is. An
+    #   inventory item's ``rationale``, and an allotment's, never reach a
+    #   row — but they ride the same ``pre_map`` carry channel and the
+    #   same snapshot, which is the artefact the steer names. Its
+    #   ``review_flags`` are excluded by the SAME Q10 rule as the row
+    #   flags above: the Pre-analysis critic is asked about a
+    #   prerequisite's misconceptions, and a critic that names a source
+    #   question in its dissent must not become a permanent, replaying
+    #   gate over work that is already paid for.
     _refuse_source_qids(
-        {"rows": rows, "topics": topics, "needed_for": needed_for},
+        {
+            "rows": rows,
+            "topics": topics,
+            "needed_for": needed_for,
+            "analysis": {
+                key: value
+                for key, value in analysis.items()
+                if key != "review_flags"
+            },
+        },
         qids,
         where="a Pre-Learning concept row",
     )
@@ -1144,6 +1241,7 @@ def build(
         "rows": rows,
         "topics": topics,
         "needed_for": needed_for,
+        "analysis": analysis,
         "review_flags": review_flags,
         "decision_flags": decision_flags,
         "validation": validation,
@@ -1158,12 +1256,22 @@ def validate_rows(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     and ``thin_description`` collide by design with a concise
     prerequisite description, so promoting Pre warnings to fatals
     wholesale would fail exactly the rows the format asks for.
+
+    Q1's allotment context is DERIVED from the rows themselves (the
+    ``_aegis_analysis_allotments`` marker ``preanalyse.stamp`` writes),
+    never assumed: only a row the Pre inventory allotted an item to may
+    carry the Misconception/ Error Analysis section, and a section on any
+    other row is named by ``unallotted_analysis_section``. Marker
+    accounting, no content judgment.
     """
     from .. import concept_validator
 
-    report = concept_validator.validate_concept_rows(
-        [dict(row) for row in rows], **PRE_VALIDATOR_FLAGS
+    prepared = [dict(row) for row in rows]
+    flags = dict(PRE_VALIDATOR_FLAGS)
+    flags["analysis_allotted_keys"] = concept_validator.analysis_allotted_keys(
+        prepared
     )
+    report = concept_validator.validate_concept_rows(prepared, **flags)
     return [dict(finding) for finding in report.get("errors") or []]
 
 

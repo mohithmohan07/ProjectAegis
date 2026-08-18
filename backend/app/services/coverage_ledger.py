@@ -27,12 +27,22 @@ from typing import Any, Mapping
 
 from . import containers
 
-LEDGER_VERSION = 2
+LEDGER_VERSION = 3
 
 _TYPE_CASE_LEDGER_KEY = "_type_case_qid_placement_ledger"
-# Q1 allotment marker stamped by phase3/assemble.py (kept in lockstep
-# with concept_validator.ANALYSIS_ALLOTMENTS_FIELD).
+# Q1 allotment marker stamped by phase3/assemble.py and, for the Pre
+# lane, by phase3/preanalyse.py (kept in lockstep with
+# concept_validator.ANALYSIS_ALLOTMENTS_FIELD).
 _ANALYSIS_ALLOTMENTS_FIELD = "_aegis_analysis_allotments"
+# The Pre lane's own row markers (phase3/premap.py). A row on the
+# prerequisite-capture grounding contract is a PRE-LEARNING row: it has
+# no source question, no Type/Case and no figure by construction (the
+# no-extraction steer), so charging it a POST obligation would report a
+# debt it can never owe. Marker accounting, not a reading of content.
+_PRE_GROUNDING_CONTRACT = "derived-from-prerequisite-capture"
+_PRE_CONCEPT_ID_FIELD = "_pre_concept_id"
+_PRE_PREREQUISITES_FIELD = "_aegis_pre_prerequisites"
+_PRE_NEEDED_FOR_FIELD = "_aegis_needed_for"
 # The pooled hub kind vocabulary lives in ``containers`` (single source);
 # this name is a consumer alias, pinned by the lockstep test.
 _HUB_KINDS = containers.HUB_INVENTORY_KINDS
@@ -156,6 +166,8 @@ def _learner_analysis_rows(
     records: list[Mapping[str, Any]],
     *,
     allotment_aware: bool = False,
+    exclude_pre_learning: bool = False,
+    mark_culmination: bool = True,
 ) -> list[dict[str, Any]]:
     """Rows missing their Mastery line or their OWED analysis section.
 
@@ -165,10 +177,28 @@ def _learner_analysis_rows(
     row without a section is complete. Legacy jobs (no allotment ledger
     anywhere) keep the every-row accounting. Achieving Mastery stays
     owed by every row either way.
+
+    ``exclude_pre_learning`` drops Pre rows from the POST accounting;
+    they are accounted separately, always allotment-aware, because the
+    Pre lane's only analysis mechanism is its own Q1 inventory and it
+    has no legacy every-row contract to fall back to. Row indexes stay
+    positional in the list handed in, so a skipped row does not
+    renumber its neighbours.
+
+    ``mark_culmination`` is the POST lane's marker accounting: that lane
+    mints its culmination rows and their titles, so reading the title
+    back is reading an identity this pipeline created. The PRE lane
+    mints none (``premap.PRE_VALIDATOR_FLAGS`` records
+    ``require_culmination=False``), so there the same read would be a
+    keyword classifying model-authored free text — and would excuse a
+    real Pre row from the Achieving Mastery every row owes. Pre rows are
+    therefore reported with ``culmination`` false and nothing is exempt.
     """
     rows: list[dict[str, Any]] = []
     for index, record in enumerate(records, start=1):
         if not isinstance(record, Mapping):
+            continue
+        if exclude_pre_learning and is_pre_learning_row(record):
             continue
         text = json.dumps(dict(record), ensure_ascii=False, default=str)
         title = str(
@@ -196,8 +226,168 @@ def _learner_analysis_rows(
             "row_index": index,
             "concept_title": title[:160],
             "missing": missing,
-            "culmination": _CULMINATION_MARK in title.casefold(),
+            "culmination": (
+                mark_culmination and _CULMINATION_MARK in title.casefold()
+            ),
         })
+    return rows
+
+
+def is_pre_learning_row(record: Mapping[str, Any]) -> bool:
+    """Whether a released row belongs to the PRE-LEARNING lane.
+
+    Pure marker accounting over identities this pipeline itself mints
+    (``phase3/premap.py``): the prerequisite-capture grounding contract,
+    or the row-private pre-concept id. It reads nothing out of the row's
+    content, so it can never classify a row by what it says.
+    """
+    if not isinstance(record, Mapping):
+        return False
+    contract = str(record.get("_source_grounding_contract") or "").strip()
+    if contract == _PRE_GROUNDING_CONTRACT:
+        return True
+    return bool(str(record.get(_PRE_CONCEPT_ID_FIELD) or "").strip())
+
+
+def _pre_learning_rows(
+    records: list[Mapping[str, Any]],
+    pre_map: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    """Every Pre row this ledger can see: released, or from the snapshot.
+
+    A Pre row may reach the ledger two ways — inside ``records`` (a Pre
+    release payload) or only through the run's recorded Pre map snapshot
+    (a Post release, where the Pre lane rode its own key). Both are
+    accounted; a row present in both is counted once, by its
+    ``_pre_concept_id``.
+    """
+    rows: list[Mapping[str, Any]] = [
+        row for row in records if is_pre_learning_row(row)
+    ]
+    seen = {
+        str(row.get(_PRE_CONCEPT_ID_FIELD) or "")
+        for row in rows
+        if str(row.get(_PRE_CONCEPT_ID_FIELD) or "")
+    }
+    for row in pre_map.get("rows") or []:
+        if not isinstance(row, Mapping):
+            continue
+        pre_id = str(row.get(_PRE_CONCEPT_ID_FIELD) or "")
+        if pre_id and pre_id in seen:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _pre_prerequisite_rows(
+    pre_rows: list[Mapping[str, Any]],
+    prelearn_snapshot: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """R4 over the capture: every merged prerequisite mapped exactly once.
+
+    ``carried`` is what the Pre map's rows actually claim; the merged
+    capture (``source.phase3-prelearn-capture.json``) is the authority
+    on what there was to carry. A prerequisite named by no row is a
+    learner's prerequisite lost; one named twice is a double-count. Both
+    are named here, never reduced to a count.
+
+    When the Pre lane carried prerequisites but that authority is absent
+    — the snapshot was never written (``runner._snapshot_prelearn``
+    writes best-effort), or the artifact directory was partly cleaned —
+    nothing here can confirm the claims, and an absent authority is not
+    a clean bill of health. Each claim is reported
+    ``capture_unavailable`` rather than ``mapped``, so the ledger says
+    "cannot account" instead of silently passing. A run with no Pre lane
+    claims nothing and still gets an empty accounting, not a false debt.
+    """
+    carried: dict[str, list[str]] = {}
+    for row in pre_rows:
+        pre_id = str(row.get(_PRE_CONCEPT_ID_FIELD) or "")
+        for entry in row.get(_PRE_PREREQUISITES_FIELD) or []:
+            if not isinstance(entry, Mapping):
+                continue
+            ref = str(entry.get("prerequisite_id") or "")
+            if ref:
+                carried.setdefault(ref, []).append(pre_id)
+    snapshot = (
+        prelearn_snapshot if isinstance(prelearn_snapshot, Mapping) else None
+    )
+    # The authority is present when the capture snapshot is, even if it
+    # captured nothing: an empty capture beside a claiming row is an
+    # ``unknown_prerequisite``, a MISSING capture is unverifiable.
+    authority = (
+        snapshot is not None
+        and snapshot.get("prerequisites") is not None
+    )
+    captured: list[dict[str, Any]] = [
+        dict(row)
+        for row in (snapshot or {}).get("prerequisites") or []
+        if isinstance(row, Mapping)
+        and str(row.get("prerequisite_id") or "").strip()
+    ]
+    known = {str(row.get("prerequisite_id") or "") for row in captured}
+    rows: list[dict[str, Any]] = []
+    for ref in sorted(known | set(carried)):
+        holders = carried.get(ref, [])
+        if not holders:
+            status = "unmapped"
+        elif len(holders) > 1:
+            status = "mapped_more_than_once"
+        elif not authority:
+            status = "capture_unavailable"
+        elif ref not in known:
+            status = "unknown_prerequisite"
+        else:
+            status = "mapped"
+        text = ""
+        for row in captured:
+            if str(row.get("prerequisite_id") or "") == ref:
+                text = str(row.get("text") or "")[:300]
+                break
+        rows.append({
+            "prerequisite_id": ref,
+            "status": status,
+            "text": text,
+            "pre_concept_ids": holders,
+        })
+    return rows
+
+
+def _pre_needed_for_rows(
+    pre_rows: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Every needed-for link, resolved or not.
+
+    A link resolves when it names a Post concept id AND carries that
+    concept's title (``premap.build`` fills the title only from the ids
+    the run actually has). A pre-concept linked to nothing is NOT an
+    accounting gap — necessity is the critic's advisory dimension (Q10)
+    — so it is reported as ``no_links`` and never counts as incomplete.
+    """
+    rows: list[dict[str, Any]] = []
+    for row in pre_rows:
+        pre_id = str(row.get(_PRE_CONCEPT_ID_FIELD) or "")
+        links = [
+            link for link in row.get(_PRE_NEEDED_FOR_FIELD) or []
+            if isinstance(link, Mapping)
+        ]
+        if not links:
+            rows.append({
+                "pre_concept_id": pre_id,
+                "post_concept_id": "",
+                "post_concept_title": "",
+                "status": "no_links",
+            })
+            continue
+        for link in links:
+            concept_id = str(link.get("post_concept_id") or "")
+            title = str(link.get("post_concept_title") or "")
+            rows.append({
+                "pre_concept_id": pre_id,
+                "post_concept_id": concept_id,
+                "post_concept_title": title[:160],
+                "status": "resolved" if concept_id and title else "unresolved",
+            })
     return rows
 
 
@@ -251,6 +441,8 @@ def build_coverage_ledger(
     container_projections: Mapping[str, Any] | None = None,
     place_snapshot: Mapping[str, Any] | None = None,
     analysis_snapshot: Mapping[str, Any] | None = None,
+    pre_map_snapshot: Mapping[str, Any] | None = None,
+    prelearn_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Account for every source item and every shipped concept.
 
@@ -259,9 +451,24 @@ def build_coverage_ledger(
     ``place_snapshot`` is the Phase 2.2 placement pass's recorded output
     (``source.phase3-place.json``); ``analysis_snapshot`` the Phase
     2.4/4.3 chapter analysis inventory
-    (``source.phase3-analysis.json``, Q1). All are optional — a legacy
-    job without them keeps the item/URL accounting (and the legacy
-    every-row analysis expectation).
+    (``source.phase3-analysis.json``, Q1); ``pre_map_snapshot`` the
+    Phase 03 Pre-Learning map (``source.phase3-prelearn-map.json``) and
+    ``prelearn_snapshot`` the merged prerequisite capture it was built
+    from (``source.phase3-prelearn-capture.json``). All are optional — a
+    legacy job without them keeps the item/URL accounting (and the
+    legacy every-row analysis expectation), and a run with no Pre lane
+    gets an empty Pre accounting rather than a false debt.
+
+    **Lane awareness (§6.6).** The two lanes owe different things and
+    this ledger charges each only its own. A PRE row has no source
+    question, no Type/Case and no figure by construction — the
+    no-extraction steer guarantees it — so it is never counted into the
+    question/hub/figure accounting or into the POST analysis
+    expectation. What the Pre lane DOES owe is accounted in full: every
+    merged prerequisite carried into the map exactly once, every Pre
+    inventory item allotted exactly once, every needed-for link
+    resolved, and Achieving Mastery on every Pre row. All of it is
+    counting identities; none of it judges whether the Pre map is good.
     """
     inventory = dict(question_inventory or {})
     rows = [row for row in (records or []) if isinstance(row, Mapping)]
@@ -269,7 +476,14 @@ def build_coverage_ledger(
         item for item in inventory.get("items") or []
         if isinstance(item, dict)
     ]
-    records_text = json.dumps(rows, ensure_ascii=False, default=str)
+    pre_map = dict(pre_map_snapshot or {})
+    # A Pre row can never carry a source qid, a Type/Case route or a
+    # figure url (premap's guard fails closed on the first, and the lane
+    # mints neither of the others), so it can only ever ADD false
+    # "placed" evidence to the POST scans. Keeping it out of
+    # ``records_text`` makes that structural rather than incidental.
+    post_rows = [row for row in rows if not is_pre_learning_row(row)]
+    records_text = json.dumps(post_rows, ensure_ascii=False, default=str)
 
     ledger = inventory.get(_TYPE_CASE_LEDGER_KEY)
     placements = (
@@ -307,12 +521,27 @@ def build_coverage_ledger(
     # rows themselves), the analysis section is owed only by allotted
     # rows; a legacy job keeps the every-row expectation.
     allotment_aware = analysis_snapshot is not None or any(
-        row.get(_ANALYSIS_ALLOTMENTS_FIELD) for row in rows
+        row.get(_ANALYSIS_ALLOTMENTS_FIELD) for row in post_rows
     )
     analysis_rows = _learner_analysis_rows(
-        rows, allotment_aware=allotment_aware
+        rows, allotment_aware=allotment_aware, exclude_pre_learning=True
     )
     analysis_item_rows = _analysis_item_rows(analysis_snapshot)
+
+    # ---- the PRE lane's own obligations (§6.6) -----------------------
+    pre_rows = _pre_learning_rows(rows, pre_map)
+    # Always allotment-aware: the Pre lane's Q1 inventory is its ONLY
+    # analysis mechanism (the retired every-concept writer went with the
+    # lane), so there is no legacy every-row contract to fall back to and an
+    # unallotted Pre row owing nothing is complete, not incomplete.
+    pre_analysis_rows = _learner_analysis_rows(
+        pre_rows, allotment_aware=True, mark_culmination=False
+    )
+    pre_analysis_item_rows = _analysis_item_rows(pre_map.get("analysis"))
+    pre_prerequisite_rows = _pre_prerequisite_rows(
+        pre_rows, prelearn_snapshot
+    )
+    pre_needed_for_rows = _pre_needed_for_rows(pre_rows)
 
     furniture = projections.get("furniture")
     furniture = dict(furniture) if isinstance(furniture, Mapping) else {}
@@ -353,6 +582,65 @@ def build_coverage_ledger(
     analysis_items_unaccounted = [
         row for row in analysis_item_rows if row["status"] != "allotted"
     ]
+    # No culmination exemption in the PRE lane: it mints no culmination
+    # row, so every Pre row missing an obligation it actually owes —
+    # Achieving Mastery always, the analysis section where its own
+    # inventory allotted an item — is incompleteness, never excused by
+    # what the model happened to call the concept.
+    pre_normal_missing = list(pre_analysis_rows)
+    pre_items_unaccounted = [
+        row for row in pre_analysis_item_rows if row["status"] != "allotted"
+    ]
+    pre_prerequisites_unaccounted = [
+        row for row in pre_prerequisite_rows if row["status"] != "mapped"
+    ]
+    pre_links_unresolved = [
+        row for row in pre_needed_for_rows if row["status"] == "unresolved"
+    ]
+    pre_learning = {
+        "rows": len(pre_rows),
+        "topics": len([
+            topic for topic in pre_map.get("topics") or []
+            if isinstance(topic, Mapping)
+        ]),
+        "refused": str(pre_map.get("refused") or ""),
+        "prerequisites": {
+            "total": len(pre_prerequisite_rows),
+            "mapped": len(pre_prerequisite_rows)
+            - len(pre_prerequisites_unaccounted),
+            "unaccounted": len(pre_prerequisites_unaccounted),
+        },
+        # Q1 in the Pre lane: every item allotted to exactly one
+        # pre-concept, and NOT every pre-concept receives one — the
+        # count of rows carrying a section is reported, never owed.
+        "analysis_items": {
+            "total": len(pre_analysis_item_rows),
+            "allotted": len(pre_analysis_item_rows)
+            - len(pre_items_unaccounted),
+            "unaccounted": len(pre_items_unaccounted),
+        },
+        "rows_with_analysis_section": sum(
+            1 for row in pre_rows if row.get(_ANALYSIS_ALLOTMENTS_FIELD)
+        ),
+        "needed_for_links": {
+            "total": len([
+                row for row in pre_needed_for_rows
+                if row["status"] != "no_links"
+            ]),
+            "resolved": len([
+                row for row in pre_needed_for_rows
+                if row["status"] == "resolved"
+            ]),
+            "unresolved": len(pre_links_unresolved),
+            # Advisory, never incomplete (Q10): necessity is a critic
+            # dimension, so a pre-concept nothing requires still ships.
+            "pre_concepts_without_links": len([
+                row for row in pre_needed_for_rows
+                if row["status"] == "no_links"
+            ]),
+        },
+        "rows_missing_learner_analysis": len(pre_analysis_rows),
+    }
     summary = {
         "questions": channel_counts("question"),
         "hubs": channel_counts("hub"),
@@ -377,6 +665,7 @@ def build_coverage_ledger(
             "unaccounted": len(analysis_items_unaccounted),
         },
         "flagged_for_review": sum(1 for row in item_rows if row["flag"]),
+        "pre_learning": pre_learning,
     }
     complete = (
         summary["questions"]["unaccounted"] == 0
@@ -385,6 +674,13 @@ def build_coverage_ledger(
         and block_status_counts.get("unaccounted", 0) == 0
         and not normal_missing
         and not analysis_items_unaccounted
+        # The Pre lane's own obligations, and only its own. A run with
+        # no Pre lane has none of these, so this reads exactly as it did
+        # before the lane existed.
+        and not pre_prerequisites_unaccounted
+        and not pre_items_unaccounted
+        and not pre_links_unresolved
+        and not pre_normal_missing
     )
     reading = dict(chapter_reading or {})
     return {
@@ -400,6 +696,16 @@ def build_coverage_ledger(
         "dropped_furniture": dropped_furniture,
         "rows_missing_learner_analysis": analysis_rows,
         "learner_analysis_items": analysis_item_rows,
+        # The PRE lane's per-identity accounting (§6.6), never a bare
+        # count: every prerequisite with the pre-concept(s) that claim
+        # it, every Pre inventory item with its destination, every
+        # needed-for link with what it resolved to.
+        "pre_learning": {
+            "prerequisites": pre_prerequisite_rows,
+            "analysis_items": pre_analysis_item_rows,
+            "needed_for": pre_needed_for_rows,
+            "rows_missing_learner_analysis": pre_analysis_rows,
+        },
         "chapter_reading": {
             "provenance": dict(reading.get("provenance") or {}),
             "census_rows": reading.get("census_rows"),
@@ -408,6 +714,122 @@ def build_coverage_ledger(
             ),
         } if reading else {},
     }
+
+
+def _render_pre_learning(ledger: Mapping[str, Any]) -> list[str]:
+    """The PRE lane's accounting, in the reviewer's first file.
+
+    Silent when the run had no Pre lane, and ONLY then. The gate is
+    whether the Pre accounting has anything to say, never whether rows
+    reached the ledger: a run whose map snapshot is missing or empty
+    while the capture holds prerequisites is exactly the state in which
+    prerequisites are lost, and gating on ``rows`` would make the
+    reviewer's first file say ``INCOMPLETE`` with no reason and name
+    nothing (R4: silent incompleteness is impossible). Counts and
+    identities only — the ledger says what the Pre lane produced and
+    what it owes, never whether the map is any good.
+    """
+    summary = (ledger.get("summary") or {}).get("pre_learning") or {}
+    detail = ledger.get("pre_learning") or {}
+    accounted = any(
+        detail.get(key)
+        for key in (
+            "prerequisites",
+            "analysis_items",
+            "needed_for",
+            "rows_missing_learner_analysis",
+        )
+    )
+    if (
+        not summary.get("rows")
+        and not summary.get("refused")
+        and not accounted
+    ):
+        return []
+    prerequisites = summary.get("prerequisites") or {}
+    analysis_items = summary.get("analysis_items") or {}
+    links = summary.get("needed_for_links") or {}
+    lines = ["", "  PRE-LEARNING (Phase 03)"]
+    if summary.get("refused"):
+        lines.append(
+            "    REFUSED and not shipped: " + summary["refused"][:300]
+        )
+    elif not summary.get("rows"):
+        lines.append(
+            "    no Pre-Learning map is recorded for this run, so nothing "
+            "below could reach a pre-concept"
+        )
+    lines.append(
+        f"    pre-concepts: {summary.get('rows', 0)} in "
+        f"{summary.get('topics', 0)} pre-topic(s)"
+    )
+    lines.append(
+        f"    prerequisites: {prerequisites.get('mapped', 0)}/"
+        f"{prerequisites.get('total', 0)} mapped exactly once"
+        + (
+            f", {prerequisites['unaccounted']} unaccounted"
+            if prerequisites.get("unaccounted") else ""
+        )
+    )
+    for row in detail.get("prerequisites") or []:
+        if row.get("status") == "mapped":
+            continue
+        lines.append(
+            f"      {row.get('status')} {row.get('prerequisite_id')}: "
+            f"{str(row.get('text'))[:120]!r}"
+            + (
+                " claimed by " + ", ".join(row.get("pre_concept_ids") or [])
+                if row.get("pre_concept_ids") else ""
+            )
+        )
+    lines.append(
+        "    analysis inventory items: "
+        f"{analysis_items.get('allotted', 0)}/"
+        f"{analysis_items.get('total', 0)} allotted, on "
+        f"{summary.get('rows_with_analysis_section', 0)} of "
+        f"{summary.get('rows', 0)} pre-concept(s) — not every "
+        "pre-concept receives one (Q1)"
+        + (
+            f", {analysis_items['unaccounted']} unaccounted"
+            if analysis_items.get("unaccounted") else ""
+        )
+    )
+    for row in detail.get("analysis_items") or []:
+        if row.get("status") != "allotted":
+            lines.append(
+                f"      unaccounted analysis item {row.get('item_id')} "
+                f"[{row.get('kind')}]: {str(row.get('text'))[:120]!r}"
+            )
+    lines.append(
+        f"    needed-for links: {links.get('resolved', 0)}/"
+        f"{links.get('total', 0)} resolved"
+        + (
+            f", {links['unresolved']} unresolved"
+            if links.get("unresolved") else ""
+        )
+        + (
+            f"; {links['pre_concepts_without_links']} pre-concept(s) "
+            "linked to nothing (advisory, Q10 — they ship)"
+            if links.get("pre_concepts_without_links") else ""
+        )
+    )
+    missing = detail.get("rows_missing_learner_analysis") or []
+    if missing:
+        lines.append(
+            f"    pre-concepts missing an owed section: {len(missing)}"
+        )
+        for row in list(missing)[:10]:
+            lines.append(
+                f"      row {row.get('row_index')} "
+                f"{str(row.get('concept_title'))!r} missing "
+                f"{', '.join(row.get('missing') or [])}"
+            )
+    else:
+        lines.append(
+            "    every pre-concept carries its Achieving Mastery line, and "
+            "its analysis section where one was allotted"
+        )
+    return lines
 
 
 def render_coverage(ledger: Mapping[str, Any]) -> str:
@@ -503,6 +925,7 @@ def render_coverage(ledger: Mapping[str, Any]) -> str:
                     if row.get("disposition") else ""
                 )
             )
+    lines.extend(_render_pre_learning(ledger))
     furniture = ledger.get("dropped_furniture") or {}
     furniture_lines = [
         (lane, line)

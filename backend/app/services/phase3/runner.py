@@ -23,6 +23,7 @@ from . import host as host_mod
 from . import kernel
 from . import place as place_mod
 from . import polish as polish_mod
+from . import preanalyse as preanalyse_mod
 from . import prelearn as prelearn_mod
 from . import premap as premap_mod
 from . import settle as settle_mod
@@ -176,10 +177,12 @@ def run(
 
     ``providers`` is test-only injection ({"topology", "grounding",
     "analysis", "host", "place", "analyse", "analyse_allot", "prelearn",
-    "prelearn_merge", "premap", "premap_links", "critic", "fixer"} —
-    "analysis" is Settle's content-authoring provider, "analyse" the Q1
-    chapter-inventory pass, "prelearn" the Phase 03 per-stage
-    pre-requisite capture, "premap" the Pre-Learning map build);
+    "prelearn_merge", "premap", "premap_links", "preanalyse",
+    "preanalyse_allot", "critic", "fixer"} — "analysis" is Settle's
+    content-authoring provider, "analyse" the Q1 chapter-inventory pass,
+    "prelearn" the Phase 03 per-stage pre-requisite capture, "premap" the
+    Pre-Learning map build, "preanalyse" the Pre lane's own Q1
+    inventory);
     production omits it and the passes use their live API adapters —
     including the live Fixer (Q13) — failing closed if no API is live.
 
@@ -350,11 +353,16 @@ def run(
             rows,
             provider=injected.get("premap"),
             links_provider=injected.get("premap_links"),
+            analysis_provider=injected.get("preanalyse"),
+            analysis_allot_provider=injected.get("preanalyse_allot"),
             critic=injected.get("critic"),
             store=store,
             fixer=injected.get("fixer"),
         )
-    except premap_mod.PreExtractionError as error:
+    except (
+        premap_mod.PreExtractionError,
+        preanalyse_mod.PreAnalysisError,
+    ) as error:
         # Recorded as a deliberate decision, not left as an omission.
         #
         # The no-extraction guard fails closed on the ARTEFACT — a Pre
@@ -382,6 +390,12 @@ def run(
             "rows": [],
             "topics": [],
             "needed_for": {},
+            "analysis": {
+                "inventory": [],
+                "allotments": {},
+                "rationales": {},
+                "review_flags": {},
+            },
             "review_flags": {},
             "decision_flags": {},
             "validation": [],
