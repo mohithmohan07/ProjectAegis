@@ -1566,9 +1566,10 @@ def test_legacy_81_percent_checkpoint_and_v6_without_owner_ledger_are_rejected()
     )
 
 
-def test_inventory_extraction_retries_empty_or_stub_rows_before_checkpoint(
+def test_inventory_extraction_retries_empty_rows_before_checkpoint(
     monkeypatch,
 ):
+    """Emptiness, never brevity: the retry trigger is a text-less row."""
     chunk = {
         "text": "Exercise 1. Calculate current from charge and elapsed time.",
         "source_topic": "Electric Current",
@@ -1706,10 +1707,17 @@ def test_inventory_extraction_rejects_correction_retry_that_drops_valid_rows(
 
 
 def test_unowned_non_task_row_is_dropped_only_by_adjudication(monkeypatch):
-    """A shape-nominated stub is dropped only on an artifact verdict the
-    independent critic verified — never by the shape rule itself."""
+    """A nominated row is dropped only on an artifact verdict the
+    independent critic verified — never by the nomination itself.
+
+    The nomination is absence of content, not a reading of the content: the
+    banner's task text is nothing but the ``source_label`` it was filed
+    under. The verb allow-list that used to nominate rows here (a keyword
+    vocabulary classifying content, CLAUDE.md's first bullet) is purged, so
+    the row beside it is checked to be untouched by any shape rule.
+    """
     chunk = {
-        "text": "Observe the picture of farmers at work, then answer Q1.",
+        "text": "Practice Set 1.1\n1) Describe the monsoon farming cycle.",
         "source_topic": "Agriculture",
         "chapter_wide_tasks": False,
     }
@@ -1721,31 +1729,35 @@ def test_unowned_non_task_row_is_dropped_only_by_adjudication(monkeypatch):
         "_attach_explicit_figure_images",
         lambda items, _sections: items,
     )
-    described = (
-        "The picture shows farmers working in the field during the "
-        "monsoon season in Maharashtra."
-    )
+    seen: dict = {}
 
     def gpt(system, user, **_kwargs):
         if "inventory-completeness reviewer" in system:
             return {"verdict": "complete", "reason": ""}
         if "inventory-row adjudicator" in system:
+            seen["adjudicated"] = user
             return {"verdicts": [{
                 "qid": "QINV-0002",
                 "verdict": "artifact",
-                "reason": "describes the picture; its real ask is QINV-0001",
+                "reason": "names a question collection, asks nothing itself",
             }]}
         if "inventory-row critic" in system:
+            seen["criticized"] = user
             return {"verdict": "verified", "issues": []}
         return {"items": [
             {
                 "source_kind": "exercise",
+                "source_label": "Q1",
                 "raw_task": (
                     "Describe how the monsoon affects the farming cycle "
                     "shown in the picture."
                 ),
             },
-            {"source_kind": "source_task", "raw_task": described},
+            {
+                "source_kind": "checkpoint_question",
+                "source_label": "Practice Set 1.1",
+                "raw_task": "## Practice Set 1.1",
+            },
         ]}
 
     monkeypatch.setattr(g, "_openai_json", gpt)
@@ -1755,6 +1767,11 @@ def test_unowned_non_task_row_is_dropped_only_by_adjudication(monkeypatch):
 
     assert [item["qid"] for item in inventory["items"]] == ["QINV-0001"]
     assert g._invalid_inventory_items(inventory) == []
+    # Only the banner was put to the model, and the critic gated the drop.
+    assert "QINV-0002" in seen["adjudicated"]
+    assert "QINV-0001" not in seen["adjudicated"]
+    assert seen.get("criticized")
+    assert "task_is_only_its_own_label" in seen["adjudicated"]
 
 
 def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):

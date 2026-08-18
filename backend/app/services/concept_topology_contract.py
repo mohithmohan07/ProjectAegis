@@ -35,10 +35,49 @@ def _normalize_literal_linebreaks(value: str) -> str:
     return _LITERAL_LINEBREAK_RE.sub("\n", str(value or ""))
 
 
+PRELEARN_SNAPSHOT = "source.phase3-prelearn-capture.json"
+
+
+def restored_prerequisites() -> dict[str, Any] | None:
+    """The Phase 03 capture of the run this job's checkpoint came from.
+
+    A restored ``final_content_ready`` checkpoint skips the whole
+    rewritten Phase 3, so the in-memory carry below never exists — but
+    the run that produced the checkpoint wrote its capture beside the
+    decision store (``runner._snapshot_prelearn``). Read it back rather
+    than re-billing the run, and return None when there is nothing to
+    read so the caller can record the absence EXPLICITLY: "no capture in
+    this process" must never be readable as "this chapter has no
+    prerequisites" (R4).
+    """
+    import json
+    from pathlib import Path
+
+    from . import canonical_source_phase3 as phase3_core
+
+    session = phase3_core.active_session() or {}
+    artifact_dir = session.get("artifact_dir") if isinstance(
+        session, dict
+    ) else None
+    if not artifact_dir:
+        return None
+    try:
+        payload = json.loads(
+            (Path(artifact_dir) / PRELEARN_SNAPSHOT).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _run_rewritten_phase3(
     generation: ModuleType,
     out: list[dict],
     kwargs: dict[str, Any],
+    *,
+    carry: dict[str, Any] | None = None,
 ) -> list[dict]:
     """Route everything after the 81% boundary through the rewritten Phase 3.
 
@@ -47,6 +86,14 @@ def _run_rewritten_phase3(
     the decision store in the job's artifact directory, and returns the
     assembled rows — Types embedded in the house format, QIDs routed —
     for the unchanged deposit and release chain downstream.
+
+    ``carry`` is the run's second exit. The return value stays exactly
+    ``result["records"]`` — byte-identical for the Post lane, which is
+    the only thing the deposit and release chain reads — while every
+    OTHER key the run produced (the Phase 03 ``prerequisites`` capture
+    above all, doc §4/Q3) is copied into the caller's dict. Before this
+    parameter existed those keys were discarded here, so material built
+    inside the run had no way out at all.
     """
     import json
 
@@ -151,6 +198,10 @@ def _run_rewritten_phase3(
         f"{summary['flagged_row_count']} row(s) carrying review flags.",
         level="success",
     )
+    if carry is not None:
+        for key, value in result.items():
+            if key != "records":
+                carry[key] = copy.deepcopy(value)
     return result["records"]
 
 

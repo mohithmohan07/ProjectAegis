@@ -27,7 +27,7 @@ What still halts (by design, this round):
 * F43-F45 (bulk-import writer / workbook publication seams) — deferred
   to the Refiner step of the restructure; not mid-run generation blocks;
 * remaining bounded-retry seams left as-is this round (rarely terminal,
-  behind their own retries): F27 (learner-analysis unusable), F28
+  behind their own retries): F28
   (assignment-unit QID invariant), F29 (consolidation returned no
   rows), F30 (method-row snapshot anchors), F31 (type-consolidation
   guards, unreachable by design), F32 (missing-topic recovery
@@ -35,6 +35,15 @@ What still halts (by design, this round):
   reconciliation), F34 (run-level empty-input guards);
 * ledger-safety mechanics (F49/F50) — they bound the ceiling-retirement
   loop and must stay.
+
+Retired seams (the register must not claim a halt the tree no longer
+has):
+
+* F27 (learner-analysis unusable) — the raise lived in
+  ``generation._ensure_misconceptions_via_api``, whose only production
+  caller was the legacy pre-learning derivation lane. Restructure step 7
+  deleted the function with that lane; the phase 3 analyse pass authors
+  learner analysis now, so there is no F27 halt left to defer.
 """
 from __future__ import annotations
 

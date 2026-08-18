@@ -1,0 +1,331 @@
+{
+ "_comment": "Recorded Phase 03 pre-requisite capture for job 23 (the RNE golden chapter, 'The Rise of Nationalism in Europe'), authored exactly the way rne_place.json and rne_analysis.json were: the pass was run against the real fixture chain with a recording provider, the four per-stage payloads it produced were dumped, and each element below was read off THAT stage's own recorded evidence. Every citation resolves against the citable-id set of the stage that made the capture and nothing else — the settle capture cites source blocks and topics, the host capture cites Type/Case unit ids and QIDs, the place capture cites pooled hub item refs, the analyse capture cites LA-item ids. Nothing is padded: 20 captures across four stages, and the merge groups them into 16 chapter prerequisites, accounting every capture exactly once (R4). Three groups consolidate captures of one prerequisite seen from two or three stages (the French Revolution, map reading, chronology); chronology and causal order are deliberately kept apart because they mean different things, which is the judgment the merge exists to make and the reason it is never a text dedupe. Ids are the positional mint PR-0001… per stage and again across the merged set.",
+ "captures": {
+  "settle": [
+   {
+    "prerequisite_id": "PR-0001",
+    "text": "What an absolutist government is: rule whose power is subject to no restraint, centralised, militarised and repressive.",
+    "evidence": [
+     "BLK-00009",
+     "BLK-00096"
+    ],
+    "rationale": "The New words box glosses 'Absolutist' as a word the learner is not assumed to hold, and the account of the post-1815 regimes then uses 'autocratic' rule as an already-understood idea rather than explaining it."
+   },
+   {
+    "prerequisite_id": "PR-0002",
+    "text": "What makes a vision utopian: a society so ideal that it is unlikely ever to exist.",
+    "evidence": [
+     "BLK-00009",
+     "BLK-00005",
+     "BLK-00013"
+    ],
+    "rationale": "The opening account of Sorrieu's 1848 print asks the learner to read it as a dream of a world of democratic and social republics; the New words box supplies the term because the chapter needs it understood before its first paragraph lands."
+   },
+   {
+    "prerequisite_id": "PR-0003",
+    "text": "The French Revolution of 1789 and its transfer of sovereignty from the monarch to a body of French citizens — the events, and who held power before and after.",
+    "evidence": [
+     "BLK-00074",
+     "BLK-00259",
+     "BLK-00031"
+    ],
+    "rationale": "The chapter says outright 'You will recall that in revolutionary France...' and 'As you would remember', resting its argument about suffrage and about female allegories on a previous year's account of the Revolution that it does not restate."
+   },
+   {
+    "prerequisite_id": "PR-0004",
+    "text": "Reading a political map of Europe: locating the major states and regions on it and seeing where the boundaries between them run.",
+    "evidence": [
+     "BLK-00050",
+     "BLK-00052"
+    ],
+    "rationale": "The section opens by instructing the learner to look at the map of mid-eighteenth-century Europe and to notice the absence of nation-states; it assumes the map can already be read, and teaches nothing about how to read one."
+   },
+   {
+    "prerequisite_id": "PR-0005",
+    "text": "What a plebiscite is: a direct vote in which all the people of a region accept or reject a proposal.",
+    "evidence": [
+     "BLK-00023"
+    ],
+    "rationale": "The New words box supplies the term because the narrative uses it as settled vocabulary in accounting for how territories were annexed."
+   },
+   {
+    "prerequisite_id": "PR-0006",
+    "text": "The difference between a monarchy, a republic and an empire as forms of state, and what a dynasty is.",
+    "evidence": [
+     "BLK-00052",
+     "BLK-00094"
+    ],
+    "rationale": "Kingdoms, duchies, cantons, the restored Bourbon dynasty and the Habsburg empire are all named as known kinds of state; the chapter distinguishes none of them and argues from the distinction throughout."
+   },
+   {
+    "prerequisite_id": "PR-0007",
+    "text": "Reading a list of dated events as a chronology: putting dates in order and seeing which event precedes which.",
+    "evidence": [
+     "BLK-00060",
+     "BLK-00062",
+     "BLK-00064",
+     "BLK-00066"
+    ],
+    "rationale": "The 'Some important dates' panels present bare year-event pairs spanning 1797 to 1905 with no instruction, so the chapter assumes the learner can already turn a dated list into a sequence."
+   }
+  ],
+  "host": [
+   {
+    "prerequisite_id": "PR-0001",
+    "text": "Interpreting a caricature: recognising that its exaggerated figures, objects and gestures stand for real people, institutions or ideas rather than depicting an event.",
+    "evidence": [
+     "TYPE-0001::CASE-0002::0002",
+     "TYPE-0001::CASE-0003::0003",
+     "QINV-0005",
+     "QINV-0010"
+    ],
+    "rationale": "Two of the chapter's assignment patterns hand the learner a caricature and ask what the caricaturist is 'trying to depict'; the task only works if reading a drawing symbolically is already available to the learner."
+   },
+   {
+    "prerequisite_id": "PR-0002",
+    "text": "Reading a thematic map against its key: identifying the regions it marks and comparing two maps of the same place at different dates.",
+    "evidence": [
+     "QINV-0004",
+     "QINV-0011.1",
+     "QINV-0011.2"
+    ],
+    "rationale": "The tasks require plotting the Vienna Congress changes onto a map of Europe and reading first, last and busiest years of accession off a pair of Italian maps — map-reading is the tool the questions are set with, never their subject."
+   },
+   {
+    "prerequisite_id": "PR-0003",
+    "text": "Writing a first-person eyewitness account in continuous prose.",
+    "evidence": [
+     "QINV-0008"
+    ],
+    "rationale": "The task asks the learner to imagine being a weaver present at the events and to write a report; the chapter sets the content but assumes the narrative-writing form."
+   },
+   {
+    "prerequisite_id": "PR-0004",
+    "text": "Reading a two-column table by pairing each row's entry with its matching entry in the other column.",
+    "evidence": [
+     "QINV-0013",
+     "TYPE-0001::CASE-0005::0005"
+    ],
+    "rationale": "The Germania task supplies an attribute-and-significance chart and expects the learner to move across its rows unaided in order to interpret the painting's symbols."
+   },
+   {
+    "prerequisite_id": "PR-0005",
+    "text": "Summarising the argument of a cited prose passage in the learner's own words.",
+    "evidence": [
+     "QINV-0002",
+     "QINV-0003",
+     "TYPE-0002::CASE-0007::0001"
+    ],
+    "rationale": "Two source-based tasks ask the learner to summarise Renan's attributes of a nation and to state the political ends List intended; both assume a passage can already be reduced to its claims."
+   },
+   {
+    "prerequisite_id": "PR-0006",
+    "text": "Arranging the stages of a process in chronological order and narrating them as a sequence.",
+    "evidence": [
+     "QINV-0019",
+     "TYPE-0002::CASE-0012::0006"
+    ],
+    "rationale": "The unification task asks for the principal stages traced in order, which presumes the learner can already build a sequence rather than list events."
+   }
+  ],
+  "place": [
+   {
+    "prerequisite_id": "PR-0001",
+    "text": "Using a figure's number and caption to establish what a picture shows, who made it and when.",
+    "evidence": [
+     "QINV-0001",
+     "QINV-0013",
+     "QINV-0015"
+    ],
+    "rationale": "The pooled items carry their evidence in captions — Sorrieu 1848, Veit's 1848 banner, the Frankfurt parliament print — and each task depends on the learner taking the artist, date and subject from the caption unprompted."
+   },
+   {
+    "prerequisite_id": "PR-0002",
+    "text": "Locating regions and states of Europe on a blank map before marking anything onto it.",
+    "evidence": [
+     "QINV-0004",
+     "QINV-0011.1"
+    ],
+    "rationale": "The pooled Vienna-Congress activity is a plotting exercise and the Italian-states item asks about people living in marked regions; both start from the learner already knowing where those places are."
+   },
+   {
+    "prerequisite_id": "PR-0003",
+    "text": "Finding and gathering information from sources outside the textbook.",
+    "evidence": [
+     "QINV-0026"
+    ],
+    "rationale": "The pooled find-out-more activity asks the learner to collect pictures, posters or music from countries outside Europe, which the chapter supplies no material for."
+   }
+  ],
+  "analyse": [
+   {
+    "prerequisite_id": "PR-0001",
+    "text": "Telling a cause apart from a consequence, and keeping the order of a causal chain straight.",
+    "evidence": [
+     "LA-0008",
+     "LA-0044"
+    ],
+    "rationale": "The recorded errors are reversed causal chains and dropped links in a cause-and-effect explanation, so the inventory shows the chapter relying on causal reasoning it never teaches."
+   },
+   {
+    "prerequisite_id": "PR-0002",
+    "text": "Separating what a source reports from the opinion of the person reporting it.",
+    "evidence": [
+     "LA-0047",
+     "LA-0048"
+    ],
+    "rationale": "The inventory records learners copying Wolff's evaluative wording into a factual-evidence column and treating his account as neutral; the chapter's source work assumes the distinction is already held."
+   },
+   {
+    "prerequisite_id": "PR-0003",
+    "text": "Reading a quantified statement exactly as it is worded, without widening its scope.",
+    "evidence": [
+     "LA-0046"
+    ],
+    "rationale": "The recorded error is reading 'all adult men older than twenty-one' as all adults, which is a precision-of-reading prerequisite rather than anything the chapter teaches."
+   },
+   {
+    "prerequisite_id": "PR-0004",
+    "text": "The institutions of pre-revolutionary and revolutionary France by name — which body was summoned by the king and which was elected.",
+    "evidence": [
+     "LA-0004"
+    ],
+    "rationale": "The recorded error mislabels the Estates General as the elected National Assembly; naming them apart comes from the previous year's account, not from this chapter."
+   }
+  ]
+ },
+ "merge": [
+  {
+   "prerequisite_id": "PR-0001",
+   "text": "What an absolutist government is: rule whose power is subject to no restraint, centralised, militarised and repressive.",
+   "captures": [
+    "settle:PR-0001"
+   ],
+   "rationale": "No other stage's evidence assumes this term, so the capture stands alone."
+  },
+  {
+   "prerequisite_id": "PR-0002",
+   "text": "What makes a vision utopian: a society so ideal that it is unlikely ever to exist.",
+   "captures": [
+    "settle:PR-0002"
+   ],
+   "rationale": "Captured once, in the chapter's opening account; no task evidence assumes it separately."
+  },
+  {
+   "prerequisite_id": "PR-0003",
+   "text": "The French Revolution of 1789: its events, and its transfer of sovereignty from the monarch to a body of French citizens, including which body was summoned by the king and which was elected.",
+   "captures": [
+    "settle:PR-0003",
+    "analyse:PR-0004"
+   ],
+   "rationale": "The prose capture and the inventory capture assume one thing from two sides — the chapter says 'you will recall' about the Revolution, and the recorded error is a learner confusing two of its institutions. Same prerequisite, seen in the text and then in what goes wrong without it."
+  },
+  {
+   "prerequisite_id": "PR-0004",
+   "text": "Reading a map of Europe: locating its states and regions, reading a map against its key, and comparing the same place at two different dates.",
+   "captures": [
+    "settle:PR-0004",
+    "host:PR-0002",
+    "place:PR-0002"
+   ],
+   "rationale": "Three stages saw the same assumed skill from their own evidence — the prose telling the learner to look at the map, the tasks set on maps, and the pooled plotting activity. One prerequisite, captured three times."
+  },
+  {
+   "prerequisite_id": "PR-0005",
+   "text": "What a plebiscite is: a direct vote in which all the people of a region accept or reject a proposal.",
+   "captures": [
+    "settle:PR-0005"
+   ],
+   "rationale": "A glossed term the narrative uses as settled vocabulary; nothing else in the run assumes it."
+  },
+  {
+   "prerequisite_id": "PR-0006",
+   "text": "The difference between a monarchy, a republic and an empire as forms of state, and what a dynasty is.",
+   "captures": [
+    "settle:PR-0006"
+   ],
+   "rationale": "Assumed throughout the prose; the task evidence never turns on it separately."
+  },
+  {
+   "prerequisite_id": "PR-0007",
+   "text": "Working with chronology: putting dated events in order and narrating the stages of a process as a sequence.",
+   "captures": [
+    "settle:PR-0007",
+    "host:PR-0006"
+   ],
+   "rationale": "The dates panel assumes the learner can order a dated list and the unification task assumes the same ordering carried into prose — one prerequisite, not two."
+  },
+  {
+   "prerequisite_id": "PR-0008",
+   "text": "Interpreting a caricature: recognising that its exaggerated figures, objects and gestures stand for real people, institutions or ideas rather than depicting an event.",
+   "captures": [
+    "host:PR-0001"
+   ],
+   "rationale": "Distinct from reading a caption: this is decoding a symbol, not extracting stated information."
+  },
+  {
+   "prerequisite_id": "PR-0009",
+   "text": "Writing a first-person eyewitness account in continuous prose.",
+   "captures": [
+    "host:PR-0003"
+   ],
+   "rationale": "A writing form the tasks require and no other stage's evidence touches."
+  },
+  {
+   "prerequisite_id": "PR-0010",
+   "text": "Reading a two-column table by pairing each row's entry with its matching entry in the other column.",
+   "captures": [
+    "host:PR-0004"
+   ],
+   "rationale": "Table navigation is assumed by the Germania symbol chart alone."
+  },
+  {
+   "prerequisite_id": "PR-0011",
+   "text": "Summarising the argument of a cited prose passage in the learner's own words.",
+   "captures": [
+    "host:PR-0005"
+   ],
+   "rationale": "Close to the source-handling prerequisite the inventory shows, but genuinely different: this is compressing a passage, not separating fact from opinion inside it."
+  },
+  {
+   "prerequisite_id": "PR-0012",
+   "text": "Using a figure's number and caption to establish what a picture shows, who made it and when.",
+   "captures": [
+    "place:PR-0001"
+   ],
+   "rationale": "Reading the caption is what the pooled items assume; it is not the same as interpreting the image's symbolism."
+  },
+  {
+   "prerequisite_id": "PR-0013",
+   "text": "Finding and gathering information from sources outside the textbook.",
+   "captures": [
+    "place:PR-0003"
+   ],
+   "rationale": "The find-out-more activity is the only evidence in the run that assumes independent research."
+  },
+  {
+   "prerequisite_id": "PR-0014",
+   "text": "Telling a cause apart from a consequence, and keeping the order of a causal chain straight.",
+   "captures": [
+    "analyse:PR-0001"
+   ],
+   "rationale": "Deliberately NOT merged with the chronology prerequisite: putting events in order and knowing which one caused which are different things, and the recorded errors are of the second kind."
+  },
+  {
+   "prerequisite_id": "PR-0015",
+   "text": "Separating what a source reports from the opinion of the person reporting it.",
+   "captures": [
+    "analyse:PR-0002"
+   ],
+   "rationale": "A source-handling prerequisite the inventory names directly."
+  },
+  {
+   "prerequisite_id": "PR-0016",
+   "text": "Reading a quantified statement exactly as it is worded, without widening its scope.",
+   "captures": [
+    "analyse:PR-0003"
+   ],
+   "rationale": "Precision of reading; no other stage's evidence assumes it."
+  }
+ ]
+}

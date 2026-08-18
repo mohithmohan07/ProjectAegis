@@ -75,6 +75,30 @@ def _slug(text: str, length: int = 22) -> str:
 
 
 def _topic_index(concept: models.Concept) -> int:
+    """Position of the concept's topic among ALL topics of the chapter.
+
+    Deliberately NOT scoped to the learning lane, and the reason is
+    recorded because the opposite looks obviously right: ``question_label``
+    below carries a literal ``_PL_`` segment and no lane discriminator, so
+    numbering each lane from 1 makes a Pre label collide with a Post label
+    whenever same-position topics carry the same concept title. A collision
+    is not merely cosmetic — ``assessment_release_service`` builds
+    ``existing_labels`` from a GLOBAL ``Question`` query and skips a
+    candidate whose label already exists ("append-only: an uploaded label
+    is immutable"), with no flag and no log, and ``question_label`` carries
+    only ``index=True``, no unique constraint. Lane-scoping the numbering
+    would therefore silently drop a learner's question (R4), which is worse
+    than the drift it would prevent.
+
+    The drift it would prevent is also narrower than it appears: sorting
+    every topic by id leaves already-published Post positions untouched in
+    the natural sequence, because Pre topics are created later and hold
+    higher ids, so they append rather than interleave.
+
+    Giving the label a lane discriminator is the real fix, and that is the
+    per-topic/per-concept ID minting rebuild §9 assigns to §10 step 8. See
+    the step-8 brief in ``docs/restructure-handoff.md``.
+    """
     topic = concept.topic
     siblings = sorted(topic.chapter.topics, key=lambda t: t.id)
     return siblings.index(topic) + 1
@@ -2309,9 +2333,6 @@ Rules:
   ``[Katex] valid LaTeX [/Katex]``. Never leave raw ``$``/``$$`` delimiters,
   ``\\(...\\)``/``\\[...\\]`` delimiters, TeX commands, subscripts, or
   superscripts outside a canonical Katex span.
-- For short_case_example issues: replace the truncated Example with the FULL
-  source question wording (and the source image URL when the question is
-  visual).
 """)
 
 prompts.register(
@@ -2359,42 +2380,6 @@ Rules:
 - Preserve the existing Achieving Mastery line at the end.
 - Wrap every expression exactly as [Katex] valid LaTeX [/Katex]. Never emit
   raw math delimiters, source labels, figure/page references, or Types.
-""")
-
-prompts.register(
-    "concepts.misconceptions.system", category=_CONCEPTS_CAT,
-    label="Missing/generic learner-analysis writer system prompt",
-    default="""\
-Write or repair the single learner-analysis section for concept rows.
-Return ONLY strict JSON:
-{"rows":[{"concept":"","misconception":"","error_analysis":""}]}.
-
-Rules:
-- Each provided normal row is missing usable learner analysis, carries generic
-  filler, or duplicates the same issue across labels. Return one compact object
-  for EVERY supplied concept, preserving its exact ``concept`` title. Do not
-  repeat or rewrite Description, Activity/Info Hub, Types, topic, or keywords.
-- ``misconception`` states one commonly held incorrect belief or interpretation
-  in learner voice, such as "Students may believe/think/assume ..." or
-  "Students may confuse ..."; do not write the correction as the belief.
-  ``error_analysis`` states one plausible procedural, computational,
-  representational, or reasoning mistakes while applying the concept, naming
-  the learner and the actual mistaken step or action. Both fields are required
-  and must be distinct.
-- For Misconceptions, avoid "should", "instead", "correctly", "remember that",
-  and declarative textbook corrections such as "A nation is not ...". The
-  Description already teaches the correct idea.
-- For Error Analysis, do not use belief verbs such as believe, think, assume,
-  interpret, confuse, or treat. Name a concrete faulty action or reasoning
-  step instead, such as omitting evidence, changing two variables, recording
-  the wrong observation, comparing unlike cases, or drawing a conclusion from
-  one trial.
-- The Misconception and Error Analysis must concern two different learner
-  problems; do not restate the same issue with different wording.
-- NEVER write templated filler like "Students may apply X as a memorized rule
-  without checking the conditions", and never "N/A"/"None"/placeholders.
-- No source artifacts (Example 3, Exercise 1.2, page numbers) and never the
-  words "MMD"/"MMDs".
 """)
 
 prompts.register(
@@ -6830,38 +6815,53 @@ def _merge_source_task_anchors(items: list[dict], anchors: list[dict]) -> list[d
     return deduped
 
 
-def _unowned_inventory_row_is_non_task(item: dict) -> bool:
-    """High-confidence semantic rows that describe content but ask nothing."""
-    source_kind = str(item.get("source_kind") or "").strip().lower()
-    raw = _strip_source_visual_markup(str(
-        item.get("raw_task") or item.get("normalized_task") or ""))
-    plain = re.sub(r"\s+", " ", raw).strip()
-    if (
-        source_kind == "source_task"
-        and "?" not in plain
-        and not re.match(
-            r"(?i)^(?:analyse|analyze|compare|describe|discuss|draw|"
-            r"explain|identify|interpret|investigate|list|observe|"
-            r"prepare|record|state|study|write)\b",
-            plain,
-        )
-    ):
-        return True
-    return bool(
-        source_kind in {"intext_question", "checkpoint_question", "other"}
-        and re.search(
-            r"(?i)\?\s*(?:Let\s+us|We(?:'ll|\s+will)|You\s+will)\s+"
-            r"(?:find\s+out|learn|see|explore)\.?\s*$",
-            plain,
-        )
-    )
+def _inventory_row_task_is_only_its_own_label(item: dict) -> bool:
+    """The row carries no task text of its own beyond its filing label.
+
+    Absence of content, not a judgment about content — the same family as
+    the empty-task check beside it. A row whose ``raw_task`` normalizes to
+    exactly the ``source_label`` it was filed under contributes no prompt:
+    the extractor captured the name of a question collection and nothing
+    else. That is *what the row does not contain*, measured by string
+    identity between two extracted fields; it is not a verdict on what the
+    book means, and it decides nothing on its own.
+
+    It is a NOMINATION only. Whether such a row is a section banner the
+    extractor mistook for a task (dropped) or a real question whose text
+    extraction lost (kept, and the run stops) is ruled by
+    :func:`_adjudicate_invalid_inventory_rows` against the source excerpt,
+    with an independent critic, fail-closed at every turn.
+
+    This is the route the Balbharati Std 6 "Three Dimensional Shapes"
+    incident needs (``## Practice Set 1.1`` / ``## Exercise 1`` arriving as
+    task rows) — see tests/test_inventory_row_adjudication.py. The
+    word-count cascade that used to nominate those rows is gone: length
+    cannot tell a mangled question from a banner, and it swept up genuinely
+    short questions ("Is 9 a cube?") on the way. The keyword vocabulary
+    that briefly stood in for it (a verb allow-list plus a "?" test) is
+    gone with it — that was a content classifier, forbidden outright by
+    CLAUDE.md's first bullet.
+    """
+    # Compare the row's WORDING only. ``_inventory_task_text`` appends the
+    # row's own figures as ``[img]`` tags; a banner that happens to sit
+    # beside a figure still carries no prompt of its own, and leaving the
+    # tags in would make the comparison depend on visual bookkeeping.
+    wording = dict(item)
+    wording.pop("image_urls", None)
+    wording.pop("_image_captions", None)
+    task_key = _inventory_coverage_key(_inventory_task_text(wording))
+    if not task_key:
+        return False
+    label_key = _inventory_coverage_key(str(item.get("source_label") or ""))
+    return bool(label_key) and task_key == label_key
 
 
 _INVALID_ROW_ADJUDICATION_SYSTEM = (
     "You are the Aegis inventory-row adjudicator. Deterministic validation "
     "rejected some rows of a textbook question inventory because their task "
-    "text is empty or too short to be answerable, or nominated them because "
-    "their text describes content without asking anything. Each such row is "
+    "text is empty, or nominated them because the row carries no task text "
+    "of its own — its task is nothing but the label it was filed under. "
+    "Length plays no part — a complete question can "
     "one of two things, and you decide which against the supplied source "
     "excerpt:\n"
     "  real_task  — the source really asks this, and extraction mangled or "
@@ -6966,13 +6966,14 @@ def _adjudicate_invalid_inventory_rows(
 ) -> tuple[list[dict], list[dict]]:
     """Let the model rule on rows deterministic validation rejected.
 
-    Validation is deliberately strict: a row whose task text is empty or too
-    short cannot render as a public Example. But "too short to answer" and
+    Validation is deliberately strict: a row whose task text is empty cannot
+    render as a public Example. But "extraction mangled a real question" and
     "not a question at all" are different failures with opposite remedies —
     the first must stop the run, the second is an extraction artifact the run
     should drop and continue past. Which one a given row is depends on what
     the book actually prints around it, so the model decides against that
-    source rather than a rule guessing from shape.
+    source rather than a rule guessing from shape. Brevity is never a
+    nomination reason: a three-word question is a question.
 
     Fail-closed at every turn: any row the model does not positively call an
     artifact is kept, a critic must approve the proposal before anything is
@@ -7095,26 +7096,42 @@ def _adjudicate_invalid_inventory_rows(
 def _unowned_stub_inventory_candidates(
     items: list[dict], anchors: list[dict],
 ) -> list[dict]:
-    """Detect model-only stub/non-task rows with no exact source owner.
+    """Detect rows carrying no task of their own and no exact source owner.
 
-    Detection only, never a decision: shape can nominate a row for review,
-    but whether an unowned stub is a mangled learner question (kept; the
+    Detection only, never a decision: nomination can send a row for review,
+    but whether an unowned row is a mangled learner question (kept; the
     terminal gate stops the run) or an extraction artifact (dropped) is
     ruled by the inventory-row adjudicator and its independent critic
-    against the source. An exact source-owned short task is never
-    nominated — deterministic anchors are the source-of-truth safety net.
+    against the source. An exact source-owned task is never nominated —
+    deterministic anchors are the source-of-truth safety net.
+
+    Both nomination reasons are ABSENCE of task content, never brevity and
+    never a reading of what the text says:
+
+    * ``empty_task`` — the task text normalizes to nothing at all.
+    * ``task_is_only_its_own_label`` — the task text normalizes to exactly
+      the ``source_label`` the row was filed under, so the row contributes
+      no prompt beyond the name of the collection it belongs to.
+
+    The word-count "stub" cascade that used to sit here is gone — length
+    never decides whether the book asked something (Rule 1), so a short
+    source question such as "Is 9 a cube?" is no longer nominated for
+    dropping. Removing it must NOT remove the judge with the judgment,
+    though: a section banner captured as a task ("## Practice Set 1.1")
+    reached the source-reading adjudicator only through this function, and
+    with no nomination at all it would instead be OWED a rendered public
+    Example by the coverage contract and force-placed in front of a
+    learner. ``task_is_only_its_own_label`` restores that route on
+    mechanics.
     """
     candidates: list[dict] = []
     for index, item in enumerate(items):
         text = _inventory_task_text(item)
         key = _inventory_coverage_key(text)
-        source_kind = (item.get("source_kind") or "").strip().lower()
-        unusable = (
-            not key
-            or (
-                source_kind not in _HUB_INVENTORY_KINDS
-                and cv._example_too_short(text)
-            )
+        unusable = not key
+        label_only = (
+            not unusable
+            and _inventory_row_task_is_only_its_own_label(item)
         )
         item_key = _inventory_task_match_key(item)
         source_owned = any(
@@ -7132,16 +7149,13 @@ def _unowned_stub_inventory_candidates(
             )
             for anchor in anchors
         )
-        if (
-            unusable
-            or _unowned_inventory_row_is_non_task(item)
-        ) and not source_owned:
+        if (unusable or label_only) and not source_owned:
             candidates.append({
                 "index": index,
                 "qid": str(item.get("qid") or "").strip(),
                 "reason": (
-                    "empty_or_stub_task" if unusable
-                    else "describes_content_but_asks_nothing"
+                    "empty_task" if unusable
+                    else "task_is_only_its_own_label"
                 ),
             })
     return candidates
@@ -7376,17 +7390,15 @@ def _extract_question_task_inventory_via_api(
         ]
 
     def invalid_task_indexes(items: list[dict]) -> list[int]:
+        """Rows with no task text at all — emptiness, never brevity.
+
+        A short extraction is not evidence of under-extraction; whether the
+        chunk was fully itemized is the completeness reviewer's verdict
+        below, made by re-reading the chunk (Rule 1).
+        """
         invalid: list[int] = []
         for index, item in enumerate(items):
-            text = _inventory_task_text(item)
-            source_kind = (item.get("source_kind") or "").strip().lower()
-            if (
-                not _inventory_coverage_key(text)
-                or (
-                    source_kind not in _HUB_INVENTORY_KINDS
-                    and cv._example_too_short(text)
-                )
-            ):
+            if not _inventory_coverage_key(_inventory_task_text(item)):
                 invalid.append(index)
         return invalid
 
@@ -7407,8 +7419,8 @@ def _extract_question_task_inventory_via_api(
         invalid_indexes = invalid_task_indexes(items)
         # Whether this extraction covered the chunk is the model's judgment,
         # made by re-reading the chunk — never an expected-count formula or
-        # a task-marker regex. Stub detection below is detection only: it
-        # can nominate a correction, and the terminal inventory-row
+        # a task-marker regex. The deterministic half detects emptiness
+        # only: it can nominate a correction, and the terminal inventory-row
         # adjudicator rules on any row that persists.
         completeness = _inventory_chunk_completeness_verdict_via_api(
             chunk, items, meta=meta)
@@ -7418,11 +7430,11 @@ def _extract_question_task_inventory_via_api(
                 + (f" ({completeness['reason']})"
                    if completeness["reason"] else "")
                 if not completeness["complete"]
-                else "stub rows only"
+                else "empty rows only"
             )
             progress.log(
                 f"  inventory chunk {i}/{len(chunks)} needs correction: "
-                f"{len(items)} item(s), {len(invalid_indexes)} empty/stub "
+                f"{len(items)} item(s), {len(invalid_indexes)} empty "
                 f"row(s), {reviewer_note} — retrying once.",
                 level="warning",
             )
@@ -7434,7 +7446,7 @@ def _extract_question_task_inventory_via_api(
             retry_user = (
                 user
                 + f"\n\nYOUR PREVIOUS ANSWER HAD {len(items)} ITEMS, INCLUDING "
-                f"{len(invalid_indexes)} EMPTY OR STUB TASKS. Re-read the chunk "
+                f"{len(invalid_indexes)} EMPTY TASKS. Re-read the chunk "
                 "because this is under-extraction, and itemize EVERY assessable "
                 "question/task: every numbered exercise, every in-text checkpoint "
                 "/ boxed '?' / 'Let's recall' prompt, every picture- or "
@@ -11819,300 +11831,6 @@ def _error_analysis_body(details: str) -> str:
     return ""
 
 
-def _learner_analysis_needs_rewrite(details: str) -> bool:
-    """Whether a normal concept lacks a usable, non-duplicated analysis tail."""
-    misconception = _misconception_body(details)
-    error_analysis = _error_analysis_body(details)
-    if (
-        cv.is_terminal_generic_analysis_filler(misconception)
-        or cv.is_terminal_generic_analysis_filler(error_analysis)
-    ):
-        return True
-    misconception_ok = cv.is_valid_misconception(misconception)
-    error_analysis_ok = cv.is_valid_error_analysis(error_analysis)
-    if not (misconception_ok and error_analysis_ok):
-        return True
-    if misconception and not misconception_ok:
-        return True
-    if error_analysis and not error_analysis_ok:
-        return True
-    return bool(
-        misconception_ok
-        and error_analysis_ok
-        and cv.issue_sections_overlap(misconception, error_analysis)
-    )
-
-
-def _ensure_misconceptions_via_api(
-    records: list[dict], *, meta: dict, use_api: bool = True,
-    max_attempts: int = 5,
-) -> list[dict]:
-    """Have GPT write missing or generic learner-analysis sections.
-
-    The legacy function name remains for callers and tests. A normal concept
-    needs one combined section containing both a misconception and a distinct
-    application/reasoning error.
-    """
-    import json as _json
-
-    targets = [
-        i for i, rec in enumerate(records)
-        if not cr.is_culmination(rec.get("concept_title", ""))
-        and (rec.get("concept_details") or "").strip()
-        and _learner_analysis_needs_rewrite(rec.get("concept_details", ""))
-    ]
-    if not targets or not use_api:
-        return records
-    progress.log(
-        f"Writing specific learner analysis for {len(targets)} concept(s) via API.")
-    system = prompts.get_text("concepts.misconceptions.system")
-    by_title: dict[str, tuple[str, str]] = {}
-    pending = {
-        bi.normalize_question_text(records[i].get("concept_title", "")): i
-        for i in targets
-    }
-    rejection_reasons: dict[str, list[str]] = {}
-    attempts = max(1, int(max_attempts or 1))
-    for attempt in range(1, attempts + 1):
-        if not pending:
-            break
-        pending_keys = list(pending)
-        if attempt > 1:
-            progress.log(
-                "Retrying specific learner analysis for "
-                f"{len(pending)} unresolved concept(s), attempt "
-                f"{attempt}/{attempts}.",
-                level="warning",
-            )
-        attempt_accepted = 0
-        next_reasons: dict[str, list[str]] = {
-            key: ["No row with this exact concept title was returned."]
-            for key in pending_keys
-        }
-        # Smaller batches keep each concept's description and the distinction
-        # between its two learner issues salient for long or mixed chapters.
-        for batch_start in range(0, len(pending_keys), 4):
-            batch_keys = pending_keys[batch_start:batch_start + 4]
-            rows = [
-                {
-                    "topic": records[pending[key]].get("topic", ""),
-                    "parent_concept": records[pending[key]].get(
-                        "parent_concept", ""),
-                    "concept": records[pending[key]].get("concept_title", ""),
-                    "concept_description": records[pending[key]].get(
-                        "concept_details", ""),
-                    "keywords": records[pending[key]].get("keywords", ""),
-                }
-                for key in batch_keys
-            ]
-            user = (
-                _metadata_block(meta)
-                + (
-                    "\n\nACTION-ONLY ERROR_ANALYSIS CONTRACT: For every "
-                    "row, start error_analysis with 'Students may' and then "
-                    "name a concrete faulty step using an action such as "
-                    "omit, skip, reverse, swap, misread, miscopy, "
-                    "miscalculate, mislabel, misplace, misapply, add, "
-                    "subtract, multiply, divide, count, group, or fail to "
-                    "check. State the specific input, representation, "
-                    "operation, or inference that the learner handles "
-                    "wrongly and its consequence. Do not use believe, think, "
-                    "assume, expect, interpret, misinterpret, misunderstand, "
-                    "confuse, mistake, or treat anywhere in error_analysis."
-                )
-                + "\n\nRows missing usable Misconceptions and/or Error "
-                "Analysis sections:\n"
-                + _json.dumps({"rows": rows}, ensure_ascii=False)
-            )
-            if rejection_reasons:
-                user += (
-                    "\n\nVALIDATION FEEDBACK FROM THE PREVIOUS ATTEMPT. "
-                    "Repair every listed row and return each exact concept "
-                    "title:\n"
-                    + _json.dumps(
-                        {
-                            records[pending[key]].get("concept_title", ""):
-                            rejection_reasons.get(key, [])
-                            for key in batch_keys
-                        },
-                        ensure_ascii=False,
-                    )
-                )
-            try:
-                data = _openai_json(
-                    system, user, purpose="concept_detailing")
-                returned_rows = [
-                    row for row in (data or {}).get("rows") or []
-                    if isinstance(row, dict)
-                ]
-            except Exception as exc:  # noqa: BLE001 - retry unresolved batch
-                progress.log(
-                    f"Learner-analysis batch attempt {attempt}/{attempts} "
-                    f"failed ({exc}).",
-                    level="warning",
-                )
-                continue
-            for row in returned_rows:
-                title_key = bi.normalize_question_text(
-                    row.get("concept") or row.get("concept_title") or "")
-                if title_key not in pending:
-                    continue
-
-                def compact_field(*names: str) -> str:
-                    value = next(
-                        (
-                            row.get(name) for name in names
-                            if row.get(name) not in (None, "")
-                        ),
-                        "",
-                    )
-                    if isinstance(value, list):
-                        value = "; ".join(
-                            str(item).strip() for item in value if str(item).strip()
-                        )
-                    return str(value or "").strip()
-
-                misconception = compact_field(
-                    "misconception", "misconceptions")
-                error_analysis = compact_field(
-                    "error_analysis", "errorAnalysis")
-                if not (misconception and error_analysis):
-                    # Backward compatibility for cached prompts/tests and
-                    # providers that still return the older full-row schema.
-                    details = cr.normalize_analysis_sections(compact_field(
-                        "concept_description", "concept_details"))
-                    misconception = (
-                        misconception or _misconception_body(details))
-                    error_analysis = (
-                        error_analysis or _error_analysis_body(details))
-                misconception = re.sub(
-                    r"^\s*Misconceptions?\s*:\s*",
-                    "",
-                    misconception,
-                    flags=re.IGNORECASE,
-                ).strip()
-                error_analysis = re.sub(
-                    r"^\s*Error\s*Analysis\s*:\s*",
-                    "",
-                    error_analysis,
-                    flags=re.IGNORECASE,
-                ).strip()
-                reasons: list[str] = []
-                if not cv.is_valid_misconception(misconception):
-                    reasons.append(
-                        "Misconceptions must state a specific learner belief "
-                        "using learner voice, not a correction or placeholder."
-                    )
-                if cv.is_terminal_generic_analysis_filler(misconception):
-                    reasons.append(
-                        "Misconceptions used forbidden title-substitution "
-                        "filler."
-                    )
-                if not cv.is_valid_error_analysis(error_analysis):
-                    reasons.append(
-                        "Error Analysis must name the learner and a concrete "
-                        "faulty action or reasoning step, not another belief."
-                    )
-                if cv.is_terminal_generic_analysis_filler(error_analysis):
-                    reasons.append(
-                        "Error Analysis used forbidden title-substitution "
-                        "filler."
-                    )
-                if (
-                    misconception
-                    and error_analysis
-                    and cv.issue_sections_overlap(
-                        misconception, error_analysis)
-                ):
-                    reasons.append(
-                        "Misconceptions and Error Analysis restated the same "
-                        "learner problem."
-                    )
-                if reasons:
-                    next_reasons[title_key] = reasons
-                    continue
-                if misconception and error_analysis:
-                    by_title[title_key] = (
-                        misconception,
-                        error_analysis,
-                    )
-                    attempt_accepted += 1
-        for key in list(pending):
-            if key in by_title:
-                pending.pop(key)
-        rejection_reasons = {
-            key: next_reasons.get(
-                key, ["The returned learner analysis was not usable."])
-            for key in pending
-        }
-        reason_counts: dict[str, int] = {}
-        for reasons in rejection_reasons.values():
-            for reason in reasons:
-                label = reason.split(".", 1)[0]
-                reason_counts[label] = reason_counts.get(label, 0) + 1
-        if reason_counts:
-            progress.log(
-                "Learner-analysis rejection summary: "
-                + "; ".join(
-                    f"{label}={count}"
-                    for label, count in sorted(reason_counts.items())
-                ),
-                level="warning",
-            )
-        progress.log(
-            "Specific learner-analysis attempt "
-            f"{attempt}/{attempts} accepted {attempt_accepted} row(s); "
-            f"{len(pending)} remain.",
-            level="success" if not pending else "warning",
-        )
-    completed = 0
-    for i in targets:
-        rec = records[i]
-        analysis = by_title.get(bi.normalize_question_text(rec.get("concept_title", "")))
-        if not analysis:
-            continue
-        misconception, error_analysis = analysis
-        sections = [
-            (label, content)
-            for label, content in cr.split_sections(rec.get("concept_details", ""))
-            if not cr.is_learner_analysis_label(label)
-        ]
-        combined: list[str] = []
-        if misconception:
-            combined.append(f"Misconceptions: {misconception}")
-        if error_analysis:
-            combined.append(f"Error Analysis: {error_analysis}")
-        if combined:
-            sections.append((
-                "Misconception/ Error Analysis",
-                "; ".join(combined),
-            ))
-        rec["concept_details"] = cr.join_sections(sections)
-        completed += 1
-    if completed != len(targets):
-        missing = [
-            records[i].get("concept_title", "")
-            for i in targets
-            if bi.normalize_question_text(
-                records[i].get("concept_title", ""))
-            not in by_title
-        ]
-        progress.log(
-            "Specific learner analysis accepted for "
-            f"{completed}/{len(targets)} concept(s); final content is blocked.",
-            level="error",
-        )
-        raise RuntimeError(
-            "specific learner-analysis generation returned unusable rows for: "
-            + ", ".join(missing[:8])
-        )
-    progress.log(
-        f"Specific learner analysis written for {completed} concept(s).",
-        level="success",
-    )
-    return records
-
-
 def _assignment_case_qids(raw_case: object) -> list[str]:
     """Return one Case's ordered qids without splitting any of its Examples."""
     if isinstance(raw_case, str):
@@ -13111,7 +12829,7 @@ _FATAL_CODES = {
     "duplicate_topic_concept", "source_artifact", "types_too_early",
     "culmination_too_early", "types_format", "case_without_type",
     "type_without_case", "culmination_description", "culmination_count",
-    "culmination_order", "section_number", "empty_types", "short_case_example",
+    "culmination_order", "section_number", "empty_types",
     "merged_description", "rich_text_format", "empty_misconception",
     "empty_error_analysis", "duplicate_misconception",
     "duplicate_error_analysis", "missing_misconception_or_error_analysis",
@@ -13317,29 +13035,10 @@ def _inventory_source_examples(inventory: dict | None) -> list[str]:
     ]
 
 
-
 _TYPE_SPLIT_RE = re.compile(r"(?=\b(?:Miscellaneous\s+)?Type\s+\d{1,2}:)", re.IGNORECASE)
 _CASE_SPLIT_RE = re.compile(r"(?=\bCase\s+\d{1,2}:)", re.IGNORECASE)
 _EXAMPLE_LINE_RE = re.compile(
     r"\bExamples?(?:\s+0*\d+)?\s*:\s*", re.IGNORECASE)
-
-
-def _inventory_lookup_texts(inventory: dict | None) -> list[str]:
-    """Full teacher-facing task texts from the Question / Task Inventory."""
-    out: list[str] = []
-    seen: set[str] = set()
-    for item in (inventory or {}).get("items") or []:
-        if not isinstance(item, dict):
-            continue
-        source_kind = (item.get("source_kind") or "").strip().lower()
-        if source_kind in _HUB_INVENTORY_KINDS:
-            continue
-        text = _inventory_task_text(item)
-        key = _inventory_coverage_key(text)
-        if text and key and key not in seen and not cv._example_too_short(text):
-            seen.add(key)
-            out.append(text)
-    return out
 
 
 def _rendered_type_examples(records: list[dict]) -> list[str]:
@@ -13449,9 +13148,30 @@ def _rendered_inventory_coverage_defects(
 ) -> dict:
     """Missing/duplicate inventory prompts in rendered public Examples.
 
-    Only inventory items with a non-empty, placeable prompt participate in the
-    exact-coverage contract. Empty or stub-length inventory rows cannot become
-    valid Examples, so they must not abort chapter deposit.
+    EVERY inventory item participates. Participation is emptiness-only
+    mechanics: a row whose text normalizes to no coverage key has nothing
+    to render. The former word-count participation filter could silently
+    drop a genuinely short source question ("Is 9 a cube?") out of the
+    coverage ledger — a Rule 1 violation and an R4 silent loss at once —
+    and this gate does not re-litigate by shape what a row means.
+
+    What keeps a non-task out of the ledger is NOT this filter. It is the
+    nomination + adjudication pass upstream
+    (:func:`_unowned_stub_inventory_candidates` ->
+    :func:`_adjudicate_invalid_inventory_rows`), where a row carrying no
+    task text of its own gets a model verdict against the source excerpt
+    with an independent critic. Note that the inventory is not purely
+    model-ruled: :func:`_merge_source_task_anchors` also backfills
+    deterministic source anchors, so "it is in the inventory" is not by
+    itself a model verdict that it is a task.
+
+    When a participating QID cannot be rendered it is reported here. What
+    the caller then does depends on the lane: the deposit lane wires the
+    F24 Fixer seam and places it by one recorded decision, while the
+    assemble fixpoint lane deliberately passes no fixer (assemble.py
+    module docstring) and its repair ladder force-places the wording with
+    a review flag on the row, raising only if even that is impossible.
+    Nothing is dropped or silently excluded on any of those paths.
 
     Textbook ``activity`` items live in Activity/Info Hub rather than Types
     Examples, so they are excluded from this Types coverage contract.
@@ -13466,9 +13186,8 @@ def _rendered_inventory_coverage_defects(
         source_kind = (item.get("source_kind") or "").strip().lower()
         if source_kind in _HUB_INVENTORY_KINDS:
             continue
-        text = _inventory_task_text(item)
-        key = _inventory_coverage_key(text)
-        if not key or cv._example_too_short(text):
+        key = _inventory_coverage_key(_inventory_task_text(item))
+        if not key:
             continue
         expected_by_qid[qid] = key
     rendered_counts = _rendered_inventory_example_counts(
@@ -13489,10 +13208,18 @@ def _rendered_inventory_coverage_defects(
 def _invalid_inventory_items(inventory: dict | None) -> list[dict]:
     """Inventory rows that cannot participate in an exact public contract.
 
-    Coverage deliberately ignores empty/one-token legacy rows because there is
-    no valid Example text to render.  The terminal gate must not silently
-    certify an inventory that contains those rows, though: doing so can turn an
-    extraction omission into an apparently complete chapter.
+    Identity mechanics (missing/duplicate/mistyped qid) and genuine
+    emptiness only. Brevity is NOT a defect here: the ``stub_task`` reason
+    used to be raised by a word-count cascade, which cannot tell a mangled
+    question from a complete short one, so a real learner question such as
+    "Is 9 a cube?" was routed for dropping by its length.
+
+    Whether a row is a task at all is decided by the model, not here: rows
+    with no task text of their own are nominated by
+    :func:`_unowned_stub_inventory_candidates` and ruled on against the
+    source by :func:`_adjudicate_invalid_inventory_rows` with an
+    independent critic. This terminal gate only refuses an artifact it can
+    prove broken by identity or emptiness.
     """
     invalid: list[dict] = []
     seen_qids: set[str] = set()
@@ -13527,33 +13254,12 @@ def _invalid_inventory_items(inventory: dict | None) -> list[dict]:
         else:
             seen_qids.add(qid)
 
-        text = _inventory_task_text(item)
-        source_kind = str(item.get("source_kind") or "").strip().lower()
-        if not _inventory_coverage_key(text):
+        if not _inventory_coverage_key(_inventory_task_text(item)):
             invalid.append({
                 "index": index,
                 "qid": qid,
                 "reason": "empty_task",
             })
-        elif (
-            source_kind not in _HUB_INVENTORY_KINDS
-            and cv._example_too_short(text)
-        ):
-            # A short imperative whose substance lives in its shared context
-            # ("Complete the table below." plus the table) is a complete
-            # source task, not an extraction stub: the context ships with the
-            # public prompt once rendering embeds it.
-            context = str(item.get("shared_context") or "").strip()
-            if not (
-                item.get("requires_context")
-                and context
-                and not cv._example_too_short(f"{context} {text}")
-            ):
-                invalid.append({
-                    "index": index,
-                    "qid": qid,
-                    "reason": "stub_task",
-                })
     return invalid
 
 
@@ -14063,9 +13769,10 @@ def _rendered_inventory_keys_present(
     for item in (inventory or {}).get("items") or []:
         if not isinstance(item, dict):
             continue
-        text = _inventory_task_text(item)
-        key = _inventory_coverage_key(text)
-        if key and not cv._example_too_short(text):
+        # Every inventory prompt participates; only genuine emptiness (no
+        # coverage key at all) has nothing to look for.
+        key = _inventory_coverage_key(_inventory_task_text(item))
+        if key:
             expected_keys.add(key)
     if not expected_keys:
         return set()
@@ -14164,7 +13871,6 @@ def _resolved_type_case_qid_placement_ledger(
                 f"placement ledgers disagree at {label}"
             )
     return copy.deepcopy(reference)
-
 
 
 def _final_type_case_qid_host_manifests(
@@ -14546,6 +14252,39 @@ def _dedupe_rendered_inventory_examples(
     if not expected_keys:
         return records, 0
 
+    # Coverage is keyed by normalized wording, so distinct QIDs that print
+    # the same prompt ("Fill the table below.") share one key and collapse
+    # into a single rendered Example here. Carry their identities so the
+    # review flag can NAME them instead of claiming the removed Example
+    # "renders elsewhere" — it is the wording that renders elsewhere, not
+    # necessarily every question that carries it (R4).
+    qids_by_key: dict[str, list[str]] = {}
+    for item in (inventory or {}).get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        item_key = _inventory_coverage_key(_inventory_task_text(item))
+        item_qid = str(item.get("qid") or "").strip()
+        if item_key and item_qid and item_qid not in qids_by_key.setdefault(
+            item_key, []
+        ):
+            qids_by_key[item_key].append(item_qid)
+
+    def _collapse_note(key: str) -> str:
+        siblings = qids_by_key.get(key) or []
+        if len(siblings) < 2:
+            return ""
+        return (
+            f"; NOTE: {len(siblings)} distinct source questions carry this "
+            f"exact wording ({', '.join(siblings)}) and the exact-once "
+            "coverage contract is keyed by wording, so they share that one "
+            "rendered Example — confirm every one of them is represented"
+        )
+
+    def _add_flag(rec: dict, flag: str) -> None:
+        existing = list(rec.get("review_flags") or [])
+        if flag not in existing:
+            rec["review_flags"] = [*existing, flag]
+
     # Q2/R4: the first render of a key is its carrier; a later duplicate
     # is removed and any Case the removal empties is dropped WITH a
     # review flag naming where its Examples live — never silently.
@@ -14592,6 +14331,7 @@ def _dedupe_rendered_inventory_examples(
                 examples = [piece.strip() for piece in pieces[1:] if piece.strip()]
                 kept: list[str] = []
                 removed_carriers: list[str] = []
+                collapsed_note = ""
                 for example in examples:
                     key = _inventory_coverage_key(example)
                     if key in expected_keys:
@@ -14601,6 +14341,8 @@ def _dedupe_rendered_inventory_examples(
                             carrier = seen[key]
                             if carrier and carrier not in removed_carriers:
                                 removed_carriers.append(carrier)
+                            collapsed_note = (
+                                _collapse_note(key) or collapsed_note)
                             continue
                         seen[key] = str(
                             record.get("concept_title") or ""
@@ -14608,24 +14350,35 @@ def _dedupe_rendered_inventory_examples(
                     kept.append(example)
                 if kept:
                     cases.append((case_title, kept))
+                    if collapsed_note:
+                        # The Case survives, but a duplicate render of one
+                        # source wording was removed from it. Name the
+                        # QIDs that share that wording so the collapse is
+                        # recorded, not merely counted (R4).
+                        _add_flag(
+                            rec,
+                            "Q2: a duplicate render of this exact source "
+                            "wording was removed here" + collapsed_note,
+                        )
                 elif examples:
                     # Dedupe emptied this Case: dropping the shell is the
                     # Q2 repair, and the removal is flagged with where the
                     # Example(s) render — never a silent mask (R4).
                     changed = True
-                    rec["review_flags"] = [
-                        *(rec.get("review_flags") or []),
+                    _add_flag(
+                        rec,
                         "Q2: removed the example-less Case shell "
                         f"{case_title[:80]!r} left by exact-once Example "
-                        "dedupe; its Example(s) render under: "
+                        "dedupe; its Example wording renders under: "
                         + (
                             ", ".join(
                                 repr(title[:60])
                                 for title in removed_carriers
                             )
                             or "another concept row"
-                        ),
-                    ]
+                        )
+                        + collapsed_note,
+                    )
                 else:
                     # A Case that arrived with no Example at all violates
                     # the public Case -> Example hierarchy, so drop it
@@ -14752,6 +14505,33 @@ def _repair_rendered_inventory_coverage(
     covered_keys = _rendered_inventory_keys_present(out, inventory)
     placed = 0
     skipped_unplaceable = 0
+
+    def _flag_forced_placement(index: int, qid: str) -> None:
+        """Record every force-placed Example on the row itself (R4 / Q13).
+
+        Force-placement is a deterministic best guess: no model-authored
+        Type/Case chose to render this inventory prompt, so this pass
+        synthesises a Type/Case shell around the raw inventory wording and
+        publishes it as a learner-facing Example. Nothing is dropped — but
+        nothing may be *guessed silently* either, so the guess rides the
+        row as a review flag naming the QID. Reviewers see, in particular,
+        any row the extractor mangled or any section banner that reached
+        this point without a source-reading verdict.
+
+        Idempotent: the deposit pipeline replays itself to a fixpoint
+        (assemble.py seam F10), and on replay the Example is already
+        rendered, so no second flag is added.
+        """
+        flag = (
+            f"R4: source question {qid} was not rendered by any authored "
+            "Type/Case; the coverage repair force-placed its inventory "
+            "wording here as an Example — verify it is a real question and "
+            "that this is its right home"
+        )
+        existing = list(out[index].get("review_flags") or [])
+        if flag not in existing:
+            out[index] = {**out[index], "review_flags": [*existing, flag]}
+
     still_missing = _rendered_inventory_coverage_defects(out, inventory)["missing"]
     for qid in still_missing:
         item = items_by_qid.get(qid)
@@ -14773,6 +14553,7 @@ def _repair_rendered_inventory_coverage(
             skipped_unplaceable += 1
             continue
         out[index] = _append_inventory_example_to_record(out[index], text, item)
+        _flag_forced_placement(index, qid)
         covered_keys.add(key)
         placed += 1
 
@@ -14792,6 +14573,7 @@ def _repair_rendered_inventory_coverage(
             continue
         out[index] = _append_inventory_example_to_record(
             out[index], text, item)
+        _flag_forced_placement(index, qid)
         covered_keys.add(key)
         placed += 1
 
@@ -15273,51 +15055,16 @@ def _normalize_activity_hubs_at_final_boundary(
         records, inventory, mined_types)
 
 
-def _match_inventory_for_short_example(
-    stub: str, inventory_texts: list[str], *, used: set[str],
-    context: str = "",
-) -> str:
-    """Best full inventory question for a truncated Example stub.
-
-    ``context`` may carry the Case title / concept title so short stubs like
-    "Describe the print." can still match a Germania / allegory inventory item.
-    """
-    stub_key = bi.normalize_question_text(stub)
-    context_key = bi.normalize_question_text(context)
-    if not stub_key and not context_key:
-        return ""
-    stub_tokens = {t for t in stub_key.split() if len(t) > 2}
-    context_tokens = {t for t in context_key.split() if len(t) > 2}
-    # Prefer inventory items that already contain / start with the stub.
-    candidates: list[tuple[int, int, str, str]] = []
-    for text in inventory_texts:
-        key = bi.normalize_question_text(text)
-        if key in used:
-            continue
-        if stub_key and (stub_key in key or key.startswith(stub_key)):
-            used.add(key)
-            return text
-        text_tokens = set(key.split())
-        stub_overlap = len(stub_tokens & text_tokens) if stub_tokens else 0
-        ctx_overlap = len(context_tokens & text_tokens) if context_tokens else 0
-        if stub_overlap or ctx_overlap:
-            candidates.append((stub_overlap, ctx_overlap, key, text))
-    # Pure placeholder stubs ("q") with no useful context cannot be matched.
-    if len(stub_key.split()) <= 1 and not context_tokens:
-        return ""
-    if not candidates:
-        return ""
-    candidates.sort(key=lambda x: (-x[0], -x[1], -len(x[2])))
-    best_stub, best_ctx, best_key, best_text = candidates[0]
-    # Accept when the stub itself overlaps enough, OR when context strongly
-    # points at one unused inventory question (History allegory / source tasks).
-    if best_stub >= max(2, (len(stub_tokens) + 1) // 2 if stub_tokens else 2):
-        used.add(best_key)
-        return best_text
-    if best_ctx >= 2 and (best_stub >= 1 or len(stub_key.split()) <= 3):
-        used.add(best_key)
-        return best_text
-    return ""
+# ``_match_inventory_for_short_example`` stood here: a token-overlap /
+# word-count matcher that guessed which full inventory question a
+# "truncated Example stub" was meant to be. It was already unreachable
+# (its only feeder, ``_inventory_lookup_texts``, had no callers either),
+# and it carried the same family of predicates this purge removes —
+# ``len(stub_key.split()) <= 1``, ``<= 3``, and overlap thresholds
+# deciding whether two texts mean the same thing. Both halves are gone;
+# an Example that does not carry the source wording is a coverage defect,
+# reported by ``_rendered_inventory_coverage_defects`` against the QID
+# ledger and repaired from the inventory's own authoritative text.
 
 
 def _rebuild_types_body(
@@ -15336,8 +15083,6 @@ def _rebuild_types_body(
                     f"Example {example_i:02d}: {example.strip()}")
     # Preserve original Type NN labels from headers; only Case indexes restart.
     return " ".join(parts)
-
-
 
 
 # ---------------------------------------------------------------------------
@@ -15592,17 +15337,21 @@ def _fix_invalid_inventory_via_fixer(
 ) -> list[dict]:
     """Fixer judgment over ``invalid_source_inventory`` rows (seam F23).
 
-    Only the content-judgment reasons (``empty_task``/``stub_task`` —
-    "is this a real task or an extraction stub?" is exactly the question
-    Rule 1 forbids deciding by threshold) may be accepted-with-flag; the
+    Only the content-judgment reason (``empty_task`` — "is this a real
+    task or an extraction artifact?" is exactly the question Rule 1
+    forbids deciding by threshold) may be accepted-with-flag; the
     identity reasons (missing/duplicate/typed qid) are mechanics and
     keep failing closed. Returns the invalid rows that remain blocking.
+
+    The former ``stub_task`` reason is gone with the word-count cascade
+    that produced it: a short row is no longer a defect to adjudicate,
+    it simply participates in coverage like every other inventory item.
     """
 
     from .phase3 import fixer as p3_fixer
     from .phase3 import kernel as p3_kernel
 
-    acceptable_reasons = {"empty_task", "stub_task"}
+    acceptable_reasons = {"empty_task"}
     store = store or _phase3_fixer_store()
     items = (inventory or {}).get("items") or []
     remaining: list[dict] = []
@@ -18863,24 +18612,6 @@ _CONCEPT_CHECKPOINT_STAGES = {
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
-    "pre_derivation_draft": {
-        "order": 90,
-        "version": 1,
-        "progress": 0.985,
-        "label": "Pre-learning dependency draft complete",
-    },
-    "pre_derivation_audited": {
-        "order": 100,
-        "version": 1,
-        "progress": 0.992,
-        "label": "Pre-learning syllabus audit complete",
-    },
-    "pre_learner_analysis": {
-        "order": 110,
-        "version": 1,
-        "progress": 0.998,
-        "label": "Pre-learning learner analysis complete",
-    },
 }
 _POST_CONCEPT_CHECKPOINT_STAGES = {
     "skeleton_chunks",
@@ -18893,11 +18624,6 @@ _POST_CONCEPT_CHECKPOINT_STAGES = {
     _CONCEPT_CHECKPOINT_STAGE,
     "post_type_assignment",
     "final_content_ready",
-}
-_PRE_DERIVATION_CHECKPOINT_STAGES = {
-    "pre_derivation_draft",
-    "pre_derivation_audited",
-    "pre_learner_analysis",
 }
 
 
@@ -19133,15 +18859,6 @@ def _compatible_concept_checkpoint_entry(
             and re.fullmatch(r"[0-9a-f]{64}", context_hash)
             and _checkpoint_has_fields(checkpoint, ("records", list))
         )
-    if stage == "pre_derivation_draft":
-        return _checkpoint_has_fields(
-            checkpoint, ("records", list), ("pre_draft", dict))
-    if stage == "pre_derivation_audited":
-        return _checkpoint_has_fields(
-            checkpoint, ("records", list), ("pre_audited", dict))
-    if stage == "pre_learner_analysis":
-        return _checkpoint_has_fields(
-            checkpoint, ("records", list), ("base_records", list))
     if not _checkpoint_has_fields(checkpoint, ("records", list)):
         return False
     if stage == "source_topic_review":
@@ -19206,9 +18923,9 @@ def _compatible_concept_checkpoint_entry(
     } and _invalid_inventory_items(
         checkpoint.get("question_task_inventory")
     ):
-        # Shape compatibility is not enough for a resumable inventory. Empty,
-        # stub, or duplicate-qid rows can never satisfy exact coverage and
-        # would otherwise fail at 98% on every retry.
+        # Shape compatibility is not enough for a resumable inventory. Empty
+        # or duplicate-qid rows can never satisfy exact coverage and would
+        # otherwise fail at 98% on every retry.
         return False
     if stage in {
         _TYPE_TAXONOMY_CHECKPOINT_STAGE,
@@ -20565,13 +20282,19 @@ def _prepare_final_concept_content(out: list[dict], **kwargs) -> list[dict]:
     runs Settle → Host → Polish → Assemble with the decision store in the
     job's artifact directory (docs/phase3-rewrite-spec.md). The legacy
     3.1–3.11 allocation lane this function used to drive is deleted.
+
+    A caller that passes a ``phase3_carry`` dict receives every non-row
+    key the run produced — the Phase 03 pre-requisite capture (doc §4,
+    Q3) among them. The returned rows are unaffected by it.
     """
     import sys as _sys
 
     from . import concept_topology_contract as _topology
 
+    carry = kwargs.get("phase3_carry")
     return _topology._run_rewritten_phase3(
-        _sys.modules[__name__], out, kwargs
+        _sys.modules[__name__], out, kwargs,
+        carry=carry if isinstance(carry, dict) else None,
     )
 
 
@@ -21254,9 +20977,41 @@ def concepts_from_mmd(
                 "skipped unless strict formatting finds a targeted repair.",
                 level="success",
             )
+            # Phase 03 (doc §4, Q3): a restored final checkpoint skips the
+            # whole phase-3 run, so the capture is not made in this
+            # process. Read back the snapshot the original run wrote
+            # beside its decision store; when there is none, record the
+            # ABSENCE explicitly. A missing key would otherwise be
+            # indistinguishable from a chapter that genuinely assumes no
+            # prerequisite, and a resumed job would ship an empty Pre map
+            # with nothing flagged (R4).
+            if artifacts is not None:
+                from . import concept_topology_contract as _topology
+
+                restored_prerequisites = _topology.restored_prerequisites()
+                if restored_prerequisites is not None:
+                    artifacts["phase3_prerequisites"] = restored_prerequisites
+                else:
+                    artifacts["phase3_prerequisites_absent"] = (
+                        "final content checkpoint restored and no "
+                        f"{_topology.PRELEARN_SNAPSHOT} was found beside the "
+                        "decision store: this run made no Phase 03 capture "
+                        "and the empty set here must not be read as one."
+                    )
+                    progress.log(
+                        "The Phase 03 pre-requisite capture is unavailable on "
+                        "this restored checkpoint and its absence is recorded "
+                        "rather than reported as an empty prerequisite set.",
+                        level="warning",
+                    )
         else:
+            # Phase 03 (doc §4, Q3): the run's pre-requisite capture leaves
+            # the sealed boundary through this dict. The rows returned by
+            # the call are untouched by it.
+            phase3_carry: dict = {}
             out = _prepare_final_concept_content(
                 out,
+                phase3_carry=phase3_carry,
                 subject=subject,
                 board=board,
                 chapter_title=chapter_title,
@@ -21272,6 +21027,21 @@ def concepts_from_mmd(
                 refresh_chapter_wide_assignments=bool(
                     final_checkpoint_refresh_reasons),
             )
+            prerequisites = phase3_carry.get("prerequisites")
+            if artifacts is not None:
+                if isinstance(prerequisites, dict):
+                    # A capture that recorded nothing is a legitimate
+                    # answer and ships as itself; only a capture that
+                    # never happened is recorded as absent.
+                    artifacts["phase3_prerequisites"] = copy.deepcopy(
+                        prerequisites
+                    )
+                else:
+                    artifacts["phase3_prerequisites_absent"] = (
+                        "the rewritten Phase 3 returned no prerequisites "
+                        "key: this run made no Phase 03 capture and the "
+                        "empty set here must not be read as one."
+                    )
         if artifacts is not None:
             artifacts["mined_types"] = copy.deepcopy(mined_types)
         # Older terminal checkpoints can predate the canonical mastery/recap
@@ -21590,379 +21360,3 @@ def concepts_from_mmd(
     }]
     # Dry path: no culmination synthesis — a culmination is model work.
     return cr.refine_chapter(_ensure_parent_concepts(out))
-
-
-# Pre-learning derivation: dependency-architecture prompt with CRITICAL
-# SYLLABUS FILTER, naming patterns, cognitive tags (FL/NU/VC/RS/GR), and a
-# second "syllabus boundary" auditor pass. The legacy 4–6 topic / 5–7
-# concept quota is purged (docs/aegis-restructure.md §3): the model sizes
-# the pre-learning structure from the prerequisites actually captured — a
-# thin chapter is never padded to satisfy arithmetic, and a
-# prerequisite-heavy one is never conflated to fit a ceiling.
-
-
-def _board_guidance(board: str) -> str:
-    b = (board or "").strip().upper()
-    if "CBSE" in b:
-        return ("BOARD-SPECIFIC CURRICULUM: CBSE-aligned. Judge previous-grade vs "
-                "current-grade content and chapter order using official CBSE/NCERT "
-                "progression (Classes 6-10) for this subject — not ICSE ordering.")
-    if "ICSE" in b:
-        return ("BOARD-SPECIFIC CURRICULUM: ICSE-aligned. Use typical official ICSE "
-                "syllabus progression for this subject and grade; do not substitute "
-                "NCERT/CBSE chapter order.")
-    return f"BOARD-SPECIFIC CURRICULUM: Board {board!r}; use its official progression."
-
-
-_PRELEARN_CAT = "Build Concepts · pre-learning derivation"
-
-prompts.register(
-    "prelearning.system", category=_PRELEARN_CAT,
-    label="Pre-learning derivation system prompt",
-    description="Variables: {{subject}} {{grade}} {{board}} "
-                "{{board_guidance}}.",
-    variables=("subject", "grade", "board", "board_guidance"),
-    default="""\
-You are an expert curriculum designer specializing in dependency-based learning
-architecture aligned with formal school syllabi (ICSE/CBSE and equivalents).
-Generate PRE-LEARNING concepts for the given chapter.
-
-OBJECTIVE — output ONLY concepts that are strict prerequisites for the chapter,
-belong to previous grade levels OR foundational knowledge expected before this
-grade, and were reasonably taught/encountered before this chapter. They are NOT
-chapter content, simplified re-teaching, or topic introductions.
-
-CRITICAL SYLLABUS FILTER (MANDATORY): reject any concept explicitly taught as
-new in the CURRENT grade for this subject, and any concept typically introduced
-in this chapter or later chapters of the same course. Only include
-previous-grade or clearly foundational concepts (basic arithmetic, basic
-algebra, general science literacy, earlier-level graph reading...).
-
-STRICT EXCLUSIONS: no "Introduction to...", "Definition of...", "Overview
-of...", "Examples of..."; nothing taught inside the chapter itself.
-
-INCLUSION TEST per concept: "If a student does NOT know this, will they
-struggle to understand the chapter even after teaching?" Include only if YES.
-
-CONCEPT DESIGN: atomic but meaningful; each concept is a skill, relationship,
-or reasoning structure; do not fragment definition/formula/example apart.
-
-NAMING RULES: each name must be specific to the prerequisite skill — vary
-structure across siblings. Do NOT repeat a shared opener on multiple rows.
-NEVER "Types of _", "Definition of _", "Basics of _", "Introduction to _".
-NEVER prefix names with decimal section numbers (1., 1.1, 1.2, etc.).
-NEVER chain names with '&' (use commas with a final 'and').
-
-COGNITIVE TAGGING (MANDATORY): one primary tag per concept:
-FL=Foundational Logic | NU=Numerical Handling | VC=Vocabulary Concept |
-RS=Real-world Sense | GR=Graphical Reasoning.
-
-STRUCTURE: the number of topics and of concepts per topic is YOUR judgment,
-sized from the prerequisites this chapter actually needs — there is no quota.
-A chapter with few real prerequisites gets a small map; never pad, invent, or
-split thin material to reach a count, and never conflate distinct
-prerequisites to stay under one. Order by dependency. No duplicates.
-
-CONCEPT DESCRIPTION FORMAT (MANDATORY): one string, sections separated by " // ".
-Every concept ends with exactly one learner-analysis section (Types may be
-inserted before it):
-Description: <what the student should already know; 2-4 short lines; must not
-teach the chapter> // Misconception/ Error Analysis: Misconceptions: <commonly
-held incorrect belief>; Error Analysis: <distinct mistaken action>
-When Types are useful, classify ALL distinct prerequisite-check varieties using
-zero-padded labels exactly "Type 01:", "Case 01:", and "Example 01:":
-Type 01: <variety title> Case 01: <declarative sub-type definition>
-Example 01: <full check question> Example 02: <another question for this Case>
-Case 02: <definition> Example 01: <question> Type 02: <variety> ...
-Cases define the variation and are never questions; questions appear only as
-numbered Examples, restarting at Example 01 for each Case.
-Description is the important lesson-planning input: source/syllabus-grounded,
-clear, and concise (2-4 compact sentences, not a chapter dump). Include Types
-only when the prerequisite has assessable check formats; pure vocabulary recall
-may omit Types. Every concept MUST include both labelled meanings inside the
-single ``Misconception/ Error Analysis`` section. Misconceptions are commonly
-held incorrect beliefs or interpretations. Error Analysis describes a distinct
-procedural, computational, representational, or reasoning mistake and names the
-learner explicitly (for example, "Students may omit ..."). Never emit separate
-top-level Misconceptions or Error Analysis sections. Use canonical order:
-Description, Activity/Info Hub when present, Types when present, then the one
-combined analysis section; never write N/A/None/filler. Restart at Type 01 per concept;
-continuous renumbering happens downstream.
-NEVER reference source artifacts and never the words "MMD".
-Do NOT mention groups or group columns.
-
-OUTPUT (STRICT JSON ONLY): {"topics": [{"topic_name": "", "concepts":
-[{"parent_concept": "", "concept_name": "", "concept_description": "",
-"tag": ""}]}]}.
-
-FINAL VALIDATION: for each concept ask "Was this already expected knowledge
-BEFORE this grade (or clearly foundational)?" — if unsure or borderline,
-REMOVE or REPLACE with a safer prior-grade prerequisite.
-
-RUN CONTEXT: Subject: {{subject}} | Grade: {{grade}} | Board: {{board}}
-{{board_guidance}}""")
-
-prompts.register(
-    "prelearning.auditor", category=_PRELEARN_CAT,
-    label="Pre-learning syllabus-boundary auditor prompt",
-    default="""\
-You are a strict curriculum auditor for ICSE/CBSE-aligned pre-learning.
-You receive draft pre-learning JSON ("topics" with nested "concepts") plus
-chapter context. REMOVE or REPLACE any concept that is taught as new in the
-current grade, introduced in this chapter or later in the same course, or
-fails "was this already expected knowledge before this grade?" (unsure or
-borderline -> REPLACE). Allow previous-grade ideas and foundational skills.
-STRUCTURE: the map's size is the prerequisite evidence's, not the draft's —
-when a rejected concept has a genuine safer prior-grade replacement,
-substitute it; when it does not, remove the row (and an emptied topic) rather
-than inventing filler to preserve slot counts. Never pad.
-Keep the same schema and canonical ``Description: ... // Types: ... //
-Misconception/ Error Analysis: Misconceptions: ...; Error Analysis: ...``
-order. Types is optional. Every concept must contain both distinct labelled
-meanings inside that one top-level analysis section; never emit separate
-top-level sections. Error Analysis must name the learner explicitly and state
-the mistaken action. Where Types exist, use zero-padded Type/Case/Example
-labels, make each Case a declarative sub-type definition, put full questions
-only in Examples, and restart Example numbering at 01 per Case. Keep the tag
-(FL|NU|VC|RS|GR).
-Rewrite repetitive sibling names to be distinct.
-Return ONLY JSON with one key "topics". No markdown, no commentary.""")
-
-
-def _prelearning_system(subject: str, grade: str, board: str) -> str:
-    return prompts.render(
-        "prelearning.system",
-        subject=subject, grade=grade, board=board,
-        board_guidance=_board_guidance(board),
-    )
-
-
-def _flatten_pre_topics(data: dict) -> list[dict]:
-    out: list[dict] = []
-    for topic in data.get("topics", []):
-        t_name = (topic.get("topic_name") or "Foundations").strip()
-        if "(pre-learning)" not in t_name.lower():
-            t_name = f"{t_name} (Pre-Learning)"
-        for c in topic.get("concepts", []):
-            title = (c.get("concept_name") or "").strip()
-            if not title:
-                continue
-            tag = (c.get("tag") or "").strip().upper()
-            parent = (c.get("parent_concept") or "").strip()
-            keyword_bits = [b for b in (f"tag {tag}" if tag else "",
-                                        ) if b]
-            out.append({
-                "topic": t_name,
-                "parent_concept": parent or t_name.replace(" (Pre-Learning)", ""),
-                "concept_title": title,
-                "concept_details": (c.get("concept_description") or "").strip(),
-                "keywords": "; ".join(keyword_bits),
-            })
-    return out
-
-
-def _exclude_current_chapter_concepts(pre_rows: list[dict], current_rows: list[dict]) -> list[dict]:
-    current = {
-        bi.normalize_question_text(r.get("concept_title", ""))
-        for r in current_rows
-        if r.get("concept_title") and not cr.is_culmination(r.get("concept_title", ""))
-    }
-    out = [
-        r for r in pre_rows
-        if bi.normalize_question_text(r.get("concept_title", "")) not in current
-    ]
-    return out
-
-
-def pre_learning_from_rows(
-    rows: list[dict], *, subject: str = "", grade: str = "", board: str = "",
-    chapter_title: str = "", unit: str = "", live: bool | None = None,
-    resume_checkpoint: dict | None = None,
-    checkpoint_callback=None,
-) -> list[dict]:
-    """Derive pre-learning records from concept-mapping rows (dicts).
-
-    rows: [{concept_title, concept_details, topic}, ...] — the chapter's
-    post-learning concept map.
-    """
-    use_live = config.use_live_generation() if live is None else live
-    if not use_live:
-        config.require_generation_live()
-    if not use_live:
-        pre = [{
-            "topic": f"{(r.get('topic') or 'Topic 01')} (Pre-Learning)",
-            "parent_concept": f"Foundations for {r.get('parent_concept') or r.get('topic') or 'Chapter'}",
-            "concept_title": f"Prerequisite for {r['concept_title']}",
-            "concept_details": (
-                f"Description: foundational idea required before learning "
-                f"'{r['concept_title']}'. "
-                "// Error Analysis: Students may skip verifying this prerequisite "
-                "before attempting a task that depends on it."
-            ),
-            "keywords": r.get("keywords", ""),
-        } for r in rows if not cr.is_culmination(r.get("concept_title", ""))]
-        return _ensure_parent_concepts(_exclude_current_chapter_concepts(pre, rows))
-
-    saved = _newest_compatible_concept_checkpoint(
-        resume_checkpoint,
-        allowed_stages=_PRE_DERIVATION_CHECKPOINT_STAGES,
-    )
-    saved_stage = str(saved.get("stage") or "") if saved else ""
-    saved_order = _checkpoint_order(saved_stage)
-    if saved:
-        try:
-            restored_progress = float(saved.get("progress") or 0.0)
-        except (TypeError, ValueError):
-            restored_progress = 0.0
-        progress.set_progress(
-            restored_progress,
-            label=(
-                saved.get("stage_label")
-                or "Pre-learning checkpoint restored"
-            ),
-        )
-        progress.log(
-            "Restored pre-learning checkpoint "
-            f"'{saved.get('stage_label') or saved_stage}'.",
-            level="success",
-        )
-    if saved_stage == "pre_learner_analysis":
-        return copy.deepcopy(saved.get("records") or [])
-
-    listing = "\n".join(
-        f"- [{(r.get('topic') or '')[:60]} / {(r.get('parent_concept') or '')[:60]}] {r['concept_title']}: "
-        f"{(r.get('concept_details') or '')[:260]}"
-        for r in rows
-        if not cr.is_culmination(r.get("concept_title", ""))
-    )
-    user = (
-        f"CHAPTER: {chapter_title or '(untitled)'}\n"
-        f"Subject: {subject} | Grade: {grade} | Board: {board} | Unit: {unit}\n\n"
-        "CONCEPT MAPPING (current chapter content — exclude from pre-learning):\n"
-        # Pre-learning reasons over the whole concept map at once; keep a high
-        # bound so realistic chapters are never truncated.
-        + _trim(listing, 400_000)
-    )
-    system = _prelearning_system(subject, grade, board)
-    if saved_order >= _checkpoint_order("pre_derivation_audited"):
-        final = copy.deepcopy(saved.get("pre_audited") or {})
-    else:
-        if saved_order >= _checkpoint_order("pre_derivation_draft"):
-            draft = copy.deepcopy(saved.get("pre_draft") or {})
-        else:
-            progress.step(
-                "Pre-learning â€” deriving prerequisite map",
-                value=0.981,
-            )
-            progress.log(
-                "Generating the prerequisite map from the completed chapter. "
-                "This final AI step can take a few minutes for a large source.",
-            )
-            draft = _openai_json(
-                system, user, purpose="pre_learning")
-            if not draft.get("topics"):
-                raise RuntimeError(
-                    "live pre-learning derivation returned no topics")
-            _emit_concept_checkpoint(
-                checkpoint_callback,
-                "pre_derivation_draft",
-                records=rows,
-                pre_draft=draft,
-            )
-            progress.set_progress(
-                0.985,
-                label="Pre-learning dependency draft complete",
-            )
-
-        # Stage 2: syllabus boundary auditor (replaces violating rows in place).
-        import json as _json
-        progress.step(
-            "Pre-learning â€” auditing syllabus boundaries",
-            value=0.988,
-        )
-        audited = _openai_json(
-            prompts.get_text("prelearning.auditor"),
-            f"Chapter: {chapter_title} | Subject: {subject} | Grade: {grade} | "
-            f"Board: {board} | Unit: {unit}\n\nDRAFT:\n"
-            + _json.dumps(draft)[:120_000],
-            purpose="pre_learning",
-        )
-        final = audited if audited.get("topics") else draft
-        _emit_concept_checkpoint(
-            checkpoint_callback,
-            "pre_derivation_audited",
-            records=rows,
-            pre_audited=final,
-        )
-        progress.set_progress(
-            0.992,
-            label="Pre-learning syllabus audit complete",
-        )
-
-    out = _exclude_current_chapter_concepts(_flatten_pre_topics(final), rows)
-    if not out:
-        raise RuntimeError("live pre-learning derivation returned no concepts")
-    pre_meta = _metadata(
-        subject=subject,
-        grade=grade,
-        board=board,
-        chapter_title=chapter_title,
-        unit=unit,
-        learning_kind="Pre",
-    )
-    progress.step(
-        "Pre-learning â€” writing learner analysis",
-        value=0.995,
-    )
-    out = _ensure_misconceptions_via_api(out, meta=pre_meta)
-    out = cv.ensure_valid_learner_analysis(out)
-    _emit_concept_checkpoint(
-        checkpoint_callback,
-        "pre_learner_analysis",
-        records=out,
-        base_records=rows,
-    )
-    progress.set_progress(
-        0.998,
-        label="Pre-learning learner analysis complete",
-    )
-    return out
-
-
-def pre_learning_from_concepts(concepts: list[models.Concept], *, live: bool | None = None) -> list[dict]:
-    """Derive pre-learning concept records from existing post-learning concepts."""
-    use_live = config.use_live_generation() if live is None else live
-    if use_live:
-        chapter = concepts[0].topic.chapter if concepts else None
-        return pre_learning_from_rows(
-            [{
-                "topic": c.topic.topic_title,
-                "parent_concept": c.parent_concept,
-                "concept_title": c.concept_title,
-                "concept_details": c.concept_details,
-                "keywords": c.keywords,
-            } for c in concepts],
-            subject=chapter.subject if chapter else "",
-            grade=chapter.grade if chapter else "",
-            board=chapter.board if chapter else "",
-            chapter_title=chapter.chapter_title if chapter else "",
-            unit=chapter.unit if chapter else "",
-            live=True,
-        )
-    config.require_generation_live()
-    out: list[dict] = []
-    for c in concepts:
-        out.append({
-            "source_concept_id": c.id,
-            "topic": f"{c.topic.topic_title} (Pre-Learning)",
-            "parent_concept": f"Foundations for {c.parent_concept or c.topic.topic_title}",
-            "concept_title": f"Pre: {c.concept_title}",
-            "concept_details": (
-                f"Description: foundational idea required before learning "
-                f"'{c.concept_title}'. "
-                "// Error Analysis: Students may skip verifying this prerequisite "
-                "before attempting a task that depends on it."
-            ),
-            "keywords": c.keywords,
-        })
-    return out

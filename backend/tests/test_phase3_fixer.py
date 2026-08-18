@@ -584,27 +584,32 @@ def test_mechanics_codes_are_never_acceptable_with_a_flag():
     assert all("_fixer_accepted_codes" not in row for row in records)
 
 
-def test_invalid_inventory_stub_rows_can_be_accepted_but_identity_cannot():
+def test_empty_inventory_rows_can_be_accepted_but_identity_cannot():
     inventory = {"items": [
-        {"qid": "QINV-0001", "source_kind": "exercise", "raw_task": "Do."},
+        {"qid": "QINV-0001", "source_kind": "exercise", "raw_task": "   "},
         {"source_kind": "exercise", "raw_task": "A real question here?"},
+        # Brevity is no longer a defect at all: the two-word row that the
+        # retired word-count cascade called a ``stub_task`` never reaches
+        # the Fixer, because nothing rejects it.
+        {"qid": "QINV-0003", "source_kind": "exercise", "raw_task": "Do."},
     ]}
     records = [_coverage_row("Interpreting Exponent Procedures")]
     invalid = g._invalid_inventory_items(inventory)
     reasons = {entry["reason"] for entry in invalid}
-    assert "stub_task" in reasons and "missing_qid" in reasons
+    assert reasons == {"empty_task", "missing_qid"}
+    assert not any(entry.get("qid") == "QINV-0003" for entry in invalid)
 
     remaining = g._fix_invalid_inventory_via_fixer(
         records, inventory, invalid,
         stage="final",
         fixer=lambda _request: {
             "accept_with_flag": True,
-            "rationale": "a two-word banner, not a learner question",
+            "rationale": "an empty banner row, not a learner question",
         },
         store=kernel.DecisionStore(),
     )
 
-    # The stub was accepted (flagged on its host row); the identity
+    # The text-less row was accepted (flagged on its host row); the identity
     # defect — a row with no qid — stays mechanics and keeps blocking.
     assert [entry["reason"] for entry in remaining] == ["missing_qid"]
     assert any(

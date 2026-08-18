@@ -1,0 +1,243 @@
+{
+ "_comment": "Recorded Phase 03 coverage plan and GENERATED pre-learning questions for job 23 (the RNE golden chapter, 'The Rise of Nationalism in Europe'), authored exactly the way rne_premap.json and rne_preanalysis.json were: the real chain was run with a recording provider wired into the prequestions stage, the prequestions.plan payload it produced was dumped, and every plan and every question below was written from THAT payload and from nothing else — the 15 pre-learning concepts' own descriptions, their prerequisite texts, the post-learning concepts recorded as needing each one, and the chapter calibration the payload carries (board CBSE, grade 10, subject History, unit Modern World History). NO QUOTA ANYWHERE, and the totals are the point of the fixture: they run from 2 to 10 and none of them is 40. Q4 states 40 (normally 20+20) as an adaptive target that is neither a mandatory quota nor a maximum, and this map is mostly single skills and single definitions a Grade 10 learner is expected to hold already, so the evidence supports small sets. 'Finding Information Beyond the Textbook' is planned at 2 because no post-learning concept of this chapter was linked as needing it at all; padding it toward a customary number is exactly what Q4 forbids. EVERY plan carries a rationale — the requirement is unconditional (spec T6), which is why no code anywhere compares a plan to a norm to decide whether one is owed, and why a plan of exactly 40 would carry one on the same terms these do. The split names the GROUP TIER vocabulary (Basic/Intermediate/Advanced) as a statement of intended coverage; it is not a verdict on any question. Each question's own tier is decided later and independently by the assessment lane's level verdict, and no question below carries a tier or a difficulty label. Every question is GENERATED for the prerequisite itself: none is lifted, reworded or paraphrased from this chapter, and no question, answer or rationale names anything from this chapter's question/task inventory — the payload the fixture was written from carries no source block and no QID at all. Questions deliberately exercise the fundamental on material OTHER than this chapter's content, because a prerequisite question that interrogated the chapter would be testing what the chapter goes on to teach. Plans and question sets name their pre-concept by TITLE and the replay provider resolves them against the request's own payload, exactly as rne_place.json and rne_preanalysis.json resolve theirs, so the fixture never hard-codes a positional mint. question_id is the per-concept positional mint PRQ-0001, … and the durable map-wide identity the pass mints from it is '<pre_concept_id>-<question_id>'.",
+ "plans": [
+  {
+   "pre_concept": "Forms of Rule Before the Nation-State",
+   "total": 8,
+   "split": [
+    {"tier": "Basic", "count": 5},
+    {"tier": "Intermediate", "count": 3}
+   ],
+   "rationale": "four distinct forms of state plus the separate axis of restraint, and six post-learning concepts were recorded as needing it — more than any other prerequisite here except sovereignty; five questions fix the vocabulary and three make the learner apply the restraint axis across the forms, which is where the confusion actually sits"
+  },
+  {
+   "pre_concept": "The Plebiscite as a Direct Vote",
+   "total": 4,
+   "split": [
+    {"tier": "Basic", "count": 3},
+    {"tier": "Intermediate", "count": 1}
+   ],
+   "rationale": "one definition carried by a single contrast with an election and a single point about consent; three questions cover the definition and the contrast and one asks why consent matters, after which a further question would be the same question again"
+  },
+  {
+   "pre_concept": "A Utopian Vision",
+   "total": 4,
+   "split": [
+    {"tier": "Basic", "count": 2},
+    {"tier": "Intermediate", "count": 2}
+   ],
+   "rationale": "a term and, more importantly, a reading stance — the shift from 'did this happen' to 'what did its maker wish for'; two questions establish the word and two make the learner perform the shift, which is the half the single linked post-learning concept actually depends on"
+  },
+  {
+   "pre_concept": "The French Revolution of 1789 and the Transfer of Sovereignty",
+   "total": 10,
+   "split": [
+    {"tier": "Basic", "count": 5},
+    {"tier": "Intermediate", "count": 4},
+    {"tier": "Advanced", "count": 1}
+   ],
+   "rationale": "the richest prerequisite in the map: a concept (sovereignty) plus a precise sequence of named bodies, and eight post-learning concepts were recorded as needing it; five questions secure the terms and the sequence, four make the learner reason with the transfer, and one asks for the distinction between holding sovereignty and exercising it, which the chapter's later concepts lean on"
+  },
+  {
+   "pre_concept": "Ordering Dated Events and Narrating a Sequence",
+   "total": 6,
+   "split": [
+    {"tier": "Basic", "count": 4},
+    {"tier": "Intermediate", "count": 2}
+   ],
+   "rationale": "the description states two halves — a mechanical ordering skill including spans and shared years, and the narrative use the ordering is for; four questions exercise the mechanics on neutral dates and two the narration, and five linked post-learning concepts all need both"
+  },
+  {
+   "pre_concept": "Telling a Cause from a Consequence",
+   "total": 6,
+   "split": [
+    {"tier": "Basic", "count": 3},
+    {"tier": "Intermediate", "count": 3}
+   ],
+   "rationale": "a direction test to apply and a chain to keep in order — two separable abilities, each needing exercise on more than one example before it is reliable; the even split reflects that half the work is recognition and half is construction"
+  },
+  {
+   "pre_concept": "Reading a Map of Europe",
+   "total": 5,
+   "split": [
+    {"tier": "Basic", "count": 3},
+    {"tier": "Intermediate", "count": 2}
+   ],
+   "rationale": "a fixed four-step procedure — key, locate, follow boundaries, compare two dates — where the first three steps are one question each and the comparison, which the linked concepts actually demand, is worth two"
+  },
+  {
+   "pre_concept": "Reading a Two-Column Table",
+   "total": 3,
+   "split": [
+    {"tier": "Basic", "count": 2},
+    {"tier": "Intermediate", "count": 1}
+   ],
+   "rationale": "a single narrow skill with one characteristic error (reading down a column instead of across a row) and one use (turning a row into a sentence); three questions cover it and a fourth would only change the table"
+  },
+  {
+   "pre_concept": "Reading a Figure's Number and Caption",
+   "total": 3,
+   "split": [
+    {"tier": "Basic", "count": 2},
+    {"tier": "Intermediate", "count": 1}
+   ],
+   "rationale": "the caption carries three things — subject, maker, date — and the one judgment that follows from them is how maker and date change what the picture is evidence of; two questions for the reading and one for that judgment"
+  },
+  {
+   "pre_concept": "Interpreting a Caricature",
+   "total": 5,
+   "split": [
+    {"tier": "Basic", "count": 2},
+    {"tier": "Intermediate", "count": 3}
+   ],
+   "rationale": "four ordered steps of which the last two — locating the exaggeration and stating the claim — are the ones a learner routinely skips, so the intermediate side is deliberately heavier than the basic one; three post-learning concepts depend on the whole procedure"
+  },
+  {
+   "pre_concept": "Summarising a Passage in Your Own Words",
+   "total": 4,
+   "split": [
+    {"tier": "Basic", "count": 2},
+    {"tier": "Intermediate", "count": 2}
+   ],
+   "rationale": "two separable abilities — separating a claim from its support, and rewriting rather than extracting — with two questions each; three linked post-learning concepts all ask for a summary of a source passage"
+  },
+  {
+   "pre_concept": "Separating a Report from the Reporter's Opinion",
+   "total": 4,
+   "split": [
+    {"tier": "Basic", "count": 2},
+    {"tier": "Intermediate", "count": 2}
+   ],
+   "rationale": "the description names three places opinion shows (word choice, judgments of worth, omission), which needs more than one worked example, plus the misreading it warns against; only one post-learning concept was linked, so four is enough and eight would be padding"
+  },
+  {
+   "pre_concept": "Reading a Quantified Statement Exactly as Worded",
+   "total": 4,
+   "split": [
+    {"tier": "Basic", "count": 3},
+    {"tier": "Intermediate", "count": 1}
+   ],
+   "rationale": "a graded vocabulary of quantity plus the parallel point about scope; three questions on widening a quantifier and one on widening a scope, which is the same error in a form learners rarely notice"
+  },
+  {
+   "pre_concept": "Writing a First-Person Eyewitness Account",
+   "total": 3,
+   "split": [
+    {"tier": "Basic", "count": 1},
+    {"tier": "Intermediate", "count": 2}
+   ],
+   "rationale": "a composition skill: one question can establish what the form is, but holding a single viewpoint and staying inside what the person could know can only be tested by writing, so two of the three ask for a written passage and the plan is small because each question is long"
+  },
+  {
+   "pre_concept": "Finding Information Beyond the Textbook",
+   "total": 2,
+   "split": [
+    {"tier": "Basic", "count": 2}
+   ],
+   "rationale": "the smallest plan in the map, and deliberately so: NO post-learning concept of this chapter was linked as requiring this fundamental, so nothing in the chapter's teaching depends on it, and its own evidence supports only two honest questions — choosing the right kind of source, and recording where an answer came from. Padding it toward a customary number would be inventing questions to fill a quota"
+  }
+ ],
+ "questions": {
+  "Forms of Rule Before the Nation-State": [
+   {"question_id": "PRQ-0001", "question_text": "Define a monarchy, and state what a dynasty adds to that definition.", "answer": "A monarchy is a state headed by a king or queen who holds power by inheritance rather than by being chosen. A dynasty is the family through which that throne is passed down the generations, so naming the dynasty says which family has held the monarchy over time.", "rationale": "checks the learner can state the first form of rule and can tell the institution from the family that occupies it"},
+   {"question_id": "PRQ-0002", "question_text": "What single feature distinguishes a republic from a monarchy?", "answer": "A republic has no monarch: those who govern hold office because they were chosen, not because they inherited the position.", "rationale": "checks the learner holds the contrast that defines a republic, rather than a list of loosely associated features"},
+   {"question_id": "PRQ-0003", "question_text": "An authority rules many different peoples and territories that were joined to it by conquest and by treaty. Which form of state is being described, and which word in your answer carries the idea of many peoples?", "answer": "An empire. The word 'empire' itself carries the idea of one authority ruling many peoples and territories, joined by conquest or treaty, rather than a single people under one government.", "rationale": "checks the learner can recognise an empire from its description and knows which part of the term does the work"},
+   {"question_id": "PRQ-0004", "question_text": "What does it mean to call a ruler's power absolutist?", "answer": "It means the ruler's power faces no restraint at all: the ruler's word is law, and dissent is repressed rather than answered.", "rationale": "checks the learner can state the restraint axis on its own, before applying it to any particular state"},
+   {"question_id": "PRQ-0005", "question_text": "Name the four forms of rule described here — monarchy, republic, empire, dynasty — and say for each whether it names a form of state or a ruling family.", "answer": "Monarchy, republic and empire name forms of state; a dynasty names the ruling family that passes a throne down the generations.", "rationale": "checks the learner does not treat 'dynasty' as a fourth form of state alongside the other three"},
+   {"question_id": "PRQ-0006", "question_text": "Explain why 'absolutist' is not simply a stronger word for 'monarchy'. Use a republic or an empire in your answer.", "answer": "Monarchy names the form of a state — who rules it and by what right — while absolutism names how much restraint the ruler faces. The two questions are separate, so a monarchy may be restrained and a state that is not a monarchy, such as an empire or a republic, may still be ruled without restraint. Calling a state absolutist therefore tells you nothing on its own about whether it has a king.", "rationale": "checks the learner treats form of state and restraint as two independent questions rather than one scale"},
+   {"question_id": "PRQ-0007", "question_text": "A state is ruled by a hereditary family that governs many conquered peoples and answers to no assembly. Classify it on both of the questions this concept asks, and say which words in the description gave you each answer.", "answer": "On form of state it is an empire ruled by a monarchy, because one authority governs many conquered peoples and the rulers are a hereditary family. On restraint it is absolutist, because it answers to no assembly, so the ruler's power faces no restraint.", "rationale": "checks the learner can answer the two questions separately from the same evidence instead of collapsing them into one label"},
+   {"question_id": "PRQ-0008", "question_text": "Why is it not enough, when describing a state of this period, to record only the title of whoever ruled it?", "answer": "Because the title names at most the form of the state and says nothing about the second question — whether the ruler's power was restrained — and it can also hide how many different peoples were being governed. A state recorded only as 'a monarchy' loses both whether it was absolutist and whether it was an empire holding many peoples together.", "rationale": "checks the learner can say what a title-only description loses, which is the error this fundamental exists to prevent"}
+  ],
+  "The Plebiscite as a Direct Vote": [
+   {"question_id": "PRQ-0001", "question_text": "What is a plebiscite?", "answer": "A direct vote in which all the people of a region are asked to accept or reject one specific proposal, most often that their region should join or leave a particular state.", "rationale": "checks the learner can state the definition, including that the vote is put to everyone in the region"},
+   {"question_id": "PRQ-0002", "question_text": "In one sentence, say how a plebiscite differs from an election.", "answer": "An election chooses the people who will govern; a plebiscite settles a single question put to everyone.", "rationale": "checks the learner holds the difference in what is chosen, which is the distinction the definition rests on"},
+   {"question_id": "PRQ-0003", "question_text": "The people of a region are asked to vote yes or no to joining a neighbouring state. Is this an election or a plebiscite, and why?", "answer": "A plebiscite, because the voters are being asked to accept or reject one specific proposal rather than to choose who will govern them.", "rationale": "checks the learner can apply the distinction to a described vote instead of only reciting it"},
+   {"question_id": "PRQ-0004", "question_text": "Two regions are transferred to the same state in the same year — one after its army occupied the territory, the other after its people voted to join. Why would a ruler want the second kind of transfer, and what word describes what the vote is meant to supply?", "answer": "Because a territory taken by an army has been conquered, while a territory whose people have voted to join is said to have chosen. The vote is meant to supply consent, which makes the transfer look like the will of the people rather than the result of force.", "rationale": "checks the learner can explain why consent is the point of a plebiscite, which is what makes the term worth knowing"}
+  ],
+  "A Utopian Vision": [
+   {"question_id": "PRQ-0001", "question_text": "What does it mean to call a vision of society utopian?", "answer": "It means the vision pictures a society so ideal that it is unlikely ever to exist.", "rationale": "checks the learner can state the word's meaning before being asked to use it"},
+   {"question_id": "PRQ-0002", "question_text": "Does calling a vision utopian mean that it is foolish? Explain.", "answer": "No. The word marks the distance between the world as it is and the world the vision shows; it is a statement about how far the picture is from reality, not a judgment that its maker was foolish.", "rationale": "checks the learner does not carry the everyday dismissive sense of the word into a historical reading"},
+   {"question_id": "PRQ-0003", "question_text": "A picture shows people of many different backgrounds standing peacefully together in a way they did not in the artist's own time. Which two questions should you ask of it, and which question should you stop asking?", "answer": "Ask what its maker wished for, and who is shown standing together here who did not stand together in life — and, from those, what order the maker thought the world ought to have. Stop asking whether the scene records what actually happened.", "rationale": "checks the learner can perform the shift in question that reading something as utopian requires"},
+   {"question_id": "PRQ-0004", "question_text": "Why does treating a utopian picture as a record of events lead a reader to the wrong conclusion?", "answer": "Because the picture was never a report of what happened, so read as a record it produces a false account of the past. Read as a vision it is good evidence for something else entirely — what its maker hoped for and what order they thought the world ought to have.", "rationale": "checks the learner can say what a utopian source is and is not evidence of, which is the judgment the reading stance produces"}
+  ],
+  "The French Revolution of 1789 and the Transfer of Sovereignty": [
+   {"question_id": "PRQ-0001", "question_text": "Define sovereignty.", "answer": "Sovereignty is the highest authority in a state — the power to make law that nobody within the state may overrule.", "rationale": "checks the learner holds the term the whole prerequisite is built on"},
+   {"question_id": "PRQ-0002", "question_text": "Before 1789, where did sovereignty lie in France?", "answer": "With the king alone.", "rationale": "checks the learner can state the starting point of the transfer"},
+   {"question_id": "PRQ-0003", "question_text": "Where did sovereignty lie in France after the Revolution, and what did that change about where law was held to come from?", "answer": "With the body of French citizens. Law was then held to come from the people rather than from the throne.", "rationale": "checks the learner can state the end point of the transfer and what it changed, not merely that something changed"},
+   {"question_id": "PRQ-0004", "question_text": "What was the Estates General, and why did the king summon it?", "answer": "The Estates General was the old French assembly of the three orders. The king summoned it because he was facing a financial crisis.", "rationale": "checks the learner can identify the first named body in the sequence and the reason it met"},
+   {"question_id": "PRQ-0005", "question_text": "What was the National Assembly, and who declared it?", "answer": "The National Assembly was an assembly claiming to speak for the nation, declared by the Third Estate representatives of the Estates General after they were refused an equal voice.", "rationale": "checks the learner can identify the second named body and who created it"},
+   {"question_id": "PRQ-0006", "question_text": "Put these in the order in which they happened and explain what each step made possible for the next: the declaration of a National Assembly; a financial crisis; the summoning of the Estates General; the refusal of an equal voice to the Third Estate.", "answer": "A financial crisis; the summoning of the Estates General; the refusal of an equal voice to the Third Estate; the declaration of a National Assembly. The crisis is why the king needed the old assembly at all; summoning it brought the Third Estate's representatives together in one place; refusing them an equal voice inside it left them without a way to act through it; and that is what they answered by declaring themselves an assembly of the nation instead.", "rationale": "checks the learner holds the sequence precisely and can say why each step made the next possible"},
+   {"question_id": "PRQ-0007", "question_text": "Explain the difference between the Estates General and the National Assembly in terms of whom each claimed to represent.", "answer": "The Estates General was the old assembly of the three orders, so it represented those orders separately and by their traditional rights. The National Assembly claimed to represent the nation as a whole, which is why its representatives could claim to speak for France rather than for one order within it.", "rationale": "checks the learner can tell the two bodies apart on the point that matters, rather than treating them as two names for one assembly"},
+   {"question_id": "PRQ-0008", "question_text": "Why is the transfer of sovereignty in 1789 described as a change in where law came from rather than simply as a change of ruler?", "answer": "Because sovereignty is the power to make law that nobody within the state may overrule. Moving it from the king to the body of citizens changed the source of that power, so law was held to come from the people themselves; a change of ruler would have left the source where it was and only changed who held it.", "rationale": "checks the learner can reason with the definition of sovereignty instead of reciting the events"},
+   {"question_id": "PRQ-0009", "question_text": "A ruler is deposed and another takes the throne with the same powers. Has sovereignty been transferred? Explain your answer.", "answer": "No. Sovereignty is the highest law-making authority in the state, and here it remains with the throne — only the person occupying it has changed. A transfer of sovereignty would mean that authority itself moved to a different holder, as it did in France when it moved from the king to the body of citizens.", "rationale": "checks the learner can apply the definition to a case designed to look like a transfer and is not"},
+   {"question_id": "PRQ-0010", "question_text": "Distinguish between holding sovereignty and exercising it, using the position of French citizens after 1789.", "answer": "Holding sovereignty is being the source of the highest authority to make law; exercising it is actually making the laws. After 1789 sovereignty was held to belong to the body of French citizens, but the citizens as a whole did not sit and legislate — an assembly did so in their name. The distinction matters because it makes the assembly's authority derived from the citizens rather than its own, and it leaves open the question of which citizens were represented in it.", "rationale": "checks the learner can separate the source of authority from its use, which is what later arguments about who counted as a citizen turn on"}
+  ],
+  "Ordering Dated Events and Narrating a Sequence": [
+   {"question_id": "PRQ-0001", "question_text": "What does chronology mean?", "answer": "The arrangement of events in the order in which they happened.", "rationale": "checks the learner holds the term before being asked to work with it"},
+   {"question_id": "PRQ-0002", "question_text": "Arrange these dates from earliest to latest: 1830, 1815, 1848, 1821.", "answer": "1815, 1821, 1830, 1848.", "rationale": "checks the mechanical half of the skill on plain dates, with nothing else to distract"},
+   {"question_id": "PRQ-0003", "question_text": "A list of events includes one recorded as 1814-1815. How many events is that, and where does it go relative to an event dated 1815?", "answer": "It is one event, which crossed a year boundary. It began before an event dated 1815 and may still have been running when that event happened, so it is placed before it and its span noted.", "rationale": "checks the learner reads a span as a single event rather than as two dated points"},
+   {"question_id": "PRQ-0004", "question_text": "Two entries in a list carry the same year. What does that tell you, and what does it not tell you?", "answer": "It tells you both happened within the same year. It does not tell you which came first, so their order cannot be settled from the years alone and needs more precise dating or other evidence.", "rationale": "checks the learner notices the limit of year-level dating instead of inventing an order"},
+   {"question_id": "PRQ-0005", "question_text": "You are given five dated events and asked to narrate the process they belong to. Explain how a narration differs from the list you started with.", "answer": "The list is a set of dated facts in order; the narration tells the process as a sequence of stages, each taking up the situation the last one left. The narration therefore has to say how each stage changed the situation for the next, so the reader can follow how things changed step by step rather than reading an unordered set of facts.", "rationale": "checks the learner knows what the ordering is for, which is the second half of the fundamental"},
+   {"question_id": "PRQ-0006", "question_text": "Why does a process retold with its stages out of order become a different account, even when every stage is correctly described?", "answer": "Because each stage takes up the situation the one before it left. Change the order and each stage is now shown responding to a situation that had not yet arisen, so the account claims a different development — the facts survive but the explanation of how things changed does not.", "rationale": "checks the learner can say why order carries meaning, not just that it should be kept"}
+  ],
+  "Telling a Cause from a Consequence": [
+   {"question_id": "PRQ-0001", "question_text": "State the difference between a cause and a consequence.", "answer": "A cause is what brought a development about; a consequence is what followed from it.", "rationale": "checks the learner holds both terms before applying the test"},
+   {"question_id": "PRQ-0002", "question_text": "What question do you ask of an item to decide whether it is a cause or a consequence of a development?", "answer": "Ask whether the item existed before the development and helped produce it, in which case it is a cause, or came after it and resulted from it, in which case it is a consequence.", "rationale": "checks the learner holds the direction test itself, which is the transferable part of the fundamental"},
+   {"question_id": "PRQ-0003", "question_text": "A harvest fails; food prices rise; townspeople riot. Identify the cause and the consequence in each of the two links of this chain.", "answer": "In the first link the failed harvest is the cause and the rise in food prices the consequence. In the second link the rise in food prices is the cause and the riot the consequence. The rise in prices is therefore both, depending on which link it is being read in.", "rationale": "checks the learner can apply the direction test twice over and sees that one item can be both"},
+   {"question_id": "PRQ-0004", "question_text": "Explain what is meant by saying that causes commonly run in a chain.", "answer": "Each link in the chain is the consequence of the one before it and the cause of the one after it, so a development is produced by a sequence of connected steps rather than by one isolated cause.", "rationale": "checks the learner holds the chain idea, which is what the direction test has to be applied along"},
+   {"question_id": "PRQ-0005", "question_text": "Take the chain 'a new tax is imposed - traders protest - the tax is withdrawn' and retell it in the wrong order. Show what the reversed version now claims.", "answer": "Reversed, it reads 'the tax is withdrawn - traders protest - a new tax is imposed', which now claims that the protests followed a withdrawal and led to a new tax being imposed. Every fact is still present, but the explanation has become the opposite one: protest is shown provoking the tax rather than removing it.", "rationale": "checks the learner can demonstrate, not just assert, that a chain in the wrong order is a different explanation"},
+   {"question_id": "PRQ-0006", "question_text": "A student writes that a war was caused by the treaty that ended it. What error has been made, and how would the direction test have caught it?", "answer": "The consequence has been given as the cause. The direction test asks whether the item existed before the development and helped produce it: a treaty ending the war came after the war and resulted from it, so it cannot be among its causes.", "rationale": "checks the learner can name the error and show the test catching it, which is what makes the test usable"}
+  ],
+  "Reading a Map of Europe": [
+   {"question_id": "PRQ-0001", "question_text": "What is the key of a historical map, and why is it read first?", "answer": "The key says what each colour, line and symbol on the map stands for. It is read first because nothing on the map means anything until it has been read.", "rationale": "checks the learner holds the first step of the fixed order and the reason for it"},
+   {"question_id": "PRQ-0002", "question_text": "List, in order, the steps for reading a historical map described here.", "answer": "Read the key; locate the states and regions the map names; follow the lines that separate them; and, where there is more than one map, compare them.", "rationale": "checks the learner holds the procedure as an order rather than as a set of loose habits"},
+   {"question_id": "PRQ-0003", "question_text": "Why must a claim drawn from a historical map always carry its date?", "answer": "Because the map shows how territory was divided at one moment in time. Without the date the claim appears to describe the territory permanently, when it describes only that moment.", "rationale": "checks the learner attaches the date to the claim, which is the error the fixed order ends with"},
+   {"question_id": "PRQ-0004", "question_text": "You are given two maps of the same land at two different dates. Name the three kinds of change you should look for and describe.", "answer": "Territory that changed hands, boundaries that moved, and names that appeared or vanished.", "rationale": "checks the learner knows what a comparison is looking for before performing one"},
+   {"question_id": "PRQ-0005", "question_text": "On the earlier of two maps a region is shaded in one colour and named; on the later map the same area is divided by a new line, and one part carries a name that did not appear before. Write the comparison as a dated claim.", "answer": "Between the date of the first map and the date of the second, the region was divided: a new boundary appeared across it, and one of the parts acquired a name that was not on the earlier map, so territory that had been shown as one unit was shown as more than one.", "rationale": "checks the learner can turn a two-map comparison into a claim that carries both dates and names what changed"}
+  ],
+  "Reading a Two-Column Table": [
+   {"question_id": "PRQ-0001", "question_text": "What does each row of a two-column table state?", "answer": "That the entry on the left goes with the entry on the right, and with no other.", "rationale": "checks the learner holds what the table's information actually is"},
+   {"question_id": "PRQ-0002", "question_text": "Why should a two-column table be read row by row rather than column by column?", "answer": "Because reading straight down one column gives two unconnected lists and loses the pairing, and the pairing is the only information the table carries.", "rationale": "checks the learner can state the characteristic error and what it destroys"},
+   {"question_id": "PRQ-0003", "question_text": "A two-column table has the headings 'Region' and 'Chief export'. One row reads 'Silesia' and 'linen'. Turn that row into a full sentence of the kind you would use in an answer.", "answer": "Silesia's chief export was linen. The sentence names both halves of the row and the relation the headings state between them.", "rationale": "checks the learner can use a row in prose, which is what the table is read for"}
+  ],
+  "Reading a Figure's Number and Caption": [
+   {"question_id": "PRQ-0001", "question_text": "What three things does a caption under a picture in a history book normally tell you?", "answer": "What the picture shows, who made it, and when it was made.", "rationale": "checks the learner knows what to read out of a caption"},
+   {"question_id": "PRQ-0002", "question_text": "What is a figure number for?", "answer": "It is how the running text points at the picture, so that when the text tells you to look at a numbered figure you can find it and establish from its caption what you are looking at.", "rationale": "checks the learner understands the number as the link between text and picture rather than as decoration"},
+   {"question_id": "PRQ-0003", "question_text": "Two pictures show the same event. One was drawn at the time by someone present; the other was drawn fifty years later. Why does the caption's information about maker and date change what each picture is evidence of?", "answer": "The first is evidence of how the event appeared to someone who was there, so it can be used, with care, as testimony about the event itself. The second is evidence of how the event was remembered or portrayed half a century afterwards, so it is testimony about the later time rather than about the event. Without the caption neither could be told from the other.", "rationale": "checks the learner can draw the judgment that maker and date support, which is why the caption counts as evidence"}
+  ],
+  "Interpreting a Caricature": [
+   {"question_id": "PRQ-0001", "question_text": "What is a caricature, and what is it not a record of?", "answer": "A caricature is a drawing that exaggerates in order to make a point. It is not a record of anything that happened.", "rationale": "checks the learner holds the definition and the limit that follows from it"},
+   {"question_id": "PRQ-0002", "question_text": "List the four steps for interpreting a caricature, in order.", "answer": "List what is actually drawn; decide what each element stands for; notice what has been made too large or absurd; and state the claim the whole picture makes.", "rationale": "checks the learner holds the procedure as an order, since the later steps depend on the earlier ones"},
+   {"question_id": "PRQ-0003", "question_text": "What kinds of clue tell you what an element in a caricature stands for?", "answer": "Its labels, its costume, and any symbol that would have been familiar to the picture's first audience.", "rationale": "checks the learner knows where the meaning of an element is to be found rather than guessing it"},
+   {"question_id": "PRQ-0004", "question_text": "In a caricature, one figure is drawn many times larger than the others and is shown holding a tiny pair of scales. Which step of the interpretation does the exaggeration belong to, and what does it tell you?", "answer": "It belongs to the third step, noticing what has been made too large or absurd. The exaggeration is where the artist's opinion sits: the size says that this figure's power is out of proportion to the others, and the tiny scales say the artist thinks its claim to deal justly is worth very little.", "rationale": "checks the learner can locate the artist's opinion in the exaggeration rather than in the subject matter"},
+   {"question_id": "PRQ-0005", "question_text": "A student describes everything drawn in a caricature accurately and stops there. Which step has been left out, and why does the description fail without it?", "answer": "The final step: stating the claim the whole picture makes. Without it the student has produced an inventory of a drawing rather than an interpretation, and the drawing exists in order to make a point, so a reading that never says what the point is has not read it.", "rationale": "checks the learner can say why the interpretation is incomplete without the final step, which is the step most often skipped"}
+  ],
+  "Summarising a Passage in Your Own Words": [
+   {"question_id": "PRQ-0001", "question_text": "What is the first thing to find when you set out to summarise a passage?", "answer": "The claim the passage is making — the thing it wants the reader to accept.", "rationale": "checks the learner starts from the claim rather than from the passage's first sentence"},
+   {"question_id": "PRQ-0002", "question_text": "What kinds of material does a summary drop, and what must it keep?", "answer": "It drops the illustration — the examples, figures and quoted detail that support the claim. It keeps the claim itself and the shape of its support.", "rationale": "checks the learner can separate claim from support, which is what makes a summary shorter without making it a different argument"},
+   {"question_id": "PRQ-0003", "question_text": "Why is copying two sentences from a passage not a summary, even when they are the two most important sentences in it?", "answer": "Because writing it in your own words is what makes it a summary rather than an extract. Copied sentences show which parts you selected but not that you have understood the argument well enough to restate it.", "rationale": "checks the learner knows the difference between summarising and extracting, which is the error the fundamental warns against"},
+   {"question_id": "PRQ-0004", "question_text": "A summary is shorter than its passage and uses none of its words, but it presents a claim the writer only mentioned in passing as the writer's main point. What has gone wrong?", "answer": "The author's meaning and emphasis have not survived. A summary must keep the claim the passage was making and the weight the writer gave it; promoting a passing remark to the main point makes it a summary of a different argument, however well it is written.", "rationale": "checks the learner holds the fidelity requirement, which is what distinguishes a summary from a paraphrase of one's own reading"}
+  ],
+  "Separating a Report from the Reporter's Opinion": [
+   {"question_id": "PRQ-0001", "question_text": "What two things does a written source usually do at once?", "answer": "It reports what the writer saw or knew, and it comments on that material.", "rationale": "checks the learner expects both to be present rather than treating a source as one or the other"},
+   {"question_id": "PRQ-0002", "question_text": "What can be done with reported material that cannot be done with opinion?", "answer": "Reported material — what happened, where, when and to whom — can in principle be checked against other sources. Opinion is the writer's judgment of that material and cannot be checked in the same way.", "rationale": "checks the learner knows why the separation is worth making at all"},
+   {"question_id": "PRQ-0003", "question_text": "Name the three places in which a writer's opinion shows itself, and give an example of the first.", "answer": "In the words chosen to describe people and actions; in what is called just or shameful; and in what is left out. An example of the first: calling a crowd 'a mob' rather than 'a gathering' passes judgment while appearing only to report.", "rationale": "checks the learner can find opinion where it hides, including in the omission that leaves no visible mark"},
+   {"question_id": "PRQ-0004", "question_text": "A source describes a protest and calls the protesters reckless. A student writes that the protesters were reckless. What misreading has been made, and how should the sentence have been written?", "answer": "The writer's judgment has been attributed to the events themselves. The sentence should have been written as a report of the source's opinion — that the writer regarded the protesters as reckless — leaving what the protesters actually did as the reported material, to be checked against other sources.", "rationale": "checks the learner can both name the misreading the fundamental warns against and correct it in writing"}
+  ],
+  "Reading a Quantified Statement Exactly as Worded": [
+   {"question_id": "PRQ-0001", "question_text": "Arrange these words of quantity from the largest share to the smallest: some, all, almost none, most, a few, many.", "answer": "All, most, many, some, a few, almost none.", "rationale": "checks the learner holds the graded vocabulary the fundamental depends on"},
+   {"question_id": "PRQ-0002", "question_text": "A source says 'most of the population were peasants'. Does that license the statement 'everyone was a peasant'? Explain.", "answer": "No. 'Most' says more than half, not all, so widening it to 'everyone' turns the statement into a different and usually false one and denies the existence of everyone the source left out.", "rationale": "checks the learner can refuse the specific widening the fundamental names"},
+   {"question_id": "PRQ-0003", "question_text": "Why are words such as 'most' and 'a few' described as part of the claim rather than as decoration?", "answer": "Because changing them changes what is being asserted. A statement about most of a population and the same statement about a few of it are two different claims, and only one of them may be supported by the evidence.", "rationale": "checks the learner treats the quantifier as load-bearing rather than as style"},
+   {"question_id": "PRQ-0004", "question_text": "A source states that in one province, during one decade, a particular trade declined. A student writes that the trade declined across the continent throughout the century. Which two things have been widened, and why is the result unsupported?", "answer": "The scope has been widened in place, from one province to a whole continent, and in time, from one decade to a whole century. A claim holds for the region and the period it was made about and not automatically beyond them, so nothing in the source supports the wider statement.", "rationale": "checks the learner can spot widening of scope, which is the same error as widening a quantifier in a form that is easier to miss"}
+  ],
+  "Writing a First-Person Eyewitness Account": [
+   {"question_id": "PRQ-0001", "question_text": "What are the two defining features of an eyewitness account, as described here?", "answer": "It is continuous prose written as 'I', and it is written by someone who was present at what is described.", "rationale": "checks the learner holds the form before being asked to produce it"},
+   {"question_id": "PRQ-0002", "question_text": "Write a short first-person account, in continuous prose, of an ordinary market day in a town you have never named before, told by a trader who was there. Report only what that person could have seen, heard or been told, in the order it reached them, and say how they felt about it.", "answer": "A complete answer is a short passage of continuous prose written as 'I', in which a trader describes the morning as it reached them — setting out a stall, what could be seen and heard from where they stood, what other people told them during the day, and in what order — and says how they felt about it. It reports nothing the trader could not have known and steps outside the person nowhere.", "rationale": "checks the learner can hold a single viewpoint in continuous prose, which cannot be tested except by writing"},
+   {"question_id": "PRQ-0003", "question_text": "Rewrite this sentence so that it belongs in an eyewitness account: 'Historians now agree that the shortage had begun several months earlier, though few people realised it at the time.' Then explain what was wrong with the original.", "answer": "A correct rewriting keeps only what the person could have known and felt — for example, 'I did not understand then how long the shortage had been building; at the time it seemed to me to have come on us all at once.' The original steps outside the person to report what historians later concluded, which an eyewitness could not have known, and it comments on everyone else's awareness from outside as well.", "rationale": "checks the learner can detect and repair the characteristic failure of the form, which is knowledge the witness could not have had"}
+  ],
+  "Finding Information Beyond the Textbook": [
+   {"question_id": "PRQ-0001", "question_text": "You are asked something your chapter does not answer. Describe the first two steps to take before you begin looking.", "answer": "Turn the question into the specific thing you need to find out, and decide what kind of source would hold it — a reference book, an atlas, a library catalogue, an archive, or a person who would know. Then go to that kind of source rather than reading generally and hoping.", "rationale": "checks the learner can turn an open question into a directed search, which is the whole of the skill"},
+   {"question_id": "PRQ-0002", "question_text": "You find the answer you were looking for. What should you record besides the answer itself, and why?", "answer": "Where it came from, so that the answer can be traced back and checked by you or by anyone else. An answer with no source cannot be verified and cannot be used as evidence.", "rationale": "checks the learner records provenance, which is what makes the found information usable"}
+  ]
+ }
+}

@@ -353,6 +353,54 @@ Doc: §4 Phase 03, Q3, Q4/D3 (adaptive-40).
   critic-flagged rationale. No `40` literal in any validator.
 - The Pre Master contains generated questions only.
 
+**Owner steer, 17 Aug 2026 — what Pre-Learning is, and what its questions
+must be calibrated to.** Recorded because it governs the generation slice
+and was previously only implicit:
+
+1. *Pre-Learning is fundamentals.* The concepts build is driven by the
+   prerequisite material §4 names — what was taught in previous years, the
+   vocabulary the chapter uses as if already known, and the basics needed to
+   understand a particular line or concept. The Pre map is built from that
+   captured evidence, never from the finished Post map (that is the retired
+   derive-from-existing flow).
+2. *The questions are GENERATED, and generated to fit.* They are not
+   source questions and never can be (§4: current-chapter source questions
+   never appear in the Pre Master). Each must be authored for the **level,
+   grade, context, subject and board** of the chapter in hand — a
+   prerequisite question for a Grade 6 science chapter and one for a Grade 10
+   mathematics chapter are different artefacts even where the underlying
+   fundamental is the same.
+
+The mechanism for (2) already exists and must be used rather than
+re-invented: The Architect (§8.1) assembles the run's instruction set —
+subject topology guidance, grade-band vocabulary, language mode, board and
+publication conventions — and its hash already joins every decision key.
+The generation pass consumes that set, so calibration is evidence the model
+reasons over, never a table of per-grade rules in code. A hard-coded
+grade/subject branch deciding question shape would be Rule 1's forbidden
+judgment wearing a curriculum hat.
+
+3. *NO EXTRACTION OF ANY QUESTIONS, anywhere in the Pre lane.* Stronger
+   than "the Pre Master contains generated questions only": no question is
+   ever lifted out of the source into **any** Pre artefact — not the Pre
+   Master, and not the Pre concept detailing either. Consequences:
+
+   * A Pre concept row carries **no Types, Cases or Examples built from
+     current-chapter source questions**. Post's Examples *are* source
+     questions (Rule C: every QID has exactly one final Type/Case
+     assignment), so lifting one onto a Pre concept would also double-route
+     that QID and break Q2's exactly-once — the constraint and the existing
+     uniqueness law point the same way.
+   * The Pre map therefore ships Description and Achieving Mastery. Types,
+     Cases and Examples reach the Pre detailing only once **generated**
+     questions exist to fill them, which is the generation slice's work,
+     not the map build's.
+   * Mechanically checkable, and it should be checked: no QID from the
+     chapter's question/task inventory may appear anywhere in a Pre row or
+     the Pre release payload. That is identity accounting, not judgment —
+     a gate that refuses a broken artefact, which CLAUDE.md permits — and
+     it fails closed.
+
 ### Step 8 — Four-output release on the SOP/MES schema (Q5)
 Doc: §6, §7, Q5.
 - Migrate schema constants, writer, and acceptance tests to the

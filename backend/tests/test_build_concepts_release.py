@@ -900,3 +900,94 @@ def test_punctuation_and_numbering_do_not_hide_a_repeat():
         issue["code"] for issue in issues
         if issue["code"] == "repeated_question_text"
     ] == ["repeated_question_text"]
+
+
+def test_diagnostics_archive_carries_the_pre_learning_lane(
+    db, tmp_path, monkeypatch,
+):
+    """Step-7 slice C2 (map §6.6): the export used to be blind to the Pre
+    lane, so a run that built a Pre-Learning map read exactly like one
+    that never did. The recorded map and the capture it was built from
+    now reach the ledger and the run report — and a reviewer sees what
+    the Pre lane produced without opening the artifact JSON."""
+    job, chapter = _job(db)
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+    )
+    (tmp_path / "source.phase3-prelearn-capture.json").write_text(
+        json.dumps({"prerequisites": [
+            {"prerequisite_id": "PR-0001", "text": "what sovereignty is"},
+        ]}),
+        encoding="utf-8",
+    )
+    (tmp_path / "source.phase3-prelearn-map.json").write_text(
+        json.dumps({
+            "rows": [{
+                "topic": "Political Vocabulary",
+                "concept_title": "Sovereignty",
+                "concept_details": (
+                    "Description: The highest law-making authority."
+                    "\nAchieving Mastery: Saying who holds it."
+                    " // Misconception/ Error Analysis: Misconceptions: "
+                    "learners may believe a sovereign is merely powerful."
+                ),
+                "_pre_concept_id": "PRC-0001",
+                "_source_grounding_contract": (
+                    "derived-from-prerequisite-capture"
+                ),
+                "_aegis_pre_prerequisites": [
+                    {"prerequisite_id": "PR-0001", "text": "what sovereignty is"},
+                ],
+                "_aegis_analysis_allotments": ["PLA-0001"],
+                "_aegis_needed_for": [],
+            }],
+            "topics": [{
+                "pre_topic_id": "PRT-0001",
+                "title": "Political Vocabulary",
+                "pre_concept_ids": ["PRC-0001"],
+            }],
+            "analysis": {
+                "inventory": [{"item_id": "PLA-0001",
+                               "kind": "misconception",
+                               "text": "a prerequisite belief"}],
+                "allotments": {"PLA-0001": "PRC-0001"},
+                "rationales": {},
+                "review_flags": {},
+            },
+            "review_flags": {},
+            "decision_flags": {},
+            "validation": [],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        release.uploads,
+        "source_artifact_directory",
+        lambda _job_id: str(tmp_path),
+        raising=False,
+    )
+
+    with zipfile.ZipFile(
+        io.BytesIO(release_files.build_diagnostics_zip(job))
+    ) as archive:
+        names = set(archive.namelist())
+        assert "context/pre_learning_map.json" in names
+        assert "context/pre_learning_capture.json" in names
+        ledger = json.loads(archive.read("context/coverage_ledger.json"))
+        report = json.loads(archive.read("context/run_report.json"))
+        rendered = archive.read("RUN_REPORT.txt").decode("utf-8")
+
+    pre = ledger["summary"]["pre_learning"]
+    assert pre["rows"] == 1
+    assert pre["prerequisites"] == {"total": 1, "mapped": 1, "unaccounted": 0}
+    assert pre["analysis_items"] == {"total": 1, "allotted": 1,
+                                     "unaccounted": 0}
+    assert report["pre_learning"]["allotted_item_count"] == 1
+    assert "PRE-LEARNING MAP (Phase 03)" in rendered
+    assert "PRE-LEARNING (Phase 03)" in rendered
+    assert "PRC-0001 Sovereignty" in rendered

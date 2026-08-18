@@ -1,3 +1,5 @@
+import pathlib
+
 import pytest
 
 from app.services import concept_validator as cv
@@ -280,9 +282,55 @@ def test_error_analysis_rejects_correct_procedural_action_without_a_defect():
         "Students may record all observations accurately.")
 
 
-def test_concise_numeric_yes_no_question_is_not_a_stub():
-    assert not cv._example_too_short("Is 9 a cube?")
-    assert cv._example_too_short("Is this correct?")
+def test_no_word_count_predicate_judges_whether_an_example_is_a_real_task():
+    """The ``_example_too_short`` cascade is gone, machinery and all.
+
+    CLAUDE.md names this exact anti-pattern: "'too short to be a real
+    task' cannot tell a mangled question from a section banner — only
+    the source can". Pin the absence of the predicate, its Case-level
+    wrapper, and the two regex vocabularies it consulted, everywhere
+    under ``app/`` — a re-introduction anywhere in production code
+    fails here, not silently in a run.
+    """
+    app_dir = pathlib.Path(cv.__file__).resolve().parent.parent
+    retired = (
+        "_example_too_short",
+        "_case_example_too_short",
+        "_CASE_TASK_VERB_RE",
+        "_CASE_SPECIFIC_DETAIL_RE",
+        "short_case_example",
+    )
+    offenders = [
+        f"{path.relative_to(app_dir)}:{name}"
+        for path in sorted(app_dir.rglob("*.py"))
+        for name in retired
+        if name in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+def test_a_three_word_source_question_renders_without_a_length_error():
+    """"Is 9 a cube?" is a whole question; nothing may reject it by length."""
+    rows = [{
+        "topic": "Cubes And Cube Roots",
+        "parent_concept": "Cube Numbers",
+        "concept_title": "Recognising Cube Numbers",
+        "concept_details": (
+            "Description: A cube number is the product of three equal "
+            "factors. Achieving Mastery: I can decide whether a given "
+            "number is a cube. // "
+            "Types: Type 01: Deciding cube membership "
+            "Case 01: Small whole numbers Example 01: Is 9 a cube? // "
+            "Misconceptions: Students may confuse squares with cubes."
+        ),
+        "keywords": "",
+    }]
+    report = cv.validate_concept_rows(
+        rows, allow_types=True, strict_type_hierarchy=True,
+        allowed_source_examples=["Is 9 a cube?"],
+    )
+    codes = {error["code"] for error in report["errors"]}
+    assert not any("short" in code for code in codes), sorted(codes)
 
 
 def test_belief_adverbs_classify_as_misconceptions_but_authored_placement_wins():

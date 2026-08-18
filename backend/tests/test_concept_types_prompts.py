@@ -1,5 +1,5 @@
 """Concept-generation prompts must require rich Types classification."""
-import copy
+from pathlib import Path
 
 import pytest
 
@@ -46,25 +46,22 @@ def test_split_prompt_contracts_are_separated():
     assert "Ohm's" not in hub and "Belgium" not in hub and "Vetal" not in hub
 
 
-def test_pre_and_post_prompts_require_one_combined_analysis_section():
+def test_the_description_prompt_requires_one_combined_analysis_section():
+    # Step 7 retired the pre-learning derivation prompt, so only the Post
+    # half of this contract survives; the assertions are unchanged.
     post = g.prompts.get_text("concepts.description_refine.system")
-    pre = g._prelearning_system("Mathematics", "08", "CBSE")
 
-    for contract in (post, pre):
-        normalized = " ".join(contract.split())
-        assert "Misconception/ Error Analysis:" in normalized
-        assert "Misconceptions:" in normalized
-        assert "Error Analysis:" in normalized
-        assert "commonly held incorrect belief" in normalized
-        assert "procedural, computational, representational, or reasoning mistake" in normalized
-        assert "both labelled" in normalized.lower()
-        assert "Never emit separate top-level" in normalized
-        assert "learner explicitly" in normalized
+    normalized = " ".join(post.split())
+    assert "Misconception/ Error Analysis:" in normalized
+    assert "Misconceptions:" in normalized
+    assert "Error Analysis:" in normalized
+    assert "commonly held incorrect belief" in normalized
+    assert "procedural, computational, representational, or reasoning mistake" in normalized
+    assert "both labelled" in normalized.lower()
+    assert "Never emit separate top-level" in normalized
+    assert "learner explicitly" in normalized
 
     types = g.prompts.get_text("concepts.types_assign.system")
-    pre_normalized = " ".join(pre.split())
-    assert "Cases define the variation and are never questions" in pre_normalized
-    assert "questions appear only as numbered Examples" in pre_normalized
     assert "When an Example refers to one or more figures" in types
     assert '[img src="https://..." alt="..."]' in types
 
@@ -983,8 +980,6 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
     monkeypatch.setattr(g, "_consolidate_concepts_via_api", lambda records, **kw: records)
     monkeypatch.setattr(g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api", lambda records, **kw: records)
-    monkeypatch.setattr(
         g, "_extract_question_task_inventory_via_api", lambda **kw: g._empty_inventory())
     monkeypatch.setattr(
         g, "_mine_types_from_inventory_via_api", lambda **kw: {"types": []})
@@ -1014,8 +1009,6 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
     monkeypatch.setattr(g, "_repair_records_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_ensure_mastery_lines_via_api", lambda records, **kw: records)
-    monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api", lambda records, **kw: records)
     monkeypatch.setattr(
         g, "_validate_final_or_raise",
         lambda records, **kw: {"ok": True, "errors": [], "summary": {}})
@@ -1207,10 +1200,6 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
         g, "_repair_records_via_api", lambda records, **kwargs: records)
     monkeypatch.setattr(
         g, "_ensure_mastery_lines_via_api",
-        lambda records, **kwargs: records,
-    )
-    monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api",
         lambda records, **kwargs: records,
     )
     monkeypatch.setattr(
@@ -1431,97 +1420,43 @@ def test_final_content_checkpoint_skips_semantic_api_repair(monkeypatch):
     assert callbacks == []
 
 
-def test_pre_learning_resume_after_audit_skips_draft_and_auditor(monkeypatch):
-    base_rows = [{
-        "topic": "Current Topic",
-        "parent_concept": "Current",
-        "concept_title": "Current Chapter Concept",
-        "concept_details": "Description: current chapter content",
-        "keywords": "",
-    }]
-    draft = {
-        "topics": [{
-            "topic_name": "Number Foundations",
-            "concepts": [{
-                "parent_concept": "Prior Number Sense",
-                "concept_name": "Whole Number Fluency",
-                "concept_description": (
-                    "Description: Learners fluently compare whole numbers. // "
-                    "Error Analysis: Students may reverse the comparison sign."
-                ),
-                "tag": "NU",
-            }],
-        }],
-    }
-    audited = copy.deepcopy(draft)
-    audited["topics"][0]["concepts"][0]["concept_name"] = (
-        "Audited Whole Number Fluency")
-    responses = iter([draft, audited])
-    monkeypatch.setattr(g, "_openai_json", lambda *a, **kw: next(responses))
-    monkeypatch.setattr(
-        g,
-        "_ensure_misconceptions_via_api",
-        lambda *a, **kw: (_ for _ in ()).throw(
-            RuntimeError("learner analysis failed")),
-    )
-    checkpoints = []
+def test_no_pre_learning_derivation_machinery_survives():
+    """The legacy pre-learning derivation lane is gone from app/.
 
-    with pytest.raises(RuntimeError, match="learner analysis failed"):
-        g.pre_learning_from_rows(
-            base_rows,
-            subject="Mathematics",
-            grade="07",
-            board="CBSE",
-            chapter_title="Current Chapter",
-            live=True,
-            checkpoint_callback=checkpoints.append,
-        )
-
-    assert [item["stage"] for item in checkpoints] == [
+    Its two entry points, its two registry prompts, its three checkpoint
+    stages, and its normalized-title exclusion all went with restructure
+    step 7. Two of the deleted lines were raises — including one that
+    killed a run whenever the exclusion emptied the map, which is exactly
+    the volume-derived halt on a thin chapter that CLAUDE.md Rule 1
+    forbids. Phase 03 captures prerequisites during the run instead.
+    """
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    tokens = (
+        "pre_learning_from_rows",
+        "pre_learning_from_concepts",
+        "prelearning.system",
+        "prelearning.auditor",
+        "_exclude_current_chapter_concepts",
+        "_flatten_pre_topics",
+        "_prelearning_system",
         "pre_derivation_draft",
         "pre_derivation_audited",
-    ]
-    monkeypatch.setattr(
-        g,
-        "_openai_json",
-        lambda *a, **kw: (_ for _ in ()).throw(
-            AssertionError("draft and auditor API calls must be restored")),
-    )
-    monkeypatch.setattr(
-        g, "_ensure_misconceptions_via_api",
-        lambda records, **kw: records,
-    )
-    resumed_callbacks = []
-
-    records = g.pre_learning_from_rows(
-        base_rows,
-        subject="Mathematics",
-        grade="07",
-        board="CBSE",
-        chapter_title="Current Chapter",
-        live=True,
-        resume_checkpoint=checkpoints[-1],
-        checkpoint_callback=resumed_callbacks.append,
-    )
-
-    assert records[0]["concept_title"] == "Audited Whole Number Fluency"
-    assert [item["stage"] for item in resumed_callbacks] == [
         "pre_learner_analysis",
-    ]
-
-
-def test_pre_learning_excludes_exact_current_concepts():
-    current = [{
-        "topic": "Algebra",
-        "parent_concept": "Linear Equations",
-        "concept_title": "Solving One-Step Equations",
-        "concept_details": "Description: current chapter content",
-        "keywords": "",
-    }]
-    pre = g.pre_learning_from_rows(
-        current, subject="Mathematics", grade="07", board="CBSE",
-        chapter_title="Linear Equations", live=False)
-    titles = {r["concept_title"] for r in pre}
-    assert "Solving One-Step Equations" not in titles
-    assert all(r.get("parent_concept") for r in pre)
-    assert all("Error Analysis:" in r["concept_details"] for r in pre)
+        "live pre-learning derivation returned no",
+    )
+    # prompts.RETIRED_PROMPT_KEYS names the two retired prompt keys on
+    # purpose, so a stranded operator override is pruned instead of left
+    # unreachable in DATA_DIR/prompt_overrides.json. That is a tombstone,
+    # not machinery.
+    tombstones = {app_dir / "services" / "prompts.py"}
+    hits = sorted(
+        f"{path.name}:{token}"
+        for path in app_dir.rglob("*.py")
+        if path not in tombstones
+        for token in tokens
+        if token in path.read_text(encoding="utf-8")
+    )
+    assert hits == []
+    # The POST 81% checkpoint boundary is NOT pre-learning and must survive.
+    assert g._CONCEPT_CHECKPOINT_STAGE == "pre_type_assignment"
+    assert "pre_type_assignment" in g._CONCEPT_CHECKPOINT_STAGES

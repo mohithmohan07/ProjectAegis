@@ -12,10 +12,14 @@ from .. import config, models
 from ..bulk_import import workbook_sync
 from . import build_concepts, concept_cleanup, uploads
 from .build_concepts_release import (
-    RELEASE_KEY,
+    LANE_POST,
+    LANE_PRE,
     ReleaseUnavailableError,
     _strip_release_fields,
+    normalize_lane,
+    release_key_for_lane,
     release_payload,
+    structural_defects,
 )
 
 
@@ -24,30 +28,56 @@ def upload_release_to_database(
     job_id: int,
     *,
     owner_sub: str | None = None,
+    lane: object = LANE_POST,
 ) -> dict[str, Any]:
-    """Publish the released rows only after an explicit authenticated action.
+    """Publish one lane's released rows after an explicit authenticated action.
 
     Flagged rows are not silently removed. Generation, semantic review and
     publication stay separate: this action performs the deterministic concept
     upsert and shared-workbook publication, but starts no model request.
+
+    ``lane`` selects the staged slot — Output 01 (post) or Output 03 (pre).
+    Rule G is untouched by that: each lane is still ONE separate, explicit,
+    authenticated act, and publishing one never publishes the other. The
+    body below was already lane-aware in its topic/concept identity
+    (``pre_post`` scopes ``_find_or_create_topic`` and
+    ``_find_concept_in_chapter``), so two sequential single-lane
+    publications compose; what was NOT lane-aware was the slot it read and
+    wrote back, which is what this parameter fixes.
+
+    ORDERING, recorded because it is load-bearing for Output 04:
+    ``assessment_release_service._resolve_snapshot_concept_ids`` resolves a
+    staged concept only against an exactly matching PUBLISHED concept in the
+    same lane, so Output 03 must be uploaded before Output 04 can publish.
+    It fails closed and loudly when it is not.
     """
 
+    resolved = normalize_lane(lane)
     job = uploads.get_job(
         db,
         job_id,
         owner_sub=owner_sub,
         module="build_concepts",
     )
-    payload = release_payload(job)
+    release_key = release_key_for_lane(resolved)
+    payload = release_payload(job, lane=resolved)
     if payload is None:
         raise ReleaseUnavailableError("this upload has no staged release")
     summary = copy.deepcopy(payload.get("summary") or {})
+
+    def _published_ids() -> list[int]:
+        return copy.deepcopy(
+            (summary.get("concept_ids") or [])
+            if resolved == LANE_PRE
+            else (job.result_ids or [])
+        )
+
     if summary.get("database_uploaded"):
         return {
             "job_id": job.id,
             "status": "generated",
             "database_uploaded": True,
-            "created_concept_ids": copy.deepcopy(job.result_ids or []),
+            "created_concept_ids": _published_ids(),
             "updated_concept_ids": [],
             "issue_count": int(summary.get("issue_count") or 0),
             "publication_status": str(
@@ -59,6 +89,14 @@ def upload_release_to_database(
     chapter = db.get(models.Chapter, chapter_id)
     if chapter is None:
         raise ValueError("the release target chapter no longer exists")
+    # "Semantic doubt flags; structural corruption blocks" (§4). A
+    # Diagnostic release keeps every download open and refuses only the
+    # database write. The defect list is the same one the upload already
+    # refused on before the Pre lane existed, so the Post lane's behaviour
+    # and its message are unchanged.
+    defects = structural_defects(payload)
+    if defects:
+        raise ValueError("; ".join(defects))
     records = [
         _strip_release_fields(row)
         for row in payload.get("records") or []
@@ -66,14 +104,8 @@ def upload_release_to_database(
         and str(row.get("topic") or "").strip()
         and str(row.get("concept_title") or row.get("concept") or "").strip()
     ]
-    if not records:
-        raise ValueError("the release contains no concept rows to upload")
 
-    pre_post = (
-        "Pre"
-        if str(payload.get("learning_kind") or "").strip().lower() == "pre"
-        else "Post"
-    )
+    pre_post = "Pre" if resolved == LANE_PRE else "Post"
     source_book = (
         str(payload.get("source_book") or "").strip()
         or str(payload.get("filename") or "").strip()
@@ -163,16 +195,26 @@ def upload_release_to_database(
             "merged_count": len(merged_ids),
             "publication_status": "publishing",
         })
+        if resolved == LANE_PRE:
+            # The Pre lane records its OWN published ids inside its own
+            # payload. ``job.result_ids`` stays the Post lane's, because
+            # every existing reader of that column (the Bulk Import
+            # shortcut, the "already uploaded" response) means Output 01
+            # by it, and a Pre publication must not silently redefine it.
+            summary["concept_ids"] = copy.deepcopy(active_ids)
         payload["summary"] = summary
         inventory = copy.deepcopy(dict(job.question_inventory or {}))
-        inventory[RELEASE_KEY] = copy.deepcopy(payload)
+        inventory[release_key] = copy.deepcopy(payload)
         job.question_inventory = inventory
-        job.status = "generated"
-        job.result_ids = active_ids
+        if resolved == LANE_POST:
+            job.status = "generated"
+            job.result_ids = active_ids
         job.deposit_scope_type = "chapter"
         job.deposit_scope_ids = [chapter_id]
+        lane_label = "Pre-Learning " if resolved == LANE_PRE else ""
         job.detail = (
-            f"Explicit database upload accepted {len(records)} released row(s): "
+            f"Explicit database upload accepted {len(records)} released "
+            f"{lane_label}row(s): "
             f"{len(created_ids)} created and {len(merged_ids)} updated. "
             f"The release audit retains {summary.get('issue_count', 0)} issue(s)."
         )
@@ -196,17 +238,17 @@ def upload_release_to_database(
             publication_status = "queued"
 
         db.refresh(job)
-        durable_payload = release_payload(job) or payload
+        durable_payload = release_payload(job, lane=resolved) or payload
         durable_summary = copy.deepcopy(durable_payload.get("summary") or summary)
         durable_summary["publication_status"] = publication_status
         durable_payload["summary"] = durable_summary
         durable_inventory = copy.deepcopy(dict(job.question_inventory or {}))
-        durable_inventory[RELEASE_KEY] = durable_payload
+        durable_inventory[release_key] = durable_payload
         job.question_inventory = durable_inventory
         job.detail = (
-            f"Explicit database upload completed: {len(created_ids)} created, "
-            f"{len(merged_ids)} updated; workbook publication is "
-            f"{publication_status}."
+            f"Explicit {lane_label}database upload completed: "
+            f"{len(created_ids)} created, {len(merged_ids)} updated; "
+            f"workbook publication is {publication_status}."
         )
         db.commit()
         db.refresh(job)

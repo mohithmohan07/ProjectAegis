@@ -151,21 +151,60 @@ def test_alias_related_titles_both_survive_the_cleanup_chain():
     assert len(duplicated) == 4  # validation never mutates or drops rows
 
 
-def test_filter_drops_pedagogy_concepts_without_subject_branch():
+def test_no_concept_row_is_deleted_for_what_its_title_seems_to_mean():
+    """The pedagogy-title vocabulary is purged; the rows survive (Rule 1, R4).
+
+    ``_PEDAGOGY_CONCEPT_RE`` deleted any row whose ``concept_title`` matched
+    a twelve-phrase classroom-instruction vocabulary. That is CLAUDE.md's
+    first forbidden bullet ("is this filler?") answered by a regex, and the
+    loss was silent — an aggregate count, no title, no id, no review flag.
+    Whether a row is a task container rather than a durable teaching concept
+    is a judgment the pipeline already holds a verdict on (the Activity/Info
+    Hub host proposal + its independent critic upstream; the validator's
+    row-addressable ``forbidden_name``/``forbidden_topic`` review warnings
+    downstream), so no new model pass is introduced here — the drop is
+    simply gone.
+    """
+    assert not hasattr(concept_cleanup, "_PEDAGOGY_CONCEPT_RE")
+
     records = [
         {"topic": "A Letter to God", "concept_title": "Lencho's Faith",
          "concept_details": "Description: a", "keywords": ""},
+        # The row the old vocabulary was written for.
         {"topic": "A Letter to God",
          "concept_title": "Pre-reading Prediction and Discussion",
          "concept_details": "Description: b", "keywords": ""},
+        # A legitimately-named teaching concept the same pattern swallowed.
+        {"topic": "A Letter to God",
+         "concept_title": "Pre-Reading Vocabulary",
+         "concept_details": "Description: c", "keywords": ""},
+        {"topic": "Writing Skills", "concept_title": "Informal Letter Format",
+         "concept_details": "Description: d", "keywords": ""},
     ]
     out = concept_cleanup.filter_review_violations(
         records, subject="Unclassified Upload", board="CBSE")
-    assert len(out) == 1
-    assert out[0]["concept_title"] == "Lencho's Faith"
+    assert [r["concept_title"] for r in out] == [
+        "Lencho's Faith",
+        "Pre-reading Prediction and Discussion",
+        "Pre-Reading Vocabulary",
+        "Informal Letter Format",
+    ]
+    # Surviving untouched means no flag either: nothing happened to them.
+    assert not any(r.get("review_flags") for r in out)
+
+    # The second run at the release boundary cannot take a second bite:
+    # the function is now a fixpoint over the rows it keeps.
+    assert concept_cleanup.filter_review_violations(
+        out, subject="Unclassified Upload", board="CBSE") == out
 
 
-def test_pedagogy_topic_uses_chapter_title_without_subject_branch():
+def test_pedagogy_topic_reassignment_rides_the_row_as_a_review_flag():
+    """A rewritten learner-visible topic is recorded on the row (R4).
+
+    The topic reassignment survives this slice, but it may not be silent:
+    the flag names the exact before/after so a reviewer can address the row,
+    never an aggregate the run cannot trace back to anything.
+    """
     records = [
         {"topic": "Classroom Activity", "concept_title": "Lencho's Faith",
          "concept_details": "Description: a", "keywords": ""},
@@ -173,6 +212,40 @@ def test_pedagogy_topic_uses_chapter_title_without_subject_branch():
     out = concept_cleanup.filter_review_violations(
         records, subject="", board="CBSE", chapter_title="A Letter to God")
     assert out[0]["topic"] == "A Letter to God"
+    flags = out[0]["review_flags"]
+    assert len(flags) == 1
+    assert "R4" in flags[0]
+    assert "'Classroom Activity'" in flags[0]
+    assert "'A Letter to God'" in flags[0]
+
+    # Idempotent: replaying the deterministic chain must not stack flags.
+    again = concept_cleanup.filter_review_violations(
+        out, subject="", board="CBSE", chapter_title="A Letter to God")
+    assert again == out
+
+
+def test_omitted_umbrella_topic_rows_are_named_never_bare_counted(monkeypatch):
+    """An omitted row cannot carry a flag, so it is named instead (R4)."""
+    from app.services import progress as _progress
+
+    logged: list[str] = []
+    monkeypatch.setattr(
+        _progress, "log",
+        lambda message, **_kw: logged.append(str(message)),
+    )
+    records = [
+        {"topic": "Real Section", "concept_title": "A",
+         "concept_details": "Description: a", "keywords": ""},
+        {"topic": "Overview", "concept_title": "Preview of the Chapter",
+         "concept_details": "Description: b", "keywords": ""},
+    ]
+    out = concept_cleanup.filter_review_violations(
+        records, subject="Civics", board="CBSE")
+    assert [r["concept_title"] for r in out] == ["A"]
+    assert len(logged) == 1
+    assert "'Preview of the Chapter'" in logged[0]
+    assert "'Overview'" in logged[0]
+    assert "pedagogy / filler concept row(s)" not in logged[0]
 
 
 def test_overview_topic_is_dropped_not_reassigned():
@@ -387,7 +460,15 @@ def test_strip_title_tag_in_labels():
     assert bi.strip_title_tag("What is Science (09CBSS_Ch_PL_T)") == "What is Science"
 
 
-def test_short_case_examples_fail_for_full_source_detail():
+def test_case_example_length_is_never_a_validation_error():
+    """Replaces the retired ``short_case_example`` gate.
+
+    A one-token Case body used to be a fatal error decided by a word
+    count. Whether a rendered Example carries the book's real question is
+    now settled where the source is in hand — the exact-once inventory
+    coverage contract, keyed by QID — so the validator itself makes no
+    length judgment at all, at any strictness.
+    """
     rows = [{
         "topic": "Triangles",
         "parent_concept": "Similarity",
@@ -399,10 +480,11 @@ def test_short_case_examples_fail_for_full_source_detail():
         ),
         "keywords": "",
     }]
-    report = concept_validator.validate_concept_rows(rows, allow_types=True)
-    short_case = [e for e in report["errors"] if e["code"] == "short_case_example"]
-    assert short_case
-    assert short_case[0]["severity"] == "error"
+    for strict in (False, True):
+        report = concept_validator.validate_concept_rows(
+            rows, allow_types=True, strict_type_hierarchy=strict)
+        codes = {e["code"] for e in report["errors"]}
+        assert not any("short" in code for code in codes), sorted(codes)
 
 
 def test_concise_math_case_with_source_expression_is_allowed():
@@ -1591,7 +1673,14 @@ def test_validator_allows_figure_reference_with_embedded_image():
         for e in report2["errors"])
 
 
-def test_validator_flags_truncated_example_lines():
+def test_truncated_example_lines_are_caught_by_coverage_not_by_length():
+    """The truncation signal is the missing QID, not the short string.
+
+    ``Example: q`` used to raise a word-count error. It now raises
+    nothing in the validator; the source question it truncated is
+    reported missing by the exact-once coverage contract, which knows
+    what the book actually asked because it holds the inventory.
+    """
     rows = [{
         "topic": "Electricity",
         "parent_concept": "Ohm's Law",
@@ -1605,7 +1694,21 @@ def test_validator_flags_truncated_example_lines():
         "keywords": "",
     }]
     report = concept_validator.validate_concept_rows(rows, allow_types=True)
-    assert any(e["code"] == "short_case_example" for e in report["errors"])
+    codes = {e["code"] for e in report["errors"]}
+    assert not any("short" in code for code in codes), sorted(codes)
+
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "exercise",
+        "raw_task": (
+            "Calculate the resistance of a conductor carrying 0.5 A across "
+            "a potential difference of 6 V."
+        ),
+    }]}
+    assert g._rendered_inventory_coverage_defects(rows, inventory) == {
+        "missing": ["QINV-0001"],
+        "duplicate": [],
+    }
 
 
 def test_cleanup_preserves_figure_reference_for_same_example_image_validation():
@@ -1685,190 +1788,39 @@ def test_topic_headings_prefer_main_sections_over_subtopics():
 
 
 # --------------------------------------------------------------------------- #
-# Full-GPT passes: misconceptions, duplicate merge, merged cells, no-loss types
+# Full-GPT passes: duplicate merge, merged cells, no-loss types
 # --------------------------------------------------------------------------- #
 
-def test_learner_analysis_via_api_replaces_generic_text(monkeypatch):
-    def fake_openai(system, user, **kw):
-        assert "Misconceptions" in system and "Error Analysis" in system
-        return {"rows": [{
-            "topic": "Triangles", "parent_concept": "Similarity",
-            "concept": "Basic Proportionality Theorem",
-            "concept_description": (
-                "Description: unchanged\n"
-                "Misconception/ Error Analysis: Misconceptions: Students may "
-                "believe any line through two sides of a triangle creates "
-                "proportional segments; Error Analysis: Students may apply "
-                "the ratio to non-parallel cutting lines or form AD/DB and "
-                "AE/EC without first checking that DE is parallel to BC."
-            ),
-            "keywords": "",
-        }]}
+def test_no_learner_analysis_rewrite_machinery_survives():
+    """The retry-loop learner-analysis writer is gone from app/.
 
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "Triangles", "parent_concept": "Similarity",
-        "concept_title": "Basic Proportionality Theorem",
-        "concept_details": (
-            "Description: Relates parallel lines and proportional segments. // "
-            "Misconceptions: Students may apply Basic Proportionality Theorem "
-            "as a memorized rule without checking the conditions, context, or "
-            "representation given in the problem."
-        ),
-        "keywords": "",
-    }]
-    out = g._ensure_misconceptions_via_api(records, meta=g._metadata(subject="Math"))
-    details = out[0]["concept_details"]
-    assert "memorized rule" not in details
-    assert "any line through two sides" in details
-    assert "non-parallel cutting lines" in details
-    assert "Misconceptions:" in details
-    assert "Error Analysis:" in details
-    assert "Relates parallel lines and proportional segments." in details
-
-
-def test_learner_analysis_via_api_fails_closed_when_no_row_is_usable(
-    monkeypatch,
-):
-    monkeypatch.setattr(
-        g,
-        "_openai_json",
-        lambda *args, **kwargs: {
-            "rows": [{
-                "topic": "Triangles",
-                "parent_concept": "Similarity",
-                "concept": "Basic Proportionality Theorem",
-                "concept_description": "Description: unchanged",
-                "keywords": "",
-            }],
-        },
-    )
-    records = [{
-        "topic": "Triangles",
-        "parent_concept": "Similarity",
-        "concept_title": "Basic Proportionality Theorem",
-        "concept_details": (
-            "Description: Relates parallel lines and proportional segments."
-        ),
-        "keywords": "",
-    }]
-
-    with pytest.raises(
-        RuntimeError,
-        match="specific learner-analysis generation returned unusable rows",
-    ):
-        g._ensure_misconceptions_via_api(
-            records, meta=g._metadata(subject="Math"))
-
-
-def test_learner_analysis_via_api_retries_only_unresolved_rows(monkeypatch):
-    titles = ["Fair Test", "Systematic Observation"]
-    calls: list[dict] = []
-
-    def analysis_row(title: str, *, valid: bool) -> dict:
-        return {
-            "concept": title,
-            "misconception": (
-                "Students may believe that one observation proves a "
-                "universal pattern."
-                if valid else "Students may find this difficult."
-            ),
-            "error_analysis": (
-                "Students may omit the time and conditions when recording "
-                "each trial."
-                if valid else "Students may answer incorrectly."
-            ),
-        }
-
-    def fake_openai(_system, user, **_kwargs):
-        payload = json.loads(
-            user.split(
-                "Rows missing usable Misconceptions and/or Error Analysis "
-                "sections:\n",
-                1,
-            )[1].split("\n\nVALIDATION FEEDBACK", 1)[0]
+    ``_ensure_misconceptions_via_api`` and its predicate
+    ``_learner_analysis_needs_rewrite`` were the Pre lane's Q1 machinery
+    (a critic-gated retry loop with a max_attempts ceiling and an
+    allowed/banned verb vocabulary). Step 7 retired them with the lane;
+    phase 3's analyse pass authors learner analysis now.
+    """
+    app_dir = Path(__file__).resolve().parents[1] / "app"
+    # Two files name the retired symbols on purpose and are not machinery:
+    # prompts.RETIRED_PROMPT_KEYS (so a stranded operator override is pruned
+    # rather than left unreachable) and the Fixer's halt register (so it does
+    # not keep claiming an F27 seam the tree no longer has).
+    tombstones = {
+        app_dir / "services" / "prompts.py",
+        app_dir / "services" / "phase3" / "fixer.py",
+    }
+    hits = sorted(
+        f"{path.name}:{token}"
+        for path in app_dir.rglob("*.py")
+        if path not in tombstones
+        for token in (
+            "_ensure_misconceptions_via_api",
+            "_learner_analysis_needs_rewrite",
+            "concepts.misconceptions.system",
         )
-        requested = [row["concept"] for row in payload["rows"]]
-        calls.append({"requested": requested})
-        if len(calls) == 1:
-            return {"rows": [
-                analysis_row(titles[0], valid=True),
-                analysis_row(titles[1], valid=False),
-            ]}
-        return {"rows": [analysis_row(titles[1], valid=True)]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "Investigation",
-        "parent_concept": "Scientific Method",
-        "concept_title": title,
-        "concept_details": f"Description: {title}.",
-        "keywords": "",
-    } for title in titles]
-
-    repaired = g._ensure_misconceptions_via_api(
-        records, meta=g._metadata(subject="Science"), max_attempts=3)
-
-    assert calls == [
-        {"requested": titles},
-        {"requested": [titles[1]]},
-    ]
-    assert all(
-        not g._learner_analysis_needs_rewrite(row["concept_details"])
-        for row in repaired
+        if token in path.read_text(encoding="utf-8")
     )
-
-
-def test_learner_analysis_action_only_retry_recovers_stubborn_error(
-    monkeypatch,
-):
-    calls: list[str] = []
-
-    def fake_openai(_system, user, **_kwargs):
-        calls.append(user)
-        if len(calls) < 4:
-            error = (
-                "Students may believe that consecutive odd numbers can be "
-                "added in any order."
-            )
-        else:
-            error = (
-                "Students may miscalculate the running total by adding one "
-                "odd term twice, producing a sum that no longer equals the "
-                "cube."
-            )
-        return {"rows": [{
-            "concept": "Cubes as Sums of Consecutive Odd Numbers",
-            "misconception": (
-                "Students may believe every odd number is itself a perfect "
-                "cube."
-            ),
-            "error_analysis": error,
-        }]}
-
-    monkeypatch.setattr(g, "_openai_json", fake_openai)
-    records = [{
-        "topic": "Cubic Numbers",
-        "parent_concept": "Odd-number Patterns",
-        "concept_title": "Cubes as Sums of Consecutive Odd Numbers",
-        "concept_details": (
-            "Description: A cube can be represented by an appropriate block "
-            "of consecutive odd numbers."
-        ),
-        "keywords": "",
-    }]
-
-    repaired = g._ensure_misconceptions_via_api(
-        records, meta=g._metadata(subject="Mathematics"))
-
-    assert len(calls) == 4
-    assert all(
-        "ACTION-ONLY ERROR_ANALYSIS CONTRACT" in call
-        for call in calls
-    )
-    assert not g._learner_analysis_needs_rewrite(
-        repaired[0]["concept_details"])
-    assert "adding one odd term twice" in repaired[0]["concept_details"]
+    assert hits == []
 
 
 def test_terminal_validation_rejects_both_title_substitution_fallbacks():
@@ -3642,9 +3594,13 @@ def test_fill_table_below_callout_owns_adjacent_source_tables():
     assert "1.024 cm" not in table_prompt["shared_context"]
     assert "What happens after 30 folds?" not in table_prompt["shared_context"]
     assert public_task.endswith("Fill the table below.")
-    assert not concept_validator._example_too_short(public_task)
 
-    contextless_stub = {
+    # A short imperative is a source task like any other. The word-count
+    # cascade that used to call this one a ``stub_task`` — and so route it
+    # for dropping when its table had not yet been attached — is gone: the
+    # row is in the inventory by the outline judge's verdict, so it is
+    # accounted, never re-litigated by length.
+    contextless = {
         "items": [{
             "qid": "QINV-0013",
             "source_kind": "checkpoint_question",
@@ -3652,11 +3608,7 @@ def test_fill_table_below_callout_owns_adjacent_source_tables():
             "normalized_task": "Fill the table below.",
         }],
     }
-    assert g._invalid_inventory_items(contextless_stub) == [{
-        "index": 0,
-        "qid": "QINV-0013",
-        "reason": "stub_task",
-    }]
+    assert g._invalid_inventory_items(contextless) == []
 
     # The same short imperative WITH its table riding along as shared context
     # is a complete source task (job 12: "Complete the table below." killed a
@@ -3763,15 +3715,20 @@ def test_fill_table_below_does_not_claim_table_after_intervening_prose():
 
     assert prompt["shared_context"] == ""
     assert prompt["requires_context"] is False
-    assert g._invalid_inventory_items({"items": [prompt]}) == [{
-        "index": 0,
-        "qid": "QINV-0013",
-        "reason": "stub_task",
-    }]
+    # Failing to claim the later table is a context-attachment outcome, not
+    # a licence to reject the row: a context-less short imperative is still
+    # a source task and still enters the coverage contract.
+    assert g._invalid_inventory_items({"items": [prompt]}) == []
 
 
-def test_only_unowned_model_stub_is_nominated_for_adjudication():
-    """Shape nominates; the adjudicator decides. Nothing is dropped here."""
+def test_brevity_never_nominates_an_inventory_row_for_adjudication():
+    """Only emptiness nominates. A short row is a task, not a suspect.
+
+    The old nomination rule called a row an ``empty_or_stub_task`` by word
+    count, which meant a genuinely short source question could be sent to
+    the adjudicator to be dropped. Emptiness — no coverage key at all — is
+    mechanics and still nominates; length never does.
+    """
     source_task = "Is 9 a cube?"
     anchors = [{
         "source_kind": "checkpoint_question",
@@ -3779,31 +3736,141 @@ def test_only_unowned_model_stub_is_nominated_for_adjudication():
         "raw_task": source_task,
         "normalized_task": source_task,
     }]
-    model_items = [
-        dict(anchors[0]),
-        {
-            "source_kind": "other",
-            "source_label": "Unowned fragment",
-            "raw_task": "q",
-            "normalized_task": "q",
-        },
-    ]
+    short_but_unowned = {
+        "source_kind": "other",
+        "source_label": "Unowned short ask",
+        "raw_task": "q",
+        "normalized_task": "q",
+    }
+    empty_row = {
+        "source_kind": "other",
+        "source_label": "Unowned fragment",
+        "raw_task": "",
+        "normalized_task": "",
+    }
+    model_items = [dict(anchors[0]), short_but_unowned, empty_row]
 
     candidates = g._unowned_stub_inventory_candidates(model_items, anchors)
 
-    assert [c["index"] for c in candidates] == [1]
-    assert candidates[0]["reason"] == "empty_or_stub_task"
-    # Detection never removes: both rows are still present for the
+    assert [c["index"] for c in candidates] == [2]
+    assert candidates[0]["reason"] == "empty_task"
+    # Detection never removes: every row is still present for the
     # inventory-row adjudicator and its critic to rule on.
-    assert len(model_items) == 2
+    assert len(model_items) == 3
+
+
+def test_a_banner_row_still_reaches_the_source_reading_adjudicator():
+    """Purging the word count must not purge the judge with it.
+
+    ``## Practice Set 1.1`` (Balbharati Std 6, "Three Dimensional Shapes")
+    reached ``_adjudicate_invalid_inventory_rows`` only via this
+    nomination. With no nomination at all it would instead be OWED a
+    rendered public Example by the coverage contract and force-placed in
+    front of a learner. The nomination is mechanics — the row's task text
+    is nothing but the label it was filed under — and it decides nothing;
+    the model rules against the source with an independent critic.
+    """
+    banner = {
+        "qid": "QINV-0026",
+        "source_kind": "checkpoint_question",
+        "source_label": "Practice Set 1.1",
+        "raw_task": "## Practice Set 1.1",
+    }
+    real_question = {
+        "qid": "QINV-0100",
+        "source_kind": "checkpoint_question",
+        "source_label": "Discuss",
+        "raw_task": "Find the volume of the cuboid.",
+    }
+    short_question = {
+        "qid": "QINV-0101",
+        "source_kind": "checkpoint_question",
+        "source_label": "Checkpoint 9.2",
+        "raw_task": "Is 9 a cube?",
+    }
+
+    # A descriptive caption the extractor mistook for a task used to be
+    # nominated by a verb allow-list plus a "?" test. That vocabulary is
+    # purged, and the deliberate consequence is stated here: the row is no
+    # longer a drop candidate at all. If no authored Type renders it, the
+    # coverage repair force-places it WITH a review flag naming its QID —
+    # a flagged surplus Example a reviewer can delete, rather than a
+    # deterministic drop of something that might have been a question.
+    # CLAUDE.md ranks these outcomes: "stopping the run is recoverable,
+    # dropping a question is not".
+    described_caption = {
+        "qid": "QINV-0102",
+        "source_kind": "source_task",
+        "source_label": "Fig. 3",
+        "raw_task": (
+            "The picture shows farmers working in the field during the "
+            "monsoon season in Maharashtra."
+        ),
+    }
+
+    candidates = g._unowned_stub_inventory_candidates(
+        [banner, real_question, short_question, described_caption], [])
+
+    assert [c["qid"] for c in candidates] == ["QINV-0026"]
+    assert candidates[0]["reason"] == "task_is_only_its_own_label"
+    # No keyword vocabulary survives to classify these rows.
+    assert not hasattr(g, "_unowned_inventory_row_is_non_task")
+
+
+def test_a_force_placed_example_is_flagged_on_the_row_it_lands_on():
+    """R4 / Q13: the coverage repair may guess, but never silently.
+
+    When no authored Type/Case rendered an inventory prompt, the repair
+    ladder synthesises a Type/Case shell around the raw inventory wording
+    and publishes it. Nothing is dropped — and nothing is guessed
+    silently either, so the placement rides the row as a review flag
+    naming the QID.
+    """
+    inventory = {"items": [{
+        "qid": "QINV-0001",
+        "source_kind": "checkpoint_question",
+        "source_label": "Practice Set 1.1",
+        "raw_task": "## Practice Set 1.1",
+    }]}
+    rows = [{
+        "title": "A",
+        "topic": "T",
+        "concept_details": "Description: d. Achieving Mastery: m.",
+        "misconceptions": "x",
+    }]
+
+    assert g._rendered_inventory_coverage_defects(rows, inventory) == {
+        "missing": ["QINV-0001"], "duplicate": [],
+    }
+
+    enforced = g._enforce_rendered_inventory_coverage(
+        [dict(row) for row in rows], inventory)
+
+    flags = enforced[0].get("review_flags") or []
+    assert any("QINV-0001" in flag and "force-placed" in flag
+               for flag in flags), flags
+    # Replaying the deterministic pipeline must not add a second flag —
+    # the assemble deposit fixpoint compares the row sets for drift.
+    replayed = g._enforce_rendered_inventory_coverage(
+        [dict(row) for row in enforced], inventory)
+    assert replayed == enforced
 
 
 def test_visual_anchor_does_not_protect_duplicate_that_lost_its_image():
-    prompt = "Complete the table below."
+    # Both rows are nominatable on mechanics — their task text is nothing
+    # but the label they were filed under — so what this test isolates is
+    # the visual contract: the deterministic anchor protects only the row
+    # that still carries the anchor's image.
+    #
+    # ``source_kind`` is deliberately ``checkpoint_question``: that is the
+    # kind the production scenario used, and the nomination must not
+    # depend on a per-kind keyword rule (the verb allow-list that briefly
+    # stood here is purged — Rule 1, first bullet).
+    prompt = "Practice Set 9.4"
     url = "https://cdn.mathpix.com/table.jpg"
     anchors = [{
         "source_kind": "checkpoint_question",
-        "source_label": "Checkpoint 9.4",
+        "source_label": prompt,
         "raw_task": prompt,
         "normalized_task": prompt,
         "requires_visual": True,
@@ -3812,12 +3879,15 @@ def test_visual_anchor_does_not_protect_duplicate_that_lost_its_image():
     complete = dict(anchors[0])
     incomplete = {
         "source_kind": "checkpoint_question",
-        "source_label": "Checkpoint 9.4",
+        "source_label": prompt,
         "raw_task": prompt,
         "normalized_task": prompt,
         "requires_visual": False,
         "image_urls": [],
     }
+
+    assert g._inventory_row_task_is_only_its_own_label(complete)
+    assert g._inventory_row_task_is_only_its_own_label(incomplete)
 
     candidates = g._unowned_stub_inventory_candidates(
         [complete, incomplete], anchors)
@@ -3825,6 +3895,7 @@ def test_visual_anchor_does_not_protect_duplicate_that_lost_its_image():
     # The anchor's visual contract protects only the row that kept its
     # image; the duplicate that lost it is nominated for adjudication.
     assert [c["index"] for c in candidates] == [1]
+    assert candidates[0]["reason"] == "task_is_only_its_own_label"
 
 
 def test_source_owned_markdown_visual_survives_attachment_resolution():
@@ -5440,10 +5511,18 @@ def test_default_openai_model_is_gpt_56_luna():
     assert DEFAULT_OPENAI_MODEL == "gpt-5.6-luna"
 
 
-def test_coverage_defects_ignore_empty_or_stub_inventory_prompts():
+def test_every_inventory_prompt_participates_in_coverage_however_short():
+    """Coverage trusts the inventory; only emptiness has nothing to render.
+
+    A short source question used to be filtered OUT of the expected-coverage
+    map by a word count, so it could disappear from the ledger without any
+    record — a Rule 1 violation and an R4 silent loss at once. Now every
+    inventory item with text is expected, and the repair ladder places it
+    verbatim rather than refusing it for being brief.
+    """
     inventory = {"items": [
         {"qid": "QINV-0001", "raw_task": ""},
-        {"qid": "QINV-0002", "raw_task": "q"},
+        {"qid": "QINV-0002", "raw_task": "Is 9 a cube?"},
         {
             "qid": "QINV-0003",
             "raw_task": (
@@ -5461,9 +5540,10 @@ def test_coverage_defects_ignore_empty_or_stub_inventory_prompts():
         ),
         "keywords": "",
     }]
-    # Empty/stub inventory rows are not part of the exact-coverage contract.
+    # The three-word question is OWED, exactly like its long neighbour; only
+    # the text-less row has nothing to place.
     assert g._rendered_inventory_coverage_defects(records, inventory) == {
-        "missing": ["QINV-0003"],
+        "missing": ["QINV-0002", "QINV-0003"],
         "duplicate": [],
     }
     enforced = g._enforce_rendered_inventory_coverage(records, inventory)
@@ -5472,6 +5552,59 @@ def test_coverage_defects_ignore_empty_or_stub_inventory_prompts():
         "duplicate": [],
     }
     assert "closed electric circuit" in enforced[0]["concept_details"]
+    # R4: the short question is on the page, not merely "not missing".
+    assert "Is 9 a cube?" in enforced[0]["concept_details"]
+
+
+def test_wording_collapse_names_every_qid_that_shares_the_prompt():
+    """Two source questions, one wording, one rendered slot — say so.
+
+    The exact-once coverage contract is keyed by normalized wording, so
+    distinct QIDs printing the same short imperative ("Fill the table
+    below.") share a single rendered Example. Widening participation to
+    every inventory prompt makes that far more reachable, and the flag
+    that records it must name the questions involved rather than claim
+    the removed Example "renders elsewhere" (R4).
+    """
+    prompt = "Fill the table below."
+    inventory = {"items": [
+        {"qid": "QINV-0001", "source_kind": "checkpoint_question",
+         "source_label": "L1", "raw_task": prompt},
+        {"qid": "QINV-0002", "source_kind": "checkpoint_question",
+         "source_label": "L2", "raw_task": prompt},
+    ]}
+    records = [
+        {"title": "A", "topic": "T", "misconceptions": "x",
+         "_aegis_release_qids": ["QINV-0001"],
+         "concept_details": (
+             "Description: d. Achieving Mastery: m. // Types: Type 01: A "
+             f"Case 01: C Example 01: {prompt}")},
+        {"title": "B", "topic": "T", "misconceptions": "x",
+         "_aegis_release_qids": ["QINV-0002"],
+         "concept_details": (
+             "Description: d. Achieving Mastery: m. // Types: Type 01: B "
+             f"Case 01: C Example 01: {prompt}")},
+    ]
+
+    enforced = g._enforce_rendered_inventory_coverage(records, inventory)
+
+    flags = " ".join(
+        flag for row in enforced for flag in (row.get("review_flags") or []))
+    assert "QINV-0001" in flags and "QINV-0002" in flags, flags
+    assert "share that one rendered Example" in flags
+    # The case-uniqueness audit is the other half of the record: it keys
+    # on QID, so it reports the collapse the coverage contract cannot see.
+    from app.services.phase3 import assemble as assemble_mod
+
+    findings = assemble_mod.audit_case_uniqueness(
+        enforced,
+        expected_examples=[
+            {"qid": item["qid"], "prompt": prompt}
+            for item in inventory["items"]
+        ],
+    )
+    assert [f["code"] for f in findings] == ["qid_render_count_mismatch"]
+    assert findings[0]["qids"] == ["QINV-0001", "QINV-0002"]
 
 
 def test_enforce_coverage_hard_fails_on_residual_missing(monkeypatch):

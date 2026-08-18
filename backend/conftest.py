@@ -18,11 +18,17 @@ _empty_syllabus.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("AEGIS_BUNDLED_SYLLABUS_DIR", str(_empty_syllabus))
 
 
-# These seven assertions encode the product behavior this branch deliberately
+# These six assertions encode the product behavior this branch deliberately
 # replaces: API generation automatically publishes to the database, fills
 # publication-only chapter fields, or returns no output on failure. Keep them
 # visible as strict expected failures until their source files are migrated.
 # Replacement coverage is comprehensive in test_build_concepts_release.py.
+#
+# A seventh entry, ``test_build_concepts.py::test_pre_learning_from_upload``,
+# was removed with the test itself: restructure step 7 deleted the legacy
+# pre-learning upload route, so the assertion no longer describes a behaviour
+# this branch replaces — it describes machinery that is gone. Its replacement
+# is ``test_the_legacy_pre_learning_routes_are_gone``, which passes.
 _SUPERSEDED_AUTOMATIC_PUBLICATION_TESTS = frozenset({
     "tests/test_build_concepts.py::test_post_learning_creates_concepts",
     "tests/test_build_concepts.py::test_post_learning_groups_concepts_under_one_topic",
@@ -30,7 +36,6 @@ _SUPERSEDED_AUTOMATIC_PUBLICATION_TESTS = frozenset({
         "tests/test_build_concepts.py::"
         "test_post_learning_api_discards_invalid_final_and_completes_retry_without_api"
     ),
-    "tests/test_build_concepts.py::test_pre_learning_from_upload",
     "tests/test_concept_mapping_format.py::test_deposit_fills_required_fields",
     "tests/test_sources.py::test_concept_resused_across_books_merges_sources",
     "tests/test_uploads_flow.py::test_generate_requires_conversion",

@@ -1863,6 +1863,25 @@ def resumable_jobs(
     owner_sub: str | None = None,
     learning_kind: str,
 ) -> tuple[list[dict], int]:
+    """Resumable Build Concepts checkpoints owned by ``owner_sub``.
+
+    The ``post|pre`` domain is kept deliberately after restructure step 7
+    retired the legacy pre-learning generation lane: it is public API contract
+    (a closed union in the frontend client), it is part of every stored
+    checkpoint fingerprint, and the backing column cannot be dropped because
+    this repo has no migration system.
+
+    KNOWN CONSEQUENCE OF THAT RETIREMENT, recorded so the contract does not
+    read as more than it is: the ``pre`` arm still lists legacy ``pre`` jobs
+    that hold a saved checkpoint, but NO route can resume one any more — the
+    pre-learning generate route is gone and the post route filters
+    ``learning_kind == "post"``. Such a job is listed and stranded, not
+    resumable. Nothing is lost (the checkpoint and its deposited rows stay on
+    disk); it simply cannot be continued by the retired lane. Whether the pre
+    arm should report these as non-resumable, or migrate them onto the Phase
+    03 lane, is step 8's decision — this function is deliberately left
+    reporting what is stored rather than silently hiding the rows.
+    """
     kind = str(learning_kind or "").strip().lower()
     if kind not in {"post", "pre"}:
         raise ValueError("learning_kind must be post or pre")

@@ -924,10 +924,10 @@ def test_post_learning_wrong_chapter_preserves_checkpoint(
     assert db.get(models.UploadJob, job.id).generation_checkpoint == expected
 
 
-@pytest.mark.parametrize("learning_kind", ["post", "pre"])
 def test_upload_workbook_failure_rolls_back_new_concepts(
-    db, first_chapter, monkeypatch, tmp_path, learning_kind,
+    db, first_chapter, monkeypatch, tmp_path,
 ):
+    learning_kind = "post"
     marker = f"Atomic Workbook Failure {learning_kind.title()} 73419"
     job = models.UploadJob(
         module="build_concepts",
@@ -984,24 +984,14 @@ def test_upload_workbook_failure_rolls_back_new_concepts(
         lambda *a, **kw: post_records,
     )
     monkeypatch.setattr(
-        build_concepts.generation,
-        "pre_learning_from_rows",
-        lambda *a, **kw: [normal],
-    )
-    monkeypatch.setattr(
         build_concepts.writer,
         "append_concepts",
         lambda *a, **kw: (_ for _ in ()).throw(
             RuntimeError("workbook write failed")),
     )
 
-    generate = (
-        build_concepts.generate_post_learning
-        if learning_kind == "post"
-        else build_concepts.generate_pre_learning_from_upload
-    )
     with pytest.raises(RuntimeError, match="workbook write failed"):
-        generate(db, job.id, chapter.id)
+        build_concepts.generate_post_learning(db, job.id, chapter.id)
 
     db.expire_all()
     assert (
@@ -1253,23 +1243,23 @@ def test_inventory_csv_missing_returns_404(client):
     assert resp.status_code == 404
 
 
-def test_pre_learning_from_upload(client, first_chapter):
-    files = {"file": ("doc.txt", io.BytesIO(
-        b"## Foundations\nNumber line basics\nInteger operations"
-    ), "text/plain")}
-    job = client.post("/build-concepts/pre-learning/uploads", files=files).json()
-    assert job["learning_kind"] == "pre"
-    convert_concept_upload(client, job["id"])
-    result = stream_result(client.post(
-        f"/build-concepts/pre-learning/uploads/{job['id']}/generate",
-        json={"target_chapter_id": first_chapter["id"]}))
-    assert result["concepts_created"] >= 2
+def test_the_legacy_pre_learning_routes_are_gone(client, first_chapter):
+    """The three legacy pre-learning API surfaces no longer exist.
 
-
-def test_pre_learning_from_existing_post_learning(client, first_chapter):
-    result = stream_result(client.post("/build-concepts/pre-learning/from-existing", json={
-        "chapter_ids": [first_chapter["id"]],
-    }))
-    assert result["chapters"] == 1
-    assert result["concepts_created"] >= 1
-    assert str(first_chapter["id"]) in {str(k) for k in result["per_chapter"]}
+    Restructure step 7 retired the upload lane, its generate lane, and the
+    "derive from existing Post Learning" lane. FastAPI answers an unrouted
+    path with 404, so a 404 here is the machinery's absence, not a rejected
+    request.
+    """
+    files = {"file": ("doc.txt", io.BytesIO(b"## Foundations\nBody"), "text/plain")}
+    assert client.post(
+        "/build-concepts/pre-learning/uploads", files=files,
+    ).status_code == 404
+    assert client.post(
+        "/build-concepts/pre-learning/uploads/1/generate",
+        json={"target_chapter_id": first_chapter["id"]},
+    ).status_code == 404
+    assert client.post(
+        "/build-concepts/pre-learning/from-existing",
+        json={"chapter_ids": [first_chapter["id"]]},
+    ).status_code == 404

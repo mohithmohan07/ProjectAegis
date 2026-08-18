@@ -27,9 +27,13 @@ PIPELINE_DIR = Path(openai_policy.__file__).resolve().parent
 # The CLI entry points that talk to OpenAI directly.
 MODEL_SCRIPTS = (
     "bulk_upload_ultimate.py",
+    "mmd_to_concepts_excel.py",
+)
+
+# Retired by §9 of docs/aegis-restructure.md, deleted in step 7.
+RETIRED_PRE_LEARNING_SCRIPTS = (
     "concept_mapping_to_prelearning.py",
     "excel_to_concepts_prelearning.py",
-    "mmd_to_concepts_excel.py",
 )
 
 
@@ -78,36 +82,80 @@ def test_cli_tools_take_their_model_from_policy_not_a_pinned_slug(name: str):
         )
 
 
-def test_prelearning_tool_carries_no_similarity_threshold_or_count_quota():
-    """concept_mapping_to_prelearning must not re-grow deterministic judgment.
+def test_the_offline_pre_learning_tools_are_gone():
+    """Both pre-learning CLIs are retired (§9), not merely re-worded.
 
-    The 0.95 SequenceMatcher similarity report and the 4-6 topics / 5-7
-    concepts-per-topic validator were purged: near-duplicate detection and
-    "how many concepts does this chapter warrant" are model decisions, not
-    arithmetic. The prompts now carry the no-quota doctrine instead.
+    This replaces a test that asserted eight token absences — ``SequenceMatcher``,
+    ``SIMILARITY_THRESHOLD``, ``MIN_TOPICS``, ``MAX_TOPICS``,
+    ``MIN_CONCEPTS_PER_TOPIC``, ``MAX_CONCEPTS_PER_TOPIC``, ``"topic count"``,
+    ``similarity`` — none of which the surviving machinery used. It therefore read
+    green while ``concept_mapping_to_prelearning.py`` still carried the repo's last
+    executable count quota (``len(out) != len(topics)``, and the same per topic),
+    its last literal 40 in a validator (``if len(t) < 40`` → "Types section too
+    short or empty"), a 350-char evidence truncation and a literal-substring
+    ``Description:``/``Types:``/``Misconception:`` content contract. Deleting the
+    files is what purged those; an absence pin cannot see machinery it never named,
+    so this pins the new truth instead.
     """
 
-    source = (PIPELINE_DIR / "concept_mapping_to_prelearning.py").read_text(
-        encoding="utf-8"
+    for name in RETIRED_PRE_LEARNING_SCRIPTS:
+        assert not (PIPELINE_DIR / name).exists(), f"{name} is back"
+        assert name not in MODEL_SCRIPTS
+
+    # No surviving tool imports, invokes, or cross-references either module.
+    for path in _source_files():
+        source = path.read_text(encoding="utf-8")
+        for name in RETIRED_PRE_LEARNING_SCRIPTS:
+            assert name[: -len(".py")] not in source, (
+                f"{path.name} still references {name}"
+            )
+
+
+def test_no_surviving_offline_tool_gates_on_the_models_item_count():
+    """The count-preservation quota must not grow back anywhere in the tools.
+
+    ``concept_mapping_to_prelearning`` raised whenever its syllabus-boundary
+    critic returned a different number of topics — or of concepts inside a topic —
+    than it had been handed. That structurally forbade the critic from dropping a
+    concept it had just judged out of the current grade: a count quota (Rule 1)
+    and a critic promoted to a gate (Q10) in one line.
+
+    What made it a quota was NOT the ``len()`` against ``len()`` — it was that
+    one side came back from a critic pass whose job included dropping. This is
+    a tripwire on that shape, not a verdict about it: ``len(row) !=
+    len(header)`` in a writer is parsing/schema mechanics, which CLAUDE.md
+    explicitly allows. So a hit here is a question to answer, not a defect
+    proven, and a legitimate one is allow-listed below with its reason rather
+    than silently deleted from the sweep.
+    """
+
+    # (file, reason) for comparisons proven to be parsing/schema mechanics.
+    allowed: set[tuple[str, int]] = set()
+
+    offenders: list[str] = []
+    for path in _source_files():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            len_calls = sum(
+                1
+                for operand in (node.left, *node.comparators)
+                if isinstance(operand, ast.Call)
+                and isinstance(operand.func, ast.Name)
+                and operand.func.id == "len"
+            )
+            if len_calls >= 2 and (path.name, node.lineno) not in allowed:
+                offenders.append(f"{path.name}:{node.lineno}")
+
+    assert not offenders, (
+        "a len()-vs-len() comparison appeared in the offline tools at "
+        f"{offenders}. If either side is a collection a model returned, this "
+        "is the retired count-preservation quota growing back (Rule 1, and "
+        "Q10 when it gates a pass that may drop) — remove it. If it is "
+        "parsing or schema mechanics (a row width against a header width), "
+        "add it to `allowed` above with its reason."
     )
-
-    # The similarity machinery (threshold, ratio, report) is gone.
-    assert "SequenceMatcher" not in source
-    assert "SIMILARITY_THRESHOLD" not in source
-    assert "similarity" not in source.lower()
-
-    # The topic/concept count quota (constants, validator, prompt text) is gone.
-    for quota_token in (
-        "MIN_TOPICS",
-        "MAX_TOPICS",
-        "MIN_CONCEPTS_PER_TOPIC",
-        "MAX_CONCEPTS_PER_TOPIC",
-        "topic count",
-    ):
-        assert quota_token not in source, quota_token
-
-    # And the prompts carry the no-quota doctrine in its place.
-    assert "there is no quota" in source
 
 
 def test_mcq_and_fill_blank_rows_are_siblings_of_one_branch():

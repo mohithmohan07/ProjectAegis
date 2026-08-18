@@ -291,6 +291,19 @@ export interface SourceArtifactFile {
   media_type: string;
   size_bytes: number;
   download_url: string;
+  /**
+   * Entries the release manifest folds in are not all downloads: the
+   * database-upload entries render as a button that POSTs to
+   * `download_url` (Rule G — publication is a separate, explicit,
+   * authenticated act). One job stages two releases, so there is one such
+   * entry per lane and the lane rides that URL's query. Declared here
+   * because the component already relied on all three fields; leaving
+   * them off the type is what let a handler ignore `download_url` and
+   * publish the wrong lane without the type checker noticing.
+   */
+  action?: "download" | "post" | string;
+  disabled?: boolean;
+  requires_confirmation?: boolean;
 }
 
 export interface SourceArtifactManifest {

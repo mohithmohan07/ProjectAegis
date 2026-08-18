@@ -309,6 +309,35 @@ def test_audit_keys_rendered_coverage_on_qid_not_wording():
     ) == []
 
 
+def test_audit_expects_a_short_source_question_like_any_other():
+    """A brief prompt is a full participant in the QID-keyed audit.
+
+    ``audit_case_uniqueness`` used to skip an expected Example whose prompt
+    a word-count predicate judged a stub, mirroring the coverage contract's
+    own filter. Both filters are gone: a genuinely short source question
+    ("Is 9 a cube?") is owed exactly one rendered slot, and its absence is
+    a finding rather than a silent omission from the audit.
+    """
+    short_prompt = "Is 9 a cube?"
+    records = [{
+        "concept_title": "Recognising Cube Numbers",
+        "concept_details": "Description: d // Types: Type 01: T Case 01: C",
+        "_aegis_release_qids": ["QINV-0001"],
+    }]
+    findings = assemble_mod.audit_case_uniqueness(
+        records,
+        expected_examples=[{"qid": "QINV-0001", "prompt": short_prompt}],
+    )
+    assert [f["code"] for f in findings] == ["qid_render_count_mismatch"]
+    assert findings[0]["qids"] == ["QINV-0001"]
+
+    records[0]["concept_details"] += f" Example: {short_prompt}"
+    assert assemble_mod.audit_case_uniqueness(
+        records,
+        expected_examples=[{"qid": "QINV-0001", "prompt": short_prompt}],
+    ) == []
+
+
 def test_audit_catches_an_example_less_case_shell():
     prompt = (
         "Explain why the pinhole image appears inverted on the screen."

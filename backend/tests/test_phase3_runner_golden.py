@@ -13,9 +13,13 @@ import re
 import pytest
 
 from app.services import concept_cleanup
-from app.services.phase3 import kernel, runner
+from app.services.phase3 import runner
 from tests import test_phase3_analyse as analyse_golden
 from tests import test_phase3_host_golden as host_golden
+from tests import test_phase3_preanalyse as preanalyse_golden
+from tests import test_phase3_premap as premap_golden
+from tests import test_phase3_prequestions as prequestions_golden
+from tests import test_phase3_prelearn as prelearn_golden
 from tests import test_phase3_settle_golden as settle_golden
 
 
@@ -94,6 +98,26 @@ def replay_providers(golden_envelope):
             encoding="utf-8"
         )
     )
+    golden_prelearn = json.loads(
+        (settle_golden.GOLDEN / "rne_prelearn.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    golden_premap = json.loads(
+        (settle_golden.GOLDEN / "rne_premap.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    golden_preanalysis = json.loads(
+        (settle_golden.GOLDEN / "rne_preanalysis.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    golden_prequestions = json.loads(
+        (settle_golden.GOLDEN / "rne_prequestions.json").read_text(
+            encoding="utf-8"
+        )
+    )
     mapping = settle_golden._replay_map(golden_envelope, golden_rows)
     topology, grounding, analysis, critic = settle_golden._providers(mapping)
 
@@ -115,6 +139,16 @@ def replay_providers(golden_envelope):
         "host": _HostProvider(),
         "place": place_replay_provider(golden_place),
         "analyse": analyse_golden.analyse_replay_provider(golden_analysis),
+        "prelearn": prelearn_golden.prelearn_replay_provider(
+            golden_prelearn
+        ),
+        "premap": premap_golden.premap_replay_provider(golden_premap),
+        "preanalyse": preanalyse_golden.preanalyse_replay_provider(
+            golden_preanalysis
+        ),
+        "prequestions": prequestions_golden.prequestions_replay_provider(
+            golden_prequestions
+        ),
         "critic": critic,
     }
 
@@ -135,31 +169,54 @@ def test_runner_produces_publication_ready_output(
     # decides every unit, so every case-covered QID reaches a host.
     assert summary["routed_qids"] == 31
     assert summary["unrouted_items"] == 0
-    # Q2/R4 re-baseline: the deposit-parity pipeline's exact-once
-    # Example dedupe has ALWAYS removed these rows' duplicate activity
-    # Examples and the Case shells the removal emptied — it used to do
-    # so silently (the map's gap 4). The removals are now review flags
-    # naming where each Example renders, so the three affected rows
-    # (the hub-relocated Wolff account plus the two rows whose
-    # duplicated figure-activity Cases were deduped) surface as flagged.
-    assert summary["flagged_row_count"] == 3
+    # Q2/R4 re-baseline. Two deterministic repairs in the deposit-parity
+    # pipeline have ALWAYS acted on this chapter and used to act silently;
+    # both now ride the rows they touched.
+    #
+    #  * exact-once Example dedupe removes duplicate activity Examples and
+    #    the Case shells the removal empties (the map's gap 4) — three
+    #    rows, unchanged from the previous baseline;
+    #  * coverage repair FORCE-PLACES an inventory prompt that no authored
+    #    Type/Case rendered, synthesising a Type/Case shell around the raw
+    #    source wording and publishing it to a learner. Ten of this
+    #    chapter's 31 routed QIDs land that way. That was invisible before
+    #    — nothing was dropped, but a deterministic guess reached the page
+    #    unrecorded, which Q13 forbids. Flagging it is what makes the
+    #    purged word-count nomination safe to remove: a section banner the
+    #    extractor mistook for a task now arrives at a reviewer instead of
+    #    quietly becoming an Example.
+    assert summary["flagged_row_count"] == 6
     flagged_rows = [
         row for row in result["records"] if row.get("review_flags")
     ]
     assert sorted(
         _normal(row["concept_title"]) for row in flagged_rows
     ) == [
+        "Autocracy, Censorship, and the Demand for Freedom of the Press",
         "Educated Middle-class Leadership of Liberal-nationalist "
         "Revolutions",
+        "Gendered Limits of Liberal Political Rights",
         "Nationalism as Conservative State Power After 1848",
         "Personifying the Nation Through Female Allegories",
+        "Utopian Nationalism and Democratic-social Republicanism",
     ]
+    forced_qids: list[str] = []
     for row in flagged_rows:
         for flag in row["review_flags"]:
+            if flag.startswith("R4: source question "):
+                forced_qids.append(flag.split()[3])
+                assert "force-placed its inventory wording here" in flag
+                continue
             assert flag.startswith(
                 "Q2: removed the example-less Case shell"
             )
-            assert "its Example(s) render under:" in flag
+            assert "its Example wording renders under:" in flag
+    # Every force-placement names its QID, so the reviewer can go back to
+    # the source row rather than guessing which Example was synthesised.
+    assert sorted(forced_qids) == [
+        "QINV-0001", "QINV-0005", "QINV-0009", "QINV-0010", "QINV-0011.1",
+        "QINV-0011.2", "QINV-0012", "QINV-0013", "QINV-0014", "QINV-0015",
+    ]
     assert summary["envelope_sha256"] == golden_envelope["envelope_sha256"]
     # Q1: the analysis inventory rode through the runner — every LA-item
     # allotted exactly once, and only allotted rows carry the section.
@@ -175,6 +232,171 @@ def test_runner_produces_publication_ready_output(
             row["concept_details"]
         )
         assert has_section == bool(row.get("_aegis_analysis_allotments"))
+    # Phase 03 (Q3): the running pre-requisite capture rode through the
+    # runner alongside every stage — four captures over four different
+    # stage payloads, then one merge that consolidates every capture
+    # exactly once (R4). It never touches the Post rows.
+    prerequisites = result["prerequisites"]
+    assert set(prerequisites["captures"]) == {
+        "settle", "host", "place", "analyse",
+    }
+    assert [
+        len(prerequisites["captures"][stage])
+        for stage in ("settle", "host", "place", "analyse")
+    ] == [7, 6, 3, 4]
+    assert len(prerequisites["prerequisites"]) == 16
+    consolidated = [
+        ref
+        for row in prerequisites["prerequisites"]
+        for ref in row["captures"]
+    ]
+    assert len(consolidated) == len(set(consolidated)) == 20
+    assert prerequisites["review_flags"] == {}
+    # No decision drew a dissent on the golden replay, at a row or at a
+    # decision — the two channels agree here.
+    assert prerequisites["stage_flags"] == {}
+    # A prerequisite seen by three stages carries all three, which is
+    # what makes the doc's word "running" mean something.
+    assert sorted(
+        row["stages"] for row in prerequisites["prerequisites"]
+        if len(row["stages"]) > 1
+    ) == [["settle", "analyse"], ["settle", "host"],
+          ["settle", "host", "place"]]
+    # Phase 03 (doc §4): the consolidated capture became the complete
+    # Pre-Learning concept map, inside the same run. It is built from the
+    # capture — the build payload never sees a Post concept row — and
+    # every one of the 16 captured prerequisites is mapped exactly once
+    # (R4) across 15 pre-concepts in 6 pre-topics. No count anywhere is
+    # derived from the size of the capture or of the chapter.
+    pre_map = result["pre_map"]
+    assert len(pre_map["topics"]) == 6
+    assert len(pre_map["rows"]) == 15
+    mapped = [
+        entry["prerequisite_id"]
+        for row in pre_map["rows"]
+        for entry in row["_aegis_pre_prerequisites"]
+    ]
+    assert sorted(mapped) == sorted(
+        row["prerequisite_id"] for row in prerequisites["prerequisites"]
+    )
+    assert len(mapped) == len(set(mapped)) == 16
+    # Every Pre row ships Description + Achieving Mastery and nothing
+    # else, and NO source question id appears anywhere in the Pre map —
+    # the owner's steer, checked mechanically (it fails closed in the
+    # pass itself; this is the golden-chapter proof).
+    pre_flat = json.dumps(pre_map["rows"], ensure_ascii=False)
+    for item in golden_envelope["inventory"]["items"]:
+        assert str(item["qid"]) not in pre_flat
+    for row in pre_map["rows"]:
+        assert row["concept_details"].startswith("Description: ")
+        assert "\nAchieving Mastery: " in row["concept_details"]
+        assert "// Types:" not in row["concept_details"]
+        # Grounded on the prerequisite capture, never on this chapter's
+        # blocks (spec T4, the Sorrieu passage).
+        assert row["_source_block_ids"] == []
+        assert row["_source_grounding_contract"] == (
+            "derived-from-prerequisite-capture"
+        )
+        assert row["_source_grounding_record_sha256"]
+    # Q1 in the PRE lane (slice C2): the Pre map has its own inventory,
+    # over its own evidence, with its own item mint — 19 items, each
+    # allotted to exactly one pre-concept (R4). Twelve of the fifteen
+    # pre-concepts receive one; three receive none, which is Q1's design
+    # and not a gap. Achieving Mastery stays owed by, and present on,
+    # every one of the fifteen.
+    pre_analysis = pre_map["analysis"]
+    assert [item["item_id"] for item in pre_analysis["inventory"]] == [
+        f"PLA-{index:04d}" for index in range(1, 20)
+    ]
+    assert set(pre_analysis["allotments"]) == {
+        item["item_id"] for item in pre_analysis["inventory"]
+    }
+    assert len(set(pre_analysis["allotments"].values())) == 12
+    assert {
+        _normal(row["concept_title"])
+        for row in pre_map["rows"]
+        if not row.get("_aegis_analysis_allotments")
+    } == {
+        "Reading a Figure's Number and Caption",
+        "Writing a First-Person Eyewitness Account",
+        "Finding Information Beyond the Textbook",
+    }
+    for row in pre_map["rows"]:
+        has_section = "Misconception/ Error Analysis" in row["concept_details"]
+        assert has_section == bool(row.get("_aegis_analysis_allotments"))
+        assert "\nAchieving Mastery: " in row["concept_details"]
+    # The Pre inventory never touched the POST lane's inventory: the two
+    # mints are disjoint, and neither lane carries the other's item ids.
+    assert not any(
+        item_id.startswith("PLA-")
+        for row in result["records"]
+        for item_id in row.get("_aegis_analysis_allotments") or []
+    )
+    assert not any(
+        item_id.startswith("LA-")
+        for row in pre_map["rows"]
+        for item_id in row.get("_aegis_analysis_allotments") or []
+    )
+
+    # Every needed-for link resolves to a real Post concept of this run.
+    from app.services.phase3 import place as place_mod
+
+    post_ids = set(place_mod.mint_concept_ids(result["records"]))
+    for row in pre_map["rows"]:
+        for link in row["_aegis_needed_for"]:
+            assert link["post_concept_id"] in post_ids
+            assert link["post_concept_title"]
+    # Exactly four flagged pre-concepts on the golden chapter, and every
+    # flag is honest:
+    #  * PRC-0015 ("Finding Information Beyond the Textbook") is linked to
+    #    nothing — no post concept of this chapter genuinely requires
+    #    independent research. Necessity is a CRITIC dimension (Q10), so
+    #    the concept ships flagged rather than being dropped.
+    #  * PRC-0001 and PRC-0013 trip concept_validator's `placeholder`
+    #    code, whose PLACEHOLDERS vocabulary contains the word "none" and
+    #    fires on the ordinary English "faces none at all" / "almost
+    #    none".
+    #  * PRC-0003 trips `misconception_framing` and PRC-0013 also trips
+    #    `error_analysis_framing`. Both are decided by VERB VOCABULARIES
+    #    in the shared validator: a belief framed as "may take 'utopian'
+    #    to mean …" is not in _MISCONCEPTION_BELIEF_RE's list, and an
+    #    error framed as "carry a claim … across a whole continent" is
+    #    not in _ERROR_ANALYSIS_ACTION_RE's. Both items are well-framed
+    #    prerequisite analysis; the vocabulary simply does not contain
+    #    their verbs.
+    #
+    # All three codes are keyword vocabularies classifying content in the
+    # SHARED validator (Rule 1). They are recorded here, NOT authored
+    # around: rewording a recorded fixture item to satisfy a verb list
+    # would hide the defect rather than purge it (premap.py's §3 purge
+    # doctrine), and their real purge is replacing each with a model
+    # verdict, which moves the Post lane and belongs to its own change.
+    # In this lane they are advisory, so none of them can gate a row.
+    assert sorted(pre_map["review_flags"]) == [
+        "PRC-0001", "PRC-0003", "PRC-0013", "PRC-0015",
+    ]
+    assert any(
+        "its necessity needs review" in flag
+        for flag in pre_map["review_flags"]["PRC-0015"]
+    )
+    assert {finding["code"] for finding in pre_map["validation"]} == {
+        "placeholder", "misconception_framing", "error_analysis_framing",
+    }
+    # Advisory means advisory: every flagged row still ships, with its
+    # analysis section intact.
+    flagged_pre_rows = [
+        row for row in pre_map["rows"]
+        if row["_pre_concept_id"] in pre_map["review_flags"]
+    ]
+    assert len(flagged_pre_rows) == 4
+    # No decision drew a critic dissent on the golden replay.
+    assert pre_map["decision_flags"] == {}
+    # And the Pre map rides its own key: no Pre row leaks into the Post
+    # release records the publication chain consumes.
+    assert not any(
+        "_pre_concept_id" in row for row in result["records"]
+    )
+
     # The Q2 deterministic audit found nothing on the golden replay.
     assert result["coverage"]["case_audit"] == []
     assert result["coverage"]["case_splits"] == []
@@ -246,6 +468,72 @@ def test_runner_produces_publication_ready_output(
     assert again == result
 
 
+def test_a_refused_pre_map_still_ships_the_finished_post_map(
+    golden_envelope, replay_providers, tmp_path_factory,
+):
+    """CLAUDE.md: "finished work always ships".
+
+    The no-extraction guard fails closed on the Pre ARTEFACT — a Pre row
+    carrying a source question's identity never ships, and
+    ``premap.build`` refuses it. But by the time the Pre map is built,
+    Settle → Host → Place → Analyse → Polish → Assemble have all
+    completed and been paid for. Letting the refusal propagate would
+    discard all 53 finished rows, and discard them PERMANENTLY: the
+    offending decision is stored content-addressed, so the replay
+    reproduces the refusal at zero spend with no route out. That is the
+    hard-stuck run Q13 exists to prevent.
+
+    So the Pre map is refused and RECORDED, and the Post map ships.
+    """
+    import copy
+
+    from app.services.phase3 import premap as premap_mod
+
+    store_dir = tmp_path_factory.mktemp("refused-store")
+    clean = runner.run(
+        golden_envelope, store_dir=store_dir, providers=replay_providers,
+    )
+
+    qid = premap_mod.inventory_qids(golden_envelope)[0]
+    original = replay_providers["premap"]
+
+    def leaking(request: dict) -> dict:
+        response = copy.deepcopy(original(request))
+        if str(request.get("stage") or "") == "premap.map":
+            concept = response["topics"][0]["concepts"][0]
+            concept["achieving_mastery"] += f" (see {qid})"
+        return response
+
+    poisoned_dir = tmp_path_factory.mktemp("refused-store-2")
+    result = runner.run(
+        golden_envelope,
+        store_dir=poisoned_dir,
+        providers={**replay_providers, "premap": leaking},
+    )
+
+    # The finished Post map is untouched and reachable.
+    assert result["records"] == clean["records"]
+    assert result["summary"]["row_count"] == 53
+    assert result["summary"]["routed_qids"] == 31
+
+    # The Pre map is refused, empty, and says so — nothing lost silently.
+    pre_map = result["pre_map"]
+    assert pre_map["rows"] == []
+    assert qid in pre_map["refused"]
+    assert "Pre-Learning concept row" in pre_map["refused"]
+
+    # And the refusal is durable, not just in-process.
+    import json as _json
+
+    snapshot = _json.loads(
+        (poisoned_dir.parent / "source.phase3-prelearn-map.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert snapshot["refused"] == pre_map["refused"]
+    assert snapshot["rows"] == []
+
+
 def test_settled_rows_snapshot_lands_beside_the_store(
     golden_envelope, replay_providers, tmp_path_factory,
 ):
@@ -273,8 +561,86 @@ def test_settled_rows_snapshot_lands_beside_the_store(
         "source_contract_hash"
     ]
 
+    # The Phase 03 capture lands beside the store too, so the Pre lane
+    # and the diagnostics export can read it long after the run.
+    capture = json.loads(
+        (artifact_dir / "source.phase3-prelearn-capture.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(capture) == {
+        "captures", "prerequisites", "review_flags", "stage_flags",
+    }
+    assert len(capture["prerequisites"]) == 16
+
 
 def test_the_migration_flag_is_retired():
     # PR 4: the rewritten Phase 3 is the only post-81% path; the
     # AEGIS_PHASE3_REWRITE flag no longer exists anywhere.
     assert not hasattr(runner, "rewrite_enabled")
+
+
+def test_the_pre_learning_questions_ship_on_their_own_carry_channel(
+    golden_envelope, replay_providers, tmp_path_factory,
+):
+    """Phase 03, Q4 per D3: the coverage plan and the generated questions.
+
+    End to end on the recorded chain: every one of the 15 pre-concepts is
+    planned, every plan carries its own rationale, every question set is
+    exactly the size its own plan authored, and nothing about it touches
+    the Post records the publication chain consumes.
+    """
+    import json as _json
+
+    artifact_dir = tmp_path_factory.mktemp("artifacts")
+    store_dir = artifact_dir / "phase3-decisions"
+    result = runner.run(
+        golden_envelope, store_dir=store_dir, providers=replay_providers,
+    )
+
+    pre_questions = result["pre_questions"]
+    assert len(pre_questions["plans"]) == 15
+    assert pre_questions["blocked"] == {}
+    assert pre_questions["decision_flags"] == {}
+    assert "refused" not in pre_questions
+    for concept_id, plan in pre_questions["plans"].items():
+        assert plan["rationale"].strip(), concept_id
+        assert sum(entry["count"] for entry in plan["split"]) == plan["total"]
+        assert len(pre_questions["questions"][concept_id]) == plan["total"]
+    # 71 generated questions across 15 pre-concepts, from a plan that runs
+    # 2..10 — an adaptive target, not a quota, and nothing at 40.
+    minted = [
+        row["pre_question_id"]
+        for rows in pre_questions["questions"].values()
+        for row in rows
+    ]
+    assert len(minted) == len(set(minted)) == 71
+    assert sorted({
+        plan["total"] for plan in pre_questions["plans"].values()
+    }) == [2, 3, 4, 5, 6, 8, 10]
+
+    # NO EXTRACTION: not one of the chapter's own question ids appears in
+    # a generated question, its answer, or its rationale.
+    from app.services.phase3 import premap as premap_mod
+
+    raw = _json.dumps(
+        {
+            "plans": pre_questions["plans"],
+            "questions": pre_questions["questions"],
+        },
+        ensure_ascii=False,
+    )
+    for qid in premap_mod.inventory_qids(golden_envelope):
+        assert qid not in raw
+
+    # The Post release records are untouched by the whole lane.
+    assert not any("pre_question" in _json.dumps(row) for row in result["records"])
+
+    # And the plan is durable, not just in-process.
+    snapshot = _json.loads(
+        (artifact_dir / "source.phase3-prelearn-questions.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert snapshot["plans"] == pre_questions["plans"]
+    assert snapshot["questions"] == pre_questions["questions"]

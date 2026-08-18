@@ -430,3 +430,331 @@ def test_mmd_lane_furniture_falls_back_to_job_state_lines():
     assert ledger["dropped_furniture"]["chapter_reading"] == [
         "MATHS STD 4", "41",
     ]
+
+
+# ---------------------------------------------------------------------------
+# lane awareness (step-7 slice C2; map §6.6)
+#
+# Before this slice the ledger and the run report had ZERO lane dimension:
+# a Pre row was charged every POST obligation — a source-question share, a
+# figure attachment, and (through the legacy every-row branch) an analysis
+# section it must not have — while the Pre lane's own obligations were
+# accounted nowhere at all.
+
+
+def _pre_row(
+    pre_id: str = "PRC-0001",
+    *,
+    prerequisites=("PR-0001",),
+    analysis_items=(),
+    needed_for=(("CONCEPT-0001", "Sovereignty After 1789"),),
+    mastery: bool = True,
+) -> dict:
+    details = "Description: Sovereignty is the highest law-making authority."
+    if mastery:
+        details += "\nAchieving Mastery: Saying who holds final authority."
+    if analysis_items:
+        details += (
+            " // Misconception/ Error Analysis: Misconceptions: learners may "
+            "believe a sovereign is merely the most powerful person."
+        )
+    row = {
+        "topic": "Political Vocabulary",
+        "concept_title": f"Pre Concept {pre_id}",
+        "concept_details": details,
+        "_pre_concept_id": pre_id,
+        "_source_block_ids": [],
+        "_source_grounding_contract": "derived-from-prerequisite-capture",
+        "_aegis_pre_prerequisites": [
+            {"prerequisite_id": ref, "text": f"text for {ref}"}
+            for ref in prerequisites
+        ],
+        "_aegis_needed_for": [
+            {"post_concept_id": ref, "post_concept_title": title}
+            for ref, title in needed_for
+        ],
+    }
+    if analysis_items:
+        row["_aegis_analysis_allotments"] = list(analysis_items)
+    return row
+
+
+def _pre_map(rows=None, *, inventory=None, allotments=None, refused="") -> dict:
+    rows = [_pre_row()] if rows is None else rows
+    return {
+        "rows": rows,
+        "topics": [{
+            "pre_topic_id": "PRT-0001",
+            "title": "Political Vocabulary",
+            "pre_concept_ids": [row["_pre_concept_id"] for row in rows],
+        }],
+        "needed_for": {},
+        "analysis": {
+            "inventory": list(inventory or []),
+            "allotments": dict(allotments or {}),
+            "rationales": {},
+            "review_flags": {},
+        },
+        "review_flags": {},
+        "decision_flags": {},
+        "validation": [],
+        **({"refused": refused} if refused else {}),
+    }
+
+
+def _capture(*refs: str) -> dict:
+    return {"prerequisites": [
+        {"prerequisite_id": ref, "text": f"text for {ref}"} for ref in refs
+    ]}
+
+
+def test_a_pre_row_is_never_charged_a_post_obligation():
+    """A Pre row has no source question, no Type/Case and no figure — the
+    no-extraction steer guarantees it. It must not be reported as owing
+    an analysis section either, and it must not disturb the POST channel
+    accounting by being in the records list."""
+    post_only = coverage_ledger.build_coverage_ledger(
+        question_inventory=_inventory(), records=_records())
+    mixed = coverage_ledger.build_coverage_ledger(
+        question_inventory=_inventory(),
+        records=[*_records(), _pre_row()],
+        pre_map_snapshot=_pre_map(),
+        prelearn_snapshot=_capture("PR-0001"),
+    )
+    for key in ("questions", "hubs", "figures", "figure_blocks",
+                "flagged_for_review"):
+        assert mixed["summary"][key] == post_only["summary"][key], key
+    # The Pre row is NOT in the POST analysis expectation, even though this
+    # job takes the legacy every-row branch (no analysis snapshot anywhere).
+    assert mixed["summary"]["rows_missing_learner_analysis"] == 0
+    assert not any(
+        "Pre Concept" in row["concept_title"]
+        for row in mixed["rows_missing_learner_analysis"]
+    )
+    # The Pre row changes the completeness verdict in neither direction.
+    assert mixed["complete"] == post_only["complete"]
+
+
+def test_a_pre_row_without_its_own_inventory_owes_no_analysis_section():
+    """§6.6's exact defect: a Pre run has no analysis snapshot and no
+    allotment marker, so the legacy branch used to report EVERY Pre row as
+    missing its section. The Pre lane is always allotment-aware — its own
+    Q1 inventory is the only mechanism — so an unallotted Pre row is
+    complete, and Achieving Mastery is still owed by every one."""
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[_pre_row()],
+        pre_map_snapshot=_pre_map(), prelearn_snapshot=_capture("PR-0001"),
+    )
+    assert ledger["pre_learning"]["rows_missing_learner_analysis"] == []
+    assert ledger["summary"]["pre_learning"]["rows_with_analysis_section"] == 0
+    assert ledger["complete"] is True
+
+    # …but a Pre row that lost its Achieving Mastery line IS reported.
+    stripped = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[_pre_row(mastery=False)],
+        pre_map_snapshot=_pre_map(rows=[_pre_row(mastery=False)]),
+        prelearn_snapshot=_capture("PR-0001"),
+    )
+    assert [
+        row["missing"]
+        for row in stripped["pre_learning"]["rows_missing_learner_analysis"]
+    ] == [["achieving_mastery"]]
+    assert stripped["complete"] is False
+
+
+def test_the_pre_lane_owns_obligations_of_its_own():
+    """Every prerequisite carried into the map exactly once, every Pre
+    inventory item allotted exactly once, every needed-for link resolved."""
+    rows = [
+        _pre_row("PRC-0001", prerequisites=("PR-0001",),
+                 analysis_items=("PLA-0001",)),
+        _pre_row("PRC-0002", prerequisites=("PR-0002",)),
+    ]
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(
+            rows,
+            inventory=[{
+                "item_id": "PLA-0001", "kind": "misconception",
+                "text": "a prerequisite belief",
+            }],
+            allotments={"PLA-0001": "PRC-0001"},
+        ),
+        prelearn_snapshot=_capture("PR-0001", "PR-0002"),
+    )
+    summary = ledger["summary"]["pre_learning"]
+    assert summary["rows"] == 2
+    assert summary["topics"] == 1
+    assert summary["prerequisites"] == {
+        "total": 2, "mapped": 2, "unaccounted": 0}
+    assert summary["analysis_items"] == {
+        "total": 1, "allotted": 1, "unaccounted": 0}
+    # Q1: NOT every pre-concept receives one — reported, never owed.
+    assert summary["rows_with_analysis_section"] == 1
+    assert summary["needed_for_links"]["resolved"] == 2
+    assert summary["needed_for_links"]["unresolved"] == 0
+    assert ledger["complete"] is True
+    assert [
+        (row["prerequisite_id"], row["status"], row["pre_concept_ids"])
+        for row in ledger["pre_learning"]["prerequisites"]
+    ] == [
+        ("PR-0001", "mapped", ["PRC-0001"]),
+        ("PR-0002", "mapped", ["PRC-0002"]),
+    ]
+
+
+def test_a_missing_pre_allotment_is_reported_incomplete():
+    """R4 in the Pre lane: an inventory item that reached no pre-concept is
+    visible incompleteness, named with its text — never a silent drop."""
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(
+            inventory=[
+                {"item_id": "PLA-0001", "kind": "misconception",
+                 "text": "allotted"},
+                {"item_id": "PLA-0002", "kind": "error_analysis",
+                 "text": "a learner's item that reached no concept"},
+            ],
+            allotments={"PLA-0001": "PRC-0001"},
+        ),
+        prelearn_snapshot=_capture("PR-0001"),
+    )
+    assert ledger["summary"]["pre_learning"]["analysis_items"] == {
+        "total": 2, "allotted": 1, "unaccounted": 1}
+    assert ledger["complete"] is False
+    rendered = coverage_ledger.render_coverage(ledger)
+    assert "unaccounted analysis item PLA-0002" in rendered
+    assert "a learner's item that reached no concept" in rendered
+
+
+def test_an_unmapped_prerequisite_and_an_unresolved_link_are_reported():
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(rows=[
+            _pre_row(
+                "PRC-0001",
+                needed_for=(("CONCEPT-0001", ""),),
+            ),
+        ]),
+        prelearn_snapshot=_capture("PR-0001", "PR-0002"),
+    )
+    assert ledger["summary"]["pre_learning"]["prerequisites"] == {
+        "total": 2, "mapped": 1, "unaccounted": 1}
+    assert ledger["summary"]["pre_learning"]["needed_for_links"][
+        "unresolved"] == 1
+    assert ledger["complete"] is False
+    rendered = coverage_ledger.render_coverage(ledger)
+    assert "unmapped PR-0002" in rendered
+    assert "text for PR-0002" in rendered
+    assert "1 unresolved" in rendered
+
+
+def test_a_pre_concept_linked_to_nothing_is_advisory_not_incomplete():
+    """Necessity is a CRITIC dimension (Q10): a pre-concept nothing in this
+    chapter requires ships flagged, and the ledger reports it without
+    calling the run incomplete."""
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(rows=[_pre_row("PRC-0001", needed_for=())]),
+        prelearn_snapshot=_capture("PR-0001"),
+    )
+    links = ledger["summary"]["pre_learning"]["needed_for_links"]
+    assert links == {
+        "total": 0, "resolved": 0, "unresolved": 0,
+        "pre_concepts_without_links": 1,
+    }
+    assert ledger["complete"] is True
+    assert "linked to nothing (advisory, Q10" in coverage_ledger.render_coverage(
+        ledger
+    )
+
+
+def test_a_run_with_no_pre_lane_reports_no_pre_section():
+    """The lane dimension is silent when there is no lane: the rendered
+    COVERAGE section is byte-identical to what it was before slice C2."""
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory=_inventory(), records=_records())
+    assert ledger["summary"]["pre_learning"]["rows"] == 0
+    assert "PRE-LEARNING" not in coverage_ledger.render_coverage(ledger)
+
+
+def test_a_refused_pre_map_is_reported_not_hidden():
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(rows=[], refused="carries QINV-0004"),
+    )
+    rendered = coverage_ledger.render_coverage(ledger)
+    assert "REFUSED and not shipped: carries QINV-0004" in rendered
+
+
+def test_a_lost_pre_map_snapshot_names_every_prerequisite_it_cannot_place():
+    """R4: silent incompleteness is impossible. The Pre map snapshot is
+    written best-effort, so a failed write leaves the capture holding
+    prerequisites that reached no row — exactly the state in which a
+    learner's prerequisite is lost. The ledger says INCOMPLETE, and the
+    reviewer's first file must say WHY and name them, not go quiet
+    because no Pre row reached it."""
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        prelearn_snapshot=_capture("PR-0001", "PR-0002"),
+    )
+    assert ledger["complete"] is False
+    assert [
+        (row["prerequisite_id"], row["status"])
+        for row in ledger["pre_learning"]["prerequisites"]
+    ] == [("PR-0001", "unmapped"), ("PR-0002", "unmapped")]
+
+    rendered = coverage_ledger.render_coverage(ledger)
+    assert "PRE-LEARNING (Phase 03)" in rendered
+    assert "no Pre-Learning map is recorded for this run" in rendered
+    for ref in ("PR-0001", "PR-0002"):
+        assert f"unmapped {ref}" in rendered
+        assert f"text for {ref}" in rendered
+
+
+def test_a_missing_capture_cannot_confirm_the_map_and_says_so():
+    """The capture is the authority on what there was to carry. When it is
+    absent the ledger cannot confirm a single claim, and an absent
+    authority is not a clean bill of health — every claimed prerequisite
+    is reported ``capture_unavailable`` rather than ``mapped``."""
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(rows=[_pre_row(prerequisites=("PR-0009",))]),
+    )
+    assert [
+        (row["prerequisite_id"], row["status"])
+        for row in ledger["pre_learning"]["prerequisites"]
+    ] == [("PR-0009", "capture_unavailable")]
+    assert ledger["complete"] is False
+    assert "capture_unavailable PR-0009" in coverage_ledger.render_coverage(
+        ledger
+    )
+
+    # A capture that is PRESENT and captured nothing is a different fact,
+    # and keeps its own name.
+    empty = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(rows=[_pre_row(prerequisites=("PR-0009",))]),
+        prelearn_snapshot=_capture(),
+    )
+    assert [
+        row["status"] for row in empty["pre_learning"]["prerequisites"]
+    ] == ["unknown_prerequisite"]
+
+
+def test_a_pre_row_is_never_excused_by_what_the_model_called_it():
+    """Rule 1 in the ledger's own verdict: the Post lane may read a
+    culmination title back because it MINTED it, but the Pre lane mints
+    none. A Pre row that lost the Achieving Mastery every row owes is
+    incompleteness whatever the model happened to title it."""
+    row = _pre_row(mastery=False, analysis_items=())
+    row["concept_title"] = "Place Value as the Culmination of Counting"
+    ledger = coverage_ledger.build_coverage_ledger(
+        question_inventory={}, records=[],
+        pre_map_snapshot=_pre_map(rows=[row]),
+        prelearn_snapshot=_capture("PR-0001"),
+    )
+    reported = ledger["pre_learning"]["rows_missing_learner_analysis"]
+    assert [entry["missing"] for entry in reported] == [["achieving_mastery"]]
+    assert reported[0]["culmination"] is False
+    assert ledger["complete"] is False

@@ -1,0 +1,350 @@
+{
+ "_comment": "Recorded Phase 03 Pre-Learning concept map for job 23 (the RNE golden chapter, 'The Rise of Nationalism in Europe'), authored exactly the way rne_prelearn.json and rne_place.json were: the pass was run against the real fixture chain with a recording provider, the premap payload it produced was dumped, and every concept below was written from THAT payload — the 16 merged prerequisites, their rationales, and the 15 source blocks they cite. The map is built from the capture and from nothing else: no post-learning concept row appears in the build payload, which is what separates this from the retired derive-from-existing flow (Q3). Each of the 16 captured prerequisites is mapped exactly once (R4); the grouping into 15 concepts and 6 topics is a meaning judgment, and only one concept consolidates two prerequisites (absolutism belongs in the same lesson as the forms of state it qualifies) — the rest stay apart because a lesson teaching them together would teach neither. Nothing is padded and nothing is invented to balance a topic. The needed-for links name post-learning concepts by TITLE, resolved against the request's own payload by the replay provider, exactly as rne_place.json names placement destinations; reading the Post Descriptions to LINK to them is a different act from building the map out of them. One pre-concept ('Finding Information Beyond the Textbook') carries an empty link list on purpose: no post-learning concept of this chapter genuinely requires independent research, and necessity is an ADVISORY critic dimension (Q10), so the concept ships with a review flag rather than being dropped. No Types, no Cases, no Examples, and no source QID appears anywhere in this fixture — the Pre lane never lifts a question out of the source (owner steer, 17 Aug 2026). Authored in TWO passes, and the second one is disclosed here because it is why this fixture draws three advisory flags rather than seventeen: the first pass wrote 134-239-word descriptions, well outside the 49-109 words the run's OWN Post descriptions occupy, so every row tripped concept_validator's `description_length` band. The second pass rewrote all 15 descriptions into that same band. That is authoring to the house standard the doc asks for (\"the same detailing standard as Post-Learning\" is a standard about the writing), not authoring to a threshold — but it does mean the advisory `description_length` path is NOT exercised by this fixture, and it is deliberately pinned separately, with a synthetic long paragraph, in tests/test_phase3_premap.py's validator-findings-flag-and-never-gate regression. The two flags this fixture DOES draw from the validator (`placeholder` on PRC-0001 and PRC-0013) were left standing on purpose: they are a keyword vocabulary in the SHARED validator firing on the ordinary English \"none\", a pre-existing Rule 1 defect, and the fixture records it rather than being massaged to hide it.",
+ "map": {
+  "topics": [
+   {
+    "pre_topic_id": "PRT-0001",
+    "title": "Political Vocabulary of the Age of Revolutions",
+    "concepts": [
+     {
+      "pre_concept_id": "PRC-0001",
+      "concept_title": "Forms of Rule Before the Nation-State",
+      "description": "A state used to be described by who ruled it and by what right. A monarchy is headed by a king or queen who holds power by inheritance; a dynasty is the family that passes that throne down the generations. A republic has no monarch: those who govern hold office because they were chosen. An empire is one authority ruling many peoples and territories joined by conquest or treaty. Cutting across all three is the question of restraint: absolutist rule faces none at all, so the ruler's word is law and dissent is repressed rather than answered.",
+      "achieving_mastery": "Naming the form of rule a state has, and saying separately whether its ruler's power is restrained or absolute",
+      "keywords": "monarchy, republic, empire, dynasty, absolutism, autocracy",
+      "prerequisites": [
+       "PR-0001",
+       "PR-0006"
+      ],
+      "rationale": "One lesson teaches these together: absolutism is a statement about how much restraint a ruler faces, and it is only meaningful beside the forms of state it describes."
+     },
+     {
+      "pre_concept_id": "PRC-0002",
+      "concept_title": "The Plebiscite as a Direct Vote",
+      "description": "A plebiscite is a direct vote in which all the people of a region are asked to accept or reject one specific proposal, usually that their region should join or leave a particular state. It differs from an election in what is chosen: an election picks people to govern, while a plebiscite settles a single question put to everyone. Its importance is consent. A territory taken by an army has been conquered; the same territory whose people have voted to join is said to have chosen.",
+      "achieving_mastery": "Explaining what question a plebiscite settles, and why a ruler would want a territory's transfer confirmed by one",
+      "keywords": "plebiscite, direct vote, referendum, consent",
+      "prerequisites": [
+       "PR-0005"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0003",
+      "concept_title": "A Utopian Vision",
+      "description": "A vision is called utopian when it pictures a society so ideal that it is unlikely ever to exist. The word does not mean the vision is foolish; it marks the distance between the world as it is and the world the picture shows. Reading something as utopian changes the question you ask of it: you stop asking whether the scene records what happened, and start asking what its maker wished for, who stands together here who did not stand together in life, and what order the maker thinks the world ought to have.",
+      "achieving_mastery": "Recognising a utopian picture of society and stating what its maker hoped for rather than what existed",
+      "keywords": "utopia, utopian, ideal society, vision",
+      "prerequisites": [
+       "PR-0002"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     }
+    ]
+   },
+   {
+    "pre_topic_id": "PRT-0002",
+    "title": "The French Revolution as Prior Knowledge",
+    "concepts": [
+     {
+      "pre_concept_id": "PRC-0004",
+      "concept_title": "The French Revolution of 1789 and the Transfer of Sovereignty",
+      "description": "Sovereignty is the highest authority in a state — the power to make law that nobody within the state may overrule. Before 1789 it belonged in France to the king alone; the Revolution moved it to the body of French citizens, so law was held to come from the people rather than the throne. The sequence is worth holding precisely. Facing a financial crisis the king summoned the Estates General, the old assembly of the three orders; its Third Estate representatives, refused an equal voice, declared themselves a National Assembly of the nation.",
+      "achieving_mastery": "Explaining where sovereignty lay before and after 1789, and telling the assembly the king summoned from the one that claimed to speak for the nation",
+      "keywords": "French Revolution, 1789, sovereignty, Estates General, National Assembly, citizen",
+      "prerequisites": [
+       "PR-0003"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     }
+    ]
+   },
+   {
+    "pre_topic_id": "PRT-0003",
+    "title": "Historical Time and Causation",
+    "concepts": [
+     {
+      "pre_concept_id": "PRC-0005",
+      "concept_title": "Ordering Dated Events and Narrating a Sequence",
+      "description": "Chronology is the arrangement of events in the order in which they happened. Working with it has two halves. The first is mechanical: place dated events from earliest to latest, read a span such as 1814-1815 as one event crossing a year boundary, and notice when two entries share a year. The second is what the ordering is for. A process is told as a sequence of stages, each taking up the situation the last one left, so a reader can follow how things changed step by step rather than meeting an unordered list of facts.",
+      "achieving_mastery": "Placing dated events in order and retelling a process as a connected sequence of stages",
+      "keywords": "chronology, sequence, timeline, dates, narration",
+      "prerequisites": [
+       "PR-0007"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0006",
+      "concept_title": "Telling a Cause from a Consequence",
+      "description": "A cause is what brought a development about; a consequence is what followed from it. The two are easy to swap, so use a direction test: ask whether the item existed before the development and helped produce it, or came after it and resulted from it. Order is the other half. Causes commonly run in a chain, each link the consequence of the one before and the cause of the one after, and a chain retold in the wrong order becomes a different explanation.",
+      "achieving_mastery": "Sorting the causes of a development from its consequences, and keeping a causal chain in the order in which it acted",
+      "keywords": "cause, consequence, effect, causal chain, order",
+      "prerequisites": [
+       "PR-0014"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     }
+    ]
+   },
+   {
+    "pre_topic_id": "PRT-0004",
+    "title": "Reading the Visual and Tabular Sources of History",
+    "concepts": [
+     {
+      "pre_concept_id": "PRC-0007",
+      "concept_title": "Reading a Map of Europe",
+      "description": "A historical map shows how territory was divided at one moment in time, and it is read in a fixed order. Start with the key, which says what each colour, line and symbol stands for; nothing on the map means anything until it has been read. Then locate the states and regions the map names and follow the lines that separate them. Finally compare: with two maps of the same land at two dates, describe territory that changed hands, boundaries that moved, and names that appeared or vanished. A claim drawn from a map always carries its date.",
+      "achieving_mastery": "Locating states and boundaries on a historical map using its key, and describing what changed between two dates",
+      "keywords": "map, key, boundary, territory, comparison, region",
+      "prerequisites": [
+       "PR-0004"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0008",
+      "concept_title": "Reading a Two-Column Table",
+      "description": "A two-column table records a set of pairs. The headings name what each column holds, and every row states that the entry on the left goes with the entry on the right and with no other. Read it row by row rather than column by column: reading straight down one column gives two unconnected lists and loses the pairing, which is the only information the table carries. When you use such a table in an answer, turn each row back into a full sentence naming both halves and the relation between them.",
+      "achieving_mastery": "Reading a two-column table row by row and restating each pairing as a sentence that keeps both entries together",
+      "keywords": "table, column, row, pairing, headings",
+      "prerequisites": [
+       "PR-0010"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0009",
+      "concept_title": "Reading a Figure's Number and Caption",
+      "description": "Every picture printed in a history book carries a figure number and a caption, and the caption is evidence rather than decoration. It normally tells you what the picture shows, who made it and when. The figure number is how the running text points at the picture, so when the text says to look at a numbered figure, the caption is where you establish what you are looking at. Maker and date matter as much as subject: a scene drawn at the time by a participant and one drawn decades later are different kinds of evidence.",
+      "achieving_mastery": "Using a figure's number and caption to state what a picture shows, who made it and when, before interpreting it",
+      "keywords": "figure, caption, attribution, date, source",
+      "prerequisites": [
+       "PR-0012"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0010",
+      "concept_title": "Interpreting a Caricature",
+      "description": "A caricature is a drawing that exaggerates in order to make a point. Its figures, objects and gestures stand for real people, institutions or ideas, so it is not a record of anything that happened. Interpret it in steps: list what is actually drawn; decide what each element stands for, using its labels, costume and any symbol familiar to the picture's first audience; notice what has been made too large or absurd, because the exaggeration is where the artist's opinion sits; then state the claim the whole picture makes.",
+      "achieving_mastery": "Working out what the figures and exaggerations in a caricature stand for, and stating the opinion it argues",
+      "keywords": "caricature, cartoon, symbol, exaggeration, satire",
+      "prerequisites": [
+       "PR-0008"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     }
+    ]
+   },
+   {
+    "pre_topic_id": "PRT-0005",
+    "title": "Handling Written Evidence",
+    "concepts": [
+     {
+      "pre_concept_id": "PRC-0011",
+      "concept_title": "Summarising a Passage in Your Own Words",
+      "description": "To summarise a passage is to state its argument compactly in your own language. Find the claim the passage is making — the thing it wants the reader to accept — and separate it from the material that supports the claim, such as examples, figures and quoted detail. Your summary keeps the claim and the shape of its support and drops the illustration. Writing it in your own words is what makes it a summary rather than an extract, and the author's meaning and emphasis must survive unchanged.",
+      "achieving_mastery": "Stating the argument of a passage compactly in your own words without altering the author's claim",
+      "keywords": "summary, argument, own words, main point",
+      "prerequisites": [
+       "PR-0011"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0012",
+      "concept_title": "Separating a Report from the Reporter's Opinion",
+      "description": "A written source usually does two things at once: it reports what the writer saw or knew, and it comments on it. Reported material can in principle be checked against other sources — what happened, where, when, to whom. Opinion is the writer's judgment of that material, and it shows in the words chosen to describe people and actions, in what is called just or shameful, and in what is left out. Neither part is worthless, but attributing the writer's judgment to the events themselves is a misreading.",
+      "achieving_mastery": "Separating what a source reports from the reporter's own judgment, and naming whose view a quoted opinion is",
+      "keywords": "source, report, opinion, viewpoint, evidence, attribution",
+      "prerequisites": [
+       "PR-0015"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0013",
+      "concept_title": "Reading a Quantified Statement Exactly as Worded",
+      "description": "Historical writing is careful with quantity, and the words that carry it — all, most, many, some, a few, almost none — are part of the claim rather than decoration. Widening one turns the statement into a different and usually false one: 'most of the population were peasants' does not license 'everyone was a peasant'. The same care applies to scope: a claim made about one region, one decade or one social group holds for that region, decade or group and not automatically for a whole continent or century.",
+      "achieving_mastery": "Restating a claim with its quantifier and its geographical, social and time boundaries unchanged",
+      "keywords": "quantifier, scope, precision, most, some, all",
+      "prerequisites": [
+       "PR-0016"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     }
+    ]
+   },
+   {
+    "pre_topic_id": "PRT-0006",
+    "title": "Producing Historical Work",
+    "concepts": [
+     {
+      "pre_concept_id": "PRC-0014",
+      "concept_title": "Writing a First-Person Eyewitness Account",
+      "description": "An eyewitness account is continuous prose written as 'I', by someone present at what is described. Writing one means holding a single viewpoint throughout: the writer reports only what that person could plausibly have seen, heard or been told, in the order it reached them, and says how they felt about it. It is written in flowing paragraphs, not notes, and it never steps outside the person to explain what historians later concluded. Everything reported must fit what is known of the time and place.",
+      "achieving_mastery": "Writing a sustained first-person account that holds one witness's viewpoint and fits what is known of the period",
+      "keywords": "eyewitness, first person, account, continuous prose, viewpoint",
+      "prerequisites": [
+       "PR-0009"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     },
+     {
+      "pre_concept_id": "PRC-0015",
+      "concept_title": "Finding Information Beyond the Textbook",
+      "description": "Some questions cannot be answered from the chapter in front of you, and answering them is a skill of its own. Turn the question into the specific thing you need to find out, decide what kind of source would hold it — a reference book, an atlas, a library catalogue, an archive, a person who would know — and go to that kind of source rather than reading generally and hoping. Record what you find together with where it came from, so it can be traced back and checked.",
+      "achieving_mastery": "Choosing the right kind of source for a question the textbook does not answer, and recording what is found with where it came from",
+      "keywords": "research, sources, library, reference, gathering information",
+      "prerequisites": [
+       "PR-0013"
+      ],
+      "rationale": "a single captured prerequisite taught on its own"
+     }
+    ]
+   }
+  ]
+ },
+ "needed_for": [
+  {
+   "pre_concept_id": "PRC-0001",
+   "post_concepts": [
+    "The French Revolution’s Transfer of Sovereignty to Citizens",
+    "Fragmented Europe and the Multinational Habsburg Empire",
+    "Conservative Statecraft and the Vienna Settlement",
+    "Restoration and Territorial Reordering After Vienna",
+    "Autocracy, Censorship, and the Demand for Freedom of the Press",
+    "The Fragmented States and Identities of Pre-unification Italy"
+   ],
+   "rationale": "each of these concepts describes what a state was and how tightly its ruler was restrained, and none of them can be followed by a learner who cannot tell a dynasty from a form of state or absolutism from monarchy"
+  },
+  {
+   "pre_concept_id": "PRC-0002",
+   "post_concepts": [
+    "Cavour’s Diplomacy and Sardinia-Piedmont’s Leadership",
+    "Garibaldi’s Volunteer Campaigns"
+   ],
+   "rationale": "both concepts turn on territories being counted as having chosen their new state, which is unreadable without knowing what a plebiscite settles"
+  },
+  {
+   "pre_concept_id": "PRC-0003",
+   "post_concepts": [
+    "Utopian Nationalism and Democratic-social Republicanism"
+   ],
+   "rationale": "the concept asks the learner to read a print as a dream of a future society rather than a record of one"
+  },
+  {
+   "pre_concept_id": "PRC-0004",
+   "post_concepts": [
+    "The French Revolution’s Transfer of Sovereignty to Citizens",
+    "French Revolutionary Measures for National Uniformity",
+    "The Outward Diffusion of French Revolutionary Nationalism",
+    "The Napoleonic Code and Legal Equality",
+    "Political Liberalism and the Limits of Nineteenth-century Citizenship",
+    "Gendered Limits of Liberal Political Rights",
+    "Personifying the Nation Through Female Allegories",
+    "Marianne as the Allegory of France"
+   ],
+   "rationale": "each of these concepts argues from what the Revolution had already done — the chapter says so outright — and none restates the Revolution itself"
+  },
+  {
+   "pre_concept_id": "PRC-0005",
+   "post_concepts": [
+    "The July Revolution and Belgian Independence",
+    "The Greek War of Independence and European Nationalist Support",
+    "Bismarck’s Military Unification of Germany",
+    "Cavour’s Diplomacy and Sardinia-Piedmont’s Leadership",
+    "Garibaldi’s Volunteer Campaigns"
+   ],
+   "rationale": "each concept is a process told as stages, and a learner who cannot hold the order cannot follow which stage produced which"
+  },
+  {
+   "pre_concept_id": "PRC-0006",
+   "post_concepts": [
+    "The Contradictory Experience of French Domination",
+    "Economic Hardship as a Cause of Popular Unrest",
+    "The French Republic and Social Reforms of 1848",
+    "Liberal Concessions After Conservative Suppression",
+    "Balkan Rivalries as a Cause of the First World War"
+   ],
+   "rationale": "each of these concepts is an explanation of why something happened, so a learner who swaps a cause for a consequence gets the explanation backwards"
+  },
+  {
+   "pre_concept_id": "PRC-0007",
+   "post_concepts": [
+    "Fragmented Europe and the Multinational Habsburg Empire",
+    "Economic Liberalism and the Zollverein",
+    "Restoration and Territorial Reordering After Vienna",
+    "The Fragmented States and Identities of Pre-unification Italy",
+    "Romantic Nationalism and the Breakup of Ottoman Control in the Balkans"
+   ],
+   "rationale": "each concept describes territory and its rearrangement, which the learner is expected to locate and compare on the chapter's maps"
+  },
+  {
+   "pre_concept_id": "PRC-0008",
+   "post_concepts": [
+    "Germania and the Symbolic Language of German Nationalism"
+   ],
+   "rationale": "the symbols of Germania are taught through a paired chart, which carries nothing unless the pairing is read across each row"
+  },
+  {
+   "pre_concept_id": "PRC-0009",
+   "post_concepts": [
+    "Utopian Nationalism and Democratic-social Republicanism",
+    "Personifying the Nation Through Female Allegories",
+    "Marianne as the Allegory of France",
+    "Germania and the Symbolic Language of German Nationalism",
+    "Imperial Imagery and British National Pride"
+   ],
+   "rationale": "each concept is taught through a numbered picture whose maker and date the caption alone supplies"
+  },
+  {
+   "pre_concept_id": "PRC-0010",
+   "post_concepts": [
+    "Autocracy, Censorship, and the Demand for Freedom of the Press",
+    "The Shift from Liberal Nationalism to Imperial Nationalism",
+    "Imperial Imagery and British National Pride"
+   ],
+   "rationale": "each concept is argued partly through a satirical drawing whose figures stand for institutions rather than depicting events"
+  },
+  {
+   "pre_concept_id": "PRC-0011",
+   "post_concepts": [
+    "Secret Societies and Mazzini’s Republican Nationalism",
+    "Folk Culture, Language, and the German National Spirit",
+    "Interpreting Wilhelm Wolff’s Account of the Silesian Weavers’ Revolt"
+   ],
+   "rationale": "each concept is taught around a cited passage the learner is asked to render compactly"
+  },
+  {
+   "pre_concept_id": "PRC-0012",
+   "post_concepts": [
+    "Interpreting Wilhelm Wolff’s Account of the Silesian Weavers’ Revolt"
+   ],
+   "rationale": "the concept is explicitly about distinguishing the reported conditions of the weavers' revolt from the journalist's treatment of them"
+  },
+  {
+   "pre_concept_id": "PRC-0013",
+   "post_concepts": [
+    "Economic Liberalism and the Zollverein",
+    "The Frankfurt Parliament and Its Failure",
+    "Limited Popular Awareness of Italian Nationalism"
+   ],
+   "rationale": "each concept rests on a precise quantity whose scope a learner must carry across unchanged"
+  },
+  {
+   "pre_concept_id": "PRC-0014",
+   "post_concepts": [
+    "The Frankfurt Parliament and Its Failure",
+    "Gendered Limits of Liberal Political Rights"
+   ],
+   "rationale": "both concepts are taught from the position of people present at the events, whose viewpoint the learner is asked to sustain"
+  },
+  {
+   "pre_concept_id": "PRC-0015",
+   "post_concepts": [],
+   "rationale": "nothing this chapter teaches requires it: independent research is an extension of the chapter's work rather than a fundamental any post-learning concept rests on. Recorded as an empty link list for review (Q10), not corrected away"
+  }
+ ]
+}

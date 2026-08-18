@@ -1,0 +1,157 @@
+{
+ "_comment": "Recorded PRE-LEARNING Q1 inventory + allotments for job 23 (the RNE golden chapter, 'The Rise of Nationalism in Europe'), authored exactly the way rne_premap.json and rne_analysis.json were: the real chain was run with a recording provider wired into the preanalyse stage, the prelearn.analyse.inventory payload it produced was dumped, and every item below was written from THAT payload and from nothing else — the 16 merged prerequisites and the 15 pre-learning concept Descriptions the Pre map went on to author. The payload carries no source block of this chapter and no question/task inventory entry at all, which is what makes this a PREREQUISITE inventory rather than a second copy of the Post one (rne_analysis.json). Misconceptions and Error Analyses are two distinct meanings and are never restated as one another: a misconception is an incorrect belief about the prerequisite itself, an error analysis a concrete process error made while APPLYING it. NOT every pre-concept receives an item — that is Q1's design, never a gap. Three of the fifteen carry none: PRC-0009 (reading a figure's number and caption), PRC-0014 (writing a first-person eyewitness account) and PRC-0015 (finding information beyond the textbook). The captured evidence supports no distinct, strong item for them that is not already carried by another concept, and an item must never be invented to cover a concept. There is no quota anywhere: 19 items is what this evidence supported, not a number derived from 16 prerequisites or 15 concepts. allot_to names the destination by pre-learning concept TITLE and the replay provider resolves it against the request's own pre_concepts payload, exactly as rne_place.json and rne_analysis.json resolve theirs, so the fixture never hard-codes a positional mint. Item ids are the positional mint PLA-0001… in listing order.",
+ "items": [
+  {
+   "item_id": "PLA-0001",
+   "kind": "misconception",
+   "text": "The learner may believe that 'absolutist' is only a stronger word for 'monarchy', so that every king is absolutist by definition and no republic or empire could ever be.",
+   "evidence": "PR-0001, PR-0006",
+   "rationale": "the captured prerequisite states restraint as a question cutting ACROSS the forms of state, which is exactly the distinction this belief collapses",
+   "allot_to": "Forms of Rule Before the Nation-State"
+  },
+  {
+   "item_id": "PLA-0002",
+   "kind": "error_analysis",
+   "text": "Students classify a state from the title of whoever rules it instead of answering the description's two separate questions — what form the state has, and whether its ruler's power is restrained — and so record an empire held together by a hereditary dynasty as simply 'a monarchy', losing the many peoples the term empire carries.",
+   "evidence": "PR-0006",
+   "rationale": "a concrete process error in applying the prerequisite, distinct from the belief in PLA-0001: the classification step itself is performed on the wrong evidence",
+   "allot_to": "Forms of Rule Before the Nation-State"
+  },
+  {
+   "item_id": "PLA-0003",
+   "kind": "misconception",
+   "text": "Students may think a plebiscite is another word for an election, so that taking part in one means choosing who governs rather than accepting or rejecting one specific proposal put to everyone in a region.",
+   "evidence": "PR-0005",
+   "rationale": "the prerequisite defines the plebiscite by WHAT is chosen, and this is the belief that erases that definition",
+   "allot_to": "The Plebiscite as a Direct Vote"
+  },
+  {
+   "item_id": "PLA-0004",
+   "kind": "misconception",
+   "text": "The learner may take 'utopian' to mean imaginary and therefore worthless, and dismiss a utopian vision as a mistake instead of reading it as a statement of the order its maker thought the world ought to have.",
+   "evidence": "PR-0002",
+   "rationale": "the prerequisite is explicit that the word marks distance from the world as it is, not foolishness; this is the incorrect belief that reading invites",
+   "allot_to": "A Utopian Vision"
+  },
+  {
+   "item_id": "PLA-0005",
+   "kind": "error_analysis",
+   "text": "Students describe a utopian picture as though it recorded an event, listing what is shown as if it had happened, instead of asking what its maker wished for and who is shown standing together who did not stand together in life.",
+   "evidence": "PR-0002",
+   "rationale": "the process error the prerequisite's own 'change the question you ask of it' step is there to prevent; distinct from PLA-0004's belief",
+   "allot_to": "A Utopian Vision"
+  },
+  {
+   "item_id": "PLA-0006",
+   "kind": "misconception",
+   "text": "Students may believe sovereignty passed to the body of French citizens at the moment the king summoned the Estates General, rather than through the Third Estate representatives declaring themselves a National Assembly of the nation.",
+   "evidence": "PR-0003",
+   "rationale": "the captured prerequisite asks for which body was summoned and which was elected; this is the belief that answers both with one body",
+   "allot_to": "The French Revolution of 1789 and the Transfer of Sovereignty"
+  },
+  {
+   "item_id": "PLA-0007",
+   "kind": "error_analysis",
+   "text": "Students use 'Estates General' and 'National Assembly' interchangeably while narrating 1789, so the assembly the king summoned and the body that declared itself the nation's assembly collapse into one and the transfer of sovereignty loses the step that produced it.",
+   "evidence": "PR-0003",
+   "rationale": "a naming error made while narrating, not a belief about what happened; the two are separately correctable",
+   "allot_to": "The French Revolution of 1789 and the Transfer of Sovereignty"
+  },
+  {
+   "item_id": "PLA-0008",
+   "kind": "error_analysis",
+   "text": "Students read a span written as 1814-1815 as two separate events and enter it twice when ordering a sequence, instead of treating it as one event crossing a year boundary.",
+   "evidence": "PR-0007",
+   "rationale": "the mechanical half of the prerequisite names this exact reading; a process error, with no belief behind it",
+   "allot_to": "Ordering Dated Events and Narrating a Sequence"
+  },
+  {
+   "item_id": "PLA-0009",
+   "kind": "misconception",
+   "text": "The learner may believe that whatever a passage describes first is the cause of what it describes next, so the order of the telling is taken for the order of the causation.",
+   "evidence": "PR-0014",
+   "rationale": "the prerequisite's direction test exists because this belief is available; distinct from the ordering error in PLA-0010",
+   "allot_to": "Telling a Cause from a Consequence"
+  },
+  {
+   "item_id": "PLA-0010",
+   "kind": "error_analysis",
+   "text": "Students retell a causal chain with two of its links reversed, naming as a cause the very development that produced it, which leaves a different explanation standing.",
+   "evidence": "PR-0014",
+   "rationale": "the prerequisite states that a chain retold in the wrong order becomes a different explanation; this is that error performed",
+   "allot_to": "Telling a Cause from a Consequence"
+  },
+  {
+   "item_id": "PLA-0011",
+   "kind": "error_analysis",
+   "text": "Students read colours and boundary lines off a map before reading its key, then describe the territory using an assumed meaning for a shading the key defines otherwise.",
+   "evidence": "PR-0004",
+   "rationale": "the prerequisite fixes the reading ORDER — key first — and this is the step performed out of order",
+   "allot_to": "Reading a Map of Europe"
+  },
+  {
+   "item_id": "PLA-0012",
+   "kind": "error_analysis",
+   "text": "Students compare the same land on two maps and report what changed hands without naming either date, so the claim cannot be placed in time.",
+   "evidence": "PR-0004",
+   "rationale": "the prerequisite ends by requiring that a claim drawn from a map carries its date; a distinct omission from PLA-0011's ordering error",
+   "allot_to": "Reading a Map of Europe"
+  },
+  {
+   "item_id": "PLA-0013",
+   "kind": "error_analysis",
+   "text": "Students read a two-column table straight down one column and then the other, producing two unconnected lists and losing the row-by-row pairing that is the only information the table carries.",
+   "evidence": "PR-0010",
+   "rationale": "the prerequisite names the pairing as the table's whole content; this is the reading that discards it",
+   "allot_to": "Reading a Two-Column Table"
+  },
+  {
+   "item_id": "PLA-0014",
+   "kind": "misconception",
+   "text": "Students may believe a caricature depicts an event that took place, and treat its exaggerated figures as a record of who was actually present.",
+   "evidence": "PR-0008",
+   "rationale": "the captured prerequisite says in as many words that the exaggerated figures stand for people, institutions or ideas rather than depicting an event",
+   "allot_to": "Interpreting a Caricature"
+  },
+  {
+   "item_id": "PLA-0015",
+   "kind": "error_analysis",
+   "text": "Students list what is drawn in a caricature and stop there, without saying what each element stands for or which exaggeration carries the artist's opinion, so the description never becomes an interpretation.",
+   "evidence": "PR-0008",
+   "rationale": "the prerequisite sets out the interpretation as steps; this is the sequence abandoned after the first one",
+   "allot_to": "Interpreting a Caricature"
+  },
+  {
+   "item_id": "PLA-0016",
+   "kind": "error_analysis",
+   "text": "Students 'summarise' a passage by copying its opening sentences, keeping the illustrative detail and dropping the claim, so what they produce is an extract in the author's words rather than the argument in their own.",
+   "evidence": "PR-0011",
+   "rationale": "the prerequisite defines the summary by which half is kept and by whose words are used; both are inverted here",
+   "allot_to": "Summarising a Passage in Your Own Words"
+  },
+  {
+   "item_id": "PLA-0017",
+   "kind": "misconception",
+   "text": "The learner may believe that everything written by someone who was present is a report of fact, so the writer's judgment of what they saw is taken as part of the events themselves.",
+   "evidence": "PR-0015",
+   "rationale": "the prerequisite separates the reported material from the reporter's judgment; this is the belief that fuses them",
+   "allot_to": "Separating a Report from the Reporter's Opinion"
+  },
+  {
+   "item_id": "PLA-0018",
+   "kind": "misconception",
+   "text": "Students may treat 'most', 'many' and 'all' as interchangeable words of emphasis, so a statement about most of a population is read as one about everyone in it.",
+   "evidence": "PR-0016",
+   "rationale": "the prerequisite states that the quantity words are part of the claim rather than decoration; this belief is the one it corrects",
+   "allot_to": "Reading a Quantified Statement Exactly as Worded"
+  },
+  {
+   "item_id": "PLA-0019",
+   "kind": "error_analysis",
+   "text": "Students carry a claim made about one region or one decade across a whole continent or century, applying a source's quantity outside the scope its wording gives it.",
+   "evidence": "PR-0016",
+   "rationale": "the prerequisite's second half is about scope rather than about the quantity word; a distinct error from PLA-0018's belief",
+   "allot_to": "Reading a Quantified Statement Exactly as Worded"
+  }
+ ]
+}

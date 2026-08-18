@@ -7,6 +7,7 @@ import DocumentUpload from "./DocumentUpload";
 const streamNdjsonMock = vi.hoisted(() => vi.fn());
 const apiMock = vi.hoisted(() => ({
   getUploadJob: vi.fn(),
+  uploadConceptRelease: vi.fn(),
   checkpointUrl: vi.fn((id: number) => `/checkpoint/${id}`),
   clearConceptCheckpoint: vi.fn(),
   importConceptCheckpoint: vi.fn(),
@@ -265,3 +266,78 @@ test("shows GPT PDF-to-ACSD review-required state without presenting it as pendi
   expect(screen.getByText("GPT PDF-to-ACSD review required")).toBeDefined();
   expect(screen.getByText(/concept generation is blocked/i)).toBeDefined();
 });
+
+
+// --------------------------------------------------------------------------- #
+// Rule G, per lane: one job stages two releases, each with its own publish act.
+//
+// The manifest offers a publish entry per lane and both carry action:"post".
+// The handler used to ignore the entry it was rendered from and call the
+// lane-less endpoint, whose server-side default is "post" — so the
+// Pre-Learning button published Outputs 01/02: a wrong-lane, authenticated,
+// explicitly-confirmed write, and a silent no-op reporting success whenever
+// Post was already published.
+// --------------------------------------------------------------------------- #
+
+function bothLanesJob(): UploadJob {
+  const job = convertedJob();
+  job.status = "released";
+  if (!job.source_artifacts) throw new Error("fixture missing artifacts");
+  job.source_artifacts.files = [
+    {
+      kind: "database_upload",
+      label: "Upload released output to database",
+      filename: "",
+      media_type: "application/json",
+      size_bytes: 0,
+      download_url: "/build-concepts/uploads/81/upload-release",
+      action: "post",
+      requires_confirmation: true,
+    },
+    {
+      kind: "pre_database_upload",
+      label: "Upload released Pre-Learning output to database",
+      filename: "",
+      media_type: "application/json",
+      size_bytes: 0,
+      download_url: "/build-concepts/uploads/81/upload-release?lane=pre",
+      action: "post",
+      requires_confirmation: true,
+    },
+  ];
+  return job;
+}
+
+test.each([
+  ["pre_database_upload", "Upload released Pre-Learning output to database", "pre", "Pre-Learning"],
+  ["database_upload", "Upload released output to database", "post", "Post-Learning"],
+] as const)(
+  "the %s button publishes its OWN lane (%s -> %s)",
+  async (_kind, label, lane, laneLabel) => {
+    const confirmSpy = vi
+      .spyOn(window, "confirm")
+      .mockImplementation(() => true);
+    apiMock.uploadConceptRelease.mockResolvedValue({});
+    apiMock.getUploadJob.mockResolvedValue(bothLanesJob());
+
+    render(
+      <RunConsoleProvider>
+        <DocumentUpload
+          module="concepts"
+          conceptKind="post"
+          externalJob={bothLanesJob()}
+          onJob={vi.fn()}
+        />
+      </RunConsoleProvider>,
+    );
+
+    screen.getByRole("button", { name: label }).click();
+
+    await vi.waitFor(() =>
+      expect(apiMock.uploadConceptRelease).toHaveBeenCalledWith(81, lane),
+    );
+    // ...and the reviewer was told WHICH lane they were authorising.
+    expect(confirmSpy.mock.calls[0][0]).toContain(laneLabel);
+    confirmSpy.mockRestore();
+  },
+);

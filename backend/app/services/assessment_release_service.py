@@ -39,6 +39,21 @@ READY = "ready"
 RELEASED_WITH_WARNINGS = "released_with_warnings"
 BLOCKED = "blocked_for_database_upload"
 
+# ``models.Question.origin`` values this release lane may mint.  A
+# reused source question keeps the long-standing value; a GENERATED
+# pre-learning question carries its own explicit one.  Before this, the
+# only way to tell them apart on an uploaded row was an empty
+# ``source_qid`` — an absence, which is exactly what every unfilled
+# field looks like, and far too weak to carry the owner steer's
+# "generated questions only" property (docs/aegis-restructure.md §4
+# Phase 03).
+QUESTION_ORIGIN_ASSESSMENT_RELEASE = "assessment_release"
+QUESTION_ORIGIN_PRE_LEARNING = "pre_learning_generated"
+QUESTION_ORIGINS = (
+    QUESTION_ORIGIN_ASSESSMENT_RELEASE,
+    QUESTION_ORIGIN_PRE_LEARNING,
+)
+
 
 class ReleaseNotFound(ValueError):
     """Absent or foreign releases look identical (no ID probing)."""
@@ -62,15 +77,36 @@ def _version_dir(release: models.AssessmentRelease) -> Path:
 
 def snapshot_from_chapter(
     db: Session, chapter_id: int, payload: Mapping,
+    *,
+    pre_post: str | None = None,
 ) -> dict:
     """Project one chapter's accepted hierarchy plus the release payload
     into the immutable renderer snapshot. DB rows are read exactly once,
-    here — never again during rendering or upload."""
+    here — never again during rendering or upload.
+
+    THE SECOND SNAPSHOT WRITER. ``snapshot_from_staged_release`` below is
+    the first, and it carries each topic's lane through from the staged
+    payload; this one reads live Topic ORM rows, and a chapter holds BOTH
+    lanes' topics at once. Output 04 must therefore be able to say which
+    lane it is projecting — without that, a Pre Master built through this
+    path would carry the chapter's POST topics and resolve its concepts
+    against them. ``pre_post=None`` keeps every existing caller's
+    projection byte-identical (both lanes, as before); naming a lane
+    restricts the projection to it.
+    """
     chapter = db.get(models.Chapter, chapter_id)
     if chapter is None:
         raise ReleaseNotFound("chapter not found")
+    lane = str(pre_post or "").strip()
     topics = sorted(
-        chapter.topics, key=lambda t: (t.source_order, t.id))
+        (
+            topic for topic in chapter.topics
+            if not lane
+            or str(topic.pre_post_learning or "").strip().casefold()
+            == lane.casefold()
+        ),
+        key=lambda t: (t.source_order, t.id),
+    )
     snapshot_topics = []
     for topic in topics:
         concepts = sorted(
@@ -243,7 +279,14 @@ def create_release(
     snapshot = (
         snapshot_from_staged_release(payload)
         if isinstance(staged, Mapping)
-        else snapshot_from_chapter(db, chapter_id, payload)
+        # The lane a release DECLARES, when it declares one. Output 04
+        # always carries a staged snapshot and takes the branch above; a
+        # legacy Build Assessments payload declares nothing and keeps the
+        # both-lanes projection it has always had.
+        else snapshot_from_chapter(
+            db, chapter_id, payload,
+            pre_post=str(payload.get("pre_post_learning") or "") or None,
+        )
     )
     release = models.AssessmentRelease(
         release_uid=(
@@ -418,6 +461,29 @@ def published_artifact(
 # Explicit database upload (spec §13.4)
 # --------------------------------------------------------------------------- #
 
+def _question_origin(candidate: Mapping) -> str:
+    """The explicit provenance marker one candidate carries to the database.
+
+    Mechanics: a candidate either declares one of the values this lane
+    mints, or declares nothing and keeps the long-standing default. An
+    unrecognised declaration is refused rather than written through —
+    ``origin`` is how a later reader tells a generated pre-learning
+    question from a reused source one, so an unknown value there is a
+    broken artifact, not a judgment call.
+    """
+
+    declared = str(candidate.get("origin") or "").strip()
+    if not declared:
+        return QUESTION_ORIGIN_ASSESSMENT_RELEASE
+    if declared not in QUESTION_ORIGINS:
+        raise UploadRefused(
+            f"candidate {candidate.get('candidate_id')!r} declares unknown "
+            f"question origin {declared!r}; this lane mints "
+            f"{QUESTION_ORIGINS!r}"
+        )
+    return declared
+
+
 def upload_master_to_database(
     db: Session, release: models.AssessmentRelease, *, owner_sub: str,
 ) -> dict:
@@ -571,7 +637,7 @@ def upload_master_to_database(
                     candidate.get("answer_explanation") or ""),
                 answers=list(candidate.get("answers") or []),
                 sub_questions=list(candidate.get("sub_questions") or []),
-                origin="assessment_release",
+                origin=_question_origin(candidate),
                 answer_restriction=str(
                     candidate.get("answer_restriction") or ""),
                 source_qid=", ".join(

@@ -526,18 +526,115 @@ def _accepted_with_risk(
     }
 
 
+def _pre_learning(
+    pre_map: Mapping[str, Any] | None,
+    coverage: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """What the PRE lane produced, readable without opening the JSON.
+
+    §6.6: the report had zero lane awareness, so a run carrying a
+    Pre-Learning map read exactly like one that never built one. This is
+    counting and identities only — how many pre-topics and pre-concepts
+    the run built, what each is called, which of them carry an analysis
+    section, how many carry a review flag, and whether the map was
+    refused. It never says whether the Pre map is any good; the flags it
+    counts are the critic's and the validator's, already recorded.
+    """
+    source = dict(pre_map or {})
+    rows = [row for row in source.get("rows") or [] if isinstance(row, Mapping)]
+    topics = [
+        topic for topic in source.get("topics") or []
+        if isinstance(topic, Mapping)
+    ]
+    analysis = dict(source.get("analysis") or {})
+    flags = source.get("review_flags") or {}
+    coverage_pre = dict(
+        (coverage or {}).get("summary", {}).get("pre_learning") or {}
+    )
+    # Silent only when the Pre lane has nothing to say. A run whose map
+    # snapshot is missing or empty while its capture holds prerequisites
+    # is precisely the state in which prerequisites were lost, and the
+    # ledger already marks it incomplete — so the report must not go
+    # quiet on it (R4).
+    owed = any((
+        (coverage_pre.get("prerequisites") or {}).get("unaccounted"),
+        (coverage_pre.get("analysis_items") or {}).get("unaccounted"),
+        (coverage_pre.get("needed_for_links") or {}).get("unresolved"),
+        coverage_pre.get("rows_missing_learner_analysis"),
+    ))
+    if not rows and not topics and not source.get("refused") and not owed:
+        return {}
+    return {
+        "refused": _normal(source.get("refused")),
+        "pre_topics": [
+            {
+                "pre_topic_id": _normal(topic.get("pre_topic_id")),
+                "title": _normal(topic.get("title")),
+                "pre_concept_ids": [
+                    str(ref) for ref in topic.get("pre_concept_ids") or []
+                ],
+            }
+            for topic in topics
+        ],
+        "pre_concepts": [
+            {
+                "pre_concept_id": _normal(row.get("_pre_concept_id")),
+                "concept_title": _normal(row.get("concept_title")),
+                "topic": _normal(row.get("topic")),
+                "prerequisite_ids": [
+                    _normal(entry.get("prerequisite_id"))
+                    for entry in row.get("_aegis_pre_prerequisites") or []
+                    if isinstance(entry, Mapping)
+                ],
+                "analysis_item_ids": [
+                    str(item_id)
+                    for item_id in row.get("_aegis_analysis_allotments") or []
+                ],
+                "needed_for_count": len(row.get("_aegis_needed_for") or []),
+                "review_flag_count": len(row.get("review_flags") or []),
+            }
+            for row in rows
+        ],
+        "analysis_item_count": len([
+            item for item in analysis.get("inventory") or []
+            if isinstance(item, Mapping)
+        ]),
+        "allotted_item_count": len(analysis.get("allotments") or {}),
+        "flagged_pre_concept_count": len(flags),
+        "validation_codes": sorted({
+            _normal(finding.get("code"))
+            for finding in source.get("validation") or []
+            if isinstance(finding, Mapping) and _normal(finding.get("code"))
+        }),
+        "coverage": coverage_pre,
+    }
+
+
 def build_run_report(
     payload: Mapping[str, Any],
     *,
     generation_log: Sequence[Any] | None = None,
     generation_checkpoint: Mapping[str, Any] | None = None,
     dropped_furniture: Mapping[str, Any] | None = None,
+    pre_map: Mapping[str, Any] | None = None,
+    coverage: Mapping[str, Any] | None = None,
+    release_lane: str = "post",
 ) -> dict[str, Any]:
     """Return the reproducible explanation of how this run ended.
 
     ``dropped_furniture`` carries both source lanes' verbatim dropped
     lines ({"chapter_reading": [...], "acsd": [...]}) so the report can
     list what was dropped and what it said (R4) — never a bare count.
+    ``pre_map`` is the run's recorded Phase 03 Pre-Learning map
+    (``source.phase3-prelearn-map.json``) and ``coverage`` the coverage
+    ledger built beside it, so the report can surface the Pre lane the
+    way it already surfaces the Post one. Both optional: a run without a
+    Pre lane reports no Pre section at all.
+
+    ``release_lane`` names which of the job's two staged releases
+    ``payload`` is — the report is generated per lane, and a reviewer
+    holding the Pre diagnostics must not have to infer which output they
+    are reading.
     """
 
     log = list(generation_log or [])
@@ -567,6 +664,7 @@ def build_run_report(
         },
         "stopped": bool(issue),
         "outcome": "stopped" if issue else "completed",
+        "release_lane": str(release_lane or "post"),
         "job_id": payload.get("job_id"),
         "stage": _normal(payload.get("checkpoint_stage")),
         "stage_label": _normal(_stage_checkpoint(checkpoint).get("stage_label")),
@@ -599,6 +697,7 @@ def build_run_report(
         "recovery_history": _recovery_history(checkpoint),
         "decision_history": decisions,
         "accepted_with_risk": _accepted_with_risk(payload, log, decisions),
+        "pre_learning": _pre_learning(pre_map, coverage),
         "pending_decision": {
             key: _normal(value)
             for key, value in (payload.get("pending_decision_snapshot") or {}).items()
@@ -631,6 +730,101 @@ def _render_furniture(report: Mapping[str, Any]) -> list[str]:
         lines.append(
             f"  … {len(rows) - 60} more line(s) in context/run_report.json"
         )
+    return lines
+
+
+def _render_lane(report: Mapping[str, Any]) -> list[str]:
+    """Name the lane, and ONLY when it is not the long-standing default.
+
+    A Post report renders byte-identically to every recorded one; a Pre
+    report says so on its first line, because a reviewer holding two
+    diagnostics archives from one run must be able to tell them apart.
+    """
+
+    if str(report.get("release_lane") or "post") == "post":
+        return []
+    return [
+        "Output     : 03/04 — the Phase 03 Pre-Learning outputs "
+        "(this run's Post-Learning outputs 01/02 have their own report)",
+    ]
+
+
+def _render_pre_learning(report: Mapping[str, Any]) -> list[str]:
+    """Render what the PRE lane produced. Silent when there was none."""
+
+    pre = report.get("pre_learning") or {}
+    if not pre:
+        return []
+    concepts = pre.get("pre_concepts") or []
+    topics = pre.get("pre_topics") or []
+    lines = ["", "PRE-LEARNING MAP (Phase 03)"]
+    if pre.get("refused"):
+        lines.append(
+            "  REFUSED and not shipped: " + str(pre["refused"])[:300]
+        )
+        lines.append(
+            "  The chapter's finished Post-Learning map is unaffected."
+        )
+        return lines
+    if not concepts and not topics:
+        # No map, but the ledger has Pre obligations to report — the one
+        # state in which prerequisites are lost. Say so here rather than
+        # leave the COVERAGE verdict below unexplained (R4).
+        prerequisites = (pre.get("coverage") or {}).get("prerequisites") or {}
+        lines.append(
+            "  no Pre-Learning map is recorded for this run, and "
+            f"{prerequisites.get('unaccounted', 0)} of "
+            f"{prerequisites.get('total', 0)} captured prerequisite(s) "
+            "reached no pre-concept"
+        )
+        lines.append(
+            "  each one is named in the COVERAGE section below."
+        )
+        return lines
+    with_analysis = [row for row in concepts if row.get("analysis_item_ids")]
+    lines.append(
+        f"  {len(concepts)} pre-concept(s) across {len(topics)} pre-topic(s), "
+        "built from this run's own prerequisite capture"
+    )
+    lines.append(
+        f"  prerequisite analysis: {pre.get('allotted_item_count', 0)}/"
+        f"{pre.get('analysis_item_count', 0)} inventory item(s) allotted, "
+        f"on {len(with_analysis)} pre-concept(s); the remaining "
+        f"{len(concepts) - len(with_analysis)} carry no section, which is "
+        "Q1's design and not a gap"
+    )
+    if pre.get("flagged_pre_concept_count"):
+        lines.append(
+            f"  pre-concepts carrying a review flag: "
+            f"{pre['flagged_pre_concept_count']}"
+            + (
+                " (validator codes: "
+                + ", ".join(pre.get("validation_codes") or [])
+                + ")"
+                if pre.get("validation_codes") else ""
+            )
+        )
+    for topic in topics:
+        members = {
+            row["pre_concept_id"]: row for row in concepts
+        }
+        lines.append(
+            f"  [{topic.get('pre_topic_id')}] {topic.get('title')}"
+        )
+        for ref in topic.get("pre_concept_ids") or []:
+            row = members.get(ref) or {}
+            marks = []
+            if row.get("analysis_item_ids"):
+                marks.append(
+                    f"{len(row['analysis_item_ids'])} analysis item(s)"
+                )
+            marks.append(f"{row.get('needed_for_count', 0)} needed-for link(s)")
+            if row.get("review_flag_count"):
+                marks.append(f"{row['review_flag_count']} flag(s)")
+            lines.append(
+                f"    {ref} {row.get('concept_title', '')} "
+                f"({'; '.join(marks)})"
+            )
     return lines
 
 
@@ -726,10 +920,12 @@ def _render_accepted(report: Mapping[str, Any]) -> list[str]:
 def render_run_report(report: Mapping[str, Any]) -> str:
     """Render the same facts as the first thing a human opens."""
 
+    lane_line = _render_lane(report)
     if not report.get("stopped"):
         return "\n".join([
             "Project Aegis run report",
             "",
+            *lane_line,
             f"Stage      : {report.get('stage')} ({report.get('stage_label')})",
             f"Progress   : {report.get('progress')}",
             f"Released   : {report.get('released_row_count')} row(s); "
@@ -741,6 +937,7 @@ def render_run_report(report: Mapping[str, Any]) -> str:
             "accepted without",
             "  full independent verification is below.",
             *_render_accepted(report),
+            *_render_pre_learning(report),
             *_render_furniture(report),
             "",
             "Full detail, including exact log indexes, is in "
@@ -753,6 +950,7 @@ def render_run_report(report: Mapping[str, Any]) -> str:
     lines = [
         "Project Aegis run report",
         "",
+        *lane_line,
         f"Stage      : {report.get('stage')} ({report.get('stage_label')})",
         f"Progress   : {report.get('progress')}",
         f"Released   : {report.get('released_row_count')} row(s); "
@@ -817,6 +1015,7 @@ def render_run_report(report: Mapping[str, Any]) -> str:
         ]
     # A stopped run still released rows, so the same quality question applies.
     lines += _render_accepted(report)
+    lines += _render_pre_learning(report)
     lines += _render_furniture(report)
     lines += [
         "",

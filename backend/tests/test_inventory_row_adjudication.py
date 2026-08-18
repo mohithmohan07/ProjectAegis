@@ -1,11 +1,14 @@
 """A rejected inventory row is judged by the model, never by its shape.
 
-Deterministic validation can prove a row is unusable — empty, or too short to
-render as a public Example. It cannot tell a mangled question apart from a
-section banner the extractor mistook for a task, because that depends on what
-the book prints, not on the row's shape. The model makes that call against the
-source, an independent critic confirms it, and every uncertain path keeps the
-row so the run stops rather than silently losing a learner's question.
+Deterministic validation can prove a row carries no task text of its own —
+empty, or nothing but the ``source_label`` it was filed under. It cannot tell
+a mangled question apart from a section banner the extractor mistook for a
+task, because that depends on what the book prints, not on the row's shape.
+Length in particular proves nothing: a complete question can be three words
+long, so the word-count cascade that used to nominate rows here is gone. The
+model makes the call against the source, an independent critic confirms it,
+and every uncertain path keeps the row so the run stops rather than silently
+losing a learner's question.
 
 Live acceptance, Balbharati Std 6 "Three Dimensional Shapes": three runs died
 because ``## Practice Set 1.1`` and ``## Exercise 1`` — the outline's two
@@ -35,12 +38,30 @@ def _rows():
             "_source_section_index": 0,
         },
     ]
-    invalid = [{"index": 0, "qid": "QINV-0026", "reason": "stub_task"}]
+    invalid = [{
+        "index": 0, "qid": "QINV-0026", "reason": "task_is_only_its_own_label",
+    }]
     sections = [{
         "heading": "Practice Set 1.1",
         "body": "1) Complete the table below.\n2) Name the solid.",
     }]
     return items, invalid, sections
+
+
+def test_the_banner_row_is_actually_nominated_by_production():
+    """The fixture's reason is one production emits, not a dead string.
+
+    The retired ``stub_task`` reason came from a word-count cascade. These
+    tests would otherwise rehearse the adjudicator against an input the
+    pipeline can no longer produce.
+    """
+    items, invalid, _sections = _rows()
+
+    nominated = g._unowned_stub_inventory_candidates(items, [])
+
+    assert nominated == invalid
+    # And a real question sitting beside it is never nominated.
+    assert not g._inventory_row_task_is_only_its_own_label(items[1])
 
 
 def _verified_critic(**_kwargs):
@@ -205,3 +226,10 @@ def test_nothing_is_judged_by_the_shape_of_the_text():
     """
     assert not hasattr(g, "_inventory_row_is_heading_only")
     assert not hasattr(g, "_HEADING_ONLY_TASK_RE")
+    # Nor its two successors: a word-count cascade, and a verb allow-list
+    # plus "?" test that classified a row as "describes content but asks
+    # nothing". Both nominated rows here; both are purged.
+    assert not hasattr(g, "_unowned_inventory_row_is_non_task")
+    assert "describes_content_but_asks_nothing" not in (
+        g._INVALID_ROW_ADJUDICATION_SYSTEM)
+    assert "too short" not in g._INVALID_ROW_ADJUDICATION_SYSTEM.lower()
