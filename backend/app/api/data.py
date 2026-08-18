@@ -32,6 +32,27 @@ def _lossless_xlsx_or_422(factory):
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _rendered(db: Session, factory):
+    """Render a workbook and COMMIT the identities rendering it minted.
+
+    ``identity.machine_id_for_*`` is lookup-then-MINT (spec-step8 T4-3):
+    composing a title cell for a row whose column is still blank ASSIGNS the
+    id on the ORM object. ``db.get_db`` yields and closes without committing,
+    so before this the tag went into the downloaded file and never into the
+    database — [measured] one concept, two downloads straddling a topic
+    reorder, two different exported ids, column blank throughout; re-importing
+    the first file after the row was finally minted would then read as a
+    ``machine_id_conflict`` against an id nothing ever stored.
+
+    "Minted once" is a property of STORAGE, so the leg that exports the tag
+    has to be the leg that stores it. Nothing else on a GET mutates the
+    session, so this commits the mint and only the mint.
+    """
+    data = _lossless_xlsx_or_422(factory)
+    db.commit()
+    return data
+
+
 @router.post("/import")
 async def import_workbook(file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Load a canonical Bulk Import workbook into the normalized DB (append-only)."""
@@ -77,7 +98,7 @@ def export_workbook(
             filename="bulk_import_output.xlsx",
             media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
-    data = _lossless_xlsx_or_422(lambda: writer.write_workbook(db))
+    data = _rendered(db, lambda: writer.write_workbook(db))
     return Response(
         content=data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -115,8 +136,8 @@ def export_questions(
     question_ids = _parse_ids(ids)
     if not question_ids:
         raise HTTPException(400, "no question ids provided")
-    data = _lossless_xlsx_or_422(
-        lambda: writer.write_workbook(db, question_ids=question_ids)
+    data = _rendered(
+        db, lambda: writer.write_workbook(db, question_ids=question_ids)
     )
     return Response(
         content=data, media_type=_XLSX_MEDIA,
@@ -136,8 +157,8 @@ def export_concepts(
     concept_ids = _parse_ids(ids)
     if not concept_ids:
         raise HTTPException(400, "no concept ids provided")
-    data = _lossless_xlsx_or_422(
-        lambda: writer.write_concepts_workbook(db, concept_ids)
+    data = _rendered(
+        db, lambda: writer.write_concepts_workbook(db, concept_ids)
     )
     return Response(
         content=data, media_type=_XLSX_MEDIA,
@@ -160,7 +181,8 @@ def create_subject_workbook(
     """
     if not subject.strip():
         raise HTTPException(400, "subject is required")
-    data = _lossless_xlsx_or_422(
+    data = _rendered(
+        db,
         lambda: writer.write_subject_workbook(
             db,
             subject=subject.strip(),

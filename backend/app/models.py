@@ -54,6 +54,12 @@ class Topic(Base):
     # kind. Database ids are creation history and must never determine textbook
     # order (a repaired topic may pre-date topics that now precede it).
     source_order: Mapped[int] = mapped_column(Integer, default=0)
+    # The topic's machine identity, MINTED ONCE and never re-derived
+    # (spec-step8 T4-1/P-C1). §6:523's "unique and stable forever" is a
+    # property of STORAGE: no formula survives the rename/merge/split/re-tag
+    # §7:577 permits, and every previous mint recomputed on every read.
+    # ``services.identity.machine_id_for_topic`` is its only producer.
+    machine_id: Mapped[str] = mapped_column(String(255), default="")
 
     chapter = relationship("Chapter", back_populates="topics")
     concepts = relationship("Concept", back_populates="topic", cascade="all, delete-orphan")
@@ -75,6 +81,13 @@ class Concept(Base):
     # independent of the primary key so refreshed/reused concepts retain the
     # source order of the current successful run.
     source_order: Mapped[int] = mapped_column(Integer, default=0)
+    # The concept's machine identity, MINTED ONCE and never re-derived
+    # (spec-step8 T4-1/P-C1). It came off the RELEASE HASH before step 8
+    # (``assessment_release_snapshot:137``), so editing any staged content
+    # re-minted every id and no label could be stable forever.
+    # ``services.identity.machine_id_for_concept`` is its only producer, and
+    # ``generation.question_label`` is ``f"{machine_id} Q##"`` off it.
+    machine_id: Mapped[str] = mapped_column(String(255), default="")
     # Multi-source book tags, "; "-joined (e.g. "NCERT; RD Sharma").
     sources: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

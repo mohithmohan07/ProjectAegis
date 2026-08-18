@@ -277,7 +277,22 @@ def test_reference_workbook_imports_by_name(db, fixture_name):
     """
     counts = reader.import_workbook(db, _reference_fixture(fixture_name))
     assert counts["layout_id"] == layouts.REFERENCE_LAYOUT_ID
-    assert counts["issues"] == []
+    # The owner's reference books predate the minted identity: their title
+    # cells carry ``directory.topic_tag``/``concept_tag``, which are
+    # CHAPTER-level — one tag on every topic of the chapter. Restoring those
+    # as identities gave [measured] six duplicate topic machine_ids in these
+    # eight topics, which is one ``question_label`` for two concepts and a
+    # silently dropped question (R4). They are now recorded, one note per row,
+    # and the id is minted on first use. Every OTHER issue must still be
+    # absent, so the filter keys on the stable code token and not on prose.
+    identity_notes = [
+        issue for issue in counts["issues"]
+        if "(imported_without_machine_id)" in issue
+    ]
+    assert identity_notes, "the legacy chapter-level tags must be RECORDED"
+    assert [
+        issue for issue in counts["issues"] if issue not in identity_notes
+    ] == []
 
     descriptive = [
         q for q in db.query(models.Question).all()
@@ -348,7 +363,16 @@ def test_reader_answer_blocks_are_read_by_name(db, tmp_path):
         tmp_path, "reference_subjective.xlsx")
 
     counts = reader.import_workbook(db, path)
-    assert counts["issues"] == []
+    # The synthetic fixture's title cells carry no machine-id tag, so the
+    # importer NOTES each row as ``imported_without_machine_id`` (S4/T4-8: a
+    # note, never a block — the id is minted on first use). Nothing about the
+    # answer bands may be reported. The filter keys on the stable CODE token,
+    # not on the prose: filtering out every issue whose text happens to
+    # contain "machine id" would also hide ``machine_id_conflict``.
+    assert [
+        issue for issue in counts["issues"]
+        if "(imported_without_machine_id)" not in issue
+    ] == []
     question = db.query(models.Question).filter_by(
         question_label="07CBSC_Sound_PL_T01_C01 Q01").one()
     assert len(question.answers) == 15

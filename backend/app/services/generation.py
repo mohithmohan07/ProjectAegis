@@ -36,6 +36,7 @@ from . import containers
 from . import katex_rules as kr
 from . import concept_refiner as cr
 from . import grounding_certificate
+from . import identity
 from . import prompts
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
@@ -74,44 +75,35 @@ def _slug(text: str, length: int = 22) -> str:
     return _SLUG_RE.sub("", (text or "").title())[:length] or "X"
 
 
-def _topic_index(concept: models.Concept) -> int:
-    """Position of the concept's topic among ALL topics of the chapter.
-
-    Deliberately NOT scoped to the learning lane, and the reason is
-    recorded because the opposite looks obviously right: ``question_label``
-    below carries a literal ``_PL_`` segment and no lane discriminator, so
-    numbering each lane from 1 makes a Pre label collide with a Post label
-    whenever same-position topics carry the same concept title. A collision
-    is not merely cosmetic — ``assessment_release_service`` builds
-    ``existing_labels`` from a GLOBAL ``Question`` query and skips a
-    candidate whose label already exists ("append-only: an uploaded label
-    is immutable"), with no flag and no log, and ``question_label`` carries
-    only ``index=True``, no unique constraint. Lane-scoping the numbering
-    would therefore silently drop a learner's question (R4), which is worse
-    than the drift it would prevent.
-
-    The drift it would prevent is also narrower than it appears: sorting
-    every topic by id leaves already-published Post positions untouched in
-    the natural sequence, because Pre topics are created later and hold
-    higher ids, so they append rather than interleave.
-
-    Giving the label a lane discriminator is the real fix, and that is the
-    per-topic/per-concept ID minting rebuild §9 assigns to §10 step 8. See
-    the step-8 brief in ``docs/restructure-handoff.md``.
-    """
-    topic = concept.topic
-    siblings = sorted(topic.chapter.topics, key=lambda t: t.id)
-    return siblings.index(topic) + 1
-
-
 def question_label(concept: models.Concept, n: int) -> str:
-    """Build a canonical question label, e.g. 10CBMA_Crcls_PL_T01_CncptlMnng Q03."""
-    ch = concept.topic.chapter
-    prefix = ch.chapter_code.split("_")[0] if ch.chapter_code else _slug(ch.chapter_title, 6)
-    return (
-        f"{prefix}_{_slug(ch.chapter_title, 6)}_PL_"
-        f"T{_topic_index(concept):02d}_{_slug(concept.concept_title)} Q{n:02d}"
-    )
+    """THE one producer of D1/Q14's ``Question = <ConceptID> Q##`` pattern.
+
+    e.g. ``10CBMA_Circles_1f4a9c2b_PL_T01_C03 Q03``.
+
+    Nothing here is re-derived from a title. The base is the concept's
+    PERSISTED ``machine_id`` through ``identity.machine_id_for_concept``, so a
+    concept that already carries an id keeps it and a concept that does not
+    gets one minted and persisted on the spot (T4-3/T4-7). The signature is
+    unchanged — the helper resolves its own session with ``object_session`` —
+    so every call site keeps its arguments.
+
+    ``_topic_index`` is GONE, and its own docstring said why this is the fix:
+    it existed only because this label "carries a literal ``_PL_`` segment and
+    no lane discriminator", so lane-scoped numbering made a Pre label
+    byte-identical to a Post one and ``assessment_release_service`` silently
+    skipped the colliding question (R4). The ``PL|PrL`` token now sits inside
+    the id, so the reason to keep a chapter-wide topic index went with it.
+
+    Two live minters were also the reason S5's ``_next_label_index`` max-scan
+    and T5-2's ``UploadRefused`` comparison could both read the wrong label
+    family for one concept. There is one now.
+
+    The legacy family is GRANDFATHERED, not migrated (T5/R5): a concept whose
+    published questions carry the old shape keeps them, the new family has a
+    different prefix, numbering restarts at 1 inside the new family, and no
+    label is ever reassigned.
+    """
+    return f"{identity.machine_id_for_concept(concept)} Q{n:02d}"
 
 
 # --------------------------------------------------------------------------- #

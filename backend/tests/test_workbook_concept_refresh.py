@@ -173,8 +173,17 @@ def test_append_concepts_refreshes_complete_band_after_normalized_title_change(
         bi.normalize_question_text(home_topic.topic_title): 2,
         bi.normalize_question_text(tagged_topic.topic_title): 1,
     }
-    # The same concept has a placement-specific tag under each topic.
-    assert len(set(title_cells_by_topic.values())) == 2
+    # ONE identity, repeated under both placements — which is precisely how
+    # the CMS reads a repeated row as a TAG rather than as a second concept.
+    # Before S4 the tag came from ``directory.concept_tag``, which is derived
+    # from the PLACEMENT topic, so the same concept exported two different
+    # machine ids and the two rows read as two concepts. The id is now the
+    # concept's own persisted ``machine_id`` (spec-step8 T4-3/T4-4), so it
+    # does not move with the placement.
+    assert len(set(title_cells_by_topic.values())) == 1
+    assert set(title_cells_by_topic.values()) == {
+        f"{concept.concept_title} ({concept.machine_id})"
+    }
 
 
 def test_append_concepts_relocates_catalog_and_question_rows_in_place(

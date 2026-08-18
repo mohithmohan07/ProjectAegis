@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import workbook_sync
-from . import build_concepts, concept_cleanup, uploads
+from . import build_concepts, concept_cleanup, identity, uploads
 from .build_concepts_release import (
     LANE_POST,
     LANE_PRE,
@@ -113,6 +113,10 @@ def upload_release_to_database(
     )
     created_ids: list[int] = []
     merged_ids: list[int] = []
+    # T4-2: a grade label the normaliser could not parse keeps its raw token
+    # (KG and Nursery must never collapse into one ``00`` family) and the
+    # fallback is RECORDED here rather than stamped silently.
+    review_flags: list[str] = []
     topic_positions: dict[str, int] = {}
     concept_positions: dict[str, int] = {}
 
@@ -121,9 +125,14 @@ def upload_release_to_database(
         chapter = db.get(models.Chapter, chapter_id)
         if chapter is None:
             raise ValueError("the release target chapter no longer exists")
+        grade_flag = identity.grade_review_flag(chapter)
+        if grade_flag:
+            review_flags.append(grade_flag)
         for raw in records:
             rec = concept_cleanup.clean_concept_record(dict(raw))
-            topic_key = bi.normalize_question_text(rec["topic"])
+            # T4-6: the second of four live topic identities, converged on the
+            # one shared normaliser.
+            topic_key = identity.topic_identity(rec["topic"])
             topic_positions.setdefault(topic_key, len(topic_positions) + 1)
             concept_positions[topic_key] = concept_positions.get(topic_key, 0) + 1
             source_order = concept_positions[topic_key]
@@ -134,6 +143,20 @@ def upload_release_to_database(
                 pre_post,
             )
             topic.source_order = topic_positions[topic_key]
+            # T4-4: the id is stamped HERE, where ``source_order`` is already
+            # assigned, and only when the row does not already carry one —
+            # §6:523's "stable forever" is a property of storage (P-C1), so a
+            # republication never re-keys a published topic.
+            #
+            # Through the ONE minter, never composed inline. Composing from
+            # this loop's own counter numbered topics by their order of first
+            # appearance in THIS release, so [measured] a second publication
+            # that prepends one topic handed the new topic the id the
+            # published one already held: two topics, two concepts and two
+            # ``question_label``s with the identical string, and
+            # ``assessment_release_service:612`` then skips the second
+            # concept's questions with no flag (R4).
+            identity.machine_id_for_topic(topic)
             existing = build_concepts._find_concept_in_chapter(
                 chapter,
                 rec["concept_title"],
@@ -147,6 +170,7 @@ def upload_release_to_database(
                     source_book,
                 )
                 concept.source_order = source_order
+                identity.machine_id_for_concept(concept)
                 db.flush()
                 created_ids.append(concept.id)
                 continue
@@ -167,6 +191,7 @@ def upload_release_to_database(
             existing.concept_details = rec.get("concept_details", "")
             existing.keywords = rec.get("keywords", "")
             existing.source_order = source_order
+            identity.machine_id_for_concept(existing)
             existing.sources = bi.merge_sources(existing.sources, source_book)
             db.flush()
             merged_ids.append(existing.id)
@@ -195,6 +220,13 @@ def upload_release_to_database(
             "merged_count": len(merged_ids),
             "publication_status": "publishing",
         })
+        if review_flags:
+            summary["identity_review_flags"] = list(
+                dict.fromkeys(
+                    list(summary.get("identity_review_flags") or [])
+                    + review_flags
+                )
+            )
         if resolved == LANE_PRE:
             # The Pre lane records its OWN published ids inside its own
             # payload. ``job.result_ids`` stays the Post lane's, because

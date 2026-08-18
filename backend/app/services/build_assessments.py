@@ -30,8 +30,8 @@ from .. import config, models
 from ..bulk_import import workbook_sync
 from . import (
     assessment_blueprint, assessment_grouping, assessment_release,
-    assessment_routing, auth, directory, generation, mmd, post_generation,
-    progress, uploads,
+    assessment_routing, auth, directory, generation, identity, mmd,
+    post_generation, progress, uploads,
 )
 from .phase3 import kernel
 
@@ -212,12 +212,6 @@ def add_batch(
         return batch
 
 
-def _legacy_machine_id(concept: models.Concept) -> str:
-    """Use the same machine base as this lane's question labels."""
-
-    return generation.question_label(concept, 1).rsplit(" Q", 1)[0]
-
-
 def _group_for_recorded_tier(
     db: Session, concept: models.Concept, tier: str,
 ) -> models.Group:
@@ -249,7 +243,7 @@ def _group_for_recorded_tier(
         sequence = int(group.group_sequence or 1)
         if not str(group.group_key or "").strip():
             group.group_key = assessment_grouping.group_key_for(
-                _legacy_machine_id(concept), tier, sequence
+                identity.machine_id_for_concept(concept), tier, sequence
             )
         group.group_sequence = sequence
         group.group_name = visible_name
@@ -261,7 +255,7 @@ def _group_for_recorded_tier(
         concept_id=concept.id,
         group_type=tier,
         group_key=assessment_grouping.group_key_for(
-            _legacy_machine_id(concept), tier, sequence),
+            identity.machine_id_for_concept(concept), tier, sequence),
         group_sequence=sequence,
         group_name=visible_name,
         group_display_name=visible_name,
@@ -296,7 +290,7 @@ def _legacy_concept(concept: models.Concept) -> dict:
     return {
         "concept_key": concept_key,
         "concept_id": concept_key,
-        "concept_machine_id": _legacy_machine_id(concept),
+        "concept_machine_id": identity.machine_id_for_concept(concept),
         "concept_title": concept.concept_title,
         "concept_display_name": concept.concept_display_name,
         "description": concept.concept_details,

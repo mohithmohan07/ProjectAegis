@@ -36,8 +36,10 @@ from __future__ import annotations
 
 import ast
 import inspect
+import io
 import json
 import re
+import zipfile
 
 import pytest
 
@@ -448,6 +450,50 @@ def test_publishing_with_an_explicit_lane_still_works(db, client):
     assert not (pre.get("summary") or {}).get("database_uploaded")
 
 
+_WALL_CLOCK = re.compile(
+    r"<dcterms:(created|modified)[^>]*>[^<]*</dcterms:\1>")
+
+
+def _clockless(name: str, body: bytes):
+    """One archive member with every WALL CLOCK removed and nothing else.
+
+    There are THREE clocks in this comparison, not one, and each was found by
+    watching this assertion fail:
+
+    * the zip local header's DOS timestamp, 2-second resolution, taken from
+      ``time.localtime()`` at write time — dropped by unzipping;
+    * ``docProps/core.xml``'s ``dcterms:created``/``dcterms:modified``, which
+      openpyxl stamps from the wall clock at 1-second resolution. [measured]
+      two saves of ONE identical workbook 1.2s apart differ in exactly that
+      one entry;
+    * the same two, one level DOWN. ``diagnostics.zip`` carries whole
+      workbooks as members (``release/released_concepts.xlsx``), so a member
+      compared as opaque bytes still carries its own container clock and its
+      own ``core.xml``. [measured] this is the entry the assertion actually
+      failed on — unzipping only the outer bundle left the flake live.
+
+    Every other byte of every other member, at every depth, is still
+    compared: the default lane serves the Post lane's artifact byte for byte.
+    """
+    if name.endswith("docProps/core.xml"):
+        return (name, _WALL_CLOCK.sub("", body.decode("utf-8")))
+    if body.startswith(b"PK\x03\x04"):
+        with zipfile.ZipFile(io.BytesIO(body)) as nested:
+            return (name, [
+                _clockless(f"{name}!{member}", nested.read(member))
+                for member in sorted(nested.namelist())
+            ])
+    return (name, body)
+
+
+def _payload_of(response):
+    """The response's CONTENT, with every wall clock removed. See above."""
+    body = response.content
+    if not body.startswith(b"PK\x03\x04"):
+        return body
+    return _clockless("", body)[1]
+
+
 def test_the_four_downloads_still_default_to_the_post_lane(db, client):
     """This matters as much as the gate above.
 
@@ -469,7 +515,7 @@ def test_the_four_downloads_still_default_to_the_post_lane(db, client):
         explicit = client.get(f"{base}/{route}?lane=post")
         assert default.status_code == 200, route
         assert explicit.status_code == 200, route
-        assert default.content == explicit.content, route
+        assert _payload_of(default) == _payload_of(explicit), route
 
     assert json.loads(client.get(f"{base}/release.json").content)[
         "learning_kind"

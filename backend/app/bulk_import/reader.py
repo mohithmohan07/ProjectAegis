@@ -99,6 +99,20 @@ def _parse_answers(
 
 
 _MAX_ISSUES = 200
+# Identity notes get a slice of the ledger, never all of it: a wholly
+# tagless legacy book raises up to two per distinct topic/concept name, and
+# an uncapped stream of them would push out the placement and mangled-row
+# issues raised later in the same row loop.
+_MAX_IDENTITY_NOTES = 50
+
+# A RESTORED id is bounded by the column that has to carry it downstream.
+# ``Topic/Concept.machine_id`` is ``String(255)`` but
+# ``Question.question_label`` is ``String(128)`` and is
+# ``f"{machine_id} Q##"`` — so an id longer than this cannot become a label.
+# Read off the column itself rather than written as a literal.
+_MAX_RESTORED_MACHINE_ID = (
+    models.Question.question_label.type.length - len(" Q00")
+)
 
 # Group-band fields that carry meaningful Group identity. The linkage columns
 # (``concept_question_labels`` and Descriptive's linkage ``question_label``)
@@ -198,6 +212,141 @@ def import_workbook(db: Session, path: Path) -> dict:
     def _flag(msg: str) -> None:
         if len(counts["issues"]) < _MAX_ISSUES:
             counts["issues"].append(msg)
+
+    identity_notes: set[tuple[str, str, str]] = set()
+
+    def _identity_flag(kind: str, name: str, code: str, msg: str) -> None:
+        """One note per row per code, and a BUDGET of its own.
+
+        A workbook repeats its topic on every line, so an un-deduped note
+        would fill ``issues`` with one defect. The separate budget matters
+        too: a wholly tagless legacy book raises two notes per distinct
+        topic/concept name, and without a cap those notes would consume
+        ``_MAX_ISSUES`` and silently truncate the placement and mangled-row
+        issues raised later in the same row loop — the ledger S2 built.
+        """
+        if (kind, name, code) in identity_notes:
+            return
+        identity_notes.add((kind, name, code))
+        if len(identity_notes) > _MAX_IDENTITY_NOTES:
+            if len(identity_notes) == _MAX_IDENTITY_NOTES + 1:
+                _flag(
+                    f"more than {_MAX_IDENTITY_NOTES} rows carry no usable "
+                    "machine id; the remaining identity notes are omitted so "
+                    "the rest of the ledger survives "
+                    "(identity_notes_truncated)")
+            return
+        _flag(msg)
+
+    # Every machine id the database already holds, read ONCE. An id restored
+    # out of a workbook cell must be unique or it is not an identity: two rows
+    # sharing one id share one ``question_label``, and
+    # ``assessment_release_service`` skips a repeated label with no flag (R4).
+    claimed: dict[str, set[str]] = {
+        "topic": {
+            str(value or "").strip()
+            for (value,) in db.query(models.Topic.machine_id).all()
+            if str(value or "").strip()
+        },
+        "concept": {
+            str(value or "").strip()
+            for (value,) in db.query(models.Concept.machine_id).all()
+            if str(value or "").strip()
+        },
+    }
+    _ORDINAL_OF = {
+        "topic": identity.minted_topic_ordinal,
+        "concept": identity.minted_concept_ordinal,
+    }
+
+    def _usable_tag(tag: str, kind: str, name: str, stored: str) -> str:
+        """The tag if it is an id THIS minter could have issued and is free.
+
+        Two gates, both mechanics, both learned from a measurement.
+
+        SHAPE. ``identity.title_tag`` only proves the tag round-trips
+        ``strip_title_tag``; it does not prove the tag is an identity. The
+        pre-S4 writer stamped ``directory.topic_tag``, which is CHAPTER-level
+        — one tag on every topic of the chapter — and that is what the
+        committed reference workbooks carry. [measured] restoring it unparsed
+        gave the owner's own eight-topic ``grade6_science.xlsx`` six duplicate
+        topic identities, with no issue recorded.
+
+        UNIQUENESS. A minted-shape tag that another row already holds is not
+        this row's identity either — importing one file against two chapters
+        would otherwise hand both the same string.
+
+        A rejected tag is not a refusal: the row imports, the note is
+        recorded, and the id is minted on first use (T4-8, R4).
+        """
+        if not tag:
+            return ""
+        if len(tag) > _MAX_RESTORED_MACHINE_ID:
+            _identity_flag(
+                kind, name, "imported_without_machine_id",
+                f"{kind} {name!r}: the title cell's tag is "
+                f"{len(tag)} characters, more than a "
+                f"{models.Question.question_label.type.length}-character "
+                "question label can carry; the id will be minted on first "
+                "use (imported_without_machine_id)")
+            return ""
+        if _ORDINAL_OF[kind](tag) is None:
+            _identity_flag(
+                kind, name, "imported_without_machine_id",
+                f"{kind} {name!r}: the title cell's tag {tag!r} is not a "
+                "machine id this pipeline mints; the id will be minted on "
+                "first use (imported_without_machine_id)")
+            return ""
+        if tag != stored and tag in claimed[kind]:
+            _identity_flag(
+                kind, name, "machine_id_already_claimed",
+                f"{kind} {name!r}: machine id {tag!r} is already held by "
+                "another row; this row keeps its own and the id is minted on "
+                "first use (machine_id_already_claimed)")
+            return ""
+        return tag
+
+    def _claim(kind: str, tag: str) -> str:
+        if tag:
+            claimed[kind].add(tag)
+        return tag
+
+    def _restore_machine_id(row, tag: str, kind: str, name: str) -> None:
+        """Keep the identity the writer exported instead of erasing it.
+
+        T4-8. This endpoint STRIPPED the tag and threw it away, so the one
+        authenticated POST S2 hardened was also the one that erased the
+        identity S4 mints. ``identity.title_tag`` returns a tag only when it
+        is exactly what ``bi.strip_title_tag`` removes, so a value restored
+        here is one the writer could have written; anything else reads as
+        tagless.
+
+        A blank column is filled — that is the restore, and it overwrites
+        nothing. A DIFFERENT persisted id is NEVER overwritten: §6:523's
+        "stable forever" is a property of storage (P-C1), so an uploaded file
+        may not re-key a published row. The disagreement is RECORDED, naming
+        both, and the row still imports: this is an import, not an identity
+        corruption, and refusing it would lose the file's content (R4).
+        """
+        stored = str(getattr(row, "machine_id", "") or "").strip()
+        if stored:
+            if tag and tag != stored:
+                _identity_flag(
+                    kind, name, "machine_id_conflict",
+                    f"{kind} {name!r}: the workbook carries machine id "
+                    f"{tag!r} but the stored row is {stored!r}; the stored id "
+                    "stands (machine_id_conflict)")
+            return
+        usable = _usable_tag(tag, kind, name, stored)
+        if usable:
+            row.machine_id = _claim(kind, usable)
+            return
+        if not tag:
+            _identity_flag(
+                kind, name, "imported_without_machine_id",
+                f"{kind} {name!r}: no machine id in the title cell; it "
+                "will be minted on first use "
+                "(imported_without_machine_id)")
 
     # A content sheet the layout declares but the file does not carry, and a
     # tab the layout declares non-content, are both RECORDED. Neither loses a
@@ -331,6 +480,7 @@ def import_workbook(db: Session, path: Path) -> dict:
             # UploadRefused class).
             t_title = t_title_clean or "Topic 01"
             t_lane = top.get("pre_post_learning", "") or "Post"
+            t_tag = identity.title_tag(top.get("topic_title", ""))
             t_ident = identity.topic_identity(t_title)
             t_key = (chapter.id, t_ident, t_lane)
             topic = topics.get(t_key)
@@ -367,14 +517,25 @@ def import_workbook(db: Session, path: Path) -> dict:
                     pre_post_learning=t_lane,
                     related_topics=top.get("related_topics", ""),
                     topic_description=top.get("topic_description", ""),
+                    machine_id=_claim(
+                        "topic", _usable_tag(t_tag, "topic", t_title, "")),
                 )
                 db.add(topic)
                 db.flush()
                 counts["topics"] += 1
+                if not t_tag:
+                    _identity_flag(
+                        "topic", t_title, "imported_without_machine_id",
+                        f"topic {t_title!r}: no machine id in the title cell; "
+                        "it will be minted on first use "
+                        "(imported_without_machine_id)")
+            else:
+                _restore_machine_id(topic, t_tag, "topic", t_title)
             topics[t_key] = topic
 
             # ---- Concept ----
             c_title = c_title_clean or "Concept"
+            c_tag = identity.title_tag(con.get("concept_title", ""))
             c_source = con.get("concept_source", "")
             c_key = (topic.id, c_title)
             concept = concepts.get(c_key)
@@ -398,13 +559,23 @@ def import_workbook(db: Session, path: Path) -> dict:
                     digicards=con.get("digicards", ""),
                     related_concepts=con.get("related_concepts", ""),
                     sources=c_source,
+                    machine_id=_claim(
+                        "concept", _usable_tag(c_tag, "concept", c_title, "")),
                 )
                 db.add(concept)
                 db.flush()
                 counts["concepts"] += 1
-            elif c_source:
-                # Same concept arriving from another book: accumulate sources.
-                concept.sources = merge_sources(concept.sources, c_source)
+                if not c_tag:
+                    _identity_flag(
+                        "concept", c_title, "imported_without_machine_id",
+                        f"concept {c_title!r}: no machine id in the title "
+                        "cell; it will be minted on first use "
+                        "(imported_without_machine_id)")
+            else:
+                _restore_machine_id(concept, c_tag, "concept", c_title)
+                if c_source:
+                    # Same concept from another book: accumulate sources.
+                    concept.sources = merge_sources(concept.sources, c_source)
             if con.get("parent_concept") and not concept.parent_concept:
                 concept.parent_concept = con.get("parent_concept", "")
             concepts[c_key] = concept

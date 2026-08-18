@@ -7,6 +7,7 @@ from app.services import build_concepts
 from app.services import concept_refiner as cr
 from app.services import concept_validator as cv
 from app.services import generation as g
+from app.services import identity
 from app.services import prompts
 
 
@@ -786,7 +787,7 @@ def test_chapter_meta_prompt_contract():
 
 
 # --------------------------------------------------------------------------- #
-# Question-label topic numbering: why it is NOT lane-scoped
+# Question-label topic numbering: the lane lives IN the id
 # --------------------------------------------------------------------------- #
 
 def _labelled_chapter(db, code: str, lanes: list[str], titles: list[str]):
@@ -819,30 +820,47 @@ def _labelled_chapter(db, code: str, lanes: list[str], titles: list[str]):
     return concepts
 
 
-def test_topic_numbering_is_chapter_wide_so_pre_labels_cannot_collide(db):
-    """``_topic_index`` must NOT be scoped to the learning lane.
+def test_topic_numbering_is_lane_scoped_because_the_id_carries_the_lane(db):
+    """The rebuild ``_topic_index``'s own docstring named as the real fix.
 
-    ``question_label`` carries a literal ``_PL_`` and no lane discriminator,
-    so numbering each lane from 1 makes a Pre label byte-identical to a Post
-    label whenever same-position topics carry the same concept title. That
-    is not cosmetic: ``assessment_release_service`` builds ``existing_labels``
-    from a global ``Question`` query and silently skips a candidate whose
-    label already exists, and ``question_label`` has no unique constraint —
-    so the colliding question is never created, with no flag (R4).
+    ``_topic_index`` was deliberately NOT lane-scoped, and it recorded why:
+    ``question_label`` carried a literal ``_PL_`` and no lane discriminator,
+    so numbering each lane from 1 made a Pre label byte-identical to a Post
+    label whenever same-position topics carried the same concept title. That
+    was never cosmetic: ``assessment_release_service`` builds
+    ``existing_labels`` from a global ``Question`` query and silently skips a
+    candidate whose label already exists, and ``question_label`` has no
+    unique constraint — so the colliding question was never created, with no
+    flag (R4). Its docstring closed by naming the per-topic/per-concept ID
+    minting rebuild of §10 step 8 as the real fix.
 
-    Giving the label a lane discriminator is the §10 step-8 ID-minting
-    rebuild. Until then this pins the numbering that keeps the two lanes
-    apart, and pins WHY, so the lane scoping is not reintroduced alone.
+    That rebuild is S4, and this test is re-authored against it in the same
+    commit that deletes ``_topic_index``. The lane now sits INSIDE the id as
+    a ``PL``/``PrL`` token, so the numbering is lane-scoped — both topics are
+    ``T01`` — and the two labels still cannot collide. The chapter-wide index
+    is gone, and with it the reason it existed.
     """
     post, pre = _labelled_chapter(
         db, "10CBMA_Collide", ["Post", "Pre"], ["Ratio Basics", "Ratio Basics"],
     )
 
-    assert g._topic_index(post) == 1
-    assert g._topic_index(pre) == 2, (
-        "the Pre topic must keep a distinct number; lane-scoped numbering "
-        "would make both 1 and the two labels identical"
+    assert not hasattr(g, "_topic_index"), (
+        "the chapter-wide topic index is retired; the lane token in the "
+        "machine id replaced it"
     )
+    post_id = identity.machine_id_for_concept(post)
+    pre_id = identity.machine_id_for_concept(pre)
+    db.commit()
+
+    assert post_id.endswith("_PL_T01_C01"), post_id
+    assert pre_id.endswith("_PrL_T01_C01"), pre_id
+    assert identity.topic_position(post.topic) == 1
+    assert identity.topic_position(pre.topic) == 1, (
+        "the numbering IS lane-scoped now; the lane token, not the number, "
+        "is what keeps the two families apart"
+    )
+    assert g.question_label(post, 1) == f"{post_id} Q01"
+    assert g.question_label(pre, 1) == f"{pre_id} Q01"
     assert g.question_label(post, 1) != g.question_label(pre, 1)
 
 

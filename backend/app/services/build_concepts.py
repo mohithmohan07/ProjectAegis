@@ -45,6 +45,7 @@ from . import (
     drive_checkpoints,
     generation,
     grounding_certificate,
+    identity,
     instruction_architect,
     mmd,
     openai_usage,
@@ -570,16 +571,23 @@ def _find_or_create_topic(
     db: Session, chapter: models.Chapter, topic_title: str, pre_post: str,
 ) -> models.Topic:
     display_name = bi.strip_topic_title(topic_title) or topic_title
-    normalized_title = bi.normalize_question_text(display_name)
+    # T4-6: the third of four live topic identities, converged on the one
+    # shared normaliser in ``services.identity``.
+    normalized_title = identity.topic_identity(topic_title)
     for t in chapter.topics:
-        stored_title = bi.strip_topic_title(t.topic_title) or t.topic_title
         if (
             t.pre_post_learning == pre_post
-            and bi.normalize_question_text(stored_title) == normalized_title
+            and identity.topic_identity(t.topic_title) == normalized_title
         ):
-            # The accepted topology owns presentation as well as placement.
-            # Reuse the identity, but do not retain stale casing/numbering.
-            t.topic_title = topic_title
+            # The stored ``topic_title`` is NEVER rewritten to the incoming
+            # casing. [measured, real SQLite session] that rewrite is the
+            # reproducible cause of the Master-upload refusal class MC6
+            # declared unfindable: depositing "Growth and Reproduction" and
+            # then re-running with "growth and reproduction" reused the row,
+            # renamed it, and the next
+            # ``_resolve_snapshot_concept_ids`` raised UploadRefused
+            # ("does not have one exact published identity") against a
+            # title nobody had edited. Match leniently, write nothing.
             if t.topic_display_name != display_name:
                 t.topic_display_name = display_name
             return t

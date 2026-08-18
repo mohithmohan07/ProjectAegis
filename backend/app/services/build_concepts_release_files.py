@@ -15,6 +15,7 @@ from openpyxl.utils import get_column_letter
 from .. import models
 from . import concept_run_report
 from . import containers
+from . import identity
 from . import coverage_ledger
 from . import uploads
 from .build_concepts_release import (
@@ -169,7 +170,7 @@ def build_release_bulk_import_workbook(
     for concept in concepts:
         for topic in sorted(
             bi_writer._concept_placements(concept),
-            key=bi_writer._source_order_key,
+            key=identity.source_order_key,
         ):
             for column, value in enumerate(
                 bi_writer._concept_to_row(
@@ -214,9 +215,8 @@ def transient_release_hierarchy(
     release = dict(payload) if isinstance(payload, Mapping) else release_payload(job)
     if release is None:
         raise ValueError("this upload has no staged release")
-    source_chapter = db.get(
-        models.Chapter, int(release.get("target_chapter_id") or 0)
-    )
+    target_chapter_id = int(release.get("target_chapter_id") or 0)
+    source_chapter = db.get(models.Chapter, target_chapter_id)
     if source_chapter is None:
         raise ValueError("the release target chapter no longer exists")
     directory = release.get("directory_metadata")
@@ -268,9 +268,16 @@ def transient_release_hierarchy(
     chapter.id = -1
     topics_by_key: dict[str, models.Topic] = {}
     concepts: list[models.Concept] = []
-    for index, record in enumerate(records, start=1):
+    chapter_key = identity.chapter_key(chapter, chapter_id=target_chapter_id)
+    # T4-5: ``source_order`` is reconciled to PER-TOPIC here. It was the
+    # chapter-wide record index in this export while
+    # ``build_concepts_release_publication`` used the per-topic position, so
+    # any ``C##`` read off it meant two different things on the two sides of
+    # one publication.
+    concept_positions: dict[str, int] = {}
+    for record in records:
         topic_title = str(record.get("topic") or "").strip()
-        key = topic_title.casefold()
+        key = identity.topic_identity(topic_title)
         topic = topics_by_key.get(key)
         if topic is None:
             topic = models.Topic(
@@ -281,6 +288,17 @@ def transient_release_hierarchy(
             topic.source_order = len(topics_by_key) + 1
             topic.chapter = chapter
             topic.chapter_id = chapter.id
+            # These rows are NEVER persisted, so ``machine_id_for_topic``
+            # refuses to mint on them (T4-7: a transient row must not invent
+            # an identity a persisted row will later contradict). They are
+            # stamped HERE instead, off the same (chapter key, lane,
+            # per-topic position) the publication will use, so the staged id
+            # and the published id are the same string.
+            topic.machine_id = identity.compose_topic_machine_id(
+                chapter_key,
+                identity.lane_token(pre_post),
+                topic.source_order,
+            )
             topics_by_key[key] = topic
         title = str(
             record.get("concept_title") or record.get("concept") or ""
@@ -301,8 +319,11 @@ def transient_release_hierarchy(
                 or ""
             ),
         )
-        concept.id = -index
-        concept.source_order = index
+        concept.id = -len(concepts) - 1
+        concept_positions[key] = concept_positions.get(key, 0) + 1
+        concept.source_order = concept_positions[key]
+        concept.machine_id = identity.compose_concept_machine_id(
+            topic.machine_id, concept.source_order)
         concept.topic = topic
         concepts.append(concept)
 

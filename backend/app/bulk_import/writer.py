@@ -25,7 +25,7 @@ from . import (
 from . import layouts
 from . import workbook_sync
 from .. import models
-from ..services import directory
+from ..services import directory, identity
 
 _BAND_FILL = {
     "Chapter": "FCE4D6", "Topic": "FFF2CC", "Concept": "D9EAD3",
@@ -344,15 +344,6 @@ def _concept_placements(c: models.Concept) -> list[models.Topic]:
     return out
 
 
-def _source_order_key(value) -> tuple[int, int]:
-    """Canonical position first; creation id only breaks legacy/tied rows."""
-    source_order = int(getattr(value, "source_order", 0) or 0)
-    return (
-        source_order if source_order > 0 else 10**9,
-        int(getattr(value, "id", 0) or 0),
-    )
-
-
 class ConceptExportScope:
     """The exact topology selected for one concept workbook/export.
 
@@ -370,7 +361,7 @@ class ConceptExportScope:
                 by_topic[topic.id][concept.id] = concept
 
         self.concepts_by_topic = {
-            topic_id: sorted(values.values(), key=_source_order_key)
+            topic_id: sorted(values.values(), key=identity.source_order_key)
             for topic_id, values in by_topic.items()
         }
         grouped_topics: dict[tuple[int, str], list[models.Topic]] = defaultdict(list)
@@ -379,7 +370,7 @@ class ConceptExportScope:
                 (topic.chapter_id, (topic.pre_post_learning or "").casefold())
             ].append(topic)
         self.topics_by_chapter_kind = {
-            key: sorted(values, key=_source_order_key)
+            key: sorted(values, key=identity.source_order_key)
             for key, values in grouped_topics.items()
         }
         self.topic_numbers = {
@@ -591,7 +582,7 @@ def _topic_number(
             sibling for sibling in topic.chapter.topics
             if sibling.pre_post_learning == topic.pre_post_learning
         ),
-        key=_source_order_key,
+        key=identity.source_order_key,
     )
     try:
         return siblings.index(topic) + 1
@@ -602,16 +593,24 @@ def _topic_number(
 def composed_topic_title(
     topic: models.Topic, export_scope: ConceptExportScope | None = None,
 ) -> str:
-    """Tagged topic title cell, e.g. 'Topic 01: <Title> (<tag>)'.
+    """Tagged topic title cell, e.g. 'Topic 01: <Title> (<machine id>)'.
 
     ``strip_topic_title`` normalizes the stored title first so an already-tagged
     value never gets a second 'Topic NN:'/code prefix.
+
+    The tag is the topic's PERSISTED ``machine_id``, read through
+    ``identity.machine_id_for_topic``, not ``directory.topic_tag``: that
+    function stamps ONE chapter-level code on every topic of the chapter, so
+    the cell could not tell two topics apart, and it re-derives from the
+    chapter title, so a rename re-keyed every row. The composition itself
+    lives in ``identity.titled`` — shared with the Master renderer, stripped
+    from neither (T14).
     """
-    chapter = topic.chapter
     clean = strip_topic_title(topic.topic_title) or topic.topic_title
-    t_tag = directory.topic_tag(
-        chapter.board, chapter.grade, chapter.subject, chapter.chapter_title)
-    return f"Topic {_topic_number(topic, export_scope):02d}: {clean} ({t_tag})"
+    return (
+        f"Topic {_topic_number(topic, export_scope):02d}: "
+        f"{identity.titled(clean, identity.machine_id_for_topic(topic))}"
+    )
 
 
 def composed_topic_display(topic: models.Topic) -> str:
@@ -633,17 +632,18 @@ def _concept_field_value(
     concept: models.Concept, topic: models.Topic, field: str, *,
     include_group_columns: bool, parent_column_present: bool,
 ) -> str:
-    chapter = topic.chapter
-    cp_tag = directory.concept_tag(
-        chapter.board, chapter.grade, chapter.subject,
-        chapter.chapter_title, topic.topic_title)
     # Parent Concept ships empty by team decision: concepts sit flat under
     # their topic. Blanking it here covers both the canonical column and the
     # legacy "parent: X" marker that older workbooks carried inside
     # related_concepts, so the grouping cannot leak out through either.
     parent = ""
     if field == "concept_title":
-        return f"{concept.concept_title} ({cp_tag})"
+        # The concept's own persisted id, not the topic-level
+        # ``directory.concept_tag`` every concept under the topic used to
+        # share (and which collapsed to ``..._X_PL_X`` for any non-Latin
+        # source, so two different Marathi chapters minted the same tag).
+        return identity.titled(
+            concept.concept_title, identity.machine_id_for_concept(concept))
     if field == "concept_display_name":
         return concept.concept_title
     if field == "parent_concept":
@@ -709,19 +709,11 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     concept_fields = concept_fields or CONCEPT_FIELDS
     parent_column_present = "parent_concept" in concept_fields
     # Column J lists each concept exactly as its concept_title column reads —
-    # the tagged "Name (tag)" form — so the importer links them (reviewers:
-    # "labels should be concept title, not concept display name").
-    cp_tag = directory.concept_tag(
-        chapter.board, chapter.grade, chapter.subject,
-        chapter.chapter_title, topic.topic_title)
-    label_concepts = (
-        export_scope.concepts_for(topic)
-        if export_scope is not None
-        else sorted(topic.concepts, key=_source_order_key)
-    )
-    concept_labels = ", ".join(
-        f"{strip_title_tag(c.concept_title) or c.concept_title} ({cp_tag})"
-        for c in label_concepts)
+    # the tagged "Name (machine id)" form — so the importer links them
+    # (reviewers: "labels should be concept title, not concept display
+    # name"). One roster, shared with the Master renderer (T14); the export
+    # scope is PASSED, never imported, so neither renderer imports the other.
+    concept_labels = identity.topic_concept_roster(topic, export_scope)
     if export_scope is not None:
         pre_topics = ", ".join(
             composed_topic_title(t, export_scope)
@@ -1101,8 +1093,8 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int]) -> dict[str
         .all()
     )
     concepts = sorted(concepts, key=lambda concept: (
-        _source_order_key(concept.topic),
-        _source_order_key(concept),
+        identity.source_order_key(concept.topic),
+        identity.source_order_key(concept),
     ))
     export_scope = ConceptExportScope(concepts)
     result = {
@@ -1263,13 +1255,13 @@ def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
         .all()
     )
     concepts = sorted(concepts, key=lambda concept: (
-        _source_order_key(concept.topic),
-        _source_order_key(concept),
+        identity.source_order_key(concept.topic),
+        identity.source_order_key(concept),
     ))
     export_scope = ConceptExportScope(concepts)
     next_row = 3
     for c in concepts:
-        for topic in sorted(_concept_placements(c), key=_source_order_key):
+        for topic in sorted(_concept_placements(c), key=identity.source_order_key):
             for i, value in enumerate(
                 _concept_to_row(
                     c,

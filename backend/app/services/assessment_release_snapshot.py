@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from .. import models
 from . import assessment_release as rel
 from . import build_concepts_release_files
+from . import identity
 
 
 class SnapshotError(ValueError):
@@ -134,18 +135,30 @@ def build(
         if concept_key in seen_keys:
             raise SnapshotError(f"duplicate release concept key {concept_key!r}")
         seen_keys.add(concept_key)
-        machine_id = f"REL{release_sha[:12].upper()}C{position:03d}"
+        # T4-4: the machine id comes off the PERSISTED column, not the
+        # release hash. It used to be f"REL{release_sha[:12].upper()}C###", so
+        # editing one character of any staged content re-minted every concept
+        # id — and with it every ``group_key`` and every ``question_label``
+        # built off it. ``source_release_sha256`` no longer participates in
+        # identity at all. Transient staged rows carry the id
+        # ``transient_release_hierarchy`` stamped, which is the same string
+        # the publication will persist.
+        machine_id = identity.machine_id_for_concept(concept)
+        if not machine_id:
+            raise SnapshotError(
+                f"staged concept row {position} has no machine identity"
+            )
         title = str(concept.concept_title or "").strip()
         display_name = str(concept.concept_display_name or "").strip()
         if not title or not display_name:
             raise SnapshotError(
                 f"staged concept row {position} has no explicit display name"
             )
-        identity = _record_identity(record, position)
+        row_identity = _record_identity(record, position)
         row = {
             "concept_key": concept_key,
             "concept_machine_id": machine_id,
-            "release_row_identity": identity,
+            "release_row_identity": row_identity,
             "concept_title": title,
             "concept_display_name": display_name,
             "parent_concept": str(concept.parent_concept or ""),
@@ -174,7 +187,7 @@ def build(
         route_concepts.append(route_row)
         provenance.append({
             "concept_key": concept_key,
-            "release_row_identity": identity,
+            "release_row_identity": row_identity,
         })
 
     rows_by_topic_object: dict[int, list[dict[str, Any]]] = {}
