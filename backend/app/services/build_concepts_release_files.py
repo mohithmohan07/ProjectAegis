@@ -27,7 +27,87 @@ from .build_concepts_release import (
     RELEASE_ROW_STATUS_FIELD,
     normalize_lane,
     release_payload,
+    release_state,
+    structural_defects,
 )
+
+
+# ---------------------------------------------------------------------- #
+# The owner's output numbering (OD4 / register entry D9-Q22), which is the
+# order the reviewer's list must read in:
+#
+#   01 Pre-Learning Concept File   02 Pre-Learning Master File
+#   03 Post-Learning Concept File  04 Post-Learning Master File
+#
+# then the evidence artifacts — the review workbook, the diagnostics zip
+# and the release JSON — which are NOT outputs and are never numbered.
+#
+# No ``kind`` string carries a digit, deliberately (T14): a kind spelling
+# an output NUMBER would have to be renamed by the next renumbering
+# ruling, and renaming a manifest kind is a frontend break.
+#
+# This lives here, in the module that owns the eager manifest, and the
+# lazy twin in ``build_concepts_release_manifest`` aliases it — the same
+# "one owner, no twin" resolution ``_safe_filename`` already got, for the
+# same reason: an ORDER that two implementations each define separately
+# is an order the monkeypatch in ``install()`` can silently disagree with.
+# ---------------------------------------------------------------------- #
+
+OUTPUT_KIND_ORDER: tuple[str, ...] = (
+    "pre_release_bulk_import",   # Output 01 · Pre-Learning Concept File
+    "pre_release_master",        # Output 02 · Pre-Learning Master File
+    "release_bulk_import",       # Output 03 · Post-Learning Concept File
+    "release_master",            # Output 04 · Post-Learning Master File
+)
+
+# The placeholder's stated reason. It says only what this module can
+# actually establish: that the entry is a placeholder and where the real
+# file will come from.
+#
+# It deliberately does NOT say "…which this run has not recorded". That
+# clause reads as a checked fact and is not one: this constant is
+# unconditional, so a job whose lane ALREADY has an ``AssessmentRelease``
+# row would be told something untrue about its own run. An inaccurate
+# reason is a smaller defect than the absent entry it replaces (R4), but
+# it is still a string that lies to a reviewer, and the check that would
+# make it true does not exist until S6 wires the release row in.
+_MASTER_UNAVAILABLE = (
+    "This lane's Master File is not available yet. It is served from the "
+    "lane's assessment release, which this manifest cannot yet address."
+)
+
+_XLSX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+
+def in_owner_order(
+    entries: Iterable[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Outputs 01-04 first in the owner's numbering, then everything else.
+
+    Pure mechanics — a stable sort on a fixed key. It reads no content and
+    decides nothing about meaning; it only fixes the sequence the reviewer
+    sees so that the four outputs are enumerated in one place, in one
+    order, in both lanes and in both manifest implementations.
+
+    It is applied at every assembly point rather than relying on the
+    literal order entries happen to be written in, so a later slice that
+    APPENDS ``release_master`` / ``pre_release_master`` at the end of a
+    block still lands them at positions 02 and 04. That is the whole
+    point: the order is fixed from here on and cannot be quietly
+    re-decided by whoever edits a list last.
+    """
+
+    rank = {kind: index for index, kind in enumerate(OUTPUT_KIND_ORDER)}
+    listed = [dict(entry) for entry in entries]
+    outputs = sorted(
+        (entry for entry in listed if entry.get("kind") in rank),
+        key=lambda entry: rank[entry["kind"]],
+    )
+    return outputs + [
+        entry for entry in listed if entry.get("kind") not in rank
+    ]
 
 
 _HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
@@ -54,8 +134,8 @@ def build_release_bulk_import_workbook(
     with the authored chapter/topic metadata applied, and the database stays
     untouched.
 
-    ``lane`` names the staged slot: ``"post"`` projects Output 01, ``"pre"``
-    Output 03. The published-concept shortcut reads the ids the lane's OWN
+    ``lane`` names the staged slot: ``"post"`` projects Output 03, ``"pre"``
+    Output 01. The published-concept shortcut reads the ids the lane's OWN
     publication recorded — ``job.result_ids`` belongs to the Post lane, so
     serving the Pre workbook from it would hand a reviewer the Post rows
     under a Pre filename.
@@ -113,7 +193,15 @@ def transient_release_hierarchy(
     *,
     payload: Mapping[str, Any] | None = None,
 ) -> tuple[models.Chapter, list[models.Concept], list[dict[str, Any]]]:
-    """Build the one transient hierarchy shared by Outputs 01 and 02.
+    """Build the one transient hierarchy a lane's Concept and Master share.
+
+    LANE-GENERIC, and named that way deliberately. ``payload`` is resolved
+    by the caller — ``build_release_bulk_import_workbook:161`` passes the
+    PRE payload when asked for the Pre lane — so this builds the Post pair
+    (Outputs 03/04) or the Pre pair (Outputs 01/02) depending on what it is
+    handed. Naming one pair here would be wrong for half the callers. This
+    is T14's own remedy for `assessment_release_run.py:1459`, the one
+    string OD4 rules must stop naming a lane rather than be renumbered.
 
     The staged release records are the concept authority.  The target chapter
     supplies only directory metadata; no persisted Topic or Concept row is
@@ -654,7 +742,7 @@ def build_diagnostics_zip(
     prelearn_snapshot = _artifact_snapshot(
         "source.phase3-prelearn-capture.json"
     )
-    # Outputs 03/04 as SHIPPED: the coverage plan and generated questions
+    # Outputs 01/02 as SHIPPED: the coverage plan and generated questions
     # the run authored, and the staged Pre release that carries them. With
     # these the reviewer sees what the Pre lane produced AND what actually
     # shipped, in RUN_REPORT.txt, without opening any artifact JSON.
@@ -797,7 +885,11 @@ def _pre_release_entries(
     *,
     sizes: bool,
 ) -> list[dict[str, Any]]:
-    """Outputs 03/04's manifest rows, or none when the run built no Pre lane.
+    """Outputs 01/02's manifest rows, or none when the run built no Pre lane.
+
+    (Numbered under the owner's ruling OD4 / register entry D9-Q22: the
+    Pre lane is 01/02 and the Post lane 03/04. Earlier text in this repo
+    called the same pair "Outputs 03/04"; it is superseded, not wrong.)
 
     NOTE FOR ANY LATER EDITOR: this function has a TWIN in
     ``build_concepts_release_manifest.py``, whose ``install()`` rebinds
@@ -815,7 +907,41 @@ def _pre_release_entries(
     stem = _safe_filename(job.filename, "concepts")
     query = f"?lane={LANE_PRE}"
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
-    return [
+    return in_owner_order([
+        {
+            # Output 01 · Pre-Learning Concept File.
+            #
+            # ``size_bytes`` is 0 even in this eager block: the builder
+            # needs a database session and a manifest block has none.
+            # Advertising the entry with an unmeasured size is what the
+            # reviewer needs; a size is not.
+            "kind": "pre_release_bulk_import",
+            "label": "Download the Pre-Learning Concept File",
+            "filename": f"{stem}_pre_bulk_import.xlsx",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}"
+                f"/release-bulk-import.xlsx{query}"
+            ),
+            "action": "download",
+        },
+        {
+            # Output 02 · Pre-Learning Master File. Present and disabled
+            # with a stated reason, never absent — an absent entry is the
+            # defect this manifest exists to close, and the reviewer who
+            # cannot see four outputs in one place cannot check that four
+            # exist. The release row it is served from arrives later.
+            "kind": "pre_release_master",
+            "label": "Pre-Learning Master File",
+            "filename": "",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": "",
+            "action": "download",
+            "disabled": True,
+            "disabled_reason": _MASTER_UNAVAILABLE,
+        },
         {
             "kind": "released_pre_concepts",
             "label": "Download released Pre-Learning output",
@@ -874,8 +1000,15 @@ def _pre_release_entries(
             "action": "post",
             "disabled": uploaded,
             "requires_confirmation": True,
+            # The lane's release state, and — when that state is
+            # ``diagnostic_release`` — what made it one. Computed and
+            # surfaced by no endpoint before this, so a reviewer facing a
+            # publication the gate will refuse saw a live button and no
+            # reason. Downloads are never blocked by either (Rule E).
+            "release_state": release_state(payload),
+            "structural_defects": structural_defects(payload),
         },
-    ]
+    ])
 
 
 def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
@@ -885,7 +1018,36 @@ def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
     workbook = build_release_workbook(job)
     diagnostics = build_diagnostics_zip(job)
     raw_payload = release_payload_bytes(job)
-    return [
+    stem = _safe_filename(job.filename, "concepts")
+    return in_owner_order([
+        {
+            # Output 03 · Post-Learning Concept File. Same builder as
+            # Output 01, same route, no ``lane`` parameter — so no
+            # already-published URL moves.
+            "kind": "release_bulk_import",
+            "label": "Download the Post-Learning Concept File",
+            "filename": f"{stem}_bulk_import.xlsx",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}"
+                f"/release-bulk-import.xlsx"
+            ),
+            "action": "download",
+        },
+        {
+            # Output 04 · Post-Learning Master File — the disabled
+            # placeholder, present so the ORDER is fixed from here on.
+            "kind": "release_master",
+            "label": "Post-Learning Master File",
+            "filename": "",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": "",
+            "action": "download",
+            "disabled": True,
+            "disabled_reason": _MASTER_UNAVAILABLE,
+        },
         {
             "kind": "released_concepts",
             "label": "Download released output",
@@ -925,14 +1087,25 @@ def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
             "filename": "",
             "media_type": "application/json",
             "size_bytes": 0,
-            "download_url": f"/build-concepts/uploads/{job.id}/upload-release",
+            # The publish URL states its lane, and the four DOWNLOAD URLs
+            # above do not. That asymmetry is the point: the publish
+            # endpoint refuses a blank or absent lane (a defaulted
+            # publication is an authenticated write nobody named), so a
+            # lane-less publish URL here would be an affordance the
+            # server's own gate rejects.
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}"
+                f"/upload-release?lane={LANE_POST}"
+            ),
             "action": "post",
             "disabled": bool(
                 (payload.get("summary") or {}).get("database_uploaded")
             ),
             "requires_confirmation": True,
+            "release_state": release_state(payload),
+            "structural_defects": structural_defects(payload),
         },
-    ] + _pre_release_entries(job, sizes=True)
+    ] + _pre_release_entries(job, sizes=True))
 
 
 # The stable handle on the EAGER implementation.

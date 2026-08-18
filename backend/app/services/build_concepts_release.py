@@ -14,8 +14,8 @@ schema migration is required and checkpoint export retains the complete audit.
 
 **Two lanes, two sibling slots (spec T3).** One run produces all four
 outputs (Q3), so one job stages two release payloads: the Post-Learning
-one under ``RELEASE_KEY`` (Outputs 01/02) and the Pre-Learning one under
-the sibling ``PRE_RELEASE_KEY`` (Outputs 03/04). They are siblings, not a
+one under ``RELEASE_KEY`` (Outputs 03/04) and the Pre-Learning one under
+the sibling ``PRE_RELEASE_KEY`` (Outputs 01/02). They are siblings, not a
 lane-keyed sub-map inside one slot: a sub-map would change the Post
 payload's byte shape and every recorded release fixture. Which slot a
 payload came out of IS its lane — every reader that must know takes the
@@ -49,7 +49,7 @@ from . import generation, uploads
 
 RELEASE_VERSION = "aegis-concept-release-1"
 RELEASE_KEY = "_aegis_release_output"
-# The Pre-Learning sibling slot (spec T3). Outputs 03/04 live here; the
+# The Pre-Learning sibling slot (spec T3). Outputs 01/02 live here; the
 # key itself carries the lane.
 PRE_RELEASE_KEY = "_aegis_pre_release_output"
 LANE_POST = "post"
@@ -118,13 +118,13 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # Slice-5 Master Refiner decisions. Candidate and group units share one
     # private audit marker while retaining distinct decision kinds/policies.
     "_aegis_assessment_master_refinement",
-    # Output 03 (spec T3): the row-private marks the Pre release stamps on
+    # Output 01 (spec T3): the row-private marks the Pre release stamps on
     # every one of its concept rows. ``_aegis_release_lane`` says which
     # lane's slot the row shipped in, so a row lifted out of the payload
     # into a diagnostics export still says what it is; and
     # ``_aegis_pre_generated_questions`` carries the identities of the
-    # GENERATED questions Output 04 authored for that pre-concept, so a
-    # reviewer holding Output 03 can see what Output 04 shipped for each
+    # GENERATED questions Output 02 authored for that pre-concept, so a
+    # reviewer holding Output 01 can see what Output 02 shipped for each
     # row. Both ride the release for the reviewer's audit and are stripped
     # before DB upload like every other audit field; neither adds a
     # house-format section and neither is ever workbook-visible.
@@ -307,7 +307,7 @@ def normalize_lane(lane: object) -> str:
     """``"post"`` unless the caller explicitly asked for the Pre lane.
 
     Mechanics: a name lookup over two known slot names, defaulting to the
-    lane that existed before Outputs 03/04 did, so every caller that has
+    lane that existed before Outputs 01/02 did, so every caller that has
     not been told about the Pre lane keeps reading the Post slot.
     """
 
@@ -410,13 +410,13 @@ def pre_release_available(job: models.UploadJob) -> bool:
 def staged_generated_questions(
     job: models.UploadJob,
 ) -> list[dict[str, Any]] | None:
-    """The GENERATED questions the staged Pre release carries for Output 04.
+    """The GENERATED questions the staged Pre release carries for Output 02.
 
     None when there is no staged Pre release at all — which is different
     from a staged Pre release that authored no question, and the two must
     stay distinguishable: the first means "this run built no Pre lane",
     the second means "it built one and it is empty", and only the second
-    is a legal empty Output 04.
+    is a legal empty Output 02.
     """
 
     payload = release_payload(job, lane=LANE_PRE)
@@ -1291,9 +1291,17 @@ def _directory_metadata_for_release(
 ) -> dict[str, Any]:
     """Freeze the target Chapter fields later projections may consume.
 
+    LANE-GENERIC: [measured] both lanes call this — the Post staging path
+    at ``:1426`` and ``stage_pre_release`` at ``:2051`` — so it names no
+    output number. The pre-OD4 text said "the staged Output-01 payload"
+    and was already lane-specific for a helper that serves both; carrying
+    that forward as "Output-03" would have preserved the defect under a
+    new number. T14's remedy for the same shape is
+    ``assessment_release_run.py:1459``: stop naming a lane.
+
     Topic and Concept meaning comes from the released records. The Chapter is
     only a directory anchor, but even that metadata must travel with the staged
-    Output-01 payload: rereading a mutable Chapter after staging would let the
+    release payload: rereading a mutable Chapter after staging would let the
     same release seal produce different workbooks and model decisions.
     """
 
@@ -1520,7 +1528,7 @@ def _run_snapshot(
     which is also how they survive a resume that skips the whole phase-3
     run. Reading them back here is the same move
     ``concept_topology_contract.restored_prerequisites`` already makes,
-    and it keeps Outputs 03/04 out of the generation call chain entirely.
+    and it keeps Outputs 01/02 out of the generation call chain entirely.
 
     THREE states, kept distinguishable (R4) — this used to be two:
 
@@ -1532,7 +1540,7 @@ def _run_snapshot(
     Collapsing the third into the first is the failure this signature
     exists to prevent. An unreadable questions snapshot would otherwise
     be indistinguishable from "the lane authored no question", and
-    Output 04 would ship empty, flagless and ``ready`` with a chapter's
+    Output 02 would ship empty, flagless and ``ready`` with a chapter's
     worth of generated questions gone — "silently losing a learner's
     question is never recoverable" (CLAUDE.md). An unreadable map would
     be indistinguishable from a run that never reached Phase 03.
@@ -1573,12 +1581,16 @@ def _refine_pre_records(
     job: models.UploadJob,
     pre_map: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """The Refiner's designed hook, for Output 03 (§8.3).
+    """The Refiner's designed hook, for Output 01 (§8.3).
 
     ``release_refiner``'s docstring reserved this seam for "the Phase 03
     prerequisite (Pre) outputs — … the replacement outputs 03/04 join this
     seam when step 7 builds them", with an ``output_kind`` parameter so
-    they join without redesign. This is that join: the Pre rows carry the
+    they join without redesign. (That quotation is left verbatim; under
+    the owner's numbering — OD4 / register entry D9-Q22 — the same pair
+    of Pre-Learning files is Outputs 01/02. Renumbering the words inside
+    the quotation marks would make it a quotation of something nobody
+    wrote.) This is that join: the Pre rows carry the
     same rendered house format (Description + Achieving Mastery, plus the
     Misconception/ Error Analysis section its own Q1 inventory allotted),
     so the same whitelist mechanics apply unchanged — nothing about the
@@ -1663,7 +1675,7 @@ def stage_pre_release_from_run(
     inventory: Mapping[str, Any] | None = None,
     reason: str = "",
 ) -> dict[str, Any] | None:
-    """Stage Outputs 03/04 from this run's recorded Phase 03 snapshots.
+    """Stage Outputs 01/02 from this run's recorded Phase 03 snapshots.
 
     Never raises: the Pre lane must not be able to take down a finished
     Post release ("finished work always ships"). A failure is logged and
@@ -1721,7 +1733,7 @@ def stage_pre_release_from_run(
         progress.log(
             "The Pre-Learning outputs could not be staged "
             f"({type(exc).__name__}: {exc}); the Post-Learning release is "
-            "unaffected and ships. Outputs 03/04 are not available for this "
+            "unaffected and ships. Outputs 01/02 are not available for this "
             "run and their absence is recorded here rather than reported as "
             "an empty Pre map.",
             level="error",
@@ -1824,14 +1836,14 @@ def _account_for_source_identity(
     payload: dict[str, Any],
     inventory: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Identity accounting at Output 03's release boundary.
+    """Identity accounting at Output 01's release boundary.
 
     The owner steer of 17 Aug 2026 makes this mechanical and names both
     halves of the Pre lane: "no QID from the chapter's question/task
     inventory may appear anywhere in a Pre row **or the Pre release
-    payload**. That is identity accounting, not judgment". Output 04
+    payload**. That is identity accounting, not judgment". Output 02
     already does exactly this at its own boundary
-    (``assessment_release_run``); Output 03 is a Pre release too, and
+    (``assessment_release_run``); Output 01 is a Pre release too, and
     this is the same two acts, in the same order, over the same
     identities — reused from that module rather than re-implemented, so
     the two boundaries can never drift into disagreeing about what a
@@ -1861,7 +1873,7 @@ def _account_for_source_identity(
     stages a Pre release that records the refusal and ships no rows: the
     evidence still downloads, the database write is blocked
     (``structural_defects`` reads ``refused``), and the reviewer is told
-    exactly which identity was found. Losing Outputs 03/04 without a word
+    exactly which identity was found. Losing Outputs 01/02 without a word
     would be the R4 failure; halting the run would spend a finished
     Post release on a Pre-lane defect.
     """
@@ -1877,7 +1889,7 @@ def _account_for_source_identity(
     source_qids = premap.inventory_qids({"inventory": source})
     if not source_qids:
         return payload
-    # Output 03's audit channels. The shared set covers ``review_flags``
+    # Output 01's audit channels. The shared set covers ``review_flags``
     # and the Refiner's diff; ``issues`` is this payload's own, and it is
     # the reachable one — ``_pre_release_issues`` transcribes every
     # review flag into it verbatim, so a critic dissent naming the source
@@ -1888,11 +1900,26 @@ def _account_for_source_identity(
     payload = release_run._redact_audit_source_qids(
         payload, source_qids, audit_keys=audit_keys,
     )
+    # The two reviewer-visible strings below are RENUMBERED here, under the
+    # owner's ruling OD4 / register entry D9-Q22: this is the PRE lane, and
+    # the Pre-Learning Concept File is Output 01, not Output 03.
+    #
+    # T14's string table listed both against S9 because S9 is the slice it
+    # expected to open this file first. T14's own rule is "renumbered in the
+    # slice that already opens its file", and S3 opens it — so they are
+    # corrected now rather than left inverted for six more slices. They are
+    # live reviewer text, not comments: the second is the ``message`` of an
+    # issue that ships in the payload. [measured] no test asserts either
+    # string — ``tests/test_pre_release_lane_wiring.py:1551`` asserts the
+    # ``code``, which does not move.
+    #
+    # S9 still owns the surrounding REGION (the ``:1918-1975`` rewrite and
+    # the release-state split). Only the numbers move here.
     try:
         premap._refuse_source_qids(
             release_run._authored_surface(payload, audit_keys=audit_keys),
             list(source_qids),
-            where="the staged Pre-Learning release payload (Output 03)",
+            where="the staged Pre-Learning release payload (Output 01)",
         )
     except premap.PreExtractionError as exc:
         payload["records"] = []
@@ -1905,7 +1932,7 @@ def _account_for_source_identity(
         issues.append(_issue(
             code="pre_learning_source_identity_refused",
             message=(
-                "Output 03 was refused at its release boundary and ships "
+                "Output 01 was refused at its release boundary and ships "
                 "no rows: " + str(exc)
             ),
             phase="phase03",
@@ -1927,9 +1954,9 @@ def stage_pre_release(
     refinements: Mapping[str, Any] | None = None,
     snapshot_defects: Sequence[str] = (),
 ) -> dict[str, Any] | None:
-    """Stage Outputs 03/04 into the sibling slot on THIS job.
+    """Stage Outputs 01/02 into the sibling slot on THIS job.
 
-    Outputs 03 and 04 are projections of one accepted snapshot exactly as
+    Outputs 01 and 02 are projections of one accepted snapshot exactly as
     01 and 02 are (§4's first release invariant): the Pre concept rows and
     the generated questions authored against them are staged together,
     once, and every later projection reads this payload rather than
@@ -1937,7 +1964,7 @@ def stage_pre_release(
 
     Returns ``None`` — staging nothing — when the run built no Pre lane at
     all. That is not the same as an empty Pre map: a chapter that
-    genuinely assumes no prior knowledge stages a real, empty Output 03
+    genuinely assumes no prior knowledge stages a real, empty Output 01
     (``pre_map`` present with zero rows), while a run that never reached
     Phase 03 stages no sibling at all. Collapsing the two would make
     "this run has no Pre map" indistinguishable from "this chapter needs
@@ -2043,7 +2070,7 @@ def stage_pre_release(
         # downloads. The key stays, empty, so every reader of a release
         # payload finds the shape it expects.
         #
-        # Output 04's leak barrier still needs that identity set, and this
+        # Output 02's leak barrier still needs that identity set, and this
         # is exactly why it does not read it from here: it reads it from
         # the job's own inventory column and the Post sibling slot (see
         # ``assessment_release_run._generated_lane_source_qids``), which
@@ -2060,7 +2087,7 @@ def stage_pre_release(
         ]),
         "needed_for": _json_safe(source.get("needed_for") or {}),
         "analysis": _json_safe(source.get("analysis") or {}),
-        # Output 04's material, staged beside Output 03 so the pair is
+        # Output 02's material, staged beside Output 01 so the pair is
         # projected from one snapshot and the assessment lane never
         # re-derives Pre meaning.
         "generated_questions": _json_safe(generated),
@@ -2094,61 +2121,72 @@ def release_result(
     payload = release_payload(job, lane=resolved)
     if payload is None:
         raise ReleaseUnavailableError("this upload has no staged release")
-    if resolved == LANE_PRE:
-        summary = copy.deepcopy(payload.get("summary") or {})
-        query = f"?lane={LANE_PRE}"
-        return {
-            "job_id": job.id,
-            "lane": LANE_PRE,
-            "status": RELEASE_STATUS,
-            "released": True,
-            "release_state": release_state(payload),
-            "structural_defects": structural_defects(payload),
-            "database_uploaded": bool(summary.get("database_uploaded")),
-            "row_count": int(summary.get("row_count") or 0),
-            "affected_row_count": int(summary.get("affected_row_count") or 0),
-            "issue_count": int(summary.get("issue_count") or 0),
-            "generated_question_count": len(
-                payload.get("generated_questions") or []
-            ),
-            "release_workbook_url": (
-                f"/build-concepts/uploads/{job.id}/release.xlsx{query}"
-            ),
-            "release_bulk_import_url": (
-                f"/build-concepts/uploads/{job.id}"
-                f"/release-bulk-import.xlsx{query}"
-            ),
-            "diagnostics_url": (
-                f"/build-concepts/uploads/{job.id}/diagnostics.zip{query}"
-            ),
-            "release_payload_url": (
-                f"/build-concepts/uploads/{job.id}/release.json{query}"
-            ),
-            "database_upload_url": (
-                f"/build-concepts/uploads/{job.id}/upload-release{query}"
-            ),
-            "detail": job.detail,
-        }
     summary = copy.deepcopy(payload.get("summary") or {})
+    # ONE builder for both lanes.
+    #
+    # These were two branches, and the Post branch omitted five of the
+    # Pre branch's keys — ``lane``, ``release_state``,
+    # ``structural_defects``, ``generated_question_count`` and
+    # ``release_bulk_import_url``. The Post dict IS the terminal
+    # ``{"type": "result"}`` event of a Build Concepts run, so the Post
+    # lane's release state was computed by ``release_state`` and
+    # surfaced by nothing: a reviewer could be shown a finished run whose
+    # publication the structural gate would refuse, with no way to see
+    # that from the result. A lane-shaped answer to "what is this
+    # release?" is the defect; one shape, filled per lane, is the fix.
+    #
+    # The lane rides the query string, and for the four DOWNLOADS the Post
+    # lane's suffix is empty — those four URLs are byte-identical to the
+    # ones already published, so no reviewer's bookmark and no recorded
+    # URL moves.
+    #
+    # The PUBLISH url is the one exception, and deliberately so: the
+    # publish endpoint (``api/build_concepts.upload_released_output_to_
+    # database``) refuses a blank or absent lane, because a defaulted
+    # lane there is an authenticated write against a lane nobody named.
+    # A server that refuses a lane-less publication must not itself hand
+    # the reviewer a lane-less publish URL, so this one always states its
+    # lane — including "post", which the download URLs still leave
+    # implicit.
+    query = f"?lane={LANE_PRE}" if resolved == LANE_PRE else ""
+    publish_query = f"?lane={resolved}"
     return {
         "job_id": job.id,
+        "lane": resolved,
         "status": RELEASE_STATUS,
         "released": True,
+        "release_state": release_state(payload),
+        "structural_defects": structural_defects(payload),
         "database_uploaded": bool(summary.get("database_uploaded")),
         "row_count": int(summary.get("row_count") or 0),
         "affected_row_count": int(summary.get("affected_row_count") or 0),
         "issue_count": int(summary.get("issue_count") or 0),
+        # ALWAYS 0 on the Post lane, and that is the shape, not a count.
+        # ``generated_questions`` is a key only the Pre payload carries —
+        # the Post lane's questions belong to the assessment release, not
+        # to the concept release — so on Post this reads "the Post concept
+        # release does not carry generated questions", NOT "this run
+        # generated none". The identical key set is what makes one reader
+        # able to read both lanes; the alternative was omitting the key on
+        # Post, which is precisely the asymmetry this builder replaces.
+        "generated_question_count": len(
+            payload.get("generated_questions") or []
+        ),
         "release_workbook_url": (
-            f"/build-concepts/uploads/{job.id}/release.xlsx"
+            f"/build-concepts/uploads/{job.id}/release.xlsx{query}"
+        ),
+        "release_bulk_import_url": (
+            f"/build-concepts/uploads/{job.id}"
+            f"/release-bulk-import.xlsx{query}"
         ),
         "diagnostics_url": (
-            f"/build-concepts/uploads/{job.id}/diagnostics.zip"
+            f"/build-concepts/uploads/{job.id}/diagnostics.zip{query}"
         ),
         "release_payload_url": (
-            f"/build-concepts/uploads/{job.id}/release.json"
+            f"/build-concepts/uploads/{job.id}/release.json{query}"
         ),
         "database_upload_url": (
-            f"/build-concepts/uploads/{job.id}/upload-release"
+            f"/build-concepts/uploads/{job.id}/upload-release{publish_query}"
         ),
         "detail": job.detail,
     }

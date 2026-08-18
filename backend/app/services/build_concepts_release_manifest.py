@@ -10,7 +10,13 @@ from typing import Any
 
 from .. import models
 from . import build_concepts_release_files as release_files
-from .build_concepts_release import LANE_PRE, release_payload
+from .build_concepts_release import (
+    LANE_POST,
+    LANE_PRE,
+    release_payload,
+    release_state,
+    structural_defects,
+)
 
 
 # The filename stem comes from ``release_files``, which owns it.
@@ -23,6 +29,14 @@ from .build_concepts_release import LANE_PRE, release_payload
 # agree is only as good as the pieces they share. One owner, no twin.
 _safe_filename = release_files._safe_filename
 
+# The owner's output numbering and the order that follows from it come
+# from ``release_files`` too, for exactly the reason above: an order each
+# twin defines separately is an order ``install()`` can silently break.
+OUTPUT_KIND_ORDER = release_files.OUTPUT_KIND_ORDER
+in_owner_order = release_files.in_owner_order
+_MASTER_UNAVAILABLE = release_files._MASTER_UNAVAILABLE
+_XLSX_MEDIA_TYPE = release_files._XLSX_MEDIA_TYPE
+
 
 def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
     payload = release_payload(job)
@@ -30,7 +44,35 @@ def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
         return []
     stem = _safe_filename(job.filename, "concepts")
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
-    return [
+    return in_owner_order([
+        {
+            # Output 03 · Post-Learning Concept File. Same builder as
+            # Output 01, same route, no ``lane`` parameter — so no
+            # already-published URL moves.
+            "kind": "release_bulk_import",
+            "label": "Download the Post-Learning Concept File",
+            "filename": f"{stem}_bulk_import.xlsx",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}"
+                f"/release-bulk-import.xlsx"
+            ),
+            "action": "download",
+        },
+        {
+            # Output 04 · Post-Learning Master File — the disabled
+            # placeholder, present so the ORDER is fixed from here on.
+            "kind": "release_master",
+            "label": "Post-Learning Master File",
+            "filename": "",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": "",
+            "action": "download",
+            "disabled": True,
+            "disabled_reason": _MASTER_UNAVAILABLE,
+        },
         {
             "kind": "released_concepts",
             "label": "Download released output",
@@ -69,16 +111,28 @@ def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
             "filename": "",
             "media_type": "application/json",
             "size_bytes": 0,
-            "download_url": f"/build-concepts/uploads/{job.id}/upload-release",
+            # States its lane where the download URLs do not — the publish
+            # endpoint refuses a blank or absent lane, so a lane-less
+            # publish URL would be an affordance its own gate rejects.
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}"
+                f"/upload-release?lane={LANE_POST}"
+            ),
             "action": "post",
             "disabled": uploaded,
             "requires_confirmation": True,
+            "release_state": release_state(payload),
+            "structural_defects": structural_defects(payload),
         },
-    ] + _pre_entries(job, stem)
+    ] + _pre_entries(job, stem))
 
 
 def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
-    """Outputs 03/04, lazily — the twin of ``release_files``' own version.
+    """Outputs 01/02, lazily — the twin of ``release_files``' own version.
+
+    (Numbered under the owner's ruling OD4 / register entry D9-Q22: the
+    Pre lane is 01/02 and the Post lane 03/04. Earlier text in this repo
+    called the same pair "Outputs 03/04"; it is superseded, not wrong.)
 
     This module MONKEYPATCHES ``release_files.release_artifact_entries``
     (see ``install()``), so this list is the one production actually
@@ -98,7 +152,33 @@ def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
         return []
     query = f"?lane={LANE_PRE}"
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
-    return [
+    return in_owner_order([
+        {
+            # Output 01 · Pre-Learning Concept File.
+            "kind": "pre_release_bulk_import",
+            "label": "Download the Pre-Learning Concept File",
+            "filename": f"{stem}_pre_bulk_import.xlsx",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": (
+                f"/build-concepts/uploads/{job.id}"
+                f"/release-bulk-import.xlsx{query}"
+            ),
+            "action": "download",
+        },
+        {
+            # Output 02 · Pre-Learning Master File — the disabled
+            # placeholder, present so the ORDER is fixed from here on.
+            "kind": "pre_release_master",
+            "label": "Pre-Learning Master File",
+            "filename": "",
+            "media_type": _XLSX_MEDIA_TYPE,
+            "size_bytes": 0,
+            "download_url": "",
+            "action": "download",
+            "disabled": True,
+            "disabled_reason": _MASTER_UNAVAILABLE,
+        },
         {
             "kind": "released_pre_concepts",
             "label": "Download released Pre-Learning output",
@@ -151,8 +231,10 @@ def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
             "action": "post",
             "disabled": uploaded,
             "requires_confirmation": True,
+            "release_state": release_state(payload),
+            "structural_defects": structural_defects(payload),
         },
-    ]
+    ])
 
 
 def install() -> None:
