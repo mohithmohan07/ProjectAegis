@@ -43,6 +43,8 @@ backend/data/aegis.db*
 backend/data/uploads/
 # Verified page batches from the GPT PDF-to-ACSD reader, keyed by content.
 backend/data/pdf-acsd-cache/
+# Durable content-addressed store for published image crops (Q8 step 10).
+backend/data/source-asset-store/
 # The append-only generation output is runtime state, not source.
 backend/data/bulk_import_output.xlsx
 *.aegis-checkpoint.json

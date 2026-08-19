@@ -22,6 +22,7 @@ import copy
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import shutil
@@ -41,6 +42,9 @@ from . import canonical_source_phase21_structure as structure
 from . import canonical_source_phase22 as phase22
 from . import katex_rules as kr
 from . import progress
+from . import source_asset_store
+
+_LOGGER = logging.getLogger(__name__)
 
 # Part of every transcription cache key: bump on any material change to the
 # extraction/verification contract so sealed pages re-derive under the new
@@ -86,7 +90,9 @@ _ALLOWED_KINDS = (
     "math",
     "other",
 )
-_BBOX_RE = re.compile(r"^[0-9a-f]{64}\.jpg$")
+# The content-addressed filename shape is owned by the durable store; one
+# owner keeps the mint and both serve paths from drifting apart.
+_BBOX_RE = source_asset_store.CONTENT_FILENAME_RE
 _SPACE_RE = re.compile(r"\s+")
 _WORD_RE = re.compile(r"[^\W_]{3,}", re.UNICODE)
 _CACHE_DIR = config.DATA_DIR / "pdf-acsd-cache"
@@ -2156,10 +2162,88 @@ def materialize_visual_assets(
                     _atomic_write_bytes(destination, data)
                 block["asset_filename"] = filename
                 block["asset_url"] = asset_url(job_id, filename)
+                try:
+                    source_asset_store.pin_asset(
+                        data,
+                        job_id=int(job_id),
+                        asset_url=block["asset_url"],
+                        public_base_url=_public_base_url(),
+                    )
+                except Exception as exc:
+                    # Durability degradation is recorded, never a halt: the
+                    # job-dir copy still serves and the run completes (Q13).
+                    # progress.log is a no-op outside a stream, so the module
+                    # logger keeps un-streamed lanes (authoring scripts,
+                    # recovery tooling) from losing the record.
+                    message = (
+                        f"Durable pin failed for source asset {filename} "
+                        f"({exc}); the crop still serves from this job's "
+                        "artifact directory but will not survive a reset or "
+                        "source replacement until re-pinned."
+                    )
+                    progress.log(message, level="warning")
+                    _LOGGER.warning(message)
                 count += 1
     finally:
         document.close()
     return count
+
+
+def pin_existing_job_assets() -> int:
+    """Backfill the durable store from every job's on-disk crops.
+
+    Assets minted before the store existed live only under their job's
+    artifact directory, so the URLs already embedded in published content
+    would still die with that directory. Idempotent and cheap once caught up
+    (two existence checks per crop), so it runs at every boot.
+    """
+    from . import uploads
+
+    root = Path(config.UPLOAD_DIR)
+    if not root.is_dir():
+        return 0
+    helper = getattr(uploads, "source_artifact_directory", None)
+    pinned = 0
+    for job_dir in sorted(root.iterdir()):
+        if not job_dir.is_dir() or not job_dir.name.isdigit():
+            continue
+        job_id = int(job_dir.name)
+        artifact_dir = (
+            helper(job_id) if helper is not None
+            else root / str(job_id) / canonical_source.ARTIFACT_DIRNAME
+        )
+        asset_dir = Path(artifact_dir) / ASSET_DIRNAME
+        if not asset_dir.is_dir():
+            continue
+        for crop in sorted(asset_dir.iterdir()):
+            if not crop.is_file() or not _BBOX_RE.fullmatch(crop.name):
+                continue
+            if (
+                source_asset_store.stored_asset_path(crop.name).exists()
+                and source_asset_store.manifest_path(crop.name).exists()
+            ):
+                continue
+            data = crop.read_bytes()
+            try:
+                url = asset_url(job_id, crop.name)
+            except ValueError:
+                # No public https origin configured (local runs); the hash is
+                # the identity, the URL is only provenance.
+                url = ""
+            stored_name = source_asset_store.pin_asset(
+                data, job_id=job_id, asset_url=url
+            )
+            if stored_name != crop.name:
+                # The file's bytes no longer match its content-hash name; the
+                # published URL for this name cannot be honestly backfilled.
+                _LOGGER.warning(
+                    "source asset %s in job %s does not match its content "
+                    "hash (stored as %s); its published URL stays job-bound",
+                    crop.name, job_id, stored_name,
+                )
+            else:
+                pinned += 1
+    return pinned
 
 
 def _escape_latex_cell(value: object) -> str:

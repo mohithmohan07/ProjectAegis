@@ -245,6 +245,30 @@ A multi-machine production deployment should move run metadata and events to
 managed PostgreSQL and large checkpoint/upload artifacts to private object
 storage; the portable bundle remains the human-controlled backup.
 
+### Backups (the volume is learner-facing infrastructure)
+
+Published workbooks embed absolute image URLs that resolve from `/data`, so the
+volume's durability is part of the product (decision Q8). Three layers exist:
+
+- **Fly volume snapshots** — taken daily by Fly automatically; `fly.toml` pins
+  `snapshot_retention = 30`. Restore with
+  `fly volumes snapshots list <volume-id>` and
+  `fly volumes create aegis_data --snapshot-id <id>`.
+- **Durable asset store** — every image crop is pinned at creation into
+  `/data/source-asset-store/` under its sha256 content hash, next to a JSON
+  manifest entry per asset. The public route falls back to this store, so
+  published image URLs survive a data reset, a source replacement, and
+  re-conversion. **Data reset intentionally preserves this directory**; delete
+  it manually only if breaking every published image link is the goal.
+  `GET /admin/source-asset-store/export` (admin token) downloads the whole
+  store as `source-asset-store.tar.gz` — an off-box recovery package: unpack it
+  into a fresh volume's `/data` to make every published image URL resolve
+  again, and the migration input for the designed UpSchool URL rewrite.
+- **Drive checkpoint mirror** — optional (`AEGIS_DRIVE_CHECKPOINT_BACKUP_*`),
+  covers Build Concepts checkpoint bundles only: job fields, converted MMD,
+  checkpoint, inventory. It does **not** cover the SQLite DB, the Bulk Import
+  workbooks, uploaded PDFs, or image assets.
+
 ## Tests
 
 ```bash

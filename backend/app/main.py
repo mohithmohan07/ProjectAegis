@@ -1,3 +1,4 @@
+import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -45,6 +46,21 @@ def bootstrap() -> None:
         syllabus_svc.bootstrap_syllabus(db)
     finally:
         db.close()
+    # Backfill the durable asset store from crops minted before it existed,
+    # so URLs already embedded in published content survive job-dir loss.
+    # Best-effort: a failed sweep is recorded, never a failed boot.
+    try:
+        from .services import canonical_source_phase221_fallback as page_acsd
+
+        pinned = page_acsd.pin_existing_job_assets()
+        if pinned:
+            logging.getLogger(__name__).info(
+                "durable asset store backfilled %d crop(s)", pinned
+            )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "durable asset store backfill sweep failed", exc_info=True
+        )
 
 
 @asynccontextmanager

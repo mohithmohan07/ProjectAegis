@@ -56,8 +56,22 @@ rewrite will walk; the hash→bytes mapping plus minted-URL provenance is exactl
 corpus migration needs.
 
 Serving falls back to the store when the job path misses. That single fallback repairs
-failure modes 2, 3, and 4 for every URL whose asset was ever minted on this volume, and
-also heals the checkpoint-import wrinkle (imported bundles referencing an old job_id).
+failure modes 2, 3, and 4 for every URL whose asset is pinned, and also heals the
+checkpoint-import wrinkle (imported bundles referencing an old job_id).
+
+Mint-time pinning alone would leave the entire pre-change corpus unpinned (the audit's
+one HIGH finding: the phase-3 lane short-circuits materialization whenever `asset_url`
+is already stamped, so existing jobs never re-mint). Two mechanical repairs close it:
+a boot-time backfill sweep (`pin_existing_job_assets`, called from `bootstrap()`,
+best-effort and idempotent — a failed sweep is a logged warning, never a failed boot;
+a crop whose bytes no longer match its content-hash name is recorded, not silently
+pinned under a name it doesn't own), and an opportunistic serve-time pin when a request
+hits the job-dir copy of a crop the store lacks.
+
+The manifest's identity is the content hash; the sidecar's job/URL fields are first-mint
+provenance, not identity. The later corpus rewrite keys on the hash in the URL filename
+and may ignore the job segment — later jobs referencing the same bytes deliberately get
+no second entry.
 
 A store write failure during generation is a recorded warning (`progress.log`), never a
 raise — the job-dir asset still exists, the run completes, durability degradation is
@@ -102,7 +116,11 @@ asset mirroring rides better on the designed UpSchool migration.
 On 404 (file in neither location) the endpoint logs a structured warning (job_id,
 filename, whether the sig validated). No DB writes on an unauthenticated route (abuse
 surface). The silence, not the miss, is the defect (R4 spirit; a serve-time miss is not a
-run event, so no Fixer involvement — map §8).
+run event, so no Fixer involvement — map §8). A shape-invalid name (not a content hash)
+is refused without a log line — that is a malformed request, not a lost asset. The
+pin-failure record during generation is emitted through BOTH `progress.log` (streamed
+runs) and the module logger (authoring scripts and recovery tooling run without a
+progress stream, where `progress.log` is a documented no-op).
 
 Losing argument: *a durable DB miss-ledger auditable in-app.* Rejected: write
 amplification on a public route; logs already surface the event operationally.
@@ -118,7 +136,10 @@ amplification on a public route; logs already surface the event operationally.
    `reset_all` and after job-artifact deletion.
 4. **Backup** — fly.toml retention, admin export endpoint, README section.
 
-New tests live in `backend/tests/test_source_asset_durability.py`. Regressions proved
+New tests live in `backend/tests/test_data_reset_durable_assets.py` (named to sort
+directly after `test_data_reset.py`: the suite tolerates a mid-session DB reset only at
+that point in the alphabet — a pre-existing order fragility, see the PR residues). The
+regressions are proved
 fail-without-fix by neutralising the fix (list in the PR body). Frozen paths untouched:
 no `backend/app/services/phase3/`, no `backend/tests/golden/`, no frontend/, acceptance
 test verbatim, `backend/data/Testing/` untouched.
