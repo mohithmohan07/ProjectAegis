@@ -274,7 +274,10 @@ def test_deposit_fatal_validator_errors_use_typed_exception(
         lambda *_args, **_kwargs: {
             "ok": False,
             "errors": [{
-                "code": "rich_text_format",
+                # S11 (T10-2): the typed-exception pin rides a BLOCKING
+                # code now — ``rich_text_format`` ships flagged and no
+                # longer raises anything.
+                "code": "required",
                 "severity": "error",
             }],
             "summary": {"warnings": 0},
@@ -283,7 +286,7 @@ def test_deposit_fatal_validator_errors_use_typed_exception(
 
     with pytest.raises(
         build_concepts.DepositValidationError,
-        match="rich_text_format",
+        match="required",
     ):
         build_concepts._deposit_concepts(
             db,

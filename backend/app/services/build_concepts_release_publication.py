@@ -493,6 +493,18 @@ def upload_release_to_database(
                 else:
                     identity.machine_id_for_concept(
                         concept, position=source_order)
+                if not str(concept.machine_id or "").strip():
+                    # T9-1 B1 (Round 9): a row still blank after the mint
+                    # is unaddressable — no question can ever name it as
+                    # its home — and this act is where machine ids exist,
+                    # so this is where the blank blocks the write.
+                    raise ValueError(
+                        f"staged row {position} "
+                        f"({rec['concept_title']!r}) could not be minted a "
+                        "machine identity, so no question could ever name "
+                        "it; the publication is refused rather than "
+                        "persisting an unaddressable row"
+                    )
                 db.flush()
                 created_ids.append(concept.id)
                 claimed_ids.add(concept.id)
@@ -511,9 +523,53 @@ def upload_release_to_database(
             # Mints only when the adopted row is a legacy blank (the mint
             # the export predicted); a row with an id keeps it verbatim.
             identity.machine_id_for_concept(existing, position=source_order)
+            if not str(existing.machine_id or "").strip():
+                # T9-1 B1 (Round 9): same refusal as the create branch —
+                # an adopted row the mint could not identify stays out of
+                # the published set rather than shipping unaddressable.
+                raise ValueError(
+                    f"staged row {position} ({rec['concept_title']!r}) "
+                    "could not be minted a machine identity, so no "
+                    "question could ever name it; the publication is "
+                    "refused rather than persisting an unaddressable row"
+                )
             existing.sources = bi.merge_sources(existing.sources, source_book)
             db.flush()
             merged_ids.append(existing.id)
+
+        # T9-1 B1 (Round 9): a duplicate persisted machine id in this
+        # chapter+lane is two rows one identity — every ``group_key`` and
+        # ``question_label`` built off it collides, and
+        # ``assessment_release_service`` then skips questions silently
+        # (R4). Checked HERE, at the publication act, because the payload
+        # never carries ids (S10) so ``structural_defects`` cannot see
+        # them. Pure identity counting over persisted rows.
+        minted_rows = (
+            db.query(models.Concept)
+            .join(models.Topic)
+            .filter(
+                models.Topic.chapter_id == chapter.id,
+                models.Topic.pre_post_learning == pre_post,
+                models.Concept.machine_id != "",
+            )
+            .all()
+        )
+        rows_by_machine_id: dict[str, list[int]] = {}
+        for row in minted_rows:
+            rows_by_machine_id.setdefault(
+                str(row.machine_id).strip(), []).append(row.id)
+        duplicated = sorted(
+            machine_id
+            for machine_id, ids in rows_by_machine_id.items()
+            if len(ids) > 1
+        )
+        if duplicated:
+            raise ValueError(
+                "duplicate persisted machine identity in this chapter's "
+                f"{pre_post} lane: {', '.join(duplicated)}; two rows "
+                "sharing one identity is data corruption, so the "
+                "publication is refused"
+            )
 
         active_ids = sorted(set(created_ids + merged_ids))
         # Freshly inserted concepts are not in the chapter's already-loaded

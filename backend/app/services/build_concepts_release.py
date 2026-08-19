@@ -646,6 +646,35 @@ DIAGNOSTIC_RELEASE = "diagnostic_release"
 STAGED_ROW_DEFECTS_FIELD = "staged_row_defects"
 STAGED_ROW_UNUSABLE = "staged_row_unusable"
 
+# T9-1's closed concept-lane identity set (S11): issue codes that name an
+# IDENTITY corruption and therefore block the database write. Enumerated,
+# never derived — extending it is a deliberate spec change, not a one-line
+# edit. T9-2's stays-flags list (``unassigned_inventory_qid``,
+# ``case_uniqueness_qid_render_count_mismatch``,
+# ``case_uniqueness_example_less_case_shell``) is deliberately absent.
+# T9-1's machine-id pair (a duplicate persisted id, a row still blank
+# after the mint) is NOT here and cannot be: machine ids exist only on
+# persisted rows, never in this payload (S10), so those two block at the
+# publication act, where the ids exist (Round 9, correcting Round 8's
+# mis-assignment).
+T9_IDENTITY_DEFECT_CODES = frozenset({
+    "duplicate_qid_assignment",
+    "unknown_type_case_qid",
+    "case_uniqueness_duplicate_case_identity",
+    "case_uniqueness_duplicate_qid_route",
+    "type_catalog_unreadable",
+})
+
+# Round 9: the QC audit's blocking findings ride their OWN named key.
+# V2/T10-0 ordered them onto ``snapshot_defects`` — and [measured] that
+# reader stamps every entry "an input snapshot could not be read", a false
+# factual preamble on a coverage finding, and the Pre lane's issue minting
+# turned each one into a spurious ``pre_learning_snapshot_unreadable``.
+# The receipt may not claim a fact nobody measured, so the blocking set
+# gets a key whose reader says what it is; ``snapshot_defects`` keeps its
+# original meaning (input-artifact unreadability) on both lanes.
+QC_BLOCKING_FIELD = "qc_blocking_defects"
+
 
 def row_projection_defect(
     row: object, position: int,
@@ -916,8 +945,91 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
                 f"so publishing this release would deposit it nowhere: "
                 f"{message}"
             )
+    # T9-1 (S11): the concept lane's CLOSED identity set. A recorded issue
+    # whose code names an identity corruption — the same QID placed twice,
+    # a rendered QID the inventory never owned, a duplicate rendered Case
+    # identity or QID route, a Type catalog that would not parse — blocks
+    # the DATABASE WRITE, never a download. [measured] before this,
+    # ``duplicate_qid_assignment`` was an ordinary (error-severity) issue
+    # that this gate simply never read, so a duplicate QID published
+    # without complaint while keyword checks halted finished runs — the
+    # exact polarity T9 inverts. The set is CLOSED and enumerated: T9-2
+    # keeps ``unassigned_inventory_qid`` (a coverage verdict — R4 says
+    # Placed OR Flagged) and the two text-derived ``case_uniqueness_*``
+    # codes (``qid_render_count_mismatch``, ``example_less_case_shell``)
+    # as flags, because a reviewer reword of ``concept_details`` must
+    # never refuse the upload on a deterministic prose comparison (§7:577).
+    #
+    # Round 9, twice over: (a) FAIL CLOSED like the row gate above — a
+    # payload with no ``issues`` key at all (restored from an export,
+    # built by another caller) recomputes the identity issues from its own
+    # ``mined_types``/inventory rather than passing on absence; (b) NO
+    # severity carve-out — T9-1 conditions blocking on the CODE, and a
+    # display severity must not be a one-word side door out of a set whose
+    # own comment says extending it is a spec change.
+    recorded_issues = (
+        payload.get("issues")
+        if "issues" in payload
+        else _recomputed_identity_issues(payload, records)
+    )
+    for issue in recorded_issues or []:
+        if not isinstance(issue, Mapping):
+            continue
+        code = _normal(issue.get("code"))
+        if code in T9_IDENTITY_DEFECT_CODES:
+            defects.append(
+                f"identity corruption recorded by the release audit "
+                f"({code}): {_normal(issue.get('message'))}"
+            )
+    # Round 9: the QC audit's blocking findings, under their own honest
+    # preamble — never the input-snapshot sentence, which states a fact
+    # these findings did not measure.
+    for defect in payload.get(QC_BLOCKING_FIELD) or []:
+        text = _normal(defect)
+        if text:
+            defects.append(
+                f"the release QC audit recorded a blocking finding: {text}"
+            )
     defects.extend(_pre_lane_verdict_defects(payload))
     return defects
+
+
+def _recomputed_identity_issues(
+    payload: Mapping[str, Any], records: object,
+) -> list[dict[str, Any]]:
+    """The T9 identity issues, recomputed from the payload's own material.
+
+    Pure, like the row-defect recompute above: ``audit_type_cases`` and
+    ``_case_uniqueness_issues`` are functions of the payload's
+    ``mined_types`` and inventory, so a payload stripped of its recorded
+    ``issues`` cannot pass the identity gate on absence alone.
+    """
+
+    mined = payload.get("mined_types")
+    inventory = payload.get("question_task_inventory")
+    try:
+        _rows, issues, _routes = audit_type_cases(
+            dict(mined) if isinstance(mined, Mapping) else {},
+            dict(inventory) if isinstance(inventory, Mapping) else {},
+        )
+    except Exception as exc:  # noqa: BLE001 — named and blocking, never a void
+        issues = [_issue(
+            code="type_catalog_unreadable",
+            message=(
+                "the identity recompute could not read the staged "
+                f"mined-Type material ({type(exc).__name__}: {exc}); the "
+                "release cannot pass the identity gate on absence"
+            ),
+            severity="error",
+            phase="type_case_release",
+        )]
+    issues = list(issues)
+    issues.extend(_case_uniqueness_issues(
+        [row for row in (records if isinstance(records, list) else [])
+         if isinstance(row, Mapping)],
+        mined,
+    ))
+    return issues
 
 
 def _pre_lane_verdict_defects(payload: Mapping[str, Any]) -> list[str]:
@@ -1412,17 +1524,28 @@ def audit_type_cases(
     return output, issues, routes
 
 
-_QUESTION_TEXT_NOISE_RE = re.compile(r"[^0-9a-z ]+")
+# T10-5 (S11): Unicode-aware, and the key casefolds first. [measured] the
+# old class (``r"[^0-9a-z ]+"``) deleted every uppercase letter and every
+# non-Latin character, so the repeated-question audit was inert for
+# Devanagari sources, for capitalised wording, and for any recased text —
+# the audit that stops one learner meeting the same question twice could
+# not read most of what learners actually read.
+_QUESTION_TEXT_NOISE_RE = re.compile(r"[^\w\s]+", re.UNICODE)
 # Only a LEADING item marker — "(2)", "3.", "b)", "(iv)". Digits inside the
-# question are part of it ("What is 2 + 3?") and must survive.
+# question are part of it ("What is 2 + 3?") and must survive. A shape
+# judgment that survives deliberately: it decides that a leading "(iv)" is
+# numbering rather than part of the question, and it is recorded in
+# docs/release-qc-checklist.md as a named residue rather than called
+# "exact wording".
 _QUESTION_ITEM_MARKER_RE = re.compile(
     r"^\(?\s*(?:[0-9]{1,3}|[a-z]|[ivxl]{1,5})\s*[\).:]\s+"
 )
 
 
 def _question_text_key(value: object) -> str:
-    """Compare questions by their words, not their punctuation or numbering."""
-    text = _QUESTION_ITEM_MARKER_RE.sub("", _normal(value))
+    """Compare questions by their words — not punctuation, case or
+    numbering."""
+    text = _QUESTION_ITEM_MARKER_RE.sub("", _normal(value).casefold())
     text = _QUESTION_TEXT_NOISE_RE.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -1442,9 +1565,14 @@ def _repeated_question_issues(
             continue
         key = _question_text_key(row.get("example_prompt"))
         qid = _normal(row.get("example_qid"))
-        if len(key) < 25 or not qid:
-            # Very short prompts ("Why?", "Explain.") legitimately recur as
-            # the tail of different questions; they are not a repeat.
+        if not key or not qid:
+            # No wording or no identity — nothing to compare. The
+            # ``len(key) < 25`` threshold that stood here was a character
+            # count deciding whether two questions are the same question
+            # (T10-5); a short repeat is now REPORTED as one grouped
+            # warning a reviewer dismisses in one glance — reporting a
+            # collision is identity accounting, suppressing it was the
+            # judgment.
             continue
         seen = qids_by_text.setdefault(key, [])
         if qid not in seen:
@@ -1485,13 +1613,29 @@ def _case_uniqueness_issues(
     rows = [dict(row) for row in records if isinstance(row, Mapping)]
     if not rows:
         return []
+    catalog_defects: list[dict[str, Any]] = []
     try:
         _types, cases = p3_assemble._type_catalog(
             {"mined_types": dict(mined_types or {})
              if isinstance(mined_types, Mapping) else {}}
         )
-    except Exception:  # noqa: BLE001 - a malformed catalog never blocks release
+    except Exception as exc:  # noqa: BLE001 — named, never swallowed (T9-3)
+        # A catalog that will not parse used to silently disable this
+        # audit — ``except Exception: cases = {}`` with a comment calling
+        # that safety. It is a NAMED structural finding now: the audit
+        # still runs over what it can read, and the reviewer is told the
+        # gate ran half-blind instead of being led to believe it ran.
         cases = {}
+        catalog_defects.append(_issue(
+            code="type_catalog_unreadable",
+            message=(
+                "the staged mined-Type catalog could not be parsed "
+                f"({type(exc).__name__}: {exc}); the case-uniqueness audit "
+                "ran without its expected-example evidence"
+            ),
+            severity="error",
+            phase="type_case_release",
+        ))
     prompt_by_qid: dict[str, str] = {}
     for case in cases.values():
         for example in case.get("examples") or []:
@@ -1506,7 +1650,7 @@ def _case_uniqueness_issues(
             for qid, prompt in sorted(prompt_by_qid.items())
         ],
     )
-    return [
+    return catalog_defects + [
         _issue(
             code=f"case_uniqueness_{finding.get('code')}",
             message=str(finding.get("message") or ""),
@@ -1593,12 +1737,26 @@ _FINAL_TOPOLOGY_ARTIFACT = "source.phase31-final-topology-cache.json"
 _SETTLED_ROWS_ARTIFACT = "source.phase3-settled-rows.json"
 
 
-def _learner_analysis_count(rows: Iterable[Mapping[str, Any]]) -> int:
+def _analysis_allotment_count(rows: Iterable[Mapping[str, Any]]) -> int:
+    """Rows carrying the recorded Q1 allotment marker.
+
+    T10-6 (S11): this replaces ``_learner_analysis_count``, which counted
+    rows whose ``concept_details`` contained the English substring
+    "misconception" — a keyword vocabulary classifying content AND a count
+    deciding meaning, scored against the every-concept requirement Q1
+    retired, so a chapter that correctly followed Q1 scored low and had
+    its validated topology discarded. The allotment marker is a recorded
+    model verdict stamped at inventory adjudication, and the analysis
+    section rides with it by construction. A legacy cache with no markers
+    on either side now scores 0-0 and the CURRENT rows ship — no verdict,
+    no swap.
+    """
+
     return sum(
         1
         for row in rows
         if isinstance(row, Mapping)
-        and "misconception" in _normal(row.get("concept_details")).casefold()
+        and (row.get("_aegis_analysis_allotments") or [])
     )
 
 
@@ -1656,12 +1814,12 @@ def _validated_artifact_topology(
             for row in rows
             if isinstance(row, Mapping)
         ]
-        if best is None or _learner_analysis_count(candidate) > (
-            _learner_analysis_count(best)
+        if best is None or _analysis_allotment_count(candidate) > (
+            _analysis_allotment_count(best)
         ):
             best = candidate
-    if best is None or _learner_analysis_count(best) <= (
-        _learner_analysis_count(current_rows)
+    if best is None or _analysis_allotment_count(best) <= (
+        _analysis_allotment_count(current_rows)
     ):
         return None
     return best
@@ -1803,6 +1961,7 @@ def stage_release(
     error: Exception | None = None,
     reason: str = "",
     refinements: Mapping[str, Any] | None = None,
+    snapshot_defects: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Persist one release payload and clear every manual decision gate.
 
@@ -1810,6 +1969,15 @@ def stage_release(
     (docs/aegis-restructure.md §8.3): its changes, summary, review flags,
     and re-seal marker. ``None`` (callers that never entered the Refiner
     seam) stores no key; the payload stays byte-compatible.
+
+    ``snapshot_defects`` (S11, V2/T10-0): the Post lane's transport for
+    input-artifact and audit BLOCKING findings — the parameter and the
+    payload key ``stage_pre_release`` has carried since S9, gained here
+    because [measured] the audit's blocking set had NOWHERE to land on the
+    Post lane: the grep for ``"snapshot_defects"`` returned exactly the
+    read in ``structural_defects`` and the Pre write, so a blocking
+    finding on this lane would have been silently dropped — the failure
+    the audit exists to prevent.
     """
 
     checkpoint_value = copy.deepcopy(
@@ -1899,6 +2067,29 @@ def stage_release(
             severity="info",
         ))
 
+    # T10-0 (S11): the QC audit runs at STAGING, for both lanes,
+    # immediately before the payload dict is assembled — never at download
+    # time, never inside an artifact builder, never at the publication
+    # act. Its issues join the existing ledger; its blocking findings ride
+    # ``snapshot_defects``, which ``structural_defects`` reads.
+    from . import release_qc
+
+    qc_issues, qc_blocking = release_qc.audit({
+        "records": record_rows,
+        "issues": issues,
+        "question_task_inventory": inventory_value,
+        "mined_types": types_value,
+        "type_case_rows": type_case_rows,
+        "learning_kind": job.learning_kind,
+    })
+    issues.extend(qc_issues)
+    staged_snapshot_defects = [
+        _normal(defect) for defect in snapshot_defects if _normal(defect)
+    ]
+    qc_blocking_defects = [
+        _normal(defect) for defect in qc_blocking if _normal(defect)
+    ]
+
     annotated = _annotate_records(record_rows, issues, routes)
     summary = _release_summary(annotated, issues)
     target = int(
@@ -1958,6 +2149,15 @@ def stage_release(
         # staging-time row defect to live, and S8 closed exactly this
         # producer-with-no-consumer hole for ``unplaced``.
         STAGED_ROW_DEFECTS_FIELD: _json_safe(row_defects),
+        # S11 (V2) — the Post lane's input-artifact defect transport, in
+        # the exact shape ``stage_pre_release`` writes: normalised
+        # non-empty strings, defaulting to []. Dormant until a Post caller
+        # records one; kept for lane parity and for the honest reader
+        # (its entries really are unreadable-input findings).
+        "snapshot_defects": _json_safe(staged_snapshot_defects),
+        # Round 9 — the QC audit's blocking findings, on their own key
+        # with their own honest reader (see ``QC_BLOCKING_FIELD``).
+        QC_BLOCKING_FIELD: _json_safe(qc_blocking_defects),
         "type_case_rows": _json_safe(type_case_rows),
         "question_task_inventory": _json_safe(inventory_value),
         "extraction_provenance": _json_safe(provenance),
@@ -2676,10 +2876,29 @@ def stage_pre_release(
         generated.extend(copy.deepcopy(entry) for entry in authored)
 
     row_defects = staged_row_defects(raw_rows)
+    # T10-0 (S11): the QC audit's Pre-lane call, immediately before the
+    # payload dict is assembled. Its blocking findings join the
+    # input-artifact defects on the transport this lane already carries.
+    from . import release_qc
+
+    qc_issues, qc_blocking = release_qc.audit({
+        "records": raw_rows,
+        "issues": [],
+        "question_task_inventory": dict(inventory or {}),
+        RELEASE_LANE_FIELD: LANE_PRE,
+    })
+    # Round 9: QC blocking findings ride their OWN key. Folding them into
+    # ``snapshot_defects`` [measured] minted one spurious
+    # ``pre_learning_snapshot_unreadable`` issue per finding — a fake
+    # snapshot-corruption record for a coverage verdict.
+    qc_blocking_defects = [
+        _normal(defect) for defect in qc_blocking if _normal(defect)
+    ]
     issues = _pre_release_issues(
         source, questions_source, raw_rows, snapshot_defects,
         row_defects=row_defects,
     )
+    issues.extend(qc_issues)
     annotated = _annotate_records(raw_rows, issues, {})
     summary = _release_summary(annotated, issues)
     target = int(
@@ -2749,6 +2968,9 @@ def stage_pre_release(
         "snapshot_defects": _json_safe(
             [_normal(defect) for defect in snapshot_defects if _normal(defect)]
         ),
+        # Round 9 — the QC audit's blocking findings, on their own key
+        # (see ``QC_BLOCKING_FIELD``'s note).
+        QC_BLOCKING_FIELD: _json_safe(qc_blocking_defects),
         "refused": _normal(source.get("refused")),
         "pre_topics": _json_safe([
             topic for topic in source.get("topics") or []

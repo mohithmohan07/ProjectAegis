@@ -751,6 +751,14 @@ def test_two_concepts_sharing_one_label_base_do_not_mint_one_label_twice(
     assert minted == [f"{shared} Q01", f"{shared} Q02"]
     assert identity.next_label_index(db, shared) == 3
 
+    # The manufactured corruption stays scoped to THIS test: since S11 the
+    # publication act refuses a chapter carrying a duplicate persisted
+    # ``machine_id`` (T9-1 B1 — the very gate the docstring cites), so the
+    # shared fixture chapter must not keep the defect once the label
+    # property is proven.
+    db.get(models.Concept, second.id).machine_id = f"{shared}B"
+    db.commit()
+
 
 @pytest.mark.xfail(
     strict=True,

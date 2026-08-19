@@ -599,6 +599,13 @@ _POST_PAYLOAD_KEYS = {
     # with no place in the payload is a producer with no consumer — the
     # hole S8 closed for ``unplaced``, one lane over.
     "staged_row_defects",
+    # S11 (V2/T10-0) adds the input-artifact defect transport the Pre
+    # lane has carried since S9 (dormant parity until a Post caller
+    # records one), and Round 9 adds the QC audit's own blocking key —
+    # split from ``snapshot_defects`` because the snapshot reader's
+    # sentence was a false preamble on a coverage finding.
+    "snapshot_defects",
+    "qc_blocking_defects",
     "type_case_rows", "question_task_inventory", "extraction_provenance",
     "mined_types", "pending_decision_snapshot", "final_grounding_certificate",
     "chapter_meta", "instruction_set", "summary",

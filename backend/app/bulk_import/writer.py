@@ -124,18 +124,6 @@ def _sheet_name_for(wb, index: "WorkbookIndex", kind: str) -> str:
     return target
 
 
-def _identified_concept_fields(
-    sheet_name: str, header_row: tuple, kind: str = "objective", *,
-    mismatches: list[dict] | None = None,
-) -> list[str]:
-    """Concept-band columns of an identified sheet."""
-    return list(
-        _identified_sheet(
-            sheet_name, header_row, kind, mismatches=mismatches,
-        ).block_fields("concept")
-    )
-
-
 # --------------------------------------------------------------------------- #
 # T3.8 — a row that does not fit its sheet is RECORDED, never silently repaired
 #
@@ -523,24 +511,21 @@ class ConceptExportScope:
             (chapter.id, (learning_kind or "").casefold()), ()))
 
 
-class ConceptWorkbookValidationError(ValueError):
-    """Serialized concept workbook disagrees with its accepted DB topology."""
-
-
-_REGULAR_TYPE_NUMBER_RE = re.compile(
-    r"(?<!Miscellaneous )\bType\s+0*(\d+)\s*:",
-    re.IGNORECASE,
-)
-_HUB_PREFIX_RE = re.compile(
-    r"\bActivity\s*[—–-]\s*(?P<marker>[^:\n]{3,100})\s*:\s*"
-    r"(?P<gist>[^.!?\n]{3,})",
-    re.IGNORECASE,
-)
-
-
-def _api_question_placement_active() -> bool:
-    """Whether the rewritten Phase 3's routing rules own question placement."""
-    return True
+# T10-4 (S11): the read-back's finding is RECORDED, never a raise. The old
+# ``ConceptWorkbookValidationError`` had exactly two repo hits — its
+# definition and its raise — nothing caught it and no test pinned it, while
+# it gated both the mid-run deposit (after the model budget was spent) and
+# the explicit publication. The identity comparison below is a gate on an
+# artifact and stays exactly where it is (R5: the workbook is the database);
+# what changed is the CONSEQUENCE — one recorded, flagged, content-addressed
+# Fixer decision per validation pass, and the run completes (Q13). The
+# writer's two content judgments (the Activity-hub marker regex and the
+# culmination keyword/count/length block) and the dead split-Type branch
+# behind the constant-True ``_api_question_placement_active`` are deleted
+# outright: keyword vocabularies and thresholds judging model-authored
+# prose, Rule 1's forbidden bullets, with [measured] no test anywhere
+# pinning any of them firing.
+READBACK_TOPOLOGY_MISMATCH = "bulk_import_readback_topology_mismatch"
 
 
 def _validate_concepts_workbook_bytes(
@@ -549,8 +534,14 @@ def _validate_concepts_workbook_bytes(
     export_scope: ConceptExportScope,
     *,
     exact_rows: bool,
-) -> None:
-    """Read the serialized XLSX back and enforce final delivery invariants."""
+) -> list[dict]:
+    """Read the serialized XLSX back and verify final delivery identity.
+
+    Returns the recorded Fixer decisions ([] when the artifact agrees with
+    its accepted DB topology). Each finding batch is one content-addressed
+    decision, logged in full here because the fresh-workbook export paths
+    return bytes and have no decisions list to collect into.
+    """
     expected: dict[tuple[str, str, str, str], dict[str, str]] = {}
     for concept in concepts:
         for topic in _concept_placements(concept):
@@ -585,16 +576,7 @@ def _validate_concepts_workbook_bytes(
     try:
         sheet_name = SHEET_BY_KIND["objective"]
         ws = workbook[sheet_name]
-        header = next(
-            ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
-        concept_fields = _identified_concept_fields(sheet_name, header)
-        details_index = (
-            _IDX_CONCEPT_TITLE + concept_fields.index("concept_details"))
         seen: dict[tuple[str, str, str, str], int] = {}
-        type_hosts: dict[tuple[str, str], set[str]] = defaultdict(set)
-        rows_by_topic: dict[
-            tuple[str, str, str], list[tuple[str, str]]
-        ] = defaultdict(list)
         issues: list[str] = []
 
         for row in ws.iter_rows(min_row=3, values_only=True):
@@ -634,28 +616,6 @@ def _validate_concepts_workbook_bytes(
                 issues.append(
                     f"{topic_title}: stale topic_description was serialized")
 
-            details = _cell_str(row, details_index)
-            # A ConceptTag repeats the same concept under another topic but
-            # does not create a second semantic Type host.
-            host = normalize_question_text(concept_title)
-            for number in _REGULAR_TYPE_NUMBER_RE.findall(details):
-                type_hosts[(
-                    normalize_question_text(chapter_title),
-                    str(int(number)),
-                )].add(host)
-            for match in _HUB_PREFIX_RE.finditer(details):
-                marker = normalize_question_text(match.group("marker"))
-                gist = normalize_question_text(match.group("gist"))
-                if marker and gist.startswith(marker):
-                    issues.append(
-                        f"{concept_title}: Activity/Info Hub repeats its "
-                        "visible marker")
-            rows_by_topic[(
-                normalize_question_text(chapter_title),
-                normalize_question_text(topic_title),
-                normalize_question_text(learning_kind),
-            )].append((concept_title, details))
-
         missing = sorted(set(expected) - set(seen))
         if missing:
             issues.append(
@@ -663,42 +623,29 @@ def _validate_concepts_workbook_bytes(
         if exact_rows and any(count != 1 for count in seen.values()):
             issues.append(
                 "fresh concept export contains duplicate selected placements")
-        split_types = sorted(
-            f"{chapter}/Type {number}"
-            for (chapter, number), hosts in type_hosts.items()
-            if len(hosts) > 1)
-        if split_types and not _api_question_placement_active():
-            # Under the rewritten Phase 3 the house routing rules place
-            # each question on the concept it belongs to, so two questions
-            # of one Type can legitimately live on different hosts (their
-            # shared Type keeps its one chapter-wide number). The
-            # single-host expectation belongs to the legacy allocator.
-            issues.append(
-                "regular Type number(s) span multiple concept hosts: "
-                + ", ".join(split_types))
 
-        for topic_key, rows in rows_by_topic.items():
-            culminations = [
-                (title, details) for title, details in rows
-                if title.casefold().startswith("culmination")]
-            if not culminations:
-                continue
-            if len(culminations) != 1:
-                issues.append(
-                    f"{topic_key[1]}: expected one culmination row")
-                continue
-            culmination_title, _details = culminations[0]
-            if len(culmination_title) > 120:
-                issues.append(
-                    f"{topic_key[1]}: culmination title exceeds 120 chars")
-            # The culmination Description is the model-authored consolidation
-            # paragraph; the retired "Recap of <every title>" composition is
-            # no longer a read-back contract.
-
-        if issues:
-            raise ConceptWorkbookValidationError(
-                "concept workbook read-back validation failed: "
-                + "; ".join(dict.fromkeys(issues)))
+        if not issues:
+            return []
+        findings = list(dict.fromkeys(issues))
+        decision = _fixer_decision(
+            READBACK_TOPOLOGY_MISMATCH,
+            detail=(
+                "the serialized concept workbook disagrees with its "
+                "accepted DB topology; the artifact ships with this "
+                "recorded decision instead of being withheld — every "
+                "finding is named here for the reviewer (T10-4, Q13)"
+            ),
+            context={
+                "findings": findings,
+                "exact_rows": bool(exact_rows),
+            },
+        )
+        logging.getLogger(__name__).warning(
+            "bulk-import %s: %s", READBACK_TOPOLOGY_MISMATCH,
+            json.dumps(
+                decision, sort_keys=True, ensure_ascii=False, default=str),
+        )
+        return [decision]
     finally:
         workbook.close()
 
@@ -1407,16 +1354,22 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int],
             result["written"] += 1
     serialized = io.BytesIO()
     wb.save(serialized)
-    _validate_concepts_workbook_bytes(
+    # T10-4 (S11): a read-back disagreement is one recorded decision and
+    # the workbook still lands — the raise that used to sit here gated the
+    # mid-run deposit after the model budget was spent, and nothing ever
+    # caught it.
+    decisions.extend(_validate_concepts_workbook_bytes(
         serialized.getvalue(),
         concepts,
         export_scope,
         exact_rows=False,
-    )
+    ))
     workbook_sync.atomic_save_workbook(wb, path)
     for decision in decisions:
-        if decision["code"] == ROW_WIDTH_MISMATCH:
-            issues.append({"code": ROW_WIDTH_MISMATCH, **decision})
+        if decision["code"] in (
+            ROW_WIDTH_MISMATCH, READBACK_TOPOLOGY_MISMATCH,
+        ):
+            issues.append({**decision})
     if issues:
         result["issues"] = issues
     if decisions:
@@ -1573,6 +1526,10 @@ def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     data = buf.getvalue()
+    # T10-4 (S11): findings are recorded (the helper logs the full
+    # decision — this path returns bytes and has no decisions list), and
+    # the download ships. Withholding the file was the defect: nothing
+    # ever caught the raise, and Rule E says no defect blocks a download.
     _validate_concepts_workbook_bytes(
         data,
         concepts,

@@ -4879,3 +4879,195 @@ Residues accepted and named: umbrella rows now enter the deposit validation cont
 that never saw them (severity measured non-fatal; untested end-to-end), and two
 same-titled rows staged under ONE topic re-staged create beside their originals
 (ambiguity is never guessed) — both owed to S11's QC pass if they bite.
+
+### Round 8 — S11 pre-implementation delta: the map, the drift, and the slice decisions
+
+Three parallel re-reads at 79625c0 (the S11 spec text pinned to code; the generation
+polarity landscape; the writer read-backs and the release threshold) before any S11 code
+moves. Verdict on the S11 section: **substantively CURRENT throughout** — every named
+deliverable is still absent, every deletion target still present, every claimed gap still
+open — with ONE item already landed (`question_source` reads from the profile via S8's
+T12 threading, at `assessment_workbook._question_record`, with a recorded divergence: the
+profile default is `""` where T10-7 item 5 ruled "UpSchool DB") and every line coordinate
+stale (work proceeds by symbol; the re-resolved coordinates live in the map transcripts).
+Facts re-measured and confirmed: the exactly-two-hit `"snapshot_defects"` grep (the read
+in `structural_defects`, the write in `stage_pre_release` — S9's `staged_row_defects` is
+a DIFFERENT key and does not satisfy V2); `len(_FATAL_CODES) == 52`; the `strict=True`
+raise in `_repair_records_via_api` has no production caller; `require_parent=True` has no
+caller anywhere, so `required_parent` cannot currently fire; no test anywhere pins any of
+the five writer deletion targets FIRING, and nothing catches or pins
+`ConceptWorkbookValidationError`; umbrella-topic rows (Round 7's residue) fire NO
+fatal-family code structurally — measured, that residue is closed.
+
+**Slice decisions, with the losing argument where one existed.**
+
+* **S11-a (the polarity inversion).** `_BLOCKING_CODES = frozenset({"required",
+  "required_parent"})` per T10-2, a literal pinned by its own test. Both gates
+  (`_validate_final_or_raise`, the deposit gate in `build_concepts`) filter their raise
+  set on it; every other `_FATAL_CODES` finding becomes a review flag carried on the row
+  through the 6335fe6 `_carry_review_flags` machinery — no Fixer round for advisory
+  codes (the Fixer at these gates now only ever sees the two mechanics codes, for which
+  acceptance is refused and correction remains the final-gate option). `_FATAL_CODES`
+  keeps its name and its classify role; the repair selector (severity) is untouched, so
+  every judgment code still earns its bounded model correction. Gates 3b/3c (invalid
+  inventory identity, exact inventory coverage), the topology gate and the grounding
+  certificate are NOT `_FATAL_CODES` gates and keep raising — they are R4/identity
+  accounting. `_FIXER_UNACCEPTABLE_CODES` shrinks to the same two codes (T10-3). The
+  dead `strict=True` branch stays (its one caller is a script), recorded here.
+* **S11-b (the writer).** The five blocks delete as T10-4 orders. The surviving
+  identity read-back stops raising at BOTH call sites — the spec names only
+  `append_concepts`, but `write_concepts_workbook` calls the same helper; a de-raise
+  that left the export path raising would keep the exact class T10-4 retires, so the
+  helper returns its findings and each caller records them on its own transport (the
+  deposit path as record-only Fixer decisions riding `fixer_decisions`/`issues`, the
+  bytes-only export path through the full-record logging transport that exists for
+  precisely that shape). With no raise left and no catcher or test pinning it,
+  `ConceptWorkbookValidationError` is deleted; `semantic_recovery`'s
+  `_PERSISTENCE_PATTERNS` entry for its message becomes dead and is left in place,
+  recorded here (removing it is a classifier change S11 does not need).
+* **S11-c (the audit's own instruments).** T10-5 verbatim: threshold deleted, casefold
+  before the noise substitution, Unicode-aware noise class; one grouped collision issue
+  per shared wording; `_QUESTION_ITEM_MARKER_RE` survives as the checklist's named
+  residue. T10-6: `_learner_analysis_count` purged; the topology tie-break becomes the
+  recorded `_aegis_analysis_allotments` marker count, else the artifact's own recorded
+  completeness. T9-3: the swallowed `_type_catalog` exception becomes a named defect.
+* **S11-d (T9's concept-lane identity set feeds `structural_defects`).**
+  `duplicate_qid_assignment`, `unknown_type_case_qid`, `duplicate_case_identity`,
+  `duplicate_qid_route`, a duplicate persisted `machine_id`, and a staged row still
+  blank after the mint — all become structural defects (block the DB write, never a
+  download; `release_state` reads DIAGNOSTIC_RELEASE). T9-2's stays-flags list
+  (`unassigned_inventory_qid`, `qid_render_count_mismatch`, `example_less_case_shell`)
+  is pinned by the named negative-control regressions. The assessment-lane B1 codes
+  keep their D8.5b transport and are NOT routed through `structural_defects`.
+* **S11-e (release_qc + the transport).** NEW `app/services/release_qc.py` with T10-0's
+  exact signature, called from both staging functions immediately before payload
+  assembly; `issues` merges into the existing ledger, `blocking` rides
+  `payload["snapshot_defects"]` — which `stage_release` GAINS (key + parameter, in
+  `stage_pre_release`'s exact shape) with `_POST_PAYLOAD_KEYS` gaining the one key, as
+  V2 orders. The audit never raises and never runs inside an artifact builder. It calls
+  `coverage_ledger.build_coverage_ledger` and turns each `unaccounted` entry into a
+  named issue (item 22 — R4's enforcement stops being inert). ADDITION beyond the
+  spec's list, recorded as such: the audit also reads
+  `_aegis_pre_related_concepts_unresolved` — [measured] a producer with NO consumer
+  anywhere (its "RECORDED REVIEW FLAG" comment promises a record nothing makes) — and
+  reports each unresolved needed-for link as an informational issue; this is the same
+  producer-with-no-consumer closure S8/S9 made for `unplaced` and `staged_row_defects`.
+  T7.5's seven assessment-lane codes are reported as issues where present, never owned.
+  NEW `docs/release-qc-checklist.md` reconstructs the 23 SOP items from T10-7's rulings
+  — where T10-7 carries no gloss for an item number, the entry records the ruling class
+  and states plainly that the original wording is not in-repo — and enumerates the
+  reconstruction's own three additions (the repeated-question collision audit, the
+  type-catalog parseability defect, the unresolved needed-for reader) as the "three
+  extras", flagged for owner confirmation since the spec never named them.
+* **S11-f (`question_source` default).** The profile default moves `""` → "UpSchool DB"
+  per T10-7 item 5 ("it names the ORIGIN SYSTEM, not a school"); the acceptance
+  workbook comparison decides whether any fixture moves with it.
+
+**Test consequences, decided up front.** Sixteen S11-named regressions plus
+`tests/test_release_qc.py`, all currently absent. Re-authored:
+`test_final_repair_options_include_every_terminal_strict_contract` (asserts the two
+codes are NOT in `_BLOCKING_CODES` and still reach the repair pass) and
+`test_a_short_shared_tail_is_not_a_repeated_question` → `..._is_reported_as_a_collision`.
+Inverted: `test_final_validation_logs_every_fatal_with_exact_location` and the
+mastery/Q1 final-gate raise pins in `test_generation_validation_diagnostics` (their
+codes now ship flagged), and `test_concept_mapping_format`'s
+`verbatim_source_description` deposit raise. Amended:
+`test_mechanics_codes_are_never_acceptable_with_a_flag` (the duplicate-title pair
+leaves the mechanics set) and the phase3_fixer accept-path fixtures (their blocked
+codes no longer reach the gate Fixer; the accept machinery is re-pinned on a
+`_BLOCKING_CODES` correction flow or retired to the seams that still use it). Kept:
+`test_final_validation_rejects_missing_source_inventory` (gate 3c is identity), the
+topology and grounding pins, and every writer does-not-fire pin (they keep passing
+through the deletions). `_POST_PAYLOAD_KEYS` gains `"snapshot_defects"`.
+
+### Round 9 — the S11 audits and the repair
+
+Three adversarial audits (doctrine, correctness, blast-radius) ran against Round 8's
+implementation before it reached the branch. Every blocking finding was reproduced,
+repaired, and re-verified; this round is the record, including the places where Round 8's
+own text was the defect.
+
+**The blocking transport told a false story — repaired with its own key.** [measured, all
+three lenses] routing the audit's blocking strings onto ``snapshot_defects`` (V2's literal
+order) stamped every finding with the reader's "an input snapshot could not be read"
+preamble — a fact no coverage finding measured — and on the Pre lane minted one spurious
+``pre_learning_snapshot_unreadable`` error issue per finding. The review stream's notes
+(§5.1/§5.4) warned about exactly this. Repair: the blocking set rides the NEW
+``qc_blocking_defects`` key on both lanes, read by ``structural_defects`` under its own
+honest sentence; ``snapshot_defects`` keeps its original input-artifact meaning, and the
+Post lane's V2 key/parameter stay as the dormant parity transport they honestly are — now
+pinned by an explicit-parameter regression. V2 is AMENDED by this, and the amendment is
+this paragraph.
+
+**T9-1's machine-id pair, delivered where the ids exist.** Round 8's S11-d claimed the
+duplicate-persisted-id and blank-after-mint defects "become structural defects" — a
+structural impossibility its own S10 established, since the payload never carries ids.
+[measured] neither check existed anywhere, while two in-tree comments claimed the
+publication act enforced them. Delivered: the publication act now refuses a row still
+blank after the mint (create and merge branches both) and refuses when the chapter+lane
+holds a duplicate persisted machine id — identity counting over persisted rows, at Rule
+G's model-free act, downloads untouched. The identity/build_assessments comments that
+cited the gate are true now rather than corrected. T9-4's mint-time (board, grade,
+subject) scope remains undelivered and owner-visible as its own line item.
+
+**The audit can no longer void itself.** [measured] one try/except around all three
+passes let a later pass's crash discard a blocking finding the coverage pass had already
+computed — T9-3's voidable-gate shape rebuilt one layer up — and labeled payload
+corruption as a mere warning-of-record. Each pass now runs isolated; a failed pass
+contributes its own BLOCKING ``release_qc_unavailable`` finding (a net that could not run
+to completion certifies nothing), and an earlier pass's findings always survive.
+
+**The identity gate fails closed and takes no severity side door.** [measured] a payload
+with its ``issues`` key stripped passed the T9 closed-set read on absence — inconsistent
+with the row gate's fail-closed recompute one block above — and a warning-shaped
+``duplicate_qid_assignment`` slipped a set whose own comment brags that extending it is a
+spec change. Both repaired: no ``issues`` key → the identity issues are recomputed from
+the payload's own mined-Type material (an unreadable catalog during that recompute is
+itself the blocking ``type_catalog_unreadable``), and the severity carve-out is gone —
+T9-1 conditions blocking on the CODE. The gate's "[measured] warning-shaped" comment was
+also wrong about history (the issue was error-severity; the gate simply never read
+issues) and now says so.
+
+**Records that were promised and not made.** ``_flag_advisory_validation_findings``
+[measured] silently dropped a finding whose ``row_index`` did not resolve and logged only
+a count; it now logs every advisory finding per-finding (code, concept, message) and
+flags the row when one resolves — the log line is also the surviving per-finding record
+at the direct DB-deposit boundary, where the row flags die with the deposit's own copies.
+That boundary's deposit-only-finding gap (a defect first minted by deposit-only cleanup
+has no durable artifact record; the affected path is non-release internal tooling — the
+release path intercepts before this gate) is recorded in the checklist and owed to the
+owner rather than claimed solved. The stale F38/F39 deposit-Fixer comment now states the
+measured truth: the validation-gate Fixer round is structurally dead at deposit (blocking
+⊆ mechanics, rows sealed); the inventory seams keep their decisions.
+
+**Promised re-authorings, actually delivered this time.** ``test_final_repair_options_
+include_every_terminal_strict_contract`` now asserts the two judgment codes are outside
+``_BLOCKING_CODES`` while staying in the repair-driving fatal family (Round 8 claimed
+this and had not done it); the ``unallotted_analysis_section`` membership pin and the
+premap ``types_too_early`` rationale (module and test) no longer justify themselves with
+the retired blocking behaviour — the premap refusal stands on the Pre lane's own
+no-extraction contract. The gate-parity test ignores comments when reading source. Round
+8's "T7.5's seven codes are reported as issues where present" was an overclaim — no
+caller can supply artifacts today; the docstrings and checklist say "reserved", and that
+is the record.
+
+**Honesty items on the audit's own instruments.** The coverage net's blocking half is
+[measured] normally SHIELDED in the wired staging flow (``unassigned_inventory_qid``
+names every unplaced item; rendered examples count as placements) — it is a gap net for
+stale, stripped and legacy payloads and for future producers, the same class as the row
+gate's recorded-key case; the checklist now says so instead of "stops being inert", and
+also records the staging ledger's false-positive direction (no ``hub_placements``
+snapshot at staging). The flagged-and-issue-named duplicate warning is gone (one
+vocabulary). ``question_source`` keeps its two aligned literals (profile + bulk-import
+default), recorded. Dead code left by the deletions (``_identified_concept_fields``, an
+unused import) is removed; ``semantic_recovery``'s dead pattern stays, recorded in Round
+8. New pins land for: the failed-pass survival, the Pre-lane coverage skip, the explicit
+``snapshot_defects`` parameter, the warning-severity block, the stripped-issues
+fail-closed recompute, and both publication-act machine-id refusals.
+
+**Expanded owner register.** The checklist's "Open with the owner" now carries the
+review stream's uncovered items verbatim as questions — ``task_blocks_left_unruled`` vs
+R4, the asset split, language-mode ownership, observability of error-severity
+non-fatal-family codes, the open-polarity code list, the worked-method-anchor log-only
+record — plus the deposit-only-finding gap and T9-4's mint-time scope. Nothing in this
+round decides any of them.

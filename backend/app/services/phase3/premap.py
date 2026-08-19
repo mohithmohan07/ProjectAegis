@@ -655,13 +655,14 @@ def _map_checker(
 
     The one structural refusal is the no-extraction steer's other half:
     a Pre row carries no Types, Case or Example section. The module can
-    never MINT one, but the model can author one inside ``description``,
-    and ``types_too_early`` is in ``generation._FATAL_CODES`` while the
-    Pre lane has no Fixer at deposit yet — so shipping such a row merely
-    flagged would hand the deposit gate a row it must reject with no
-    Q13 route out. Catching it here instead gives the model its bounded
-    corrections and then The Fixer's one recorded decision, which is
-    where a mid-run defect belongs.
+    never MINT one, but the model can author one inside ``description``.
+    Since S11 the deposit gate would no longer reject such a row
+    (``types_too_early`` is fatal-family, not blocking — it would ship
+    flagged), but the no-extraction steer is the Pre lane's own CONTRACT:
+    a Types section on a Pre row is a map defect regardless of what a
+    later gate would do with it. Catching it here gives the model its
+    bounded corrections and then The Fixer's one recorded decision, which
+    is where a mid-run defect belongs.
     """
 
     expected = set(prerequisite_ids)

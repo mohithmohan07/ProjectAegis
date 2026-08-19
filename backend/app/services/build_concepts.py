@@ -806,7 +806,14 @@ def _deposit_concepts(
     # The Fixer (Q13, seams F38/F39/F40): the deposit twins of the
     # final-gate blocks reach the same content-addressed decisions — a QID
     # the Fixer placed at the final gate replays free here, so the deposit
-    # payload stays idempotent with the certified one.
+    # payload stays idempotent with the certified one. Since S11 that
+    # claim holds for the INVENTORY seams (F23/F24/F38) only: the
+    # validation-gate round below is structurally dead at deposit —
+    # ``_BLOCKING_CODES`` is a subset of the mechanics set, rows are
+    # sealed (``allow_corrections=False``), so the Fixer is skipped for
+    # every blocking row and a remaining ``required`` fails closed with no
+    # decision to record; advisory codes never reach the Fixer at all
+    # (they ship flagged, T10-2).
     from .phase3 import fixer as p3_fixer
 
     deposit_fixer = p3_fixer.default_provider() if pre_post == "Post" else None
@@ -925,17 +932,26 @@ def _deposit_concepts(
     # this boundary, so the Fixer may only accept-with-flag here; mechanics
     # codes are never acceptable and any remaining defect fails closed.
     fatal = generation._without_fixer_accepted(records, fatal)
-    if fatal and deposit_fixer is not None:
+    # T10-1/T10-2 (S11): the deposit gate filters its raise set on the SAME
+    # ``_BLOCKING_CODES`` allow-list as the final gate — split, there is a
+    # bisect point where every code blocks or none does. Advisory
+    # fatal-family findings ride the rows as review flags.
+    blocking, advisory = generation._split_blocking(fatal)
+    if blocking and deposit_fixer is not None:
         generation._fix_validation_failures_via_fixer(
-            records, fatal, stage="deposit", fixer=deposit_fixer,
+            records, blocking, stage="deposit", fixer=deposit_fixer,
             allow_corrections=False,
         )
         fatal = generation._without_fixer_accepted(records, fatal)
+        blocking, advisory = generation._split_blocking(fatal)
+    generation._flag_advisory_validation_findings(
+        records, advisory, stage="deposit")
     progress.log(
-        f"Deposit validation: {len(fatal)} fatal error(s), "
+        f"Deposit validation: {len(blocking)} blocking and "
+        f"{len(advisory)} flagged fatal-family error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
-    if fatal:
-        codes = ", ".join(sorted({e["code"] for e in fatal}))
+    if blocking:
+        codes = ", ".join(sorted({e["code"] for e in blocking}))
         raise DepositValidationError(
             f"concept validation failed before deposit: {codes}")
 

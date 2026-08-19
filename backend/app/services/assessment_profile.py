@@ -31,9 +31,13 @@ DEFAULT_PROFILE: dict = {
     # profile settles the fill practice).  Read ONLY through
     # ``forced_blank_fields`` below.
     "forced_blank_fields": ("chapter_duration", "question_disclaimer"),
-    # The wire value this school's Master rows carry in ``question_source``
-    # when a candidate declares none.
-    "question_source": "",
+    # The wire value Master rows carry in ``question_source`` when a
+    # candidate declares none. T10-7 item 5 (S11): it names the ORIGIN
+    # SYSTEM, not a school — [measured] every gold row carries
+    # "UpSchool DB" — so the origin-system default lives here rather than
+    # being an empty string a declared-none candidate turns into a blank
+    # learner-visible cell.
+    "question_source": "UpSchool DB",
     # The wire value this school's Master rows carry in ``group_status``
     # when a group declares none.
     "group_status": "Active",

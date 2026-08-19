@@ -12891,16 +12891,38 @@ _FATAL_CODES = {
 }
 
 
-# Mechanics, not meaning (CLAUDE.md Rule 1, Q13): schema/ID/duplicate-identity
-# codes name defects in the artifact's *identity*, not judgment calls about
-# content. The Fixer may correct the row, but these codes are NEVER
-# acceptable-with-flag — shipping two rows with one identity, or a row with
-# no identity at all, is data corruption the reviewer cannot repair.
+# THE POLARITY INVERSION (spec-step8 T10-1/T10-2, S11). ``_FATAL_CODES``
+# above keeps its name and its CLASSIFY role — the fatal FAMILY the
+# validator can emit — but the set that may HALT a run is this explicit
+# allow-list: schema presence, pure mechanics, nothing that reads meaning.
+# Every other fatal-family finding becomes a review flag carried on its row
+# (``_flag_advisory_validation_findings``) — recorded, reviewer-visible,
+# never a halt. [measured] the previous polarity blocked finished runs on
+# keyword lists, character thresholds and an English-stemmer overlap ratio
+# (``issue_section_overlap``: ``len(shared) >= 2 and shared/shorter >=
+# 0.8``) while a duplicate QID published without complaint — the exact
+# inversion of Rule 1 and T9. Identity, arithmetic, exactly-once and schema
+# blocking lives at the publication act (T9's closed set), not here.
+# A LITERAL, pinned by its own test, so "just add one more code to the
+# fatal set" is no longer a one-line change anyone can make quietly.
+_BLOCKING_CODES = frozenset({
+    "required",         # schema: a mandatory field is absent
+    "required_parent",  # schema: row lost its parent identity
+})
+
+
+# Mechanics, not meaning (CLAUDE.md Rule 1, Q13): schema codes name defects
+# in the artifact's *identity*, not judgment calls about content. The Fixer
+# may correct the row, but these codes are NEVER acceptable-with-flag — a
+# row with no identity at all is data corruption the reviewer cannot
+# repair. T10-3 (S11): the two duplicate-title codes left this set with the
+# blocking set — identity no longer depends on title text after T4, and
+# [measured] ``duplicate_topic_concept`` could not be cleared by any legal
+# Fixer move at the sealed deposit boundary, so two same-titled concepts
+# under one topic — a shape a real chapter produces — killed the run.
 _FIXER_UNACCEPTABLE_CODES = frozenset({
     "required",              # schema: a mandatory field is absent
     "required_parent",       # schema: row lost its parent identity
-    "duplicate_title",       # identity: two rows share one concept title
-    "duplicate_topic_concept",  # identity: duplicate (topic, concept) pair
 })
 
 
@@ -12951,6 +12973,57 @@ def _fatal_errors(report: dict) -> list[dict]:
         # for review instead of blocking the terminal gate.
         and str(e.get("severity") or "error") == "error"
     ]
+
+
+def _split_blocking(errors: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(blocking, advisory) under T10-2's allow-list. Pure classification."""
+
+    blocking = [e for e in errors if e.get("code") in _BLOCKING_CODES]
+    advisory = [e for e in errors if e.get("code") not in _BLOCKING_CODES]
+    return blocking, advisory
+
+
+def _flag_advisory_validation_findings(
+    records: list[dict], findings: list[dict], *, stage: str,
+) -> None:
+    """T10-2 (S11): a fatal-family finding outside ``_BLOCKING_CODES`` ships
+    as a review flag ON ITS ROW and as a per-finding warning in the run
+    log — never a halt. Idempotent per (row, flag), so gate re-runs and
+    checkpoint replays cannot stack copies. A finding whose ``row_index``
+    does not resolve (no live producer emits one, [verified]) is still
+    LOGGED in full — Round 9: the silent ``continue`` that stood here was
+    the exact skip shape R4 bans. On the direct DB-deposit boundary the
+    row flag travels only as far as the deposit's own record copies (the
+    recorded ``concept_cleanup`` asymmetry); the log line below is that
+    boundary's surviving per-finding record. The repair selector upstream
+    is untouched: every one of these codes still earned its bounded model
+    correction before reaching this gate; only the
+    destroy-on-second-failure went.
+    """
+
+    for error in findings:
+        code = str(error.get("code") or "")
+        message = _diagnostic_snippet(error.get("message") or "", limit=200)
+        row_index = error.get("row_index", -1)
+        row = (
+            records[row_index]
+            if isinstance(row_index, int) and 0 <= row_index < len(records)
+            else None
+        )
+        title = _diagnostic_snippet(
+            (row or {}).get("concept_title") or "<unresolved row>", limit=80)
+        progress.log(
+            f"  flagged validation finding ({stage}): code={code!r}; "
+            f"concept={title!r}; {message}",
+            level="warning",
+        )
+        if row is None:
+            continue
+        _fixer_flag_row(
+            row,
+            f"validation: {code} at the {stage} gate — ships flagged for "
+            f"review (T10-2); {message}",
+        )
 
 
 def _repair_records_via_api(
@@ -15696,12 +15769,15 @@ def _validate_final_or_raise(
 
     report = _run_report()
     fatal = _without_fixer_accepted(records, _fatal_errors(report))
-    if fatal and fixer is not None:
+    blocking, advisory = _split_blocking(fatal)
+    if blocking and fixer is not None:
         # The Fixer seam F22 (Q13): one recorded decision per failing row
         # — a corrected row (final gate; deposit rows are sealed) or an
         # explicit acceptance-with-flag — then the gate re-measures.
+        # T10-2 (S11): only ``_BLOCKING_CODES`` findings reach this round;
+        # everything else ships flagged below and needs no acceptance.
         changed = _fix_validation_failures_via_fixer(
-            records, fatal, stage=stage, fixer=fixer, store=fixer_store,
+            records, blocking, stage=stage, fixer=fixer, store=fixer_store,
             allow_corrections=stage != "deposit",
         )
         if changed and stage == "final":
@@ -15713,11 +15789,16 @@ def _validate_final_or_raise(
         if changed:
             report = _run_report()
         fatal = _without_fixer_accepted(records, _fatal_errors(report))
+        blocking, advisory = _split_blocking(fatal)
+    # T10-2: the advisory findings are RECORDED on their rows before the
+    # gate decides anything — a halted run must still leave the record.
+    _flag_advisory_validation_findings(records, advisory, stage=stage)
     progress.log(
-        f"{stage}: final validation found {len(fatal)} fatal error(s), "
+        f"{stage}: final validation found {len(blocking)} blocking and "
+        f"{len(advisory)} flagged fatal-family error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
-    if fatal:
-        for error in fatal:
+    if blocking:
+        for error in blocking:
             row_index, title, field, snippet = _validation_error_context(
                 records, error)
             progress.log(
@@ -15728,9 +15809,9 @@ def _validate_final_or_raise(
                 f"snippet={snippet!r}",
                 level="error",
             )
-        codes = ", ".join(sorted({e["code"] for e in fatal}))
+        codes = ", ".join(sorted({e["code"] for e in blocking}))
         first_index, first_title, first_field, _ = _validation_error_context(
-            records, fatal[0])
+            records, blocking[0])
         raise RuntimeError(
             f"{stage} validation failed: {codes}; first at "
             f"row_index={first_index}, concept={first_title!r}, "

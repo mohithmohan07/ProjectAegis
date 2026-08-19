@@ -272,9 +272,17 @@ def test_post_deposit_rejects_cases_without_numbered_examples(db):
         },
     ]
 
-    with pytest.raises(ValueError, match="case_without_example"):
-        build_concepts._deposit_concepts(
-            db, chapter, _mark_allotted(records), "Post", "")
+    # INVERTED under S11 (T10-2): ``case_without_example`` is not in
+    # ``_BLOCKING_CODES``, so the deposit completes. The advisory flag
+    # lands on the deposit's own cleaned copies and is dropped at the DB
+    # boundary — the recorded asymmetry ``concept_cleanup`` names
+    # (``models.Concept`` has no ``review_flags`` column); the durable
+    # flag surface is the final gate, pinned in
+    # test_generation_validation_diagnostics.
+    created, _merged = build_concepts._deposit_concepts(
+        db, chapter, _mark_allotted(records), "Post", "")
+    assert created
+    assert chapter.topics
 
 
 def test_post_deposit_ships_extra_examples_with_explicit_empty_inventory(db):
@@ -391,22 +399,22 @@ def test_post_deposit_without_inventory_uses_generation_fatal_policy(db):
         },
     ]
 
-    with pytest.raises(
-        ValueError,
-        match=r"concept validation failed before deposit: "
-              r"verbatim_source_description",
-    ):
-        build_concepts._deposit_concepts(
-            db,
-            chapter,
-            _mark_allotted(records),
-            "Post",
-            "",
-            inventory=None,
-            source_text=copied_description,
-        )
-
-    assert not chapter.topics
+    # INVERTED under S11 (T10-2): ``verbatim_source_description`` is a
+    # meaning-policy verdict, not identity mechanics — the deposit
+    # completes. The flag lands on the deposit's cleaned copies and is
+    # dropped at the DB boundary (the recorded ``concept_cleanup``
+    # asymmetry); the durable flag surface is the final gate.
+    created, _merged = build_concepts._deposit_concepts(
+        db,
+        chapter,
+        _mark_allotted(records),
+        "Post",
+        "",
+        inventory=None,
+        source_text=copied_description,
+    )
+    assert created
+    assert chapter.topics
 
 
 def test_post_deposit_preserves_inventory_example_and_image_in_export(db):

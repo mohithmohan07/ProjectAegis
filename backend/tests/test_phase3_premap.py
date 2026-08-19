@@ -924,14 +924,15 @@ def test_a_model_authored_types_section_is_a_contract_defect(
     """The pin above is a source pin — it proves the module cannot MINT a
     section, not that one cannot ARRIVE. The model can author a Types
     block inside ``description``, and the composed row would then carry
-    it. That row must not ship: ``types_too_early`` is in
-    ``generation._FATAL_CODES`` and the Pre lane has no Fixer at deposit
-    yet, so a merely-flagged row walks into a fatal gate with no Q13
-    route out.
+    it. That row must not ship: the no-extraction steer is the Pre
+    lane's own contract, so a Types section on a Pre row is a map defect
+    in its own right (since S11 the deposit gate would merely flag
+    ``types_too_early`` — fatal-family, not blocking — which is exactly
+    why the refusal lives HERE, on the contract that owns it).
 
     So it is a mechanical defect on the map checker, which means bounded
     corrections and then The Fixer's one recorded decision — never a
-    halt, and never a knowingly-fatal shipped row."""
+    halt, and never a knowingly-defective shipped row."""
     from app.services import generation
 
     assert "types_too_early" in generation._FATAL_CODES

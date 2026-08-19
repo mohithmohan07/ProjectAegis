@@ -41,7 +41,13 @@ def _culmination(topic: str = "General Term") -> dict:
     )
 
 
-def test_final_validation_logs_every_fatal_with_exact_location(monkeypatch):
+def test_a_fatal_family_defect_ships_flagged_with_its_exact_record(monkeypatch):
+    """INVERTED under S11 (T10-2): this test used to pin the final-gate
+    RuntimeError for ``rich_text_format`` with per-row fatal log lines. The
+    code is not in ``_BLOCKING_CODES``, so the run completes and the record
+    moves ONTO THE ROW — the flag names the code and the validator's own
+    message, which is the location a reviewer actually uses.
+    """
     records = [
         _row(
             "Deriving the General Term",
@@ -58,35 +64,22 @@ def test_final_validation_logs_every_fatal_with_exact_location(monkeypatch):
         lambda message, **kwargs: logs.append((message, kwargs)),
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match=(
-            r"final validation failed: .*rich_text_format.*"
-            r"row_index=0.*concept='Deriving the General Term'.*"
-            r"field='concept_details'"
-        ),
-    ):
-        g._validate_final_or_raise(records)
+    report = g._validate_final_or_raise(records)
+    assert report is not None
 
-    fatal_logs = [
-        message for message, _ in logs
-        if "fatal validation error:" in message
-    ]
-    assert fatal_logs
+    flags = records[0].get("review_flags") or []
     assert any(
-        all(
-            fragment in message
-            for fragment in (
-                "row_index=0",
-                "concept='Deriving the General Term'",
-                "field='concept_details'",
-                "code='rich_text_format'",
-                "message='concept_details violates canonical",
-                r"snippet='Description: The raw expression \\frac{n}{2}",
-            )
-        )
-        for message in fatal_logs
+        "validation: rich_text_format at the final gate" in flag
+        and "ships flagged for review (T10-2)" in flag
+        and "concept_details violates canonical" in flag
+        for flag in flags
+    ), flags
+    assert any(
+        "flagged fatal-family error(s)" in message for message, _ in logs
     )
+    # Replaying the gate cannot stack a second copy of the same record.
+    g._validate_final_or_raise(records)
+    assert (records[0].get("review_flags") or []).count(flags[0]) == 1
 
 
 def test_final_validation_rejects_missing_source_inventory(monkeypatch):
@@ -176,33 +169,47 @@ def _strict_culmination(*, question: str = "") -> dict:
 
 
 def test_q1_final_gate_splits_analysis_existence_by_allotment():
-    """Q1 gate split at the terminal boundary: an UNALLOTTED row without
-    a section clears the final gate; an ALLOTTED row missing its section
-    fails; an unallotted row that kept a section fails on the
-    marker-accounting code."""
+    """Q1 gate split at the terminal boundary, INVERTED under S11 (T10-2):
+    an UNALLOTTED row without a section clears the final gate clean; an
+    ALLOTTED row missing its section ships FLAGGED on the format code; an
+    unallotted row that kept a section ships FLAGGED on the
+    marker-accounting code. The SPLIT — which code fires for which
+    allotment state — is the property this test still pins; the raise is
+    what S11 removed.
+    """
     unallotted = _strict_normal_row()
     unallotted["concept_details"] = unallotted["concept_details"].split(
         " // Misconception/ Error Analysis:"
     )[0]
     del unallotted["_aegis_analysis_allotments"]
     g._validate_final_or_raise([unallotted, _strict_culmination()])
+    assert not (unallotted.get("review_flags") or [])
 
     allotted_missing = _strict_normal_row()
     allotted_missing["concept_details"] = allotted_missing[
         "concept_details"
     ].split(" // Misconception/ Error Analysis:")[0]
-    with pytest.raises(RuntimeError, match="analysis_section_format"):
-        g._validate_final_or_raise(
-            [allotted_missing, _strict_culmination()])
+    g._validate_final_or_raise([allotted_missing, _strict_culmination()])
+    assert any(
+        "validation: analysis_section_format" in flag
+        for flag in allotted_missing.get("review_flags") or []
+    )
 
     unallotted_with_section = _strict_normal_row()
     del unallotted_with_section["_aegis_analysis_allotments"]
-    with pytest.raises(RuntimeError, match="unallotted_analysis_section"):
-        g._validate_final_or_raise(
-            [unallotted_with_section, _strict_culmination()])
+    g._validate_final_or_raise(
+        [unallotted_with_section, _strict_culmination()])
+    assert any(
+        "validation: unallotted_analysis_section" in flag
+        for flag in unallotted_with_section.get("review_flags") or []
+    )
 
 
-def test_final_validation_requires_mastery_and_authored_culmination():
+def test_final_validation_flags_mastery_and_culmination_contracts():
+    """INVERTED under S11 (T10-2): both contracts still FIRE — the codes
+    stay in the fatal family and still earn their repair attempts — but
+    neither halts the run; each ships as a review flag on its own row.
+    """
     missing_mastery = _strict_normal_row()
     missing_mastery["concept_details"] = missing_mastery[
         "concept_details"
@@ -211,18 +218,22 @@ def test_final_validation_requires_mastery_and_authored_culmination():
         "with the supplied circuit quantities.",
         "",
     )
-    with pytest.raises(RuntimeError, match="missing_mastery_statement"):
-        g._validate_final_or_raise(
-            [missing_mastery, _strict_culmination()])
+    g._validate_final_or_raise([missing_mastery, _strict_culmination()])
+    assert any(
+        "validation: missing_mastery_statement" in flag
+        for flag in missing_mastery.get("review_flags") or []
+    )
 
     # No canonical "Recap of ..." composition is required any more — the
-    # authored consolidation is the Description. Only an EMPTY culmination
-    # Description remains a mechanical defect.
+    # authored consolidation is the Description. An EMPTY culmination
+    # Description is still a defect; it is recorded, not a halt.
     empty_description = _strict_culmination()
     empty_description["concept_details"] = "Description: "
-    with pytest.raises(RuntimeError, match="culmination_description"):
-        g._validate_final_or_raise(
-            [_strict_normal_row(), empty_description])
+    g._validate_final_or_raise([_strict_normal_row(), empty_description])
+    assert any(
+        "validation: culmination_description" in flag
+        for flag in empty_description.get("review_flags") or []
+    )
 
 
 def test_final_repair_normalizes_newline_analysis_before_api(monkeypatch):
@@ -755,10 +766,19 @@ def test_final_repair_options_include_every_terminal_strict_contract():
     assert options["strict_mastery_statement"] is True
     # The code-composed recap contract is retired with the recap machinery.
     assert "strict_culmination_recap" not in options
+    # RE-AUTHORED under S11 (T10-1/T10-2): the two terminal strict
+    # contracts stay in the fatal FAMILY — so they still drive the bounded
+    # repair pass (its selector is severity, and both emit at error) —
+    # while neither may HALT a run: the blocking set is the closed
+    # mechanics literal, and these are judgment codes.
     assert {
         "section_number_in_description",
         "case_example_semantic_mismatch",
     } <= g._FATAL_CODES
+    assert not (
+        {"section_number_in_description", "case_example_semantic_mismatch"}
+        & g._BLOCKING_CODES
+    )
 
 
 def test_final_repair_loop_receives_type_and_stray_mastery_defects(
