@@ -29,9 +29,40 @@ step 10's map and spec land, step 11's map lands. That is real progress and it
 is roughly 6–8 hours of work compressed into 3. It is not the end of the
 programme.
 
-The largest single speedup available is **more cores**, not more accounts:
-4 → 16 takes agents-per-workflow from 2 to 14 and compresses the fan-out that
-dominates every slice, with no coordination cost.
+The largest single speedup available is **more cores**, not more accounts —
+see §1a.
+
+---
+
+## 1a. Cores: what to provision, and what each step buys
+
+The harness caps concurrent sub-agents per workflow at `min(16, nproc - 2)`.
+That single line explains most of this session's wall clock.
+
+| Cores | Agents/workflow | Effect on a slice |
+|---|---|---|
+| **4** (today) | **2** | The step-8 spec's 14 agents ran as **7 sequential pairs → 2 h 14 m**. A 3-audit slice runs 2 audits, then the third alone. |
+| 8 | 6 | All three audits of a slice run at once. Fan-out phases roughly halve. |
+| **16** | **14** | The same 14-agent spec workflow becomes **one batch, ~20–25 min**. This is the knee of the curve. |
+| 18+ | 16 (hard cap) | No further gain; the cap binds, not the CPU. |
+
+**Provision 16 cores for the step-8 stream.** It has the largest fan-out —
+three adversarial audits plus implement and repair on every slice. 8 cores is
+enough for stream B, whose slices are smaller. Stream C (documents) is not
+CPU-bound at all.
+
+RAM is not the constraint: this container has 15 GB and has never been near it.
+
+**What more cores does NOT compress**, so the expectation stays honest:
+
+* the full suite — ~2–3.5 min, single-threaded by necessity, and it is a
+  **global lock** (see §0);
+* the dependency chain S7 → S8 → S9 → S10 → S11;
+* the orchestrator's own verification and commit, which is serial by design and
+  is what has caught the defects the audits missed.
+
+Realistic effect of 4 → 16 cores on the remaining 36–52 h: **roughly 30–40 %
+off**, not 4×. The fan-out compresses; the serial spine does not.
 
 ---
 
@@ -204,17 +235,43 @@ assumption). Do not introduce one.
 
 ### Which stream suits which account
 
-Assign by **reversibility and doctrine risk**, not by a general claim about
-model strengths:
+Assign on three things that are checkable, not on general claims about model
+quality:
 
-* Work that must internalise Rule 1 and can silently lose learner content —
-  step 8's slices, the extraction fix — stays with an agent that has the
-  doctrine loop wired in.
-* Work that is **file-isolated and reversible** — step 10, and document work
-  like step 11's map — is where a newly-added account should start, because a
-  mistake there is visible and cheap.
-* Give any new account one stream first and read its first PR closely before
-  widening. Both new streams still run the full audit loop in §2.
+**1. Does the work need the harness?** This project's method is
+map → spec → N independent adversarial audits → repair, run as parallel
+sub-agents against one working tree. Claude Code has that harness natively
+(`Workflow`, sub-agents, per-agent tool scoping). An agent without it can
+still do the work, but the loop has to be driven by hand, which is where
+adversarial independence quietly degrades into one agent reviewing itself.
+→ **Work that writes pipeline code goes to an account with the harness.**
+
+**2. Can the output be verified by reading it?** A map, a spec, a census or a
+review is checkable in minutes and costs nothing when wrong. Pipeline code
+that passes tests but violates Rule 1 costs a slice and may not be caught for
+weeks.
+→ **Read-verifiable work is the safe place to start a new account.**
+
+**3. Would model diversity help?** This is the one place a second *family* of
+model is worth more than a second instance of the same one. Every audit in
+this session has been Claude auditing Claude, and the failure pattern is
+visible in the record: twice, two audits agreed with each other and both were
+wrong about the mechanism; three times, all audits missed a defect the repair
+found. Those are correlated blind spots, which is exactly what a different
+training lineage breaks up.
+→ **A GPT account is most valuable as an independent adversarial reviewer of
+this session's slices**, not as a second implementer racing alongside.
+
+**Concrete assignment:**
+
+| Account | Primary | Why |
+|---|---|---|
+| **Claude Max #2** | Step 10 — image durability, full loop, own PR | Writes pipeline code; needs the harness; file-isolated so a mistake cannot reach step 8 |
+| **GPT Pro** | (a) Adversarial review of each step-8 slice PR before merge; (b) step 11 map + spec; (c) the question-extraction spec from the existing map | Read-verifiable output; different blind spots from the Claude audits; zero merge risk |
+| **This session** | Step 8 S7 → S11, then the extraction fix | Holds the spec, the residues and the verification loop |
+
+Give each new account **one** stream first and read its first PR closely before
+widening. Both still run the loop in §2.
 
 ---
 
