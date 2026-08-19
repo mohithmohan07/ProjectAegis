@@ -182,7 +182,7 @@ def snapshot_from_chapter(
 
 
 def snapshot_from_staged_release(payload: Mapping) -> dict:
-    """Assemble Output 02 from the immutable staged Output-01 hierarchy."""
+    """The lane's Master snapshot from the immutable staged hierarchy."""
 
     source = payload.get("concept_snapshot")
     if not isinstance(source, Mapping):
@@ -900,9 +900,23 @@ def _resolve_snapshot_concept_ids(
 ) -> dict[str, int]:
     """Resolve private release keys only against exact published identities.
 
-    A staged Output-01 concept is never inferred from similar text.  Until its
-    exact concept release has been explicitly uploaded, Master publication is
-    refused while both downloadable workbooks remain available.
+    A staged concept row carrying its ``concept_machine_id`` resolves by the
+    persisted ``models.Concept.machine_id`` alone (S10), scoped to the
+    chapter and the topic row's lane — the identity the concept-lane
+    publication mints, whatever the titles now say. The five-field byte
+    match below survives ONLY as the recorded legacy fallback for snapshot
+    rows frozen before the identity column existed: [measured] against live
+    rows it refused a Master upload over a recased topic title nobody had
+    edited (MC6), and its content half made an ordinary post-upload edit to
+    a published concept block the Master — drift protection is the frozen
+    seal's job (S10-g), not a byte-compare against mutable rows. Either
+    way, a staged concept is never inferred from similar text: until the
+    lane's exact concept release has been explicitly uploaded, Master
+    publication is refused while both downloadable workbooks remain
+    available. A published row still carrying a blank ``machine_id``
+    (published before the column) refuses against an id-carrying snapshot;
+    republishing that concept release mints the ids, which is the recorded
+    migration path.
     """
 
     chapter_id = int(snapshot.get("target_chapter_id") or 0)
@@ -910,6 +924,14 @@ def _resolve_snapshot_concept_ids(
     for topic in snapshot.get("topics") or []:
         topic_title = str(topic.get("topic_title") or "")
         pre_post = str(topic.get("pre_post_learning") or "")
+        # OD4, per topic row: the Pre lane's concept file is Output 01, the
+        # Post lane's is Output 03. Normalized exactly as the id's own lane
+        # token is, so the message and the identity can never disagree.
+        output_name = (
+            "Output-01"
+            if str(pre_post or "").strip().casefold().startswith("pre")
+            else "Output-03"
+        )
         for concept in topic.get("concepts") or []:
             key = str(concept.get("concept_key") or "")
             if not key or key in concept_ids:
@@ -923,6 +945,45 @@ def _resolve_snapshot_concept_ids(
                 raise UploadRefused(
                     "staged concept snapshot has no target chapter identity"
                 )
+            machine_id = str(concept.get("concept_machine_id") or "").strip()
+            if machine_id:
+                matches = (
+                    db.query(models.Concept)
+                    .join(models.Topic)
+                    .filter(
+                        models.Topic.chapter_id == chapter_id,
+                        models.Topic.pre_post_learning == pre_post,
+                        models.Concept.machine_id == machine_id,
+                    )
+                    .all()
+                )
+                # Round 7 guard, defence in depth: the resolved row's own
+                # topic must BE this snapshot row's topic through the one
+                # lenient normaliser (T4-6). The id is the join; the topic
+                # read CONFIRMS it — [measured] without this, a snapshot
+                # whose stamped ids had drifted from the persisted rows
+                # attached a question to an unrelated concept in a
+                # different topic, silently, where the old five-field match
+                # at least refused. A recased title still resolves; a
+                # different topic never does.
+                exact = [
+                    row for row in matches
+                    if identity.topic_identity(
+                        str(row.topic.topic_title or ""))
+                    == identity.topic_identity(topic_title)
+                ]
+                if len(matches) != 1 or len(exact) != 1:
+                    raise UploadRefused(
+                        f"concept {concept.get('concept_title')!r} under "
+                        f"topic {topic_title!r} does not have one exact "
+                        f"published {output_name} identity; upload that "
+                        "concept release first"
+                    )
+                concept_ids[key] = exact[0].id
+                continue
+            # Legacy fallback, recorded: this snapshot row was frozen before
+            # ``concept_machine_id`` existed, so the only identity it carries
+            # is its exact text. Byte-exact or refused — never similar.
             matches = (
                 db.query(models.Concept)
                 .join(models.Topic)
@@ -950,7 +1011,8 @@ def _resolve_snapshot_concept_ids(
                 raise UploadRefused(
                     f"concept {concept.get('concept_title')!r} under "
                     f"topic {topic_title!r} does not have one exact published "
-                    "Output-01 identity; upload that concept release first"
+                    f"{output_name} identity; upload that concept release "
+                    "first"
                 )
             concept_ids[key] = exact[0].id
     return concept_ids

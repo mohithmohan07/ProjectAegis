@@ -259,7 +259,13 @@ def run_context(
     }
     if job is not None:
         context["job_id"] = int(job.id)
-        context["staged_release_version"] = staged_version(
-            release_payload(job, lane=resolved)
+        payload = release_payload(job, lane=resolved)
+        context["staged_release_version"] = staged_version(payload)
+        # The draft LINEAGE the freeze ties back to (S10 repair, Round 7):
+        # the version restarts on a legitimate inventory reset, so the seal
+        # gate keys on this uid instead. Empty for drafts staged before the
+        # uid existed — the gate then has nothing to compare and says so.
+        context["staged_release_uid"] = str(
+            (payload or {}).get("staged_release_uid") or ""
         )
     return context

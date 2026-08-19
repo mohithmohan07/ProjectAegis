@@ -604,11 +604,18 @@ def _find_or_create_topic(
 
 
 def _add_concept(db: Session, topic: models.Topic, rec: dict,
-                 source_book: str = "") -> models.Concept:
+                 source_book: str = "", *, clean: bool = True,
+                 ) -> models.Concept:
     chapter = topic.chapter
     # Normalize name (& collapse) and description (strip dangling refs) before
-    # persisting, so dry and live output are equally import-clean.
-    rec = concept_cleanup.clean_concept_record(dict(rec))
+    # persisting, so dry and live output are equally import-clean. The
+    # publication lane passes ``clean=False`` (S10): its rows are what the
+    # reviewer approved in the staged workbook, and the cleaner is
+    # [measured] a rewriter there — "pH and its meaning" recased, a "Fig.
+    # 2.1" reference and its sentence head destroyed. The deposit lane keeps
+    # the default.
+    if clean:
+        rec = concept_cleanup.clean_concept_record(dict(rec))
     concept = models.Concept(
         topic_id=topic.id,
         concept_title=rec["concept_title"],

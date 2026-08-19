@@ -956,8 +956,9 @@ def test_no_concept_payload_can_take_the_assessment_branch(db):
 
     ``_is_assessment_payload`` is a one-key shape sniff, and it returns
     EARLY out of the concept branch — including out of the concept lane's
-    only database-write refusal at
-    ``build_concepts_release_publication.py:97``. [measured] neither
+    structural-defects refusal in ``upload_release_to_database`` (and,
+    since S10, the seal, row-defect and duplicate-identity gates beside
+    it). [measured] neither
     staging site emits ``candidates`` or ``groups`` today, so the branch
     is unreachable from a concept payload. Nothing asserted that, and the
     bypass condition is "a future slice adds a key named ``groups``".

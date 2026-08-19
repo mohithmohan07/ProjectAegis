@@ -483,12 +483,12 @@ def run_pre_release_from_job(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Output 04 — the Pre Master — from one Build Concepts job.
+    """Output 02 — the Pre Master (OD4) — from one Build Concepts job.
 
     Its own route rather than a flag on the Post one: the two outputs are
     separate artefacts with separate publications, and a lane is never a
     default anyone can fall into. The generated questions come from the
-    staged Output-03 payload; the chapter's own questions cannot reach
+    staged Output-01 payload; the chapter's own questions cannot reach
     this lane (assessment_release_run's leak barrier, bound to the Pre
     slot).
     """

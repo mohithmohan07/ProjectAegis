@@ -1259,10 +1259,26 @@ def validate_master_file(
     # The topic cell's read-back twin (B4 repair round): keyed off the
     # COMPOSED concept title, which embeds the machine id, so two
     # same-titled concepts under two topics map to their own topics.
-    expected_topic_by_concept = {
-        _titled_concept(e["concept"]): _titled_topic(e["topic"])
-        for e in _concept_rows(snapshot)
-    }
+    #
+    # Round 7: a LEGACY snapshot (``snapshot_from_chapter``, no machine
+    # ids) composes the bare title, so two same-titled concepts collapse
+    # onto one key. Last-wins there turned this twin into a false gate —
+    # [measured] it blocked a valid legacy Master with "topic_title does
+    # not match" over rows nobody mis-filed, permanently, the moment a
+    # chapter legitimately held two same-titled concepts (a state S10's
+    # publication supports). A key two rows share with two different
+    # topics proves nothing about either row, so the twin DECLINES to
+    # judge those (``None`` skips the check below) instead of judging by
+    # collapse order.
+    expected_topic_by_concept: dict[str, str | None] = {}
+    for e in _concept_rows(snapshot):
+        composed_key = _titled_concept(e["concept"])
+        expected_value = _titled_topic(e["topic"])
+        if composed_key in expected_topic_by_concept:
+            if expected_topic_by_concept[composed_key] != expected_value:
+                expected_topic_by_concept[composed_key] = None
+        else:
+            expected_topic_by_concept[composed_key] = expected_value
     for name in ("Objective", "Descriptive"):
         sheet_rows = parsed["sheets"][name]["rows"]
         row_numbers = parsed["sheets"][name].get("row_numbers")

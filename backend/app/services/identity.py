@@ -365,7 +365,9 @@ def _session_of(row):
         return None
 
 
-def machine_id_for_topic(topic, *, chapter_id: int | None = None) -> str:
+def machine_id_for_topic(
+    topic, *, chapter_id: int | None = None, position: int | None = None,
+) -> str:
     """The topic's persisted id, minting and persisting one only if blank.
 
     P-C1: identity is minted ONCE and PERSISTED; it is never re-derived. A row
@@ -377,6 +379,15 @@ def machine_id_for_topic(topic, *, chapter_id: int | None = None) -> str:
     stamped on the copy and mints nothing: there is nowhere to persist to, and
     a transient row must never invent an identity a persisted row will later
     contradict.
+
+    ``position`` (S10 repair, Round 7): the caller's OWN 1-based ordinal for
+    where the ``free_slot`` search starts, overriding the sibling-sort guess
+    of ``topic_position``. The release publication passes its per-release
+    counter here so the minted id equals the id the transient export stamped
+    for the same row — [measured] the sibling-sort guess counts blank-id
+    legacy rows and unstable ``source_order`` ties, so the two drifted and a
+    republication minted a fresh id every time. Still ONE minter, still
+    ``free_slot``, still persisted.
     """
     if topic is None:
         return ""
@@ -399,14 +410,16 @@ def machine_id_for_topic(topic, *, chapter_id: int | None = None) -> str:
     }
     minted = free_slot(
         lambda n: compose_topic_machine_id(key, lane, n),
-        topic_position(topic),
+        topic_position(topic) if position is None else position,
         taken,
     )
     topic.machine_id = minted
     return minted
 
 
-def machine_id_for_concept(concept, *, chapter_id: int | None = None) -> str:
+def machine_id_for_concept(
+    concept, *, chapter_id: int | None = None, position: int | None = None,
+) -> str:
     """The concept's persisted id, minting and persisting one only if blank.
 
     The single source of the ``<TopicID>_C##`` pattern, and — through
@@ -414,6 +427,9 @@ def machine_id_for_concept(concept, *, chapter_id: int | None = None) -> str:
     minters meant the same question could carry two label shapes, so S5's
     ``_next_label_index`` max-scan and T5-2's ``UploadRefused`` comparison both
     read the wrong family.
+
+    ``position`` overrides the sibling-sort start ordinal exactly as on
+    ``machine_id_for_topic`` above, and exists for the same measured reason.
     """
     if concept is None:
         return ""
@@ -433,7 +449,7 @@ def machine_id_for_concept(concept, *, chapter_id: int | None = None) -> str:
     }
     minted = free_slot(
         lambda m: compose_concept_machine_id(base, m),
-        concept_position(concept),
+        concept_position(concept) if position is None else position,
         taken,
     )
     concept.machine_id = minted

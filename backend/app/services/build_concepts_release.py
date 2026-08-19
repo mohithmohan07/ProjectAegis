@@ -40,6 +40,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -78,6 +79,16 @@ RELEASE_LANE_FIELD = "release_lane"
 # after a freeze is therefore visible on both sides instead of being an
 # overwrite nothing recorded.
 STAGED_VERSION_FIELD = "staged_version"
+# The draft's LINEAGE (S10 repair, Round 7). The version above is a per-slot
+# counter, and [measured] it RESTARTS at 1 whenever ``question_inventory``
+# is legitimately cleared (``replace_file``, ``convert_job``, the
+# source-review checkpoint reset) — so "same version" cannot distinguish
+# "the same draft, edited in place" from "a fresh draft that happens to
+# count from 1 again", and the seal gate built on the version alone accused
+# a legitimate fresh run of tampering. Every staging act therefore mints one
+# opaque uid; the freeze records it; the seal gate compares seals only
+# within one recorded lineage.
+STAGED_RELEASE_UID_FIELD = "staged_release_uid"
 # One recorded, named issue: the lane's Master File did not build on this
 # run (spec-step8 T15-2). It is an ISSUE, never a structural defect — the
 # CONCEPT payload is not corrupt, a later lane simply did not produce, and
@@ -1913,6 +1924,7 @@ def stage_release(
         # The SCHEMA version above; the DRAFT version here. Minted, not
         # overwritten (spec-step8 T2/S6) — read the constant's note.
         STAGED_VERSION_FIELD: next_staged_version(job, lane=LANE_POST),
+        STAGED_RELEASE_UID_FIELD: uuid4().hex,
         "released_at": released_at,
         "release_reason": _normal(reason) or (
             "Generation completed and was staged for explicit publication."
@@ -2686,6 +2698,7 @@ def stage_pre_release(
         # Minted per LANE, so a Pre re-stage never reads as a Post one
         # (spec-step8 T2/S6).
         STAGED_VERSION_FIELD: next_staged_version(job, lane=LANE_PRE),
+        STAGED_RELEASE_UID_FIELD: uuid4().hex,
         RELEASE_LANE_FIELD: LANE_PRE,
         "released_at": datetime.now(timezone.utc).isoformat(),
         "release_reason": _normal(reason) or (

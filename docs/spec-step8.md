@@ -4612,3 +4612,270 @@ the spec now carries the measured number with the command that produces it. Two 
 facts were re-confirmed rather than assumed: the committed format workbook's sheet names and
 order (`['Objective','Descriptive','Subjective']`, executed) and the four-sheet output of
 `writer._new_workbook` (executed). No finding was rejected outright.
+
+### Round 5 — owner ruling OD7 closes RES-1 (recorded here as the register entry the ruling names)
+
+**OD7 · Decided — the Post lane gets NO empty-publication verdict; this entry IS the record.**
+Owner ruling, 19 Aug 2026, closing S9's RES-1. The question: D8.3 gives the PRE lane a
+positive model verdict on an empty capture ("does this chapter genuinely have no
+prerequisites, or did the capture fail?"), and the Post lane had no analogue — should a
+zero-row POST publication carry one, or a register entry saying none is wanted? The ruling:
+**a register entry; no Post-lane verdict is built.** Current behaviour is already exactly
+compliant: D8.1 forbids treating emptiness as corruption, D8.2 is written unqualified, and
+since S9 the Post lane's empty publication completes while its receipt reports the emptiness
+"as measured rather than as decided"
+(`build_concepts_release_publication.py`, the no-row branch) — asserting no verdict the run
+did not make. S10 therefore changes NOTHING on this path; its regression
+`test_an_empty_pre_release_still_exports_and_still_publishes_zero_rows` pins the Pre lane,
+and the Post lane's honest no-verdict receipt stays pinned by S9's tests. The asymmetry with
+D8.3 is deliberate and owner-decided, not an omission.
+
+### Round 6 — S10 pre-implementation delta: measured drift, and the decisions the slice executes under
+
+Three parallel re-reads of the S10 surfaces at d7d2e2f (the publication lane, the master
+lane, the test inventory) before any S10 code moved. Everything below is measured against
+that commit; S10's own line refs (`:125`, `:100-106`, `:137-172`) are stale and the work
+proceeds by symbol.
+
+**Spec-vs-code drift, recorded so S10 does not re-do landed work.** (i) The T3.3b lift
+already runs — `_publication.py` builds its records through
+`_strip_release_fields(_lift_resolved_related_concepts(row))` — and the merge branch
+already persists `related_concepts`/`digicards`; both halves are pinned by
+`test_step8_one_renderer.py` (including a source-text grep pin on the exact assignment
+strings, which any rewrite of the merge branch must keep verbatim or amend in the same
+commit). (ii) `_add_concept` already persists both columns; S10's "today it persists
+neither" is stale. (iii) MC-G's `_find_or_create_topic` title-rewrite claim is stale —
+the stored `topic_title` is never rewritten (measured, and pinned by
+`test_topic_display_name_is_clean_when_topic_is_created_or_reused`). What remains of S10
+is therefore exactly: the OD4 string, the cleaner removal (atomic with `clean=`), the
+machine-id resolutions (both lanes), flags-not-deletes, the named row drop, and the
+tamper gates. None of the nine S10-named regressions exists yet.
+
+**Red-today reproductions (measured in-memory, real `upload_release_to_database`).**
+(i) Staging `concept_title="pH and its meaning"` with details `"See Fig. 2.1 for the pH
+scale."` persists `'pH and Its Meaning'` / `'for the pH scale.'` — the reviewer's title
+recased and the figure reference destroyed, by `clean_concept_record` at the publication
+boundary. (ii) Cross-publication same-title destruction is real: publishing `"Shared
+Name"` under a second topic re-parents the first concept, deletes its tags and overwrites
+its details (`updated: [1]`); the single-publication form accidentally passes because the
+stale in-session `topic.concepts` collection hides row 1 from `_find_concept_in_chapter` —
+so the S10 regression uses the cross-publication form. (iii) The master lane still
+refuses a recased staged topic title (`UploadRefused` at the five-field byte match) even
+though `_find_or_create_topic` now matches leniently.
+
+**Decisions, with the losing argument recorded.**
+
+* **S10-a (OD4 string).** `_resolve_snapshot_concept_ids` derives the output name from
+  each topic row's own `pre_post_learning` — Pre → "Output-01", Post → "Output-03" —
+  instead of the hard-coded "Output-01"; `test_staged_master_waits_for_exact_output01_
+  publication` is renamed and re-matched to "Output-03 identity" in the same commit
+  (spec §4's amendment). The backwards lane comment in `upload_release_to_database`'s
+  docstring ("Output 01 (post) or Output 03 (pre)") is corrected to OD4's mapping in the
+  same pass. Losing argument: a lane-less legacy release could keep the old string — but
+  the topic rows carry the lane either way, and one string with a recorded derivation
+  beats two strings with a guard.
+* **S10-b (cleaner removal, atomic).** `_add_concept` gains `clean: bool = True`;
+  the publication deletes its own `clean_concept_record` call and passes `clean=False`.
+  Default True keeps the deposit path (`_deposit_concepts`) and
+  `test_add_concept_cleans_name_and_description` byte-identical. The cleaner is
+  idempotent (MC-G), so either half alone changes nothing on the create path — the two
+  land in one commit or not at all.
+* **S10-c (publication resolution by slot identity).** The staged records carry NO
+  machine-id field; the transient export stamps composed positional ids
+  (`compose_topic_machine_id(chapter_key, lane, topic_order)` →
+  `compose_concept_machine_id(topic_mid, concept_order)`) that are, by T4-4's design,
+  "the same string the publication will persist" — and
+  `test_source_order_agrees_between_export_and_publication` pins staged ids == published
+  ids. So the publication resolves each row to the persisted concept holding the id the
+  staged workbook SHOWED for that slot: `machine_id == compose(persisted topic
+  machine_id, this release's source_order)`, queried against the DB (never the loaded
+  relationship — the stale-collection accident above), scoped to the resolved topic.
+  Exactly one → update in place (no re-parent, no `db.delete(tag)` — resolution inside
+  one topic makes re-parenting structurally impossible, so the tag-repair loop it
+  existed for goes with it). Zero → create through `_add_concept` and mint through the
+  one minter. More than one → refuse naming the duplicate identity (a gate on corrupted
+  identity, not a judgment). The composed string is used as a LOOKUP key only; minting
+  stays with `machine_id_for_concept`/`free_slot` (T4-4's inline-composition warning is
+  about minting, and still binds). Consequences accepted and recorded: a legacy row with
+  a blank `machine_id` is never merged into — title-shape matching is exactly the
+  deterministic judgment Rule 1 forbids, so an unprovable identity CREATES rather than
+  guesses, and the legacy row stays untouched beside it (nothing lost, R4); a release
+  that reorders same-titled rows re-files content by slot, which is what the reviewer's
+  approved workbook showed. Losing argument: keep title-match as a fallback for blank-id
+  rows — rejected because it re-admits T11.3's destruction class through the fallback.
+* **S10-d (flags, not deletes).** `filter_review_violations` keeps every
+  `_FORBIDDEN_TOPIC_NAMES` row and records the suspicion ON the row through
+  `_add_review_flag` (deterministic text, so the assemble/deposit fixpoint replay
+  converges — the same mechanism the pedagogy branch already pins). The vocabulary
+  itself survives as a flag-raiser only (advisory, Q10-shaped, gates nothing); its purge
+  is tracked separately, exactly like `_PEDAGOGY_TOPIC_RE`. The omission log dies with
+  the omission. `phase3/assemble.py` and `release_refiner.py` call sites are untouched —
+  the behavior change flows through `concept_cleanup.py` alone and the `phase3/` diff
+  stays empty. The two tests pinning deletion invert in the same commit.
+* **S10-e (the named row drop).** The publication's record filter stops eating rows: each
+  incoming row is checked with the EXISTING `row_projection_defect` vocabulary
+  (`staged_row_unusable`), and a droppable row raises, naming the row — same transport as
+  the `structural_defects` gate above it. This fires only in the measured gap where a
+  stale recorded `staged_row_defects` key disagrees with the records
+  (`structural_defects`' recorded-key-wins branch); the regression constructs exactly
+  that payload. No new defect code is minted.
+* **S10-f (master-lane machine-id resolution).** `_resolve_snapshot_concept_ids`
+  resolves a snapshot concept row that carries `concept_machine_id` by
+  `models.Concept.machine_id` alone, scoped to the chapter and the topic row's lane —
+  killing the five-field byte-match refusal class (the recased-topic reproduction). The
+  five-field exact match survives ONLY as the recorded legacy fallback for snapshot rows
+  frozen before the column existed (no `concept_machine_id` key). Deliberate behavior
+  change, recorded: the content-drift half of the old match is gone — editing a
+  published concept's details after the concept release uploaded no longer refuses the
+  Master upload; drift protection is the seal's job (S10-g), not a byte-compare against
+  mutable rows. A legacy PUBLISHED row (blank `machine_id`) against an id-carrying
+  snapshot refuses with "upload that concept release first" — republishing the concept
+  release mints the ids and unblocks, which is the migration path.
+* **S10-g (tamper gates).** Master lane: the disk re-hash already refuses both tampered
+  artifacts; the S10 regression exercises all four projections. Concept lane (the gap —
+  no verification of any kind today): `upload_release_to_database` recomputes
+  `assessment_release_snapshot.source_release_sha256(payload)` and compares it against
+  the frozen same-job, same-lane `AssessmentRelease`'s recorded
+  `concept_snapshot["source_concept_release_sha256"]` — but ONLY when that row's
+  `provider_identity["staged_release_version"]` equals the payload's current
+  `staged_version`: the same draft version must hash to what was frozen, and a mismatch
+  is an in-place edit nobody recorded. A re-stage bumps the version and is therefore
+  never a false positive; a frozen row predating the version record (or no frozen row at
+  all) leaves nothing to compare and the publication proceeds — the gate refuses only on
+  measured drift, judges no content, and blocks nothing it cannot prove. The seal
+  excludes `issues` and `summary` by construction, so the publication's own summary
+  writes and the `assessment_lane_unavailable` recorder never move it.
+
+**Test consequences, decided up front.** Inverted: `test_overview_topic_is_dropped_not_
+reassigned`, `test_omitted_umbrella_topic_rows_are_named_never_bare_counted` (both now
+pin survival-with-flag; the never-reassigned half survives the inversion). Amended:
+`test_staged_master_waits_for_exact_output01_publication` (rename to `..._output03_...`,
+match "Output-03 identity", and the satisfying fixture row gains the `machine_id` the
+resolver now reads). Watched, amended only if red or made vacuous:
+`test_a_published_id_is_not_re_keyed_by_a_second_publication` and
+`test_a_second_publication_that_prepends_a_topic_mints_no_duplicate` — under slot
+resolution both scenarios still resolve to the same rows, so both should stay green
+while still testing a merge. Kept verbatim: the grep pins in `test_step8_one_renderer.py`
+(the merge-branch assignment strings survive the rewrite), the deposit twin's tests
+(`_deposit_concepts` is NOT in S10), and `test_add_concept_cleans_name_and_description`
+(default True). The stale "Publication title-cases the labels it writes" comment in
+`test_pre_release_lane_wiring.py` is corrected where touched. Of the nine S10 names, two
+are pins of behavior that already landed (`test_pre_related_concepts_survives_publication`,
+`test_digicards_survive_publication` — S8 follow-up persisted both columns) plus the
+OD7-pinned Pre-lane empty publication; each pin is proven live by neutralising the code
+it guards before being trusted, per the standing red-first rule; the other six are
+red-first regressions.
+
+### Round 7 — the S10 audits, the withdrawn slot design, and the repair
+
+Three adversarial audits (doctrine, mechanical correctness, coverage/blast-radius) ran
+against Round 6's implementation before it was ever committed. Their blocking findings
+were each reproduced end-to-end and are recorded here as the reason Round 6's slice-c/f
+design is WITHDRAWN — none of it reached the branch history; this round is the record of
+why the committed shape differs from the Round-6 plan.
+
+**What the audits measured against the slot design.** (i) Resolution by composed
+position (`compose(topic_mid, source_order)`) overwrote a removed row's neighbour on an
+ordinary shrinking republication — Concept B's learner-visible details replaced by
+Concept C's, no flag, no log, a stale duplicate left beside it (R4, and worse than
+d7d2e2f, whose title merge handled the same flow losslessly). (ii) The transient
+export's purely positional stamps diverged from the publication's minting the moment
+the chapter held prior state (a prepended topic, a seeded chapter, a blank-id legacy
+sibling), so the Master's machine-id resolution silently attached a question authored
+for Concept X to the unrelated Concept A — the old five-field byte match at least
+refused; and beside a blank-id legacy row the create path minted a fresh duplicate on
+EVERY republication, unboundedly, with the reviewer-seen id never persisted. (iii) The
+seal gate's `staged_version` key collides after a legitimate inventory reset
+(`replace_file` / `convert_job` / the source-review checkpoint restart the counter at
+1), so it accused a clean fresh run of tampering; and the tamper it exists for could
+strip the version field and walk through. (iv) The row-drop gate ran after the
+zero-row branch, so a payload whose EVERY row was tampered unusable published as an
+idempotent empty success saying "nothing was removed". All four reproduced, all four
+repaired, and the audits' own reproduction scripts re-run green against the repair.
+
+**The repaired resolution rule (per record, in order).** (1) A record CARRYING
+`machine_id` resolves by the persisted column, chapter+lane wide — recorded identity
+wins (P-C1); found under a different topic → fields update in place, NO re-parent, and
+the disagreement rides the receipt as a flag; the id held by nothing → the identity is
+restored verbatim with the content, exactly as the workbook reader restores one (B4).
+No record carries an id today; the workbook round-trip is the intended carrier.
+(2) Otherwise, EXACTLY ONE unclaimed persisted concept under THIS resolved topic whose
+title matches through the one normaliser (`bi.normalize_question_text`) is the same
+row re-staged: updated in place, id kept, no re-parent, no `db.delete(tag)`, no
+cleaner. (3) Zero candidates, or two-plus, CREATE — an identity that cannot be proven
+unique is never guessed, and a `claimed` set guarantees no persisted row is merged
+into twice in one publication. This is a RECORDED AMENDMENT of S10's literal "no
+merge": the audits measured that id-only resolution with no carrier destroys (slot
+keying) or pollutes (create-always duplicates every republication and the platform
+reads the DB rows), while the topic-scoped exactly-one title match restores d7d2e2f's
+lossless republication cases with T11.3's three destructive ingredients (chapter-wide
+scope, re-parent + tag deletion, the cleaner rewrite) all removed. The chapter-wide
+`_find_concept_in_chapter` stays out of the publication permanently.
+
+**Identity agreement, both sides of the publication.** `transient_release_hierarchy`
+now consults the persisted chapter for IDENTITY ONLY — never content — and stamps by
+the SAME rule the publication resolves by: persisted topic ids reused verbatim on a
+lenient title match, persisted concept ids reused on the exactly-one title match, a
+blank-id legacy row stamped with the mint its adoption will produce, and fresh rows
+slotted by `free_slot` from this release's position against the persisted lane
+siblings. The minters gain an explicit `position=` mode (still ONE producer, still
+`free_slot`, still persisted) because their sibling-sort guess counts blank-id rows
+and ties, which is exactly the drift the audit measured. The docstring's "no
+persisted row is read" is amended to what it always protected: content authority
+stays with the staged records. Consequence: reviewer-seen workbook ids, snapshot ids
+and persisted ids are one string in every deterministic case, pinned end-to-end by
+`test_a_prepended_topic_still_homes_master_questions` and
+`test_a_legacy_blank_id_row_is_adopted_not_duplicated`. The Master resolver keeps a
+defence-in-depth topic read: the machine-id match must sit under the snapshot row's
+topic through the one lenient normaliser, so an id that drifts anyway refuses loudly
+instead of mis-homing (a recase still resolves;
+`test_master_resolution_survives_a_published_content_edit` pins the deliberately
+dropped content half, `test_a_blank_id_published_row_refuses_an_id_carrying_snapshot`
+pins the migration refusal).
+
+**The seal gate, re-keyed to lineage.** Every staging act mints
+`staged_release_uid`; `run_context` records it on the frozen row; the gate compares
+seals only within one recorded lineage, so a version-counter restart can never accuse
+a clean draft. A frozen row that RECORDS a lineage while the payload carries none is
+the field stripped in place and refuses. Recorded limits, in the gate's own
+docstring: pre-uid payloads and rows leave nothing to compare (dormant, like the
+Master lane before recorded hashes), and an edit that swaps in a fresh uuid is
+indistinguishable from a legitimate re-stage by the payload alone — the Master's
+artifacts stay hash-sealed regardless. The row-defect gate moved above the zero-row
+branch (`test_an_entirely_unusable_tampered_payload_is_refused_not_published_as_empty`).
+
+**The OD4 string table, completed.** The S6-assigned `assessment_release_run` strings
+were never delivered and read BACKWARDS against OD4; observable contradiction once
+S10's resolver spoke the new numbering. Delivered now: Pre names Output 01/02, Post
+names Output 03/04, in both missing-release raises and the Post-only inventory raise;
+the both-lanes chapter-identity raise names NO output (T14); the Pre-Master API
+docstring, the snapshot module header and the two stale test comments corrected with
+them. Accepted cosmetic residue: a lane-less legacy snapshot row still reads
+"Output-03" in the refusal message (its resolution goes through `db:` keys in
+practice).
+
+**Smaller deliveries out of the audit list.** T7.2's flag clause is implemented at the
+publication: where the cleaner WOULD have rewritten a row, the divergence is recorded
+into the receipt's `identity_review_flags` (idempotent staging rows diverge on
+nothing, so the note appears only where a human's edit won). The umbrella flag carries
+its T7.3 code (`review_topic_name`) in the flag text. `filter_review_violations`' two
+retained vocabulary roles are BOTH named now — the reassignment regex and the
+umbrella set's part in choosing the reassignment's destination — with the measured
+all-umbrella fallback corner recorded rather than smoothed over. The legacy Master
+read-back's topic twin DECLINES to judge a composed key two snapshot rows share with
+two different topics (a legacy no-id snapshot with duplicate titles), instead of
+last-wins collapsing into a permanent false refusal — S10's publication makes
+same-titled concepts a supported state, and the interaction was the audit's find. The
+S10 test module builds its OWN chapter per DB-writing test (the shared fixture
+chapter [measured] turned five lifecycle tests red under targeted orderings).
+
+**The red-first ledger for this round.** Red at d7d2e2f and green now: the six Round-6
+regressions, the all-defective row-gate case, and the two payload-tamper legs plus
+strip-lineage leg of the four-outputs test. Pins of the repaired design whose red
+state was the WITHDRAWN intermediate rather than any commit: shrink, reorder,
+legacy-adoption, prepend-homing, content-drift, blank-id refusal — their red proof is
+the audit reproduction scripts, re-run before and after the repair in this session.
+Residues accepted and named: umbrella rows now enter the deposit validation contract
+that never saw them (severity measured non-fatal; untested end-to-end), and two
+same-titled rows staged under ONE topic re-staged create beside their originals
+(ambiguity is never guessed) — both owed to S11's QC pass if they bite.

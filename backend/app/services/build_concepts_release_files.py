@@ -434,9 +434,14 @@ def transient_release_hierarchy(
     string OD4 rules must stop naming a lane rather than be renumbered.
 
     The staged release records are the concept authority.  The target chapter
-    supplies only directory metadata; no persisted Topic or Concept row is
-    read.  Keeping this construction in one place prevents the Concept and
-    Master projections from drifting before the explicit database upload.
+    supplies directory metadata, and — since Round 7 — persisted Topic and
+    Concept rows are consulted for IDENTITY ONLY (machine ids and the title
+    join), never for content: the ids stamped on these transient rows must
+    be the ids the publication persists, and [measured] stamping them
+    without looking cost every Master question its home the moment the
+    chapter held prior state.  Keeping this construction in one place
+    prevents the Concept and Master projections from drifting before the
+    explicit database upload.
     """
 
     from . import build_concepts
@@ -533,6 +538,32 @@ def transient_release_hierarchy(
     # any ``C##`` read off it meant two different things on the two sides of
     # one publication.
     concept_positions: dict[str, int] = {}
+    # Round 7: the ids stamped here must BE the ids the publication
+    # persists. [measured] purely positional stamping diverged from the
+    # publication's minting the moment the chapter held prior state — a
+    # prepended topic, a blank-id legacy row — and every Master question
+    # built on the stamped id then resolved against the wrong persisted row
+    # or against nothing. So the persisted chapter is consulted for
+    # IDENTITY ONLY (machine ids and the title join), mirroring the
+    # publication's own resolution input for input; the staged records stay
+    # the sole CONTENT authority, which is what the docstring's "no
+    # persisted row is read" rule always meant to protect.
+    from .. import bulk_import as bi_mod
+    live_chapter = db.get(models.Chapter, target_chapter_id)
+    lane = identity.lane_token(pre_post)
+    persisted_topics: dict[str, models.Topic] = {}
+    taken_topic_ids: set[str] = set()
+    if live_chapter is not None:
+        for row in live_chapter.topics:
+            if identity.lane_token(row.pre_post_learning) == lane:
+                mid = str(row.machine_id or "").strip()
+                if mid:
+                    taken_topic_ids.add(mid)
+            if row.pre_post_learning == pre_post:
+                persisted_topics.setdefault(
+                    identity.topic_identity(row.topic_title), row)
+    taken_concept_ids: dict[str, set[str]] = {}
+    claimed_concept_ids: set[int] = set()
     for record in records:
         topic_title = str(record.get("topic") or "").strip()
         key = identity.topic_identity(topic_title)
@@ -549,14 +580,32 @@ def transient_release_hierarchy(
             # These rows are NEVER persisted, so ``machine_id_for_topic``
             # refuses to mint on them (T4-7: a transient row must not invent
             # an identity a persisted row will later contradict). They are
-            # stamped HERE instead, off the same (chapter key, lane,
-            # per-topic position) the publication will use, so the staged id
-            # and the published id are the same string.
-            topic.machine_id = identity.compose_topic_machine_id(
-                chapter_key,
-                identity.lane_token(pre_post),
-                topic.source_order,
-            )
+            # stamped HERE instead, by the publication's own resolution: a
+            # persisted topic's id is reused verbatim (P-C1 — a published
+            # topic is never re-keyed), and a genuinely new topic takes the
+            # first free slot from this release's position among the
+            # persisted lane siblings — so the staged id and the published
+            # id are the same string in every deterministic case, not only
+            # on a fresh chapter.
+            persisted = persisted_topics.get(key)
+            persisted_mid = str(
+                getattr(persisted, "machine_id", "") or "").strip()
+            if persisted_mid:
+                topic.machine_id = persisted_mid
+            else:
+                topic.machine_id = identity.free_slot(
+                    lambda n: identity.compose_topic_machine_id(
+                        chapter_key, lane, n),
+                    topic.source_order,
+                    taken_topic_ids,
+                )
+            taken_topic_ids.add(topic.machine_id)
+            seeded = taken_concept_ids.setdefault(topic.machine_id, set())
+            if persisted is not None:
+                for row in persisted.concepts:
+                    mid = str(row.machine_id or "").strip()
+                    if mid:
+                        seeded.add(mid)
             topics_by_key[key] = topic
         title = str(
             record.get("concept_title") or record.get("concept") or ""
@@ -599,8 +648,44 @@ def transient_release_hierarchy(
         concept.id = -len(concepts) - 1
         concept_positions[key] = concept_positions.get(key, 0) + 1
         concept.source_order = concept_positions[key]
-        concept.machine_id = identity.compose_concept_machine_id(
-            topic.machine_id, concept.source_order)
+        # The publication's per-record resolution, predicted with the same
+        # inputs (Round 7): a carried ``machine_id`` verbatim; else the
+        # exactly-one unclaimed persisted title match under this topic —
+        # its persisted id, or, for a blank-id legacy row the publication
+        # will adopt, the mint that adoption will produce; else a fresh
+        # slot among this topic's taken ids.
+        carried = str(record.get("machine_id") or "").strip()
+        taken = taken_concept_ids.setdefault(topic.machine_id, set())
+        if carried:
+            concept.machine_id = carried
+            taken.add(carried)
+        else:
+            match = None
+            persisted = persisted_topics.get(key)
+            if persisted is not None:
+                norm = bi_mod.normalize_question_text(title)
+                candidates = [
+                    row for row in persisted.concepts
+                    if row.id not in claimed_concept_ids
+                    and bi_mod.normalize_question_text(row.concept_title)
+                    == norm
+                ]
+                if len(candidates) == 1:
+                    match = candidates[0]
+            if match is not None:
+                claimed_concept_ids.add(match.id)
+            match_mid = str(
+                getattr(match, "machine_id", "") or "").strip()
+            if match_mid:
+                concept.machine_id = match_mid
+            else:
+                concept.machine_id = identity.free_slot(
+                    lambda m: identity.compose_concept_machine_id(
+                        topic.machine_id, m),
+                    concept.source_order,
+                    taken,
+                )
+            taken.add(concept.machine_id)
         concept.topic = topic
         concepts.append(concept)
 

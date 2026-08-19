@@ -1306,9 +1306,10 @@ def run_pre_release_for_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     questions = build_concepts_release.staged_generated_questions(job)
     if questions is None:
+        # OD4 numbering: the Pre concept file is Output 01, its Master 02.
         raise ReleaseRunError(
-            "this job has no staged Output-03 Pre-Learning concept release; "
-            "stage the Pre release before building Output 04"
+            "this job has no staged Output-01 Pre-Learning concept release; "
+            "stage the Pre release before building Output 02"
         )
     return run_release_for_job(
         db,
@@ -1377,15 +1378,16 @@ def run_release_for_job(
         build_concepts_release.staged_release_for_lane(job, lane)
     )
     if staged_release is None:
+        # OD4 numbering: Pre is Outputs 01/02, Post is Outputs 03/04.
         raise ReleaseRunError(
             "this job has no staged "
             + (
-                "Output-03 Pre-Learning concept release; stage the Pre "
-                "release before building Output 04"
+                "Output-01 Pre-Learning concept release; stage the Pre "
+                "release before building Output 02"
                 if build_concepts_release.normalize_lane(lane)
                 == build_concepts_release.LANE_PRE
-                else "Output-01 concept release; stage the concept release "
-                "before building Output 02"
+                else "Output-03 concept release; stage the concept release "
+                "before building Output 04"
             )
         )
     try:
@@ -1451,13 +1453,15 @@ def run_release_for_job(
             "Pre-Learning items (owner steer, 17 Aug 2026)"
         )
     if not generate_lane and not (inventory.get("items") or []):
+        # Post-lane only (the Pre lane generates), so OD4 names Output 03.
         raise ReleaseRunError(
-            "the staged Output-01 release has no question/task inventory"
+            "the staged Output-03 release has no question/task inventory"
         )
     chapter_id = int(bridge["snapshot"].get("target_chapter_id") or 0)
     if not chapter_id:
+        # Both lanes reach this, so per T14 it names NO output number.
         raise ReleaseRunError(
-            "the staged Output-01 release has no target chapter identity"
+            "the staged concept release has no target chapter identity"
         )
     if generate_lane:
         # PRE-SPEND source-integrity check, and deliberately here rather
@@ -1792,7 +1796,8 @@ def run_release_for_job(
         candidates=candidates,
     )
 
-    # Stage 7 — route only across the immutable staged Output-01 concepts.
+    # Stage 7 — route only across the immutable staged concept-release
+    # concepts (this run's own lane; OD4 numbers them 01 or 03).
     progress.log(
         f"Routing {len(candidates)} candidate(s) across "
         f"{len(concept_payload)} concept(s).")

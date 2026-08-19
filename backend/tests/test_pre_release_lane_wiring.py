@@ -386,7 +386,10 @@ def test_output_04_refuses_a_job_with_no_staged_pre_release(db):
 
     with pytest.raises(run.ReleaseRunError) as raised:
         run.run_pre_release_for_job(db, job.id, owner_sub=OWNER)
-    assert "Output-03" in str(raised.value)
+    # OD4 (Round 7): the missing PRE concept release is Output 01, and the
+    # Master it blocks is Output 02.
+    assert "Output-01 Pre-Learning" in str(raised.value)
+    assert "Output 02" in str(raised.value)
 
 
 # --------------------------------------------------------------------------- #
@@ -586,7 +589,8 @@ def test_the_published_pre_concept_carries_no_audit_marker(db):
 # --------------------------------------------------------------------------- #
 
 _POST_PAYLOAD_KEYS = {
-    "version", "staged_version", "released_at", "release_reason", "job_id",
+    "version", "staged_version", "staged_release_uid", "released_at",
+    "release_reason", "job_id",
     "learning_kind", "source_book", "filename", "source_document_hash",
     "target_chapter_id", "directory_metadata", "target_identity",
     "checkpoint_stage", "checkpoint_progress", "records", "issues",
@@ -609,15 +613,17 @@ def test_the_post_release_payload_keeps_its_recorded_shape(db):
     key set, and pinned on a job that HAS a Pre sibling, so the Pre lane
     cannot leak a key into the Post payload.
 
-    ``staged_version`` is the ONE key spec-step8 S6 adds, and it is added
+    ``staged_version`` is the key spec-step8 S6 adds, and it is added
     deliberately rather than tolerated: staging used to OVERWRITE this
     slot, which is why §7:551's "a new immutable release version per
     applied round" was unexpressible on it and why a ``force_release``
     after a Master had been frozen could move the payload with nothing on
-    either side recording that it had. The slot is still one slot — the
-    staging DRAFT — and this is the draft's version. It is deliberately
-    NOT a lane-keyed sub-map, which is the shape this test exists to
-    refuse.
+    either side recording that it had. ``staged_release_uid`` is its
+    Round-7 sibling — the draft LINEAGE the seal gate keys on, because the
+    version counter [measured] restarts on a legitimate inventory reset.
+    The slot is still one slot — the staging DRAFT — and these are the
+    draft's version and lineage. It is deliberately NOT a lane-keyed
+    sub-map, which is the shape this test exists to refuse.
     """
 
     chapter = _chapter_with_concepts(db)
@@ -997,8 +1003,9 @@ def test_publishing_one_lane_never_publishes_the_other(db):
     assert pre["summary"]["concept_ids"]
     assert not set(pre["summary"]["concept_ids"]) & set(job.result_ids or [])
 
-    # Publication title-cases the labels it writes, so compare on the
-    # normalised form rather than the authored one.
+    # Topic identity is matched leniently on both sides (S10 stopped
+    # rewriting the labels themselves), so compare on the normalised form
+    # rather than the authored one.
     lanes = {
         str(topic.topic_title).casefold(): topic.pre_post_learning
         for topic in db.query(models.Topic).filter(

@@ -269,7 +269,11 @@ def test_flagged_content_publishes_with_warnings_and_still_uploads(db):
     assert published.state == "uploaded"
 
 
-def test_staged_master_waits_for_exact_output01_publication(db):
+def test_staged_master_waits_for_exact_output03_publication(db):
+    # Renamed from ``..._output01_...`` under OD4: the Post lane's concept
+    # file is Output 03, and the refusal string now says so. The satisfying
+    # fixture row carries the ``machine_id`` the S10 resolver reads — the
+    # persisted identity, not the five-field byte match.
     chapter = _chapter_concept(db).topic.chapter
     token = uuid.uuid4().hex[:12]
     concept_key = f"release:{token}:0001"
@@ -326,7 +330,7 @@ def test_staged_master_waits_for_exact_output01_publication(db):
     )
     published = svc.publish_release(db, release)
 
-    with pytest.raises(svc.UploadRefused, match="Output-01 identity"):
+    with pytest.raises(svc.UploadRefused, match="Output-03 identity"):
         svc.upload_master_to_database(db, published, owner_sub=OWNER)
     assert published.state == "ready_for_upload"
 
@@ -345,6 +349,7 @@ def test_staged_master_waits_for_exact_output01_publication(db):
         concept_details="Exact staged teaching content.",
         keywords="staged, exact",
         sources="fixture",
+        machine_id=machine_id,
     )
     db.add(concept)
     for tier in ag.TIER_CODES:

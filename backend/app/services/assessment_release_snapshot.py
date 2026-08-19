@@ -1,6 +1,7 @@
-"""Immutable Output-01 hierarchy used by the assessment release.
+"""Immutable staged concept-release hierarchy used by the assessment release.
 
-The staged Build Concepts release is the sole concept authority for Output 02.
+The staged Build Concepts release is the sole concept authority for the
+lane's Master File — Output 02 off Output 01, Output 04 off Output 03 (OD4).
 Persisted Topic and Concept rows are deliberately absent from this projection;
 the target Chapter contributes directory metadata only.  Private release keys
 join concepts, groups, placements, and questions without entering workbook
