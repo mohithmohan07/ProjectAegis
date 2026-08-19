@@ -5,6 +5,9 @@ Status: specification only; no implementation is included here.
 Depends on:
 
 - Step 8 S10's machine-ID publication join;
+- correction of Step 8 S8's Output-02/04 identity projection and read-backs,
+  which currently strip the machine ID from concept-title cells and collapse
+  same-titled questionless concepts to one visible-title set;
 - the Step 11 removal of chapter-wide title deduplication and title-based
   duplicate validation; and
 - the Step 2 question-extraction follow-up in
@@ -217,9 +220,19 @@ The following changes are one end-to-end contract:
 - publish and update by persisted `machine_id`, never chapter-wide title;
 - key question routing, related-concept links, QC aggregates, and workbook
   placement by machine/plan identity; and
+- make both assessment snapshot builders carry `concept_machine_id`, and make
+  Outputs 02/04 compose every concept-title cell through the shared
+  `identity.titled` function so `topic_concept_labels` is an exact-text roster
+  of the cells it names;
+- validate concept presence and multiplicity by `concept_key`/persisted machine
+  ID, not a set of visible titles, at both the Master validator and Refiner
+  read-backs; questionless tail rows are part of that identity ledger; and
+- prove that workbook re-import restores the original persisted IDs instead of
+  recording `imported_without_machine_id` and re-minting them;
 - add a regression with two stanza topics, each containing a concept named
   `Courage`, and prove both survive authoring, validation, staging, workbook
-  rendering, publication, and re-download.
+  rendering, publication, re-download, and re-import. Include a questionless
+  pair so the OD5 tail-row path and both read-backs are load-bearing.
 
 This preserves Step 8's actual topic-scoped positional identity instead of
 merely asserting that the minter is correct in isolation.
@@ -283,6 +296,9 @@ Tests must prove:
 - no production regex/keyword list chooses poem/prose, stanza, episode,
   culmination, or component placement;
 - same-titled concepts under different stanza topics survive end to end;
+- both question-bearing and questionless same-titled concepts retain their
+  original machine IDs through Output-02/04 render, read-back, download, and
+  re-import;
 - localized/edited culmination titles retain their recorded roles;
 - every source block and language component is accounted for; and
 - no question is lost between the adjudicated source inventory and its final
@@ -325,7 +341,8 @@ No full-suite run is a substitute for this chapter review.
 4. **L4 — analysis and threading.** Build the final Detailed Analysis topic and
    exact-once grammar/listening/writing placements for both modes.
 5. **L5 — identity and residue retirement.** Remove chapter-wide title
-   deletion/validation, finish machine-ID publication, and replace English
+   deletion/validation, finish machine-ID publication, repair Output-02/04
+   identity composition and identity-keyed read-backs, and replace English
    culmination inference with explicit role transport.
 6. **L6 — live acceptance.** Validate the required corpus and record the
    evidence and costs.
@@ -346,8 +363,9 @@ prove exact coverage over tasks that vanished upstream.
   with source-grounded, work-appropriate content.
 - Grammar, listening, and writing material is accounted for and threaded by
   recorded verdict.
-- Two equal concept names under different stanza topics survive through
-  publication and re-download with different persisted IDs.
+- Two equal concept names under different stanza topics — including a
+  questionless OD5 pair — survive through publication, re-download, and
+  re-import with their original different persisted IDs.
 - Culmination behavior survives localization and title edits because it is
   keyed by role, not English wording.
 - Critic dissent is advisory; mid-run blocks become one recorded Fixer

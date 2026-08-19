@@ -3,8 +3,10 @@
 Status: implementation map only. This document records what exists and what
 the selected mode reaches; it does not implement the poem/prose adapter.
 
-Evidence basis: `origin/main` at `3aea81e` and PR #229 head `2296bf5` (S1-S7),
-checked 19 August 2026.
+Evidence basis: `origin/main` at `3aea81e` and PR #229 head `76c84fb` (S1-S8),
+checked 19 August 2026. The S8 evidence includes the independent review of the
+production snapshot, renderer, read-back, and import paths; helper-level tests
+were not treated as proof of end-to-end identity survival.
 
 ## 1. Binding destination
 
@@ -36,7 +38,8 @@ not line counts, heading patterns, or keyword lists.
 | Legacy prompt visibility | `_metadata_block` renders the selected mode and rationale into legacy `generation.py` API prompts | `generation.py:2485-2566`; `test_instruction_architect.py:554-582` |
 | Generic literary guidance | Skeleton/recovery prompts mention story, scene, stanza, episodes, and literary analysis | `generation.py:1259-1361,1363-1394` |
 | Semantic graph routing | Subject metadata is deterministically mapped to `language_literature`; graph metadata stores that adapter name | `canonical_source_phase3.py:349-390,944-985,1707-1725` |
-| Stable Step 8 identity | Persisted concept IDs are topic-scoped and positional; equal visible names under different topics mint different IDs | PR #229 `identity.py:320-440`; `test_persisted_identity.py:249-261` |
+| Step 8 identity primitive | Persisted concept IDs are topic-scoped and positional; equal visible names under different topics mint different IDs | PR #229 `identity.py:320-440`; `test_persisted_identity.py:249-261` |
+| Step 8 assessment projection | Incomplete: Outputs 02/04 render bare concept titles, while their topic roster carries tagged titles; the workbook read-backs compare visible-title sets rather than stable concept identity | PR #229 `assessment_release_snapshot.py:151-163,204-224`; `assessment_release_service.py:120-150`; `assessment_workbook.py:203-218,560-575,1004,1104-1110` |
 
 ## 3. What the selection currently reaches
 
@@ -77,11 +80,12 @@ not the Q9 adapter.
 
 ## 4. Existing blockers and residues
 
-### 4.1 Chapter-wide title deletion still forecloses a valid poem map
+### 4.1 The minter permits repeated names; the surrounding pipeline still does not
 
-The Step 8 identity primitive itself passes the required check: two equal
-concept names under two topics mint distinct `..._T01_C01` and `..._T02_C01`
-IDs. Step 8 therefore did not bake a chapter-wide title into identity.
+The Step 8 identity primitive itself passes the narrow required check: two
+equal concept names under two topics mint distinct `..._T01_C01` and
+`..._T02_C01` IDs. Step 8 therefore did not bake a chapter-wide title into
+the persisted minter.
 
 The pipeline around it still forecloses the case at PR #229 S7:
 
@@ -99,6 +103,33 @@ PR #229's Step 8 spec assigns the publication join to S10 and deliberately
 leaves `_dedupe_titles_chapter_wide` for Step 11. Until both are retired, two
 stanzas that legitimately teach a concept named `Courage` cannot survive end
 to end as two concepts.
+
+S8 adds a second, independent end-to-end break in the assessment projections:
+
+- the staged snapshot keeps `concept_machine_id` beside a bare
+  `concept_title`, while the database snapshot omits that ID from each concept
+  record (`assessment_release_snapshot.py:151-163` and
+  `assessment_release_service.py:139-150` on the PR head);
+- `assessment_workbook._bands_record` removes the identity trio and never calls
+  `identity.titled`, even though the S8 spec says both renderers share that
+  composer (`assessment_workbook.py:203-218`);
+- `topic_concept_labels` is nevertheless composed with the machine ID, so the
+  topic's exact-text roster and its concept-title cells disagree
+  (`assessment_release_snapshot.py:204-224` and
+  `assessment_release_service.py:120-136`);
+- `validate_master_file` records concept titles in sets, so dropping either of
+  two same-titled questionless tail rows is invisible; the Refiner's second
+  read-back checks group rows and skips those tails
+  (`assessment_workbook.py:1004,1104-1110` and
+  `assessment_master_refiner.py:677-729`); and
+- the importer restores a concept ID only from the title-cell tag. A bare title
+  therefore becomes `imported_without_machine_id` and is re-minted later
+  (`bulk_import/reader.py:536-575`).
+
+The current S8 test fixture pre-bakes `(machine id)` into `concept_title`, so it
+does not exercise either production snapshot builder. Step 11 must depend on a
+renderer/read-back correction as well as on removal of chapter-wide title
+deduplication and the S10 publication join.
 
 ### 4.2 English culmination recognition substitutes wording for role
 
