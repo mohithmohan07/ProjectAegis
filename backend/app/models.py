@@ -430,7 +430,24 @@ class AssessmentRelease(Base):
         ForeignKey("assessment_sessions.id"), nullable=True, default=None)
     # draft|materialized|validated_with_flags|ready_for_upload|
     # publication_pending|uploaded|superseded (spec §5.6).
+    #
+    # INTERNAL lifecycle, not the public release vocabulary. The three §4
+    # names (Ready / Ready with flags / Diagnostic release) are the only
+    # public ones and are computed by ``services.release_core``; this and
+    # ``diagnostics["readiness"]`` stay beside it as diagnostics
+    # (spec-step8 T1).
     state: Mapped[str] = mapped_column(String(32), default="draft")
+    # WHICH LANE this immutable row is the record of: "pre" (Outputs 01/02)
+    # or "post" (Outputs 03/04). One row per lane per run — two rows, four
+    # projections (spec-step8 T2). Blank on a legacy Build Assessments
+    # release that declared no lane, which is why the column defaults to
+    # "" rather than to a lane: defaulting would assert a lane nobody
+    # named.
+    lane: Mapped[str] = mapped_column(String(16), default="", index=True)
+    # The workbook LAYOUT this run executed under (``bulk_import.layouts``
+    # ids, e.g. "sop-mes-1"). Recorded on the row so a release published
+    # under one layout is never re-read under another.
+    layout_id: Mapped[str] = mapped_column(String(64), default="")
     # Immutable inputs, frozen at Stage 1 with their hashes.
     concept_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
     concept_snapshot_sha256: Mapped[str] = mapped_column(
@@ -444,7 +461,12 @@ class AssessmentRelease(Base):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
     # Issue ledger, readiness, and validation diagnostics.
     diagnostics: Mapped[dict] = mapped_column(JSON, default=dict)
-    # Provider/model/prompt/schema identity pinned for the whole run.
+    # Provider/model/prompt/schema identity pinned for the whole run,
+    # plus the run context §3 guard 2 asks for: the assessment PROFILE
+    # name, the LAYOUT manifest identity, and the staged concept-release
+    # version this row was frozen from. Declared since the first MES
+    # release and written from spec-step8 S6 onward — before that it was
+    # a column no code ever filled.
     provider_identity: Mapped[dict] = mapped_column(JSON, default=dict)
     # {"concepts_xlsx": sha256, "master_xlsx": sha256, "manifest": sha256}.
     workbook_hashes: Mapped[dict] = mapped_column(JSON, default=dict)

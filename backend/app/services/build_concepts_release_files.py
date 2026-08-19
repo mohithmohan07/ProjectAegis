@@ -21,6 +21,7 @@ from . import uploads
 from .build_concepts_release import (
     LANE_POST,
     LANE_PRE,
+    assessment_lane_issue,
     RELEASE_ROW_BLOCKS_FIELD,
     RELEASE_ROW_ERRORS_FIELD,
     RELEASE_ROW_QIDS_FIELD,
@@ -61,25 +62,132 @@ OUTPUT_KIND_ORDER: tuple[str, ...] = (
     "release_master",            # Output 04 · Post-Learning Master File
 )
 
-# The placeholder's stated reason. It says only what this module can
-# actually establish: that the entry is a placeholder and where the real
-# file will come from.
-#
-# It deliberately does NOT say "…which this run has not recorded". That
-# clause reads as a checked fact and is not one: this constant is
-# unconditional, so a job whose lane ALREADY has an ``AssessmentRelease``
-# row would be told something untrue about its own run. An inaccurate
-# reason is a smaller defect than the absent entry it replaces (R4), but
-# it is still a string that lies to a reviewer, and the check that would
-# make it true does not exist until S6 wires the release row in.
-_MASTER_UNAVAILABLE = (
-    "This lane's Master File is not available yet. It is served from the "
-    "lane's assessment release, which this manifest cannot yet address."
-)
-
 _XLSX_MEDIA_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+
+# The two Master entries' labels, keyed by lane, so the twin manifests
+# cannot drift on the text either.
+_MASTER_LABELS = {
+    LANE_PRE: ("pre_release_master", "Pre-Learning Master File"),
+    LANE_POST: ("release_master", "Post-Learning Master File"),
+}
+# The two reasons that are NOT the generic placeholder, each stating a
+# checked fact rather than a guess.
+_MASTER_NOT_BUILT = (
+    "This lane's Master File has not been built for this run yet. Build it "
+    "from the release page; the Concept File for this lane is unaffected."
+)
+_MASTER_NOT_PUBLISHED = (
+    "This lane's Master File exists but its release has not finished "
+    "publishing, so nothing is served for it yet."
+)
+_MASTER_SUPERSEDED = (
+    "This lane's Master File was superseded and no newer release has "
+    "finished being built. The superseded release keeps its file and its "
+    "receipt; the manifest does not point at a superseded release."
+)
+
+
+def master_entry(
+    job: models.UploadJob, *, lane: object,
+) -> dict[str, Any]:
+    """Output 02 or Output 04's manifest row — PRESENT, always.
+
+    The four outputs are enumerated in one place or map P16 survives at
+    its root: a reviewer who cannot see four entries cannot check that
+    four exist, and an ABSENT entry is indistinguishable from a lane that
+    does not apply to this chapter. So this row is never omitted. When the
+    lane has no servable Master it is present and ``disabled`` with a
+    reason that says which of the three things happened:
+
+    * the lane's Master was not built on this run;
+    * it was built but its release has not finished publishing;
+    * every release in the lane's chain has been superseded, so there is
+      no live row to point at;
+    * it is available, and the entry is enabled and points at it.
+
+    In all three disabled cases, when the run RECORDED why
+    (``assessment_lane_unavailable``, T15-2) the reason is that record's
+    own message — naming the exception — rather than the generic
+    sentence.
+
+    Resolved through ``AssessmentRelease.job_id`` plus the ``lane`` column
+    (spec-step8 T2/S6) — which is exactly why S3 could only leave a
+    placeholder here: there was no column to ask, and the entry had to
+    exist anyway so that the ORDER was fixed from that slice on.
+
+    The session comes off the job itself. A manifest block is handed an
+    ORM object and no session, and reaching for a new one here would open
+    a second connection during a serialization; ``object_session`` is the
+    one the caller already has.
+    """
+
+    from sqlalchemy.orm import object_session
+
+    from . import release_core
+
+    resolved = normalize_lane(lane)
+    kind, label = _MASTER_LABELS[resolved]
+    entry: dict[str, Any] = {
+        "kind": kind,
+        "label": label,
+        "filename": "",
+        "media_type": _XLSX_MEDIA_TYPE,
+        "size_bytes": 0,
+        "download_url": "",
+        "action": "download",
+    }
+    # Read ONCE, above both disabled branches. The run that recorded a
+    # named ``assessment_lane_unavailable`` failure is this run — staging
+    # rebuilds ``payload["issues"]`` from scratch and ``_build_master_
+    # siblings`` appends after it — so whenever this is present it is the
+    # more specific of two true things, and the reviewer gets the named
+    # exception rather than a generic sentence. It used to be read only in
+    # the "no row at all" branch, which meant the realistic partial
+    # failure — ``create_release`` commits, then ``publish_release``
+    # raises — showed the generic reason and threw the recorded one away.
+    recorded = assessment_lane_issue(release_payload(job, lane=resolved))
+    release = None
+    superseded = None
+    try:
+        session = object_session(job)
+        release = release_core.latest_release_for_lane(
+            session, job.id, resolved)
+        if release is None:
+            superseded = release_core.release_chain_head(
+                session, job.id, resolved)
+    except Exception:
+        # A manifest block must never be the thing that fails a job
+        # serialization. An unreadable release row leaves the entry
+        # present and disabled, which is the shape this function
+        # guarantees in every other branch too.
+        release = None
+        superseded = None
+    if release is None:
+        entry["disabled"] = True
+        entry["disabled_reason"] = (
+            str((recorded or {}).get("message") or "")
+            or (_MASTER_SUPERSEDED if superseded is not None
+                else _MASTER_NOT_BUILT)
+        )
+        return entry
+    if not (release.publication or {}).get("manifest"):
+        entry["disabled"] = True
+        entry["disabled_reason"] = (
+            str((recorded or {}).get("message") or "")
+            or _MASTER_NOT_PUBLISHED
+        )
+        return entry
+    entry["label"] = f"Download the {label}"
+    entry["filename"] = (
+        f"aegis_master_{release.release_uid}_v{release.version}.xlsx"
+    )
+    entry["download_url"] = (
+        f"/build-assessments/releases/{release.id}/master.xlsx"
+    )
+    entry["release_state"] = release_core.release_state(release)
+    return entry
 
 
 def in_owner_order(
@@ -947,22 +1055,12 @@ def _pre_release_entries(
             ),
             "action": "download",
         },
-        {
-            # Output 02 · Pre-Learning Master File. Present and disabled
-            # with a stated reason, never absent — an absent entry is the
-            # defect this manifest exists to close, and the reviewer who
-            # cannot see four outputs in one place cannot check that four
-            # exist. The release row it is served from arrives later.
-            "kind": "pre_release_master",
-            "label": "Pre-Learning Master File",
-            "filename": "",
-            "media_type": _XLSX_MEDIA_TYPE,
-            "size_bytes": 0,
-            "download_url": "",
-            "action": "download",
-            "disabled": True,
-            "disabled_reason": _MASTER_UNAVAILABLE,
-        },
+        # Output 02 · Pre-Learning Master File. Present and, when the lane
+        # has no servable Master, disabled with a stated reason — never
+        # absent, because an absent entry is the defect this manifest
+        # exists to close and a reviewer who cannot see four outputs in
+        # one place cannot check that four exist.
+        master_entry(job, lane=LANE_PRE),
         {
             "kind": "released_pre_concepts",
             "label": "Download released Pre-Learning output",
@@ -1056,19 +1154,9 @@ def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
             ),
             "action": "download",
         },
-        {
-            # Output 04 · Post-Learning Master File — the disabled
-            # placeholder, present so the ORDER is fixed from here on.
-            "kind": "release_master",
-            "label": "Post-Learning Master File",
-            "filename": "",
-            "media_type": _XLSX_MEDIA_TYPE,
-            "size_bytes": 0,
-            "download_url": "",
-            "action": "download",
-            "disabled": True,
-            "disabled_reason": _MASTER_UNAVAILABLE,
-        },
+        # Output 04 · Post-Learning Master File, resolved through this
+        # job's Post ``AssessmentRelease`` row. Present in every branch.
+        master_entry(job, lane=LANE_POST),
         {
             "kind": "released_concepts",
             "label": "Download released output",

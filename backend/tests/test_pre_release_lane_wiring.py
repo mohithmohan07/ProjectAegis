@@ -460,7 +460,7 @@ def test_neither_manifest_offers_the_pre_entries_without_a_pre_release(db):
 # 3. BOTH snapshot writers
 # --------------------------------------------------------------------------- #
 
-def test_both_snapshot_writers_are_lane_correct_for_output_04(db):
+def test_both_snapshot_writers_are_lane_correct_for_output_02(db):
     """Two writers project the concept hierarchy; both must say Pre.
 
     ``assessment_release_snapshot.build`` reads the staged payload;
@@ -570,12 +570,12 @@ def test_the_published_pre_concept_carries_no_audit_marker(db):
 # --------------------------------------------------------------------------- #
 
 _POST_PAYLOAD_KEYS = {
-    "version", "released_at", "release_reason", "job_id", "learning_kind",
-    "source_book", "filename", "source_document_hash", "target_chapter_id",
-    "directory_metadata", "target_identity", "checkpoint_stage",
-    "checkpoint_progress", "records", "issues", "type_case_rows",
-    "question_task_inventory", "extraction_provenance", "mined_types",
-    "pending_decision_snapshot", "final_grounding_certificate",
+    "version", "staged_version", "released_at", "release_reason", "job_id",
+    "learning_kind", "source_book", "filename", "source_document_hash",
+    "target_chapter_id", "directory_metadata", "target_identity",
+    "checkpoint_stage", "checkpoint_progress", "records", "issues",
+    "type_case_rows", "question_task_inventory", "extraction_provenance",
+    "mined_types", "pending_decision_snapshot", "final_grounding_certificate",
     "chapter_meta", "instruction_set", "summary",
 }
 
@@ -587,6 +587,16 @@ def test_the_post_release_payload_keeps_its_recorded_shape(db):
     shape and every recorded release fixture with it. Pinned as an exact
     key set, and pinned on a job that HAS a Pre sibling, so the Pre lane
     cannot leak a key into the Post payload.
+
+    ``staged_version`` is the ONE key spec-step8 S6 adds, and it is added
+    deliberately rather than tolerated: staging used to OVERWRITE this
+    slot, which is why §7:551's "a new immutable release version per
+    applied round" was unexpressible on it and why a ``force_release``
+    after a Master had been frozen could move the payload with nothing on
+    either side recording that it had. The slot is still one slot — the
+    staging DRAFT — and this is the draft's version. It is deliberately
+    NOT a lane-keyed sub-map, which is the shape this test exists to
+    refuse.
     """
 
     chapter = _chapter_with_concepts(db)
@@ -594,6 +604,8 @@ def test_the_post_release_payload_keeps_its_recorded_shape(db):
     payload = release.release_payload(job)
 
     assert set(payload) == _POST_PAYLOAD_KEYS
+    assert payload["staged_version"] == 1
+    assert payload["version"] == release.RELEASE_VERSION
     assert payload["learning_kind"] == "post"
     assert release.RELEASE_LANE_FIELD not in payload
     assert set(payload["summary"]) == {

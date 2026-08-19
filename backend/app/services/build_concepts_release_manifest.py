@@ -34,7 +34,10 @@ _safe_filename = release_files._safe_filename
 # twin defines separately is an order ``install()`` can silently break.
 OUTPUT_KIND_ORDER = release_files.OUTPUT_KIND_ORDER
 in_owner_order = release_files.in_owner_order
-_MASTER_UNAVAILABLE = release_files._MASTER_UNAVAILABLE
+# The Master entries themselves come from one builder, for the same
+# reason the ORDER does: two implementations of "is this lane's Master
+# servable, and if not why not" is two answers waiting to disagree.
+master_entry = release_files.master_entry
 _XLSX_MEDIA_TYPE = release_files._XLSX_MEDIA_TYPE
 
 
@@ -60,19 +63,9 @@ def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
             ),
             "action": "download",
         },
-        {
-            # Output 04 · Post-Learning Master File — the disabled
-            # placeholder, present so the ORDER is fixed from here on.
-            "kind": "release_master",
-            "label": "Post-Learning Master File",
-            "filename": "",
-            "media_type": _XLSX_MEDIA_TYPE,
-            "size_bytes": 0,
-            "download_url": "",
-            "action": "download",
-            "disabled": True,
-            "disabled_reason": _MASTER_UNAVAILABLE,
-        },
+        # Output 04 · Post-Learning Master File — the shared builder, so
+        # the lazy twin and the eager one cannot disagree about it.
+        master_entry(job, lane=LANE_POST),
         {
             "kind": "released_concepts",
             "label": "Download released output",
@@ -166,19 +159,8 @@ def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
             ),
             "action": "download",
         },
-        {
-            # Output 02 · Pre-Learning Master File — the disabled
-            # placeholder, present so the ORDER is fixed from here on.
-            "kind": "pre_release_master",
-            "label": "Pre-Learning Master File",
-            "filename": "",
-            "media_type": _XLSX_MEDIA_TYPE,
-            "size_bytes": 0,
-            "download_url": "",
-            "action": "download",
-            "disabled": True,
-            "disabled_reason": _MASTER_UNAVAILABLE,
-        },
+        # Output 02 · Pre-Learning Master File — the shared builder.
+        master_entry(job, lane=LANE_PRE),
         {
             "kind": "released_pre_concepts",
             "label": "Download released Pre-Learning output",

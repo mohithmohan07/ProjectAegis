@@ -265,7 +265,172 @@ def _release_after_result(
     return staged
 
 
+def _lane_has_staged_concept_release(
+    db,
+    job_id: int,
+    lane: str,
+    *,
+    owner_sub: str | None = None,
+) -> bool:
+    """Is there a staged CONCEPT release in this lane's slot to build from?
+
+    A mechanical precondition, not a judgment about content: the
+    assessment lane reads the staged concept payload for ITS lane, and a
+    lane whose slot is empty raises ``ReleaseRunError`` before the runner
+    does anything at all.
+
+    Asking first matters because the failure is otherwise unrecordable.
+    ``record_assessment_lane_unavailable`` writes onto the lane's staged
+    payload, so with no payload there is nothing to write onto: the
+    exception is caught and then DROPPED — neither built nor recorded.
+    [measured] a job with no Pre slot attempts the Pre lane, raises
+    ``ReleaseRunError``, and records nothing anywhere. A chapter with no
+    Phase-03 pre map is the ordinary shape of that, so every Post-only
+    run was paying for a doomed attempt and discarding its reason.
+
+    An unreadable answer ATTEMPTS. This may skip a lane only on positive
+    evidence that its slot is empty, never on a database it could not
+    read — a lane skipped by accident is exactly the silent loss the
+    whole containment exists to prevent.
+    """
+
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=owner_sub, module="build_concepts")
+        return release.release_payload(job, lane=lane) is not None
+    except Exception:
+        return True
+
+
+def _build_master_siblings(
+    db,
+    job_id: int,
+    target_chapter_id: int,
+    *,
+    owner_sub: str | None = None,
+) -> dict[str, dict[str, Any] | None]:
+    """Outputs 02 and 04, in the same run that produced 01 and 03.
+
+    THE OWNER'S RULING (OD1 / spec-step8 T15): one Build Concepts run
+    produces all four outputs. There is no option, no fallback and no
+    mailbox — the two API routes that build these lanes stay, but as the
+    reviewer's explicit RE-BUILD against the already-frozen release row
+    (Rule G's idempotent second act), not as the only trigger.
+
+    **It never propagates, and that is a Q13 requirement rather than a
+    robustness nicety.** By the time this runs the two CONCEPT outputs are
+    finished and durable: the payload is staged for both lanes and
+    ``release-bulk-import.xlsx`` already renders. An exception escaping
+    here would propagate out of ``generate_post_learning`` and take them
+    with it — a mid-run halt after the model budget is spent, losing
+    finished work, which CLAUDE.md and Q13 forbid. One Master-lane fault
+    would cost all four outputs.
+
+    So each lane is wrapped in ``try/except Exception``. Deliberately
+    broad, and the reason is stated rather than apologised for: an
+    enumerated tuple of exception types is a list that goes stale, and the
+    one thing that must never happen is a NEW exception type costing
+    Outputs 01/03. [verified] the types it will actually see today are
+    ``assessment_release_run.ReleaseRunError`` and its subclasses
+    ``GeneratedLaneError`` / ``SourceQuestionLeak``,
+    ``assessment_release_service.UploadRefused``,
+    ``assessment_workbook.WorkbookRenderError`` and
+    ``phase3.premap.PreExtractionError``.
+
+    **Caught is not swallowed.** Each failure becomes a named
+    ``assessment_lane_unavailable`` issue on THAT LANE'S CONCEPT release,
+    through the issue ledger that already exists, carrying the lane, the
+    exception class, its message and the staged draft version. The concept
+    release's ``release_state`` is unchanged and its database upload stays
+    open — only that lane's Master manifest entry goes ``disabled``,
+    carrying the recorded issue as its reason.
+
+    In the owner's numbering: Output 02 (Pre) then Output 04 (Post).
+    Neither lane's outcome is an input to the other's, so a Pre failure
+    never skips the Post build.
+    """
+
+    from . import assessment_release_run
+
+    built: dict[str, dict[str, Any] | None] = {}
+    for lane, runner in (
+        (release.LANE_PRE, assessment_release_run.run_pre_release_for_job),
+        (release.LANE_POST, assessment_release_run.run_release_for_job),
+    ):
+        try:
+            if not _lane_has_staged_concept_release(
+                db, job_id, lane, owner_sub=owner_sub,
+            ):
+                # No slot, so nothing to build a Master from and nowhere
+                # to record a failure onto. Skipping is the honest
+                # answer: the alternative is a doomed run whose reason is
+                # thrown away. The lane's Master entry is still PRESENT
+                # and disabled with the "not built for this run" reason,
+                # so nothing about it is silent.
+                built[lane] = None
+                continue
+            built[lane] = {"release_id": runner(
+                db, job_id, owner_sub=owner_sub).id}
+        except Exception as exc:  # noqa: BLE001 — see the docstring
+            built[lane] = None
+            try:
+                db.rollback()
+                job = uploads.get_job(
+                    db,
+                    job_id,
+                    owner_sub=owner_sub,
+                    module="build_concepts",
+                )
+                release.record_assessment_lane_unavailable(
+                    db, job, lane=lane, error=exc)
+            except Exception:
+                # The recorder is already defensive; this is the second
+                # ring, so that a database that cannot even be read back
+                # still cannot cost the finished concept outputs.
+                pass
+    return built
+
+
 def _run_generation_release(
+    original: Callable[..., object],
+    db,
+    job_id: int,
+    target_chapter_id: int,
+    *args,
+    **kwargs,
+) -> dict[str, Any]:
+    """Stage the two concept lanes, then build the two Master lanes.
+
+    Three lines, and every one of them is load-bearing:
+
+    * ``_stage_generation_release`` is today's whole body, moved verbatim.
+      All four exits — clean/captured, clean/checkpoint, raised/captured,
+      raised/checkpoint — and all four ``stage_release`` /
+      ``_stage_pre_sibling`` pairs stay exactly where they were.
+    * ``_build_master_siblings`` is called ONCE, on the single tail all
+      four exits converge on. Not four times beside ``_stage_pre_sibling``,
+      for three checkable reasons: (a) all four exits reach it, INCLUDING
+      the two failure exits, which are exactly where "one run, four
+      outputs" would otherwise silently degrade to two on the runs that
+      most need the evidence — ``_stage_pre_sibling``'s own docstring
+      makes this argument for the Pre lane and it applies unchanged one
+      lane further; (b) it is OUTSIDE the ``_RELEASE_MODE`` /
+      ``_RELEASE_CAPTURE`` context vars, whose ``finally`` has already run
+      by the time control reaches here, so the deposit interceptor
+      ``install()`` wires cannot see the assessment lane; (c) one site, so
+      a fifth exit added later inherits it rather than being forgotten.
+    * the staged result is returned unchanged — the assessment lane is a
+      sibling of the concept release, never a gate on it.
+    """
+
+    staged = _stage_generation_release(
+        original, db, job_id, target_chapter_id, *args, **kwargs)
+    _build_master_siblings(
+        db, job_id, target_chapter_id, owner_sub=kwargs.get("owner_sub"))
+    return staged
+
+
+def _stage_generation_release(
     original: Callable[..., object],
     db,
     job_id: int,

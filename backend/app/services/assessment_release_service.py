@@ -261,8 +261,20 @@ def create_release(
     job_id: int | None = None,
     owner_sub: str,
     supersedes: models.AssessmentRelease | None = None,
+    lane: str = "",
+    layout_id: str = "",
+    provider_identity: Mapping | None = None,
 ) -> models.AssessmentRelease:
-    """Assemble and persist one immutable release (state: materialized)."""
+    """Assemble and persist one immutable release (state: materialized).
+
+    ``lane``, ``layout_id`` and ``provider_identity`` are the run context
+    the converged core records on the row (spec-step8 T2/S6): which lane
+    this row is the release of record for, which workbook layout the run
+    executed under, and the provider/model/prompt identity plus the staged
+    draft version it was frozen from. All three default to empty, because
+    a legacy Build Assessments payload declares no lane and inventing one
+    for it would put a row into a lane's manifest on no evidence.
+    """
     frozen = rel.freeze_payload(payload)
     staged = payload.get("concept_snapshot")
     if isinstance(staged, Mapping):
@@ -299,6 +311,9 @@ def create_release(
         version=(supersedes.version + 1 if supersedes else 1),
         owner_sub=owner_sub,
         job_id=job_id,
+        lane=str(lane or "").strip().lower(),
+        layout_id=str(layout_id or ""),
+        provider_identity=dict(provider_identity or {}),
         state=rel.advance_state("draft", "materialized"),
         concept_snapshot=snapshot,
         concept_snapshot_sha256=assessment_workbook.snapshot_sha256(snapshot),

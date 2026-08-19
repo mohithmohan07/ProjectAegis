@@ -61,6 +61,29 @@ RELEASE_LANES = (LANE_POST, LANE_PRE)
 # lets ``payload_lane`` catch a Pre payload mis-staged into the POST slot.
 # It is never the authority when the key is available.
 RELEASE_LANE_FIELD = "release_lane"
+# The staged draft's VERSION (spec-step8 T1/T2/S6).
+#
+# This slot used to be overwritten in place — ``durable_inventory[KEY] =
+# payload`` — which is why §7:551's "a new immutable release version per
+# applied round" was unexpressible on it and why the hazard T2 names was
+# live: publish the Concept File, then ``force_release`` re-stages, the
+# payload changes, ``source_release_sha256`` changes, and the already
+# published Master can never be matched to its source again.
+#
+# The slot is still ONE slot — after the convergence it is the staging
+# DRAFT, and ``models.AssessmentRelease`` is the immutable row of record
+# (T2). What changes here is that every staging MINTS a version instead
+# of silently replacing what was there: the number is monotonic per lane,
+# it travels into the frozen row's ``provider_identity``, and a re-stage
+# after a freeze is therefore visible on both sides instead of being an
+# overwrite nothing recorded.
+STAGED_VERSION_FIELD = "staged_version"
+# One recorded, named issue: the lane's Master File did not build on this
+# run (spec-step8 T15-2). It is an ISSUE, never a structural defect — the
+# CONCEPT payload is not corrupt, a later lane simply did not produce, and
+# refusing the concept lane's database write for a fault in a different
+# lane is Rule G's two-publication separation collapsed.
+ASSESSMENT_LANE_UNAVAILABLE = "assessment_lane_unavailable"
 RELEASE_STATUS = "released"
 RELEASE_ROW_STATUS_FIELD = "_aegis_release_status"
 RELEASE_ROW_ERRORS_FIELD = "_aegis_release_errors"
@@ -397,6 +420,137 @@ def staged_release_for_lane(
     return payload, payload_lane(payload)
 
 
+def staged_version(payload: Mapping[str, Any] | None) -> int:
+    """The staged draft's version, or 0 when it carries none.
+
+    0 means "staged before this counter existed", not "version zero": a
+    release payload recorded by an earlier build has no such key and must
+    keep opening.
+    """
+
+    if not isinstance(payload, Mapping):
+        return 0
+    try:
+        return int(payload.get(STAGED_VERSION_FIELD) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def next_staged_version(
+    job: models.UploadJob, *, lane: object = LANE_POST,
+) -> int:
+    """Mint the next version for one lane's staging slot.
+
+    Mechanics: read what is in the slot, add one. Per LANE, because the
+    two lanes are separate drafts with separate publications (Rule G), and
+    a shared counter would make a Pre re-stage look like a Post one.
+    """
+
+    return staged_version(release_payload(job, lane=lane)) + 1
+
+
+def assessment_lane_issue(
+    payload: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """The recorded ``assessment_lane_unavailable`` issue, or None.
+
+    The read half of the transport ``record_assessment_lane_unavailable``
+    writes: the manifest's Master entry uses it as the stated reason the
+    entry is disabled, so the reviewer is told WHY the file is missing
+    instead of only that it is.
+    """
+
+    if not isinstance(payload, Mapping):
+        return None
+    recorded = [
+        dict(issue)
+        for issue in payload.get("issues") or []
+        if isinstance(issue, Mapping)
+        and _normal(issue.get("code")) == ASSESSMENT_LANE_UNAVAILABLE
+    ]
+    return recorded[-1] if recorded else None
+
+
+def record_assessment_lane_unavailable(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    lane: object,
+    error: BaseException,
+) -> dict[str, Any] | None:
+    """Record that one lane's Master File did not build, and keep going.
+
+    Q13, and the reason is the whole point rather than a robustness
+    nicety: by the time this is called the two CONCEPT outputs are
+    finished and durable — the payload is staged, the bulk-import workbook
+    already renders for both lanes. An exception escaping the assessment
+    lane would propagate out of ``generate_post_learning`` and take them
+    with it: a mid-run halt after the model budget is spent, which
+    CLAUDE.md and Q13 forbid. So the failure is CAUGHT, and then it is
+    NAMED — nothing is guessed silently and nothing finished is lost.
+
+    It touches ``issues`` and NOTHING else, and both halves of that are
+    deliberate:
+
+    * it is not a re-stage. It is also seal-safe by measurement —
+      ``assessment_release_snapshot.source_release_sha256`` hashes
+      thirteen payload keys and ``issues`` is not among them — so
+      appending here moves no seal, no ``machine_id`` and no
+      ``concept_snapshot_sha256``, and the frozen Master of the OTHER
+      lane still matches its source.
+    * it does not touch ``summary``. The concept release's
+      ``release_state`` reads the summary counts, and a later lane's
+      fault must not change the CONCEPT lane's public state or close its
+      database upload (T15-2). The counts and this ledger therefore
+      disagree by one on a failed run, deliberately: the alternative is a
+      Master-lane fault silently downgrading a clean Concept File.
+
+    Never raises. A recorder that can raise is the same defect one level
+    up.
+    """
+
+    try:
+        resolved = normalize_lane(lane)
+        payload = release_payload(job, lane=resolved)
+        if payload is None:
+            return None
+        issue = _issue(
+            code=ASSESSMENT_LANE_UNAVAILABLE,
+            severity="error",
+            phase="assessment_release",
+            message=(
+                f"The {resolved!r} lane's Master File was not built on this "
+                f"run: {type(error).__name__}: {error}. The Concept File for "
+                "this lane is unaffected and its database upload is still "
+                "open; re-run the lane from the release page."
+            ),
+            details={
+                "lane": resolved,
+                "exception": type(error).__name__,
+                "error": str(error),
+                STAGED_VERSION_FIELD: staged_version(payload),
+            },
+        )
+        key = release_key_for_lane(resolved)
+        durable = copy.deepcopy(dict(job.question_inventory or {}))
+        slot = durable.get(key)
+        if not isinstance(slot, Mapping):
+            return None
+        slot = copy.deepcopy(dict(slot))
+        slot["issues"] = list(slot.get("issues") or []) + [issue]
+        durable[key] = slot
+        job.question_inventory = durable
+        db.commit()
+        db.refresh(job)
+        return issue
+    except Exception:  # pragma: no cover - the recorder must never raise
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
 def release_available(
     job: models.UploadJob, *, lane: object = LANE_POST,
 ) -> bool:
@@ -454,6 +608,43 @@ def _publishable_record(record: object) -> bool:
     )
 
 
+# The two keys that make a payload the ASSESSMENT release's payload rather
+# than a concept release's. This reads which SCHEMA is in hand — not what
+# any content means — and the two shapes are disjoint by construction:
+# neither staged concept payload (Post or Pre) carries either key, and the
+# assessment payload carries no ``records``.
+#
+# It exists because ``release_state`` became the ONE public vocabulary for
+# both release systems (spec-step8 T1). [measured] before this,
+# ``release_state({"source_atoms": …, "candidates": …, "groups": …})``
+# returned ``diagnostic_release``, because the only depositable unit this
+# function knew about was a concept row — so every healthy assessment
+# release was labelled structurally corrupt the moment the shared core
+# started asking.
+_ASSESSMENT_PAYLOAD_KEYS = ("candidates", "groups")
+
+
+def _is_assessment_payload(payload: Mapping[str, Any]) -> bool:
+    return any(key in payload for key in _ASSESSMENT_PAYLOAD_KEYS)
+
+
+def _publishable_candidate(candidate: object) -> bool:
+    """The assessment lane's depositable unit.
+
+    The same mechanic one level over: it has the two identities the
+    assessment upsert joins on — its home concept and its group. No
+    reading of what the question means, and no judgment about whether it
+    is a GOOD question; that is what the flags and the model's own
+    verdicts are for.
+    """
+
+    return (
+        isinstance(candidate, Mapping)
+        and bool(_normal(candidate.get("concept_key")))
+        and bool(_normal(candidate.get("group_key")))
+    )
+
+
 def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
     """Structural/import-integrity defects that block the database upload.
 
@@ -482,6 +673,24 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
 
     if not isinstance(payload, Mapping):
         return ["no staged release"]
+    if _is_assessment_payload(payload):
+        # B's payload shape (spec-step8 S6). Its depositable unit is a
+        # candidate carrying its home concept and its group, not a
+        # concept row — asking for ``records`` here labelled every
+        # healthy assessment release ``diagnostic_release``.
+        #
+        # This does NOT take over the assessment lane's publication gate.
+        # That stays where it is: ``diagnostics["payload_errors"]`` and
+        # ``_readiness``'s read of the renderer's ``unplaced`` list, both
+        # in ``assessment_release_service``, are what refuse the write.
+        # This function only says which of the three §4 NAMES the row
+        # wears, through one vocabulary for both lanes.
+        if not [
+            candidate for candidate in payload.get("candidates") or []
+            if _publishable_candidate(candidate)
+        ]:
+            return ["the release contains no assessment rows to upload"]
+        return []
     defects: list[str] = []
     refused = _normal(payload.get("refused"))
     if refused:
@@ -1444,6 +1653,9 @@ def stage_release(
     released_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "version": RELEASE_VERSION,
+        # The SCHEMA version above; the DRAFT version here. Minted, not
+        # overwritten (spec-step8 T2/S6) — read the constant's note.
+        STAGED_VERSION_FIELD: next_staged_version(job, lane=LANE_POST),
         "released_at": released_at,
         "release_reason": _normal(reason) or (
             "Generation completed and was staged for explicit publication."
@@ -2040,6 +2252,9 @@ def stage_pre_release(
     )
     payload = {
         "version": RELEASE_VERSION,
+        # Minted per LANE, so a Pre re-stage never reads as a Post one
+        # (spec-step8 T2/S6).
+        STAGED_VERSION_FIELD: next_staged_version(job, lane=LANE_PRE),
         RELEASE_LANE_FIELD: LANE_PRE,
         "released_at": datetime.now(timezone.utc).isoformat(),
         "release_reason": _normal(reason) or (
@@ -2210,6 +2425,13 @@ def force_release(
         raise uploads.JobAlreadyRunningError(
             "generation is still running; release it after the active request finishes"
         )
+    # MINTS a new staged version rather than overwriting the slot
+    # (spec-step8 T2/S6). This is the route that made the hazard concrete:
+    # it refuses only when ``job.status == "generated"``, so a reviewer
+    # could re-stage after the Master File had already been frozen against
+    # the previous draft, and nothing on either side recorded that the
+    # source had moved. ``stage_release`` mints the version; the frozen
+    # row carries it.
     stage_release(
         db,
         job,

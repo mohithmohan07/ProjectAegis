@@ -303,13 +303,28 @@ _XLSX_MEDIA = (
 
 
 def _release_summary(release) -> dict:
+    from ..services import release_core
+
     diagnostics = release.diagnostics or {}
     return {
         "id": release.id,
         "release_uid": release.release_uid,
         "version": release.version,
+        # THE public release vocabulary, and the only one (spec-step8 T1).
+        # One name for both release systems, so a reviewer reading the
+        # assessment release and a reviewer reading the concept release
+        # are reading the same three §4 names about the same run.
+        "release_state": release_core.release_state(release),
+        # DIAGNOSTICS, kept beside it and deliberately not removed.
+        # ``state`` is B's 7-state internal lifecycle and ``readiness``
+        # its 3-value publication verdict — the thing that actually
+        # refuses the database write, at
+        # ``assessment_release_service.py``'s ``if readiness == BLOCKED``.
+        # Both remain exactly as truthful as they were; what changed is
+        # that neither is a second PUBLIC name for the release any more.
         "state": release.state,
         "readiness": diagnostics.get("readiness", ""),
+        "lane": release_core.lane_of(release),
         "concept_snapshot_sha256": release.concept_snapshot_sha256,
         "workbook_sha256s": release.workbook_hashes or {},
         "published": bool((release.publication or {}).get("manifest")),

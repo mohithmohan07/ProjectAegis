@@ -49,6 +49,7 @@ from . import assessment_profile
 from . import build_concepts_release
 from . import identity
 from . import progress, uploads
+from . import release_core
 from . import release_refiner
 from .phase3 import envelope as phase3_envelope
 from .phase3 import kernel
@@ -2332,6 +2333,27 @@ def run_release_for_job(
             source_qids=source_qids,
             where="the generated assessment release payload",
         )
+    if supersedes is None:
+        # THE FREEZE SEAM (spec-step8 T2/S6). One immutable row per lane
+        # per run: a second run of the same lane on the same job is a new
+        # VERSION that supersedes the first, not an unrelated release that
+        # orphans it. Resolved from the job and the lane, so the reviewer's
+        # explicit re-build route — the idempotent second act — lands on
+        # the same chain the in-run build started.
+        #
+        # Only when the caller named none: a caller that passes
+        # ``supersedes`` has already decided the lineage, and a lane-less
+        # legacy release has no chain to join.
+        #
+        # ``release_chain_head``, not ``latest_release_for_lane``: this is
+        # the lineage question, and it must include a superseded row. A
+        # chain whose every row is superseded is still that lane's chain,
+        # and appending to it keeps the published receipts in one lineage
+        # where minting a fresh ``release_uid`` at version 1 would orphan
+        # them. The manifest asks the other question, and gets the other
+        # answer.
+        supersedes = release_core.release_chain_head(
+            db, job.id, staged_lane)
     release = release_service.create_release(
         db,
         chapter_id=chapter_id,
@@ -2339,6 +2361,14 @@ def run_release_for_job(
         job_id=job.id,
         owner_sub=owner_sub,
         supersedes=supersedes,
+        lane=staged_lane,
+        layout_id=release_core.layout_id(),
+        provider_identity=release_core.run_context(
+            job,
+            lane=staged_lane,
+            profile=profile,
+            layout_id=release_core.layout_id(),
+        ),
     )
     release = release_service.publish_release(db, release)
     progress.log(

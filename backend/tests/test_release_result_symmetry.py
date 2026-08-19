@@ -206,8 +206,17 @@ _MANIFEST_BLOCKS = (
 )
 
 
-def _emits_a_manifest_entry(node: ast.FunctionDef) -> bool:
-    """True when this function's own body writes a ``"kind":`` entry."""
+def _emits_a_manifest_entry(node: ast.AST) -> bool:
+    """True when this function's own body writes a ``"kind":`` entry.
+
+    Deliberately the WIDEST net that finds one: any ``"kind":`` dict
+    anywhere in the function, however it is assembled. A fifth manifest
+    block written as ``out = []; out.append({"kind": ...}); return out``
+    is exactly as capable of drifting from the other four as one written
+    as a list literal, and a scan that only recognises the literal form
+    would not see it. [measured] the narrower "inside a list literal"
+    form of this predicate returns ``False`` for that append shape.
+    """
 
     for child in ast.walk(node):
         if isinstance(child, ast.Dict):
@@ -215,6 +224,22 @@ def _emits_a_manifest_entry(node: ast.FunctionDef) -> bool:
                 if isinstance(key, ast.Constant) and key.value == "kind":
                     return True
     return False
+
+
+# Entry BUILDERS: functions that return ONE entry and are CALLED by the
+# blocks rather than being one. ``release_files.master_entry`` is the
+# only one — it is the "one owner, no twin" resolution that REMOVES a
+# place the two manifests can disagree, so counting it as a fifth block
+# would demand it be listed in ``_MANIFEST_BLOCKS`` and called as though
+# it returned a list, which it does not.
+#
+# It is excluded by NAME rather than by narrowing the scan above, and the
+# difference is the whole point: an exclusion is one named function that
+# the test below proves still exists, where a narrowed predicate silently
+# stops seeing a whole SHAPE of block for ever after.
+_ENTRY_BUILDERS = {
+    (release_files.__name__, "master_entry"),
+}
 
 
 def test_the_four_manifest_blocks_are_the_only_manifest_blocks():
@@ -241,11 +266,40 @@ def test_the_four_manifest_blocks_are_the_only_manifest_blocks():
             ) and _emits_a_manifest_entry(node):
                 discovered.add((module.__name__, node.name))
 
+    # The exclusion is checked, not claimed: a builder that was renamed
+    # or removed would otherwise leave a stale name here quietly
+    # excluding nothing, and the next reader would trust a guard that no
+    # longer guards.
+    assert _ENTRY_BUILDERS <= discovered, (
+        "every excluded entry builder must still exist and still write a "
+        "'kind' entry"
+    )
+
     listed = {
         (param.values[0].__module__, param.values[0].__name__)
         for param in _MANIFEST_BLOCKS
     }
-    assert discovered == listed
+    assert discovered - _ENTRY_BUILDERS == listed
+
+
+def test_the_excluded_builders_return_one_entry_and_not_a_block(db):
+    """Why ``master_entry`` is excluded, checked rather than asserted.
+
+    A block returns a LIST of entries and is a place an edit can reach
+    one of and miss another; a builder returns ONE entry and is the
+    opposite — the shared owner that removes such a place. If
+    ``master_entry`` ever started returning a list it would BE a fifth
+    block, and the name-based exclusion above would be hiding it. This is
+    what stops that.
+    """
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+
+    for lane in (release.LANE_PRE, release.LANE_POST):
+        entry = release_files.master_entry(job, lane=lane)
+        assert isinstance(entry, dict), lane
+        assert entry.get("kind"), lane
 
 
 @pytest.mark.parametrize(

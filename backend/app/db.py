@@ -108,6 +108,14 @@ def _ensure_columns() -> None:
         ("questions", "validation_errors", "TEXT DEFAULT '[]'"),
         ("groups", "group_key", "VARCHAR(255) DEFAULT ''"),
         ("groups", "group_sequence", "INTEGER DEFAULT 0"),
+        # The converged release core (spec-step8 T2/S6): one immutable row
+        # per LANE per run, on the table that already exists. A RENAME is
+        # not expressible here — this helper emits only ADD COLUMN, so a
+        # renamed table would be minted empty by ``create_all`` and every
+        # published release and receipt would be orphaned. Adding columns
+        # is expressible and free.
+        ("assessment_releases", "lane", "VARCHAR(16) DEFAULT ''"),
+        ("assessment_releases", "layout_id", "VARCHAR(64) DEFAULT ''"),
     ]
     with engine.connect() as conn:
         for table, column, ddl in additions:
@@ -138,6 +146,17 @@ def _ensure_columns() -> None:
                 "CREATE INDEX IF NOT EXISTS "
                 "ix_assessment_sessions_owner_sub "
                 "ON assessment_sessions(owner_sub)"
+            )
+        if "assessment_releases" in tables:
+            # ``lane`` is declared ``index=True`` on the model, which only
+            # reaches databases ``create_all`` mints. The database that
+            # matters is the MIGRATED one, and ``ADD COLUMN`` carries no
+            # index — so without this line the deployed schema differs
+            # permanently from the declared model. Same shape, and beside,
+            # the two ``owner_sub`` indexes above.
+            conn.exec_driver_sql(
+                "CREATE INDEX IF NOT EXISTS ix_assessment_releases_lane "
+                "ON assessment_releases(lane)"
             )
         if "questions" in tables:
             _ensure_question_label_index(conn)
