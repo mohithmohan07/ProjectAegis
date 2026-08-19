@@ -33,6 +33,62 @@ def _load_test_fixtures() -> None:
         db.close()
 
 
+@pytest.fixture(autouse=True)
+def _qx_echo_author(monkeypatch):
+    """Deterministic QX task-membership author for the suite (docs/spec-qx.md).
+
+    The active compile seam now requires model adjudication of task
+    membership (Phase 2.1.2). Tests run with no live provider, so this echo
+    author confirms every parser candidate and rules every other block
+    not_task — compile-based fixtures keep their historical task sets with
+    zero behavior change. QX-specific tests override these seams with their
+    own scripted providers (or _provider_ready=False for the blocked path).
+    """
+    from app.services import canonical_source_phase212 as qx
+
+    def echo(*, system, prompt, schema, purpose="source_extraction",
+             max_tokens=None):
+        payload = json.loads(prompt)
+        if system == qx._CRITIC_SYSTEM:
+            return {"verdict": "concur", "dissents": []}
+
+        def entry(block_id):
+            return {
+                "block_id": block_id,
+                "verdict": "not_task",
+                "confirmed_candidate_ids": [],
+                "rejected_candidate_ids": [],
+                "missed_asks": [],
+                "continues_task_ref": "",
+                "context_for_task_refs": [],
+            }
+
+        if system == qx._FIXER_SYSTEM:
+            block = payload["block"]
+            row = entry(block["block_id"])
+            confirmed = [
+                c["candidate_id"]
+                for c in payload["candidates_overlapping_this_block"]
+            ]
+            if confirmed:
+                row["verdict"] = "contains_tasks"
+                row["confirmed_candidate_ids"] = confirmed
+            return row | {"rationale": "echo author"}
+
+        blocks = payload.get("blocks") or []
+        candidates = payload.get("candidates") or []
+        out = [entry(blk["block_id"]) for blk in blocks]
+        if out and candidates:
+            out[0]["verdict"] = "contains_tasks"
+            out[0]["confirmed_candidate_ids"] = [
+                c["candidate_id"] for c in candidates
+            ]
+        return {"blocks": out}
+
+    monkeypatch.setattr(qx, "_provider_ready", lambda: True)
+    monkeypatch.setattr(qx, "_call_provider", echo)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _prepare():
     Base.metadata.drop_all(bind=engine)

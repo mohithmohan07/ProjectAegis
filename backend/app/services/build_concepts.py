@@ -1259,10 +1259,19 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
     final_grounding = artifacts.get(
         grounding_certificate.FINAL_CERTIFICATE_FIELD
     )
+    provenance = inventory.get("extraction_provenance")
+    adjudicated_empty = bool(
+        isinstance(provenance, dict)
+        and provenance.get("task_verdict_ledger_applied")
+    )
     if (
         not inventory.get("items")
         and not mined.get("types")
         and not isinstance(final_grounding, dict)
+        # QX: a chapter the author adjudicated to zero tasks still stores
+        # its accounting — "no questions here" must be distinguishable
+        # from "not read" on the job record (R4).
+        and not adjudicated_empty
     ):
         return
     stored = {
@@ -1270,6 +1279,8 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
         "stats": inventory.get("stats", {}),
         "mined_types": mined.get("types", []),
     }
+    if isinstance(provenance, dict):
+        stored["extraction_provenance"] = copy.deepcopy(provenance)
     if inventory.get("split_parents"):
         # A split question's parent must survive every persistence surface,
         # or a later refresh re-mints it beside its fragments (job 15).

@@ -257,7 +257,17 @@ def test_phase2_inventory_preserves_display_math_and_source_identity():
     )
 
 
-def test_active_generation_inventory_bypasses_model_extraction(monkeypatch):
+def test_active_inventory_renders_from_ledger_without_reasking(monkeypatch):
+    """QX re-author (docs/spec-qx.md): the RENDER step makes no model call.
+
+    Task membership is adjudicated at the compile seam (Phase 2.1.2);
+    by the time the wrapper renders the inventory, the ledger already
+    carries its recorded authority, so re-asking here would be double
+    spend. This is no longer a claim that no model authored membership
+    — the compile-seam tests in test_canonical_source_phase212.py and
+    test_canonical_source_phase212_contract.py prove the author IS
+    called on a live active compile and replayed from the sealed cache.
+    """
     _compiled, canonical = _compiled_with_one_task()
 
     monkeypatch.setattr(

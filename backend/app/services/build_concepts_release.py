@@ -1169,18 +1169,38 @@ def _extraction_provenance_issues(
         return []
     issues: list[dict[str, Any]] = []
     if not provenance.get("chapter_outline_applied"):
-        issues.append(_issue(
-            code="chapter_outline_not_applied",
-            severity="warning",
-            phase="source-conversion",
-            message=(
-                "No model-decided chapter outline reached this run, so topics "
-                "and question boundaries fell back to deterministic reading. "
-                "Multi-part exercise sections are likely to have stayed whole. "
-                "Re-run the source conversion for this chapter."
-            ),
-            details=dict(provenance),
-        ))
+        if provenance.get("task_verdict_ledger_applied"):
+            # QX (docs/spec-qx.md): the text lane has no outline, but every
+            # source block received a recorded model membership verdict, so
+            # "nobody read this chapter" is no longer true. Record the
+            # authority positively instead of warning about the outline.
+            issues.append(_issue(
+                code="task_membership_model_verdict",
+                severity="info",
+                phase="source-conversion",
+                message=(
+                    "Task membership for this chapter was adjudicated "
+                    "block-by-block by the QX author verdict ledger "
+                    f"({int(provenance.get('task_missed_asks_recovered') or 0)}"
+                    " ask(s) recovered beyond the parser, "
+                    f"{int(provenance.get('task_candidates_rejected') or 0)}"
+                    " candidate(s) ruled not_task)."
+                ),
+                details=dict(provenance),
+            ))
+        else:
+            issues.append(_issue(
+                code="chapter_outline_not_applied",
+                severity="warning",
+                phase="source-conversion",
+                message=(
+                    "No model-decided chapter outline reached this run, so topics "
+                    "and question boundaries fell back to deterministic reading. "
+                    "Multi-part exercise sections are likely to have stayed whole. "
+                    "Re-run the source conversion for this chapter."
+                ),
+                details=dict(provenance),
+            ))
     elif not provenance.get("chapter_outline_topics"):
         issues.append(_issue(
             code="chapter_outline_topics_unusable",
@@ -1204,6 +1224,53 @@ def _extraction_provenance_issues(
                 "outline, even after a follow-up pass. They shipped whole, so "
                 "any independent questions inside them are not in this "
                 "release."
+            ),
+            details=dict(provenance),
+        ))
+    fixer_count = int(provenance.get("task_fixer_decisions") or 0)
+    if fixer_count:
+        issues.append(_issue(
+            code="task_membership_fixer_decided",
+            severity="warning",
+            phase="source-conversion",
+            message=(
+                f"{fixer_count} source block(s) could not be decided by the "
+                "ordinary QX author pass; The Fixer recorded a best-judgment "
+                "membership verdict for each and the affected occurrences "
+                "carry review flags."
+            ),
+            details=dict(provenance),
+        ))
+    dissents = int(provenance.get("task_critic_dissents") or 0)
+    ledger_flags = [
+        str(flag)
+        for flag in provenance.get("task_ledger_review_flags") or []
+    ]
+    if dissents or ledger_flags:
+        issues.append(_issue(
+            code="task_membership_critic_dissent",
+            severity="warning",
+            phase="source-conversion",
+            message=(
+                f"The QX membership critic recorded {dissents} dissent(s); "
+                "the affected occurrences carry review flags"
+                + (
+                    f" and {len(ledger_flags)} finding(s) could not be "
+                    "attached to a single occurrence (see details)."
+                    if ledger_flags else "."
+                )
+            ),
+            details=ledger_flags or dict(provenance),
+        ))
+    if provenance.get("task_critic_unavailable"):
+        issues.append(_issue(
+            code="task_membership_critic_unavailable",
+            severity="info",
+            phase="source-conversion",
+            message=(
+                "The QX membership critic pass was unavailable for this "
+                "chapter; the author verdicts stand unreviewed: "
+                + str(provenance.get("task_critic_unavailable"))
             ),
             details=dict(provenance),
         ))
