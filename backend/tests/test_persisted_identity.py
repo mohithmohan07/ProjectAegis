@@ -615,8 +615,8 @@ def test_source_order_agrees_between_export_and_publication(db):
     job = _job(db, chapter, records)
     payload = build_concepts_release.release_payload(job)
 
-    _t_chapter, staged, _records = release_files.transient_release_hierarchy(
-        db, job, payload=payload)
+    _t_chapter, staged, _records, _defects = (
+        release_files.transient_release_hierarchy(db, job, payload=payload))
     staged_orders = [c.source_order for c in staged]
     staged_ids = [c.machine_id for c in staged]
     assert staged_orders == [1, 2, 1], staged_orders

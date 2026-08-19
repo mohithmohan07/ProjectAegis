@@ -501,36 +501,181 @@ def test_a_thin_capture_yields_a_small_map_and_is_never_padded(
     }]
 
 
-def test_an_empty_capture_yields_an_empty_map_without_spending_a_decision(
+def _empty_capture_provider(verdict="assumes_nothing", rationale="decided"):
+    def provider(request: dict) -> dict:
+        assert request["stage"] == premap.EMPTY_CAPTURE_KIND
+        return {
+            "verdict": verdict, "rationale": rationale, "confidence": 0.97,
+        }
+    return provider
+
+
+def test_an_empty_capture_spends_exactly_one_recorded_verdict(
     golden_envelope,
 ):
-    """A chapter that genuinely assumes nothing gets an empty Pre map,
-    cleanly — not a raise, and not a padded one."""
-    calls = {"n": 0}
+    """INVERTED by spec-step8 D8.3/S9, and inverted rather than deleted.
+
+    [measured at 76c84fb] this branch returned the empty map "without
+    spending a decision" and its own docstring said so — it answered a
+    JUDGMENT question ("does this chapter genuinely assume no prior
+    knowledge, or did the capture fail to reach it?") with the shape of a
+    list. An OCR-degraded scan, a thin lower-grade chapter and a chapter
+    that genuinely opens from nothing are indistinguishable under that
+    inference, which is the shape-matching Rule 1 exists to forbid.
+
+    What the old test really pinned — that an empty capture is never
+    padded and never raises — is pinned here still. What is added is the
+    one recorded verdict, taken against the chapter's own source.
+    """
+    seen: list[dict] = []
 
     def provider(request: dict) -> dict:
-        calls["n"] += 1
-        raise AssertionError("an empty capture must not spend a decision")
+        seen.append(copy.deepcopy(request))
+        return {
+            "verdict": "assumes_nothing",
+            "rationale": "the chapter opens from first principles",
+            "confidence": 0.96,
+        }
 
     result = _build(
         golden_envelope, prerequisites={"prerequisites": []},
         provider=provider,
     )
-    assert result == {
-        "rows": [],
-        "topics": [],
-        "needed_for": {},
-        "analysis": {
-            "inventory": [],
-            "allotments": {},
-            "rationales": {},
-            "review_flags": {},
-        },
-        "review_flags": {},
-        "decision_flags": {},
-        "validation": [],
+    # Never padded: not one invented row, topic or link.
+    assert result["rows"] == []
+    assert result["topics"] == []
+    assert result["needed_for"] == {}
+    assert result["validation"] == []
+    # And exactly ONE decision, on the NEW kind.
+    assert len(seen) == 1
+    assert seen[0]["stage"] == premap.EMPTY_CAPTURE_KIND
+    # It sees the chapter's own source — the only evidence that can answer
+    # the question, since the capture returned nothing to reason from.
+    assert seen[0]["evidence"]["source_blocks"]
+    assert seen[0]["chapter"]["grade"]
+    # The verdict row's WHOLE shape, ``review_flags`` included. That key
+    # was added after the first cut of this slice, when [measured] the
+    # critic's dissent on this decision reached the release nowhere:
+    # ``build_concepts_release`` has no reader for ``decision_flags``, and
+    # ``stage_pre_release`` copies this row and nothing else. Q10 makes the
+    # dissent an advisory flag, and a flag no reviewer of the artefact can
+    # read is discarded, not recorded. Pinned by equality here so a later
+    # slice cannot drop it back out.
+    assert result[premap.EMPTY_CAPTURE_VERDICT_FIELD] == {
+        "verdict": "assumes_nothing",
+        "rationale": "the chapter opens from first principles",
+        "review_flags": [],
     }
-    assert calls["n"] == 0
+
+
+def test_the_empty_capture_verdict_has_its_own_kind_and_policy_version():
+    """spec-step8 §4: a NEW kind with its OWN policy version, never an edit.
+
+    Editing ``premap.map``'s text or ``POLICY_VERSION`` would replay every
+    verdict taken under the old text against the new one — cache poisoning
+    with no symptom. Pinned by value so the next slice cannot quietly fold
+    this verdict into an existing identity.
+    """
+    assert premap.EMPTY_CAPTURE_KIND == "premap.empty_capture"
+    assert premap.EMPTY_CAPTURE_POLICY_VERSION == "premap-empty-capture-1"
+    assert premap.POLICY_VERSION == "premap-1"
+    assert premap.EMPTY_CAPTURE_POLICY_VERSION != premap.POLICY_VERSION
+
+
+def test_a_capture_incomplete_verdict_is_recorded_and_the_run_completes(
+    golden_envelope,
+):
+    """The other verdict, and the reason the whole thing exists.
+
+    A capture that FAILED must never be reported as a chapter that needed
+    nothing (R4). The run still completes — this is not a halt — and the
+    verdict rides the map for the release lane to read.
+    """
+    result = _build(
+        golden_envelope, prerequisites={"prerequisites": []},
+        provider=_empty_capture_provider(
+            "capture_incomplete", "the source ends mid-sentence"),
+    )
+    assert result["rows"] == []
+    assert result[premap.EMPTY_CAPTURE_VERDICT_FIELD] == {
+        "verdict": "capture_incomplete",
+        "rationale": "the source ends mid-sentence",
+        "review_flags": [],
+    }
+
+
+def test_the_empty_capture_critic_advises_and_never_gates(golden_envelope):
+    """Q10: the critic's dissent is a recorded flag, not a veto.
+
+    It also has to be recorded WHERE THE RELEASE CAN READ IT, which is why
+    this test no longer stops at ``decision_flags``. [measured] with the
+    dissent in ``decision_flags`` alone, staging a Pre release from this
+    map put the critic's words nowhere in the artefact — not an issue, not
+    a manifest row, not even as a substring of the payload — because
+    ``stage_pre_release`` copies the verdict row and nothing else.
+    ``test_pre_release_lane_wiring`` carries the end-to-end half.
+    """
+
+    def dissenting(payload: dict) -> dict:
+        return {
+            "verdict": "rejected", "confidence": 0.42,
+            "issues": ["the source shows two missing pages"],
+        }
+
+    result = _build(
+        golden_envelope, prerequisites={"prerequisites": []},
+        provider=_empty_capture_provider(),
+        critic=dissenting,
+    )
+    # The decision STANDS — the critic did not overturn it.
+    assert result[premap.EMPTY_CAPTURE_VERDICT_FIELD]["verdict"] == (
+        "assumes_nothing"
+    )
+    flags = result["decision_flags"]["empty_capture"]
+    assert any("rejected" in flag for flag in flags)
+    assert any("missing pages" in flag for flag in flags)
+    # And on the verdict row itself — the ONE thing the release copies.
+    carried = result[premap.EMPTY_CAPTURE_VERDICT_FIELD]["review_flags"]
+    assert carried == flags
+
+
+def test_an_undecidable_empty_capture_goes_to_the_fixer_and_completes(
+    golden_envelope,
+):
+    """Q13: no positive decision mid-run means ONE flagged Fixer decision.
+
+    The run COMPLETES. An empty capture is not one of the three pre-spend
+    pauses and it is not genuine impossibility, so it may not halt.
+    """
+
+    def refusing(request: dict) -> dict:
+        return {"verdict": "", "rationale": ""}
+
+    def fixer(request: dict) -> dict:
+        assert request["fixer"] is True
+        assert request["contract"]["kind"] == premap.EMPTY_CAPTURE_KIND
+        return {
+            "verdict": "capture_incomplete",
+            "rationale": "no verdict could be reached on this source",
+        }
+
+    result = _build(
+        golden_envelope, prerequisites={"prerequisites": []},
+        provider=refusing, fixer=fixer,
+    )
+    assert result[premap.EMPTY_CAPTURE_VERDICT_FIELD]["verdict"] == (
+        "capture_incomplete"
+    )
+    assert any(
+        flag.startswith("fixer: ")
+        for flag in result["decision_flags"]["empty_capture"]
+    )
+    # And on the verdict row, so the release records that this verdict was
+    # the Fixer's best judgment rather than a decision the pass reached.
+    assert any(
+        flag.startswith("fixer: ")
+        for flag in result[premap.EMPTY_CAPTURE_VERDICT_FIELD]["review_flags"]
+    )
 
 
 # ---------------------------------------------------------------------------

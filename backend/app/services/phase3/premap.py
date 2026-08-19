@@ -74,8 +74,20 @@ from evidence volume — not from the number of prerequisites, not from
 the number of Post concepts, not from source size (Rule 1: no
 volume-derived structure; §9 records that a "4-6 topics / 5-7 concepts"
 quota engine was retired from this very lane). A thin capture yields a
-small map and is never padded; an empty capture yields an empty map
-without spending a decision at all (place.py's empty-pool precedent).
+small map and is never padded; an EMPTY capture yields an empty map
+carrying one recorded verdict on whether that emptiness is correct.
+
+**An empty capture is a judgment, not a shape** (spec-step8 D8.3 / S9).
+This pass used to return the empty map "without spending a decision",
+which answered "does this chapter genuinely assume no prior knowledge?"
+by looking at the length of a list — and an OCR-degraded scan, a thin
+lower-grade chapter and a chapter that genuinely opens from nothing are
+indistinguishable under that inference. So the question goes to the
+model against the chapter's own source, as ONE decision on its own kind
+(``premap.empty_capture``) with its own policy version, an advisory
+critic (Q10) and a Fixer seam (Q13). The verdict rides
+``pre_lane_verdict`` on the returned map; ``build_concepts_release.
+structural_defects`` reads it and never re-decides it.
 
 **Calibration is evidence, never a branch** (steer point 2). The
 chapter's own board, grade, subject and unit ride the payload as
@@ -160,6 +172,34 @@ from .. import katex_rules as kr
 from .. import progress
 
 POLICY_VERSION = "premap-1"
+
+# --------------------------------------------------------------------------- #
+# The empty-capture verdict (spec-step8 D8.3 / S9)
+#
+# A NEW decision kind with its OWN policy version, and never an edit to
+# ``premap.map`` / ``premap.needed_for`` or to ``POLICY_VERSION`` above:
+# a decision key is (kind, unit, envelope, payload, policy_version), so
+# changing an existing one replays verdicts made under different prompt
+# text against the new text — cache poisoning with no symptom (spec §4,
+# "the phase3 modules' decision identities").
+#
+# WHY IT EXISTS. This pass used to return the empty map "without spending
+# a decision", inferring from an empty list that the chapter needs
+# nothing. An OCR-degraded scan, a thin lower-grade chapter and a chapter
+# that genuinely assumes nothing are indistinguishable under that
+# inference — and it is exactly the shape-matching Rule 1 forbids ("the
+# list is empty, therefore the chapter needs nothing"). So the question
+# goes to the model with the chapter's own source in hand, with an
+# advisory critic (Q10) and a Fixer seam (Q13). It costs one call, and it
+# is what let §4 keep its three release-state names.
+# --------------------------------------------------------------------------- #
+
+EMPTY_CAPTURE_KIND = "premap.empty_capture"
+EMPTY_CAPTURE_POLICY_VERSION = "premap-empty-capture-1"
+EMPTY_CAPTURE_VERDICT_FIELD = "pre_lane_verdict"
+ASSUMES_NOTHING = "assumes_nothing"
+CAPTURE_INCOMPLETE = "capture_incomplete"
+EMPTY_CAPTURE_VERDICTS = (ASSUMES_NOTHING, CAPTURE_INCOMPLETE)
 
 # The Pre lane's grounding contract (spec T4). A Pre row is grounded on
 # the run's own prerequisite capture, not on chapter source blocks.
@@ -515,6 +555,45 @@ def map_evidence(
     }
 
 
+def empty_capture_evidence(
+    env: Mapping[str, Any], qids: list[str] | None = None,
+) -> dict[str, Any]:
+    """The chapter's own source, for the empty-capture verdict.
+
+    The capture returned nothing, so there is no captured row to reason
+    from — the only evidence that can answer "does this chapter genuinely
+    assume no prior knowledge, or did the capture fail to reach it?" is the
+    chapter itself. This is the same ``source_blocks`` shape
+    ``prelearn.stage_evidence`` builds for the capture that came back
+    empty, so the verdict is taken over the material the capture saw.
+
+    QIDs are redacted exactly as ``map_evidence`` redacts them: a source
+    question's identity may not ride a payload the Pre lane authors.
+    No counts, ratios or size-derived fields ride any of it.
+    """
+
+    qids = list(qids or [])
+    text_by_id = {
+        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        for row in env["canonical"]["blocks"]
+        if isinstance(row, Mapping)
+    }
+    return {
+        "source_blocks": [
+            {
+                "block_id": str(row.get("block_id") or ""),
+                "topic_id": str(row.get("topic_id") or ""),
+                "kind": str(row.get("kind") or ""),
+                "text": _redact_ids(
+                    text_by_id.get(str(row.get("block_id") or ""), ""), qids
+                ),
+            }
+            for row in env["graph"]["blocks"]
+            if isinstance(row, Mapping) and str(row.get("block_id") or "")
+        ],
+    }
+
+
 def chapter_calibration(env: Mapping[str, Any]) -> dict[str, str]:
     """The chapter's own board/grade/subject/unit, as evidence.
 
@@ -725,6 +804,130 @@ def _links_checker(
 # live adapters
 
 
+def _empty_capture_checker(
+    response: Mapping[str, Any],
+) -> list[str]:
+    """Mechanics only: one of the two named verdicts, and a stated reason.
+
+    It does not judge WHICH verdict is right — that is the whole point of
+    spending the call — and it bounds nothing by size. It refuses a
+    response the release lane could not act on, which is the response
+    contract every kernel decision has.
+    """
+
+    defects: list[str] = []
+    verdict = _normal(response.get("verdict"))
+    if verdict not in EMPTY_CAPTURE_VERDICTS:
+        defects.append(
+            f"verdict {verdict or '<empty>'!r} is not one of "
+            + ", ".join(repr(name) for name in EMPTY_CAPTURE_VERDICTS)
+        )
+    if not _normal(response.get("rationale")):
+        defects.append(
+            "rationale is empty; a verdict a reviewer cannot read is a "
+            "verdict nobody can check"
+        )
+    return defects
+
+
+def _live_empty_capture(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import prompts
+    from .. import generation
+
+    return generation._openai_json(
+        prompts.PREMAP_EMPTY_CAPTURE_SYSTEM, prompts.render(payload),
+        purpose="concept_mapping",
+    )
+
+
+def _live_empty_capture_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import prompts
+    from .. import generation
+
+    return generation._openai_json(
+        prompts.PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM, prompts.render(payload),
+        purpose="concept_mapping",
+    )
+
+
+def _empty_capture_rules(rules_suffix: str) -> str:
+    return (
+        "Phase 03: this chapter's prerequisite capture came back with no "
+        "element at all. Decide which of two things happened, reading the "
+        "chapter's own source below. assumes_nothing: this chapter "
+        "genuinely opens from nothing a learner at this level, grade, "
+        "subject and board must already hold — it teaches its first idea "
+        "from the beginning, so there is nothing to place before it. "
+        "capture_incomplete: the chapter does assume prior knowledge and "
+        "the capture failed to reach it — the source is unreadable, "
+        "degraded, truncated or otherwise not what the capture needed. "
+        "Answer from the source in front of you: whether the source "
+        "READS as a whole chapter, and whether its own teaching leans on "
+        "anything it does not itself explain. An honest assumes_nothing "
+        "is a legitimate and expected answer for a genuinely opening "
+        "chapter and is never a failure; an honest capture_incomplete "
+        "costs nothing but a reviewer's attention. rationale states in "
+        "one or two sentences what in the source decided it."
+        + rules_suffix
+    )
+
+
+def empty_capture_verdict(
+    env: Mapping[str, Any],
+    qids: list[str],
+    *,
+    provider: kernel.Provider,
+    critic: kernel.Critic | None,
+    store: kernel.DecisionStore,
+    fixer: kernel.Provider | None,
+    rules_suffix: str = "",
+) -> dict[str, Any]:
+    """ONE recorded verdict on an empty prerequisite capture (D8.3).
+
+    Returns ``{"verdict", "rationale", "review_flags"}``. The critic is
+    advisory and never gates (Q10) — ``kernel.decide`` records its dissent
+    as review flags on the decision. The Fixer seam is the Q13 route: if
+    the model does not positively decide within its bounded corrections,
+    ONE recorded flagged best-judgment decision is made and the run
+    completes.
+
+    A verdict that is not ``assumes_nothing`` — including a Fixer decision
+    that landed on ``capture_incomplete`` — keeps the Pre release
+    Diagnostic through ``build_concepts_release.structural_defects``. It
+    does not stop the run: finished work always ships, and every download
+    stays open.
+    """
+
+    payload = {
+        "stage": EMPTY_CAPTURE_KIND,
+        "rules": _empty_capture_rules(rules_suffix),
+        "chapter": chapter_calibration(env),
+        "evidence": empty_capture_evidence(env, qids),
+    }
+    # The same pre-spend post-condition the map payload carries: the
+    # chapter's own question identities must not reach a Pre-lane payload.
+    _refuse_source_qids(
+        payload, qids, where="the Pre empty-capture verdict payload")
+    decision = kernel.decide(
+        kind=EMPTY_CAPTURE_KIND,
+        unit_id="chapter",
+        envelope_sha256=str(env.get("envelope_sha256") or ""),
+        payload=payload,
+        provider=provider,
+        checker=_empty_capture_checker,
+        critic=critic,
+        store=store,
+        policy_version=EMPTY_CAPTURE_POLICY_VERSION,
+        fixer=fixer,
+    )
+    response = decision.get("response") or {}
+    return {
+        "verdict": _normal(response.get("verdict")),
+        "rationale": _normal(response.get("rationale")),
+        "review_flags": list(decision.get("review_flags") or []),
+    }
+
+
 def _live_map(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
     from .. import generation
@@ -843,8 +1046,12 @@ def build(
     [post_concept_id]}, "analysis": {the Pre-scoped Q1 inventory and its
     allotments}, "review_flags": {pre_concept_id: [flags]},
     "decision_flags": {decision: [flags]}, "validation": [findings]}``.
-    An empty capture returns an empty map without spending a decision —
-    a chapter that genuinely assumes nothing is never padded.
+    An empty capture returns an empty map carrying ONE recorded verdict
+    under ``pre_lane_verdict`` — ``assumes_nothing`` or
+    ``capture_incomplete``, decided by the model against the chapter's own
+    source (spec-step8 D8.3). A chapter that genuinely assumes nothing is
+    never padded, and a capture that failed is never reported as a chapter
+    that needed nothing.
     """
     from . import fixer as fixer_mod
     from . import place as place_mod
@@ -874,9 +1081,66 @@ def build(
         "validation": [],
     }
     if not captured:
+        # D8.3 / S9 — ONE verdict, not an inference. This branch used to
+        # return ``empty`` "without spending a decision", which answered a
+        # judgment question ("does this chapter genuinely assume no prior
+        # knowledge?") with the shape of a list.
+        empty_provider = provider
+        empty_critic = critic
+        empty_fixer = fixer
+        if empty_provider is None:
+            envelope_mod.require_live_api()
+            empty_provider = _live_empty_capture
+            empty_critic = (
+                empty_critic if empty_critic is not None
+                else _live_empty_capture_critic
+            )
+            empty_fixer = empty_fixer or fixer_mod.live_fixer
+        verdict = empty_capture_verdict(
+            env,
+            qids,
+            provider=empty_provider,
+            critic=empty_critic,
+            store=store or kernel.DecisionStore(),
+            fixer=empty_fixer,
+            rules_suffix=prompts_mod.instruction_rules_suffix(
+                env, slots=prompts_mod.PRE_LEARNING_SLOTS
+            ),
+        )
+        # THE FLAGS RIDE THE VERDICT ROW, not only ``decision_flags``.
+        # [measured] with the flags in ``decision_flags`` alone, a critic
+        # that dissented on THIS decision — the one that opens the Pre
+        # lane's zero-row publication — reached the release nowhere at all:
+        # ``build_concepts_release`` has no reader for ``decision_flags``
+        # (``grep -n decision_flags`` in that module returns nothing), and
+        # ``stage_pre_release`` copies this row and this row only. Q10 says
+        # dissent is a recorded advisory flag; recorded means recorded
+        # where the reviewer of THIS artefact reads it. Carrying them here
+        # gets them into the payload, the release issues, the Issues sheet
+        # and the diagnostics zip for free, because every one of those
+        # already reads this row.
+        empty[EMPTY_CAPTURE_VERDICT_FIELD] = {
+            "verdict": verdict["verdict"],
+            "rationale": verdict["rationale"],
+            "review_flags": list(verdict["review_flags"]),
+        }
+        if verdict["review_flags"]:
+            # Kept as well: ``decision_flags`` is the phase-3 convention
+            # every other decision in this module writes, and the run's own
+            # artifact readers use it.
+            empty["decision_flags"]["empty_capture"] = list(
+                verdict["review_flags"]
+            )
         progress.log(
-            "Pre-Learning map: the run captured no prerequisite element, "
-            "so the Pre map is empty — never padded to look richer."
+            "Pre-Learning map: the run captured no prerequisite element. "
+            "The model decided "
+            f"{verdict['verdict']!r} against the chapter's own source — "
+            "an empty Pre map is never inferred from an empty list, and "
+            "never padded to look richer. "
+            + verdict["rationale"],
+            level=(
+                "info" if verdict["verdict"] == ASSUMES_NOTHING else "error"
+            ),
         )
         return empty
 

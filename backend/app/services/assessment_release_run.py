@@ -1287,14 +1287,16 @@ def run_pre_release_for_job(
     concept rows and no generated question runs here and ships an empty
     Output 04.
 
-    Stated precisely, because the obvious illustration is wrong: a
-    chapter that assumes NOTHING stages a Pre release with no rows at
-    all, and that one does not reach an empty Output 04 — the export
-    refuses it ("the release contains no concept rows to export"), which
-    is the same refusal the Post lane has always made for a release with
-    nothing in it, and its database write is blocked anyway. Zero
-    QUESTIONS is the case this tolerates; zero ROWS is a release with
-    nothing to project.
+    Zero ROWS runs too, since spec-step8 S9 — and the illustration that
+    used to sit here ("the export refuses it") is gone with the raise it
+    described. A chapter that assumes NOTHING stages a Pre release with no
+    rows, and [measured] that now builds a real, empty Output 04 in state
+    ``ready_for_upload``: ``transient_release_hierarchy`` records instead
+    of raising, so nothing between here and the Master takes the artefact
+    away. Whether that empty release may be WRITTEN is a separate question
+    with a separate answer — premap's recorded ``pre_lane_verdict``, read
+    by ``build_concepts_release.structural_defects`` — which is exactly
+    the emptiness/corruption split D8.1 exists to keep apart.
     """
 
     job = uploads.get_job(
@@ -2154,6 +2156,11 @@ def run_release_for_job(
     payload = {
         "source_concept_release_sha256": source_release_sha,
         "concept_snapshot": bridge["snapshot"],
+        # S9: the staged rows the snapshot could not carry. Written here so
+        # that ``create_release`` — which sees only this payload — can
+        # append them to ``frozen["errors"]`` and refuse the assessment
+        # lane's database write while every download stays open (Rule E).
+        "concept_snapshot_defects": list(bridge.get("defects") or []),
         "source_atoms": atoms,
         "blueprint_cells": cells,
         "candidates": candidates,

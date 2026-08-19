@@ -689,7 +689,7 @@ def test_pre_related_concepts_carries_the_resolved_post_machine_ids(db):
     job = _both_lanes_job(db, chapter)
 
     post = release.release_payload(job, lane=release.LANE_POST)
-    _c, post_concepts, _r = release_files.transient_release_hierarchy(
+    _c, post_concepts, _r, _d = release_files.transient_release_hierarchy(
         db, job, payload=post)
     expected = post_concepts[0].machine_id
     assert expected
@@ -700,7 +700,7 @@ def test_pre_related_concepts_carries_the_resolved_post_machine_ids(db):
     assert row[release.PRE_ROW_RELATED_UNRESOLVED_FIELD] == []
 
     # And it reaches the rendered Pre Concept File.
-    _c, pre_concepts, _r = release_files.transient_release_hierarchy(
+    _c, pre_concepts, _r, _d = release_files.transient_release_hierarchy(
         db, job, payload=pre)
     assert pre_concepts[0].related_concepts == expected
     # No opaque phase-3 token survives anywhere in the rendered bytes.
@@ -730,7 +730,7 @@ def test_post_related_concepts_is_blank_until_a_relations_pass_exists(db):
     chapter = _chapter_with_concepts(db)
     job = _both_lanes_job(db, chapter)
     post = release.release_payload(job, lane=release.LANE_POST)
-    _c, concepts, _r = release_files.transient_release_hierarchy(
+    _c, concepts, _r, _d = release_files.transient_release_hierarchy(
         db, job, payload=post)
     assert all(not (c.related_concepts or "") for c in concepts)
 

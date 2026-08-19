@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import openpyxl
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font
 
 from ..services import assessment_profile
@@ -92,32 +93,168 @@ MAX_SUBQUESTION_KEYWORDS = 6
 class WorkbookRenderError(ValueError):
     """A workbook cannot be rendered without violating a mechanical rule.
 
-    Still raised by ``_cell_value`` for a cell no XLSX file can hold.  It is
-    NOT raised anywhere in the Master lane's own decision path any more:
-    ``render_master_file`` and ``_question_record`` raise nothing, because a
-    raise there costs every row on every sheet of all four outputs while the
-    same verdict is available at staging (spec-step8 T7.5/B4).
+    Since spec-step8 S9 NOTHING in the Master or Concept lane raises it.
+    ``render_master_file``, ``_question_record`` and ``_cell_value`` all
+    record instead, because a raise at projection time costs every row on
+    every sheet of all four outputs while the same verdict is available at
+    staging (T7.5/B4, and S9 for the two cell-shape cases).  The class is
+    kept — it is public API and a caller outside this package may still be
+    catching it — but this module no longer raises it.
     """
 
 
-def _cell_value(value: Any, *, context: str) -> Any:
+# THE TWO SHAPES NO XLSX CELL CAN HOLD, in ONE place (T1: one
+# implementation, two callers) — and ONE cell can carry BOTH at once, which
+# is why the predicate below answers with a list.  ``_cell_value`` repairs
+# every shape a cell trips, not the first one;
+# ``assessment_release.unresolved_question_homes`` calls the SAME predicate
+# at staging and names one ``render_shape_overflow`` finding per shape,
+# which refuses the database write.  Two inline copies of one rule is
+# exactly the drift that put the staged verdict and the renderer out of
+# step over renderable sheet kinds.
+#
+# Neither is a judgment about content: 32 767 is the XLSX format's own
+# per-cell character cap, and the illegal-character set is openpyxl's own
+# ``ILLEGAL_CHARACTERS_RE`` — the code points XML 1.0 forbids in character
+# data.  Both are read from the format, not authored here.
+
+CELL_TEXT_TOO_LONG = "cell_text_too_long"
+CELL_TEXT_ILLEGAL_CHARACTER = "cell_text_illegal_character"
+
+
+def cell_text_defects(value: Any) -> list[dict[str, Any]]:
+    """EVERY reason this value cannot be written into one XLSX cell.
+
+    A LIST, and that is the whole point of the plural.  [measured] while
+    this returned the FIRST reason only, a value that was both over the cap
+    and carrying an XML-illegal code point reported ``cell_text_too_long``
+    alone; ``_cell_value`` dispatched on that one reason, truncated, never
+    stripped, and openpyxl raised ``IllegalCharacterError`` out of
+    ``wb.save`` — the exact all-four-outputs loss S9 exists to remove, and
+    invisible at staging because the finding named the other half.  A value
+    can be wrong in two ways at once and the record has to say both.
+
+    Ordered ``too long`` first, then ``illegal characters``, so the primary
+    entry stays the one earlier readers saw for a singly-defective value.
+    """
+
+    if value is None or (
+        isinstance(value, (int, float)) and not isinstance(value, bool)
+    ):
+        return []
+    text = str(value)
+    defects: list[dict[str, Any]] = []
+    if len(text) > CELL_LIMIT:
+        defects.append({
+            "reason": CELL_TEXT_TOO_LONG,
+            "cap": CELL_LIMIT,
+            "actual": len(text),
+        })
+    illegal = ILLEGAL_CHARACTERS_RE.findall(text)
+    if illegal:
+        defects.append({
+            "reason": CELL_TEXT_ILLEGAL_CHARACTER,
+            "cap": 0,
+            "actual": len(illegal),
+            "code_points": sorted({f"U+{ord(ch):04X}" for ch in illegal}),
+        })
+    return defects
+
+
+# What a truncated cell says in the workbook itself, so a reviewer reading
+# the file — not only ``manifest.json`` — can see that the tail is
+# elsewhere.  R4: the silence is the defect.
+_TRUNCATION_MARK = (
+    "\n[Aegis: this cell holds the first {kept} of {actual} characters. The "
+    "complete value is recorded in this release's issues manifest under "
+    "'oversized_cells' and nothing has been lost.]"
+)
+
+
+def _cell_value(
+    value: Any, *, context: str, oversized: list[dict] | None = None,
+) -> Any:
+    """One cell's value, repaired rather than refused (spec-step8 S9).
+
+    [measured at 76c84fb] a 40 000-character question raised
+    ``WorkbookRenderError`` out of ``render_master_file`` and took all four
+    outputs with it, and a single ``\\x01`` reached openpyxl and raised
+    ``IllegalCharacterError`` from ``wb.save`` — while the staged verdict
+    returned ``[]`` for both, so nothing refused the database write either.
+    Both are now repaired here, named at staging as
+    ``render_shape_overflow``, and recorded WHOLE in ``oversized`` — the
+    ledger that becomes the issues manifest's ``oversized_cells``, beside
+    S8's ``truncated_rows``.
+
+    THE TRUNCATION QUESTION, answered rather than defaulted: the cell keeps
+    as much as the format allows and says in the cell that it was cut, and
+    the FULL value rides the manifest.  Dropping the tail silently is the
+    one thing R4 forbids; refusing the file is the one thing Rule E
+    forbids; and no reviewer can read a 40 000-character answer inside a
+    spreadsheet cell anyway.
+
+    EVERY REPAIR IS APPLIED, IN THIS ORDER, and the order is load-bearing.
+    [measured] a value that was BOTH over the cap and carrying ``\\x01``
+    reported one reason, took the branch for that reason, and shipped the
+    illegal code point into openpyxl — which raised out of ``wb.save`` and
+    cost all four outputs, the very failure this function was written to
+    end.  So: strip the code points no cell may carry, decide the
+    formula-injection prefix on what SURVIVES that strip, then truncate
+    inside a budget that already reserves room for the prefix.  Truncating
+    first and prefixing after produced a ``CELL_LIMIT + 1`` cell — under
+    the format's own cap by nothing, and only because openpyxl declines to
+    check.
+    """
     if value is None:
         return ""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
     text = str(value)
-    if len(text) > CELL_LIMIT:
-        raise WorkbookRenderError(
-            f"{context}: cell exceeds {CELL_LIMIT} characters "
-            f"({len(text)})")
-    if text[:1] in {"=", "+", "-", "@"}:
-        return "'" + text  # formula-injection guard (spec §11)
-    return text
+    defects = cell_text_defects(text)
+    if defects and oversized is not None:
+        for defect in defects:
+            oversized.append({
+                "context": str(context),
+                "reason": defect["reason"],
+                "cap": defect["cap"],
+                "actual": defect["actual"],
+                "code_points": defect.get("code_points", []),
+                # The whole value, unabridged. This is the record that
+                # makes truncation a repair rather than a loss.
+                "full_value": text,
+            })
+    if any(
+        defect["reason"] == CELL_TEXT_ILLEGAL_CHARACTER for defect in defects
+    ):
+        text = ILLEGAL_CHARACTERS_RE.sub("", text)
+    # The prefix is decided AFTER the strip, because stripping can expose a
+    # new first character, and it is reserved BEFORE the truncation so the
+    # finished cell can never exceed the cap.
+    prefix = "'" if text[:1] in {"=", "+", "-", "@"} else ""
+    budget = CELL_LIMIT - len(prefix)
+    if len(text) > budget:
+        actual = len(text)
+        # Two passes, because the note's own length depends on the number
+        # it states.  The first pass sizes the note with a count that is
+        # never narrower than the real one, so ``kept`` comes out
+        # conservative; the second states the truth.  [measured] the single
+        # pass this replaces formatted the TEMPLATE and cut by the
+        # FORMATTED mark, so a 40 000-character value shipped a cell that
+        # said it held 32 585 characters while holding 32 589 — a false
+        # sentence inside a repair whose justification is that the record
+        # stays true.
+        kept = budget - len(
+            _TRUNCATION_MARK.format(kept=budget, actual=actual))
+        mark = _TRUNCATION_MARK.format(kept=kept, actual=actual)
+        kept = min(kept, budget - len(mark))
+        text = text[:kept] + mark
+    return prefix + text
 
 
 def _row_values(
     sheet: str, record: Mapping[str, Any],
     forced_blank: tuple[str, ...] = (),
+    *, oversized: list[dict] | None = None,
 ) -> list:
     """Serialize one record positionally.
 
@@ -133,7 +270,7 @@ def _row_values(
     for field in fields:
         value = "" if field in blank else record.get(field, "")
         row.append(_cell_value(
-            value, context=f"{sheet}:{field}"))
+            value, context=f"{sheet}:{field}", oversized=oversized))
     return row
 
 
@@ -228,7 +365,16 @@ def snapshot_sha256(snapshot: Mapping) -> str:
 
 def render_concept_file(
     snapshot: Mapping, profile: Mapping | str | None = None,
+    *, oversized: list[dict] | None = None,
 ) -> bytes:
+    """Output 01/03 — the Concept File.
+
+    ``oversized`` is the optional cell-shape ledger (spec-step8 S9). This
+    renderer returns bytes rather than (bytes, issues), so the caller that
+    wants the record passes a list in; passing none loses nothing a
+    reviewer sees, because the SAME defect is named at staging as
+    ``render_shape_overflow`` on the concept row it belongs to.
+    """
     forced_blank = assessment_profile.forced_blank_fields(profile)
     wb = _new_workbook()
     ws = wb["Objective"]
@@ -240,7 +386,8 @@ def render_concept_file(
         for field in ("basic_groups", "intermediate_groups",
                       "advanced_groups", "concept_question_labels"):
             record[field] = ""
-        ws.append(_row_values("Objective", record, forced_blank))
+        ws.append(_row_values(
+            "Objective", record, forced_blank, oversized=oversized))
     return _workbook_bytes(wb)
 
 
@@ -480,7 +627,8 @@ def render_master_file(
         sheet: str, group_key: str, record: Mapping[str, Any],
     ) -> None:
         ws = wb[sheet]
-        ws.append(_row_values(sheet, record, forced_blank))
+        ws.append(_row_values(
+            sheet, record, forced_blank, oversized=oversized))
         group_provenance.append({
             "sheet": sheet,
             "row": ws.max_row,
@@ -488,6 +636,10 @@ def render_master_file(
         })
 
     truncated: list[dict] = []
+    # S9's cell-shape ledger. Every entry carries the FULL value, so a cell
+    # the format cannot hold is repaired in the workbook and recorded whole
+    # here — the ``truncated_rows`` pattern one level down, at the cell.
+    oversized: list[dict] = []
 
     def _full_record(candidate: Mapping, sheet: str) -> dict:
         concept_key = str(candidate.get("concept_key") or "")
@@ -563,8 +715,8 @@ def render_master_file(
         entry = concept_entries[concept_key]
         record = _bands_record(entry)
         record["concept_question_labels"] = ""
-        wb["Objective"].append(
-            _row_values("Objective", record, forced_blank))
+        wb["Objective"].append(_row_values(
+            "Objective", record, forced_blank, oversized=oversized))
         questionless.append({
             "concept_key": concept_key,
             "concept_machine_id": str(
@@ -588,6 +740,9 @@ def render_master_file(
         # a complete-looking six-option row with no sign an option was
         # dropped. R4: the silence was the defect.
         "truncated_rows": truncated,
+        # What no XLSX cell can hold, with the whole value beside it
+        # (spec-step8 S9). Refused at staging as ``render_shape_overflow``.
+        "oversized_cells": oversized,
     }
     return _workbook_bytes(wb), issues
 

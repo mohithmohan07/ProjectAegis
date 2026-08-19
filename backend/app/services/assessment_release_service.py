@@ -367,6 +367,18 @@ def create_release(
         f"{finding['code']}: {finding['message']}"
         for finding in rel.unresolved_question_homes(snapshot, run_profile)
     )
+    # S9: the staged concept rows ``assessment_release_snapshot.build``
+    # could not carry. They used to be ``SnapshotError`` raises that cost
+    # the whole Master (and, through ``ReleaseRunError``, 400'd the build
+    # route); they are now recorded rows refused on the SAME transport as
+    # the home/shape verdict above, so Outputs 02/04 build from the sound
+    # rows and only the database write is refused.
+    frozen["errors"].extend(
+        f"{str(finding.get('code') or 'concept_snapshot_defect')}: "
+        f"{str(finding.get('message') or finding)}"
+        for finding in payload.get("concept_snapshot_defects") or []
+        if isinstance(finding, Mapping)
+    )
     release = models.AssessmentRelease(
         release_uid=(
             supersedes.release_uid if supersedes else rel.new_release_uid()),

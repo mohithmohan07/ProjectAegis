@@ -14,10 +14,12 @@ from . import build_concepts, concept_cleanup, identity, uploads
 from .build_concepts_release import (
     LANE_POST,
     LANE_PRE,
+    PRE_LANE_VERDICT_FIELD,
     ReleaseUnavailableError,
     _lift_resolved_related_concepts,
     _strip_release_fields,
     normalize_lane,
+    nothing_to_publish,
     release_key_for_lane,
     release_payload,
     structural_defects,
@@ -98,6 +100,84 @@ def upload_release_to_database(
     defects = structural_defects(payload)
     if defects:
         raise ValueError("; ".join(defects))
+    if nothing_to_publish(payload):
+        # D8.2 — PUBLISHING NOTHING IS AN IDEMPOTENT ZERO-ROW SUCCESS.
+        #
+        # §4:475-478 requires publication to be "idempotent, model-free,
+        # never drops a highlighted row"; writing nothing when there is
+        # nothing IS the idempotent answer, and it is reached only after
+        # ``structural_defects`` above found no corruption — which, for the
+        # Pre lane, includes the recorded ``assumes_nothing`` verdict
+        # (D8.3). An empty capture nobody decided never gets here.
+        #
+        # This is the only refusal S9 removes from this function. The other
+        # five stay, and stay for one reason: Rule E blocks the DATABASE
+        # WRITE on a defect, it does not make the write unconditional.
+        # ``ReleaseUnavailableError`` (no staged release) and the three
+        # missing-chapter checks all describe a write that has no target,
+        # and the bare ``raise`` after ``db.rollback()`` is what stops a
+        # half-written transaction reporting success.
+        summary.update({
+            "database_uploaded": True,
+            "database_uploaded_at": datetime.now(timezone.utc).isoformat(),
+            "created_count": 0,
+            "merged_count": 0,
+            "publication_status": "published",
+        })
+        if resolved == LANE_PRE:
+            summary["concept_ids"] = []
+        payload["summary"] = summary
+        inventory = copy.deepcopy(dict(job.question_inventory or {}))
+        inventory[release_key] = copy.deepcopy(payload)
+        job.question_inventory = inventory
+        if resolved == LANE_POST:
+            job.status = "generated"
+            job.result_ids = []
+        lane_label = "Pre-Learning " if resolved == LANE_PRE else ""
+        # THE RECEIPT MAY NOT CLAIM A DECISION NOBODY MADE. [measured] this
+        # sentence read "the run recorded that its emptiness is correct" on
+        # BOTH lanes — but D8.3's verdict is Pre-lane only
+        # (``_pre_lane_verdict_defects`` returns ``[]`` for every other
+        # lane), so on the Post lane it asserted, as a fact in the job's own
+        # record, exactly the shape-inference D8.3 spends a model call to
+        # abolish. A receipt is the one place a reviewer reads what was
+        # decided; the difference between "a verdict says so" and "nothing
+        # here said otherwise" is the whole of R4. So it names the recorded
+        # verdict when there is one, and says plainly that there is none
+        # when there is not.
+        verdict_row = payload.get(PRE_LANE_VERDICT_FIELD)
+        verdict_row = verdict_row if isinstance(verdict_row, Mapping) else {}
+        verdict = str(verdict_row.get("verdict") or "").strip()
+        rationale = str(verdict_row.get("rationale") or "").strip()
+        if verdict:
+            accounted = (
+                f"the run recorded the verdict {verdict!r} on that "
+                "emptiness"
+                + (f": {rationale}" if rationale else "")
+            )
+        else:
+            accounted = (
+                "this lane records no verdict on whether that emptiness is "
+                "correct, so it is reported as measured rather than as "
+                "decided"
+            )
+        job.detail = (
+            f"Explicit {lane_label}database upload completed with no row to "
+            f"write: this release is empty and {accounted}. Nothing was "
+            "created and nothing was removed."
+        )
+        db.commit()
+        db.refresh(job)
+        return {
+            "job_id": job.id,
+            "status": "generated",
+            "database_uploaded": True,
+            "created_concept_ids": [],
+            "updated_concept_ids": [],
+            "issue_count": int(summary.get("issue_count") or 0),
+            "publication_status": "published",
+            "publication": {"written": 0, "sources_updated": 0},
+        }
     # T3.3b: the resolved Post ``machine_id``s ride a registered
     # ``_aegis_*`` marker, and ``_strip_release_fields`` drops every
     # ``_RELEASE_AUDIT_FIELDS`` key BY CONSTRUCTION — so the marker cannot

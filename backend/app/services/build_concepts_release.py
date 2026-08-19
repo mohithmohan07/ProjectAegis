@@ -614,6 +614,99 @@ READY = "ready"
 READY_WITH_FLAGS = "ready_with_flags"
 DIAGNOSTIC_RELEASE = "diagnostic_release"
 
+# --------------------------------------------------------------------------- #
+# S9 — the row-level projection gate, decided ONCE at staging
+#
+# D8.5's proof: ``structural_defects`` is a pure function of the staged
+# payload, and ``transient_release_hierarchy`` runs only at DOWNLOAD time.
+# A row skipped at projection time could therefore reach the release state
+# only by mutating a frozen payload during a GET. So the verdict is taken
+# at STAGING, rides the payload under ``staged_row_defects``, and the
+# projection reads a decision the payload already holds.
+#
+# ONE implementation for both (T1): ``build_concepts_release_files.
+# transient_release_hierarchy`` calls the same function on the same rows,
+# so the reviewer's issue and the skipped row can never disagree.
+#
+# It compares presence of the two join identities. It judges nothing about
+# what a row MEANS — a gate under CLAUDE.md's "mechanics, not meaning".
+# --------------------------------------------------------------------------- #
+
+STAGED_ROW_DEFECTS_FIELD = "staged_row_defects"
+STAGED_ROW_UNUSABLE = "staged_row_unusable"
+
+
+def row_projection_defect(
+    row: object, position: int,
+) -> dict[str, Any] | None:
+    """Why this staged concept row cannot be projected, or ``None``.
+
+    The three conditions ``transient_release_hierarchy`` used to raise on,
+    one row at a time. Raising cost every one of the four outputs for one
+    bad row; naming the row costs the row and ships the rest (Rule E).
+    """
+
+    if not isinstance(row, Mapping):
+        return {
+            "code": STAGED_ROW_UNUSABLE,
+            "position": int(position),
+            "message": (
+                f"staged concept row {position} is not an object, so it "
+                "reaches no workbook row and no database row"
+            ),
+        }
+    if not _normal(row.get("topic")):
+        return {
+            "code": STAGED_ROW_UNUSABLE,
+            "position": int(position),
+            "concept_title": _normal(
+                row.get("concept_title") or row.get("concept")
+            ),
+            "message": (
+                f"staged concept row {position} has no topic, so it has no "
+                "place in the chapter hierarchy the outputs are projected "
+                "onto"
+            ),
+        }
+    if not _normal(row.get("concept_title") or row.get("concept")):
+        return {
+            "code": STAGED_ROW_UNUSABLE,
+            "position": int(position),
+            "topic": _normal(row.get("topic")),
+            "message": (
+                f"staged concept row {position} has no concept title, so it "
+                "cannot be addressed by a machine id or a workbook cell"
+            ),
+        }
+    return None
+
+
+def staged_row_defects(records: object) -> list[dict[str, Any]]:
+    """Every unusable row in one staged record list, in source order."""
+
+    findings: list[dict[str, Any]] = []
+    for position, row in enumerate(records or [], start=1):
+        finding = row_projection_defect(row, position)
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
+# --------------------------------------------------------------------------- #
+# S9 / D8.3 — the Pre lane's empty-capture verdict, as the payload records it
+#
+# ``phase3/premap.build`` spends ONE model verdict when the prerequisite
+# capture is empty: does this chapter genuinely assume no prior knowledge,
+# or did the capture fail to reach it? An empty list cannot answer that,
+# and inferring "empty therefore fine" is exactly the shape-inference
+# Rule 1 forbids. The verdict rides the Pre map, then this payload, and
+# ``structural_defects`` reads it — it never re-decides it.
+# --------------------------------------------------------------------------- #
+
+PRE_LANE_VERDICT_FIELD = "pre_lane_verdict"
+PRE_LANE_ASSUMES_NOTHING = "assumes_nothing"
+PRE_LANE_CAPTURE_INCOMPLETE = "capture_incomplete"
+
 
 def _publishable_record(record: object) -> bool:
     """A row the deterministic publication can actually deposit.
@@ -668,20 +761,55 @@ def _publishable_candidate(candidate: object) -> bool:
     )
 
 
+def nothing_to_publish(payload: Mapping[str, Any] | None) -> bool:
+    """True when this lane has no depositable unit — EMPTINESS, not corruption.
+
+    Split out of ``structural_defects`` by spec-step8 D8.1, because the two
+    answer different questions and conflating them refused an
+    empty-but-correct Pre release as if it were corrupt. "This release has
+    nothing in it" and "this release is broken" are not the same fact, and
+    only the second one is a reason to distrust what IS in it.
+
+    What follows from emptiness is D8.2: publishing nothing is the
+    idempotent zero-row success, not an error — §4:475-478 asks
+    publication to be "idempotent, model-free, never drops a highlighted
+    row", and writing nothing when there is nothing IS that answer.
+
+    Counts identities; reads no content.
+    """
+
+    if not isinstance(payload, Mapping):
+        return True
+    if _is_assessment_payload(payload):
+        return not [
+            candidate for candidate in payload.get("candidates") or []
+            if _publishable_candidate(candidate)
+        ]
+    return not [
+        row for row in payload.get("records") or []
+        if _publishable_record(row)
+    ]
+
+
 def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
     """Structural/import-integrity defects that block the database upload.
 
     "Semantic doubt flags; structural corruption blocks" (§4). This is the
-    structural half, and it is deliberately the SAME set of conditions the
-    explicit upload already refused before the Pre lane existed — a
-    payload with no depositable row — plus the two new structural states
-    the Pre lane can reach: a lane that refused its own artefact (the
-    fail-closed source-question barrier) and therefore has nothing to
-    publish, and an input snapshot that was on disk and unreadable, so
-    what this release is missing is missing from the ARTEFACT rather than
-    from the chapter. A gate that refuses a broken artifact, judging
-    nothing about content: it counts identities, reads a recorded
-    refusal, and reads whether a file parsed.
+    structural half: a lane that refused its own artefact (the fail-closed
+    source-question barrier), an input snapshot that was on disk and
+    unreadable, a staged row that cannot be projected onto any output, and
+    a Pre lane whose empty capture no verdict has accounted for. A gate
+    that refuses a broken artifact, judging nothing about content: it
+    counts identities, reads a recorded refusal, reads whether a file
+    parsed, and reads a verdict the model already made.
+
+    **CORRUPTION ONLY, since spec-step8 D8.1.** "The release contains no
+    concept rows to upload" has MOVED to ``nothing_to_publish`` — it is
+    emptiness, not corruption, and while it lived here an empty-but-correct
+    Pre release was named *Diagnostic release* and refused as if the
+    artefact were broken. §4 defines that name as "structural/import
+    integrity failed"; nothing failed. This is why no fourth state was
+    needed: the two questions were always two questions.
 
     The unreadable-snapshot case is what makes this a safety property
     rather than bookkeeping. Publishing a Pre release whose questions
@@ -708,10 +836,15 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
         # in ``assessment_release_service``, are what refuse the write.
         # This function only says which of the three §4 NAMES the row
         # wears, through one vocabulary for both lanes.
-        if not [
-            candidate for candidate in payload.get("candidates") or []
-            if _publishable_candidate(candidate)
-        ]:
+        #
+        # RESIDUE, named rather than left implicit: D8.1's emptiness split
+        # is applied to the CONCEPT branch only. The assessment lane's own
+        # publication act (``assessment_release_service``) is S10's
+        # convergence, and moving its zero-candidate refusal out of here
+        # ahead of that would open its database write with nothing on the
+        # other side yet deciding a zero-row publication is correct for a
+        # lane whose depositable unit is a QUESTION.
+        if nothing_to_publish(payload):
             return ["the release contains no assessment rows to upload"]
         return []
     defects: list[str] = []
@@ -724,12 +857,100 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
                 "an input snapshot could not be read, so this release is "
                 f"incomplete rather than empty: {_normal(defect)}"
             )
-    if not [
-        row for row in payload.get("records") or []
-        if _publishable_record(row)
-    ]:
-        defects.append("the release contains no concept rows to upload")
+    # A ``records`` value that is not an array carries no row at all, and
+    # the emptiness split must not let it read as an empty release. It is
+    # CORRUPTION — [measured] with only ``nothing_to_publish`` answering,
+    # ``records={"a": 1}`` returned no defect, read *Ready with flags* and
+    # published as a zero-row success, because ``payload.get("records") or
+    # []`` iterates a dict's KEYS and none of them is a publishable record.
+    # A pure read of the payload's own shape; it judges no content.
+    records = payload.get("records")
+    if records is not None and not isinstance(records, list):
+        defects.append(
+            "the staged release concept records are not an array, so no "
+            "concept row can be read from them and this release is corrupt "
+            "rather than empty"
+        )
+    # S9: the row-level verdict the payload already holds, taken at staging
+    # (D8.5). Every entry names one row that reaches no output — the
+    # producer whose consumer this is.
+    #
+    # FAIL CLOSED WHEN THE PAYLOAD DOES NOT HOLD IT. A payload with no
+    # ``staged_row_defects`` key at all is not a payload with no defects —
+    # it is a payload staged before this key existed, restored from an
+    # export, or built by a caller other than the two staging functions.
+    # [measured] reading the key alone, a Post payload whose single record
+    # had no ``topic`` and no such key returned NO defect, read *Ready with
+    # flags*, and published ``database_uploaded: True`` with an empty id
+    # list and a receipt that said the emptiness was correct — the row
+    # dropped in silence, and ``database_uploaded`` latched so no later
+    # attempt could find it. At 76c84fb that same payload was refused.
+    # Recomputing is legal and cannot drift: ``staged_row_defects`` is a
+    # pure function of the payload calling the SAME
+    # ``row_projection_defect`` the projection and the staging pass call,
+    # and D8.5 forbids a projection-time DISCOVERY mutating a frozen
+    # payload, not a pure recomputation inside the gate.
+    recorded = (
+        payload.get(STAGED_ROW_DEFECTS_FIELD)
+        if STAGED_ROW_DEFECTS_FIELD in payload
+        else staged_row_defects(records if isinstance(records, list) else [])
+    )
+    for finding in recorded or []:
+        if not isinstance(finding, Mapping):
+            continue
+        message = _normal(finding.get("message"))
+        if message:
+            defects.append(
+                "a staged concept row cannot be projected onto any output, "
+                f"so publishing this release would deposit it nowhere: "
+                f"{message}"
+            )
+    defects.extend(_pre_lane_verdict_defects(payload))
     return defects
+
+
+def _pre_lane_verdict_defects(payload: Mapping[str, Any]) -> list[str]:
+    """The empty Pre lane's one question: was the emptiness DECIDED?
+
+    D8.3. ``lane_content_decided`` recorded "Phase 03 ran", which cannot
+    tell an OCR-degraded scan, a thin lower-grade chapter and a chapter
+    that genuinely assumes nothing apart. So premap spends one verdict and
+    this reads it — an empty capture opens the zero-row publication only
+    on a positive ``assumes_nothing``; ``capture_incomplete``, a Fixer
+    decision that could not reach either, and a run that recorded no
+    verdict at all all keep the release *Diagnostic*.
+
+    Reads a recorded verdict. Decides nothing itself, and above all does
+    not answer the question with a count.
+    """
+
+    if _normal(payload.get(RELEASE_LANE_FIELD)) != LANE_PRE:
+        return []
+    if not nothing_to_publish(payload):
+        return []
+    verdict_row = payload.get(PRE_LANE_VERDICT_FIELD)
+    verdict_row = verdict_row if isinstance(verdict_row, Mapping) else {}
+    verdict = _normal(verdict_row.get("verdict"))
+    if verdict == PRE_LANE_ASSUMES_NOTHING:
+        return []
+    if not verdict:
+        return [
+            "this Pre-Learning release has no concept row and no recorded "
+            "verdict on whether the chapter genuinely assumes no prior "
+            "knowledge, so an empty capture and a failed one are not "
+            "distinguishable here"
+        ]
+    return [
+        "the Pre-Learning capture was empty and the run decided "
+        f"{verdict!r} rather than {PRE_LANE_ASSUMES_NOTHING!r}, so what "
+        "this release is missing may be missing from the CAPTURE rather "
+        "than from the chapter"
+        + (
+            f": {_normal(verdict_row.get('rationale'))}"
+            if _normal(verdict_row.get("rationale"))
+            else ""
+        )
+    ]
 
 
 def release_state(payload: Mapping[str, Any] | None) -> str:
@@ -1639,6 +1860,19 @@ def stage_release(
             ),
             phase="release",
         ))
+    # S9: the row-level projection verdict, decided HERE because
+    # ``structural_defects`` is a pure function of this payload and the
+    # projection runs at download time (D8.5). Recorded twice on purpose —
+    # as a reviewer-facing issue and as the machine-readable key
+    # ``structural_defects`` reads — because a defect with no place in the
+    # state vocabulary is invisible.
+    row_defects = staged_row_defects(record_rows)
+    for finding in row_defects:
+        issues.append(_issue(
+            code=STAGED_ROW_UNUSABLE,
+            message=finding["message"],
+            phase="release",
+        ))
     provenance = _extraction_provenance(inventory_value)
     issues.extend(_extraction_provenance_issues(provenance))
     if upgraded_from_cache:
@@ -1705,6 +1939,13 @@ def stage_release(
         ),
         "records": _json_safe(annotated),
         "issues": _json_safe(issues),
+        # S9 — the row-level defect record. It is a NEW key on the Post
+        # payload's recorded shape (``tests/test_pre_release_lane_wiring``'s
+        # ``_POST_PAYLOAD_KEYS`` gains it here), added deliberately: the
+        # state split is only half a fix without somewhere for a
+        # staging-time row defect to live, and S8 closed exactly this
+        # producer-with-no-consumer hole for ``unplaced``.
+        STAGED_ROW_DEFECTS_FIELD: _json_safe(row_defects),
         "type_case_rows": _json_safe(type_case_rows),
         "question_task_inventory": _json_safe(inventory_value),
         "extraction_provenance": _json_safe(provenance),
@@ -1981,6 +2222,7 @@ def _pre_release_issues(
     pre_questions: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
     snapshot_defects: Sequence[str] = (),
+    row_defects: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Everything the Pre lane recorded, as release issues.
 
@@ -2009,6 +2251,71 @@ def _pre_release_issues(
             ),
             phase="phase03",
         ))
+    for finding in row_defects:
+        # S9: the same row-level verdict the Post lane records, on the same
+        # code, so a reviewer reading either lane's issues reads one
+        # vocabulary. It reaches ``structural_defects`` through the
+        # payload's ``staged_row_defects`` key, not through this issue.
+        issues.append(_issue(
+            code=STAGED_ROW_UNUSABLE,
+            message=_normal(finding.get("message")),
+            phase="release",
+        ))
+    verdict_row = pre_map.get(PRE_LANE_VERDICT_FIELD)
+    verdict = (
+        _normal(verdict_row.get("verdict"))
+        if isinstance(verdict_row, Mapping) else ""
+    )
+    if verdict and verdict != PRE_LANE_ASSUMES_NOTHING:
+        # ONLY the non-positive verdict becomes an issue. A recorded
+        # ``assumes_nothing`` is PROVENANCE, not doubt: an issue for it
+        # would count toward ``issue_count`` and name a correct empty
+        # release *Ready with flags*, and flags mean "a human should look
+        # at this", which is the opposite of what the run just decided.
+        # The positive verdict is still visible to a reviewer holding only
+        # the workbook — ``_provenance_manifest_rows`` writes it — and it
+        # rides ``payload["pre_lane_verdict"]`` for every reader.
+        issues.append(_issue(
+            code="pre_learning_empty_capture_verdict",
+            message=(
+                "The prerequisite capture was empty and the run decided "
+                f"{verdict!r} rather than "
+                f"{PRE_LANE_ASSUMES_NOTHING!r}: "
+                + (
+                    _normal(verdict_row.get("rationale"))
+                    or "no rationale was recorded"
+                )
+            ),
+            phase="phase03",
+        ))
+    # Q10, enforced at the release boundary rather than only at the
+    # decision. The empty-capture critic ADVISES and never gates — but its
+    # dissent is the codebase's own second pass on the ONE decision that
+    # decides whether an empty Pre release is *Ready* or *Diagnostic*, and
+    # [measured] it reached the release nowhere: not an issue, not a flag,
+    # not a manifest row, not even as a substring of the payload. A critic
+    # that said "the source shows two missing pages" on that decision was
+    # readable only inside premap's own return value. An advisory flag a
+    # reviewer cannot read is not recorded, it is discarded.
+    #
+    # It becomes an ISSUE, not a defect: it is doubt about what the source
+    # means, so it flags. The release moves to *Ready with flags*, every
+    # download stays open, and the publication stays open too — which is
+    # exactly what "the critic never gates" means.
+    for flag in (
+        verdict_row.get("review_flags") or []
+        if isinstance(verdict_row, Mapping) else []
+    ):
+        if _normal(flag):
+            issues.append(_issue(
+                code="pre_learning_empty_capture_review_flag",
+                message=(
+                    "The empty-capture verdict carries a review flag from "
+                    "its own second pass, which advises and never gates: "
+                    + _normal(flag)
+                ),
+                phase="phase03",
+            ))
     map_refused = _normal(pre_map.get("refused"))
     if map_refused:
         issues.append(_issue(
@@ -2200,7 +2507,7 @@ def _post_machine_ids_by_concept_id(db, job) -> dict[str, tuple[str, str]]:
         post = release_payload(job, lane=LANE_POST)
         if not post:
             return {}
-        _chapter, concepts, records = (
+        _chapter, concepts, records, _defects = (
             release_files.transient_release_hierarchy(db, job, payload=post))
     except Exception:  # noqa: BLE001 - the Pre lane never blocks on this
         return {}
@@ -2299,19 +2606,17 @@ def stage_pre_release(
     nothing" — exactly the R4 confusion the capture snapshot's own
     absent-marker exists to prevent.
 
-    That empty release DOWNLOADS but does not PUBLISH, and the docstring
-    used to claim otherwise. ``structural_defects`` reports "the release
-    contains no concept rows to upload" for it — the same refusal the
-    Post lane has always made for a release with nothing to deposit, on
-    the same message — so ``release_state`` reads *Diagnostic release*
-    and the database write is blocked. Stated plainly rather than left as
-    a contradiction between prose and code: the block is correct (there
-    is genuinely nothing to write, and publishing nothing is not a
-    publication), but the STATE NAME is a poor fit for a healthy chapter
-    that assumes nothing, because §4 defines *Diagnostic release* as
-    "structural/import integrity failed" and nothing failed here.
-    Renaming it needs a fourth named state, which is a §4 change and
-    therefore step 8's convergence work, not this slice's.
+    That empty release DOWNLOADS, and since spec-step8 S9 it also
+    PUBLISHES — as a zero-row idempotent success — but only when the run
+    positively DECIDED the emptiness. ``structural_defects`` no longer
+    reports "the release contains no concept rows to upload" (that moved
+    to ``nothing_to_publish``, D8.1: emptiness is not corruption, and §4
+    defines *Diagnostic release* as "structural/import integrity failed",
+    which an empty-but-correct chapter is not). What decides it now is
+    premap's recorded ``pre_lane_verdict``: ``assumes_nothing`` reads
+    *Ready*, anything else — including no verdict at all — keeps the
+    release *Diagnostic*. That replaced the fourth named state §4 would
+    otherwise have needed, so §4's three names are unamended.
 
     ``snapshot_defects`` carries input artefacts that were on disk and
     unreadable. They ride the payload, become error issues, and block the
@@ -2358,8 +2663,10 @@ def stage_pre_release(
         row[PRE_ROW_RELATED_UNRESOLVED_FIELD] = unresolved
         generated.extend(copy.deepcopy(entry) for entry in authored)
 
+    row_defects = staged_row_defects(raw_rows)
     issues = _pre_release_issues(
         source, questions_source, raw_rows, snapshot_defects,
+        row_defects=row_defects,
     )
     annotated = _annotate_records(raw_rows, issues, {})
     summary = _release_summary(annotated, issues)
@@ -2399,6 +2706,16 @@ def stage_pre_release(
         ),
         "records": _json_safe(annotated),
         "issues": _json_safe(issues),
+        # S9 — the row-level defect record, the same key and the same shape
+        # the Post lane carries.
+        STAGED_ROW_DEFECTS_FIELD: _json_safe(row_defects),
+        # S9 / D8.3 — premap's recorded empty-capture verdict, carried
+        # verbatim. ``structural_defects`` reads it; nothing re-decides it.
+        PRE_LANE_VERDICT_FIELD: _json_safe(
+            dict(source.get(PRE_LANE_VERDICT_FIELD))
+            if isinstance(source.get(PRE_LANE_VERDICT_FIELD), Mapping)
+            else {}
+        ),
         # DELIBERATELY EMPTY, and this is the steer's own mechanical rule.
         # The Post payload carries the chapter's question/task inventory
         # here; the Pre payload must not, because "no QID from the

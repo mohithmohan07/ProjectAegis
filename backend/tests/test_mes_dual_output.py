@@ -10,7 +10,6 @@ import copy
 import io
 
 import openpyxl
-import pytest
 
 from app.bulk_import import assessment_workbook as mp
 from app.services import assessment_grouping as ag
@@ -447,10 +446,170 @@ def test_formula_injection_and_cell_limit_guards():
          if r["question_label"]][0]
     assert q["question"] == "'=HYPERLINK evil"
 
+    # INVERTED by spec-step8 S9, and inverted deliberately rather than
+    # deleted: this assertion pinned a REAL behaviour that is now wrong.
+    # [measured at 76c84fb] a 40 000-character question raised
+    # ``WorkbookRenderError`` out of ``render_master_file`` — costing every
+    # row on every sheet of ALL FOUR outputs for one cell — while the
+    # staged verdict returned ``[]``, so nothing refused the database write
+    # either. Rule E says a defect blocks the write, never a download. The
+    # new contract is asserted here in full, and the coverage this test had
+    # is strengthened, not weakened: it now pins the workbook, the
+    # truncation marker, the whole recorded value, and the staged refusal.
     oversized = copy.deepcopy(_snapshot())
-    oversized["candidates"][0]["question"] = "x" * (mp.CELL_LIMIT + 1)
-    with pytest.raises(mp.WorkbookRenderError, match="exceeds"):
-        mp.render_master_file(oversized)
+    full_text = "x" * (mp.CELL_LIMIT + 1)
+    oversized["candidates"][0]["question"] = full_text
+    master, issues = mp.render_master_file(oversized)
+    assert master, "the Master File is written, not refused"
+
+    recorded = [
+        row for row in issues["oversized_cells"]
+        if row["reason"] == mp.CELL_TEXT_TOO_LONG
+    ]
+    assert recorded, "the oversized cell is recorded, never silently cut"
+    # R4: the SILENCE is the defect. The complete value is where a
+    # reviewer reads it, unabridged.
+    assert recorded[0]["full_value"] == full_text
+    assert recorded[0]["actual"] == len(full_text)
+    assert recorded[0]["cap"] == mp.CELL_LIMIT
+
+    # And the cell itself says the tail is elsewhere.
+    written = [
+        row for row in mp.parse_workbook(master)["sheets"]["Objective"]["rows"]
+        if row["question_label"]
+    ][0]["question"]
+    assert len(written) <= mp.CELL_LIMIT
+    assert "the complete value is recorded" in written.lower()
+
+    # The database write is refused, by name, at STAGING.
+    findings = [
+        f for f in rel.unresolved_question_homes(oversized)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert [f["field"] for f in findings] == ["question"]
+    assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
+
+
+def test_a_control_character_is_repaired_not_raised():
+    """The second half of the ``render_shape_overflow`` family (S9).
+
+    [measured at 76c84fb] a single ``\\x01`` in a question reached openpyxl
+    and raised ``IllegalCharacterError`` out of ``wb.save`` — an exception
+    from a third-party library, with no defect name, no record, and all
+    four outputs gone. XML 1.0 forbids those code points; the cell is
+    repaired, the whole original is recorded, and the write is refused.
+    """
+    ctl = copy.deepcopy(_snapshot())
+    ctl["candidates"][0]["question"] = "bad\x01char"
+
+    master, issues = mp.render_master_file(ctl)
+    assert master, "the Master File is written, not refused"
+
+    recorded = [
+        row for row in issues["oversized_cells"]
+        if row["reason"] == mp.CELL_TEXT_ILLEGAL_CHARACTER
+    ]
+    assert recorded, "the illegal character is recorded"
+    assert recorded[0]["full_value"] == "bad\x01char"
+    assert recorded[0]["code_points"] == ["U+0001"]
+
+    written = [
+        row for row in mp.parse_workbook(master)["sheets"]["Objective"]["rows"]
+        if row["question_label"]
+    ][0]["question"]
+    assert written == "badchar"
+
+    findings = [
+        f for f in rel.unresolved_question_homes(ctl)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert [f["reason"] for f in findings] == [
+        mp.CELL_TEXT_ILLEGAL_CHARACTER
+    ]
+
+
+def test_a_cell_that_is_both_too_long_and_illegal_is_repaired_for_both():
+    """The compound case — S9's own failure mode, still reachable until now.
+
+    [measured on the first cut of S9] ``cell_text_defect`` returned the
+    FIRST reason only. A value that was over the cap AND carried an
+    XML-illegal code point reported ``cell_text_too_long``, ``_cell_value``
+    dispatched on that one reason, truncated, and never stripped — so the
+    illegal code point rode into openpyxl and
+
+        aw.render_master_file(snap)
+        -> openpyxl.utils.exceptions.IllegalCharacterError
+
+    took all four outputs, the exact loss this slice exists to end. It was
+    data-position-dependent: the same defect at the tail was truncated away
+    by luck, so one chapter shipped and the next did not. Staging named the
+    length only, so a reviewer reading the findings could not have known
+    what actually broke the file.
+
+    Both halves are asserted, on the cell and at staging, plus the two cap
+    arithmetic facts the same repair path owns.
+    """
+    both = copy.deepcopy(_snapshot())
+    full_text = "\x01" + "y" * (mp.CELL_LIMIT + 5000)
+    both["candidates"][0]["question"] = full_text
+
+    master, issues = mp.render_master_file(both)
+    assert master, "the Master File is written, not refused"
+    assert mp.build_dual_output(both)["valid"], "and it reads back clean"
+
+    reasons = [
+        row["reason"] for row in issues["oversized_cells"]
+        if row["context"].endswith(":question")
+    ]
+    assert reasons == [mp.CELL_TEXT_TOO_LONG, mp.CELL_TEXT_ILLEGAL_CHARACTER]
+    assert all(
+        row["full_value"] == full_text for row in issues["oversized_cells"]
+        if row["context"].endswith(":question")
+    ), "both entries carry the WHOLE value; neither is a partial record"
+
+    written = [
+        row for row in mp.parse_workbook(master)["sheets"]["Objective"]["rows"]
+        if row["question_label"]
+    ][0]["question"]
+    assert "\x01" not in written
+    assert len(written) <= mp.CELL_LIMIT
+
+    # Staging names BOTH, so the findings say what broke the file.
+    findings = [
+        f for f in rel.unresolved_question_homes(both)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert sorted({f["reason"] for f in findings}) == sorted({
+        mp.CELL_TEXT_TOO_LONG, mp.CELL_TEXT_ILLEGAL_CHARACTER,
+    })
+
+
+def test_the_truncated_cell_states_a_true_count_and_stays_under_the_cap():
+    """Two arithmetic defects in one repair, both measured, both fixed.
+
+    * the note said "holds the first 32585 of 40000 characters" while
+      holding 32589 — ``kept`` was computed from the unformatted TEMPLATE
+      (182 chars) and the cut used the FORMATTED mark (178). A false
+      sentence inside a repair whose whole justification is that the record
+      stays true.
+    * the formula-injection guard ran AFTER the truncation and PREPENDED a
+      character, so a truncated cell beginning ``=`` was written at
+      ``CELL_LIMIT + 1``. openpyxl does not enforce the cap, so it saved —
+      violating the format limit the module says it is honouring.
+    """
+    import re
+
+    plain = mp._cell_value("z" * 40000, context="t")
+    stated = int(re.search(r"first (\d+) of (\d+)", plain).group(1))
+    assert stated == plain.index("\n[Aegis:"), "the count is the true count"
+    assert len(plain) <= mp.CELL_LIMIT
+
+    guarded = mp._cell_value("=" + "x" * 40000, context="t")
+    assert guarded.startswith("'=")
+    assert len(guarded) <= mp.CELL_LIMIT
+    stated = int(re.search(r"first (\d+) of (\d+)", guarded).group(1))
+    # One for the guard prefix, which is reserved before the cut now.
+    assert stated == guarded.index("\n[Aegis:") - 1
 
 
 def test_capacity_overflow_is_a_named_defect_with_the_label_named():

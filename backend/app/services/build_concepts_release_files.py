@@ -31,8 +31,18 @@ from .build_concepts_release import (
     normalize_lane,
     release_payload,
     release_state,
+    row_projection_defect,
     structural_defects,
 )
+
+
+# The projection's own defect codes (spec-step8 D8.4/S9). Row-level
+# findings reuse ``build_concepts_release.STAGED_ROW_UNUSABLE``, because
+# the staging pass and this one call the SAME function; these three name
+# what is wrong with the release as a whole rather than with one row.
+RELEASE_TARGET_CHAPTER_MISSING = "release_target_chapter_missing"
+RELEASE_DIRECTORY_METADATA_MISSING = "release_directory_metadata_missing"
+STAGED_RECORDS_NOT_AN_ARRAY = "staged_records_not_an_array"
 
 
 # ---------------------------------------------------------------------- #
@@ -231,6 +241,55 @@ _EXAMPLE_FILL = PatternFill("solid", fgColor="F3F3F3")
 _BLOCK_ID_RE = re.compile(r"\bBLK-[A-Za-z0-9_-]+\b")
 
 
+ISSUES_NOTE_LABEL = "Release issues"
+
+
+def _write_issues_note(
+    sheet, defects: list[dict[str, Any]], concepts: list[Any],
+) -> None:
+    """Row 1's note, past the last banded column. See the caller's docstring.
+
+    Written whenever the projection recorded anything OR the release is
+    empty, so the reviewer opening a zero-row Concept File is told why it
+    is empty instead of being left to guess (R4: the silence is the
+    defect). Never written when there is nothing to say, so a healthy
+    workbook is byte-identical to the one this repo already ships.
+
+    THE CUT SAYS THAT IT CUT. A cell holds ``CELL_LIMIT`` characters and
+    no more; a note longer than that has to lose its tail. It was losing
+    it to a bare ``[:32_000]`` — an unnamed number, four digits away from
+    the format's real cap, cutting mid-sentence with no marker in a note
+    that is the last thing a reviewer reads before opening the release
+    JSON. The cap is read from the module that owns it, and what was cut
+    is named.
+    """
+    from ..bulk_import import writer as bi_writer
+    from ..bulk_import.assessment_workbook import CELL_LIMIT
+
+    lines = [_cell_text(defect.get("message")) for defect in defects]
+    lines = [line for line in lines if line]
+    if not concepts:
+        lines.append(
+            "This release has no concept row to export. That is emptiness, "
+            "not corruption: whether it is CORRECT is recorded as the "
+            "release state, not guessed here."
+        )
+    if not lines:
+        return
+    column = len(bi_writer.FIELDS_BY_KIND["objective"]) + 2
+    cell = sheet.cell(row=1, column=column)
+    text = _cell_text(f"{ISSUES_NOTE_LABEL}: " + " | ".join(lines))
+    if len(text) > CELL_LIMIT:
+        mark = (
+            f" […{len(lines)} findings were recorded and this note was cut "
+            "to fit one spreadsheet cell.]"
+        )
+        text = text[:CELL_LIMIT - len(mark)] + mark
+    cell.value = text
+    cell.font = Font(bold=True)
+    cell.alignment = Alignment(horizontal="left")
+
+
 def build_release_bulk_import_workbook(
     db, job: models.UploadJob, *, lane: object = LANE_POST,
 ) -> bytes:
@@ -249,6 +308,37 @@ def build_release_bulk_import_workbook(
     publication recorded — ``job.result_ids`` belongs to the Post lane, so
     serving the Pre workbook from it would hand a reviewer the Post rows
     under a Pre filename.
+
+    IT ALWAYS RETURNS A WORKBOOK (spec-step8 D8.4). [measured at 76c84fb]
+    an empty Pre release and a Post release with one topic-less row both
+    404'd this route while the other three downloads returned 200 — one
+    bad row took the reviewer's Concept File away. Now the sound rows are
+    written and the defects ride an issues note.
+
+    WHERE THAT NOTE GOES, and it is not a free choice. This file is the
+    canonical Bulk Import format and it is re-imported: an extra sheet is
+    refused outright by ``layouts.identify_workbook`` ("a sheet that no
+    layout claims … refuses the WHOLE workbook") unless it is registered
+    in the layout's ``ignored_sheets``, which the reference layout leaves
+    empty; and an extra DATA row would be read back as a concept by
+    ``reader.import_workbook`` and by ``validate_concept_file``'s row
+    comparison. So the note is written on ROW 1 — the band row, which no
+    reader parses (``_header_names`` reads row 2, data starts at row 3) —
+    past the last banded column, where the reference sheet is blank by
+    construction. Format-safe, and visible above the frozen pane.
+
+    WHAT THE NOTE DUPLICATES AND WHAT IT DOES NOT, stated exactly rather
+    than generously. The ROW-level findings are decided at staging by
+    ``build_concepts_release.staged_row_defects``, so they are already in
+    ``payload["issues"]``, in the release workbook's Issues sheet, in the
+    diagnostics zip and in the release state — this note repeats them.
+    The two CHAPTER-level findings below are not: they are discovered
+    here, at download time, from a live database read, and D8.5 forbids a
+    projection-time discovery from mutating the frozen payload. Their
+    consumer for the DATABASE WRITE exists and is not this note —
+    ``upload_release_to_database`` re-checks the target chapter itself and
+    refuses — but this note is their only place in an ARTEFACT. Recorded
+    as a known asymmetry rather than papered over.
     """
     from ..bulk_import import writer as bi_writer
     resolved = normalize_lane(lane)
@@ -268,12 +358,13 @@ def build_release_bulk_import_workbook(
     if bool(summary.get("database_uploaded")) and result_ids:
         return bi_writer.write_concepts_workbook(db, result_ids)
 
-    chapter, concepts, _records = transient_release_hierarchy(
+    chapter, concepts, _records, defects = transient_release_hierarchy(
         db, job, payload=payload
     )
 
     wb = bi_writer._new_workbook()
     ws = wb[bi_writer.SHEET_BY_KIND["objective"]]
+    _write_issues_note(ws, defects, concepts)
     export_scope = bi_writer.ConceptExportScope(concepts)
     next_row = 3
     for concept in concepts:
@@ -302,8 +393,37 @@ def transient_release_hierarchy(
     job: models.UploadJob,
     *,
     payload: Mapping[str, Any] | None = None,
-) -> tuple[models.Chapter, list[models.Concept], list[dict[str, Any]]]:
+) -> tuple[
+    models.Chapter,
+    list[models.Concept],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
     """Build the one transient hierarchy a lane's Concept and Master share.
+
+    RETURNS ``(chapter, concepts, records, defects)`` — spec-step8 D8.4,
+    Rule E enforced for the first time. Seven of this function's eight
+    raises are gone: a defect anywhere in the hierarchy used to cost the
+    ARTIFACTS, 404-ing ``release-bulk-import.xlsx`` and 400-ing the two
+    Master builds, which is precisely what "a defect blocks the database
+    write, never a download" forbids. What each of the seven did instead
+    is written at its own site below.
+
+    The ONE raise that stays is ``release is None`` — "this upload has no
+    staged release". That is genuine impossibility rather than a defect:
+    there is no artefact to project, no frozen directory metadata to build
+    a chapter row from, and fabricating an empty one would hand a reviewer
+    an invented file. D8.4 names it explicitly ("keeps ValueError→404 only
+    for 'this upload has no staged release'"), and ``api/build_concepts``
+    keeps exactly that arm.
+
+    The ROW-level verdict is not made here. ``build_concepts_release.
+    row_projection_defect`` is the one implementation and the staged
+    payload already carries its findings under ``staged_row_defects``
+    (D8.5: this function runs at download time, so a discovery here could
+    reach ``structural_defects`` only by mutating a frozen payload during
+    a GET). Calling it here re-reads the same rows through the same
+    function, so the skipped row and the reviewer's issue cannot drift.
 
     LANE-GENERIC, and named that way deliberately. ``payload`` is resolved
     by the caller — ``build_release_bulk_import_workbook:161`` passes the
@@ -323,36 +443,65 @@ def transient_release_hierarchy(
 
     release = dict(payload) if isinstance(payload, Mapping) else release_payload(job)
     if release is None:
+        # THE ONE SURVIVING RAISE — see the docstring. Genuine
+        # impossibility, not a defect: there is nothing staged to project.
         raise ValueError("this upload has no staged release")
+    defects: list[dict[str, Any]] = []
     target_chapter_id = int(release.get("target_chapter_id") or 0)
-    source_chapter = db.get(models.Chapter, target_chapter_id)
-    if source_chapter is None:
-        raise ValueError("the release target chapter no longer exists")
+    if db.get(models.Chapter, target_chapter_id) is None:
+        # DE-RAISED. The persisted chapter row contributes NOTHING to this
+        # projection — every chapter field below is read from the payload's
+        # frozen ``directory_metadata`` — so its absence changed no cell and
+        # cost all four outputs. Recorded because the publication DOES need
+        # that row and will refuse without it.
+        defects.append({
+            "code": RELEASE_TARGET_CHAPTER_MISSING,
+            "message": (
+                "the release target chapter no longer exists, so these "
+                "files project the chapter frozen into the release rather "
+                "than a live one"
+            ),
+        })
     directory = release.get("directory_metadata")
     if not isinstance(directory, Mapping) or not directory:
-        raise ValueError(
-            "the staged release has no frozen chapter directory metadata"
-        )
+        # DE-RAISED. Missing directory metadata blanks the chapter's
+        # board/grade/subject cells; it does not stop a single concept row
+        # from being written.
+        defects.append({
+            "code": RELEASE_DIRECTORY_METADATA_MISSING,
+            "message": (
+                "the staged release has no frozen chapter directory "
+                "metadata, so the chapter's directory cells ship blank"
+            ),
+        })
+        directory = {}
     raw_records = release.get("records") or []
     if not isinstance(raw_records, list):
-        raise ValueError("the staged release concept records are not an array")
+        # DE-RAISED. A records value that is not an array yields no rows,
+        # which is what an empty array yields; the difference is that this
+        # one is a defect and is named as one.
+        defects.append({
+            "code": STAGED_RECORDS_NOT_AN_ARRAY,
+            "message": (
+                "the staged release concept records are not an array, so "
+                "no concept row could be read from them"
+            ),
+        })
+        raw_records = []
     records: list[dict[str, Any]] = []
     for position, row in enumerate(raw_records, start=1):
-        if not isinstance(row, Mapping):
-            raise ValueError(
-                f"staged concept row {position} is not an object"
-            )
-        if not str(row.get("topic") or "").strip():
-            raise ValueError(f"staged concept row {position} has no topic")
-        if not str(
-            row.get("concept_title") or row.get("concept") or ""
-        ).strip():
-            raise ValueError(
-                f"staged concept row {position} has no concept title"
-            )
+        # DE-RAISED, three at once (row not an object / no topic / no
+        # concept title). ONE implementation, shared with staging.
+        finding = row_projection_defect(row, position)
+        if finding is not None:
+            defects.append(dict(finding))
+            continue
         records.append(dict(row))
-    if not records:
-        raise ValueError("the release contains no concept rows to export")
+    # THE EIGHTH RAISE IS SIMPLY GONE, with no defect in its place: "the
+    # release contains no concept rows to export" was EMPTINESS, and
+    # emptiness is ``nothing_to_publish``'s question, not a corruption
+    # finding (D8.1). Recording it here would put the very conflation this
+    # slice split back into the projection.
 
     pre_post = (
         "Pre"
@@ -461,7 +610,7 @@ def transient_release_hierarchy(
         active_concept_ids=None,
         pre_post=pre_post,
     )
-    return chapter, concepts, records
+    return chapter, concepts, records, defects
 
 
 def _json_bytes(value: Any) -> bytes:
@@ -510,9 +659,35 @@ def _provenance_manifest_rows(payload: Mapping[str, Any]) -> dict[str, Any]:
     A reviewer holding only this workbook can otherwise not tell a chapter
     with genuinely few questions from one whose outline pass never ran.
     """
+    verdict_rows: dict[str, Any] = {}
+    verdict = payload.get("pre_lane_verdict")
+    if isinstance(verdict, Mapping) and str(verdict.get("verdict") or ""):
+        # S9 / D8.3. It belongs HERE and not in the Issues sheet: a
+        # positive ``assumes_nothing`` is provenance, not doubt, and
+        # counting it as an issue would name a correct empty release
+        # "ready with flags". A ``capture_incomplete`` verdict IS an issue
+        # and ``_pre_release_issues`` raises it as one; this row states
+        # what was decided either way, which is exactly the question this
+        # manifest exists to answer for a reviewer holding only the file.
+        verdict_rows["Empty prerequisite capture"] = (
+            f"{verdict.get('verdict')} — {verdict.get('rationale') or ''}"
+        ).strip(" —")
+        # Its own second pass, beside it (Q10). The critic advises and
+        # never gates, so its dissent belongs where the verdict is read —
+        # a reviewer holding only this workbook can otherwise not tell a
+        # verdict the second pass agreed with from one it argued against.
+        flags = [
+            str(flag).strip()
+            for flag in verdict.get("review_flags") or []
+            if str(flag).strip()
+        ]
+        if flags:
+            verdict_rows["Empty prerequisite capture — review"] = (
+                " | ".join(flags)
+            )
     provenance = payload.get("extraction_provenance")
     if not isinstance(provenance, Mapping) or not provenance:
-        return {}
+        return verdict_rows
     applied = bool(provenance.get("chapter_outline_applied"))
     reader = str(provenance.get("source_reader") or "")
     flags = [str(flag) for flag in provenance.get("chapter_outline_review_flags") or []]
@@ -539,6 +714,7 @@ def _provenance_manifest_rows(payload: Mapping[str, Any]) -> dict[str, Any]:
         rows[label] = str(int(provenance.get(key) or 0))
     if flags:
         rows["Outline normalization flags"] = "\n".join(flags)
+    rows.update(verdict_rows)
     return rows
 
 

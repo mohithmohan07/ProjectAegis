@@ -587,6 +587,55 @@ def candidate_home_finding(
     return None
 
 
+def _cell_shape_findings(
+    record: Mapping, where: str, **named: Any,
+) -> list[dict]:
+    """Every cell in one RENDERED record that no XLSX cell can hold (S9).
+
+    The staging twin of ``assessment_workbook._cell_value``'s repair. Two
+    things keep it from being a second implementation of one rule — the
+    drift ``candidate_home_finding``'s docstring records is what that
+    costs:
+
+    * the predicate is ``assessment_workbook.cell_text_defects``, that
+      module's own, so the cap and the illegal-character set are read from
+      the format in exactly one place;
+    * the input is the record the RENDERER will build, not the raw
+      candidate. A staged field the renderer never writes into a cell must
+      not refuse a database write, and a field it does write must not
+      escape — only the rendered record answers both.
+
+    ONE FINDING PER SHAPE, because one cell can trip both. [measured] while
+    the predicate answered with the first reason only, a value that was
+    over the cap AND carried an XML-illegal code point was named
+    ``cell_text_too_long`` here and nothing named the code point — so a
+    reviewer reading the findings had no way to know what actually broke
+    the file when openpyxl raised on it.
+
+    It looks at LENGTH and at which code points a cell may carry. It never
+    reads what the text says.
+    """
+    from ..bulk_import import assessment_workbook as workbook
+
+    findings: list[dict] = []
+    for field, value in record.items():
+        for defect in workbook.cell_text_defects(value):
+            findings.append(_finding(
+                RENDER_SHAPE_OVERFLOW,
+                f"{where}: {field} carries {defect['actual']} "
+                + (
+                    f"character(s), and one cell holds {defect['cap']}"
+                    if defect["reason"] == workbook.CELL_TEXT_TOO_LONG
+                    else "character(s) no XLSX cell may carry ("
+                    + ", ".join(defect.get("code_points") or [])
+                    + ")"
+                ),
+                field=str(field), cap=defect["cap"],
+                actual=defect["actual"],
+                reason=defect["reason"], **named))
+    return findings
+
+
 def unresolved_question_homes(
     snapshot: Mapping, profile: Mapping | str | None = None,
 ) -> list[dict]:
@@ -617,6 +666,15 @@ def unresolved_question_homes(
             concept_names[str(concept.get("concept_key") or "")] = str(
                 concept.get("concept_display_name") or ""
             ).strip()
+            # The concept band is written into every Master row and into
+            # every Concept File row, so a concept cell no XLSX cell can
+            # hold is the same defect one band over (S9). The snapshot's
+            # concept row IS the rendered record for those columns.
+            findings.extend(_cell_shape_findings(
+                concept,
+                f"concept {concept.get('concept_title') or ''}".strip(),
+                concept_key=str(concept.get("concept_key") or ""),
+            ))
 
     groups_by_key: dict[str, Mapping] = {}
     for group in snapshot.get("groups") or []:
@@ -675,7 +733,8 @@ def unresolved_question_homes(
     # kind, and that map is the constant INTERSECTED with the layout's own
     # sheet-name map.  Reading the un-intersected constant here was a
     # second source for one question — see ``candidate_home_finding``.
-    renderable = tuple(workbook.sheet_for_kind())
+    sheet_by_kind = workbook.sheet_for_kind()
+    renderable = tuple(sheet_by_kind)
     profile_name = assessment_profile.name(profile)
     caps = (
         ("answers", workbook.MAX_OBJECTIVE_OPTIONS, ("objective",)),
@@ -718,6 +777,13 @@ def unresolved_question_homes(
                     f"{cap} slots",
                     candidate_id=candidate_id, question_label=label,
                     field=field, cap=cap, actual=actual))
+        sheet_name = sheet_by_kind.get(kind)
+        if sheet_name:
+            findings.extend(_cell_shape_findings(
+                workbook._question_record(candidate, sheet_name, profile),
+                f"{identity}",
+                candidate_id=candidate_id, question_label=label,
+            ))
         if kind == "descriptive":
             for n, sub in enumerate(candidate.get("sub_questions") or [], 1):
                 if not isinstance(sub, Mapping):
