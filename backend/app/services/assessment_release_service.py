@@ -39,6 +39,11 @@ READY = "ready"
 RELEASED_WITH_WARNINGS = "released_with_warnings"
 BLOCKED = "blocked_for_database_upload"
 
+# The recorded name for Rule G's idempotent second act (T5-2). It exists so
+# that "this label was already published by this release" is a note a reviewer
+# can read, rather than a bare ``continue``.
+QUESTION_LABEL_REISSUED = "question_label_reissued"
+
 # ``models.Question.origin`` values this release lane may mint.  A
 # reused source question keeps the long-standing value; a GENERATED
 # pre-learning question carries its own explicit one.  Before this, the
@@ -597,20 +602,88 @@ def upload_master_to_database(
                 group.get("semantic_description") or "")
             groups_by_key[group_key] = record
 
-        existing_labels = {
-            q.question_label
-            for q in db.query(models.Question).all()
-            if q.question_label
-        }
+        # The label a row was published under, with the release that published
+        # it. ``route_audit.release_uid`` is the key because it is the one
+        # identity this insert ALREADY writes (:648-651) and the only one that
+        # exists for both lanes: a generated pre-learning question is permitted
+        # to carry no source atom at all, so it stores ``source_qid = ""`` and
+        # a source-identity key cannot tell two of them apart.
+        #
+        # Only the two columns the verdict reads are materialised: the whole
+        # corpus as ORM objects costs the same table scan and materially more
+        # memory as it grows, for information the label check never touches.
+        #
+        # THE ROW THIS RELEASE OWNS WINS. A database that already carries the
+        # same label twice is precisely the database ``db._ensure_question_
+        # label_index`` deliberately keeps bootable rather than crashing, and on
+        # it a first-row-wins lookup makes the verdict depend on row order: if
+        # a foreign row happens to sort first, a LEGITIMATE second act of the
+        # owning release compares against the wrong row and refuses. The
+        # direction is safe — a wrong pick refuses rather than drops — but a
+        # refusal on a legitimate re-publication is the failure this branch is
+        # atomic with T5-3 to prevent, and it would fire on exactly the
+        # databases a reviewer is trying to repair. Preferring the row whose
+        # ``route_audit.release_uid`` is ours removes the order dependence
+        # without weakening the refusal: if no row is ours, any of them refuses.
+        existing_by_label: dict[str, str] = {}
+        for label, route_audit in db.query(
+            models.Question.question_label, models.Question.route_audit
+        ):
+            if not label:
+                continue
+            prior_uid = str((route_audit or {}).get("release_uid") or "")
+            if label not in existing_by_label or (
+                prior_uid and prior_uid == release.release_uid
+            ):
+                existing_by_label[label] = prior_uid
         questions_created = 0
+        labels_reissued: list[str] = []
+        # Rows this loop has already inserted are not in the query above, and
+        # they are the one collision the freeze-time check cannot cover for a
+        # release FROZEN BEFORE T5-1 existed: its ``payload_errors`` were
+        # computed without ``duplicate_question_labels``, so a pre-existing
+        # snapshot carrying one label twice reaches this loop with readiness
+        # READY.
+        #
+        # [measured] what happened then depended on the database, and the worse
+        # branch is the one this slice exists for. WITH the partial index, the
+        # second insert raised and the generic ``except Exception`` below
+        # converted it into ``upload failed and was rolled back
+        # (IntegrityError: UNIQUE constraint failed…)`` — safe, but it names a
+        # driver error instead of the label and the reason. WITHOUT the index —
+        # i.e. on exactly the database ``db._ensure_question_label_index``
+        # declines to index rather than crash on, the database a reviewer is in
+        # the middle of repairing — the upload SUCCEEDED with
+        # ``questions_created: 2`` and wrote TWO rows under one
+        # ``question_label``: identity corruption committed to the database,
+        # the T9-1 B1 defect the publication act is supposed to block. Refused
+        # by name on both, before anything is written.
+        written_here: set[str] = set()
         for candidate in snapshot.get("candidates") or []:
             label = str(candidate.get("question_label") or "")
             if not label:
                 raise UploadRefused(
                     f"candidate {candidate.get('candidate_id')!r} carries "
                     "no question label")
-            if label in existing_labels:
-                continue  # append-only: an uploaded label is immutable
+            if label in written_here:
+                raise UploadRefused(
+                    f"{label}: two candidates in this release carry the same "
+                    "question label")
+            if label in existing_by_label:
+                prior_uid = existing_by_label[label]
+                if prior_uid and prior_uid == release.release_uid:
+                    # Rule G's idempotent second act: this exact release
+                    # already put this exact label in the database. Skipping is
+                    # correct — but it is RECORDED, because an unflagged
+                    # ``continue`` here is what made a learner's question
+                    # disappear between the release and the database (R4).
+                    labels_reissued.append(label)
+                    continue
+                # A different candidate wants a label that is already
+                # published. Never drop it: refuse the whole upload, keep both
+                # downloads, and let a reviewer resolve the collision.
+                raise UploadRefused(
+                    f"{label}: already published under different content")
             group = groups_by_key.get(str(candidate.get("group_key") or ""))
             if group is None:
                 raise UploadRefused(
@@ -649,6 +722,7 @@ def upload_master_to_database(
                     "version": release.version,
                 },
             ))
+            written_here.add(label)
             questions_created += 1
 
         result = {
@@ -656,7 +730,31 @@ def upload_master_to_database(
             "version": release.version,
             "groups_created": groups_created,
             "questions_created": questions_created,
+            "labels_reissued": list(labels_reissued),
         }
+        if labels_reissued:
+            notes = list((release.diagnostics or {}).get("release_notes") or [])
+            note = {
+                "code": QUESTION_LABEL_REISSUED,
+                "release_uid": release.release_uid,
+                "version": release.version,
+                "question_labels": list(labels_reissued),
+                "detail": (
+                    "this release had already published these labels; the "
+                    "second act skipped them and wrote nothing new"
+                ),
+            }
+            # Recorded once, not once per act. Every field of the note is
+            # constant for one release row, so a third and fourth second act
+            # append a byte-identical copy and grow ``release_notes`` without
+            # adding anything a reviewer can read. The note says WHAT was
+            # skipped; the count of acts is the publication record's business.
+            if note not in notes:
+                notes.append(note)
+                release.diagnostics = {
+                    **(release.diagnostics or {}),
+                    "release_notes": notes,
+                }
         release.publication = {
             **publication,
             "uploaded_key": idempotency_key,

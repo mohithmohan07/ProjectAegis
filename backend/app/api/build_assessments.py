@@ -351,6 +351,13 @@ def get_assessment_release_issues(
         "payload_errors": diagnostics.get("payload_errors", []),
         "read_back": diagnostics.get("read_back", {}),
         "issues": diagnostics.get("issues", {}),
+        # ``release_notes`` carries the ``question_label_reissued`` record of
+        # Rule G's idempotent second act. Written durably to the release row and
+        # projected here, because a note on no read path is not a record: the
+        # POST that performs the upload returns ``labels_reissued`` to whoever
+        # is standing there, and this is how anyone reading the release LATER
+        # learns which labels the second act skipped.
+        "release_notes": diagnostics.get("release_notes", []),
     }
 
 

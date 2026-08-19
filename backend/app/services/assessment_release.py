@@ -435,6 +435,36 @@ def duplicate_group_keys(groups: Iterable[Mapping]) -> list[str]:
     return duplicates
 
 
+def duplicate_question_labels(candidates: Iterable[Mapping]) -> list[str]:
+    """Return repeated question labels inside one release.
+
+    ``question_label`` is the learner-facing machine identity of a question.
+    Reusing one label for a different question is structural corruption, not a
+    semantic concern that a later judgment pass may accept with a flag: the
+    database write has exactly one row per label, so the second question does
+    not get stored differently — it does not get stored at all, and a learner
+    question that vanishes with no record is the one loss R4 forbids.
+
+    Seen HERE, at freeze, the collision reaches ``_readiness`` as a payload
+    error, the release goes BLOCKED, every download still ships, and only the
+    database write is refused (T9's principle; the same transport
+    ``duplicate_group_keys`` already rides).
+
+    Blank labels are refused one at a time at the upload, by name; they are not
+    collisions with each other and are skipped here.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for candidate in candidates:
+        label = str(candidate.get("question_label") or "")
+        if not label:
+            continue
+        if label in seen and label not in duplicates:
+            duplicates.append(label)
+        seen.add(label)
+    return duplicates
+
+
 def primary_placement_errors(placements: Iterable[Mapping]) -> list[str]:
     """Exactly one home concept and group per question (spec §3.7)."""
     errors: list[str] = []
@@ -509,6 +539,8 @@ def freeze_payload(payload: Mapping) -> dict:
         errors.append(f"duplicate group identity {identity}")
     for group_key in duplicate_group_keys(payload.get("groups") or []):
         errors.append(f"duplicate group_key {group_key!r}")
+    for label in duplicate_question_labels(payload.get("candidates") or []):
+        errors.append(f"duplicate question_label {label!r}")
     errors.extend(
         primary_placement_errors(payload.get("placements") or []))
     return {

@@ -1,7 +1,35 @@
+import json
+import logging
+
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from .config import DB_URL
+from .config import DATA_DIR, DB_URL
+
+log = logging.getLogger(__name__)
+
+# spec-step8 T5-4/T5-5. The unique index on ``questions.question_label`` is
+# PARTIAL and it is GATED on a scan.
+#
+#   * partial, because blank labels are legion and legitimate —
+#     ``reader.py:369-370`` creates a ``Question`` from a row that carries a
+#     question and no label, so the column's ``''`` default is reachable, and
+#     [measured, sqlite 3.45.1] two ``''`` rows fail a plain unique index and
+#     are accepted by ``WHERE question_label <> ''``.
+#   * gated, because ``init_db`` runs inside the FastAPI lifespan
+#     (``app/main.py:42``): a raise here takes the product down for the very
+#     reviewer who has to repair the duplicates, and ``_backfill_and_normalize``
+#     never runs either. A database that already carries duplicates BOOTS; the
+#     finding is recorded and the index is simply not created on it.
+#
+# The scan is never a bare create wrapped in ``try/except`` — that would swallow
+# the duplicates instead of naming them.
+QUESTION_LABEL_INDEX = "ux_questions_question_label"
+QUESTION_LABEL_DUPLICATE = "question_label_duplicate"
+INTEGRITY_REPORT = DATA_DIR / "db_integrity" / "question_label_duplicates.json"
+
+# The last scan's verdict, in-process. The durable copy is ``INTEGRITY_REPORT``.
+QUESTION_LABEL_INDEX_STATUS: dict = {}
 
 
 class Base(DeclarativeBase):
@@ -111,7 +139,104 @@ def _ensure_columns() -> None:
                 "ix_assessment_sessions_owner_sub "
                 "ON assessment_sessions(owner_sub)"
             )
+        if "questions" in tables:
+            _ensure_question_label_index(conn)
         conn.commit()
+
+
+def _ensure_question_label_index(conn) -> None:
+    """Scan first, create second, and never halt startup (T5-4).
+
+    ``CREATE UNIQUE INDEX IF NOT EXISTS`` is the only route to a unique
+    constraint here: ``_ensure_columns`` is additive ``ADD COLUMN`` only, there
+    is no alembic and no migrations directory, and a ``UniqueConstraint`` on
+    the model would only reach databases whose ``questions`` table does not yet
+    exist — a green suite proving nothing about the databases that matter.
+
+    "Never halt startup" is stated absolutely, so it is also held absolutely
+    against the shape of the table, not only against its contents: a
+    ``questions`` table without a ``question_label`` column makes the scan
+    itself raise ``OperationalError`` straight out of the FastAPI lifespan.
+    ``question_label`` is an original ``NOT NULL`` model column and is not in
+    the ``additions`` list, so no database the product has written has that
+    shape — which is exactly why an unchecked assumption about it would be
+    discovered by a reviewer who can no longer boot the app to look. The column
+    is checked, not assumed; that is the same PRAGMA the ADD COLUMN loop above
+    already runs, and it is mechanics, not judgment.
+    """
+    columns = {
+        row[1] for row in conn.exec_driver_sql("PRAGMA table_info(questions)")
+    }
+    if "question_label" not in columns:
+        QUESTION_LABEL_INDEX_STATUS.clear()
+        QUESTION_LABEL_INDEX_STATUS.update({
+            "code": "question_label_column_absent",
+            "index": QUESTION_LABEL_INDEX,
+            "created": False,
+            "duplicates": [],
+        })
+        log.warning(
+            "questions.question_label is absent; %s not created",
+            QUESTION_LABEL_INDEX,
+        )
+        return
+    duplicates = [
+        {"question_label": row[0], "rows": int(row[1])}
+        for row in conn.exec_driver_sql(
+            "SELECT question_label, COUNT(*) FROM questions "
+            "WHERE question_label IS NOT NULL AND question_label <> '' "
+            "GROUP BY question_label HAVING COUNT(*) > 1 "
+            "ORDER BY question_label"
+        )
+    ]
+    if duplicates:
+        # Recorded, not raised. Repair is a reviewer path (T5-5): these surface
+        # as ``question_label_duplicate`` release-audit issues, and until they
+        # are resolved the freeze-time check and the upload refusal carry the
+        # guarantee on this database.
+        _record_question_label_duplicates(duplicates)
+        return
+    conn.exec_driver_sql(
+        f"CREATE UNIQUE INDEX IF NOT EXISTS {QUESTION_LABEL_INDEX} "
+        "ON questions(question_label) WHERE question_label <> ''"
+    )
+    QUESTION_LABEL_INDEX_STATUS.clear()
+    QUESTION_LABEL_INDEX_STATUS.update({
+        "created": True, "duplicates": [],
+    })
+    try:
+        INTEGRITY_REPORT.unlink(missing_ok=True)
+    except OSError as exc:  # pragma: no cover - reporting, never the gate
+        log.warning("could not clear %s: %s", INTEGRITY_REPORT, exc)
+
+
+def _record_question_label_duplicates(duplicates: list[dict]) -> None:
+    """Durably name what blocked the index, without stopping the app."""
+    finding = {
+        "code": QUESTION_LABEL_DUPLICATE,
+        "index": QUESTION_LABEL_INDEX,
+        "created": False,
+        "duplicates": duplicates,
+        "detail": (
+            "duplicate non-blank question_label values are present, so the "
+            "unique index was not created on this database; resolve them "
+            "through the release-audit surface and restart"
+        ),
+    }
+    QUESTION_LABEL_INDEX_STATUS.clear()
+    QUESTION_LABEL_INDEX_STATUS.update(finding)
+    log.warning(
+        "%s: %s duplicate question_label values; %s not created",
+        QUESTION_LABEL_DUPLICATE, len(duplicates), QUESTION_LABEL_INDEX,
+    )
+    try:
+        INTEGRITY_REPORT.parent.mkdir(parents=True, exist_ok=True)
+        INTEGRITY_REPORT.write_text(
+            json.dumps(finding, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+    except OSError as exc:  # pragma: no cover - reporting, never the gate
+        log.warning("could not write %s: %s", INTEGRITY_REPORT, exc)
 
 
 def _backfill_and_normalize() -> None:

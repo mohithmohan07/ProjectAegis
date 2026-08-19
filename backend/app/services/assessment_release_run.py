@@ -47,6 +47,7 @@ from . import assessment_routing as routing
 from . import assessment_source_inventory as source_inventory
 from . import assessment_profile
 from . import build_concepts_release
+from . import identity
 from . import progress, uploads
 from . import release_refiner
 from .phase3 import envelope as phase3_envelope
@@ -1251,19 +1252,13 @@ def _label_base(concept: Mapping[str, Any]) -> str:
 
 
 def _next_label_index(db: Session, base: str) -> int:
-    """Continue numbering after every label already committed for this base."""
-    prefix = f"{base} Q"
-    taken = [
-        q.question_label
-        for q in db.query(models.Question)
-        .filter(models.Question.question_label.startswith(prefix))
-    ]
-    highest = 0
-    for label in taken:
-        tail = label[len(prefix):]
-        if tail.isdigit():
-            highest = max(highest, int(tail))
-    return highest + 1
+    """Continue numbering after every label already committed for this base.
+
+    The body moved to ``identity.next_label_index`` (T5-3) so the Build
+    Assessments lane runs the identical max-scan instead of its own count.
+    This name is kept as the local seam.
+    """
+    return identity.next_label_index(db, base)
 
 
 # --------------------------------------------------------------------------- #

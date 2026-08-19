@@ -707,11 +707,31 @@ def _generate_session(
 
         # Per-concept running index keeps question labels unique and ordered,
         # continuing after every question committed by earlier sessions.
-        counters: dict[int, int] = {
-            concept.id:
-                sum(len(group.questions) for group in concept.groups) + 1
+        # A MAX-SCAN, not a count (T5-3): counting reissues the number of every
+        # deleted question, and R5 says an uploaded label is never reassigned.
+        # ``identity.next_label_index`` is the same helper the release lane
+        # calls, keyed on the same persisted ``machine_id`` the label is minted
+        # from, so the two lanes continue one family instead of two.
+        label_bases: dict[int, str] = {
+            concept.id: identity.machine_id_for_concept(concept)
             for concept in refreshed_concepts
         }
+        # Keyed by BASE, not by concept id, and that is load-bearing: the label
+        # family is the base, so two concepts that resolve to one base must
+        # share one counter or they mint the same label inside a single run and
+        # the partial unique index turns it into an IntegrityError that escapes
+        # ``db.commit()`` below and loses the whole generated batch. Two
+        # concepts DO share a base whenever both carry a blank ``machine_id``
+        # (no resolvable chapter), and on a database that already carries a
+        # duplicate persisted ``machine_id`` — the T9-1 B1 defect the
+        # publication act blocks, which the generation run must survive rather
+        # than crash on.
+        counters: dict[str, int] = {
+            base: identity.next_label_index(db, base)
+            for base in set(label_bases.values())
+        }
+        label_family_notes = _legacy_label_family_notes(
+            refreshed_concepts, label_bases)
         created_ids: list[int] = []
         for concept_id, cell_id, identified_records in generated_batches:
             concept = concepts_by_id[concept_id]
@@ -719,10 +739,11 @@ def _generate_session(
                 group = _group_for_recorded_tier(
                     db, concept, recorded_tier_by_candidate[candidate_id])
                 record = dict(generated_record)
+                base = label_bases[concept_id]
                 record["question_label"] = generation.question_label(
-                    concept, counters[concept_id]
+                    concept, counters[base]
                 )
-                counters[concept_id] += 1
+                counters[base] += 1
                 question = models.Question(
                     group_id=group.id,
                     blueprint_cell_id=cell_id,
@@ -757,10 +778,27 @@ def _generate_session(
         "session_id": session_id, "created": len(created_ids),
         "question_ids": created_ids,
         "pipeline": pipeline,
+        "notes": label_family_notes,
         "review": {"problems": problems[:50],
                    "monotony": {k: monotony[k] for k in
                                 ("worst", "worst_count", "generic_ratio", "monotonous")}},
     }
+
+
+def _legacy_label_family_notes(concepts, bases: dict[int, str]) -> list[dict]:
+    """Say out loud that a concept carries two label conventions (T5/R5).
+
+    A grandfathered label is never re-minted, so the max-scan legitimately
+    ignores it — it belongs to a different family. Reporting both prefixes is
+    the difference between "the scan is scoped" and "the scan missed rows".
+    """
+    notes: list[dict] = []
+    for concept in concepts:
+        note = identity.legacy_label_family_for_concept(
+            concept, bases.get(concept.id, ""))
+        if note is not None:
+            notes.append(note)
+    return notes
 
 
 def _question_kwargs(rec: dict) -> dict:
@@ -1072,9 +1110,19 @@ def generate_from_upload(
 
         created_ids: list[int] = []
         merged_ids: list[int] = []
-        counters: dict[int, int] = {
-            c.id: sum(len(g.questions) for g in c.groups) + 1 for c in concepts
+        # The same max-scan as the generation path and the release lane
+        # (T5-3/R5): a count reissues a deleted question's number.
+        label_bases: dict[int, str] = {
+            c.id: identity.machine_id_for_concept(c) for c in concepts
         }
+        # Keyed by BASE for the same reason as ``_generate_session``: one
+        # family, one counter, or a shared base mints one label twice inside a
+        # single run.
+        counters: dict[str, int] = {
+            base: identity.next_label_index(db, base)
+            for base in set(label_bases.values())
+        }
+        label_family_notes = _legacy_label_family_notes(concepts, label_bases)
         # Deposit each question into its routed home concept. Placement was
         # decided above (model judgment in live mode; mechanical only for a
         # sole-concept scope) — never round-robin arithmetic on a live path.
@@ -1095,11 +1143,12 @@ def generate_from_upload(
                 )
                 merged_ids.append(dup.id)
                 continue
+            base = label_bases[concept.id]
             rec.setdefault(
                 "question_label",
-                generation.question_label(concept, counters[concept.id]),
+                generation.question_label(concept, counters[base]),
             )
-            counters[concept.id] += 1
+            counters[base] += 1
             group = _group_for_recorded_tier(
                 db, concept, recorded_tier_by_candidate[candidate_id]
             )
@@ -1144,4 +1193,5 @@ def generate_from_upload(
         "duplicates_merged": len(merged_ids),
         "question_ids": created_ids + merged_ids,
         "pipeline": pipeline,
+        "notes": label_family_notes,
     }
