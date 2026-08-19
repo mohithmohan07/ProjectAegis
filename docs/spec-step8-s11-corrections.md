@@ -8,6 +8,49 @@ Evidence basis: `claude/step-8-four-output-schema` at `d7d2e2f`, checked
 **Changes** bullet of `docs/spec-step8.md:3524-3545`. It distinguishes a
 pending change from a claim that is no longer executable as written.
 
+All Step 8 behaviour claims in this log are branch-relative. They must be
+verified against the current head of `claude/step-8-four-output-schema`, not
+against `main`; `main` is behind the Step 8 repair train until PR #229 merges.
+
+## Status correction: BLOCKER 4 is fixed on the Step 8 branch
+
+**CLAIM**
+
+The earlier BLOCKER 4 report said `assessment_workbook.py` had no identity
+import and Outputs 02/04 therefore rendered a bare `concept_title`, allowing
+same-named concepts to collapse in the Master read-back.
+
+**MEASURED TRUTH**
+
+That report is historical at the Step 8 branch head. Commit `d7d2e2f` imports
+`identity` at `assessment_workbook.py:45`; `_titled_topic` and
+`_titled_concept` compose the persisted machine IDs at `:351-364` and
+`:400-411`; and `_bands_record` uses those composed values for the workbook
+cells at `:414-429`.
+
+The correction also has both requested read-back twins. `validate_concept_file`
+compares the composed concept and topic titles at `:1108-1132`.
+`validate_master_file` keys the topic check by the composed concept title at
+`:1259-1284`, checks each group's composed concept home at `:1331-1338`, and
+uses composed titles for the all-concepts presence set at `:1386-1395`. Two
+same-visible-title concepts with distinct machine IDs therefore remain two
+expected members, so omitting either is detectable.
+
+Status as of this measurement:
+
+- **fixed** on `claude/step-8-four-output-schema` at `d7d2e2f` (PR #229);
+- **open on `main` only** until PR #229 merges.
+
+This status supersedes any PR #232 prose that describes BLOCKER 4 as still
+open on the Step 8 branch. It does not rewrite the historical finding against
+the earlier S8 commit where the defect was present.
+
+**HOW TO CONFIRM**
+
+```bash
+git show d7d2e2f:backend/app/bulk_import/assessment_workbook.py | nl -ba | sed -n '39,46p;341,429p;1108,1132p;1254,1284p;1326,1338p;1386,1395p'
+```
+
 ## 1. The two proposed files are still new
 
 **CLAIM**
