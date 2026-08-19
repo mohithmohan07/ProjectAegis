@@ -242,7 +242,6 @@ def _transient_projection(
                 topic,
                 "concept_title",
                 include_group_columns=False,
-                parent_column_present=True,
             ),
         }
     return projection

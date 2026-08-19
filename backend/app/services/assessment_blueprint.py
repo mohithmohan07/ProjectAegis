@@ -16,6 +16,7 @@ import hashlib
 import math
 from typing import Iterable, Mapping
 
+from . import assessment_profile
 from . import assessment_release as rel
 
 # Legacy Build-Assessments sheet kinds. A strict assessment profile (e.g.
@@ -89,15 +90,25 @@ def compile_cells_from_batches(
     return cells
 
 
-def validate_cells(cells: list[dict], *, strict_profile: bool = False) -> None:
+def validate_cells(
+    cells: list[dict], *, strict_profile: bool = False,
+    profile: Mapping | str | None = None,
+) -> None:
     """Stage-3 validation before any generation spend (spec §6 Stage 3).
 
     Exact counts, totals, and structural rules. Raises with every defect
     named; a blueprint that cannot be validated never reaches a model.
+
+    ``profile`` is the RUN profile (spec-step8 B2): without it a strict
+    validation resolved ``DEFAULT_PROFILE`` and rejected a widened
+    profile's cells before staging ever saw them.
     """
     errors: list[str] = []
     seen_ids: set[str] = set()
-    allowed_kinds = rel.SHEET_KINDS if strict_profile else LEGACY_SHEET_KINDS
+    allowed_kinds = (
+        assessment_profile.sheet_kinds(profile) if strict_profile
+        else LEGACY_SHEET_KINDS
+    )
     for cell in cells:
         cell_id = str(cell.get("cell_id") or "")
         if not cell_id:

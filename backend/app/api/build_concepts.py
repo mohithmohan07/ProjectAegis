@@ -23,17 +23,65 @@ router = APIRouter(prefix="/build-concepts", tags=["build-concepts"])
 
 # --------------------------------------------------------------------------- #
 # Release lane (spec T3): which of the job's two staged outputs a download or
-# an explicit publication acts on. Defaults to the Post lane, so every
-# existing caller and every recorded URL keeps serving Outputs 01/02 exactly
-# as before; Outputs 03/04 are reached only by asking for them.
+# an explicit publication acts on.
+#
+# A DOWNLOAD defaults to the Post lane, so every existing caller and every
+# recorded URL keeps serving Outputs 03/04 exactly as before; Outputs 01/02
+# (the Phase 03 Pre-Learning outputs) are reached only by asking for them.
+#
+# (The numbering here is the owner's, ruling OD4 / register entry D9-Q22:
+# 01 Pre Concept, 02 Pre Master, 03 Post Concept, 04 Post Master. Earlier
+# text in this file called the Post pair "Outputs 01/02"; it is superseded,
+# not wrong. A description string that lies about which lane it serves is
+# how the wrong lane gets published by hand.)
+#
+# A PUBLICATION does NOT default — see ``PUBLISH_LANE_QUERY`` below.
 # --------------------------------------------------------------------------- #
 
 LANE_QUERY = Query(
     release_svc.LANE_POST,
     description=(
-        "Which staged release to serve: 'post' (Outputs 01/02) or 'pre' "
-        "(Outputs 03/04, the Phase 03 Pre-Learning outputs)."
+        "Which staged release to serve: 'post' (Outputs 03/04, the "
+        "Post-Learning outputs) or 'pre' (Outputs 01/02, the Phase 03 "
+        "Pre-Learning outputs). Downloads default to 'post'."
     ),
+)
+
+
+# --------------------------------------------------------------------------- #
+# The publication lane, which is a DIFFERENT question from the download lane
+# and must not share its default.
+#
+# ``release_svc.normalize_lane`` answers "post" for both ``""`` and a missing
+# value. For a download that is right and stays: it is backward compatibility
+# for every recorded URL, and a download of the wrong lane costs a reviewer
+# one click. For a PUBLICATION it is not recoverable — a request that simply
+# omits the lane would perform an authenticated write against a lane the
+# reviewer never named, and Rule G makes publication a separate, explicit act.
+#
+# The gate lives HERE, on the server, and not in a client. A server that
+# trusts its caller to send the right lane has the same hole open for every
+# other caller — curl, a replayed URL, the next client. This is mechanics in
+# the CLAUDE.md sense: it refuses an unsafe REQUEST and makes no judgment
+# about content.
+# --------------------------------------------------------------------------- #
+
+PUBLISH_LANE_QUERY = Query(
+    "",
+    description=(
+        "REQUIRED. Which staged release this act publishes: 'post' "
+        "(Outputs 03/04) or 'pre' (Outputs 01/02). Publication has no "
+        "default lane; a blank or absent value is refused with 400."
+    ),
+)
+
+_PUBLISH_LANE_REQUIRED = (
+    "publishing requires an explicit release lane: pass lane=post (the "
+    "Post-Learning outputs 03/04) or lane=pre (the Pre-Learning outputs "
+    "01/02). Publication is a separate, explicit, authenticated act and "
+    "has no default lane — a defaulted lane would publish staged rows the "
+    "reviewer never named. Downloads are unaffected and still default to "
+    "post."
 )
 
 
@@ -42,6 +90,18 @@ def _lane(value: str) -> str:
         return release_svc.normalize_lane(value)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+
+
+def _publish_lane(value: object) -> str:
+    """The lane a PUBLICATION acts on. Never defaulted; blank is a 400.
+
+    The message names both valid values, so the refusal tells the caller
+    what to send rather than only that it was wrong.
+    """
+
+    if not str(value or "").strip():
+        raise HTTPException(400, _PUBLISH_LANE_REQUIRED)
+    return _lane(str(value))
 
 
 def _tag(value: str) -> str:
@@ -405,7 +465,7 @@ def download_release_payload(
 @router.post("/uploads/{job_id}/upload-release")
 def upload_released_output_to_database(
     job_id: int,
-    lane: str = LANE_QUERY,
+    lane: str = PUBLISH_LANE_QUERY,
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
@@ -414,13 +474,19 @@ def upload_released_output_to_database(
     Rule G is unchanged by the Pre lane: publication stays one separate,
     explicit, authenticated act — ``lane`` only says WHICH staged output
     this act publishes, and each lane needs its own act.
+
+    ``lane`` is REQUIRED here and only here. The download routes above
+    keep their Post default; this one refuses a blank or absent lane with
+    a 400 naming both valid values, because publishing the lane the
+    caller did not name is an authenticated write nobody authorised.
     """
+    resolved = _publish_lane(lane)
     try:
         return release_publication.upload_release_to_database(
             db,
             job_id,
             owner_sub=user.sub,
-            lane=_lane(lane),
+            lane=resolved,
         )
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))

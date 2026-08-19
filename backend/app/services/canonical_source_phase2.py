@@ -711,6 +711,46 @@ def extraction_provenance(
         "source_task_blocks": len(tasks),
         "inventory_items": len(items),
         "model_split_items": model_split_items,
+        # QX (Phase 2.1.2): who authored task MEMBERSHIP for this bundle.
+        # "model_verdict" = the QX block-verdict ledger; the outline fields
+        # above continue to describe the PDF lane's own authority; anything
+        # else means the bundle predates adjudication (and the active lane
+        # blocks pre-spend on it).
+        "task_membership_authority": str(
+            (canonical.get("task_membership") or {}).get("authority") or ""
+        ),
+        "task_verdict_ledger_applied": bool(
+            (canonical.get("task_verdict_ledger") or {}).get(
+                "membership_authority"
+            ) == "model_verdict"
+        ),
+        "task_candidates_rejected": len(
+            ((canonical.get("task_verdict_ledger") or {}).get("accounting")
+             or {}).get("rejected_candidates") or []
+        ),
+        "task_missed_asks_recovered": int(
+            ((canonical.get("task_verdict_ledger") or {}).get("accounting")
+             or {}).get("created_from_missed_asks") or 0
+        ),
+        "task_fixer_decisions": len(
+            (canonical.get("task_verdict_ledger") or {}).get(
+                "fixer_decisions"
+            ) or []
+        ),
+        "task_critic_dissents": len(
+            ((canonical.get("task_verdict_ledger") or {}).get("critic")
+             or {}).get("dissents") or []
+        ),
+        "task_critic_unavailable": str(
+            ((canonical.get("task_verdict_ledger") or {}).get("critic")
+             or {}).get("unavailable") or ""
+        ),
+        "task_ledger_review_flags": [
+            str(flag)
+            for flag in ((canonical.get("task_verdict_ledger") or {}).get(
+                "accounting"
+            ) or {}).get("ledger_review_flags") or []
+        ],
     }
 
 
@@ -894,6 +934,15 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
                 "_acsd_raw_prompt": raw_prompt,
                 "_acsd_source_contract": SOURCE_CONTRACT_MODE,
                 "_acsd_decomposition": str(row.get("decomposition") or ""),
+                # QX: the occurrence's recorded review flags (critic dissent,
+                # Fixer decisions, kind-pending notes) ride the inventory so
+                # the release surfaces can show them (flags need a consumer).
+                "_acsd_review_flags": [
+                    str(flag) for flag in row.get("review_flags") or []
+                ],
+                "_acsd_membership_authority": str(
+                    row.get("membership_authority") or ""
+                ),
             }
             items.append(item)
 

@@ -47,6 +47,10 @@ backend/data/pdf-acsd-cache/
 backend/data/source-asset-store/
 # The append-only generation output is runtime state, not source.
 backend/data/bulk_import_output.xlsx
+# ...and so is the pre-migration copy a layout migration retains beside it
+# (layouts.migrate_workbook_layout). It is the recorded recovery path for a
+# value the target layout has no column for — never source, never deleted.
+backend/data/*.pre-*.xlsx
 *.aegis-checkpoint.json
 *.xlsx~
 

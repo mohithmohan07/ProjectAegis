@@ -309,6 +309,10 @@ def _validated_cache_rows():
             "_semantic_topic_id": "TOPIC-A",
             "_semantic_graph_contract": "CONTRACT-1",
             "_source_block_ids": ["BLK-0007"],
+            # T10-6 (S11): the tie-break reads the RECORDED Q1 allotment
+            # marker, not a "misconception" substring — a validated row
+            # with complete analysis carries the marker by construction.
+            "_aegis_analysis_allotments": ["LA-0001"],
         },
         {
             "topic": "Topic A",
@@ -868,9 +872,13 @@ def test_distinct_questions_are_not_reported_as_repeats():
     ]
 
 
-def test_a_short_shared_tail_is_not_a_repeated_question():
-    # "Why?" and "Explain." close many different questions; treating those as
-    # repeats would bury the real ones.
+def test_a_short_shared_tail_is_reported_as_a_collision():
+    """RE-AUTHORED under S11 (T10-5): the ``len(key) < 25`` threshold that
+    suppressed this was a character count deciding whether two questions
+    are the same question. A short repeat is REPORTED — one grouped
+    warning a reviewer dismisses in one glance — because reporting a
+    collision is identity accounting; suppressing it was the judgment.
+    """
     types = _mined_types()
     cases = types["types"][0]["case_prompts"]
     cases[0]["examples"][0]["prompt"] = "Why?"
@@ -878,10 +886,51 @@ def test_a_short_shared_tail_is_not_a_repeated_question():
 
     _rows, issues, _routes = release.audit_type_cases(types, _inventory())
 
-    assert not [
+    repeats = [
         issue for issue in issues
         if issue["code"] == "repeated_question_text"
     ]
+    assert len(repeats) == 1
+    assert repeats[0]["severity"] == "warning"
+    assert len(repeats[0]["qids"]) == 2
+
+
+def test_a_devanagari_question_repeated_is_reported():
+    """[measured, T10-5] the old Latin-only noise class reduced Devanagari
+    prompts to the empty string, so the audit was inert for every
+    non-Latin source."""
+    types = _mined_types()
+    cases = types["types"][0]["case_prompts"]
+    prompt = "\u0926\u0939\u0940 \u092e\u0947\u0902 \u0915\u094c\u0928-\u0938\u093e \u0905\u092e\u094d\u0932 \u092a\u093e\u092f\u093e \u091c\u093e\u0924\u093e \u0939\u0948?"
+    cases[0]["examples"][0]["prompt"] = prompt
+    cases[1]["examples"][0]["prompt"] = prompt
+
+    _rows, issues, _routes = release.audit_type_cases(types, _inventory())
+
+    repeats = [
+        issue for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ]
+    assert len(repeats) == 1
+    assert len(repeats[0]["qids"]) == 2
+
+
+def test_repeated_question_detection_is_case_insensitive():
+    """[measured, T10-5] the old key deleted uppercase letters instead of
+    folding them, so a recased repeat read as a different question."""
+    types = _mined_types()
+    cases = types["types"][0]["case_prompts"]
+    cases[0]["examples"][0]["prompt"] = "Name the acid present in curd."
+    cases[1]["examples"][0]["prompt"] = "NAME THE ACID PRESENT IN CURD."
+
+    _rows, issues, _routes = release.audit_type_cases(types, _inventory())
+
+    repeats = [
+        issue for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ]
+    assert len(repeats) == 1
+    assert len(repeats[0]["qids"]) == 2
 
 
 def test_punctuation_and_numbering_do_not_hide_a_repeat():

@@ -682,25 +682,24 @@ def tier_columns(ck):
 # by (band, field) so a repeated name cannot land in the wrong column.
 # --------------------------------------------------------------------------
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
-from app.bulk_import import (  # noqa: E402
-    CHAPTER_FIELDS, TOPIC_FIELDS, CONCEPT_FIELDS, OBJECTIVE_GROUP_FIELDS,
-    DESCRIPTIVE_GROUP_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
-)
+from app.bulk_import import SHEET_BY_KIND  # noqa: E402
+from app.bulk_import import layouts as _layouts  # noqa: E402
 
 KIND = {"O": "objective", "S": "subjective", "D": "descriptive"}
 SHEETS = {sk: SHEET_BY_KIND[kind] for sk, kind in KIND.items()}
 
 
 def _bands(sk):
-    """(header, {band: (offset, [field, ...])}) for one sheet."""
-    gf = (DESCRIPTIVE_GROUP_FIELDS if sk == "D" else OBJECTIVE_GROUP_FIELDS)
-    layout = [("chapter", CHAPTER_FIELDS), ("topic", TOPIC_FIELDS),
-              ("concept", CONCEPT_FIELDS), ("group", gf),
-              ("question", FIELDS_BY_KIND[KIND[sk]][
-                  len(CHAPTER_FIELDS) + len(TOPIC_FIELDS)
-                  + len(CONCEPT_FIELDS) + len(gf):])]
+    """(header, {band: (offset, [field, ...])}) for one sheet.
+
+    Read straight off the registered target layout: the bands are per sheet
+    now (Descriptive carries no ``concept_source``, the reference Objective
+    sheet leaves column 23 unbanded) and slicing a shared constant lands on
+    the wrong column.
+    """
+    sheet = _layouts.sheet(_layouts.REFERENCE_LAYOUT_ID, KIND[sk])
     bands, header, offset = {}, [], 0
-    for band, fields in layout:
+    for band, fields in sheet.blocks:
         bands[band] = (offset, list(fields))
         header.extend(fields)
         offset += len(fields)

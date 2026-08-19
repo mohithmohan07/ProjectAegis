@@ -47,7 +47,9 @@ from . import assessment_routing as routing
 from . import assessment_source_inventory as source_inventory
 from . import assessment_profile
 from . import build_concepts_release
+from . import identity
 from . import progress, uploads
+from . import release_core
 from . import release_refiner
 from .phase3 import envelope as phase3_envelope
 from .phase3 import kernel
@@ -680,10 +682,11 @@ def _bind_explicit_cells(
     assessment_blueprint.validate_cells(
         cells,
         strict_profile=True,
+        profile=profile,
     )
-    # Slice 3 cannot widen the existing Output-02 wire.  A future profile may
-    # support Subjective only when materialization and publication do too.
-    allowed_kinds = tuple(rel.SHEET_KINDS)
+    # The profile answers this, through the one accessor (spec-step8
+    # T12/M5b).
+    allowed_kinds = assessment_profile.sheet_kinds(profile)
     defects: list[str] = []
     appears_in = str(profile.get("appears_in") or "").strip()
     if not appears_in:
@@ -884,7 +887,7 @@ def _bind_generated_cells(
     defects: list[str] = []
     if not appears_in:
         defects.append("assessment profile has no appears_in value")
-    allowed_kinds = tuple(rel.SHEET_KINDS)
+    allowed_kinds = assessment_profile.sheet_kinds(profile)
 
     cells: list[dict] = []
     seen_question_ids: set[str] = set()
@@ -1002,7 +1005,9 @@ def _bind_generated_cells(
             "generated assessment blueprint failed validation: "
             + "; ".join(defects[:20])
         )
-    assessment_blueprint.validate_cells(cells, strict_profile=True)
+    assessment_blueprint.validate_cells(
+        cells, strict_profile=True, profile=profile,
+    )
     return cells
 
 
@@ -1251,19 +1256,13 @@ def _label_base(concept: Mapping[str, Any]) -> str:
 
 
 def _next_label_index(db: Session, base: str) -> int:
-    """Continue numbering after every label already committed for this base."""
-    prefix = f"{base} Q"
-    taken = [
-        q.question_label
-        for q in db.query(models.Question)
-        .filter(models.Question.question_label.startswith(prefix))
-    ]
-    highest = 0
-    for label in taken:
-        tail = label[len(prefix):]
-        if tail.isdigit():
-            highest = max(highest, int(tail))
-    return highest + 1
+    """Continue numbering after every label already committed for this base.
+
+    The body moved to ``identity.next_label_index`` (T5-3) so the Build
+    Assessments lane runs the identical max-scan instead of its own count.
+    This name is kept as the local seam.
+    """
+    return identity.next_label_index(db, base)
 
 
 # --------------------------------------------------------------------------- #
@@ -1291,23 +1290,26 @@ def run_pre_release_for_job(
     concept rows and no generated question runs here and ships an empty
     Output 04.
 
-    Stated precisely, because the obvious illustration is wrong: a
-    chapter that assumes NOTHING stages a Pre release with no rows at
-    all, and that one does not reach an empty Output 04 — the export
-    refuses it ("the release contains no concept rows to export"), which
-    is the same refusal the Post lane has always made for a release with
-    nothing in it, and its database write is blocked anyway. Zero
-    QUESTIONS is the case this tolerates; zero ROWS is a release with
-    nothing to project.
+    Zero ROWS runs too, since spec-step8 S9 — and the illustration that
+    used to sit here ("the export refuses it") is gone with the raise it
+    described. A chapter that assumes NOTHING stages a Pre release with no
+    rows, and [measured] that now builds a real, empty Output 04 in state
+    ``ready_for_upload``: ``transient_release_hierarchy`` records instead
+    of raising, so nothing between here and the Master takes the artefact
+    away. Whether that empty release may be WRITTEN is a separate question
+    with a separate answer — premap's recorded ``pre_lane_verdict``, read
+    by ``build_concepts_release.structural_defects`` — which is exactly
+    the emptiness/corruption split D8.1 exists to keep apart.
     """
 
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     questions = build_concepts_release.staged_generated_questions(job)
     if questions is None:
+        # OD4 numbering: the Pre concept file is Output 01, its Master 02.
         raise ReleaseRunError(
-            "this job has no staged Output-03 Pre-Learning concept release; "
-            "stage the Pre release before building Output 04"
+            "this job has no staged Output-01 Pre-Learning concept release; "
+            "stage the Pre release before building Output 02"
         )
     return run_release_for_job(
         db,
@@ -1376,15 +1378,16 @@ def run_release_for_job(
         build_concepts_release.staged_release_for_lane(job, lane)
     )
     if staged_release is None:
+        # OD4 numbering: Pre is Outputs 01/02, Post is Outputs 03/04.
         raise ReleaseRunError(
             "this job has no staged "
             + (
-                "Output-03 Pre-Learning concept release; stage the Pre "
-                "release before building Output 04"
+                "Output-01 Pre-Learning concept release; stage the Pre "
+                "release before building Output 02"
                 if build_concepts_release.normalize_lane(lane)
                 == build_concepts_release.LANE_PRE
-                else "Output-01 concept release; stage the concept release "
-                "before building Output 02"
+                else "Output-03 concept release; stage the concept release "
+                "before building Output 04"
             )
         )
     try:
@@ -1450,13 +1453,15 @@ def run_release_for_job(
             "Pre-Learning items (owner steer, 17 Aug 2026)"
         )
     if not generate_lane and not (inventory.get("items") or []):
+        # Post-lane only (the Pre lane generates), so OD4 names Output 03.
         raise ReleaseRunError(
-            "the staged Output-01 release has no question/task inventory"
+            "the staged Output-03 release has no question/task inventory"
         )
     chapter_id = int(bridge["snapshot"].get("target_chapter_id") or 0)
     if not chapter_id:
+        # Both lanes reach this, so per T14 it names NO output number.
         raise ReleaseRunError(
-            "the staged Output-01 release has no target chapter identity"
+            "the staged concept release has no target chapter identity"
         )
     if generate_lane:
         # PRE-SPEND source-integrity check, and deliberately here rather
@@ -1617,6 +1622,7 @@ def run_release_for_job(
     materialized = materialization.materialize_candidates(
         obligations,
         meta=meta,
+        profile=profile,
         context={
             "source_concept_release_sha256": source_release_sha,
             "released_hierarchy": bridge["snapshot"],
@@ -1749,6 +1755,7 @@ def run_release_for_job(
     marking_rows = marking.decide_markings(
         list(zip(candidates, cells)),
         meta=meta,
+        profile=profile,
         envelope_sha256=envelope_sha,
         provider=marking_provider,
         critic=marking_critic,
@@ -1789,7 +1796,8 @@ def run_release_for_job(
         candidates=candidates,
     )
 
-    # Stage 7 — route only across the immutable staged Output-01 concepts.
+    # Stage 7 — route only across the immutable staged concept-release
+    # concepts (this run's own lane; OD4 numbers them 01 or 03).
     progress.log(
         f"Routing {len(candidates)} candidate(s) across "
         f"{len(concept_payload)} concept(s).")
@@ -2158,6 +2166,11 @@ def run_release_for_job(
     payload = {
         "source_concept_release_sha256": source_release_sha,
         "concept_snapshot": bridge["snapshot"],
+        # S9: the staged rows the snapshot could not carry. Written here so
+        # that ``create_release`` — which sees only this payload — can
+        # append them to ``frozen["errors"]`` and refuse the assessment
+        # lane's database write while every download stays open (Rule E).
+        "concept_snapshot_defects": list(bridge.get("defects") or []),
         "source_atoms": atoms,
         "blueprint_cells": cells,
         "candidates": candidates,
@@ -2337,6 +2350,27 @@ def run_release_for_job(
             source_qids=source_qids,
             where="the generated assessment release payload",
         )
+    if supersedes is None:
+        # THE FREEZE SEAM (spec-step8 T2/S6). One immutable row per lane
+        # per run: a second run of the same lane on the same job is a new
+        # VERSION that supersedes the first, not an unrelated release that
+        # orphans it. Resolved from the job and the lane, so the reviewer's
+        # explicit re-build route — the idempotent second act — lands on
+        # the same chain the in-run build started.
+        #
+        # Only when the caller named none: a caller that passes
+        # ``supersedes`` has already decided the lineage, and a lane-less
+        # legacy release has no chain to join.
+        #
+        # ``release_chain_head``, not ``latest_release_for_lane``: this is
+        # the lineage question, and it must include a superseded row. A
+        # chain whose every row is superseded is still that lane's chain,
+        # and appending to it keeps the published receipts in one lineage
+        # where minting a fresh ``release_uid`` at version 1 would orphan
+        # them. The manifest asks the other question, and gets the other
+        # answer.
+        supersedes = release_core.release_chain_head(
+            db, job.id, staged_lane)
     release = release_service.create_release(
         db,
         chapter_id=chapter_id,
@@ -2344,6 +2378,14 @@ def run_release_for_job(
         job_id=job.id,
         owner_sub=owner_sub,
         supersedes=supersedes,
+        lane=staged_lane,
+        layout_id=release_core.layout_id(),
+        provider_identity=release_core.run_context(
+            job,
+            lane=staged_lane,
+            profile=profile,
+            layout_id=release_core.layout_id(),
+        ),
     )
     release = release_service.publish_release(db, release)
     progress.log(

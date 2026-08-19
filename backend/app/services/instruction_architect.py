@@ -95,12 +95,14 @@ _FROZEN_CORE_PROMPT_KEYS = (
 # PREANALYSE_* replayed old verdicts, which was a real cache-invalidation
 # defect in the slices that introduced them.
 #
-# STILL ABSENT, and named so the gap is tracked rather than assumed closed:
-# ANALYSE_INVENTORY_SYSTEM, ANALYSE_ALLOT_SYSTEM, ANALYSE_CRITIC_SYSTEM,
-# PLACE_SYSTEM, PLACE_CRITIC_SYSTEM, REFINER_SYSTEM. Editing any of those
-# replays verdicts made under the old text. They are POST-lane prompts, so
-# listing them re-keys every stored Post decision - a blast radius the Pre
-# lane has no business spending. It belongs with the step-8 release work.
+# The six Post-lane prompts below closed that gap in step 8 (§10 line 726),
+# appended together in one commit so the Post lane re-keys once rather than
+# six times. Until then, editing ANALYSE_*, PLACE_* or REFINER_SYSTEM replayed
+# verdicts made under the old text: a real cache-invalidation defect, deferred
+# rather than unnoticed, because listing them re-keys every stored Post
+# decision and the Pre-lane slices that found it had no business spending that
+# blast radius. Nothing is absent from this tuple now; a phase-3 system prompt
+# added later belongs here in the same commit that adds it.
 _FROZEN_CORE_PHASE3_CONSTANTS = (
     "TOPOLOGY_SYSTEM",
     "GROUNDING_SYSTEM",
@@ -115,12 +117,21 @@ _FROZEN_CORE_PHASE3_CONSTANTS = (
     "PREMAP_SYSTEM",
     "PREMAP_NEEDED_FOR_SYSTEM",
     "PREMAP_CRITIC_SYSTEM",
+    # spec-step8 S9 — the empty-capture verdict and its advisory critic.
+    "PREMAP_EMPTY_CAPTURE_SYSTEM",
+    "PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM",
     "PREANALYSE_INVENTORY_SYSTEM",
     "PREANALYSE_ALLOT_SYSTEM",
     "PREANALYSE_CRITIC_SYSTEM",
     "PREQUESTIONS_PLAN_SYSTEM",
     "PREQUESTIONS_AUTHOR_SYSTEM",
     "PREQUESTIONS_CRITIC_SYSTEM",
+    "ANALYSE_INVENTORY_SYSTEM",
+    "ANALYSE_ALLOT_SYSTEM",
+    "ANALYSE_CRITIC_SYSTEM",
+    "PLACE_SYSTEM",
+    "PLACE_CRITIC_SYSTEM",
+    "REFINER_SYSTEM",
 )
 
 

@@ -6,6 +6,7 @@ import openpyxl
 
 from app import bulk_import as bi
 from app import models
+from app.bulk_import import layouts
 from app.db import _backfill_and_normalize
 from app.services import generation
 
@@ -95,36 +96,44 @@ def test_generated_questions_populate_question_text(client, first_concept, db):
         assert "[katex]" not in q.question_text.lower()  # plain text, not markup
 
 
-def test_export_workbook_has_question_text_as_last_column(client):
+def test_export_workbook_carries_question_text_where_the_authority_puts_it(
+    client,
+):
+    """The column is no longer LAST — it sits right after ``question``.
+
+    This test asserted "question_text is the last column" on every sheet. On
+    the owner's layout it is not: Objective puts it at column 41 of 67. The
+    assertion is re-pointed at the authority rather than deleted, and the
+    sheet set below loses the Doc Link tab with it (OWNER RULING OD6).
+    """
     r = client.get("/data/export?scope=all")
     wb = openpyxl.load_workbook(io.BytesIO(r.content))
     for kind, sheet in bi.SHEET_BY_KIND.items():
         ws = wb[sheet]
         header = [c.value for c in ws[2]]
-        assert header[len(bi.FIELDS_BY_KIND[kind]) - 1] == "question_text"
-    # Only the 3 supported content sheets + doc link — no new sheets.
-    assert set(wb.sheetnames) == {
-        bi.SHEET_OBJECTIVE, bi.SHEET_SUBJECTIVE, bi.SHEET_DESCRIPTIVE,
-        bi.SHEET_DOC_LINK,
-    }
+        assert header == bi.FIELDS_BY_KIND[kind]
+        assert header[header.index("question") + 1] == "question_text"
+    # Exactly the authority's three sheets, in the authority's order, and NO
+    # 'Doc Link <> Each fields ' sheet.
+    assert wb.sheetnames == bi.SHEET_ORDER
 
 
 def test_legacy_import_backfills_question_text(client, db, tmp_path):
     """Template WITHOUT question_text imports safely; backfill = plain question."""
-    legacy_fields = (
-        bi.CHAPTER_FIELDS + bi.TOPIC_FIELDS + bi.CONCEPT_FIELDS[:bi.LEGACY_CONCEPT_LEN]
-        + bi.OBJECTIVE_GROUP_FIELDS
-        + [f for f in bi.OBJECTIVE_FIELDS[
-            len(bi.CHAPTER_FIELDS) + len(bi.TOPIC_FIELDS) + len(bi.CONCEPT_FIELDS)
-            + len(bi.OBJECTIVE_GROUP_FIELDS):] if f != "question_text"]
-    )
+    # Built from the FROZEN registry entry for the pre-question_text template,
+    # never from ``writer._write_headers`` (that writer moves in S7). Every
+    # sheet carries its real header: the layout gate identifies a WORKBOOK,
+    # and a one-column stub sheet is not a layout.
+    legacy = layouts.layout("canonical-no-question-text")
+    legacy_fields = list(legacy.sheet("objective").fields)
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    for sheet in (bi.SHEET_OBJECTIVE, bi.SHEET_SUBJECTIVE, bi.SHEET_DESCRIPTIVE):
-        ws = wb.create_sheet(sheet)
+    for kind in ("objective", "subjective", "descriptive"):
+        sheet_layout = legacy.sheet(kind)
+        ws = wb.create_sheet(sheet_layout.sheet_name)
         ws.append(["Chapter"])
-        ws.append(legacy_fields if sheet == bi.SHEET_OBJECTIVE else ["chapter_title"])
-    ws = wb[bi.SHEET_OBJECTIVE]
+        ws.append(list(sheet_layout.fields))
+    ws = wb[legacy.sheet("objective").sheet_name]
     row = [""] * len(legacy_fields)
     row[0] = "Legacy QT Chapter (09CBPH_LegacyQT)"
     row[6] = "Legacy QT Topic"
@@ -205,28 +214,38 @@ def test_context_attached_to_question_text():
 # ------------------------------ validation ----------------------------------- #
 
 def test_import_validation_reports_issues(client, tmp_path):
-    fields = bi.OBJECTIVE_FIELDS
+    # Real headers on all three sheets, from the frozen registry entry: the
+    # one-column stubs this fixture used to write match no layout, and the
+    # reader now refuses a workbook whose geometry it cannot establish.
+    current = layouts.layout("canonical-current")
+    fields = list(current.sheet("objective").fields)
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    for sheet in (bi.SHEET_OBJECTIVE, bi.SHEET_SUBJECTIVE, bi.SHEET_DESCRIPTIVE):
-        ws = wb.create_sheet(sheet)
+    for kind in ("objective", "subjective", "descriptive"):
+        sheet_layout = current.sheet(kind)
+        ws = wb.create_sheet(sheet_layout.sheet_name)
         ws.append(["Chapter"])
-        ws.append(list(fields) if sheet == bi.SHEET_OBJECTIVE else ["chapter_title"])
-    ws = wb[bi.SHEET_OBJECTIVE]
+        ws.append(list(sheet_layout.fields))
+    ws = wb[current.sheet("objective").sheet_name]
+    sheet_layout = current.sheet("objective")
     row = [""] * len(fields)
-    row[0] = "Validation Chapter (09CBPH_Validate)"
-    row[6] = "T"
-    row[12] = "C"
-    row[26] = "Basic"
-    row[fields.index("question_label") + 22] = ""  # noqa — label set below
-    q_start = len(bi.CHAPTER_FIELDS) + len(bi.TOPIC_FIELDS) + len(bi.CONCEPT_FIELDS) \
-        + len(bi.OBJECTIVE_GROUP_FIELDS)
-    row[21] = "09CBPH_Val_PL_T01_X Q01"
-    row[q_start] = "09CBPH_Val_PL_T01_X Q01"
-    row[q_start + 2] = "Memorising"                 # unknown skill -> flagged
-    row[q_start + 7] = "Extreme"                    # unknown difficulty -> flagged
-    row[q_start + 8] = "Compute $$x^2$$ quickly"    # raw $$ -> flagged
-    row[q_start + 9] = "abc"                        # marks not numeric -> flagged
+
+    def put(band, name, value):
+        # Addressed by band-qualified NAME through the CANONICAL entry this
+        # fixture is built from, never by an offset summed from the target's
+        # constants: the two layouts no longer agree on a single position.
+        row[sheet_layout.column(band, name)] = value
+
+    put("chapter", "chapter_title", "Validation Chapter (09CBPH_Validate)")
+    put("topic", "topic_title", "T")
+    put("concept", "concept_title", "C")
+    put("group", "group_type", "Basic")
+    put("group", "concept_question_labels", "09CBPH_Val_PL_T01_X Q01")
+    put("question", "question_label", "09CBPH_Val_PL_T01_X Q01")
+    put("question", "cognitive_skills", "Memorising")   # unknown -> flagged
+    put("question", "level_of_difficulty", "Extreme")   # unknown -> flagged
+    put("question", "question", "Compute $$x^2$$ quickly")  # raw $$ -> flagged
+    put("question", "marks", "abc")                     # not numeric -> flagged
     ws.append(row)
     path = tmp_path / "validate.xlsx"
     wb.save(path)

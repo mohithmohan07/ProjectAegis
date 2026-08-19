@@ -1164,7 +1164,9 @@ def test_q1_gate_split_scopes_existence_to_allotted_rows():
         analysis_allotted_keys=set(),
     )
     assert "unallotted_analysis_section" in _codes(report)
-    # It is release-blocking (mechanics: marker accounting).
+    # Fatal FAMILY membership (the marker accounting is mechanics);
+    # since S11 the code ships FLAGGED rather than blocking — only
+    # ``_BLOCKING_CODES`` may halt.
     from app.services import generation as g
 
     assert "unallotted_analysis_section" in g._FATAL_CODES

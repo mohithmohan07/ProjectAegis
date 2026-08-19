@@ -45,6 +45,7 @@ from . import (
     drive_checkpoints,
     generation,
     grounding_certificate,
+    identity,
     instruction_architect,
     mmd,
     openai_usage,
@@ -570,16 +571,23 @@ def _find_or_create_topic(
     db: Session, chapter: models.Chapter, topic_title: str, pre_post: str,
 ) -> models.Topic:
     display_name = bi.strip_topic_title(topic_title) or topic_title
-    normalized_title = bi.normalize_question_text(display_name)
+    # T4-6: the third of four live topic identities, converged on the one
+    # shared normaliser in ``services.identity``.
+    normalized_title = identity.topic_identity(topic_title)
     for t in chapter.topics:
-        stored_title = bi.strip_topic_title(t.topic_title) or t.topic_title
         if (
             t.pre_post_learning == pre_post
-            and bi.normalize_question_text(stored_title) == normalized_title
+            and identity.topic_identity(t.topic_title) == normalized_title
         ):
-            # The accepted topology owns presentation as well as placement.
-            # Reuse the identity, but do not retain stale casing/numbering.
-            t.topic_title = topic_title
+            # The stored ``topic_title`` is NEVER rewritten to the incoming
+            # casing. [measured, real SQLite session] that rewrite is the
+            # reproducible cause of the Master-upload refusal class MC6
+            # declared unfindable: depositing "Growth and Reproduction" and
+            # then re-running with "growth and reproduction" reused the row,
+            # renamed it, and the next
+            # ``_resolve_snapshot_concept_ids`` raised UploadRefused
+            # ("does not have one exact published identity") against a
+            # title nobody had edited. Match leniently, write nothing.
             if t.topic_display_name != display_name:
                 t.topic_display_name = display_name
             return t
@@ -596,11 +604,18 @@ def _find_or_create_topic(
 
 
 def _add_concept(db: Session, topic: models.Topic, rec: dict,
-                 source_book: str = "") -> models.Concept:
+                 source_book: str = "", *, clean: bool = True,
+                 ) -> models.Concept:
     chapter = topic.chapter
     # Normalize name (& collapse) and description (strip dangling refs) before
-    # persisting, so dry and live output are equally import-clean.
-    rec = concept_cleanup.clean_concept_record(dict(rec))
+    # persisting, so dry and live output are equally import-clean. The
+    # publication lane passes ``clean=False`` (S10): its rows are what the
+    # reviewer approved in the staged workbook, and the cleaner is
+    # [measured] a rewriter there — "pH and its meaning" recased, a "Fig.
+    # 2.1" reference and its sentence head destroyed. The deposit lane keeps
+    # the default.
+    if clean:
+        rec = concept_cleanup.clean_concept_record(dict(rec))
     concept = models.Concept(
         topic_id=topic.id,
         concept_title=rec["concept_title"],
@@ -609,6 +624,13 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
         parent_concept=rec.get("parent_concept", ""),
         concept_details=rec.get("concept_details", ""),
         keywords=rec.get("keywords", ""),
+        # OD3/T3.3b: both are real columns on ``models.Concept`` and both
+        # were dropped here, so a Pre row's resolved ``related_concepts``
+        # was filled before publication and EMPTY after it — Output 01
+        # changing shape the moment a reviewer clicks Upload, which is the
+        # R4 loss "one immutable snapshot, four projections" forbids.
+        related_concepts=rec.get("related_concepts", ""),
+        digicards=rec.get("digicards", ""),
         sources=source_book.strip(),
     )
     db.add(concept)
@@ -784,7 +806,14 @@ def _deposit_concepts(
     # The Fixer (Q13, seams F38/F39/F40): the deposit twins of the
     # final-gate blocks reach the same content-addressed decisions — a QID
     # the Fixer placed at the final gate replays free here, so the deposit
-    # payload stays idempotent with the certified one.
+    # payload stays idempotent with the certified one. Since S11 that
+    # claim holds for the INVENTORY seams (F23/F24/F38) only: the
+    # validation-gate round below is structurally dead at deposit —
+    # ``_BLOCKING_CODES`` is a subset of the mechanics set, rows are
+    # sealed (``allow_corrections=False``), so the Fixer is skipped for
+    # every blocking row and a remaining ``required`` fails closed with no
+    # decision to record; advisory codes never reach the Fixer at all
+    # (they ship flagged, T10-2).
     from .phase3 import fixer as p3_fixer
 
     deposit_fixer = p3_fixer.default_provider() if pre_post == "Post" else None
@@ -903,17 +932,26 @@ def _deposit_concepts(
     # this boundary, so the Fixer may only accept-with-flag here; mechanics
     # codes are never acceptable and any remaining defect fails closed.
     fatal = generation._without_fixer_accepted(records, fatal)
-    if fatal and deposit_fixer is not None:
+    # T10-1/T10-2 (S11): the deposit gate filters its raise set on the SAME
+    # ``_BLOCKING_CODES`` allow-list as the final gate — split, there is a
+    # bisect point where every code blocks or none does. Advisory
+    # fatal-family findings ride the rows as review flags.
+    blocking, advisory = generation._split_blocking(fatal)
+    if blocking and deposit_fixer is not None:
         generation._fix_validation_failures_via_fixer(
-            records, fatal, stage="deposit", fixer=deposit_fixer,
+            records, blocking, stage="deposit", fixer=deposit_fixer,
             allow_corrections=False,
         )
         fatal = generation._without_fixer_accepted(records, fatal)
+        blocking, advisory = generation._split_blocking(fatal)
+    generation._flag_advisory_validation_findings(
+        records, advisory, stage="deposit")
     progress.log(
-        f"Deposit validation: {len(fatal)} fatal error(s), "
+        f"Deposit validation: {len(blocking)} blocking and "
+        f"{len(advisory)} flagged fatal-family error(s), "
         f"{report['summary'].get('warnings', 0)} warning(s).")
-    if fatal:
-        codes = ", ".join(sorted({e["code"] for e in fatal}))
+    if blocking:
+        codes = ", ".join(sorted({e["code"] for e in blocking}))
         raise DepositValidationError(
             f"concept validation failed before deposit: {codes}")
 
@@ -1185,30 +1223,29 @@ def _sync_chapter_topic_summary(
                 # concepts are moved between topics.
                 t.topic_description = "Covers " + ", ".join(names) + "."
 
-    n_concepts = sum(
-        sum(
-            1 for concept in topic.concepts
-            if not active_concept_ids or concept.id in active_concept_ids
-        )
-        for topic in topics
-    )
+    # PURGED (Rule 1, CLAUDE.md:17-18), atomically with spec-step8 S8's
+    # ``forced_blank_fields`` lever. Two code-composed fallbacks used to
+    # sit here and both were VOLUME-DERIVED STRUCTURE:
+    #
+    #   chapter_description = f"This chapter develops {n_concepts}
+    #       concept(s) across {len(topics)} topic(s): {topic_names}."
+    #   chapter_duration    = f"{max(40, n_concepts * 12)} minutes"
+    #       # "Rough classroom estimate: ~12 minutes per concept"
+    #
+    # Neither reads the book; both scale a learner-visible cell off a
+    # count. They were invisible while ``chapter_duration`` shipped
+    # force-blanked — un-blanking it through the profile without purging
+    # them first would have shipped a manufactured number to every school,
+    # a Rule-1 regression introduced by a portability fix. A chapter whose
+    # description or duration nothing authored now ships BLANK, which is
+    # honest, rather than filled with arithmetic dressed as content.
     if meta_summary.get("chapter_description"):
         chapter.chapter_description = meta_summary["chapter_description"]
-    elif _is_blank(chapter.chapter_description) and topics:
-        topic_names = ", ".join(
-            bi.strip_topic_title(t.topic_title) or t.topic_title for t in topics)
-        chapter.chapter_description = (
-            f"This chapter develops {n_concepts} concept(s) across "
-            f"{len(topics)} topic(s): {topic_names}."
-        )
     finalized = _parse_duration_minutes(chapter.chapter_duration)
     if finalized:
         chapter.chapter_duration = f"{finalized} minutes"
     elif meta_summary.get("chapter_duration_minutes") and _is_blank(chapter.chapter_duration):
         chapter.chapter_duration = f"{meta_summary['chapter_duration_minutes']} minutes"
-    elif _is_blank(chapter.chapter_duration) and n_concepts:
-        # Rough classroom estimate: ~12 minutes of instruction per concept.
-        chapter.chapter_duration = f"{max(40, n_concepts * 12)} minutes"
 
 
 # --------------------------------------------------------------------------- #
@@ -1222,10 +1259,19 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
     final_grounding = artifacts.get(
         grounding_certificate.FINAL_CERTIFICATE_FIELD
     )
+    provenance = inventory.get("extraction_provenance")
+    adjudicated_empty = bool(
+        isinstance(provenance, dict)
+        and provenance.get("task_verdict_ledger_applied")
+    )
     if (
         not inventory.get("items")
         and not mined.get("types")
         and not isinstance(final_grounding, dict)
+        # QX: a chapter the author adjudicated to zero tasks still stores
+        # its accounting — "no questions here" must be distinguishable
+        # from "not read" on the job record (R4).
+        and not adjudicated_empty
     ):
         return
     stored = {
@@ -1233,6 +1279,8 @@ def _store_inventory(job: models.UploadJob, artifacts: dict) -> None:
         "stats": inventory.get("stats", {}),
         "mined_types": mined.get("types", []),
     }
+    if isinstance(provenance, dict):
+        stored["extraction_provenance"] = copy.deepcopy(provenance)
     if inventory.get("split_parents"):
         # A split question's parent must survive every persistence surface,
         # or a later refresh re-mints it beside its fragments (job 15).
@@ -1773,7 +1821,12 @@ def _stage_concept_workbook(
             # ``append_concepts`` creates a canonical workbook when the path
             # does not exist.
             staged.unlink()
-        written = writer.append_concepts(db, staged, concept_ids)
+        # ``sibling_for`` only NAMES any retained pre-migration copy. Without
+        # it the copy inherits ``mkstemp``'s dot-hidden random stem, so the
+        # recorded recovery path points at a hidden file that does not say
+        # which workbook it came from and every run leaves a fresh orphan.
+        written = writer.append_concepts(
+            db, staged, concept_ids, sibling_for=target)
         return staged, written
     except Exception:
         staged.unlink(missing_ok=True)
@@ -4302,6 +4355,54 @@ def generate_post_learning(
         f"({instruction_set.get('slots_source')}); its hash joins every "
         "decision identity for this run."
     )
+    # Step 11 (docs/aegis-restructure.md Q9): when the Architect selected a
+    # literary mode, author (or replay) the language topology plan BEFORE
+    # any generation identity is computed. The plan rides the slot
+    # transport into the sealed envelope, and its hash is composed into
+    # the run's instruction identity so a changed plan re-keys every
+    # downstream decision exactly like a changed instruction set.
+    language_mode = str(
+        (instruction_slots.get("language_mode") or {}).get("mode") or ""
+    )
+    if language_mode in ("poem", "prose"):
+        from . import canonical_source_phase2 as _phase2
+        from . import language_topology
+
+        canonical_bundle = _phase2.active_canonical()
+        if canonical_bundle is None:
+            # No canonical bundle (legacy/no-ACSD path): the adapter cannot
+            # ground a closed-world plan. Named, visible, and blocking for
+            # the literary lane — never a silent expository fallback.
+            raise language_topology.LanguagePlanError(
+                "the Architect selected a literary mode but no canonical "
+                "source bundle is active; the language topology plan "
+                "cannot be grounded"
+            )
+        language_plan = language_topology.ensure_language_plan(
+            canonical_bundle,
+            instruction_set=instruction_set,
+            work_name=str(chapter.chapter_title or ""),
+            artifact_dir=artifact_dir,
+        )
+        for flag in language_plan.get("review_flags") or []:
+            progress.log(f"Language plan review flag: {flag}",
+                         level="warning")
+        instruction_slots[language_topology.PLAN_SLOT_KEY] = (
+            language_topology.plan_slot_text(language_plan)
+        )
+        # Composed run identity: architect hash ⊕ plan hash. Everything
+        # downstream that keys on instruction_set_sha256 therefore re-keys
+        # when either the instructions or the plan change.
+        plan_hash = str(language_plan.get("plan_sha256") or "")
+        instruction_hash = hashlib.sha256(
+            f"{instruction_hash}\u241f{plan_hash}".encode("utf-8")
+        ).hexdigest()
+        progress.log(
+            f"Language topology plan {plan_hash[:12]} ({language_mode}"
+            + (", replayed" if language_plan.get("replayed") else "")
+            + ") joins the run's instruction identity "
+            f"{instruction_hash[:12]}."
+        )
     fingerprint = _generation_checkpoint_fingerprint(
         job, chapter, instruction_set_sha256=instruction_hash)
     target_identity = _generation_target_identity(chapter)
@@ -4565,10 +4666,22 @@ def generate_post_learning(
         f"Created {len(created_ids)} post-learning concepts "
         f"({len(merged_ids)} merged).", level="success")
     progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
-    progress.log(
-        "Parent concept export: "
-        + ("parent_concept column" if written.get("parent_column") else "related_concepts fallback")
-    )
+    for issue in written.get("issues") or []:
+        # Recorded, flagged, and visible to the reviewer — never a halt (Q13).
+        progress.log(
+            f"Bulk Import workbook issue [{issue.get('code')}]: "
+            f"{issue.get('detail')}",
+            level="warning",
+        )
+    migration = written.get("layout_migration")
+    if migration:
+        progress.log(
+            "Migrated the output workbook from layout "
+            f"{migration.get('source_layout_id')} to "
+            f"{migration.get('target_layout_id')}; the pre-migration workbook "
+            f"is retained at {migration.get('sibling_path')}.",
+            level="warning",
+        )
     return {
         "job_id": job_id,
         "concepts_created": len(created_ids),
@@ -4581,4 +4694,11 @@ def generate_post_learning(
         "output_certificate_sha256": str(
             (deposited_grounding or {}).get("certificate_sha256") or ""
         ),
+        # Q16's recorded receipt and the issues it produced ride the run's own
+        # result: a migration that dropped a value is a release issue with a
+        # recorded Fixer decision, not a halt.
+        "workbook_issues": list(written.get("issues") or []),
+        "workbook_fixer_decisions": list(
+            written.get("fixer_decisions") or []),
+        "layout_migration": written.get("layout_migration"),
     }

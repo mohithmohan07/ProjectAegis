@@ -144,12 +144,14 @@ def _published_rows(path) -> list[dict]:
     workbook = openpyxl.load_workbook(path, data_only=False)
     sheet = workbook[writer.SHEET_BY_KIND["objective"]]
     header = [cell.value for cell in sheet[2]]
+    # ``parent_concept`` has no column on the target layout (Q5); the field
+    # still round-trips through the DB row, which
+    # tests/test_concept_mapping_format.py pins.
     indexes = {
         field: header.index(field)
         for field in (
             "topic_display_name",
             "concept_display_name",
-            "parent_concept",
             "concept_details",
         )
     }
@@ -252,8 +254,6 @@ def test_real_certified_deposit_binds_db_audit_and_workbook_atomically(
     assert published_normal == [{
         "topic_display_name": normal_payload["topic"],
         "concept_display_name": normal_payload["concept_title"],
-        # Ships empty regardless of what the deposit authored.
-        "parent_concept": None,
         "concept_details": normal_payload["concept_details"],
     }]
 

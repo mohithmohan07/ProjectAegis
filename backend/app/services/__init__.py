@@ -19,6 +19,9 @@ from .canonical_source_phase21_contract import (
 from .canonical_source_phase211_contract import (
     install as _install_canonical_source_phase211_contract,
 )
+from .canonical_source_phase212_contract import (
+    install as _install_canonical_source_phase212_contract,
+)
 from .canonical_source_phase22_contract import (
     install as _install_canonical_source_phase22_contract,
 )
@@ -104,6 +107,7 @@ _install_canonical_source_phase2_contract()
 _install_canonical_source_phase2_compat(generation)
 _install_canonical_source_phase21_contract(generation)
 _install_canonical_source_phase211_contract(generation)
+_install_canonical_source_phase212_contract(generation)
 _install_canonical_source_phase22_contract(generation)
 _install_canonical_source_phase221_contract()
 _install_canonical_source_phase222_contract()
@@ -134,6 +138,7 @@ del _install_canonical_source_phase2_contract
 del _install_canonical_source_phase2_compat
 del _install_canonical_source_phase21_contract
 del _install_canonical_source_phase211_contract
+del _install_canonical_source_phase212_contract
 del _install_canonical_source_phase22_contract
 del _install_canonical_source_phase221_contract
 del _install_canonical_source_phase222_contract

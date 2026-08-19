@@ -116,6 +116,51 @@ def test_hash_moves_with_a_frozen_core_prompt_override():
     assert architect.empty_set_sha256() == base
 
 
+def test_the_six_post_lane_prompts_are_frozen_core():
+    """Editing a Post-lane phase-3 prompt must re-key its cached verdicts.
+
+    Until step 8 these six were listed in a comment as knowingly absent:
+    ANALYSE_*, PLACE_* and REFINER_SYSTEM decided a pass's output while
+    sitting outside the hash that keys that pass's decisions, so editing one
+    replayed verdicts taken under the old text. The Pre-lane slices that found
+    it deferred the fix because listing them re-keys every stored Post
+    decision.
+
+    The assertions pin BEHAVIOUR, never the literal digest: a frozen-core
+    hash that could not move would be the defect, and a hash pinned by value
+    would have to be edited by anyone who legitimately moves it.
+    """
+    keys = {entry["key"] for entry in architect._frozen_core_entries()}
+    for name in (
+        "ANALYSE_INVENTORY_SYSTEM",
+        "ANALYSE_ALLOT_SYSTEM",
+        "ANALYSE_CRITIC_SYSTEM",
+        "PLACE_SYSTEM",
+        "PLACE_CRITIC_SYSTEM",
+        "REFINER_SYSTEM",
+    ):
+        assert f"phase3:{name}" in keys, f"{name} left the frozen core"
+
+    # Every phase-3 system prompt is listed: a new one added without its
+    # entry here is the same cache-invalidation defect, silently reissued.
+    module_prompts = {
+        name for name in vars(p3_prompts)
+        if name.endswith("_SYSTEM") and isinstance(
+            getattr(p3_prompts, name), str)
+    }
+    assert module_prompts == set(architect._FROZEN_CORE_PHASE3_CONSTANTS)
+
+    base = architect.empty_set_sha256()
+    original = p3_prompts.PLACE_SYSTEM
+    try:
+        p3_prompts.PLACE_SYSTEM = original + "\nOverride."
+        assert architect.empty_set_sha256() != base, (
+            "PLACE_SYSTEM is listed but does not reach the hash")
+    finally:
+        p3_prompts.PLACE_SYSTEM = original
+    assert architect.empty_set_sha256() == base
+
+
 def test_architect_prompt_is_registered_under_architect_category():
     spec = prompts.describe("architect.assemble.system")
     assert spec["category"] == "Architect"

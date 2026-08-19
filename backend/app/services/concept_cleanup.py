@@ -150,9 +150,10 @@ def filter_review_violations(
     records: list[dict], *, subject: str = "", board: str = "",
     chapter_title: str = "",
 ) -> list[dict]:
-    """Reassign or omit rows that QA flagged across subject samples.
+    """Reassign or flag rows that QA flagged across subject samples.
 
-    **No row is removed for what its title appears to MEAN.**
+    **No row is removed for what its title appears to MEAN — and since S10,
+    no row is removed here at all.**
     ``_PEDAGOGY_CONCEPT_RE`` used to delete any row whose ``concept_title``
     matched a twelve-phrase classroom-instruction vocabulary
     (``pre-?\\s*reading``, ``letter writing``, ``think and discuss``, ...).
@@ -185,23 +186,31 @@ def filter_review_violations(
     ``forbidden_name`` is emitted at severity ``error``, not ``warning``.
     They are not a safety net for this class and must not be cited as one.
 
-    So the drop is deleted and the row survives to the upstream verdict.
-    What this function still does to a row is recorded ON that row as a
-    review flag, or — where the row cannot carry one — by naming the row,
-    never as a bare count.
+    So the drops are deleted — the pedagogy-title one first, the
+    umbrella-topic one under S10 — and every row survives to the upstream
+    verdict. What this function still does to a row is recorded ON that row
+    as a review flag, never as a bare count.
 
     One boundary caveat, recorded rather than implied: ``models.Concept``
     has no ``review_flags`` column, so a flag added here rides the release
     payload (``release_refiner`` / ``phase3.assemble``) but is dropped on
-    the DB-deposit path. The omission log below is what carries the record
-    at that boundary.
+    the DB-deposit path. The ROW itself now survives every boundary, so
+    what that path loses is the advisory note, not learner-visible
+    content.
 
-    Still Rule 1 and still here: ``_PEDAGOGY_TOPIC_RE`` below reassigns a
-    row's topic from the same twelve-phrase vocabulary. It reassigns and
-    flags rather than losing the row, so it is not the R4 defect this
-    change removes — but it is the same forbidden bullet and its purge is
-    tracked separately, because removing it changes Post-lane topic
-    assignment and owes its own evidence.
+    Still Rule 1 and still here, BOTH residues named (Round 7):
+    ``_PEDAGOGY_TOPIC_RE`` below reassigns a row's topic from the same
+    twelve-phrase vocabulary, and — the quieter half — the
+    ``real_topics``/``fallback_topic`` selection above the loop uses BOTH
+    vocabularies to decide which topic that reassignment writes into the
+    learner-visible ``rec["topic"]``. Each reassigns and flags rather than
+    losing the row, so neither is the R4 defect this change removes — but
+    both are the same forbidden bullet and their purge is tracked
+    separately, because removing them changes Post-lane topic assignment
+    and owes its own evidence. [measured] with every topic
+    umbrella/pedagogy and no chapter title, the fallback degrades to the
+    first row's own umbrella name and the replay converges on the second
+    pass instead of the first — recorded here rather than smoothed over.
     """
     if not records:
         return records
@@ -224,7 +233,6 @@ def filter_review_violations(
     )
 
     out: list[dict] = []
-    omitted: list[str] = []
     for rec in records:
         title = (rec.get("concept_title") or "").strip()
         topic = (rec.get("topic") or "").strip()
@@ -246,28 +254,37 @@ def filter_review_violations(
             )
             out.append(rec)
             continue
-        # Overview / Summary / Basics topics are omitted entirely — never
-        # pushed into a neighboring topic (that caused repeated preview/recap).
-        # Classroom discussion cases / activity blocks are classified by the
-        # GPT Activity/Info Hub pass, not by chapter-named regex filters.
+        # Overview / Summary / Basics topics: the row SURVIVES, flagged
+        # (S10). It used to be deleted here — [measured] 5 records in, 2
+        # out, with only a progress-log line as the record, while the
+        # Marathi "सारांश" sailed through an English-only name set — which
+        # was this vocabulary DECIDING what the rows mean, Rule 1's
+        # forbidden move, and a silent learner-visible loss (R4). On THIS
+        # branch the vocabulary now only raises a flag (advisory,
+        # Q10-shaped: it gates nothing and deletes nothing); whether the
+        # row is a real teaching concept stays with the model passes
+        # upstream. Its OTHER retained role — excluding umbrella names from
+        # the reassignment branch's fallback candidacy above — is a real
+        # residue and is named in the docstring, not claimed away here. The
+        # row is still never pushed into a neighboring topic (that caused
+        # repeated preview/recap). The purge of both vocabularies is
+        # tracked separately.
         if topic_key in _FORBIDDEN_TOPIC_NAMES:
-            omitted.append(f"{title or '(untitled)'!r} under topic {topic!r}")
+            rec = dict(rec)
+            # ``review_topic_name`` is the CODE T7.3 names for this flag,
+            # carried in the text so a reader can grep the class.
+            _add_review_flag(
+                rec,
+                "review_topic_name (R4): this row is filed under the "
+                f"structural umbrella topic {topic!r}, which names a "
+                "chapter section rather than a teaching topic; the row and "
+                "its topic are untouched — confirm whether its content "
+                "belongs under a real topic of this chapter",
+            )
+            out.append(rec)
             continue
         out.append(rec)
 
-    if omitted:
-        from . import progress as _progress
-        # R4: an omitted row cannot carry a review flag, so it is named
-        # instead. A bare count ("Dropped N pedagogy / filler concept
-        # row(s)") is not a record of anything — it cannot be traced back to
-        # a row, and it is exactly how a learner-facing concept went missing
-        # unnoticed.
-        _progress.log(
-            f"Omitted {len(omitted)} concept row(s) filed under a structural "
-            "umbrella topic name (never merged into a neighbouring topic): "
-            + "; ".join(omitted),
-            level="warning",
-        )
     return out
 
 

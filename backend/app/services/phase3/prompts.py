@@ -250,6 +250,38 @@ PREMAP_CRITIC_SYSTEM = _SHARED + (
     "human review and does not block the run."
 )
 
+PREMAP_EMPTY_CAPTURE_SYSTEM = _SHARED + (
+    " Task: Phase 03 — this chapter's prerequisite capture returned no "
+    "element at all. Decide, from the chapter's own source, which of two "
+    "things happened. Response schema: {\"verdict\": "
+    "\"assumes_nothing|capture_incomplete\", \"rationale\", "
+    "\"confidence\"}. assumes_nothing: the chapter genuinely opens from "
+    "nothing a learner at this level, grade, subject and board must "
+    "already hold, so there is nothing to place before it. "
+    "capture_incomplete: the chapter does assume prior knowledge and the "
+    "capture failed to reach it — the source is unreadable, degraded, "
+    "truncated, or is not the chapter it claims to be. Read the source "
+    "for whether it holds together as a whole chapter and whether its "
+    "own teaching leans on anything it never explains. An honest "
+    "assumes_nothing is a legitimate and expected answer for an opening "
+    "chapter; never prefer one verdict because it is tidier. rationale "
+    "names in one or two sentences what in the source decided it."
+)
+
+PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM = _SHARED + (
+    " Task: independently audit a proposed Phase 03 verdict on an EMPTY "
+    "prerequisite capture. Judge two things and state each plainly. "
+    "SOURCE INTEGRITY: does the source in the request read as a complete, "
+    "legible chapter, or does it show the damage — missing pages, "
+    "garbled text, a fragment — that would explain an empty capture? "
+    "ASSUMED KNOWLEDGE: does this chapter's own teaching lean on anything "
+    "it does not itself explain, which a learner would have to hold "
+    "first? Response schema: {\"verdict\": \"verified|rejected\", "
+    "\"confidence\", \"issues\": [..]}. You are an auditor, not a judge: "
+    "your dissent is recorded on the output for human review and does not "
+    "block the run or overturn the verdict."
+)
+
 PREANALYSE_INVENTORY_SYSTEM = _SHARED + (
     " Task: Phase 2.4, PRE-LEARNING lane — build the inventory of "
     "DISTINCT Misconceptions and Error Analyses for this chapter's "
@@ -549,12 +581,15 @@ def render(payload: Mapping[str, Any]) -> str:
     return json.dumps(dict(payload), ensure_ascii=False, indent=1)
 
 
-# The Architect slots every pass reads. Widening this tuple would re-key
-# every stored Settle/Host/Place/Analyse/capture decision, so it is fixed;
-# a lane that needs more slots passes its own tuple instead.
+# The Architect slots every pass reads. An EMPTY slot renders nothing, so
+# widening this tuple re-keys only runs where the new slot is authored —
+# which is exactly when re-keying is wanted. ``language_topology_plan``
+# (step 11) is authored only for the Architect's poem/prose chapters, so
+# every existing expository run keeps byte-identical payloads and keys.
 DEFAULT_SLOTS: tuple[tuple[str, str], ...] = (
     ("Subject topology guidance", "subject_topology_guidance"),
     ("Grade-band vocabulary", "grade_band_vocabulary"),
+    ("Language topology plan", "language_topology_plan"),
 )
 
 # The Pre-Learning lane's slots (owner steer, 17 Aug 2026, point 2): a
