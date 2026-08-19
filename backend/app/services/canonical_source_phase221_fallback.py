@@ -2204,6 +2204,8 @@ def pin_existing_job_assets() -> int:
         return 0
     helper = getattr(uploads, "source_artifact_directory", None)
     pinned = 0
+    failed = 0
+    mismatched = 0
     for job_dir in sorted(root.iterdir()):
         if not job_dir.is_dir() or not job_dir.name.isdigit():
             continue
@@ -2218,6 +2220,7 @@ def pin_existing_job_assets() -> int:
                 continue
             crops = sorted(asset_dir.iterdir())
         except Exception as exc:
+            failed += 1
             _LOGGER.warning(
                 "source asset backfill could not read job %s (%s); "
                 "continuing with the remaining jobs",
@@ -2246,6 +2249,7 @@ def pin_existing_job_assets() -> int:
                     data, job_id=job_id, asset_url=url
                 )
             except Exception as exc:
+                failed += 1
                 _LOGGER.warning(
                     "source asset backfill could not pin %s in job %s (%s); "
                     "continuing with the remaining assets",
@@ -2255,6 +2259,7 @@ def pin_existing_job_assets() -> int:
             if stored_name != crop.name:
                 # The file's bytes no longer match its content-hash name; the
                 # published URL for this name cannot be honestly backfilled.
+                mismatched += 1
                 _LOGGER.warning(
                     "source asset %s in job %s does not match its content "
                     "hash (stored as %s); its published URL stays job-bound",
@@ -2262,6 +2267,15 @@ def pin_existing_job_assets() -> int:
                 )
             else:
                 pinned += 1
+    if failed or mismatched:
+        # The individual records above can scroll away; the count is the
+        # boot-level signal that part of the corpus is still unpinned (R4).
+        _LOGGER.warning(
+            "source asset backfill summary: %d pinned, %d failed, "
+            "%d name-mismatched; failed crops stay unpinned until the next "
+            "boot sweep or a successful serve-time pin",
+            pinned, failed, mismatched,
+        )
     return pinned
 
 

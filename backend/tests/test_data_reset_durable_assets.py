@@ -367,6 +367,11 @@ def test_boot_sweep_survives_a_per_crop_failure(tmp_path, monkeypatch, caplog):
     assert pinned == 1
     assert source_asset_store.stored_asset_path(_hash_name(survivor)).exists()
     assert any("could not pin" in r.getMessage() for r in caplog.records)
+    # The COUNT is the boot-level signal (R4): individual lines scroll away.
+    assert any(
+        "summary: 1 pinned, 1 failed, 0 name-mismatched" in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_serve_time_pin_records_a_hash_mismatch(client, tmp_path, monkeypatch, caplog):
