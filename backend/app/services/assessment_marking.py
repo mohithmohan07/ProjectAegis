@@ -22,6 +22,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from .. import config
+from . import assessment_profile
 from . import assessment_release as rel
 from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
@@ -318,7 +319,7 @@ def _prepare_pair(
         )
 
     kind = cell.get("sheet_kind")
-    if kind not in rel.SHEET_KINDS:
+    if kind not in assessment_profile.sheet_kinds():
         raise MarkingError(
             f"marking blueprint cell {cell_id!r} has invalid sheet_kind "
             f"{kind!r}"

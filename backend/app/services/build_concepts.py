@@ -617,6 +617,13 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
         parent_concept=rec.get("parent_concept", ""),
         concept_details=rec.get("concept_details", ""),
         keywords=rec.get("keywords", ""),
+        # OD3/T3.3b: both are real columns on ``models.Concept`` and both
+        # were dropped here, so a Pre row's resolved ``related_concepts``
+        # was filled before publication and EMPTY after it — Output 01
+        # changing shape the moment a reviewer clicks Upload, which is the
+        # R4 loss "one immutable snapshot, four projections" forbids.
+        related_concepts=rec.get("related_concepts", ""),
+        digicards=rec.get("digicards", ""),
         sources=source_book.strip(),
     )
     db.add(concept)

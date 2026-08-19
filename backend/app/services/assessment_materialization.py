@@ -19,6 +19,7 @@ import math
 from typing import Any, Mapping
 
 from .. import config
+from . import assessment_profile
 from . import assessment_release as rel
 from . import katex_rules
 from .phase3 import kernel
@@ -117,7 +118,9 @@ def _validate_obligation(
     cell_id = str(cell.get("cell_id") or "").strip()
     if not cell_id:
         raise MaterializationError("blueprint cell has no cell_id")
-    if str(cell.get("sheet_kind") or "") not in rel.SHEET_KINDS:
+    if str(cell.get("sheet_kind") or "") not in (
+        assessment_profile.sheet_kinds()
+    ):
         raise MaterializationError(
             f"blueprint cell {cell_id!r} has an unknown sheet_kind"
         )

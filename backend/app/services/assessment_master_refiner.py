@@ -595,9 +595,13 @@ def _validation_state(
 ) -> dict[str, Any]:
     """Run release mechanics and exact production workbook read-back."""
 
-    frozen = rel.freeze_payload(payload)
+    frozen = rel.freeze_payload(payload, profile)
     errors = [f"payload: {error}" for error in frozen.get("errors") or []]
     snapshot = release_service.snapshot_from_staged_release(payload)
+    errors.extend(
+        f"payload: {finding['code']}: {finding['message']}"
+        for finding in rel.unresolved_question_homes(snapshot, profile)
+    )
     output = assessment_workbook.build_dual_output(snapshot, profile)
     manifest = output["manifest"]
     errors.extend(
@@ -674,9 +678,51 @@ def _validation_state(
         str(group.get("group_key") or ""): group
         for group in payload.get("groups") or []
     }
+    # The SECOND read-back enforcing "every group has a rendered Master
+    # row", scoped exactly like ``validate_master_file``'s
+    # ``expected_group_keys`` and in the same change (OWNER RULING OD5 /
+    # spec-step8 T16). A concept with zero placed question rows gets one
+    # tail row stopping at the concept columns and NO Group row, so an
+    # unscoped read-back would turn every questionless concept into an
+    # error. It is NOT "a group with no questions" — that would stop
+    # catching a genuinely missing catalogue row on a concept that does
+    # have questions.
+    #
+    # Scoped through the SAME decision the renderer takes, not a looser
+    # restatement of it: ``rel.candidate_home_finding`` is what decides
+    # whether a candidate reaches a data row, and the renderable set is
+    # ``sheet_for_kind()`` — the module constant INTERSECTED with the
+    # layout's sheet-name map — not the constant alone. The former version
+    # required only a label and a renderable kind, so on an already-defective
+    # release it reported extra "has no rendered Master row" errors the
+    # renderer legitimately caused.
+    snapshot_concept_keys = {
+        str(concept.get("concept_key") or "")
+        for topic in snapshot.get("topics") or []
+        for concept in topic.get("concepts") or []
+    }
+    snapshot_groups_by_key: dict[str, Any] = {}
+    for group in snapshot.get("groups") or []:
+        key = str(group.get("group_key") or "")
+        if key and key not in snapshot_groups_by_key:
+            snapshot_groups_by_key[key] = group
+    renderable = tuple(assessment_workbook.sheet_for_kind())
+    placed_concepts = {
+        str(candidate.get("concept_key") or "")
+        for candidate in snapshot.get("candidates") or []
+        if rel.candidate_home_finding(
+            candidate, snapshot_concept_keys, snapshot_groups_by_key,
+            renderable) is None
+    }
+    concept_key_by_group = {
+        str(group.get("group_key") or ""): str(group.get("concept_key") or "")
+        for group in snapshot.get("groups") or []
+    }
     for group_key, group in groups_by_key.items():
         rows = group_rows.get(group_key, [])
         if not rows:
+            if concept_key_by_group.get(group_key, "") not in placed_concepts:
+                continue
             errors.append(
                 f"refiner-readback: group {group_key!r} has no rendered Master row"
             )

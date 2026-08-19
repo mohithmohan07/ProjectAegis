@@ -35,6 +35,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app import models
 from app.api import build_assessments as build_assessments_api
 from app.bulk_import import assessment_workbook
+from app.services import assessment_release as rel
 from app.services import assessment_release_run as run
 from app.services import assessment_release_service as svc
 from app.services import build_concepts_release as release
@@ -354,23 +355,72 @@ def test_an_unplaced_candidate_still_blocks_the_upload_through_readiness(
         assert response.status_code == 200, filename
 
 
-def test_the_unplaced_read_is_still_the_only_consumer_and_is_still_there():
-    """The one thing this slice must not do, asserted rather than trusted.
+def test_no_code_path_decides_on_unplaced_and_the_refusal_survives(
+    db, client,
+):
+    """S8's replacement for S6's ``…_is_still_there`` pin (T7.5 item 5).
 
-    An earlier draft of the spec had S6 delete this read. That was caught
-    as an R4 hole: with the replacement verdict not landing until S8, the
-    deletion opens a bisect window — and a merged state if S8 slipped — in
-    which a learner's question that reaches no sheet at all publishes to
-    the database anyway.
+    Two halves, deliberately in ONE test so neither can land alone.
+
+    Half one: no site outside ``assessment_workbook``'s own producers
+    READS ``unplaced``. The key is still WRITTEN and still durable —
+    ``publish_release`` puts the whole issues manifest on disk as
+    ``manifest.json`` — so what is gone is the DECIDER, not the record.
+    "Has no consumer" would overstate it and contradict T7.5 item 4.
+
+    Half two: the same candidate is STILL refused, now by the staged
+    ``unresolved_question_home`` verdict, and every download still ships.
     """
 
+    import subprocess
     from pathlib import Path
 
-    source = Path(
+    service = Path(
         "app/services/assessment_release_service.py"
     ).read_text(encoding="utf-8")
-    assert '(manifest.get("issues") or {}).get("unplaced") or []' in source
-    assert "if readiness == BLOCKED" in source
+    assert '(manifest.get("issues") or {}).get("unplaced") or []' not in (
+        service
+    )
+    assert "if readiness == BLOCKED" in service
+
+    def _grep(pattern: str) -> list[str]:
+        return subprocess.run(
+            ["grep", "-rn", pattern, "app/", "--include=*.py"],
+            capture_output=True, text=True, check=False,
+        ).stdout.splitlines()
+
+    # No READ of the key anywhere in the tree, in either indexing form.
+    assert _grep(r'get("unplaced")\|\["unplaced"\]') == []
+    # The PRODUCER is still there — the evidence channel must not be
+    # deleted along with the decider.
+    renderer = Path(
+        "app/bulk_import/assessment_workbook.py"
+    ).read_text(encoding="utf-8")
+    assert "unplaced.append(" in renderer
+    assert '"unplaced": unplaced' in renderer
+
+    from tests.test_mes_release_lifecycle import _fresh_release
+
+    def orphan(payload):
+        payload["candidates"][0]["group_key"] = "(unknown) BG01"
+
+    release_row, _payload, label = _fresh_release(db, mutate=orphan)
+    assert any(
+        error.startswith(rel.UNRESOLVED_QUESTION_HOME)
+        for error in release_row.diagnostics["payload_errors"])
+    published = svc.publish_release(db, release_row)
+    assert published.diagnostics["readiness"] == svc.BLOCKED
+    with pytest.raises(svc.UploadRefused, match="blocked"):
+        svc.upload_master_to_database(db, published, owner_sub=OWNER)
+    for filename in ("master.xlsx", "concepts.xlsx"):
+        response = client.get(
+            f"/build-assessments/releases/{published.id}/{filename}")
+        assert response.status_code == 200, filename
+    # The evidence still ships.
+    assert [
+        item["question_label"]
+        for item in published.diagnostics["issues"]["unplaced"]
+    ] == [label]
 
 
 # --------------------------------------------------------------------------- #
@@ -980,3 +1030,92 @@ def test_a_migrated_database_gets_the_lane_index_a_fresh_one_gets(tmp_path):
 
     assert "ix_assessment_releases_lane" in indexes(f"sqlite:///{fresh}")
     assert indexes(f"sqlite:///{migrated}") == indexes(f"sqlite:///{fresh}")
+
+
+# --------------------------------------------------------------------------- #
+# 7. S8's headline regression — the R4 hole, closed end to end
+# --------------------------------------------------------------------------- #
+
+def test_a_candidate_with_no_resolved_home_is_a_named_defect_not_a_silent_warning(
+    db, client,
+):
+    """The whole of spec-step8's first atomic, proved as an END STATE.
+
+    A candidate whose ``concept_key`` does not resolve:
+
+    * yields a NAMED ``unresolved_question_home`` entry in
+      ``diagnostics["payload_errors"]`` — decided at STAGING, by a pure
+      function of the frozen snapshot, not discovered at projection time;
+    * leaves ``_readiness`` BLOCKED and the database write refused;
+    * leaves ALL FOUR output downloads returning 200;
+    * and its ``question_label`` appears in NO DATA ROW OF ANY OF THE FOUR
+      OUTPUTS. That last fact is what makes it a DEFECT rather than a flag:
+      §4's "flags never block" governs semantic doubt on a row that SHIPS,
+      and this row does not ship at all.
+    """
+
+    import io
+
+    from openpyxl import load_workbook
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+    _pre, post = _run_both_lanes(db, job, chapter)
+
+    orphaned = copy.deepcopy(dict(post.payload))
+    label = str(orphaned["candidates"][0]["question_label"])
+    orphaned["candidates"][0]["group_key"] = "(no-such-concept) BG01"
+    orphaned["candidates"][0]["concept_key"] = "no-such-concept"
+
+    broken = svc.create_release(
+        db,
+        chapter_id=chapter.id,
+        payload=orphaned,
+        job_id=job.id,
+        owner_sub=OWNER,
+        supersedes=post,
+        lane=post.lane,
+        layout_id=post.layout_id,
+        provider_identity=dict(post.provider_identity or {}),
+    )
+
+    # (1) the named verdict, at staging.
+    named = [
+        error for error in broken.diagnostics["payload_errors"]
+        if error.startswith(rel.UNRESOLVED_QUESTION_HOME)
+    ]
+    assert len(named) == 1, broken.diagnostics["payload_errors"]
+    assert label in named[0]
+
+    published = svc.publish_release(db, broken)
+
+    # (2) readiness BLOCKED and the database write refused.
+    assert published.diagnostics["readiness"] == svc.BLOCKED
+    with pytest.raises(svc.UploadRefused, match="blocked"):
+        svc.upload_master_to_database(db, published, owner_sub=OWNER)
+
+    # (3) all four downloads 200.
+    db.refresh(job)
+    downloads: list[tuple[str, bytes]] = []
+    for lane_query in ("", "?lane=pre"):
+        response = client.get(
+            f"/build-concepts/uploads/{job.id}"
+            f"/release-bulk-import.xlsx{lane_query}")
+        assert response.status_code == 200, lane_query
+        downloads.append((lane_query or "post", response.content))
+    for row_release in (_pre, published):
+        response = client.get(
+            f"/build-assessments/releases/{row_release.id}/master.xlsx")
+        assert response.status_code == 200, row_release.id
+        downloads.append((f"master-{row_release.id}", response.content))
+    assert len(downloads) == 4
+
+    # (4) and the label reaches no data row of any of them.
+    for name, content in downloads:
+        book = load_workbook(io.BytesIO(content), read_only=True)
+        for sheet in book.worksheets:
+            for row in sheet.iter_rows(values_only=True):
+                assert label not in [
+                    None if cell is None else str(cell) for cell in row
+                ], (name, sheet.title)
+        book.close()

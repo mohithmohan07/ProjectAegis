@@ -14,6 +14,7 @@ import pytest
 
 from app.bulk_import import assessment_workbook as mp
 from app.services import assessment_grouping as ag
+from app.services import assessment_release as rel
 
 
 def _snapshot() -> dict:
@@ -198,26 +199,42 @@ def test_master_contains_everything_including_questionless_concepts():
     assert provenance[("Objective", 3)] == "(06MSMA_T01_TwoDim) BG01"
     assert provenance[("Descriptive", 3)] == "(06MSMA_T01_TwoDim) IG01"
     assert provenance[("Objective", 4)] == "(06MSMA_T01_TwoDim) AG01"
-    assert parsed["sheets"]["Objective"]["row_numbers"] == [3, 4, 5, 6, 7]
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [3, 4, 5]
     assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
 
-    # One objective question row + catalogue rows for the five groups no
-    # question represents (2 concepts x 3 shells - the occupied BG01... the
-    # occupied IG01 lives on the Descriptive sheet).
+    # One objective question row, one catalogue row for the AG01 the
+    # occupied concept's questions do not represent (its IG01 lives on the
+    # Descriptive sheet), and ONE tail row for the questionless concept
+    # (OWNER RULING OD5).
     question_rows = [r for r in objective_rows if r["question_label"]]
     catalogue_rows = [r for r in objective_rows if not r["question_label"]]
     assert len(question_rows) == 1
-    assert len(catalogue_rows) == 4
-    # The questionless concept appears via its shells.
-    assert any(
-        r["concept_title"].startswith("Three-dimensional")
-        for r in catalogue_rows)
-    shells = {r["group_name"] for r in catalogue_rows}
-    assert "Three-dimensional shape — Basic" in shells
+    assert len(catalogue_rows) == 2
+    tail = [
+        r for r in catalogue_rows
+        if r["concept_title"].startswith("Three-dimensional")]
+    assert len(tail) == 1
+    assert tail[0] is catalogue_rows[-1]
     assert all(
-        r["group_description"] == "NA" for r in catalogue_rows
-        if r["group_type"] in {"Basic", "Intermediate", "Advanced"}
-        and r["concept_title"].startswith("Three-dimensional"))
+        not str(tail[0].get(field) or "").strip()
+        for field in (
+            "group_name", "group_display_name", "group_description",
+            "group_status", "group_type", "group_question_labels",
+            "related_digicards", "concept_question_labels",
+        )
+    )
+    assert [
+        item["concept_title"] for item in issues["questionless_concepts"]
+    ] == ["Three-dimensional shape (06MSMA_T01_ThreeDim)"]
+    assert sorted(
+        issues["questionless_concepts"][0]["shell_group_keys"]) == [
+        "(06MSMA_T01_ThreeDim) AG01",
+        "(06MSMA_T01_ThreeDim) BG01",
+        "(06MSMA_T01_ThreeDim) IG01",
+    ]
+    # The shells stay in the payload; the difference is RECORDED, not silent.
+    assert {g["group_key"] for g in _snapshot()["groups"]} >= set(
+        issues["questionless_concepts"][0]["shell_group_keys"])
 
     q = question_rows[0]
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
@@ -325,7 +342,14 @@ def test_master_provenance_distinguishes_shared_friendly_group_names():
     assert result["valid"], result["manifest"]["read_back"]
 
 
-def test_master_refuses_duplicate_internal_group_keys():
+def test_master_records_a_duplicate_group_key_instead_of_raising():
+    """INVERTED by spec-step8 T7.5/B4.
+
+    The raise cost every row on every sheet of all four outputs while the
+    same defect was already refused at freeze by
+    ``rel.duplicate_group_keys`` and again by ``validate_master_file``'s
+    read-back. The workbook is now written and the defect is recorded.
+    """
     snapshot = copy.deepcopy(_snapshot())
     duplicate = copy.deepcopy(snapshot["groups"][0])
     duplicate["concept_key"] = "C_B"
@@ -333,33 +357,64 @@ def test_master_refuses_duplicate_internal_group_keys():
     duplicate["group_name"] = "Three-dimensional shape — Advanced"
     duplicate["group_display_name"] = duplicate["group_name"]
     snapshot["groups"].append(duplicate)
-    with pytest.raises(mp.WorkbookRenderError, match="duplicate group_key"):
-        mp.render_master_file(snapshot)
+    master, issues = mp.render_master_file(snapshot)
+    assert master
+    assert any(
+        "duplicate group_key" in item["message"]
+        for item in issues["group_defects"])
+    # The staging twin, unchanged and still refusing at freeze.
+    assert rel.duplicate_group_keys(snapshot["groups"]) == [
+        "(06MSMA_T01_TwoDim) BG01"]
+    # And the read-back twin.
+    assert any(
+        "duplicate group_key" in error
+        for error in mp.validate_master_file(
+            mp.parse_workbook(master), snapshot))
 
 
-def test_master_refuses_non_q12_visible_group_names():
+def test_a_non_q12_visible_group_name_is_a_named_defect_not_a_render_error():
     snapshot = copy.deepcopy(_snapshot())
     group = snapshot["groups"][0]
     group["group_name"] = group["group_key"]
     group["group_display_name"] = group["group_key"]
-    with pytest.raises(mp.WorkbookRenderError, match="visible names"):
-        mp.render_master_file(snapshot)
+    master, _ = mp.render_master_file(snapshot)
+    assert master
+    codes = {
+        f["code"] for f in rel.unresolved_question_homes(snapshot)}
+    assert rel.GROUP_VISIBLE_NAME_MISMATCH in codes
 
     missing_display = copy.deepcopy(_snapshot())
     missing_display["topics"][0]["concepts"][0][
         "concept_display_name"
     ] = ""
-    with pytest.raises(
-        mp.WorkbookRenderError, match="no explicit concept_display_name",
-    ):
-        mp.render_master_file(missing_display)
+    master, _ = mp.render_master_file(missing_display)
+    assert master
+    assert rel.GROUP_HOME_UNNAMED in {
+        f["code"] for f in rel.unresolved_question_homes(missing_display)}
 
 
-def test_master_refuses_candidate_group_concept_mismatch():
+def test_a_group_home_disagreement_is_a_defect_not_a_render_error():
+    """INVERTED by spec-step8 T7.5/B4 — the ``:373`` raise.
+
+    Today it cost all four workbooks; now all four are written, the
+    candidate reaches no data row, and the defect is NAMED at staging so
+    the database write is refused.
+    """
     snapshot = copy.deepcopy(_snapshot())
     snapshot["candidates"][0]["concept_key"] = "C_B"
-    with pytest.raises(mp.WorkbookRenderError, match="does not match group"):
-        mp.render_master_file(snapshot)
+    master, issues = mp.render_master_file(snapshot)
+    assert master
+    assert [item["question_label"] for item in issues["unplaced"]] == [
+        "06MSMA_T01_TwoDim Q01"]
+    findings = rel.unresolved_question_homes(snapshot)
+    assert [f["code"] for f in findings] == [rel.GROUP_HOME_DISAGREEMENT]
+    assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
+    # And the label reaches NO data row.
+    parsed = mp.parse_workbook(master)
+    for sheet in parsed["sheets"].values():
+        assert all(
+            row.get("question_label") != "06MSMA_T01_TwoDim Q01"
+            for row in sheet["rows"])
 
 
 def test_master_provenance_uses_physical_sheet_row_numbers():
@@ -372,7 +427,7 @@ def test_master_provenance_uses_physical_sheet_row_numbers():
     workbook.close()
 
     parsed = mp.parse_workbook(buffer.getvalue())
-    assert parsed["sheets"]["Objective"]["row_numbers"] == [4, 5, 6, 7, 8]
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [4, 5, 6]
     assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
     shifted_provenance = copy.deepcopy(issues["group_provenance"])
     for item in shifted_provenance:
@@ -398,8 +453,24 @@ def test_formula_injection_and_cell_limit_guards():
         mp.render_master_file(oversized)
 
 
-def test_capacity_overflow_is_refused_with_the_label_named():
+def test_capacity_overflow_is_a_named_defect_with_the_label_named():
+    """INVERTED by spec-step8 T7.5/B4 — ``_question_record``'s four caps.
+
+    The cap is the LAYOUT's own column count, so a row that overflows it
+    cannot be written whole. Raising cost every row on every sheet of all
+    four outputs; now the row ships with the slots the layout has, the
+    overflow is named ``render_shape_overflow`` at staging with the label,
+    the cap and the actual count, and the database write is refused.
+    """
     snapshot = copy.deepcopy(_snapshot())
     snapshot["candidates"][0]["answers"] *= 4  # 8 options
-    with pytest.raises(mp.WorkbookRenderError, match="Q01"):
-        mp.render_master_file(snapshot)
+    master, _ = mp.render_master_file(snapshot)
+    assert master
+    findings = [
+        f for f in rel.unresolved_question_homes(snapshot)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert len(findings) == 1
+    assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
+    assert findings[0]["cap"] == mp.MAX_OBJECTIVE_OPTIONS
+    assert findings[0]["actual"] == 8

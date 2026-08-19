@@ -27,6 +27,7 @@ from .. import config, models
 from ..bulk_import import assessment_workbook
 from . import assessment_grouping as grouping
 from . import assessment_release as rel
+from . import identity
 
 _TITLE_TAG_RE = re.compile(r"\(([^()]+)\)\s*$")
 
@@ -120,7 +121,19 @@ def snapshot_from_chapter(
             "topic_title": topic.topic_title,
             "topic_display_name": topic.topic_display_name,
             "pre_post_learning": topic.pre_post_learning,
-            "topic_concept_labels": "",
+            # §6:509-512 makes this column the Topic→Concept join
+            # ("joined by exact text labels"), and the gold fills it on
+            # 23/23 populated rows. Hard-coding "" here deleted the join
+            # from every projection that reads this snapshot (T3.7). The
+            # composition is the SHARED ``identity.titled``, not a second
+            # copy of it.
+            "topic_concept_labels": ", ".join(
+                identity.titled(
+                    concept.concept_title,
+                    identity.machine_id_for_concept(concept),
+                )
+                for concept in concepts
+            ),
             "related_topics": topic.related_topics,
             "topic_description": topic.topic_description,
             "concepts": [
@@ -141,6 +154,11 @@ def snapshot_from_chapter(
         "chapter": {
             "chapter_title": chapter.chapter_title,
             "chapter_display_name": chapter.chapter_display_name,
+            # Carried, not omitted (spec-step8 T12/M4): the profile's
+            # ``forced_blank_fields`` is what decides whether it ships, and
+            # a key the snapshot never carries leaves that lever with
+            # nothing to un-blank.
+            "chapter_duration": chapter.chapter_duration,
             "pre_topics": chapter.pre_topics,
             "post_topics": chapter.post_topics,
             "chapter_description": chapter.chapter_description,
@@ -253,6 +271,31 @@ def _complete_required_shells(snapshot: dict) -> None:
                 groups_by_home_key.setdefault(home_key, []).append(shell)
 
 
+def _run_profile(provider_identity: Mapping | None) -> Mapping | str | None:
+    """The run's profile off the run context, as a name OR a dict.
+
+    ``release_core.run_context`` writes a NAME under ``profile``;
+    spec-step8 T12/M7 also names ``assessment_profile``, and
+    ``assessment_release_run`` builds ``{"assessment_profile": <dict>}``
+    for the refiner.  Coercing with ``str()`` turned a dict into
+    ``"{'name': …}"`` and ``get_profile`` then raised ``KeyError: unknown
+    assessment profile`` out of ``freeze_payload`` — no release row, no
+    workbooks, on a slice whose whole theme is that nothing costs the four
+    outputs.  Everything downstream (``freeze_payload``,
+    ``unresolved_question_homes``, ``build_dual_output``) already accepts
+    ``Mapping | str | None``, so the Mapping is passed straight through.
+    An empty value resolves to the default rather than raising on
+    ``get_profile("")``.
+    """
+    # NOT named ``identity``: this module imports ``identity`` for the
+    # shared title composition, and a local of that name would shadow it.
+    context = provider_identity or {}
+    value = context.get("assessment_profile") or context.get("profile")
+    if isinstance(value, Mapping):
+        return value
+    return str(value or "").strip() or None
+
+
 def create_release(
     db: Session,
     *,
@@ -275,7 +318,8 @@ def create_release(
     a legacy Build Assessments payload declares no lane and inventing one
     for it would put a row into a lane's manifest on no evidence.
     """
-    frozen = rel.freeze_payload(payload)
+    run_profile = _run_profile(provider_identity)
+    frozen = rel.freeze_payload(payload, run_profile)
     staged = payload.get("concept_snapshot")
     if isinstance(staged, Mapping):
         staged_chapter_id = int(staged.get("target_chapter_id") or 0)
@@ -304,6 +348,24 @@ def create_release(
             db, chapter_id, payload,
             pre_post=str(payload.get("pre_post_learning") or "") or None,
         )
+    )
+    # THE STAGED HOME/SHAPE VERDICT (spec-step8 T7.5, D8.5b). It goes
+    # BETWEEN the snapshot and the diagnostics dict for one measured reason:
+    # it needs the concept universe, and ``freeze_payload`` sees only the
+    # payload (the ``snapshot_from_chapter`` branch carries no
+    # ``concept_snapshot`` key at all, so it could not reach the concepts
+    # even in principle). Its findings append to ``frozen["errors"]`` — the
+    # transport the duplicate ``question_label`` of S5 already uses — so
+    # ``_readiness`` BLOCKED and the upload refusal need NO new wiring.
+    #
+    # This lands in the SAME change that deletes ``_readiness``'s read of
+    # the renderer's unplaced list below. Either half alone is a hole:
+    # the deletion without this leaves an unresolved home refused by
+    # nothing (the R4 breach), and this without the deletion leaves two
+    # vocabularies refusing one defect.
+    frozen["errors"].extend(
+        f"{finding['code']}: {finding['message']}"
+        for finding in rel.unresolved_question_homes(snapshot, run_profile)
     )
     release = models.AssessmentRelease(
         release_uid=(
@@ -336,17 +398,28 @@ def create_release(
 # --------------------------------------------------------------------------- #
 
 def _readiness(release: models.AssessmentRelease, manifest: Mapping) -> str:
+    """Readiness from the STAGED verdict, never from a projection-time one.
+
+    The read of the renderer's unplaced list that used to sit below
+    the payload-error check is GONE (spec-step8 T7.5 item 5), deleted in the
+    same change that landed
+    ``assessment_release.unresolved_question_homes`` and wired it into
+    ``create_release``. Two vocabularies refusing one defect is what T1
+    exists to end, and the reviewer's experience improves in the same
+    commit: instead of an unexplained BLOCKED they get a named defect
+    carrying the candidate's ``question_label``.
+
+    The renderer's unplaced list is still WRITTEN and still durable —
+    ``publish_release`` puts the whole issues manifest on disk as
+    ``manifest.json`` — so every unplaced candidate survives with its
+    identity, reason and flags. What is gone is the DECIDER, not the record.
+    """
     read_back = manifest.get("read_back") or {}
     if (
         read_back.get("concepts_errors")
         or read_back.get("master_errors")
         or (release.diagnostics or {}).get("payload_errors")
     ):
-        return BLOCKED
-    unplaced = (manifest.get("issues") or {}).get("unplaced") or []
-    if unplaced:
-        # A question with no resolved home can corrupt graph identity on
-        # import: downloads stay available, the database stays protected.
         return BLOCKED
     flagged = [
         c for c in (release.payload or {}).get("candidates") or []
@@ -373,7 +446,14 @@ def publish_release(
     served, so a release with only one successfully published file cannot
     exist (spec §13.2 step 7).
     """
-    output = assessment_workbook.build_dual_output(release.concept_snapshot)
+    # The run's own profile, read back off the row it was persisted on
+    # (spec-step8 T12/M7), through the same accessor ``create_release``
+    # staged it with — so a run whose context carried a profile DICT
+    # publishes instead of raising ``KeyError`` and shipping no workbook.
+    output = assessment_workbook.build_dual_output(
+        release.concept_snapshot,
+        _run_profile(release.provider_identity),
+    )
     target = _version_dir(release)
     staging = target.with_name(target.name + ".staging")
     staging_parent = staging.parent

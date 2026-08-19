@@ -21,6 +21,7 @@ from . import uploads
 from .build_concepts_release import (
     LANE_POST,
     LANE_PRE,
+    PRE_ROW_RELATED_CONCEPTS_FIELD,
     assessment_lane_issue,
     RELEASE_ROW_BLOCKS_FIELD,
     RELEASE_ROW_ERRORS_FIELD,
@@ -421,6 +422,25 @@ def transient_release_hierarchy(
                 or ""
             ),
             keywords=str(record.get("keywords") or ""),
+            # OWNER RULING OD3: ``keywords`` and ``related_concepts`` ship
+            # FILLED. The reference workbook leaving them blank is that
+            # school's fill practice, not a rule of the format — the
+            # committed format workbook carries both columns and no data
+            # rows at all, so the format asserts nothing about them. The
+            # ``forced_blank_fields`` profile key stays as the one-line
+            # lever if that ever changes.
+            #
+            # On a PRE row the value is the resolved marker T3.3 stamps at
+            # staging (persisted Post ``machine_id``s, newline-joined —
+            # concept titles legitimately contain commas). On a POST row
+            # nothing authors a concept↔concept relation yet, so it is
+            # whatever the record carries, which is blank.
+            related_concepts=str(
+                record.get(PRE_ROW_RELATED_CONCEPTS_FIELD)
+                or record.get("related_concepts")
+                or ""
+            ),
+            digicards=str(record.get("digicards") or ""),
             sources=str(
                 release.get("source_book")
                 or release.get("filename")

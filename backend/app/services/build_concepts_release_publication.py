@@ -15,6 +15,7 @@ from .build_concepts_release import (
     LANE_POST,
     LANE_PRE,
     ReleaseUnavailableError,
+    _lift_resolved_related_concepts,
     _strip_release_fields,
     normalize_lane,
     release_key_for_lane,
@@ -97,8 +98,14 @@ def upload_release_to_database(
     defects = structural_defects(payload)
     if defects:
         raise ValueError("; ".join(defects))
+    # T3.3b: the resolved Post ``machine_id``s ride a registered
+    # ``_aegis_*`` marker, and ``_strip_release_fields`` drops every
+    # ``_RELEASE_AUDIT_FIELDS`` key BY CONSTRUCTION — so the marker cannot
+    # reach ``_add_concept``'s ``rec`` at all unless it is lifted here,
+    # first. The registry stays the transport; the DB column is the
+    # destination.
     records = [
-        _strip_release_fields(row)
+        _strip_release_fields(_lift_resolved_related_concepts(row))
         for row in payload.get("records") or []
         if isinstance(row, Mapping)
         and str(row.get("topic") or "").strip()
@@ -190,6 +197,9 @@ def upload_release_to_database(
             existing.parent_concept = rec.get("parent_concept", "")
             existing.concept_details = rec.get("concept_details", "")
             existing.keywords = rec.get("keywords", "")
+            # OD3/T3.3b — the same two columns the create branch persists.
+            existing.related_concepts = rec.get("related_concepts", "")
+            existing.digicards = rec.get("digicards", "")
             existing.source_order = source_order
             identity.machine_id_for_concept(existing)
             existing.sources = bi.merge_sources(existing.sources, source_book)

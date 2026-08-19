@@ -16,7 +16,7 @@ from typing import Any, Mapping
 
 from .. import bulk_import as bi
 from .. import config
-from . import assessment_release as rel
+from . import assessment_profile
 from .phase3 import kernel
 
 
@@ -96,11 +96,13 @@ def _envelope_hash(value: str) -> str:
     return envelope_sha
 
 
-def _allowed_sheet_kinds(_profile: Mapping[str, Any]) -> tuple[str, ...]:
-    # Slice 3 must emit only kinds the current Output-02 materializer and
-    # release schema can represent.  ``allow_subjective_rows`` remains a
-    # future profile capability; it cannot widen this wire contract yet.
-    return tuple(rel.SHEET_KINDS)
+def _allowed_sheet_kinds(profile: Mapping[str, Any]) -> tuple[str, ...]:
+    # The PROFILE answers this, through the one accessor (spec-step8
+    # T12/M5, M5b).  It used to ignore its argument and return the module
+    # constant, so the payload told the model something the profile denied.
+    # A profile that carries no ``sheet_kinds`` falls back to the default,
+    # which is byte-identical for ``reference-1`` — zero decisions re-key.
+    return assessment_profile.sheet_kinds(profile)
 
 
 def _profile_payload(profile: Mapping[str, Any]) -> dict[str, Any]:

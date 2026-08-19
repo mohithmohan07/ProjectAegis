@@ -3684,8 +3684,16 @@ collected tests in `tests/test_mes_release_lifecycle.py` (the fullest publicatio
 in the repo, and the convergence target) — **with one amendment OD4 forces and this spec
 states rather than breaks quietly: `:319`'s
 `pytest.raises(svc.UploadRefused, match="Output-01 identity")` becomes
-`match="Output-03 identity"` in S10, in the same commit that rewrites the message. 17 of
-the 18 are untouched; the 18th changes one string literal and no behaviour** (§5);
+`match="Output-03 identity"` in S10, in the same commit that rewrites the message.
+AMENDED IN S8 (a second amendment to this file, recorded here rather than left to
+contradict this paragraph): `test_duplicate_group_key_is_named_and_publication_fails_
+closed:188-218` is INVERTED by T7.5/B4 — publication no longer raises on a duplicate
+`group_key`; it succeeds, `_readiness` is `BLOCKED` and the upload raises
+`UploadRefused`. The refusal is unchanged; the point at which it is taken moves from the
+renderer to the staged verdict, which is the whole of B4. Its unused
+`assessment_workbook as mp` import goes with the `pytest.raises` it served. So 16 of the
+18 are untouched, one changes a string literal and no behaviour, and one is inverted with
+its reason written in its own docstring** (§5);
 `tests/test_release_refiner.py:182, :590` (the
 `concepts_release` branch stays byte-behaviour identical);
 `tests/test_chapter_topic_quality.py:849-877` (published Post labels byte-identical);

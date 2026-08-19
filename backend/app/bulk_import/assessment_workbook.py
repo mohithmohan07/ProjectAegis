@@ -41,6 +41,7 @@ from openpyxl.styles import Alignment, Font
 
 from ..services import assessment_profile
 from ..services import assessment_release as rel
+from . import layouts
 
 CELL_LIMIT = 32_767
 
@@ -58,8 +59,29 @@ _INDEX: dict[str, dict[str, int]] = {
     for name, fields in FIELDS.items()
 }
 
-# MES §3.8: these fields ship blank regardless of what upstream rows carry.
-_FORCED_BLANK = {"chapter_duration", "question_disclaimer"}
+# Which sheet kinds ``_question_record`` can write TODAY — a property of
+# THIS CODE, not of any school's profile and not of the layout.  It has
+# exactly two branches (``if sheet == "Objective"`` and ``else: # Descriptive``),
+# so a Subjective candidate would fall through the Descriptive branch and
+# ship the wrong shape.  Widened by the Output-04-lane step that teaches
+# ``_question_record`` the 144-column Subjective answer blocks (spec-step8
+# T7.5/B3, T12/M2's scope limit).
+#
+# ``sheet_for_kind`` is derived from THIS tuple × the layout's own sheet-name
+# map, deliberately NOT from the profile: a profile-derived map has no
+# ``None`` branch to take the moment a profile widens, so the defect could
+# never fire and ``_question_record`` would raise instead.
+RENDERABLE_SHEET_KINDS = ("objective", "descriptive")
+
+
+def sheet_for_kind() -> dict[str, str]:
+    """``RENDERABLE_SHEET_KINDS`` × the layout's sheet-name map."""
+
+    names = layouts.layout(layouts.REFERENCE_LAYOUT_ID).sheet_name_by_kind()
+    return {
+        kind: names[kind] for kind in RENDERABLE_SHEET_KINDS if kind in names
+    }
+
 
 MAX_OBJECTIVE_OPTIONS = 6
 MAX_DESCRIPTIVE_ANSWERS = 10
@@ -68,7 +90,14 @@ MAX_SUBQUESTION_KEYWORDS = 6
 
 
 class WorkbookRenderError(ValueError):
-    """A workbook cannot be rendered without violating a mechanical rule."""
+    """A workbook cannot be rendered without violating a mechanical rule.
+
+    Still raised by ``_cell_value`` for a cell no XLSX file can hold.  It is
+    NOT raised anywhere in the Master lane's own decision path any more:
+    ``render_master_file`` and ``_question_record`` raise nothing, because a
+    raise there costs every row on every sheet of all four outputs while the
+    same verdict is available at staging (spec-step8 T7.5/B4).
+    """
 
 
 def _cell_value(value: Any, *, context: str) -> Any:
@@ -86,11 +115,23 @@ def _cell_value(value: Any, *, context: str) -> Any:
     return text
 
 
-def _row_values(sheet: str, record: Mapping[str, Any]) -> list:
+def _row_values(
+    sheet: str, record: Mapping[str, Any],
+    forced_blank: tuple[str, ...] = (),
+) -> list:
+    """Serialize one record positionally.
+
+    ``forced_blank`` is the profile's ``forced_blank_fields`` (spec-step8
+    T12/M4) — which fields ship blank whatever the row carries is a school's
+    fill practice, not a fact about the format, and the same key is read by
+    ``validate_concept_file``'s must-keep-blank gate so the renderer and the
+    read-back can never disagree.
+    """
+    blank = frozenset(forced_blank)
     fields = FIELDS[sheet]
     row = []
     for field in fields:
-        value = "" if field in _FORCED_BLANK else record.get(field, "")
+        value = "" if field in blank else record.get(field, "")
         row.append(_cell_value(
             value, context=f"{sheet}:{field}"))
     return row
@@ -159,12 +200,20 @@ def _concept_rows(snapshot: Mapping) -> list[dict]:
     return rows
 
 
+# The concept identity trio: join keys and provenance, never workbook cells.
+# ``_row_values`` iterates template fields, so a record key with no column
+# vanishes with no flag — stripping them HERE is what keeps T3.6's
+# manifest-union gate from reporting two identity fields as structural
+# defects on every release.
+_IDENTITY_TRIO = ("concept_key", "concept_machine_id", "release_row_identity")
+
+
 def _bands_record(entry: Mapping) -> dict:
     record: dict = {}
     record.update(entry["chapter"])
     record.update(entry["topic"])
     record.update({
-        k: v for k, v in entry["concept"].items() if k != "concept_key"
+        k: v for k, v in entry["concept"].items() if k not in _IDENTITY_TRIO
     })
     return record
 
@@ -177,7 +226,10 @@ def snapshot_sha256(snapshot: Mapping) -> str:
 # Output A — Concept File (spec §1, §9)
 # --------------------------------------------------------------------------- #
 
-def render_concept_file(snapshot: Mapping) -> bytes:
+def render_concept_file(
+    snapshot: Mapping, profile: Mapping | str | None = None,
+) -> bytes:
+    forced_blank = assessment_profile.forced_blank_fields(profile)
     wb = _new_workbook()
     ws = wb["Objective"]
     for entry in _concept_rows(snapshot):
@@ -188,7 +240,7 @@ def render_concept_file(snapshot: Mapping) -> bytes:
         for field in ("basic_groups", "intermediate_groups",
                       "advanced_groups", "concept_question_labels"):
             record[field] = ""
-        ws.append(_row_values("Objective", record))
+        ws.append(_row_values("Objective", record, forced_blank))
     return _workbook_bytes(wb)
 
 
@@ -196,33 +248,46 @@ def render_concept_file(snapshot: Mapping) -> bytes:
 # Output B — Master File (spec §1, §10)
 # --------------------------------------------------------------------------- #
 
-def _question_record(candidate: Mapping, sheet: str) -> dict:
-    identity = str(
-        candidate.get("question_label")
-        or candidate.get("candidate_id")
-        or "candidate"
-    )
-    duration = _readback_decimal(candidate.get("question_duration"))
-    if duration is None or duration <= 0:
-        raise WorkbookRenderError(
-            f"{identity}: question_duration must be authored, finite, and "
-            "positive"
-        )
-    keyboard = candidate.get("math_keyboard")
-    if sheet == "Objective" and keyboard != "":
-        raise WorkbookRenderError(
-            f"{identity}: objective math_keyboard must be exactly blank"
-        )
-    if sheet == "Descriptive" and keyboard not in {"Yes", "No"}:
-        raise WorkbookRenderError(
-            f"{identity}: descriptive math_keyboard must be exactly Yes or No"
-        )
+def _question_record(
+    candidate: Mapping, sheet: str, profile: Mapping | str | None = None,
+    *, truncated: list[dict] | None = None,
+) -> dict:
+    """Project one candidate onto its sheet's question columns.
+
+    THIS FUNCTION RAISES NOTHING (spec-step8 T7.5/B4).  Its seven former
+    raises are gone: ``question_duration``, objective ``math_keyboard`` and
+    descriptive ``math_keyboard`` already have a staging twin in
+    ``assessment_release.validate_candidate``, and the four count caps are
+    named at staging as ``render_shape_overflow``.  What it does with a row
+    that overflows the layout is write what the layout HAS slots for — the
+    row ships and is visible, the overflow is named, and the database write
+    is refused — instead of costing every row on every sheet of all four
+    outputs.
+
+    ``truncated`` is the renderer's own ledger.  Every one of the four caps
+    appends ``{question_label, field, cap, actual}`` to it, so the loss is
+    recorded in the issues manifest that lands on disk and not only in the
+    staged verdict — a caller outside ``create_release`` used to truncate
+    with no record anywhere (R4: the silence is the defect).
+    """
+    def _cap(field: str, items: list, cap: int) -> list:
+        if len(items) > cap and truncated is not None:
+            truncated.append({
+                "candidate_id": str(candidate.get("candidate_id") or ""),
+                "question_label": str(candidate.get("question_label") or ""),
+                "field": field,
+                "cap": cap,
+                "actual": len(items),
+            })
+        return items[:cap]
+
     record = {
         "question_label": candidate.get("question_label", ""),
         "question_category": candidate.get("question_category", ""),
         "cognitive_skills": candidate.get("cognitive_skill", ""),
-        "question_source": candidate.get("question_source", ""),
-        "question_duration": candidate["question_duration"],
+        "question_source": candidate.get(
+            "question_source", assessment_profile.question_source(profile)),
+        "question_duration": candidate.get("question_duration", ""),
         "question_appears_in": candidate.get("question_appears_in", ""),
         "answer_restriction": candidate.get("answer_restriction", ""),
         "level_of_difficulty": candidate.get("difficulty", ""),
@@ -235,24 +300,22 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
         a for a in candidate.get("answers") or [] if isinstance(a, Mapping)
     ]
     if sheet == "Objective":
-        if len(answers) > MAX_OBJECTIVE_OPTIONS:
-            raise WorkbookRenderError(
-                f"{record['question_label']}: more than "
-                f"{MAX_OBJECTIVE_OPTIONS} options")
-        for n, answer in enumerate(answers, start=1):
+        # The layout has exactly this many slots; an overflow is named at
+        # staging as ``render_shape_overflow`` and refuses the DB write.
+        for n, answer in enumerate(
+            _cap("answers", answers, MAX_OBJECTIVE_OPTIONS), start=1
+        ):
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
             record[f"answer_content_{n}"] = answer.get("answer_content", "")
             record[f"correct_answer_{n}"] = answer.get("correct_answer", "")
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
     else:  # Descriptive
-        record["math_keyboard"] = candidate["math_keyboard"]
+        record["math_keyboard"] = candidate.get("math_keyboard", "")
         record["display_answer"] = candidate.get("display_answer", "")
-        if len(answers) > MAX_DESCRIPTIVE_ANSWERS:
-            raise WorkbookRenderError(
-                f"{record['question_label']}: more than "
-                f"{MAX_DESCRIPTIVE_ANSWERS} answer blocks")
-        for n, answer in enumerate(answers, start=1):
+        for n, answer in enumerate(
+            _cap("answers", answers, MAX_DESCRIPTIVE_ANSWERS), start=1
+        ):
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
@@ -261,20 +324,18 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
             s for s in candidate.get("sub_questions") or []
             if isinstance(s, Mapping)
         ]
-        if len(sub_questions) > MAX_SUBQUESTIONS:
-            raise WorkbookRenderError(
-                f"{record['question_label']}: more than "
-                f"{MAX_SUBQUESTIONS} subquestions")
-        for n, sub in enumerate(sub_questions, start=1):
+        for n, sub in enumerate(
+            _cap("sub_questions", sub_questions, MAX_SUBQUESTIONS), start=1
+        ):
             record[f"sub_question_{n}"] = sub.get("text", "")
             record[f"sub_question_marks_{n}"] = sub.get("marks", "")
-            keywords = [
-                k for k in sub.get("keywords") or [] if isinstance(k, Mapping)
-            ]
-            if len(keywords) > MAX_SUBQUESTION_KEYWORDS:
-                raise WorkbookRenderError(
-                    f"{record['question_label']}: subquestion {n} has more "
-                    f"than {MAX_SUBQUESTION_KEYWORDS} keyword slots")
+            keywords = _cap(
+                f"sub_questions[{n}].keywords",
+                [
+                    k for k in sub.get("keywords") or []
+                    if isinstance(k, Mapping)
+                ],
+                MAX_SUBQUESTION_KEYWORDS)
             for m, keyword in enumerate(keywords, start=1):
                 record[f"sq{n}_answer_type_{m}"] = keyword.get(
                     "answer_type", "")
@@ -283,99 +344,133 @@ def _question_record(candidate: Mapping, sheet: str) -> dict:
     return record
 
 
-def _group_record_fields(group: Mapping, group_labels: list[str]) -> dict:
+def _group_record_fields(
+    group: Mapping, group_labels: list[str],
+    profile: Mapping | str | None = None,
+) -> dict:
     return {
         "group_name": group.get("group_name", ""),
         "group_display_name": group.get("group_display_name", ""),
         "group_description": group.get("semantic_description", ""),
-        "group_status": group.get("group_status", "Active"),
+        "group_status": group.get(
+            "group_status", assessment_profile.group_status(profile)),
         "group_type": group.get("group_type", ""),
         "group_question_labels": ", ".join(group_labels),
         "related_digicards": "",
     }
 
 
-def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
+def render_master_file(
+    snapshot: Mapping, profile: Mapping | str | None = None,
+) -> tuple[bytes, dict]:
     """Render the Master File; returns (bytes, issues manifest).
+
+    THIS FUNCTION RAISES NOTHING (spec-step8 T7.5/B4).  Its seven former
+    raises are gone.  Three of them (blank ``group_key``, duplicate
+    ``group_key``, invalid ``group_type``) already have a staging twin in
+    ``assessment_release.validate_group`` / ``duplicate_group_keys`` and a
+    second read-back twin in ``validate_master_file``; the other four are
+    named at staging by ``assessment_release.unresolved_question_homes`` as
+    ``group_concept_home_unknown``, ``group_home_unnamed``,
+    ``group_visible_name_mismatch`` and ``group_home_disagreement``.  A raise
+    here would cost NO WORKBOOK FOR ANY OF THE FOUR OUTPUTS while the same
+    verdict is already recorded on the release and already refuses the
+    database write.
 
     Nothing disappears: a candidate whose placement never resolved to a
     concept/group cannot be positioned in the hierarchy, so it is recorded
     in the issues manifest (spec §13.3 keeps the full ledger in the release
-    manifest, never an unrecognized extra sheet).
+    manifest, never an unrecognized extra sheet); a group the renderer
+    cannot place is recorded in ``issues["group_defects"]`` for the same
+    reason.
     """
+    forced_blank = assessment_profile.forced_blank_fields(profile)
     concept_entries = {
         str(entry["concept"].get("concept_key") or ""): entry
         for entry in _concept_rows(snapshot)
     }
+    concept_order = [
+        str(entry["concept"].get("concept_key") or "")
+        for entry in _concept_rows(snapshot)
+    ]
     groups = [dict(g) for g in snapshot.get("groups") or []]
+    group_defects: list[dict] = []
+
+    def _group_defect(group_key: str, code: str, message: str) -> None:
+        group_defects.append(
+            {"group_key": group_key, "code": code, "message": message})
+
     groups_by_key: dict[str, dict] = {}
+    renderable_groups: list[dict] = []
     for group in groups:
         group_key = str(group.get("group_key") or "")
         if not group_key:
-            raise WorkbookRenderError("group_key must not be blank")
+            _group_defect(
+                "", rel.GROUP_KEY_BLANK,
+                "group_key must not be blank")
+            continue
         if group_key in groups_by_key:
-            raise WorkbookRenderError(
+            _group_defect(
+                group_key, rel.GROUP_KEY_DUPLICATE,
                 f"duplicate group_key {group_key!r}")
+            continue
         groups_by_key[group_key] = group
-    for group_key, group in groups_by_key.items():
         concept_key = str(group.get("concept_key") or "")
         concept_entry = concept_entries.get(concept_key)
         if concept_entry is None:
-            raise WorkbookRenderError(
+            # No hierarchy row to hang a catalogue row off. Named at
+            # staging as ``group_concept_home_unknown``; recorded here.
+            _group_defect(
+                group_key, rel.GROUP_CONCEPT_HOME_UNKNOWN,
                 f"group {group_key!r} has unknown concept home "
                 f"{concept_key!r}")
-        concept_name = str(
-            concept_entry["concept"].get("concept_display_name") or ""
-        ).strip()
-        if not concept_name:
-            raise WorkbookRenderError(
-                f"group {group_key!r} home {concept_key!r} has no explicit "
-                "concept_display_name")
-        tier = str(group.get("group_type") or "")
-        if tier not in rel.GROUP_TYPES:
-            raise WorkbookRenderError(
-                f"group {group_key!r} has invalid group_type {tier!r}")
-        visible_name = f"{concept_name} — {tier}"
-        if (
-            str(group.get("group_name") or "") != visible_name
-            or str(group.get("group_display_name") or "") != visible_name
-        ):
-            raise WorkbookRenderError(
-                f"group {group_key!r} visible names must both equal "
-                f"{visible_name!r}")
+            continue
+        renderable_groups.append(group)
     candidates = [dict(c) for c in snapshot.get("candidates") or []]
 
+    sheets_by_kind = sheet_for_kind()
+    renderable = tuple(sheets_by_kind)
+    profile_name = assessment_profile.name(profile)
+
     # Complete ordered label aggregates (spec §8.4).
+    #
+    # The three "can this candidate be written to a data row" branches are
+    # NOT re-discovered here: ``assessment_release.candidate_home_finding``
+    # is the one implementation and the staged verdict calls the same
+    # function on the same four inputs (T1). Two inline copies had already
+    # drifted on the renderable set — see that function's docstring.
     concept_labels: dict[str, list[str]] = {}
     group_labels: dict[str, list[str]] = {}
     unplaced: list[dict] = []
-    placed: list[dict] = []
+    placed: list[tuple[dict, dict | None]] = []
+
+    def _record_unplaced(candidate: Mapping, finding: Mapping) -> None:
+        unplaced.append({
+            "candidate_id": finding["candidate_id"],
+            "question_label": finding["question_label"],
+            "code": finding["code"],
+            "reason": finding["message"],
+            "flags": list(candidate.get("flags") or []),
+        })
+
     for candidate in candidates:
         concept_key = str(candidate.get("concept_key") or "")
         group_key = str(candidate.get("group_key") or "")
         label = str(candidate.get("question_label") or "")
-        if (
-            concept_key not in concept_entries
-            or group_key not in groups_by_key
-            or not label
-        ):
-            unplaced.append({
-                "candidate_id": str(candidate.get("candidate_id") or ""),
-                "question_label": label,
-                "reason": "unresolved home concept/group placement",
-                "flags": list(candidate.get("flags") or []),
-            })
+        home = rel.candidate_home_finding(
+            candidate, concept_entries, groups_by_key, renderable,
+            profile_name)
+        if home is not None and home["code"] != rel.SHEET_KIND_NOT_RENDERABLE:
+            _record_unplaced(candidate, home)
             continue
-        group_concept_key = str(
-            groups_by_key[group_key].get("concept_key") or "")
-        if group_concept_key != concept_key:
-            identity = label or str(candidate.get("candidate_id") or "")
-            raise WorkbookRenderError(
-                f"{identity}: concept_key {concept_key!r} does not match "
-                f"group {group_key!r} home {group_concept_key!r}")
+        # A candidate whose HOME resolved still contributes its label to
+        # the ordered aggregates even when this step cannot render its
+        # sheet kind — the label is a fact about the concept and the group,
+        # not about which sheet the row lands on, and
+        # ``validate_master_file``'s read-back expects exactly this set.
         concept_labels.setdefault(concept_key, []).append(label)
         group_labels.setdefault(group_key, []).append(label)
-        placed.append(candidate)
+        placed.append((candidate, home))
 
     wb = _new_workbook()
     represented_groups: set[str] = set()
@@ -385,12 +480,14 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
         sheet: str, group_key: str, record: Mapping[str, Any],
     ) -> None:
         ws = wb[sheet]
-        ws.append(_row_values(sheet, record))
+        ws.append(_row_values(sheet, record, forced_blank))
         group_provenance.append({
             "sheet": sheet,
             "row": ws.max_row,
             "group_key": group_key,
         })
+
+    truncated: list[dict] = []
 
     def _full_record(candidate: Mapping, sheet: str) -> dict:
         concept_key = str(candidate.get("concept_key") or "")
@@ -400,52 +497,97 @@ def render_master_file(snapshot: Mapping) -> tuple[bytes, dict]:
         record["concept_question_labels"] = ", ".join(
             concept_labels.get(concept_key, []))
         record.update(_group_record_fields(
-            groups_by_key[group_key], group_labels.get(group_key, [])))
-        record.update(_question_record(candidate, sheet))
+            groups_by_key[group_key], group_labels.get(group_key, []),
+            profile))
+        record.update(
+            _question_record(candidate, sheet, profile, truncated=truncated))
         return record
 
-    sheet_for_kind = {"objective": "Objective", "descriptive": "Descriptive"}
     question_rows = 0
-    for candidate in placed:
-        kind = str(candidate.get("sheet_kind") or "")
-        sheet = sheet_for_kind.get(kind)
-        if sheet is None:
-            # The reference profile emits no Subjective data rows.
-            unplaced.append({
-                "candidate_id": str(candidate.get("candidate_id") or ""),
-                "question_label": str(candidate.get("question_label") or ""),
-                "reason": f"sheet kind {kind!r} has no MES data sheet",
-                "flags": list(candidate.get("flags") or []),
-            })
+    placed_by_concept: dict[str, int] = {}
+    for candidate, home in placed:
+        if home is not None:
+            # A kind this step cannot render. Named at staging as
+            # ``sheet_kind_not_renderable``, carrying the kind, the profile
+            # name and the renderable set — never a school's name. The
+            # verdict is ``candidate_home_finding``'s, not a second copy.
+            _record_unplaced(candidate, home)
             continue
+        sheet = sheets_by_kind[str(candidate.get("sheet_kind") or "")]
         group_key = str(candidate.get("group_key") or "")
         _append_group_row(
             sheet, group_key, _full_record(candidate, sheet))
         question_rows += 1
         represented_groups.add(group_key)
+        concept_key = str(candidate.get("concept_key") or "")
+        placed_by_concept[concept_key] = (
+            placed_by_concept.get(concept_key, 0) + 1)
 
-    # Group catalogue rows: every created group not otherwise represented by
-    # a question row — required empty shells included — appears once on the
-    # Objective sheet (the catalogue carrier), Question band blank. This is
-    # also what keeps questionless concepts in the Master (spec §10).
-    for group in groups:
+    # Group catalogue rows: every created group whose concept has at least
+    # one placed question row and which no question row represents appears
+    # once on the Objective sheet (the catalogue carrier), Question band
+    # blank. A concept with NO placed rows gets one tail row below instead
+    # (OWNER RULING OD5 / spec-step8 T16).
+    for group in renderable_groups:
         group_key = str(group.get("group_key") or "")
         if group_key in represented_groups:
             continue
         concept_key = str(group.get("concept_key") or "")
+        if not placed_by_concept.get(concept_key):
+            continue
         entry = concept_entries[concept_key]
         record = _bands_record(entry)
         record["concept_question_labels"] = ", ".join(
             concept_labels.get(concept_key, []))
         record.update(_group_record_fields(
-            group, group_labels.get(group_key, [])))
+            group, group_labels.get(group_key, []), profile))
         _append_group_row("Objective", group_key, record)
+
+    # OWNER RULING OD5: "the Master should contain everything (including the
+    # concepts that have no questions … so they should appear in the end
+    # till concepts columns)". Exactly ONE row per questionless concept, no
+    # Group-band update at all, appended LAST in the snapshot's own concept
+    # order. The payload keeps its BG01/IG01/AG01 shells — they are group
+    # structure the grouping lane and step 9's edit surface read — so the
+    # payload and the workbook differ, and that difference is RECORDED here
+    # rather than being silent (R4).
+    questionless: list[dict] = []
+    shells_by_concept: dict[str, list[str]] = {}
+    for group in renderable_groups:
+        shells_by_concept.setdefault(
+            str(group.get("concept_key") or ""), []
+        ).append(str(group.get("group_key") or ""))
+    for concept_key in concept_order:
+        if placed_by_concept.get(concept_key):
+            continue
+        entry = concept_entries[concept_key]
+        record = _bands_record(entry)
+        record["concept_question_labels"] = ""
+        wb["Objective"].append(
+            _row_values("Objective", record, forced_blank))
+        questionless.append({
+            "concept_key": concept_key,
+            "concept_machine_id": str(
+                entry["concept"].get("concept_machine_id") or ""),
+            "concept_title": str(
+                entry["concept"].get("concept_title") or ""),
+            "shell_group_keys": shells_by_concept.get(concept_key, []),
+        })
 
     issues = {
         "unplaced": unplaced,
         "placed_questions": question_rows,
         "groups": len(groups),
         "group_provenance": group_provenance,
+        "questionless_concepts": questionless,
+        "group_defects": group_defects,
+        # What the layout had no slot for. The row SHIPS truncated (that is
+        # what stops a raise costing all four outputs) and the loss is named
+        # at staging as ``render_shape_overflow``, which refuses the
+        # database write — but a reviewer reading only ``manifest.json`` saw
+        # a complete-looking six-option row with no sign an option was
+        # dropped. R4: the silence was the defect.
+        "truncated_rows": truncated,
     }
     return _workbook_bytes(wb), issues
 
@@ -707,7 +849,10 @@ def _descriptive_marking_errors(
     return errors
 
 
-def validate_concept_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
+def validate_concept_file(
+    parsed: Mapping, snapshot: Mapping,
+    profile: Mapping | str | None = None,
+) -> list[str]:
     errors = _header_errors(parsed)
     if errors:
         return errors
@@ -721,13 +866,18 @@ def validate_concept_file(parsed: Mapping, snapshot: Mapping) -> list[str]:
         errors.append(
             f"concept rows differ: expected {len(expected)}, "
             f"got {len(actual)} (or out of source order)")
+    # The must-keep-blank list reads the SAME profile key the renderer's
+    # ``_row_values`` reads (spec-step8 T12/M4), so the read-back gate and
+    # the renderer can never disagree about what ships blank.
+    must_be_blank = (
+        "group_name", "group_type", "question_label", "question",
+        "basic_groups", "intermediate_groups", "advanced_groups",
+        "concept_question_labels",
+        *assessment_profile.forced_blank_fields(profile),
+    )
     for i, row in enumerate(rows, start=3):
         populated = [
-            field for field in (
-                "group_name", "group_type", "question_label", "question",
-                "basic_groups", "intermediate_groups", "advanced_groups",
-                "concept_question_labels", "chapter_duration",
-            )
+            field for field in must_be_blank
             if str(row.get(field) or "").strip()
         ]
         if populated:
@@ -748,11 +898,12 @@ def validate_master_file(
     errors = _header_errors(parsed)
     if errors:
         return errors
-    if not profile["allow_subjective_rows"] and (
+    if "subjective" not in assessment_profile.sheet_kinds(profile) and (
         parsed["sheets"]["Subjective"]["rows"]
     ):
         errors.append(
-            f"Subjective: profile {profile['name']!r} allows no data rows")
+            "Subjective: profile "
+            f"{assessment_profile.name(profile)!r} allows no data rows")
 
     groups = [dict(g) for g in snapshot.get("groups") or []]
     groups_by_key: dict[str, dict] = {}
@@ -764,7 +915,6 @@ def validate_master_file(
             errors.append(f"snapshot contains duplicate group_key {group_key!r}")
         else:
             groups_by_key[group_key] = group
-    expected_group_keys = set(groups_by_key)
     keys_by_visible_name: dict[str, list[str]] = {}
     for group_key, group in groups_by_key.items():
         group_name = str(group.get("group_name") or "")
@@ -804,6 +954,12 @@ def validate_master_file(
     }
     concept_keys = set(concept_entries)
     expected_group_labels: dict[str, list[str]] = {}
+    # The same count the renderer used: how many question rows each concept
+    # actually places. A concept with none gets ONE tail row stopping at the
+    # concept columns (OD5/T16) and no Group row at all, so demanding a Group
+    # row for it would turn every questionless concept into an error.
+    placed_by_concept: dict[str, int] = {}
+    renderable_sheets = sheet_for_kind()
     for candidate in snapshot.get("candidates") or []:
         concept_key = str(candidate.get("concept_key") or "")
         group_key = str(candidate.get("group_key") or "")
@@ -822,6 +978,13 @@ def validate_master_file(
                     f"{group_concept_key!r}")
                 continue
             expected_group_labels.setdefault(group_key, []).append(label)
+            if str(candidate.get("sheet_kind") or "") in renderable_sheets:
+                placed_by_concept[concept_key] = (
+                    placed_by_concept.get(concept_key, 0) + 1)
+    expected_group_keys = {
+        group_key for group_key, group in groups_by_key.items()
+        if placed_by_concept.get(str(group.get("concept_key") or ""))
+    }
 
     seen_group_keys: set[str] = set()
     seen_concepts: set[str] = set()
@@ -905,10 +1068,11 @@ def validate_master_file(
                 continue
             question_rows += 1
             appears = str(row.get("question_appears_in") or "")
-            if appears != profile["appears_in"]:
+            wire = assessment_profile.appears_in(profile)
+            if appears != wire:
                 errors.append(
                     f"{label}: question_appears_in {appears!r} is not the "
-                    f"profile wire value {profile['appears_in']!r}")
+                    f"profile wire value {wire!r}")
             restriction = str(row.get("answer_restriction") or "")
             if restriction not in rel.ANSWER_RESTRICTIONS:
                 errors.append(
@@ -978,15 +1142,15 @@ def build_dual_output(
     snapshot. Returns concepts/master bytes plus the shared manifest."""
     profile = assessment_profile.resolve(profile)
     snapshot_hash = snapshot_sha256(snapshot)
-    concepts_bytes = render_concept_file(snapshot)
-    master_bytes, issues = render_master_file(snapshot)
+    concepts_bytes = render_concept_file(snapshot, profile)
+    master_bytes, issues = render_master_file(snapshot, profile)
     concept_errors = validate_concept_file(
-        parse_workbook(concepts_bytes), snapshot)
+        parse_workbook(concepts_bytes), snapshot, profile)
     master_errors = validate_master_file(
         parse_workbook(master_bytes), snapshot, profile,
         group_provenance=issues["group_provenance"])
     manifest = {
-        "profile": profile["name"],
+        "profile": assessment_profile.name(profile),
         "template_source": MANIFEST.get("source", ""),
         "concept_snapshot_sha256": snapshot_hash,
         "workbook_sha256s": {

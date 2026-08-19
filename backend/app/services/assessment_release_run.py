@@ -683,9 +683,9 @@ def _bind_explicit_cells(
         cells,
         strict_profile=True,
     )
-    # Slice 3 cannot widen the existing Output-02 wire.  A future profile may
-    # support Subjective only when materialization and publication do too.
-    allowed_kinds = tuple(rel.SHEET_KINDS)
+    # The profile answers this, through the one accessor (spec-step8
+    # T12/M5b).
+    allowed_kinds = assessment_profile.sheet_kinds(profile)
     defects: list[str] = []
     appears_in = str(profile.get("appears_in") or "").strip()
     if not appears_in:
@@ -886,7 +886,7 @@ def _bind_generated_cells(
     defects: list[str] = []
     if not appears_in:
         defects.append("assessment profile has no appears_in value")
-    allowed_kinds = tuple(rel.SHEET_KINDS)
+    allowed_kinds = assessment_profile.sheet_kinds(profile)
 
     cells: list[dict] = []
     seen_question_ids: set[str] = set()

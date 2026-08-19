@@ -93,6 +93,16 @@ RELEASE_ROW_ROUTES_FIELD = "_aegis_release_type_case_routes"
 RELEASE_ROW_REFINED_FIELD = "_aegis_release_refined"
 RELEASE_ROW_LANE_FIELD = "_aegis_release_lane"
 PRE_ROW_GENERATED_QUESTIONS_FIELD = "_aegis_pre_generated_questions"
+# OD3/T3.3: the Pre row's ``related_concepts`` CONTENT — the resolved,
+# persisted Post ``machine_id``s this pre-concept is needed for. Resolved
+# at STAGING (there is no durable Post identity to join on at render time,
+# and a title join is forbidden by T11.2), stamped here, read by the
+# renderer, and lifted onto the DB column at publication so the column does
+# not empty the moment a reviewer clicks Upload (T3.3b).
+PRE_ROW_RELATED_CONCEPTS_FIELD = "_aegis_pre_related_concepts"
+# A link that does not resolve is a RECORDED REVIEW FLAG on the row, never
+# a blank and never a block (T3.3).
+PRE_ROW_RELATED_UNRESOLVED_FIELD = "_aegis_pre_related_concepts_unresolved"
 
 _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_STATUS_FIELD,
@@ -122,10 +132,23 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # phase3/premap.py): the captured prerequisites a pre-concept teaches,
     # and its explicit needed-for links to the Post concepts that require
     # it. Both ride the release for the reviewer's audit and are stripped
-    # before DB upload; their column home is step 8's related_concepts
-    # (Q5), and neither adds a house-format section.
+    # before DB upload. CORRECTED (spec-step8 T3.3): only ONE of the two
+    # has ``related_concepts`` as its column home. ``_aegis_needed_for``
+    # does — resolved to persisted Post ``machine_id``s at Pre staging and
+    # carried on ``PRE_ROW_RELATED_CONCEPTS_FIELD`` below.
+    # ``_aegis_pre_prerequisites`` does NOT: it is
+    # ``{prerequisite_id, text}``, copied provenance prose rather than a
+    # label, and putting prose in a join column would corrupt the join.
     "_aegis_pre_prerequisites",
     "_aegis_needed_for",
+    # The RESOLVED form of ``_aegis_needed_for``: the persisted Post
+    # ``machine_id``s this Pre concept is needed for, newline-joined
+    # (concept titles legitimately contain commas). Publication LIFTS it
+    # into an explicit ``related_concepts`` key before this frozenset is
+    # applied — see ``_lift_resolved_related_concepts`` — because
+    # ``_strip_release_fields`` drops every key here by construction.
+    "_aegis_pre_related_concepts",
+    "_aegis_pre_related_concepts_unresolved",
     # Assessment grouping verdicts (step 6): private release audit carried by
     # candidates/groups and stripped before concept-row database publication.
     # The assessment renderer has no visible slots for these records.
@@ -2154,6 +2177,99 @@ def _account_for_source_identity(
     return payload
 
 
+# --------------------------------------------------------------------------- #
+# T3.3 — the Pre lane's ``related_concepts`` content, resolved at staging
+# --------------------------------------------------------------------------- #
+
+def _post_machine_ids_by_concept_id(db, job) -> dict[str, tuple[str, str]]:
+    """``CONCEPT-%04d`` → (persisted Post ``machine_id``, concept title).
+
+    ``phase3.place.mint_concept_ids`` mints those ids POSITIONALLY over the
+    settled+created row list, and the Post release records are that list in
+    that order. So the join is positional bookkeeping, not a title match
+    (T11.2 forbids the latter) — and the recorded ``post_concept_title`` is
+    used only to CONFIRM the position, never to find it.
+
+    Never raises: a job with no staged Post release resolves nothing, every
+    link becomes a recorded review flag, and the Pre lane still ships.
+    """
+
+    from . import build_concepts_release_files as release_files
+
+    try:
+        post = release_payload(job, lane=LANE_POST)
+        if not post:
+            return {}
+        _chapter, concepts, records = (
+            release_files.transient_release_hierarchy(db, job, payload=post))
+    except Exception:  # noqa: BLE001 - the Pre lane never blocks on this
+        return {}
+    resolved: dict[str, tuple[str, str]] = {}
+    for position, (concept, record) in enumerate(
+        zip(concepts, records), start=1
+    ):
+        machine_id = str(getattr(concept, "machine_id", "") or "")
+        if not machine_id:
+            continue
+        title = str(
+            record.get("concept_title") or record.get("concept") or "")
+        resolved[f"CONCEPT-{position:04d}"] = (machine_id, title)
+    return resolved
+
+
+def _resolve_needed_for(
+    row: Mapping[str, Any], post_ids: Mapping[str, tuple[str, str]],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Return (resolved machine ids, unresolved links) for one Pre row."""
+
+    resolved: list[str] = []
+    unresolved: list[dict[str, Any]] = []
+    for link in row.get("_aegis_needed_for") or []:
+        if not isinstance(link, Mapping):
+            continue
+        concept_id = _normal(link.get("post_concept_id"))
+        recorded_title = _normal(link.get("post_concept_title"))
+        entry = post_ids.get(concept_id)
+        if entry is None:
+            unresolved.append({
+                "post_concept_id": concept_id,
+                "post_concept_title": recorded_title,
+                "reason": "no Post concept was staged under this id",
+            })
+            continue
+        machine_id, title = entry
+        if recorded_title and _normal(title) != recorded_title:
+            # The position and the recorded identity disagree. Never
+            # guessed silently: the link becomes a review flag on the row.
+            unresolved.append({
+                "post_concept_id": concept_id,
+                "post_concept_title": recorded_title,
+                "reason": (
+                    f"the Post concept staged at this position is "
+                    f"{title!r}"),
+            })
+            continue
+        if machine_id not in resolved:
+            resolved.append(machine_id)
+    return resolved, unresolved
+
+
+def _lift_resolved_related_concepts(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Lift the resolved marker onto an explicit ``related_concepts`` key.
+
+    Called at publication, BEFORE ``_strip_release_fields`` (T3.3b): the
+    marker is a registered audit field, so the strip drops it by
+    construction and the column would empty at exactly the moment the
+    reviewer publishes.
+    """
+
+    lifted = dict(row)
+    resolved = str(lifted.get(PRE_ROW_RELATED_CONCEPTS_FIELD) or "")
+    if resolved:
+        lifted["related_concepts"] = resolved
+    return lifted
+
+
 def stage_pre_release(
     db: Session,
     job: models.UploadJob,
@@ -2225,6 +2341,11 @@ def stage_pre_release(
             if isinstance(row, Mapping)
         ]
     generated: list[dict[str, Any]] = []
+    # T3.3: resolve every ``_aegis_needed_for[].post_concept_id`` against
+    # the POST payload staged in the SAME run. ``_stage_pre_sibling`` runs
+    # after the Post release is staged and both slots hang off this one
+    # job, so the identity exists here and exists nowhere earlier.
+    post_ids = _post_machine_ids_by_concept_id(db, job)
     for row in raw_rows:
         pre_concept_id = _normal(row.get("_pre_concept_id"))
         authored = questions_by_concept.get(pre_concept_id) or []
@@ -2232,6 +2353,9 @@ def stage_pre_release(
         row[PRE_ROW_GENERATED_QUESTIONS_FIELD] = [
             _normal(entry.get("pre_question_id")) for entry in authored
         ]
+        resolved, unresolved = _resolve_needed_for(row, post_ids)
+        row[PRE_ROW_RELATED_CONCEPTS_FIELD] = "\n".join(resolved)
+        row[PRE_ROW_RELATED_UNRESOLVED_FIELD] = unresolved
         generated.extend(copy.deepcopy(entry) for entry in authored)
 
     issues = _pre_release_issues(

@@ -209,7 +209,16 @@ def build(
                 topic.topic_display_name or topic.topic_title or ""
             ),
             "pre_post_learning": str(topic.pre_post_learning or ""),
-            "topic_concept_labels": "",
+            # §6:509-512's Topic→Concept join, filled on 23/23 populated
+            # gold rows and hard-coded "" here until now (spec-step8 T3.7).
+            # Composed off the SHARED ``identity.titled`` over this topic's
+            # own concept rows, so the roster reads exactly as each
+            # concept's own title cell does.
+            "topic_concept_labels": ", ".join(
+                identity.titled(
+                    row["concept_title"], row["concept_machine_id"])
+                for row in rows_by_topic_object[marker]
+            ),
             "related_topics": str(topic.related_topics or ""),
             "topic_description": str(topic.topic_description or ""),
             "concepts": rows_by_topic_object[marker],
@@ -224,6 +233,11 @@ def build(
             "chapter_display_name": str(
                 chapter.chapter_display_name or chapter.chapter_title or ""
             ),
+            # Carried, not omitted (spec-step8 T12/M4): the profile's
+            # ``forced_blank_fields`` decides whether it ships, and a key
+            # the snapshot never carries leaves that lever with nothing to
+            # un-blank.
+            "chapter_duration": str(chapter.chapter_duration or ""),
             "pre_topics": str(chapter.pre_topics or ""),
             "post_topics": str(chapter.post_topics or ""),
             "chapter_description": str(chapter.chapter_description or ""),

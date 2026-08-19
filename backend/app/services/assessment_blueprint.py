@@ -16,6 +16,7 @@ import hashlib
 import math
 from typing import Iterable, Mapping
 
+from . import assessment_profile
 from . import assessment_release as rel
 
 # Legacy Build-Assessments sheet kinds. A strict assessment profile (e.g.
@@ -97,7 +98,10 @@ def validate_cells(cells: list[dict], *, strict_profile: bool = False) -> None:
     """
     errors: list[str] = []
     seen_ids: set[str] = set()
-    allowed_kinds = rel.SHEET_KINDS if strict_profile else LEGACY_SHEET_KINDS
+    allowed_kinds = (
+        assessment_profile.sheet_kinds() if strict_profile
+        else LEGACY_SHEET_KINDS
+    )
     for cell in cells:
         cell_id = str(cell.get("cell_id") or "")
         if not cell_id:
