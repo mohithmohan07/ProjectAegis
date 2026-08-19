@@ -1193,30 +1193,29 @@ def _sync_chapter_topic_summary(
                 # concepts are moved between topics.
                 t.topic_description = "Covers " + ", ".join(names) + "."
 
-    n_concepts = sum(
-        sum(
-            1 for concept in topic.concepts
-            if not active_concept_ids or concept.id in active_concept_ids
-        )
-        for topic in topics
-    )
+    # PURGED (Rule 1, CLAUDE.md:17-18), atomically with spec-step8 S8's
+    # ``forced_blank_fields`` lever. Two code-composed fallbacks used to
+    # sit here and both were VOLUME-DERIVED STRUCTURE:
+    #
+    #   chapter_description = f"This chapter develops {n_concepts}
+    #       concept(s) across {len(topics)} topic(s): {topic_names}."
+    #   chapter_duration    = f"{max(40, n_concepts * 12)} minutes"
+    #       # "Rough classroom estimate: ~12 minutes per concept"
+    #
+    # Neither reads the book; both scale a learner-visible cell off a
+    # count. They were invisible while ``chapter_duration`` shipped
+    # force-blanked — un-blanking it through the profile without purging
+    # them first would have shipped a manufactured number to every school,
+    # a Rule-1 regression introduced by a portability fix. A chapter whose
+    # description or duration nothing authored now ships BLANK, which is
+    # honest, rather than filled with arithmetic dressed as content.
     if meta_summary.get("chapter_description"):
         chapter.chapter_description = meta_summary["chapter_description"]
-    elif _is_blank(chapter.chapter_description) and topics:
-        topic_names = ", ".join(
-            bi.strip_topic_title(t.topic_title) or t.topic_title for t in topics)
-        chapter.chapter_description = (
-            f"This chapter develops {n_concepts} concept(s) across "
-            f"{len(topics)} topic(s): {topic_names}."
-        )
     finalized = _parse_duration_minutes(chapter.chapter_duration)
     if finalized:
         chapter.chapter_duration = f"{finalized} minutes"
     elif meta_summary.get("chapter_duration_minutes") and _is_blank(chapter.chapter_duration):
         chapter.chapter_duration = f"{meta_summary['chapter_duration_minutes']} minutes"
-    elif _is_blank(chapter.chapter_duration) and n_concepts:
-        # Rough classroom estimate: ~12 minutes of instruction per concept.
-        chapter.chapter_duration = f"{max(40, n_concepts * 12)} minutes"
 
 
 # --------------------------------------------------------------------------- #

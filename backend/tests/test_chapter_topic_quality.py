@@ -650,7 +650,24 @@ def test_sync_chapter_topic_summary_preserves_finalized_duration(db):
     assert chapter.chapter_duration == "160 minutes"
 
 
-def test_sync_chapter_topic_summary_falls_back_without_meta(db):
+def test_sync_chapter_topic_summary_authors_nothing_without_meta(db):
+    """INVERTED by the Rule-1 purge atomic with spec-step8 S8.
+
+    Two code-composed fallbacks used to fill these cells when nothing
+    authored them: ``f"This chapter develops {n_concepts} concept(s)
+    across {len(topics)} topic(s): …"`` and
+    ``f"{max(40, n_concepts * 12)} minutes"``. Both are VOLUME-DERIVED
+    STRUCTURE (CLAUDE.md:17-18) — neither reads the book; both scale a
+    learner-visible cell off a count. They were invisible while
+    ``chapter_duration`` shipped force-blanked, and un-blanking it through
+    the profile without purging them first would have shipped a
+    manufactured number to every school.
+
+    A chapter nothing authored a description or a duration for now ships
+    BLANK, which is honest. The TOPIC roster below is unchanged: it is a
+    list of the concepts actually present, not a number derived from how
+    many there are.
+    """
     chapter = models.Chapter(
         chapter_code="10CBMA_MetaF", board="CBSE", grade="10",
         subject="Mathematics", unit="Mathematics Unit",
@@ -671,8 +688,8 @@ def test_sync_chapter_topic_summary_falls_back_without_meta(db):
     db.commit()
 
     build_concepts._sync_chapter_topic_summary(chapter)
-    assert chapter.chapter_description
-    assert chapter.chapter_duration.endswith("minutes")
+    assert not (chapter.chapter_description or "")
+    assert not (chapter.chapter_duration or "")
     assert topic.topic_description == "Covers A."
 
 
