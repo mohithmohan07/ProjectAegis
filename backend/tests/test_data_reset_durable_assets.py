@@ -339,6 +339,121 @@ def test_malformed_names_are_still_refused(client, tmp_path, monkeypatch):
         source_asset_store.stored_asset_path("notahash.jpg")
 
 
+def test_boot_sweep_survives_a_per_crop_failure(tmp_path, monkeypatch, caplog):
+    job_root = _isolated_serving(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "UPLOAD_DIR", job_root)
+    poison = b"crop that cannot be pinned"
+    survivor = CONTENT
+    for job, data in (("1", poison), ("2", survivor)):
+        asset_dir = job_root / job / fallback.ASSET_DIRNAME
+        asset_dir.mkdir(parents=True)
+        (asset_dir / _hash_name(data)).write_bytes(data)
+
+    real_pin = source_asset_store.pin_asset
+
+    def flaky_pin(data, **kwargs):
+        if data == poison:
+            raise OSError("disk error")
+        return real_pin(data, **kwargs)
+
+    monkeypatch.setattr(fallback.source_asset_store, "pin_asset", flaky_pin)
+
+    with caplog.at_level(
+        logging.WARNING, logger="app.services.canonical_source_phase221_fallback"
+    ):
+        pinned = fallback.pin_existing_job_assets()
+
+    # Job 1's failure is recorded and job 2 is still pinned.
+    assert pinned == 1
+    assert source_asset_store.stored_asset_path(_hash_name(survivor)).exists()
+    assert any("could not pin" in r.getMessage() for r in caplog.records)
+
+
+def test_serve_time_pin_records_a_hash_mismatch(client, tmp_path, monkeypatch, caplog):
+    job_root = _isolated_serving(tmp_path, monkeypatch)
+    claimed = "c" * 64 + ".jpg"
+    asset_dir = job_root / "7" / fallback.ASSET_DIRNAME
+    asset_dir.mkdir(parents=True)
+    (asset_dir / claimed).write_bytes(CONTENT)
+
+    with caplog.at_level(logging.WARNING, logger="app.api.source_assets"):
+        response = client.get(f"/source-assets/7/{claimed}")
+
+    assert response.status_code == 200
+    assert not source_asset_store.stored_asset_path(claimed).exists()
+    assert any(
+        "does not match its content hash" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_pin_asset_heals_corrupt_stored_bytes(tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    filename = source_asset_store.pin_asset(
+        CONTENT, job_id=4, asset_url="https://aegis.example/source-assets/4/x"
+    )
+    stored = source_asset_store.stored_asset_path(filename)
+    stored.write_bytes(b"rotted bytes")
+
+    with caplog.at_level(
+        logging.WARNING, logger="app.services.source_asset_store"
+    ):
+        again = source_asset_store.pin_asset(
+            CONTENT, job_id=4, asset_url="https://aegis.example/source-assets/4/x"
+        )
+
+    assert again == filename
+    assert stored.read_bytes() == CONTENT
+    assert any("re-pinned from fresh bytes" in r.getMessage() for r in caplog.records)
+
+
+def test_export_skips_corrupt_members_and_records_them(
+    client, tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    filename = source_asset_store.pin_asset(
+        CONTENT, job_id=5, asset_url="https://aegis.example/source-assets/5/x"
+    )
+    source_asset_store.stored_asset_path(filename).write_bytes(b"rotted bytes")
+
+    token = client.post("/admin/login", json={"password": "admin"}).json()["token"]
+    with caplog.at_level(logging.WARNING, logger="app.api.admin"):
+        response = client.get(
+            "/admin/source-asset-store/export", headers={"X-Admin-Token": token}
+        )
+
+    assert response.status_code == 200
+    with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as archive:
+        names = set(archive.getnames())
+    # The corrupt jpg stays out (restoring it would poison the store
+    # silently); its sidecar still records what should exist.
+    assert f"source-asset-store/{filename}" not in names
+    assert f"source-asset-store/{filename.removesuffix('.jpg')}.json" in names
+    assert any("bytes do not match" in r.getMessage() for r in caplog.records)
+
+
+def test_export_records_unpaired_assets(client, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    filename = _hash_name(CONTENT)
+    root = source_asset_store.store_root()
+    root.mkdir(parents=True)
+    (root / filename).write_bytes(CONTENT)
+
+    token = client.post("/admin/login", json={"password": "admin"}).json()["token"]
+    with caplog.at_level(logging.WARNING, logger="app.api.admin"):
+        response = client.get(
+            "/admin/source-asset-store/export", headers={"X-Admin-Token": token}
+        )
+
+    assert response.status_code == 200
+    with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as archive:
+        names = set(archive.getnames())
+    # Bytes beat provenance: the asset ships, the missing sidecar is recorded.
+    assert f"source-asset-store/{filename}" in names
+    assert any(
+        "without its manifest sidecar" in r.getMessage() for r in caplog.records
+    )
+
+
 def test_admin_export_requires_auth_and_contains_the_store(
     client, tmp_path, monkeypatch
 ):

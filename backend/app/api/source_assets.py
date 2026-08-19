@@ -39,9 +39,18 @@ def source_asset(job_id: int, filename: str, sig: str = Query(default="")):
                     minted_url = fallback.asset_url(job_id, filename)
                 except ValueError:
                     minted_url = ""
-                source_asset_store.pin_asset(
+                stored_name = source_asset_store.pin_asset(
                     path.read_bytes(), job_id=int(job_id), asset_url=minted_url
                 )
+                if stored_name != filename:
+                    # Same record the boot sweep makes: bytes that no longer
+                    # match their content-hash name cannot heal this URL.
+                    logger.warning(
+                        "source asset %s in job %s does not match its "
+                        "content hash (stored as %s); its published URL "
+                        "stays job-bound",
+                        filename, int(job_id), stored_name,
+                    )
         except Exception:
             logger.warning(
                 "opportunistic pin failed for source asset %s", filename

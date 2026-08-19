@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import tarfile
 import tempfile
@@ -30,6 +31,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 _SALT = "aegis-admin-v1"
 _EXPORT_PREFIX = "aegis-asset-export-"
+_EXPORT_LOGGER = logging.getLogger(__name__)
 
 
 def _password() -> str:
@@ -128,6 +130,26 @@ def export_source_asset_store(x_admin_token: str | None = Header(default=None)):
                             # of the recovery package.
                             continue
                         try:
+                            if child.suffix == ".jpg":
+                                digest = hashlib.sha256(
+                                    child.read_bytes()
+                                ).hexdigest()
+                                if digest != child.stem:
+                                    # Restoring corrupt bytes under a hash
+                                    # name would poison the restored store
+                                    # silently; the hole stays visible.
+                                    _EXPORT_LOGGER.warning(
+                                        "source asset store export skipped "
+                                        "%s: bytes do not match the content "
+                                        "hash", child.name,
+                                    )
+                                    continue
+                                if not child.with_suffix(".json").exists():
+                                    _EXPORT_LOGGER.warning(
+                                        "source asset store export includes "
+                                        "%s without its manifest sidecar",
+                                        child.name,
+                                    )
                             archive.add(
                                 child,
                                 arcname=(

@@ -2208,31 +2208,50 @@ def pin_existing_job_assets() -> int:
         if not job_dir.is_dir() or not job_dir.name.isdigit():
             continue
         job_id = int(job_dir.name)
-        artifact_dir = (
-            helper(job_id) if helper is not None
-            else root / str(job_id) / canonical_source.ARTIFACT_DIRNAME
-        )
-        asset_dir = Path(artifact_dir) / ASSET_DIRNAME
-        if not asset_dir.is_dir():
-            continue
-        for crop in sorted(asset_dir.iterdir()):
-            if not crop.is_file() or not _BBOX_RE.fullmatch(crop.name):
-                continue
-            if (
-                source_asset_store.stored_asset_path(crop.name).exists()
-                and source_asset_store.manifest_path(crop.name).exists()
-            ):
-                continue
-            data = crop.read_bytes()
-            try:
-                url = asset_url(job_id, crop.name)
-            except ValueError:
-                # No public https origin configured (local runs); the hash is
-                # the identity, the URL is only provenance.
-                url = ""
-            stored_name = source_asset_store.pin_asset(
-                data, job_id=job_id, asset_url=url
+        try:
+            artifact_dir = (
+                helper(job_id) if helper is not None
+                else root / str(job_id) / canonical_source.ARTIFACT_DIRNAME
             )
+            asset_dir = Path(artifact_dir) / ASSET_DIRNAME
+            if not asset_dir.is_dir():
+                continue
+            crops = sorted(asset_dir.iterdir())
+        except Exception as exc:
+            _LOGGER.warning(
+                "source asset backfill could not read job %s (%s); "
+                "continuing with the remaining jobs",
+                job_id, exc,
+            )
+            continue
+        for crop in crops:
+            # One unreadable or unpinnable crop must not abandon the rest of
+            # the corpus: the boundary is per crop, recorded, never a halt.
+            try:
+                if not crop.is_file() or not _BBOX_RE.fullmatch(crop.name):
+                    continue
+                if (
+                    source_asset_store.stored_asset_path(crop.name).exists()
+                    and source_asset_store.manifest_path(crop.name).exists()
+                ):
+                    continue
+                data = crop.read_bytes()
+                try:
+                    url = asset_url(job_id, crop.name)
+                except ValueError:
+                    # No public https origin configured (local runs); the
+                    # hash is the identity, the URL is only provenance.
+                    url = ""
+                stored_name = source_asset_store.pin_asset(
+                    data, job_id=job_id, asset_url=url
+                )
+            except Exception as exc:
+                _LOGGER.warning(
+                    "source asset backfill could not pin %s in job %s (%s); "
+                    "continuing with the remaining assets",
+                    crop.name, job_id, exc,
+                )
+                continue
             if stored_name != crop.name:
                 # The file's bytes no longer match its content-hash name; the
                 # published URL for this name cannot be honestly backfilled.

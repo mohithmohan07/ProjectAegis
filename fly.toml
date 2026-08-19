@@ -30,6 +30,9 @@ primary_region = 'ams'
   # The volume is learner-facing infrastructure (Q8): published image URLs
   # resolve from it. Keep a month of daily snapshots instead of the 5-day
   # default so an operator can restore past a late-noticed loss.
+  # NOTE: this setting only applies to volumes fly deploy CREATES. An existing
+  # aegis_data volume must be updated once, out of band:
+  #   fly volumes update <volume-id> --snapshot-retention 30
   snapshot_retention = 30
 
 [http_service]

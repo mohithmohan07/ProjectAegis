@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -31,6 +32,8 @@ from pathlib import Path
 from typing import Any
 
 from .. import config
+
+_LOGGER = logging.getLogger(__name__)
 
 STORE_DIRNAME = "source-asset-store"
 
@@ -104,6 +107,15 @@ def pin_asset(
     filename = f"{hashlib.sha256(data).hexdigest()}.jpg"
     asset = stored_asset_path(filename)
     if not asset.exists():
+        _atomic_write_bytes(asset, data)
+    elif hashlib.sha256(asset.read_bytes()).hexdigest() != asset.stem:
+        # The stored bytes no longer match the name they live under (volume
+        # corruption, partial restore). We hold the correct bytes — their
+        # hash IS this name — so heal in place and record it.
+        _LOGGER.warning(
+            "stored source asset %s no longer matched its content hash; "
+            "re-pinned from fresh bytes", filename,
+        )
         _atomic_write_bytes(asset, data)
     sidecar = manifest_path(filename)
     if not sidecar.exists():

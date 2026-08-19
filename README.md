@@ -229,7 +229,7 @@ stores both runtime files and SQLite there. Create the encrypted volume once in
 the app's primary region before deploying this configuration:
 
 ```bash
-fly volumes create aegis_data --app projectaegis --region ams
+fly volumes create aegis_data --app projectaegis --region ams --snapshot-retention 30
 fly deploy --app projectaegis --ha=false
 ```
 
@@ -250,10 +250,15 @@ storage; the portable bundle remains the human-controlled backup.
 Published workbooks embed absolute image URLs that resolve from `/data`, so the
 volume's durability is part of the product (decision Q8). Three layers exist:
 
-- **Fly volume snapshots** — taken daily by Fly automatically; `fly.toml` pins
-  `snapshot_retention = 30`. Restore with
+- **Fly volume snapshots** — taken daily by Fly automatically. The
+  `snapshot_retention = 30` in `fly.toml` applies only to volumes that
+  `fly deploy` itself creates; it does NOT change a volume that already
+  exists. For the current production volume (or any volume created manually
+  without `--snapshot-retention`), an operator must run
+  `fly volumes update <volume-id> --snapshot-retention 30` once — until then
+  the volume keeps Fly's five-day default. Restore with
   `fly volumes snapshots list <volume-id>` and
-  `fly volumes create aegis_data --snapshot-id <id>`.
+  `fly volumes create aegis_data --snapshot-id <id> --snapshot-retention 30`.
 - **Durable asset store** — every image crop is pinned at creation into
   `/data/source-asset-store/` under its sha256 content hash, next to a JSON
   manifest entry per asset. The public route falls back to this store, so
