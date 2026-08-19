@@ -1781,7 +1781,12 @@ def _stage_concept_workbook(
             # ``append_concepts`` creates a canonical workbook when the path
             # does not exist.
             staged.unlink()
-        written = writer.append_concepts(db, staged, concept_ids)
+        # ``sibling_for`` only NAMES any retained pre-migration copy. Without
+        # it the copy inherits ``mkstemp``'s dot-hidden random stem, so the
+        # recorded recovery path points at a hidden file that does not say
+        # which workbook it came from and every run leaves a fresh orphan.
+        written = writer.append_concepts(
+            db, staged, concept_ids, sibling_for=target)
         return staged, written
     except Exception:
         staged.unlink(missing_ok=True)
@@ -4573,10 +4578,22 @@ def generate_post_learning(
         f"Created {len(created_ids)} post-learning concepts "
         f"({len(merged_ids)} merged).", level="success")
     progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
-    progress.log(
-        "Parent concept export: "
-        + ("parent_concept column" if written.get("parent_column") else "related_concepts fallback")
-    )
+    for issue in written.get("issues") or []:
+        # Recorded, flagged, and visible to the reviewer — never a halt (Q13).
+        progress.log(
+            f"Bulk Import workbook issue [{issue.get('code')}]: "
+            f"{issue.get('detail')}",
+            level="warning",
+        )
+    migration = written.get("layout_migration")
+    if migration:
+        progress.log(
+            "Migrated the output workbook from layout "
+            f"{migration.get('source_layout_id')} to "
+            f"{migration.get('target_layout_id')}; the pre-migration workbook "
+            f"is retained at {migration.get('sibling_path')}.",
+            level="warning",
+        )
     return {
         "job_id": job_id,
         "concepts_created": len(created_ids),
@@ -4589,4 +4606,11 @@ def generate_post_learning(
         "output_certificate_sha256": str(
             (deposited_grounding or {}).get("certificate_sha256") or ""
         ),
+        # Q16's recorded receipt and the issues it produced ride the run's own
+        # result: a migration that dropped a value is a release issue with a
+        # recorded Fixer decision, not a halt.
+        "workbook_issues": list(written.get("issues") or []),
+        "workbook_fixer_decisions": list(
+            written.get("fixer_decisions") or []),
+        "layout_migration": written.get("layout_migration"),
     }

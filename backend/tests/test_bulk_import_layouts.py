@@ -214,9 +214,36 @@ def test_the_canonical_layout_entries_are_frozen_literals_not_live_constants():
     assert len(no_qt.sheet("objective").fields) == 64
     assert "question_text" not in no_qt.sheet("objective").fields
 
-    # --- the two S7 flips ------------------------------------------------- #
-    assert list(objective.fields) == bi.FIELDS_BY_KIND["objective"]
-    assert objective.sheet_name == bi.SHEET_BY_KIND["objective"]
+    # --- the two S7 flips, now FLIPPED ------------------------------------ #
+    # S7 moved bi.FIELDS_BY_KIND / bi.SHEET_BY_KIND onto the owner's layout.
+    # These two inequalities ARE the pin that the frozen literals above stayed
+    # frozen: had the canonical entries been written as live references to
+    # those constants, they would have moved too, the canonical layout would
+    # have stopped being registered, and every older workbook would 422.
+    assert list(objective.fields) != bi.FIELDS_BY_KIND["objective"]
+    assert objective.sheet_name != bi.SHEET_BY_KIND["objective"]
+    assert bi.SHEET_BY_KIND["objective"] == "Objective"
+    # And the canonical layout is still registered and still reachable.
+    assert layouts.LAYOUTS["canonical-current"] is current
+
+
+def test_the_canonical_registry_entries_did_not_move_with_FIELDS_BY_KIND():
+    """S7's direct pin, stated once on its own so it cannot be lost in a diff.
+
+    ``layouts.CANONICAL_CURRENT`` is a frozen literal transcription. After S7
+    it must NOT equal ``bi.FIELDS_BY_KIND``; if it ever does, the entry was
+    re-derived and ``canonical-current`` has silently become the reference
+    layout.
+    """
+    canonical = layouts.CANONICAL_CURRENT.fields_by_kind()
+    for kind in ("objective", "subjective", "descriptive"):
+        assert list(canonical[kind]) != list(bi.FIELDS_BY_KIND[kind]), kind
+    assert layouts.CANONICAL_CURRENT.sheet_name_by_kind() != bi.SHEET_BY_KIND
+    # All four entries are registered, so an older workbook still identifies.
+    assert set(layouts.LAYOUTS) == {
+        layouts.REFERENCE_LAYOUT_ID, "canonical-current",
+        "canonical-no-question-text", "canonical-legacy-concept-band",
+    }
 
 
 def test_the_reference_entry_carries_the_measured_reference_geometry():

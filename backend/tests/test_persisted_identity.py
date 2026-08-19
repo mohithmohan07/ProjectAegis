@@ -137,7 +137,7 @@ def test_identity_is_persisted_not_rederived(db):
     assert concept.machine_id == minted
     assert writer._concept_field_value(
         concept, topic, "concept_title",
-        include_group_columns=False, parent_column_present=True,
+        include_group_columns=False,
     ) == f"Umbra and Penumbra, Renamed Entirely ({minted})"
 
 

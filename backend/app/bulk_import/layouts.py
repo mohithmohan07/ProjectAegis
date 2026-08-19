@@ -35,14 +35,17 @@ Two kinds of entry live here, and the difference is load-bearing:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
-from dataclasses import dataclass
+import shutil
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 import openpyxl
+from openpyxl.styles import Alignment, Font
 
 # --------------------------------------------------------------------------- #
 # Errors and recorded defects
@@ -68,12 +71,22 @@ _REGISTRY_DEFECTS: list[dict] = []
 
 
 def registry_defects() -> list[dict]:
-    """Defects recorded while BUILDING the registry (never a halt).
+    """Defects recorded while BUILDING the registry — recorded, not decided.
 
-    Today this carries ``layout_manifest_drift`` (the committed format
-    workbook and the template JSON disagree; the workbook won) and
-    ``layout_source_missing`` (the committed workbook is not on disk, so the
-    reference layout is not registered in this process).
+    Building the registry never halts on its own: it records what it found and
+    returns whatever it could register. Today that is ``layout_manifest_drift``
+    (the committed format workbook and the template JSON disagree; the workbook
+    won, and the drift is a recorded defect) and ``layout_source_missing`` (the
+    committed workbook is not on disk, so the reference layout is not
+    registered in this process).
+
+    What the CALLER does with a defect is the caller's contract, and the two
+    differ deliberately. ``layout_manifest_drift`` has an answer — the workbook
+    — so it stays a record. ``layout_source_missing`` leaves this package with
+    no column geometry at all, so ``bulk_import/__init__.py`` turns it into an
+    ``ImportError`` at import time: a pre-spend gate on a broken artifact, and
+    the opposite of the mid-run halt Q13 retired, which is a refusal to finish
+    work already paid for.
     """
     return [dict(defect) for defect in _REGISTRY_DEFECTS]
 
@@ -822,3 +835,476 @@ def identify_workbook(headers: Mapping[str, Sequence]) -> WorkbookIdentity:
             f"the rest of this workbook is layout {layout_id!r}",
         )
     return WorkbookIdentity(layout_id, tuple(identified), tuple(ignored))
+
+
+# --------------------------------------------------------------------------- #
+# Migrating a workbook from one registered layout to another (Q16 / T7.6)
+#
+# The SUBJECT is ``config.BULK_IMPORT_OUTPUT`` — the append-only generation
+# accumulator, gitignored runtime state on the deployed volume. It is NOT
+# ``backend/data/bulk_import_database.xlsx``, which nothing appends to and
+# which CI regenerates through this package's writer before every pytest run
+# (OWNER RULING OD2 / T7.6a). There is no fallback path, no second file and no
+# sequence-of-paths plumbing.
+#
+# This function NEVER RAISES on row content. ``writer.append_concepts`` is
+# reached from ``build_concepts.py`` inside a generation run that has already
+# spent its entire model budget, so a refusal here is the halt Q13 retired.
+# An unmappable non-blank value lands in the receipt's ``unmappable`` list and
+# becomes one recorded Fixer decision plus a release issue; the pre-migration
+# workbook is retained beside the target; the run completes.
+# --------------------------------------------------------------------------- #
+
+MIGRATION_UNMAPPABLE_VALUE = "layout_migration_unmappable_value"
+MIGRATION_DROPPED_SHEET = "layout_migration_dropped_sheet"
+
+
+@dataclass(frozen=True)
+class LayoutAlias:
+    """One RECORDED column alias between two registered layouts.
+
+    An alias is never inferred. [measured] canonical Descriptive carries
+    ``question_label`` twice — at index 27 inside the Group band and at index
+    30 inside the Question band — and on this repo's own artifact both are
+    non-blank on 56 of 56 rows with IDENTICAL values on all 56, because
+    ``writer._question_to_row`` wrote ``q.question_label`` into both. The
+    target carries the column once. Under the band-qualified logical key that
+    makes name-addressing possible, ``group.question_label`` therefore has no
+    destination and would be reported unmappable on every real workbook. The
+    collapse is provably safe, but it is written down here as an explicit
+    entry rather than derived by a "same name, must be the same thing" rule —
+    which is precisely the kind of shape-matching that reads a workbook wrong.
+    """
+
+    source_layout_id: str
+    target_layout_id: str
+    kind: str
+    source: tuple[str, str]      # (band, field) in the source layout
+    target: tuple[str, str]      # (band, field) in the target layout
+    reason: str
+
+    @property
+    def name(self) -> str:
+        return (
+            f"{self.source_layout_id}:{self.kind}:"
+            f"{self.source[0]}.{self.source[1]} -> "
+            f"{self.target_layout_id}:{self.target[0]}.{self.target[1]}"
+        )
+
+
+_DUPLICATE_QUESTION_LABEL_REASON = (
+    "canonical Descriptive carries question_label in BOTH the Group band "
+    "(idx 27) and the Question band (idx 30); the writer wrote "
+    "q.question_label into both, and [measured] the two agree on 56 of 56 "
+    "rows of this repo's own artifact. The target carries the column once, "
+    "in the Question band, so the Group-band copy collapses onto it."
+)
+
+_CONCEPT_QUESTION_LABELS_REASON = (
+    "the canonical layouts open the Group band with concept_question_labels "
+    "(the label list linking a concept to its questions); the target keeps "
+    "the same column with the same name at the END of the Concept band. Same "
+    "column, same meaning, different band — so it is an alias, and without it "
+    "every migrated question row would report the concept->question linkage "
+    "unmappable and lose it."
+)
+
+_CANONICAL_LAYOUT_IDS = (
+    "canonical-current",
+    "canonical-no-question-text",
+    "canonical-legacy-concept-band",
+)
+
+MIGRATION_ALIASES: tuple[LayoutAlias, ...] = tuple(
+    LayoutAlias(
+        source_layout_id=source_id,
+        target_layout_id=REFERENCE_LAYOUT_ID,
+        kind="descriptive",
+        source=("group", "question_label"),
+        target=("question", "question_label"),
+        reason=_DUPLICATE_QUESTION_LABEL_REASON,
+    )
+    for source_id in _CANONICAL_LAYOUT_IDS
+) + tuple(
+    LayoutAlias(
+        source_layout_id=source_id,
+        target_layout_id=REFERENCE_LAYOUT_ID,
+        kind=kind,
+        source=("group", "concept_question_labels"),
+        target=("concept", "concept_question_labels"),
+        reason=_CONCEPT_QUESTION_LABELS_REASON,
+    )
+    for source_id in _CANONICAL_LAYOUT_IDS
+    for kind in ("objective", "descriptive", "subjective")
+)
+
+
+def aliases_for(source_layout_id: str, target_layout_id: str,
+                kind: str) -> tuple[LayoutAlias, ...]:
+    return tuple(
+        alias for alias in MIGRATION_ALIASES
+        if alias.source_layout_id == source_layout_id
+        and alias.target_layout_id == target_layout_id
+        and alias.kind == kind
+    )
+
+
+@dataclass
+class MigrationReceipt:
+    """Pure mechanics of one layout migration — Q16's recorded receipt."""
+
+    source_layout_id: str
+    target_layout_id: str
+    sha256_before: str
+    sha256_after: str
+    rows_by_sheet_before: dict[str, int]
+    rows_by_sheet_after: dict[str, int]
+    sibling_path: str
+    alias_entries_applied: list[str] = dataclass_field(default_factory=list)
+    unmappable: list[dict] = dataclass_field(default_factory=list)
+    dropped_sheets: list[str] = dataclass_field(default_factory=list)
+    # Non-blank data cells (row 3 onward) each dropped sheet was carrying when
+    # it was dropped. A sheet the source layout declares ``ignored`` is not
+    # part of either layout, so its columns have no logical names to map — but
+    # a reviewer who pasted a link into that tab put content there, and a
+    # receipt that records only the sheet's NAME cannot say whether anything
+    # was in it. The values themselves are retained verbatim in the
+    # pre-migration sibling; this is the magnitude that makes the drop
+    # escalatable into one recorded decision instead of a silent tidy-up.
+    dropped_sheet_cells: dict[str, int] = dataclass_field(default_factory=dict)
+
+    def as_dict(self) -> dict:
+        return {
+            "source_layout_id": self.source_layout_id,
+            "target_layout_id": self.target_layout_id,
+            "sha256_before": self.sha256_before,
+            "sha256_after": self.sha256_after,
+            "rows_by_sheet_before": dict(self.rows_by_sheet_before),
+            "rows_by_sheet_after": dict(self.rows_by_sheet_after),
+            "sibling_path": self.sibling_path,
+            "alias_entries_applied": list(self.alias_entries_applied),
+            "unmappable": [dict(entry) for entry in self.unmappable],
+            "dropped_sheets": list(self.dropped_sheets),
+            "dropped_sheet_cells": dict(self.dropped_sheet_cells),
+        }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _write_layout_headers(worksheet, sheet_layout: "SheetLayout") -> None:
+    """The two header rows of one sheet of one layout, byte-exactly.
+
+    Band labels keep their per-sheet trailing whitespace and the bands keep
+    their gaps: the reference Objective sheet leaves column 23 unbanded.
+    """
+    for band in sheet_layout.bands:
+        cell = worksheet.cell(row=1, column=band.start)
+        cell.value = band.label
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal="center")
+        if band.end > band.start:
+            worksheet.merge_cells(
+                start_row=1, start_column=band.start,
+                end_row=1, end_column=band.end,
+            )
+    for index, name in enumerate(sheet_layout.fields, start=1):
+        cell = worksheet.cell(row=2, column=index)
+        cell.value = name
+        cell.font = Font(bold=True, size=9)
+    worksheet.freeze_panes = "A3"
+
+
+def _is_blank(value) -> bool:
+    """Whether a source cell is EMPTY. Mechanics, and deliberately narrow.
+
+    ``0`` and ``False`` are values a workbook can legitimately carry (a mark, a
+    count), and ``str(value or "").strip()`` calls both of them blank — which
+    would drop them from a migration and record nothing. Only ``None`` and
+    whitespace-only text are empty.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def _collapse_placements(
+    candidates: list[dict],
+) -> tuple[dict, list[dict]]:
+    """Which candidate lands in a shared target column, and what is recorded.
+
+    Two source cells reach ONE target column only through a recorded alias
+    (canonical Descriptive carries ``question_label`` in both the Group and
+    the Question band; the target carries it once). Deciding between them is
+    mechanics, not judgment about content, and the rule is fixed:
+
+    * a blank candidate never displaces a non-blank one — so a whitespace-only
+      cell in the target's own band cannot erase a real aliased value;
+    * among the non-blank candidates the one whose OWN band carries this
+      logical name in both layouts (the un-aliased one) is kept;
+    * every other non-blank candidate that DIFFERS from the keeper is returned
+      as a conflict, for the caller to record in the receipt's ``unmappable``
+      list. It is never dropped in silence, and the alias is not reported
+      applied for that row.
+
+    Identical copies collapse losslessly, which is the case this repo's own
+    artifact is in on 56 of 56 rows.
+    """
+    if len(candidates) == 1:
+        return candidates[0], []
+    filled = [
+        candidate for candidate in candidates
+        if not _is_blank(candidate["value"])
+    ]
+    if not filled:
+        return candidates[0], []
+    keeper = next(
+        (candidate for candidate in filled if candidate["alias"] is None),
+        filled[0],
+    )
+    conflicts = [
+        candidate for candidate in filled
+        if candidate is not keeper
+        and str(candidate["value"]) != str(keeper["value"])
+    ]
+    return keeper, conflicts
+
+
+def _non_blank_data_cells(worksheet) -> int:
+    """Non-blank cells from row 3 down — a sheet's DATA, not its banner rows."""
+    return sum(
+        1
+        for row in worksheet.iter_rows(min_row=3, values_only=True)
+        for value in row
+        if not _is_blank(value)
+    )
+
+
+def _workbook_headers(path: Path) -> dict[str, tuple]:
+    workbook = openpyxl.load_workbook(path, data_only=True, read_only=True)
+    try:
+        return {
+            name: next(
+                workbook[name].iter_rows(
+                    min_row=2, max_row=2, values_only=True),
+                (),
+            )
+            for name in workbook.sheetnames
+        }
+    finally:
+        workbook.close()
+
+
+def migrate_workbook_layout(
+    path: Path, *, target_layout_id: str,
+    sibling_for: Path | None = None,
+) -> MigrationReceipt | None:
+    """Rewrite ``path`` from its registered layout onto ``target_layout_id``.
+
+    Returns ``None`` when there is nothing to do — the file does not exist, it
+    is already on the target layout, or it matches no registered layout (which
+    ``writer.scan_workbook`` records as a mismatch on the same pass). Returns a
+    ``MigrationReceipt`` otherwise. It never raises on row content.
+
+    Every value moves by its BAND-QUALIFIED logical name plus the explicit
+    aliases above. A non-blank source value whose logical name has no home in
+    the target is left in the receipt's ``unmappable`` list; the caller turns
+    it into one recorded Fixer decision and a release issue.
+
+    ``sibling_for`` names the retained pre-migration copy after the workbook
+    the OPERATOR knows rather than after ``path``. The generation run hands
+    this function the staged temp sibling the transactional outbox provides
+    (``build_concepts._stage_concept_workbook``), whose stem is
+    ``tempfile.mkstemp``'s dot-hidden random token — so without this the
+    recorded recovery path points at a hidden file whose name says nothing
+    about which workbook it came from, and every failed run leaves another
+    one. Named for the target, the copy is beside the target, says what it is,
+    and a re-run overwrites it instead of accumulating orphans.
+    """
+    from . import workbook_sync
+    from .writer import _safe_cell
+
+    path = Path(path)
+    if not path.exists():
+        return None
+    target = LAYOUTS.get(target_layout_id)
+    if target is None:
+        return None
+
+    with workbook_sync.output_workbook_lock():
+        try:
+            identity = identify_workbook(_workbook_headers(path))
+        except WorkbookLayoutError:
+            # Unidentifiable: guessing its geometry is the corruption the
+            # registry exists to prevent, and refusing mid-run is the halt
+            # Q13 retired. Recorded by the caller's scan; nothing is touched.
+            return None
+        if identity.layout_id == target_layout_id:
+            return None
+
+        source = identity.layout
+        sha256_before = _sha256_file(path)
+        named_for = Path(sibling_for) if sibling_for is not None else path
+        sibling = named_for.with_name(
+            f"{named_for.stem}.pre-{identity.layout_id}{named_for.suffix}")
+        shutil.copy2(path, sibling)
+
+        rows_before: dict[str, int] = {}
+        rows_after: dict[str, int] = {}
+        applied: list[str] = []
+        unmappable: list[dict] = []
+        dropped = [name for name in identity.ignored_sheets]
+
+        old = openpyxl.load_workbook(path, data_only=True)
+        new = openpyxl.Workbook()
+        new.remove(new.active)
+        dropped_cells: dict[str, int] = {}
+        try:
+            dropped_cells = {
+                name: _non_blank_data_cells(old[name])
+                for name in dropped if name in old.sheetnames
+            }
+            for kind, sheet_layout in target.sheets.items():
+                worksheet = new.create_sheet(sheet_layout.sheet_name)
+                _write_layout_headers(worksheet, sheet_layout)
+                source_sheet = source.sheets.get(kind)
+                rows_before[sheet_layout.sheet_name] = 0
+                rows_after[sheet_layout.sheet_name] = 0
+                if source_sheet is None or source_sheet.sheet_name not in old.sheetnames:
+                    continue
+                alias_by_source = {
+                    alias.source: alias
+                    for alias in aliases_for(
+                        identity.layout_id, target_layout_id, kind)
+                }
+                out_row = 3
+                for row_index, values in enumerate(
+                    old[source_sheet.sheet_name].iter_rows(
+                        min_row=3, values_only=True),
+                    start=3,
+                ):
+                    if not values or all(
+                        _is_blank(value) for value in values
+                    ):
+                        continue
+                    rows_before[sheet_layout.sheet_name] += 1
+                    # RESOLVE the whole row before writing any of it. Writing
+                    # inside the walk made the alias's own conflict guard
+                    # unreachable: source bands are visited in layout order, so
+                    # ``group.question_label`` always landed in a still-blank
+                    # cell and the Question band then overwrote it with no
+                    # comparison at all — a divergent duplicate label left with
+                    # no ``unmappable`` entry while the receipt still reported
+                    # the alias applied. Resolving first makes the comparison
+                    # symmetric and order-independent.
+                    placements: dict[int, list[dict]] = {}
+                    for block, names in source_sheet.blocks:
+                        for name in names:
+                            index = source_sheet.column(block, name)
+                            if index is None or index >= len(values):
+                                continue
+                            value = values[index]
+                            alias = alias_by_source.get((block, name))
+                            key = alias.target if alias is not None else (
+                                block, name)
+                            column = sheet_layout.column(*key)
+                            if column is None:
+                                if not _is_blank(value):
+                                    unmappable.append({
+                                        "sheet": source_sheet.sheet_name,
+                                        "kind": kind,
+                                        "row": row_index,
+                                        "band": block,
+                                        "field": name,
+                                        "value": str(value),
+                                        "source_layout_id": identity.layout_id,
+                                        "target_layout_id": target_layout_id,
+                                    })
+                                continue
+                            placements.setdefault(column, []).append({
+                                "value": value,
+                                "band": block,
+                                "field": name,
+                                "alias": alias,
+                            })
+                    wrote_any = False
+                    for column, candidates in placements.items():
+                        keeper, conflicts = _collapse_placements(candidates)
+                        for loser in conflicts:
+                            unmappable.append({
+                                "sheet": source_sheet.sheet_name,
+                                "kind": kind,
+                                "row": row_index,
+                                "band": loser["band"],
+                                "field": loser["field"],
+                                "value": str(loser["value"]),
+                                "conflicts_with": str(keeper["value"]),
+                                "alias": (
+                                    loser["alias"].name
+                                    if loser["alias"] is not None else None
+                                ),
+                                "source_layout_id": identity.layout_id,
+                                "target_layout_id": target_layout_id,
+                            })
+                        for candidate in candidates:
+                            alias = candidate["alias"]
+                            if alias is None or alias.name in applied:
+                                continue
+                            if any(loser is candidate for loser in conflicts):
+                                continue
+                            if _is_blank(candidate["value"]):
+                                continue
+                            applied.append(alias.name)
+                        if _is_blank(keeper["value"]):
+                            # Nothing to carry: the target cell is already
+                            # empty in this freshly built sheet.
+                            continue
+                        worksheet.cell(
+                            row=out_row, column=column + 1,
+                            # openpyxl refuses to write a control character;
+                            # a raise here is the halt Q13 retired, so the
+                            # writer's own sanitiser guards the save.
+                            value=_safe_cell(keeper["value"]),
+                        )
+                        wrote_any = True
+                    # ``rows_after`` counts rows that actually LANDED. It used
+                    # to be incremented in the same breath as ``rows_before``
+                    # with no branch between them, so the receipt's "no rows
+                    # lost" field was true by construction and could not be
+                    # evidence of anything. A source row whose every non-blank
+                    # value is homeless in the target lands nothing — each of
+                    # those values is already an ``unmappable`` record and the
+                    # sibling still holds the row — and the counts now say so
+                    # instead of writing an empty row and calling it survival.
+                    if not wrote_any:
+                        continue
+                    out_row += 1
+                    rows_after[sheet_layout.sheet_name] += 1
+            # Atomic, like every other write in this package: the subject is
+            # runtime state on a deployed volume, and a crash mid-save must
+            # not leave it truncated.
+            workbook_sync.atomic_save_workbook(new, path)
+        finally:
+            old.close()
+            new.close()
+
+        return MigrationReceipt(
+            source_layout_id=identity.layout_id,
+            target_layout_id=target_layout_id,
+            sha256_before=sha256_before,
+            sha256_after=_sha256_file(path),
+            rows_by_sheet_before=rows_before,
+            rows_by_sheet_after=rows_after,
+            sibling_path=str(sibling),
+            alias_entries_applied=applied,
+            unmappable=unmappable,
+            dropped_sheets=dropped,
+            dropped_sheet_cells=dropped_cells,
+        )

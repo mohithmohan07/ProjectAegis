@@ -1,12 +1,31 @@
 """Regression coverage for in-place Concept-band workbook refreshes."""
 
 from collections import Counter
+from pathlib import Path
 
 import openpyxl
 
 from app import bulk_import as bi
 from app import models
-from app.bulk_import import writer
+from app.bulk_import import layouts, writer
+
+
+def _write_layout_workbook(path, layout_id: str):
+    """An empty workbook on one REGISTERED layout, built from the registry.
+
+    Never from ``writer._new_workbook`` with the header row overwritten: that
+    fixture moved with the writer, which is exactly how a canonical-layout
+    regression can go green while the canonical layout has stopped existing.
+    """
+    entry = layouts.layout(layout_id)
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    for sheet_layout in entry.sheets.values():
+        worksheet = workbook.create_sheet(sheet_layout.sheet_name)
+        worksheet.append([band.label for band in sheet_layout.bands])
+        worksheet.append(list(sheet_layout.fields))
+    workbook.save(path)
+    return path
 
 
 def _refresh_graph(db, suffix: str, *, include_tag: bool = True):
@@ -125,7 +144,6 @@ def test_append_concepts_refreshes_complete_band_after_normalized_title_change(
     assert len(rows) == 3
 
     details_col = bi.OBJECTIVE_FIELDS.index("concept_details")
-    parent_col = bi.OBJECTIVE_FIELDS.index("parent_concept")
     source_col = bi.OBJECTIVE_FIELDS.index("concept_source")
     basic_col = bi.OBJECTIVE_FIELDS.index("basic_groups")
     intermediate_col = bi.OBJECTIVE_FIELDS.index("intermediate_groups")
@@ -153,8 +171,6 @@ def test_append_concepts_refreshes_complete_band_after_normalized_title_change(
         assert writer._cell_str(
             row, writer._IDX_CONCEPT_TITLE + 1) == concept.concept_title
         assert writer._cell_str(row, details_col) == concept.concept_details
-        # Parent Concept ships empty; the refresh must not repopulate it.
-        assert writer._cell_str(row, parent_col) == ""
         assert writer._cell_str(row, source_col) == (
             "Original Book, Current Book")
         title_cells_by_topic[topic_key] = expected_title
@@ -442,28 +458,33 @@ def test_reconciliation_never_hijacks_same_title_pre_learning_rows(
         post_concept, post_topic) not in index.c_placements
 
 
-def test_append_concepts_refreshes_legacy_fields_on_catalog_and_question_rows(
+def test_append_concepts_migrates_a_legacy_workbook_then_refreshes_its_fields(
     db, tmp_path,
 ):
+    """Appending to an OLDER registered layout migrates it once, first.
+
+    This test used to build a legacy-layout sheet and assert that
+    ``append_concepts`` kept writing legacy columns in place. Since S7 the
+    append MIGRATES the workbook onto the target layout before it writes
+    anything (Q16 / T7.6) — writing target values at old-layout positions is
+    the corruption the migration exists to prevent — so what is pinned here is
+    that the migration happens once, that it is recorded, and that the fields
+    still refresh by NAME afterwards.
+    """
     concept, _, _, basic, question = _refresh_graph(db, "Legacy")
     path = tmp_path / "legacy-refresh.xlsx"
-    workbook = writer._new_workbook()
-    ws = workbook[bi.SHEET_OBJECTIVE]
-    legacy_fields = (
-        bi.CHAPTER_FIELDS + bi.TOPIC_FIELDS + bi.LEGACY_CONCEPT_FIELDS
-        + bi.OBJECTIVE_GROUP_FIELDS + bi.OBJECTIVE_QUESTION_FIELDS
-    )
-    assert len(legacy_fields) == ws.max_column
-    for column, field in enumerate(legacy_fields, start=1):
-        ws.cell(row=2, column=column, value=field)
-    workbook.save(path)
+    _write_layout_workbook(path, "canonical-legacy-concept-band")
 
-    assert writer.append_concepts(db, path, [concept.id])["written"] == 2
+    first = writer.append_concepts(db, path, [concept.id])
+    assert first["written"] == 2
+    receipt = first["layout_migration"]
+    assert receipt["source_layout_id"] == "canonical-legacy-concept-band"
+    assert receipt["target_layout_id"] == layouts.REFERENCE_LAYOUT_ID
+    assert Path(receipt["sibling_path"]).exists()
     assert writer.append_questions(db, path, [question.id])["objective"] == 1
     before_ws, _ = _objective_rows(path)
     before_max_row = before_ws.max_row
 
-    concept.parent_concept = "Corrected Legacy Parent"
     concept.concept_details = "Corrected legacy concept details"
     concept.keywords = "corrected, searchable, keywords"
     concept.related_concepts = "Current Legacy Relation"
@@ -473,13 +494,14 @@ def test_append_concepts_refreshes_legacy_fields_on_catalog_and_question_rows(
 
     result = writer.append_concepts(db, path, [concept.id])
     assert result["written"] == 0
-    assert result["parent_column"] is False
-    assert result["parent_fallback"] is True
+    # Migrated ONCE: the second append finds the workbook already on target.
+    assert "layout_migration" not in result
 
     ws, rows = _objective_rows(path)
     assert ws.max_row == before_max_row
     assert len(rows) == 3
     headers = [cell.value for cell in ws[2]]
+    assert headers == bi.FIELDS_BY_KIND["objective"]
     details_col = headers.index("concept_details")
     keywords_col = headers.index("keywords")
     related_col = headers.index("related_concepts")

@@ -128,7 +128,6 @@ def _successful_deposit(*_args, **_kwargs):
     return [], [], {
         "written": 0,
         "sources_updated": 0,
-        "parent_column": True,
         "grounding_certificate": (
             grounding_certificate.build_final_certificate(records)
         ),

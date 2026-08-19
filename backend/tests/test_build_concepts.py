@@ -164,7 +164,7 @@ def test_post_learning_failure_persists_and_resumes_type_checkpoint(
         build_concepts.writer,
         "append_concepts",
         lambda *a, **kw: {
-            "written": 0, "sources_updated": 0, "parent_column": True,
+            "written": 0, "sources_updated": 0,
         },
     )
     monkeypatch.setattr(
@@ -749,7 +749,6 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         return [], [], {
             "written": 0,
             "sources_updated": 0,
-            "parent_column": True,
             "grounding_certificate": copy.deepcopy(
                 _kwargs["final_grounding_certificate"]
             ),

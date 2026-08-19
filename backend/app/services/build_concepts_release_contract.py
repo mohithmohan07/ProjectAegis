@@ -81,7 +81,6 @@ def _capture_deposit(original, args, kwargs) -> tuple[list[int], list[int], dict
     written = {
         "written": len(records),
         "sources_updated": 0,
-        "parent_column": True,
         "grounding_certificate": final_certificate,
         "publication_status": "staged_release_only",
         "database_uploaded": False,

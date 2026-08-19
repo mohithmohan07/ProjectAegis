@@ -651,56 +651,33 @@ def test_writer_leaves_group_columns_empty_for_concept_rows(db):
     assert row[basic_idx + 2] == ""
 
 
-def test_writer_keeps_the_parent_concept_column_but_ships_it_empty(db):
-    """Concepts sit flat under their topic; the column stays for shape only."""
-    concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
-    concept.parent_concept = "Cell Organisation"
-    row = writer._concept_to_row(concept, "objective")
-    parent_idx = bi.OBJECTIVE_FIELDS.index("parent_concept")
-    # The column must survive — removing it would change the canonical
-    # workbook shape — but it carries nothing.
-    assert "parent_concept" in bi.OBJECTIVE_FIELDS
-    assert row[parent_idx] == ""
-    # keywords / related_concepts columns are gone from new workbooks.
-    assert "keywords" not in bi.OBJECTIVE_FIELDS
-    assert "related_concepts" not in bi.OBJECTIVE_FIELDS
+def test_parent_concept_survives_staging_into_the_published_row(db):
+    """The COLUMN is gone from the target layout; the FIELD is not.
 
-
-def test_the_legacy_parent_marker_no_longer_leaks_into_related_concepts(db):
-    """A legacy workbook has no parent column, and must not smuggle one in.
-
-    Older workbooks carried the parent as a "parent: X" marker inside
-    related_concepts. With Parent Concept shipping empty, that back door has
-    to close too, or the grouping reappears under another name.
+    Three tests used to live here asserting that ``parent_concept`` had a
+    column on the canonical sheet and shipped blank in it. Q5's layout has no
+    such column at all, so they asserted a column that is gone rather than a
+    behaviour that changed. What must not be lost with them is that the field
+    itself still round-trips — ``models.Concept.parent_concept`` is a real
+    column, ``build_concepts._add_concept`` persists it and
+    ``build_concepts_release_publication`` re-applies it on publish — so the
+    survival is pinned here instead.
     """
-    concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
-    concept.parent_concept = "Cell Organisation"
-    row = writer._concept_to_row(
-        concept, "objective", concept_fields=bi.LEGACY_CONCEPT_FIELDS)
-    related_idx = (
-        len(bi.CHAPTER_FIELDS) + len(bi.TOPIC_FIELDS)
-        + bi.LEGACY_CONCEPT_FIELDS.index("related_concepts")
-    )
-    assert "parent:" not in (row[related_idx] or "")
-
-
-def test_append_concepts_keeps_the_parent_column_blank(db, tmp_path):
-    import openpyxl
-
-    concept = db.query(models.Concept).join(models.Topic).join(models.Chapter).first()
+    assert "parent_concept" not in bi.FIELDS_BY_KIND["objective"]
+    assert "parent_concept" not in bi.concept_fields("objective")
+    concept = db.query(models.Concept).join(models.Topic).join(
+        models.Chapter).first()
     concept.parent_concept = "Cell Organisation"
     db.flush()
+    db.expire(concept)
+    assert db.get(models.Concept, concept.id).parent_concept == (
+        "Cell Organisation")
 
-    path = tmp_path / "parent_template.xlsx"
-    writer._new_workbook().save(path)
-
-    result = writer.append_concepts(db, path, [concept.id])
-    assert result["parent_column"] is True
-    out = openpyxl.load_workbook(path)[bi.SHEET_OBJECTIVE]
-    headers = [c.value for c in out[2]]
-    parent_idx = headers.index("parent_concept") + 1
-    # The header stays so the canonical shape is unchanged; the cell is empty.
-    assert out.cell(row=3, column=parent_idx).value in (None, "")
+    # It simply has nowhere to be WRITTEN on the target sheet, and the row
+    # builder does not invent one.
+    row = writer._concept_to_row(concept, "objective")
+    assert len(row) == len(bi.FIELDS_BY_KIND["objective"])
+    assert "Cell Organisation" not in [str(cell) for cell in row]
 
 
 def test_roundtrip_recovers_clean_titles(db):

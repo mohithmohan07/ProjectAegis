@@ -1,63 +1,100 @@
 """Canonical Bulk Import Excel schema.
 
 The Bulk Import workbook is the single source of truth for the integrated
-tool. It has three content sheets — Objective, Subjective, Descriptive — each
+tool. It has three content sheets — Objective, Descriptive, Subjective — each
 with TWO header rows:
 
   row 1: section bands (Chapter / Topic / Concept / Group / Question)
   row 2: the actual field names
 
-Field orders below are reproduced exactly from LATEST_BULK_IMPORT_EXCEL.xlsx.
-The answer / sub-question blocks are regular, so they are generated rather
-than transcribed. ``question_label`` deliberately appears more than once in a
-row — once in the Group band (links a group to a question) and once in the
-Question band — so columns are addressed positionally, never by name alone.
+**Every name and every position below is DERIVED from the layout registry**
+(``bulk_import.layouts``), which reads the owner-supplied, committed format
+workbook ``backend/data/Testing/reference_bulk_import/bulk_import_format.xlsx``
+(spec-step8 T3.1/T3.1b, slice S7). Nothing here is transcribed: a transcription
+sitting in the trust chain is the same defect shape as the trailing-space
+``SHEET_OBJECTIVE = "Objective "`` constant that used to hide the whole
+Objective sheet from the reader.
+
+Two consequences of the move that callers must know about:
+
+* the target layout carries **no duplicate field name** on any sheet, so a
+  column can finally be addressed by its band-qualified name instead of by a
+  position derived from a shared constant;
+* the row-1 bands are **not contiguous** — the reference Objective sheet
+  leaves column 23 (``concept_source``) unbanded and stops banding after
+  column 31 — so ``SECTION_BANDS`` carries ``{label, start, end}`` dicts with
+  gaps, never ``(label, span)`` runs. ``tests/test_bulk_import_schema.py`` is
+  the anti-drift gate that pins every one of these to the registry.
+
+``LEGACY_CONCEPT_FIELDS`` below stays a frozen literal: it describes a layout
+older workbooks carry, and deriving it from the current target is exactly the
+mistake ``layouts.py``'s frozen ``canonical-*`` entries exist to prevent.
 """
 from __future__ import annotations
 
-# Sheet names exactly as they appear in the source workbook (note trailing spaces).
-SHEET_OBJECTIVE = "Objective "
-SHEET_SUBJECTIVE = "Subjective"
-SHEET_DESCRIPTIVE = "Descriptive"
-SHEET_DOC_LINK = "Doc Link <> Each fields "
+from . import layouts as _layouts
 
-SHEET_BY_KIND = {
-    "objective": SHEET_OBJECTIVE,
-    "subjective": SHEET_SUBJECTIVE,
-    "descriptive": SHEET_DESCRIPTIVE,
+# The owner's committed format workbook is the layout authority. If it is not
+# on disk the registry records ``layout_source_missing`` and this package has
+# no positions to offer — a gate on an artifact (CLAUDE.md "gates that refuse
+# to accept a broken artifact"), never a guess.
+_REFERENCE = _layouts.LAYOUTS.get(_layouts.REFERENCE_LAYOUT_ID)
+if _REFERENCE is None:
+    raise ImportError(
+        "the committed Bulk Import format workbook "
+        f"({_layouts.REFERENCE_WORKBOOK_PATH}) is not readable, so layout "
+        f"{_layouts.REFERENCE_LAYOUT_ID!r} is not registered and the Bulk "
+        "Import column geometry is unknown; registry defects: "
+        f"{_layouts.registry_defects()}"
+    )
+
+# Sheet names and the sheet ORDER come from the registry (T12/M1). The order
+# of this mapping IS the workbook's sheet order — Objective, Descriptive,
+# Subjective — and ``writer._new_workbook`` walks it.
+SHEET_BY_KIND: dict[str, str] = {
+    kind: sheet.sheet_name for kind, sheet in _REFERENCE.sheets.items()
+}
+SHEET_OBJECTIVE = SHEET_BY_KIND["objective"]
+SHEET_DESCRIPTIVE = SHEET_BY_KIND["descriptive"]
+SHEET_SUBJECTIVE = SHEET_BY_KIND["subjective"]
+SHEET_ORDER: list[str] = list(SHEET_BY_KIND.values())
+
+
+def _block(kind: str, block: str) -> list[str]:
+    return list(_REFERENCE.sheet(kind).block_fields(block))
+
+
+# --------------------------------------------------------------------------- #
+# Shared front bands: Chapter, Topic
+# --------------------------------------------------------------------------- #
+
+CHAPTER_FIELDS = _block("objective", "chapter")
+TOPIC_FIELDS = _block("objective", "topic")
+
+
+# --------------------------------------------------------------------------- #
+# The Concept band is PER SHEET (it is not shared any more)
+#
+# [measured on the authority] Objective and Subjective carry ``concept_source``
+# as the trailing, unbanded column of the concept block; Descriptive does not
+# carry it at all. A single shared ``CONCEPT_FIELDS`` cannot express that, and
+# a caller that assumed it computed a wrong row width and had its tail
+# truncated in silence (spec-step8 T3.8).
+# --------------------------------------------------------------------------- #
+
+def concept_fields(kind: str) -> list[str]:
+    """The Concept band of one sheet of the TARGET layout."""
+    return _block(kind, "concept")
+
+
+CONCEPT_FIELDS_BY_KIND: dict[str, list[str]] = {
+    kind: _block(kind, "concept") for kind in SHEET_BY_KIND
 }
 
-# --------------------------------------------------------------------------- #
-# Shared front bands: Chapter, Topic, Concept
-# --------------------------------------------------------------------------- #
-
-CHAPTER_FIELDS = [
-    "chapter_title", "chapter_display_name", "chapter_duration",
-    "pre_topics", "post_topics", "chapter_description",
-]
-TOPIC_FIELDS = [
-    "topic_title", "topic_display_name", "pre_post_learning",
-    # Comma-separated list of the concept titles taught under this topic.
-    "topic_concept_labels", "related_topics", "topic_description",
-]
-CONCEPT_FIELDS = [
-    # parent_concept is a first-class column (team request): it used to ride
-    # inside related_concepts as a "parent: X" fallback marker. The keywords and
-    # related_concepts columns were dropped from the canonical layout (also a
-    # team request); legacy workbooks that still carry them are auto-detected
-    # from the header row and read/appended without shifting any band.
-    "concept_title", "concept_display_name", "parent_concept",
-    "concept_details", "digicards",
-    "basic_groups", "intermediate_groups", "advanced_groups",
-    # Multi-source tag (e.g. "NCERT; RD Sharma") — concepts overlap between the
-    # books different schools prefer; one concept carries every book it appears
-    # in. Appended at the END of the Concept band so all earlier columns keep
-    # their positions; the reader auto-detects workbooks without this column.
-    "concept_source",
-]
 # Concept band of the OLD layout (pre parent_concept column, with keywords /
-# related_concepts, pre concept_source). Kept so legacy workbooks are still
-# read and appended correctly (fields are detected from the header row).
+# related_concepts, pre concept_source). FROZEN LITERAL: legacy workbooks are
+# still read and appended correctly, and deriving this from the target would
+# silently redefine what "legacy" means the moment the target moves.
 LEGACY_CONCEPT_FIELDS = [
     "concept_title", "concept_display_name", "concept_details",
     "keywords", "digicards", "related_concepts",
@@ -65,140 +102,54 @@ LEGACY_CONCEPT_FIELDS = [
 ]
 LEGACY_CONCEPT_LEN = len(LEGACY_CONCEPT_FIELDS)
 
-# --------------------------------------------------------------------------- #
-# Objective sheet
-# --------------------------------------------------------------------------- #
-
-OBJECTIVE_GROUP_FIELDS = [
-    # Trailing label of the Concept band: the question labels tagged to the
-    # concept (comma-separated). Renamed from the old positional "question_label".
-    "concept_question_labels",
-    "group_name", "group_display_name", "group_description",
-    "group_status", "group_type",
-    # The question labels tagged to THIS group (comma-separated).
-    "group_question_labels", "related_digicards",
-]
-OBJECTIVE_QUESTION_FIELDS = (
-    [
-        "question_label", "question_category", "cognitive_skills",
-        "question_source", "question_disclaimer", "question_duration",
-        "question_appears_in", "level_of_difficulty", "question", "marks",
-    ]
-    + [
-        f"{prefix}_{n}"
-        for n in range(1, 7)
-        for prefix in ("answer_type", "answer_content", "correct_answer", "answer_weightage")
-    ]
-    + ["answer_explanation"]
-    # question_text: plain-text question + any shared context (passage,
-    # conversation, diagram description...) passed to the AI evaluator.
-    # Appended as the LAST column of the sheet so no existing column shifts;
-    # the reader auto-detects templates without it (non-breaking).
-    + ["question_text"]
-)
-OBJECTIVE_FIELDS = (
-    CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
-    + OBJECTIVE_GROUP_FIELDS + OBJECTIVE_QUESTION_FIELDS
-)
 
 # --------------------------------------------------------------------------- #
-# Subjective sheet
+# Group bands (per sheet — Descriptive's field ORDER differs from Objective's)
 # --------------------------------------------------------------------------- #
 
-SUBJECTIVE_GROUP_FIELDS = OBJECTIVE_GROUP_FIELDS
-SUBJECTIVE_QUESTION_FIELDS = (
-    [
-        "question_label", "question_category", "cognitive_skills",
-        "question_source", "question_disclaimer", "question_duration",
-        "math_keyboard", "question_appears_in", "level_of_difficulty",
-        "question", "marks",
-    ]
-    + [
-        f"{prefix}_{n}"
-        for n in range(1, 11)
-        for prefix in ("answer_type", "answer", "answer_display", "weightage", "placeholder")
-    ]
-    + ["answer_explanation"]
-    + ["question_text"]  # last column; see Objective note
-)
-SUBJECTIVE_FIELDS = (
-    CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
-    + SUBJECTIVE_GROUP_FIELDS + SUBJECTIVE_QUESTION_FIELDS
-)
+OBJECTIVE_GROUP_FIELDS = _block("objective", "group")
+SUBJECTIVE_GROUP_FIELDS = _block("subjective", "group")
+DESCRIPTIVE_GROUP_FIELDS = _block("descriptive", "group")
 
-# --------------------------------------------------------------------------- #
-# Descriptive sheet
-# --------------------------------------------------------------------------- #
-
-DESCRIPTIVE_GROUP_FIELDS = [
-    "concept_question_labels", "group_display_name", "group_description",
-    "group_name", "group_status", "group_type",
-    "question_label", "group_question_labels", "related_digicards",
-]
-DESCRIPTIVE_QUESTION_FIELDS = (
-    [
-        "question_label", "question_category", "cognitive_skills",
-        "question_source", "question_disclaimer", "question_duration",
-        "math_keyboard", "question_appears_in", "level_of_difficulty",
-        "question", "marks", "display_answer",
-    ]
-    + [
-        f"{prefix}_{n}"
-        for n in range(1, 11)
-        for prefix in ("answer_type", "answer_weightage", "answer_content")
-    ]
-    + ["answer_explanation"]
-)
-DESCRIPTIVE_SUBQUESTION_FIELDS = [
-    field
-    for n in range(1, 16)
-    for field in (
-        [f"sub_question_{n}", f"sub_question_marks_{n}"]
-        + [
-            f"sq{n}_{prefix}_{m}"
-            for m in range(1, 7)
-            for prefix in ("answer_type", "weightage", "keyword")
-        ]
-    )
-]
-DESCRIPTIVE_FIELDS = (
-    CHAPTER_FIELDS + TOPIC_FIELDS + CONCEPT_FIELDS
-    + DESCRIPTIVE_GROUP_FIELDS + DESCRIPTIVE_QUESTION_FIELDS
-    + DESCRIPTIVE_SUBQUESTION_FIELDS
-    + ["question_text"]  # last column; see Objective note
-)
-
-FIELDS_BY_KIND = {
-    "objective": OBJECTIVE_FIELDS,
-    "subjective": SUBJECTIVE_FIELDS,
-    "descriptive": DESCRIPTIVE_FIELDS,
+GROUP_FIELDS_BY_KIND: dict[str, list[str]] = {
+    "objective": OBJECTIVE_GROUP_FIELDS,
+    "subjective": SUBJECTIVE_GROUP_FIELDS,
+    "descriptive": DESCRIPTIVE_GROUP_FIELDS,
 }
 
-# Section bands (row 1) as (label, span) in column order.
-SECTION_BANDS = {
-    "objective": [
-        ("Chapter", len(CHAPTER_FIELDS)),
-        ("Topic", len(TOPIC_FIELDS)),
-        ("Concept", len(CONCEPT_FIELDS) + 1),   # +1: trailing question_label
-        ("Group", len(OBJECTIVE_GROUP_FIELDS) - 1),
-        ("Question", len(OBJECTIVE_QUESTION_FIELDS)),
-    ],
-    "subjective": [
-        ("Chapter", len(CHAPTER_FIELDS)),
-        ("Topic", len(TOPIC_FIELDS)),
-        ("Concept", len(CONCEPT_FIELDS) + 1),
-        ("Group", len(SUBJECTIVE_GROUP_FIELDS) - 1),
-        ("Question", len(SUBJECTIVE_QUESTION_FIELDS)),
-    ],
-    "descriptive": [
-        ("Chapter", len(CHAPTER_FIELDS)),
-        ("Topic", len(TOPIC_FIELDS)),
-        ("Concept", len(CONCEPT_FIELDS) + 1),
-        ("Group", len(DESCRIPTIVE_GROUP_FIELDS) - 1),
-        # +1: trailing question_text column.
-        ("Question", len(DESCRIPTIVE_QUESTION_FIELDS) + len(DESCRIPTIVE_SUBQUESTION_FIELDS) + 1),
-    ],
+
+# --------------------------------------------------------------------------- #
+# Question bands
+# --------------------------------------------------------------------------- #
+
+OBJECTIVE_QUESTION_FIELDS = _block("objective", "question")
+SUBJECTIVE_QUESTION_FIELDS = _block("subjective", "question")
+DESCRIPTIVE_QUESTION_FIELDS = _block("descriptive", "question")
+
+QUESTION_FIELDS_BY_KIND: dict[str, list[str]] = {
+    "objective": OBJECTIVE_QUESTION_FIELDS,
+    "subjective": SUBJECTIVE_QUESTION_FIELDS,
+    "descriptive": DESCRIPTIVE_QUESTION_FIELDS,
 }
+
+
+# --------------------------------------------------------------------------- #
+# Whole sheets
+# --------------------------------------------------------------------------- #
+
+OBJECTIVE_FIELDS = list(_REFERENCE.sheet("objective").fields)
+DESCRIPTIVE_FIELDS = list(_REFERENCE.sheet("descriptive").fields)
+SUBJECTIVE_FIELDS = list(_REFERENCE.sheet("subjective").fields)
+
+FIELDS_BY_KIND: dict[str, list[str]] = {
+    kind: list(sheet.fields) for kind, sheet in _REFERENCE.sheets.items()
+}
+
+# Section bands (row 1) as ``{label, start, end}`` dicts, 1-based inclusive,
+# in column order. They DO NOT tile the sheet: the reference Objective bands
+# cover 30 of its 67 columns. Anything that sums spans to a column count is
+# reading the wrong invariant.
+SECTION_BANDS: dict[str, list[dict]] = _REFERENCE.bands_by_kind()
 
 # --------------------------------------------------------------------------- #
 # Controlled vocabularies (used by the Blueprint UI and column mapping)
