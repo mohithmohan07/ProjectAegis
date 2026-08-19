@@ -1351,9 +1351,13 @@ def test_calibration_rides_the_payload_and_branches_nowhere_in_code(
     # not — without moving any existing pass's payload.
     from app.services.phase3 import prompts
 
+    # Step 11 added the language-topology plan slot; it is empty on every
+    # non-literary run, so no existing pass's payload (or decision key)
+    # moves — the suffix renderer skips empty slots.
     assert prompts.DEFAULT_SLOTS == (
         ("Subject topology guidance", "subject_topology_guidance"),
         ("Grade-band vocabulary", "grade_band_vocabulary"),
+        ("Language topology plan", "language_topology_plan"),
     )
     assert prompts.PRE_LEARNING_SLOTS == prompts.DEFAULT_SLOTS + (
         (
