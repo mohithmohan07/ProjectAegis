@@ -4355,6 +4355,54 @@ def generate_post_learning(
         f"({instruction_set.get('slots_source')}); its hash joins every "
         "decision identity for this run."
     )
+    # Step 11 (docs/aegis-restructure.md Q9): when the Architect selected a
+    # literary mode, author (or replay) the language topology plan BEFORE
+    # any generation identity is computed. The plan rides the slot
+    # transport into the sealed envelope, and its hash is composed into
+    # the run's instruction identity so a changed plan re-keys every
+    # downstream decision exactly like a changed instruction set.
+    language_mode = str(
+        (instruction_slots.get("language_mode") or {}).get("mode") or ""
+    )
+    if language_mode in ("poem", "prose"):
+        from . import canonical_source_phase2 as _phase2
+        from . import language_topology
+
+        canonical_bundle = _phase2.active_canonical()
+        if canonical_bundle is None:
+            # No canonical bundle (legacy/no-ACSD path): the adapter cannot
+            # ground a closed-world plan. Named, visible, and blocking for
+            # the literary lane — never a silent expository fallback.
+            raise language_topology.LanguagePlanError(
+                "the Architect selected a literary mode but no canonical "
+                "source bundle is active; the language topology plan "
+                "cannot be grounded"
+            )
+        language_plan = language_topology.ensure_language_plan(
+            canonical_bundle,
+            instruction_set=instruction_set,
+            work_name=str(chapter.chapter_title or ""),
+            artifact_dir=artifact_dir,
+        )
+        for flag in language_plan.get("review_flags") or []:
+            progress.log(f"Language plan review flag: {flag}",
+                         level="warning")
+        instruction_slots[language_topology.PLAN_SLOT_KEY] = (
+            language_topology.plan_slot_text(language_plan)
+        )
+        # Composed run identity: architect hash ⊕ plan hash. Everything
+        # downstream that keys on instruction_set_sha256 therefore re-keys
+        # when either the instructions or the plan change.
+        plan_hash = str(language_plan.get("plan_sha256") or "")
+        instruction_hash = hashlib.sha256(
+            f"{instruction_hash}\u241f{plan_hash}".encode("utf-8")
+        ).hexdigest()
+        progress.log(
+            f"Language topology plan {plan_hash[:12]} ({language_mode}"
+            + (", replayed" if language_plan.get("replayed") else "")
+            + ") joins the run's instruction identity "
+            f"{instruction_hash[:12]}."
+        )
     fingerprint = _generation_checkpoint_fingerprint(
         job, chapter, instruction_set_sha256=instruction_hash)
     target_identity = _generation_target_identity(chapter)

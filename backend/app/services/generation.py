@@ -16695,7 +16695,10 @@ def _merge_concept_records(records: list[dict]) -> list[dict]:
 
 
 def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
-    """Keep the FIRST row for each normalized concept title, chapter-wide.
+    """Keep the FIRST row for each normalized topic+title identity.
+
+    (The name keeps its historical ``chapter_wide`` suffix for call-site
+    stability; since step 11 the key is topic-scoped.)
 
     The validator requires every concept to appear exactly once per chapter,
     but chunked extraction occasionally restates the same concept under two
@@ -16711,12 +16714,20 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
     kept — still reaches the reviewer on the row that ends up carrying that
     teaching (docs/aegis-restructure.md §8.2, "Never silent").
     """
-    seen: dict[str, int] = {}
+    seen: dict[tuple[str, str], int] = {}
     out: list[dict] = []
     dropped = 0
     for rec in records:
-        key = bi.normalize_question_text(rec.get("concept_title", ""))
-        if key and key in seen:
+        # Step 11: the duplicate key is TOPIC-SCOPED. Two stanza topics may
+        # both legitimately teach a concept named "Courage"; only two rows
+        # claiming one topic+title identity are the same concept restated
+        # (identity is positional and topic-scoped — never chapter-wide
+        # wording).
+        key = (
+            bi.normalize_question_text(rec.get("topic", "")),
+            bi.normalize_question_text(rec.get("concept_title", "")),
+        )
+        if key[1] and key in seen:
             kept_index = seen[key]
             if (
                 _method_anchor_ids(rec)
@@ -16728,12 +16739,13 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
                 _carry_review_flags(rec, out[kept_index])
             dropped += 1
             continue
-        if key:
+        if key[1]:
             seen[key] = len(out)
         out.append(rec)
     if dropped:
         progress.log(
-            f"Dropped {dropped} duplicate concept-title row(s) chapter-wide.",
+            f"Dropped {dropped} duplicate concept-title row(s) within their "
+            "topic.",
             level="warning",
         )
     return out

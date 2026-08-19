@@ -141,9 +141,14 @@ def test_two_same_titled_concepts_in_one_topic_do_not_kill_the_run():
     flags = [
         flag for row in rows for flag in row.get("review_flags") or []
     ]
-    assert any("validation: duplicate_title" in flag for flag in flags)
+    # Step 11 retired chapter-wide duplicate_title; the topic-scoped
+    # identity code is the one that survives and it ships flagged.
     assert any(
         "validation: duplicate_topic_concept" in flag for flag in flags
+    )
+    assert not any(
+        "duplicate_title" in flag and "duplicate_topic_concept" not in flag
+        for flag in flags
     )
 
 

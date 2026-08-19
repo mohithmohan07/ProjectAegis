@@ -581,12 +581,15 @@ def render(payload: Mapping[str, Any]) -> str:
     return json.dumps(dict(payload), ensure_ascii=False, indent=1)
 
 
-# The Architect slots every pass reads. Widening this tuple would re-key
-# every stored Settle/Host/Place/Analyse/capture decision, so it is fixed;
-# a lane that needs more slots passes its own tuple instead.
+# The Architect slots every pass reads. An EMPTY slot renders nothing, so
+# widening this tuple re-keys only runs where the new slot is authored —
+# which is exactly when re-keying is wanted. ``language_topology_plan``
+# (step 11) is authored only for the Architect's poem/prose chapters, so
+# every existing expository run keeps byte-identical payloads and keys.
 DEFAULT_SLOTS: tuple[tuple[str, str], ...] = (
     ("Subject topology guidance", "subject_topology_guidance"),
     ("Grade-band vocabulary", "grade_band_vocabulary"),
+    ("Language topology plan", "language_topology_plan"),
 )
 
 # The Pre-Learning lane's slots (owner steer, 17 Aug 2026, point 2): a

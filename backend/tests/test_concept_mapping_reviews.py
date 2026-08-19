@@ -141,11 +141,16 @@ def test_alias_related_titles_both_survive_the_cleanup_chain():
     assert not hasattr(concept_cleanup, "find_similar_title_groups")
     assert not hasattr(concept_cleanup, "_KNOWN_CONCEPT_ALIASES")
 
-    # An undecided EXACT duplicate is flagged by the validator (a blocking
-    # duplicate-label report at deposit), never silently dropped.
+    # An undecided EXACT duplicate (same topic + title = one claimed
+    # identity, step 11) is flagged by the validator, never silently
+    # dropped. Chapter-wide duplicate_title is retired: cross-topic same
+    # names are legitimate concepts.
     duplicated = out + [dict(out[0])]
     report = concept_validator.validate_concept_rows(duplicated)
     assert any(
+        e["code"] == "duplicate_topic_concept" for e in report["errors"]
+    )
+    assert not any(
         e["code"] == "duplicate_title" for e in report["errors"]
     )
     assert len(duplicated) == 4  # validation never mutates or drops rows

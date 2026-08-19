@@ -1637,13 +1637,9 @@ def validate_concept_rows(
                      "culmination must carry a non-empty authored "
                      "'Description: ...' consolidation")
 
-    for norm_title, count in title_counts.items():
-        if norm_title and count > 1:
-            for i, row in enumerate(rows):
-                title = row.get("concept_title") or row.get("concept") or ""
-                if _norm(title) == norm_title:
-                    _add(errors, i, "concept_title", "duplicate_title",
-                         "duplicate concept title within chapter")
+    # Step 11: chapter-wide duplicate titles are legitimate (two stanza
+    # topics may each teach "Courage"); identity is topic-scoped, so only
+    # the topic+title pair below proves two rows claim one identity.
     for key, count in topic_title_counts.items():
         if key[0] and key[1] and count > 1:
             for i, row in enumerate(rows):

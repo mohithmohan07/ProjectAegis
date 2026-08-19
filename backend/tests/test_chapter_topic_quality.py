@@ -765,18 +765,23 @@ def test_mastery_template_is_gone_and_polish_repairs_missing_mastery():
     )
 
 
-def test_duplicate_titles_are_dropped_chapter_wide():
+def test_duplicate_titles_dedupe_within_topic_and_survive_across_topics():
+    """Step 11: identity is topic-scoped. Two stanza topics may both teach
+    a concept named "Courage"; only a same-topic restatement is dropped."""
     records = [
         _rec("Similarity vs Congruence", "Description: a", topic="T1"),
         _rec("AAA Criterion", "Description: b", topic="T1"),
-        # Same concept restated under another topic (chunked extraction echo).
-        _rec("Similarity vs Congruence", "Description: a again", topic="T2"),
+        # Same-topic restatement (chunked extraction echo): deduped.
+        _rec("Similarity vs Congruence", "Description: a again", topic="T1"),
+        # Same visible name under ANOTHER topic: a different concept; kept.
+        _rec("Similarity vs Congruence", "Description: c", topic="T2"),
     ]
     out = g._dedupe_titles_chapter_wide(records)
-    assert [r["concept_title"] for r in out] == [
-        "Similarity vs Congruence", "AAA Criterion"]
-    # First statement (the teaching home) is the one kept.
-    assert out[0]["topic"] == "T1"
+    assert [(r["topic"], r["concept_title"]) for r in out] == [
+        ("T1", "Similarity vs Congruence"),
+        ("T1", "AAA Criterion"),
+        ("T2", "Similarity vs Congruence"),
+    ]
 
 
 def test_control_chars_are_stripped_from_records_and_cells():
