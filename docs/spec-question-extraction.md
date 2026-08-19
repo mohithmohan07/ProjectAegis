@@ -2,7 +2,7 @@
 
 Status: specification only; no implementation is included here.
 
-Evidence basis: `origin/main` at `3aea81e`, checked 19 August 2026. The
+Evidence basis: PR #229 at `d7d2e2f`, checked 19 August 2026. The
 previously referenced `docs/map-question-extraction.md` was not present on
 `main` or on PR #229 at the time of review, so every central claim below was
 re-checked against production code and tests.
@@ -47,26 +47,52 @@ The production call graph for text-shaped uploads is:
 flowchart TD
     A[".mmd / .md / .txt"] --> B["mmd.to_mmd"]
     B --> C["Phase 2 ACSD compile"]
-    C --> D["generation._source_task_anchors"]
-    D --> E["ACSD task ledger"]
-    E --> F["inventory_from_canonical"]
+    C --> D["generation._source_task_anchors: initial tasks"]
+    D --> E["initial ACSD task ledger"]
+    E --> R["Phase 2.1 regex/cue recovery: added tasks and follow-ups"]
+    R --> L["final canonical text-task ledger"]
+    L --> F["inventory_from_canonical: one row per final text parent"]
+    F --> G["optional API topic placement for chapter-wide items"]
 ```
 
-The central facts are not inferred from names or docstrings:
+The central facts are not inferred from names or docstrings. Re-measurement at
+`d7d2e2f` preserves the doctrine finding but narrows two earlier absolutes:
+the active wrapper can call a model for **topic placement** after membership
+already exists, and the final inventory is not 1:1 with the **initial anchor
+list** because Phase 2.1 can append parents that `_source_task_anchors` missed.
+That recovery is itself driven by finite cue regexes rather than a closed-world
+model verdict. On direct text, the final inventory does remain one row per
+final canonical parent; model-ruled multi-row boundaries are PDF-only today.
 
 | Claim | Code evidence | Consequence |
 |---|---|---|
 | Text uploads are read as text, without the PDF reader | `backend/app/services/mmd.py:28-47,51-75` | `.mmd`, `.md`, and `.txt` enter the ordinary MMD compiler. |
-| ACSD tasks originate in the deterministic anchor parser | `canonical_source.py:588-650`; `canonical_source_phase2.py:114-132` | The Phase 2 task ledger starts from `generation._source_task_anchors`. |
-| The production inventory extractor is rebound at import | `canonical_source_phase2_contract.py:27-44,134-192,258-267`; install order in `services/__init__.py:97-110` | During an active Phase 2 run, `_extract_question_task_inventory_via_api` returns `inventory_from_canonical` instead of invoking its original API extractor. |
-| A test positively forbids the model call | `backend/tests/test_canonical_source_phase2.py:260-288` | The bypass is an asserted production contract, not dead code. |
-| Phase 3 only annotates that result | `canonical_source_phase3_contract.py:41-45,348-356,428-435` | The semantic graph does not discover tasks absent from the Phase 2 ledger. |
+| Initial ACSD tasks originate in the deterministic anchor parser | `canonical_source.py:588-650`; `canonical_source_phase2.py:114-132` | The Phase 2 ledger starts from `generation._source_task_anchors`, but this is not its only deterministic membership pass. |
+| Phase 2.1 can append tasks and follow-ups through more vocabularies | `canonical_source_phase21_structure.py:16-29,74-96,279-390,944-1039`; active calls at `canonical_source_phase21.py:97-116` | `_CUE_RE` can append a new parent task, while an English cue-heading plus `?`/imperative test can attach additional prompts. These are recorded and sometimes flagged, but no model made their task/not-task decision. |
+| The production inventory extractor is rebound at import | `canonical_source_phase2_contract.py:27-44,134-192,258-267`; install order in `services/__init__.py:97-110` | During an active Phase 2 run, `_extract_question_task_inventory_via_api` calls `inventory_from_canonical` rather than its original extraction author. Lines `154-163` can still call the API to assign already-existing chapter-wide items to topics. |
+| The no-author-call test is deliberately scoped | `backend/tests/test_canonical_source_phase2.py:260-288` | Its fixture has no chapter-wide item and forbids `_openai_json`; it proves the extraction-author bypass on that path, not that every inventory-shaped input makes zero provider calls. |
+| Direct-text follow-up leaves do not create extra inventory rows | `_never_split_questions` at `canonical_source_phase2.py:660-664`; merge at `:717-807`; the only `gpt_boundary_parts` writer is `canonical_source_phase221_fallback.py:3102-3104` | Deterministic direct-text follow-ups are merged back into their parent row. Multiple model-ruled rows exist only on the PDF page-ledger lane at this commit. |
+| Phase 3 only annotates that result | `canonical_source_phase3_contract.py:41-45,348-356,428-435` | The semantic graph does not discover parent tasks absent from the Phase 2 ledger. |
 | PDF has a different recovery authority | `canonical_source_phase221_fallback.py:2790-2875,3330-3367` | A verified GPT page task can be created even when the parser found no candidate. |
 
 The existing API extractor in `generation.py` still performs a model
 extraction and completeness review, then merges deterministic anchors
-(`generation.py:7440-7515`). Under the active Phase 2 contract, however, that
-function body is not the production inventory author for a text upload.
+(`generation.py:7370-7542`). Under the active Phase 2 contract, however, that
+function body is not the production inventory author for a text upload. The
+precise claim is therefore **no live model is the closed-world task-membership
+author on the active text path**, not “the rebound function can never call an
+API” and not “every final item is 1:1 with the **initial**
+`_source_task_anchors` result.” Its
+chapter-wide call at `canonical_source_phase2_contract.py:154-163` assigns a
+topic to a task the ledger already supplied; Phase 2.1's extra membership
+comes from deterministic cue recovery, not that API call.
+
+The central rebind correction is reproducible without importing the service:
+
+```bash
+git show d7d2e2f:backend/app/services/canonical_source_phase2_contract.py | nl -ba | sed -n '27,44p;134,192p;258,267p'; git show d7d2e2f:backend/app/services/canonical_source_phase21.py | nl -ba | sed -n '97,120p'; git show d7d2e2f:backend/app/services/canonical_source_phase21_structure.py | nl -ba | sed -n '1,29p;74,96p;279,390p;944,1039p'; git show d7d2e2f:backend/app/services/generation.py | nl -ba | sed -n '7370,7542p'
+git grep -n 'gpt_boundary_parts' d7d2e2f -- backend/app/services; git show d7d2e2f:backend/app/services/canonical_source_phase2.py | nl -ba | sed -n '660,664p;717,807p'
+```
 
 ### 2.1 The semantic decisions currently made by patterns
 
@@ -74,21 +100,34 @@ The parser does more than recognize syntax:
 
 - `_QUESTION_SENTENCE_RE` admits only named English interrogatives and
   auxiliary verbs and imposes `{8,800}` character bounds
-  (`generation.py:4422-4429`).
+  (`generation.py:4414-4421`).
 - `_STANDALONE_CHECKPOINT_DIRECTIVE_RE` is an English imperative vocabulary
-  (`generation.py:4442-4447`).
+  (`generation.py:4434-4439`).
 - `_CHECKPOINT_CONTAINER_HEADING_RE`, `_TASK_LIST_CONTAINER_RE`, and
   `_CHAPTER_WIDE_TASK_HEADING_RE` decide where task parsing is active from
-  finite English heading vocabularies (`generation.py:4396-4421`).
+  finite English heading vocabularies (`generation.py:4388-4413`).
 - The headingless recovery lane adds more English phrases, stop words,
   content-specific token sets, and numeric text bounds
-  (`generation.py:4601-4659,4764-4858`).
+  (`generation.py:4593-4675,4757-4850`).
 - `_source_task_anchors` uses those results to create the only tasks that reach
-  the text-lane ACSD ledger (`generation.py:5267-5849`). It also contains
-  English-only branches for activity/project headings and task scoping.
+  the **initial** text-lane ACSD ledger (`generation.py:5259-5842`). It also
+  contains English-only branches for activity/project headings and task
+  scoping.
+- Phase 2.1 then applies another English cue vocabulary. `_CUE_RE` appends a
+  new task directly; `_TASK_CUE_HEADING_RE`, `_IMPERATIVE_RE`, and the presence
+  of `?` decide whether sibling blocks become task follow-ups
+  (`canonical_source_phase21_structure.py:16-29,74-96,279-390,944-1039`).
 
 These are content-membership decisions under Rule 1, even where comments call
 them structural gates. They decide whether a learner-visible ask exists at all.
+For direct text, `inventory_from_canonical` merges deterministic follow-up
+`leaf_cases` back into one row per final parent. Phase 2.1 can nevertheless
+append cue-matched parents, so “final inventory is 1:1 with the initial anchor
+list” is false. The narrower and load-bearing statement is that a source block
+missed by **both deterministic membership passes** has no later closed-world
+model authority that can add it. The only current `gpt_boundary_parts` writer
+that can produce multiple model-ruled rows is the PDF fallback
+(`canonical_source_phase221_fallback.py:3102-3104`).
 
 Concrete loss cases include:
 
@@ -96,8 +135,9 @@ Concrete loss cases include:
   with neither an English container heading nor an English interrogative cue;
 - `Compare the two accounts.` in an otherwise ordinary unlabelled paragraph —
   a single imperative ask outside a recognized container;
-- a legitimate question whose printed wording falls below 8 or above 800
-  characters after its cue; and
+- a legitimate question outside all recognized container/cue recovery paths
+  whose printed wording falls below 8 or above 800 characters after its cue;
+  and
 - a publisher-specific callout with no `?`, English task-list heading, or
   recognized `Activity`/`Project` label.
 
@@ -159,6 +199,10 @@ This is a contract replacement, not a single call-site edit.
 
 - Re-author Phase 2 task construction so `_source_task_anchors` yields
   **candidates and mechanical source locations**, not the canonical task set.
+  The same change must demote Phase 2.1's `recover_plain_task_cues`,
+  `recover_followup_task_prompts`, and `is_task_like` from membership authority
+  to candidate/span evidence; fixing only the first parser leaves the wider
+  deterministic recovery vocabulary in charge.
 - Add a text-source task-verdict ledger parallel in authority to the verified
   PDF page ledger. Each verdict must retain block IDs, source spans, task/context
   relationships, rationale, review flags, prompt/schema versions, and decision
@@ -172,9 +216,11 @@ This is a contract replacement, not a single call-site edit.
 
 ### 5.2 Runtime wiring
 
-- Replace the import-time Phase 2 rebinding contract that bypasses model
-  extraction. The production function name must describe what it does; keeping
-  `_via_api` while a wrapper forbids the API is actively misleading.
+- Replace the import-time Phase 2 rebinding contract that bypasses the
+  extraction-author API. The production function name must describe what it
+  does; keeping `_via_api` while the wrapper builds membership without that API
+  is actively misleading even though chapter-wide topic placement may still
+  make a later API call.
 - Ensure Phase 3 consumes the adjudicated task ledger and cannot annotate a
   parser-only fallback as semantic extraction.
 - Thread the Architect instruction identity and relevant language/board slots
@@ -196,7 +242,9 @@ must prove the stored verdict is reused without a call.
 
 Parser tests remain useful only for span recovery, list-label parsing, figure
 attachment, and candidate provenance. They must not assert that the absence of
-a regex match means the absence of a question.
+a regex match means the absence of a question. Phase 2.1 tests for
+`recover_plain_task_cues` and `recover_followup_task_prompts` require the same
+migration: cue matches may nominate exact spans, but cannot author membership.
 
 ## 6. Validation and live-provider requirement
 
@@ -261,4 +309,3 @@ question extraction.
 - A resumed run replays the same decisions and QIDs without provider spend.
 - Critic dissent and Fixer decisions reach the release review surface.
 - Live acceptance on real chapters is recorded and reviewed.
-
