@@ -9,6 +9,7 @@ import pytest
 from app import models
 from app.services import assessment_grouping as grouping
 from app.services import build_assessments
+from app.services import identity
 from app.services import post_generation
 from app.services.phase3 import kernel
 
@@ -67,7 +68,7 @@ def test_group_selection_accepts_only_a_recorded_tier(db) -> None:
         "Recorded level concept — Advanced"
     )
     assert group.group_key == grouping.group_key_for(
-        build_assessments._legacy_machine_id(concept), "Advanced", 1
+        identity.machine_id_for_concept(concept), "Advanced", 1
     )
     assert group.group_sequence == 1
     db.rollback()
@@ -80,7 +81,7 @@ def test_group_selection_never_chooses_first_same_tier_variant(db) -> None:
             concept_id=concept.id,
             group_type="Basic",
             group_key=grouping.group_key_for(
-                build_assessments._legacy_machine_id(concept),
+                identity.machine_id_for_concept(concept),
                 "Basic",
                 sequence,
             ),
@@ -116,7 +117,7 @@ def test_group_selection_records_missing_legacy_machine_identity(db) -> None:
 
     assert selected.id == legacy.id
     assert selected.group_key == grouping.group_key_for(
-        build_assessments._legacy_machine_id(concept), "Intermediate", 1
+        identity.machine_id_for_concept(concept), "Intermediate", 1
     )
     assert selected.group_sequence == 1
     assert selected.group_name == selected.group_display_name == (

@@ -401,6 +401,30 @@ judgment wearing a curriculum hat.
      a gate that refuses a broken artefact, which CLAUDE.md permits — and
      it fails closed.
 
+4. *The reference school (MES) is a PROFILE, not the bible.* Q5 makes its
+   accepted workbooks the schema of record — **the layout only**: which
+   columns exist, in what order, under which band. It settles nothing about
+   pedagogy, topology, how a chapter is broken down, how many questions a
+   concept deserves, or what good teaching content looks like. Those follow
+   the Aegis document, whose objective is to work **across sources, grades,
+   boards and subjects**.
+
+   The codebase already states this and should be kept honest to it —
+   `assessment_profile.py`: *"The assessment pipeline is school-agnostic …
+   everything a school's paper format dictates lives in a profile, never in
+   code … another school is another profile, not another pipeline."* So
+   `allow_subjective_rows: False` is one profile's value, not a rule about
+   assessments; `LEGACY_SHEET_KINDS` carries all three sheets.
+
+   The failure mode to watch, because it has happened once already: prose
+   that promotes a reference value into an observed norm. Slice D1's
+   calibration text claimed "the reference school's usual pre-learning
+   coverage is 40 questions per concept" — a provenance found nowhere in
+   the docs, attributing a number to the very authority the pipeline exists
+   to match. An audit caught it; it now reads "a target this project
+   recorded, not an observed practice of any school, board or grade".
+   Treat any new sentence of that shape as a defect.
+
 ### Step 8 — Four-output release on the SOP/MES schema (Q5)
 Doc: §6, §7, Q5.
 - Migrate schema constants, writer, and acceptance tests to the

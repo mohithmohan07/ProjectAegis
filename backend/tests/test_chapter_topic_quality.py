@@ -7,6 +7,7 @@ from app.services import build_concepts
 from app.services import concept_refiner as cr
 from app.services import concept_validator as cv
 from app.services import generation as g
+from app.services import identity
 from app.services import prompts
 
 
@@ -649,7 +650,24 @@ def test_sync_chapter_topic_summary_preserves_finalized_duration(db):
     assert chapter.chapter_duration == "160 minutes"
 
 
-def test_sync_chapter_topic_summary_falls_back_without_meta(db):
+def test_sync_chapter_topic_summary_authors_nothing_without_meta(db):
+    """INVERTED by the Rule-1 purge atomic with spec-step8 S8.
+
+    Two code-composed fallbacks used to fill these cells when nothing
+    authored them: ``f"This chapter develops {n_concepts} concept(s)
+    across {len(topics)} topic(s): …"`` and
+    ``f"{max(40, n_concepts * 12)} minutes"``. Both are VOLUME-DERIVED
+    STRUCTURE (CLAUDE.md:17-18) — neither reads the book; both scale a
+    learner-visible cell off a count. They were invisible while
+    ``chapter_duration`` shipped force-blanked, and un-blanking it through
+    the profile without purging them first would have shipped a
+    manufactured number to every school.
+
+    A chapter nothing authored a description or a duration for now ships
+    BLANK, which is honest. The TOPIC roster below is unchanged: it is a
+    list of the concepts actually present, not a number derived from how
+    many there are.
+    """
     chapter = models.Chapter(
         chapter_code="10CBMA_MetaF", board="CBSE", grade="10",
         subject="Mathematics", unit="Mathematics Unit",
@@ -670,8 +688,8 @@ def test_sync_chapter_topic_summary_falls_back_without_meta(db):
     db.commit()
 
     build_concepts._sync_chapter_topic_summary(chapter)
-    assert chapter.chapter_description
-    assert chapter.chapter_duration.endswith("minutes")
+    assert not (chapter.chapter_description or "")
+    assert not (chapter.chapter_duration or "")
     assert topic.topic_description == "Covers A."
 
 
@@ -747,18 +765,23 @@ def test_mastery_template_is_gone_and_polish_repairs_missing_mastery():
     )
 
 
-def test_duplicate_titles_are_dropped_chapter_wide():
+def test_duplicate_titles_dedupe_within_topic_and_survive_across_topics():
+    """Step 11: identity is topic-scoped. Two stanza topics may both teach
+    a concept named "Courage"; only a same-topic restatement is dropped."""
     records = [
         _rec("Similarity vs Congruence", "Description: a", topic="T1"),
         _rec("AAA Criterion", "Description: b", topic="T1"),
-        # Same concept restated under another topic (chunked extraction echo).
-        _rec("Similarity vs Congruence", "Description: a again", topic="T2"),
+        # Same-topic restatement (chunked extraction echo): deduped.
+        _rec("Similarity vs Congruence", "Description: a again", topic="T1"),
+        # Same visible name under ANOTHER topic: a different concept; kept.
+        _rec("Similarity vs Congruence", "Description: c", topic="T2"),
     ]
     out = g._dedupe_titles_chapter_wide(records)
-    assert [r["concept_title"] for r in out] == [
-        "Similarity vs Congruence", "AAA Criterion"]
-    # First statement (the teaching home) is the one kept.
-    assert out[0]["topic"] == "T1"
+    assert [(r["topic"], r["concept_title"]) for r in out] == [
+        ("T1", "Similarity vs Congruence"),
+        ("T1", "AAA Criterion"),
+        ("T2", "Similarity vs Congruence"),
+    ]
 
 
 def test_control_chars_are_stripped_from_records_and_cells():
@@ -786,7 +809,7 @@ def test_chapter_meta_prompt_contract():
 
 
 # --------------------------------------------------------------------------- #
-# Question-label topic numbering: why it is NOT lane-scoped
+# Question-label topic numbering: the lane lives IN the id
 # --------------------------------------------------------------------------- #
 
 def _labelled_chapter(db, code: str, lanes: list[str], titles: list[str]):
@@ -819,30 +842,47 @@ def _labelled_chapter(db, code: str, lanes: list[str], titles: list[str]):
     return concepts
 
 
-def test_topic_numbering_is_chapter_wide_so_pre_labels_cannot_collide(db):
-    """``_topic_index`` must NOT be scoped to the learning lane.
+def test_topic_numbering_is_lane_scoped_because_the_id_carries_the_lane(db):
+    """The rebuild ``_topic_index``'s own docstring named as the real fix.
 
-    ``question_label`` carries a literal ``_PL_`` and no lane discriminator,
-    so numbering each lane from 1 makes a Pre label byte-identical to a Post
-    label whenever same-position topics carry the same concept title. That
-    is not cosmetic: ``assessment_release_service`` builds ``existing_labels``
-    from a global ``Question`` query and silently skips a candidate whose
-    label already exists, and ``question_label`` has no unique constraint —
-    so the colliding question is never created, with no flag (R4).
+    ``_topic_index`` was deliberately NOT lane-scoped, and it recorded why:
+    ``question_label`` carried a literal ``_PL_`` and no lane discriminator,
+    so numbering each lane from 1 made a Pre label byte-identical to a Post
+    label whenever same-position topics carried the same concept title. That
+    was never cosmetic: ``assessment_release_service`` builds
+    ``existing_labels`` from a global ``Question`` query and silently skips a
+    candidate whose label already exists, and ``question_label`` has no
+    unique constraint — so the colliding question was never created, with no
+    flag (R4). Its docstring closed by naming the per-topic/per-concept ID
+    minting rebuild of §10 step 8 as the real fix.
 
-    Giving the label a lane discriminator is the §10 step-8 ID-minting
-    rebuild. Until then this pins the numbering that keeps the two lanes
-    apart, and pins WHY, so the lane scoping is not reintroduced alone.
+    That rebuild is S4, and this test is re-authored against it in the same
+    commit that deletes ``_topic_index``. The lane now sits INSIDE the id as
+    a ``PL``/``PrL`` token, so the numbering is lane-scoped — both topics are
+    ``T01`` — and the two labels still cannot collide. The chapter-wide index
+    is gone, and with it the reason it existed.
     """
     post, pre = _labelled_chapter(
         db, "10CBMA_Collide", ["Post", "Pre"], ["Ratio Basics", "Ratio Basics"],
     )
 
-    assert g._topic_index(post) == 1
-    assert g._topic_index(pre) == 2, (
-        "the Pre topic must keep a distinct number; lane-scoped numbering "
-        "would make both 1 and the two labels identical"
+    assert not hasattr(g, "_topic_index"), (
+        "the chapter-wide topic index is retired; the lane token in the "
+        "machine id replaced it"
     )
+    post_id = identity.machine_id_for_concept(post)
+    pre_id = identity.machine_id_for_concept(pre)
+    db.commit()
+
+    assert post_id.endswith("_PL_T01_C01"), post_id
+    assert pre_id.endswith("_PrL_T01_C01"), pre_id
+    assert identity.topic_position(post.topic) == 1
+    assert identity.topic_position(pre.topic) == 1, (
+        "the numbering IS lane-scoped now; the lane token, not the number, "
+        "is what keeps the two families apart"
+    )
+    assert g.question_label(post, 1) == f"{post_id} Q01"
+    assert g.question_label(pre, 1) == f"{pre_id} Q01"
     assert g.question_label(post, 1) != g.question_label(pre, 1)
 
 

@@ -19,6 +19,10 @@ import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
 
+from . import assessment_profile
+# Aliased: three functions in this module use ``identity`` as a local.
+from . import identity as identity_mod
+
 # --------------------------------------------------------------------------- #
 # Release state machine (spec §5.6)
 # --------------------------------------------------------------------------- #
@@ -100,7 +104,11 @@ _CORRECT_OPTION_MARKERS = frozenset({"1", "true", "yes"})
 
 def is_correct_option(value) -> bool:
     return str(value or "").strip().lower() in _CORRECT_OPTION_MARKERS
-SHEET_KINDS = ("objective", "descriptive")
+# ``SHEET_KINDS`` used to be re-declared here as "the default profile's
+# sheet kinds, for sites with no profile in hand". [measured] it had ZERO
+# readers under ``app/`` and ``tests/`` — a declaration with no reader is
+# what C10's key-with-no-reader pin exists to catch, so it is gone.
+# ``assessment_profile.sheet_kinds(profile)`` is the one owner (T12/M5b).
 ANSWER_RESTRICTIONS = ("Open", "Specific")
 
 _SOURCE_ATOM_REQUIRED = (
@@ -159,18 +167,25 @@ def validate_source_atom(atom: Mapping) -> list[str]:
     return errors
 
 
-def validate_blueprint_cell(cell: Mapping) -> list[str]:
+def validate_blueprint_cell(
+    cell: Mapping, profile: Mapping | str | None = None,
+) -> list[str]:
     errors = [
         f"missing {f}" for f in _missing(cell, _BLUEPRINT_CELL_REQUIRED)
     ]
-    if cell.get("sheet_kind") not in SHEET_KINDS:
+    # The allowed set is the PROFILE's, not a school baked into a message
+    # (spec-step8 T12/M6): what a school's papers use is a profile fact.
+    allowed = assessment_profile.sheet_kinds(profile)
+    if cell.get("sheet_kind") not in allowed:
         errors.append(
-            f"sheet_kind must be one of {SHEET_KINDS} "
-            f"(got {cell.get('sheet_kind')!r}); MES never uses Subjective")
+            f"sheet_kind must be one of {allowed} "
+            f"(got {cell.get('sheet_kind')!r})")
     return errors
 
 
-def validate_candidate(candidate: Mapping) -> list[str]:
+def validate_candidate(
+    candidate: Mapping, profile: Mapping | str | None = None,
+) -> list[str]:
     errors = [f"missing {f}" for f in _missing(candidate, _CANDIDATE_REQUIRED)]
     # Explicit, deliberate, and independent of ``_missing``'s string
     # coercion (see ``_CANDIDATE_REQUIRED``).  Identity accounting only:
@@ -189,9 +204,10 @@ def validate_candidate(candidate: Mapping) -> list[str]:
             f"source_policy {GENERATED_SOURCE_POLICY!r}"
         )
     kind = candidate.get("sheet_kind")
-    if kind not in SHEET_KINDS:
+    allowed_kinds = assessment_profile.sheet_kinds(profile)
+    if kind not in allowed_kinds:
         errors.append(
-            f"sheet_kind must be one of {SHEET_KINDS} "
+            f"sheet_kind must be one of {allowed_kinds} "
             f"(got {kind!r})")
     restriction = candidate.get("answer_restriction")
     if restriction not in ANSWER_RESTRICTIONS:
@@ -372,14 +388,18 @@ def validate_candidate(candidate: Mapping) -> list[str]:
     return errors
 
 
-def validate_placement(placement: Mapping) -> list[str]:
+def validate_placement(
+    placement: Mapping, profile: Mapping | str | None = None,
+) -> list[str]:
     errors = [f"missing {f}" for f in _missing(placement, _PLACEMENT_REQUIRED)]
     secondary = placement.get("secondary_placements")
-    if secondary:
-        # MES automatic secondary placements are off (spec §3.7).
+    # Whether automatic secondary placements exist is the profile's EXISTING
+    # ``automatic_secondary_tags`` key (spec-step8 T12/M6) — not a second key,
+    # and not a school name in a message.
+    if secondary and not assessment_profile.automatic_secondary_tags(profile):
         errors.append(
-            "secondary_placements must be empty for MES "
-            f"(got {len(secondary)})")
+            "secondary_placements must be empty under profile "
+            f"{assessment_profile.name(profile)!r} (got {len(secondary)})")
     return errors
 
 
@@ -435,6 +455,398 @@ def duplicate_group_keys(groups: Iterable[Mapping]) -> list[str]:
     return duplicates
 
 
+# --------------------------------------------------------------------------- #
+# The staged home/shape verdict (spec-step8 T7.5, D8.5b)
+# --------------------------------------------------------------------------- #
+# A candidate the renderer cannot write to a data row is decided at STAGING,
+# recorded once on the release, refused at the publication act by machinery
+# that already exists, and merely REPORTED by the renderer.
+#
+# Why it cannot live in the renderer: ``render_master_file`` runs at
+# PROJECTION time, inside ``publish_release``, after the payload is frozen —
+# so a discovery made there reaches no readiness computation, and a raise
+# made there costs every row on every sheet of all four outputs.  These
+# codes are computed here instead, from the four inputs the renderer uses,
+# and ride ``freeze_payload``'s existing ``errors`` transport into
+# ``diagnostics["payload_errors"]`` → ``_readiness`` BLOCKED → the upload
+# refusal.  One vocabulary, one transport, one refusal.
+#
+# It counts identities and compares key sets against literal tuples.  It
+# judges nothing about content, so it is a gate under CLAUDE.md's "what is
+# still allowed to be deterministic", not a judgment under Rule 1.
+
+UNRESOLVED_QUESTION_HOME = "unresolved_question_home"
+GROUP_HOME_DISAGREEMENT = "group_home_disagreement"
+SHEET_KIND_NOT_RENDERABLE = "sheet_kind_not_renderable"
+GROUP_CONCEPT_HOME_UNKNOWN = "group_concept_home_unknown"
+GROUP_HOME_UNNAMED = "group_home_unnamed"
+GROUP_VISIBLE_NAME_MISMATCH = "group_visible_name_mismatch"
+RENDER_SHAPE_OVERFLOW = "render_shape_overflow"
+
+QUESTION_HOME_CODES = (
+    UNRESOLVED_QUESTION_HOME,
+    GROUP_HOME_DISAGREEMENT,
+    SHEET_KIND_NOT_RENDERABLE,
+    GROUP_CONCEPT_HOME_UNKNOWN,
+    GROUP_HOME_UNNAMED,
+    GROUP_VISIBLE_NAME_MISMATCH,
+    RENDER_SHAPE_OVERFLOW,
+)
+
+# Two GROUP-identity codes for the renderer's evidence ledger
+# (``issues["group_defects"]``). They are deliberately NOT question-home
+# codes and NOT in ``QUESTION_HOME_CODES``: a blank or duplicate
+# ``group_key`` is refused at freeze by ``validate_group`` /
+# ``duplicate_group_keys`` and again by ``validate_master_file``'s
+# read-back, so nothing here decides anything. They exist because the
+# renderer used to tag both with ``UNRESOLVED_QUESTION_HOME`` — a
+# candidate-level code on a group-level defect, which put the wrong
+# vocabulary in front of a reviewer reading ``manifest.json``.
+GROUP_KEY_BLANK = "group_key_blank"
+GROUP_KEY_DUPLICATE = "group_key_duplicate"
+
+GROUP_LEDGER_CODES = (
+    GROUP_KEY_BLANK,
+    GROUP_KEY_DUPLICATE,
+    GROUP_CONCEPT_HOME_UNKNOWN,
+)
+
+
+def _finding(code: str, message: str, **fields: Any) -> dict:
+    finding = {"code": code, "message": message}
+    finding.update({k: v for k, v in fields.items()})
+    return finding
+
+
+def candidate_home_finding(
+    candidate: Mapping,
+    concept_keys,
+    groups_by_key: Mapping,
+    renderable,
+    profile_name: str = "",
+) -> dict | None:
+    """THE decision "can this candidate be written to a data row".
+
+    ONE implementation, two callers: ``unresolved_question_homes`` below
+    (which stages it, so readiness and the upload refusal see it) and
+    ``assessment_workbook.render_master_file`` (which records the same
+    verdict in the issues manifest's unplaced ledger as the evidence
+    channel).  They used
+    to be two inline copies of the same three branches reading the same
+    four inputs — and they had already drifted: the staged copy compared
+    against ``RENDERABLE_SHEET_KINDS`` while the renderer compared against
+    ``sheet_for_kind()``, which is that tuple INTERSECTED with the layout's
+    sheet-name map.  [measured] under a layout carrying no Descriptive
+    sheet the renderer dropped every descriptive candidate while the staged
+    verdict returned nothing, so readiness read ``ready`` and the database
+    write proceeded with those questions in no data row.  That is the R4
+    hole this slice exists to close, one layer up, and two implementations
+    of one decision is what T1 exists to end.
+
+    ``renderable`` is the caller's own renderable-kind set, so the drift
+    cannot come back: the renderer passes ``tuple(sheet_for_kind())`` and
+    the staging pass passes the same.
+
+    Returns one finding dict, or ``None`` when the candidate can be placed.
+    It compares key sets and membership only — a gate under CLAUDE.md's
+    "mechanics, not meaning", never a judgment about content.
+    """
+
+    candidate_id = str(candidate.get("candidate_id") or "")
+    label = str(candidate.get("question_label") or "")
+    concept_key = str(candidate.get("concept_key") or "")
+    group_key = str(candidate.get("group_key") or "")
+    identity = label or candidate_id or "candidate"
+    named = {"candidate_id": candidate_id, "question_label": label}
+
+    if (
+        concept_key not in concept_keys
+        or group_key not in groups_by_key
+        or not label
+    ):
+        return _finding(
+            UNRESOLVED_QUESTION_HOME,
+            f"{identity}: unresolved home concept/group placement "
+            f"(concept_key {concept_key!r}, group_key {group_key!r})",
+            concept_key=concept_key, group_key=group_key, **named)
+
+    group_concept_key = str(groups_by_key[group_key].get("concept_key") or "")
+    if group_concept_key != concept_key:
+        return _finding(
+            GROUP_HOME_DISAGREEMENT,
+            f"{identity}: concept_key {concept_key!r} does not match "
+            f"group {group_key!r} home {group_concept_key!r}",
+            concept_key=concept_key, group_key=group_key, **named)
+
+    kind = str(candidate.get("sheet_kind") or "")
+    if kind not in renderable:
+        return _finding(
+            SHEET_KIND_NOT_RENDERABLE,
+            f"{identity}: sheet_kind {kind!r} is outside the kinds this "
+            f"step renders {tuple(renderable)}",
+            sheet_kind=kind, profile=profile_name,
+            renderable_sheet_kinds=list(renderable), **named)
+    return None
+
+
+def _cell_shape_findings(
+    record: Mapping, where: str, **named: Any,
+) -> list[dict]:
+    """Every cell in one RENDERED record that no XLSX cell can hold (S9).
+
+    The staging twin of ``assessment_workbook._cell_value``'s repair. Two
+    things keep it from being a second implementation of one rule — the
+    drift ``candidate_home_finding``'s docstring records is what that
+    costs:
+
+    * the predicate is ``assessment_workbook.cell_text_defects``, that
+      module's own, so the cap and the illegal-character set are read from
+      the format in exactly one place;
+    * the input is the record the RENDERER will build, not the raw
+      candidate. A staged field the renderer never writes into a cell must
+      not refuse a database write, and a field it does write must not
+      escape — only the rendered record answers both.
+
+    ONE FINDING PER SHAPE, because one cell can trip both. [measured] while
+    the predicate answered with the first reason only, a value that was
+    over the cap AND carried an XML-illegal code point was named
+    ``cell_text_too_long`` here and nothing named the code point — so a
+    reviewer reading the findings had no way to know what actually broke
+    the file when openpyxl raised on it.
+
+    It looks at LENGTH and at which code points a cell may carry. It never
+    reads what the text says.
+    """
+    from ..bulk_import import assessment_workbook as workbook
+
+    findings: list[dict] = []
+    for field, value in record.items():
+        for defect in workbook.cell_text_defects(value):
+            findings.append(_finding(
+                RENDER_SHAPE_OVERFLOW,
+                f"{where}: {field} carries {defect['actual']} "
+                + (
+                    f"character(s), and one cell holds {defect['cap']}"
+                    if defect["reason"] == workbook.CELL_TEXT_TOO_LONG
+                    else "character(s) no XLSX cell may carry ("
+                    + ", ".join(defect.get("code_points") or [])
+                    + ")"
+                ),
+                field=str(field), cap=defect["cap"],
+                actual=defect["actual"],
+                reason=defect["reason"], **named))
+    return findings
+
+
+def unresolved_question_homes(
+    snapshot: Mapping, profile: Mapping | str | None = None,
+) -> list[dict]:
+    """Every home/shape defect the Master renderer used to raise or drop.
+
+    A PURE function of the frozen snapshot's ``candidates``, ``groups`` and
+    ``concept_key`` set plus the profile's allowed sheet kinds — the same
+    four inputs ``assessment_workbook.render_master_file`` reads, so it can
+    decide at STAGING what the renderer used to discover at projection time.
+
+    Returns a list of ``{"code", "message", …identity}`` findings.  The
+    caller appends them to the frozen payload's ``errors``.
+    """
+
+    # Local imports: ``assessment_workbook`` and ``assessment_grouping``
+    # both import this module, so the renderable set, the layout's own
+    # column caps and the learner-visible group-name composition are read
+    # here rather than declared twice.  Both edges are one-way and taken at
+    # call time.
+    from ..bulk_import import assessment_workbook as workbook
+    from . import assessment_grouping as grouping
+
+    findings: list[dict] = []
+
+    concept_names: dict[str, str] = {}
+    for topic in snapshot.get("topics") or []:
+        for concept in topic.get("concepts") or []:
+            concept_names[str(concept.get("concept_key") or "")] = str(
+                concept.get("concept_display_name") or ""
+            ).strip()
+            # The concept band is written into every Master row and into
+            # every Concept File row, so a concept cell no XLSX cell can
+            # hold is the same defect one band over (S9). The renderer now
+            # COMPOSES the title cell off the machine id (B4), so the
+            # measured mapping must carry the composed value or this gate
+            # measures a string the renderer no longer writes (the audit's
+            # near-limit truncation hole).
+            concept_machine_id = str(
+                concept.get("concept_machine_id") or "").strip()
+            rendered_shape = dict(concept)
+            if concept_machine_id:
+                rendered_shape["concept_title"] = identity_mod.titled(
+                    str(concept.get("concept_title") or ""),
+                    concept_machine_id,
+                )
+            findings.extend(_cell_shape_findings(
+                rendered_shape,
+                f"concept {concept.get('concept_title') or ''}".strip(),
+                concept_key=str(concept.get("concept_key") or ""),
+            ))
+
+    groups_by_key: dict[str, Mapping] = {}
+    for group in snapshot.get("groups") or []:
+        group_key = str(group.get("group_key") or "")
+        if not group_key or group_key in groups_by_key:
+            # Blank and duplicate ``group_key`` are already refused at
+            # freeze by ``validate_group``/``duplicate_group_keys`` and
+            # again by ``validate_master_file``'s read-back; naming them a
+            # third time here would be a third vocabulary for one defect.
+            continue
+        groups_by_key[group_key] = group
+
+    for group_key, group in groups_by_key.items():
+        concept_key = str(group.get("concept_key") or "")
+        if concept_key not in concept_names:
+            findings.append(_finding(
+                GROUP_CONCEPT_HOME_UNKNOWN,
+                f"group {group_key!r} has unknown concept home "
+                f"{concept_key!r}",
+                group_key=group_key, concept_key=concept_key))
+            continue
+        concept_name = concept_names[concept_key]
+        if not concept_name:
+            findings.append(_finding(
+                GROUP_HOME_UNNAMED,
+                f"group {group_key!r} home {concept_key!r} has no explicit "
+                "concept_display_name",
+                group_key=group_key, concept_key=concept_key))
+            continue
+        tier = str(group.get("group_type") or "")
+        if tier not in GROUP_TYPES or tier not in grouping.TIER_CODES:
+            # ``validate_group`` already refuses this at freeze.
+            continue
+        # ONE owner for the learner-visible composition.  It used to be
+        # spelled inline here as ``f"{concept_name} — {tier}"`` while
+        # ``assessment_grouping.friendly_group_name`` composed the value
+        # that is actually written — so a change to the separator would
+        # have falsely flagged every group of every release and blocked
+        # every one of them.  The two guards above are exactly the two
+        # conditions ``friendly_group_name`` raises on, so this call cannot
+        # raise and the function stays pure.
+        visible_name = grouping.friendly_group_name(concept_name, tier)
+        if (
+            str(group.get("group_name") or "") != visible_name
+            or str(group.get("group_display_name") or "") != visible_name
+        ):
+            findings.append(_finding(
+                GROUP_VISIBLE_NAME_MISMATCH,
+                f"group {group_key!r} visible names must both equal "
+                f"{visible_name!r}",
+                group_key=group_key, concept_key=concept_key))
+
+    allowed_kinds = assessment_profile.sheet_kinds(profile)
+    # ``sheet_for_kind()``, NOT ``RENDERABLE_SHEET_KINDS``: the renderer
+    # places a candidate iff ``sheet_for_kind()`` names a sheet for its
+    # kind, and that map is the constant INTERSECTED with the layout's own
+    # sheet-name map.  Reading the un-intersected constant here was a
+    # second source for one question — see ``candidate_home_finding``.
+    sheet_by_kind = workbook.sheet_for_kind()
+    renderable = tuple(sheet_by_kind)
+    profile_name = assessment_profile.name(profile)
+    caps = (
+        ("answers", workbook.MAX_OBJECTIVE_OPTIONS, ("objective",)),
+        ("answers", workbook.MAX_DESCRIPTIVE_ANSWERS, ("descriptive",)),
+        ("sub_questions", workbook.MAX_SUBQUESTIONS, ("descriptive",)),
+    )
+
+    for candidate in snapshot.get("candidates") or []:
+        candidate_id = str(candidate.get("candidate_id") or "")
+        label = str(candidate.get("question_label") or "")
+        identity = label or candidate_id or "candidate"
+        home = candidate_home_finding(
+            candidate, concept_names, groups_by_key, renderable, profile_name)
+        if home is not None:
+            if (
+                home["code"] == SHEET_KIND_NOT_RENDERABLE
+                and home["sheet_kind"] not in allowed_kinds
+            ):
+                # A kind the PROFILE does not allow at all is already
+                # refused at freeze by ``validate_candidate``. Naming it
+                # here as well would be two vocabularies for one defect —
+                # the negative control the reference profile pins. The
+                # renderer still records it in the issues manifest's
+                # unplaced ledger, so nothing about it is silent.
+                continue
+            findings.append(home)
+            continue
+        kind = str(candidate.get("sheet_kind") or "")
+        for field, cap, kinds in caps:
+            if kind not in kinds:
+                continue
+            actual = len([
+                item for item in candidate.get(field) or []
+                if isinstance(item, Mapping)
+            ])
+            if actual > cap:
+                findings.append(_finding(
+                    RENDER_SHAPE_OVERFLOW,
+                    f"{identity}: {actual} {field} exceeds the layout's "
+                    f"{cap} slots",
+                    candidate_id=candidate_id, question_label=label,
+                    field=field, cap=cap, actual=actual))
+        sheet_name = sheet_by_kind.get(kind)
+        if sheet_name:
+            findings.extend(_cell_shape_findings(
+                workbook._question_record(candidate, sheet_name, profile),
+                f"{identity}",
+                candidate_id=candidate_id, question_label=label,
+            ))
+        if kind == "descriptive":
+            for n, sub in enumerate(candidate.get("sub_questions") or [], 1):
+                if not isinstance(sub, Mapping):
+                    continue
+                actual = len([
+                    k for k in sub.get("keywords") or []
+                    if isinstance(k, Mapping)
+                ])
+                if actual > workbook.MAX_SUBQUESTION_KEYWORDS:
+                    findings.append(_finding(
+                        RENDER_SHAPE_OVERFLOW,
+                        f"{identity}: subquestion {n} has {actual} keyword "
+                        f"slots, the layout carries "
+                        f"{workbook.MAX_SUBQUESTION_KEYWORDS}",
+                        candidate_id=candidate_id, question_label=label,
+                        field=f"sub_questions[{n}].keywords",
+                        cap=workbook.MAX_SUBQUESTION_KEYWORDS, actual=actual))
+    return findings
+
+
+def duplicate_question_labels(candidates: Iterable[Mapping]) -> list[str]:
+    """Return repeated question labels inside one release.
+
+    ``question_label`` is the learner-facing machine identity of a question.
+    Reusing one label for a different question is structural corruption, not a
+    semantic concern that a later judgment pass may accept with a flag: the
+    database write has exactly one row per label, so the second question does
+    not get stored differently — it does not get stored at all, and a learner
+    question that vanishes with no record is the one loss R4 forbids.
+
+    Seen HERE, at freeze, the collision reaches ``_readiness`` as a payload
+    error, the release goes BLOCKED, every download still ships, and only the
+    database write is refused (T9's principle; the same transport
+    ``duplicate_group_keys`` already rides).
+
+    Blank labels are refused one at a time at the upload, by name; they are not
+    collisions with each other and are skipped here.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for candidate in candidates:
+        label = str(candidate.get("question_label") or "")
+        if not label:
+            continue
+        if label in seen and label not in duplicates:
+            duplicates.append(label)
+        seen.add(label)
+    return duplicates
+
+
 def primary_placement_errors(placements: Iterable[Mapping]) -> list[str]:
     """Exactly one home concept and group per question (spec §3.7)."""
     errors: list[str] = []
@@ -487,7 +899,9 @@ def zero_loss_report(
 # Release construction
 # --------------------------------------------------------------------------- #
 
-def freeze_payload(payload: Mapping) -> dict:
+def freeze_payload(
+    payload: Mapping, profile: Mapping | str | None = None,
+) -> dict:
     """Validate and hash a complete release payload.
 
     Returns {"errors": [...], "hashes": {...}}. Mechanical gates only: any
@@ -498,17 +912,19 @@ def freeze_payload(payload: Mapping) -> dict:
     for atom in payload.get("source_atoms") or []:
         errors.extend(validate_source_atom(atom))
     for cell in payload.get("blueprint_cells") or []:
-        errors.extend(validate_blueprint_cell(cell))
+        errors.extend(validate_blueprint_cell(cell, profile))
     for candidate in payload.get("candidates") or []:
-        errors.extend(validate_candidate(candidate))
+        errors.extend(validate_candidate(candidate, profile))
     for group in payload.get("groups") or []:
         errors.extend(validate_group(group))
     for placement in payload.get("placements") or []:
-        errors.extend(validate_placement(placement))
+        errors.extend(validate_placement(placement, profile))
     for identity in duplicate_group_identities(payload.get("groups") or []):
         errors.append(f"duplicate group identity {identity}")
     for group_key in duplicate_group_keys(payload.get("groups") or []):
         errors.append(f"duplicate group_key {group_key!r}")
+    for label in duplicate_question_labels(payload.get("candidates") or []):
+        errors.append(f"duplicate question_label {label!r}")
     errors.extend(
         primary_placement_errors(payload.get("placements") or []))
     return {

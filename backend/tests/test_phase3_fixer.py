@@ -500,63 +500,66 @@ def _drop_mastery(row: dict) -> dict:
     return row
 
 
-def test_a_fixer_accepted_code_ships_flagged_through_both_gates():
+def test_an_advisory_code_ships_flagged_through_both_gates_without_a_fixer():
+    """RE-AUTHORED under S11 (T10-2): this test used to pin the Fixer
+    accept-with-flag round for ``missing_mastery_statement``. That code is
+    not in ``_BLOCKING_CODES`` any more, so it never reaches the gate Fixer
+    — it ships flagged directly, with no model decision needed, and the
+    deposit twin passes on the same record. The Fixer machinery itself
+    stays pinned by the correction test below and by the inventory seams.
+    """
     records = [_drop_mastery(_strict_row()), _strict_culmination()]
-    store = kernel.DecisionStore()
     fixer_calls: list[dict] = []
 
     def fixer(request: dict) -> dict:
         fixer_calls.append(request)
-        return {
-            "accept_with_flag": True,
-            "rationale": "the description already states the capability",
-        }
+        return {"accept_with_flag": True, "rationale": "never asked"}
 
     report = g._validate_final_or_raise(
-        records, fixer=fixer, fixer_store=store)
+        records, fixer=fixer, fixer_store=kernel.DecisionStore())
 
     assert report["summary"] is not None
-    assert fixer_calls, "the fixer round must run"
-    assert fixer_calls[0]["blocked_check"][0]["code"] == (
-        "missing_mastery_statement"
+    assert fixer_calls == [], (
+        "an advisory code must not spend a Fixer decision"
     )
-    assert records[0]["_fixer_accepted_codes"] == [
-        "missing_mastery_statement"
-    ]
+    assert "_fixer_accepted_codes" not in records[0]
     assert any(
-        flag.startswith(
-            "fixer: blocked=missing_mastery_statement at final validation; "
-            "decided=accepted with flag"
-        )
+        "validation: missing_mastery_statement at the final gate" in flag
         for flag in records[0]["review_flags"]
     )
-    # The deposit twin honors the recorded acceptance without a new
-    # decision (F39), and the F40 filter drops the accepted pair too.
+    # The deposit twin ships the same record without a Fixer either.
     g._validate_final_or_raise(records, stage="deposit")
-    remaining = g._without_fixer_accepted(records, [{
-        "row_index": 0, "code": "missing_mastery_statement",
-        "severity": "error",
-    }])
-    assert remaining == []
+    assert fixer_calls == []
 
 
 def test_a_fixer_corrected_row_clears_the_final_gate():
+    """RE-AUTHORED under S11 (T10-2): the correction flow is pinned on a
+    BLOCKING code now — ``required`` (an empty mandatory field), the class
+    that still halts a run — since advisory codes no longer reach the gate
+    Fixer at all.
+    """
     healthy = _strict_row()
-    records = [_drop_mastery(_strict_row()), _strict_culmination()]
+    broken = _strict_row()
+    broken["concept_details"] = ""
+    records = [broken, _strict_culmination()]
+    blocked_codes: list[str] = []
 
-    def fixer(_request: dict) -> dict:
+    def fixer(request: dict) -> dict:
+        blocked_codes.extend(
+            entry["code"] for entry in request["blocked_check"])
         return {
             "row": {"concept_details": healthy["concept_details"]},
-            "rationale": "restored the authored mastery line",
+            "rationale": "restored the authored description",
         }
 
     g._validate_final_or_raise(
         records, fixer=fixer, fixer_store=kernel.DecisionStore())
 
+    assert "required" in blocked_codes
     assert records[0]["concept_details"] == healthy["concept_details"]
     assert any(
         flag.startswith(
-            "fixer: blocked=missing_mastery_statement at final validation; "
+            "fixer: blocked=required at final validation; "
             "decided=corrected row content"
         )
         for flag in records[0]["review_flags"]
@@ -565,10 +568,14 @@ def test_a_fixer_corrected_row_clears_the_final_gate():
 
 
 def test_mechanics_codes_are_never_acceptable_with_a_flag():
-    # Two rows with one identity: duplicate_title/duplicate_topic_concept
-    # are data corruption, not judgment — acceptance must be refused and
-    # the gate must keep failing closed.
-    records = [_strict_row(), _strict_row(), _strict_culmination()]
+    # RE-AUTHORED under S11 (T10-3): the duplicate-title pair left the
+    # mechanics set with the blocking set — identity no longer depends on
+    # title text. ``required`` is the mechanics class that remains: a row
+    # with no mandatory field is corruption, acceptance must be refused,
+    # and with no correction on offer the gate keeps failing closed.
+    broken = _strict_row()
+    broken["concept_details"] = ""
+    records = [broken, _strict_culmination()]
     fixer_calls = 0
 
     def fixer(_request: dict) -> dict:
@@ -576,7 +583,7 @@ def test_mechanics_codes_are_never_acceptable_with_a_flag():
         fixer_calls += 1
         return {"accept_with_flag": True, "rationale": "please accept"}
 
-    with pytest.raises(RuntimeError, match="duplicate"):
+    with pytest.raises(RuntimeError, match="required"):
         g._validate_final_or_raise(
             records, fixer=fixer, fixer_store=kernel.DecisionStore())
 

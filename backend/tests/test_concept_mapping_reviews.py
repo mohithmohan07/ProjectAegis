@@ -141,11 +141,16 @@ def test_alias_related_titles_both_survive_the_cleanup_chain():
     assert not hasattr(concept_cleanup, "find_similar_title_groups")
     assert not hasattr(concept_cleanup, "_KNOWN_CONCEPT_ALIASES")
 
-    # An undecided EXACT duplicate is flagged by the validator (a blocking
-    # duplicate-label report at deposit), never silently dropped.
+    # An undecided EXACT duplicate (same topic + title = one claimed
+    # identity, step 11) is flagged by the validator, never silently
+    # dropped. Chapter-wide duplicate_title is retired: cross-topic same
+    # names are legitimate concepts.
     duplicated = out + [dict(out[0])]
     report = concept_validator.validate_concept_rows(duplicated)
     assert any(
+        e["code"] == "duplicate_topic_concept" for e in report["errors"]
+    )
+    assert not any(
         e["code"] == "duplicate_title" for e in report["errors"]
     )
     assert len(duplicated) == 4  # validation never mutates or drops rows
@@ -224,15 +229,15 @@ def test_pedagogy_topic_reassignment_rides_the_row_as_a_review_flag():
     assert again == out
 
 
-def test_omitted_umbrella_topic_rows_are_named_never_bare_counted(monkeypatch):
-    """An omitted row cannot carry a flag, so it is named instead (R4)."""
-    from app.services import progress as _progress
+def test_umbrella_topic_rows_survive_with_the_record_on_the_row():
+    """INVERTED under S10: the umbrella-topic row survives, flagged (R4).
 
-    logged: list[str] = []
-    monkeypatch.setattr(
-        _progress, "log",
-        lambda message, **_kw: logged.append(str(message)),
-    )
+    This test used to pin the deletion (the omission plus its named
+    progress-log line). The deletion was the ``_FORBIDDEN_TOPIC_NAMES``
+    vocabulary DECIDING what the rows mean — Rule 1's forbidden move — and
+    a silent learner-visible loss at the sealed payload. The record now
+    rides the row itself, where a reviewer can address it.
+    """
     records = [
         {"topic": "Real Section", "concept_title": "A",
          "concept_details": "Description: a", "keywords": ""},
@@ -241,15 +246,28 @@ def test_omitted_umbrella_topic_rows_are_named_never_bare_counted(monkeypatch):
     ]
     out = concept_cleanup.filter_review_violations(
         records, subject="Civics", board="CBSE")
-    assert [r["concept_title"] for r in out] == ["A"]
-    assert len(logged) == 1
-    assert "'Preview of the Chapter'" in logged[0]
-    assert "'Overview'" in logged[0]
-    assert "pedagogy / filler concept row(s)" not in logged[0]
+    assert [r["concept_title"] for r in out] == ["A", "Preview of the Chapter"]
+    assert "review_flags" not in out[0]
+    flags = out[1]["review_flags"]
+    assert len(flags) == 1
+    assert "review_topic_name" in flags[0]
+    assert "R4" in flags[0]
+    assert "'Overview'" in flags[0]
+
+    # Idempotent: replaying the deterministic chain must not stack flags —
+    # the assemble/deposit fixpoint replay depends on it.
+    again = concept_cleanup.filter_review_violations(
+        out, subject="Civics", board="CBSE")
+    assert again == out
 
 
-def test_overview_topic_is_dropped_not_reassigned():
-    """Overview/Summary rows are omitted entirely — never pushed next door."""
+def test_overview_topic_rows_are_flagged_never_reassigned():
+    """Overview/Summary rows keep their own topic — never pushed next door.
+
+    INVERTED under S10 from the deletion pin: the never-reassigned half is
+    the property that survives (pushing a recap row into a neighboring
+    topic caused repeated preview/recap); the omission half is gone.
+    """
     records = [
         {"topic": "Real Section", "concept_title": "A",
          "concept_details": "Description: a", "keywords": ""},
@@ -258,8 +276,11 @@ def test_overview_topic_is_dropped_not_reassigned():
         {"topic": "Summary", "concept_title": "C",
          "concept_details": "Description: c", "keywords": ""},
     ]
-    out = concept_cleanup.filter_review_violations(records, subject="Civics", board="CBSE")
-    assert [r["concept_title"] for r in out] == ["A"]
+    out = concept_cleanup.filter_review_violations(
+        records, subject="Civics", board="CBSE")
+    assert [r["concept_title"] for r in out] == ["A", "B", "C"]
+    assert [r["topic"] for r in out] == ["Real Section", "Overview", "Summary"]
+    assert all("review_flags" in r for r in out[1:])
 
 
 def test_overview_and_summary_content_reaches_excerpts_and_rows_survive():

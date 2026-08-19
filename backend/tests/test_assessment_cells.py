@@ -426,9 +426,25 @@ def test_cell_input_identity_and_profile_fail_before_provider_calls() -> None:
         )
 
 
-def test_profile_cannot_enable_an_unsupported_subjective_wire(monkeypatch) -> None:
+def test_a_widened_profile_widens_the_cells_wire_contract(monkeypatch) -> None:
+    """RE-AUTHORED by spec-step8 T12/M5-M6b, and the name is the point.
+
+    The old name was ``test_profile_cannot_enable_an_unsupported_subjective_
+    wire``. Its profile carried ``allow_subjective_rows: True`` and no
+    ``sheet_kinds``, so under M5b's accessor it would fall back to the
+    default and still raise — [measured] GREEN while proving nothing. A
+    green test whose name has stopped being true is worse than a red one.
+
+    The plumbing genuinely widening the cells wire is the whole point of
+    M5-M6; the refusal moves DOWNSTREAM to the named
+    ``sheet_kind_not_renderable`` defect (T7.5/B3), which is where B3 puts
+    it and where all four downloads survive it.
+    """
     monkeypatch.setattr(cells.config, "phase3_decision_workers", lambda: 1)
-    subjective_profile = {**PROFILE, "allow_subjective_rows": True}
+    widened = {
+        **PROFILE,
+        "sheet_kinds": ("objective", "descriptive", "subjective"),
+    }
     requests = []
 
     def provider(request: dict) -> dict:
@@ -438,17 +454,32 @@ def test_profile_cannot_enable_an_unsupported_subjective_wire(monkeypatch) -> No
             marks=2,
         )
 
+    decided = cells.decide_cells(
+        [_atom()],
+        meta=META,
+        profile=widened,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        store=kernel.DecisionStore(),
+    )
+    assert decided[0]["sheet_kind"] == "subjective"
+    assert requests[0]["profile"]["allowed_sheet_kinds"] == [
+        "objective", "descriptive", "subjective"]
+
+    # The un-widened profile still refuses, exactly as before.
     with pytest.raises(kernel.ContractError, match="sheet_kind"):
         cells.decide_cells(
             [_atom()],
             meta=META,
-            profile=subjective_profile,
+            profile=PROFILE,
             envelope_sha256=ENVELOPE_SHA256,
             provider=provider,
             store=kernel.DecisionStore(),
         )
 
-    assert len(requests) == kernel.MAX_ATTEMPTS
-    assert requests[0]["profile"]["allowed_sheet_kinds"] == [
+    # One accepted attempt under the widened profile, then MAX_ATTEMPTS
+    # refusals under the un-widened one.
+    assert len(requests) == 1 + kernel.MAX_ATTEMPTS
+    assert requests[-1]["profile"]["allowed_sheet_kinds"] == [
         "objective", "descriptive",
     ]

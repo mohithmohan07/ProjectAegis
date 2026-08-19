@@ -1,6 +1,7 @@
-"""Immutable Output-01 hierarchy used by the assessment release.
+"""Immutable staged concept-release hierarchy used by the assessment release.
 
-The staged Build Concepts release is the sole concept authority for Output 02.
+The staged Build Concepts release is the sole concept authority for the
+lane's Master File — Output 02 off Output 01, Output 04 off Output 03 (OD4).
 Persisted Topic and Concept rows are deliberately absent from this projection;
 the target Chapter contributes directory metadata only.  Private release keys
 join concepts, groups, placements, and questions without entering workbook
@@ -14,10 +15,22 @@ from typing import Any, Mapping
 from .. import models
 from . import assessment_release as rel
 from . import build_concepts_release_files
+from . import identity
 
 
 class SnapshotError(ValueError):
-    """The staged concept release cannot form an immutable hierarchy."""
+    """The staged concept release cannot form an immutable hierarchy.
+
+    Since spec-step8 S9 this means GENUINE IMPOSSIBILITY only. A row that
+    cannot be carried into the snapshot is skipped and recorded in the
+    bridge's ``defects`` — see ``build``'s docstring for which of its six
+    raises is which, and why.
+    """
+
+
+# The two row-level codes ``build`` records instead of raising.
+SNAPSHOT_ROW_UNADDRESSABLE = "snapshot_row_unaddressable"
+SNAPSHOT_ROW_UNNAMED = "snapshot_row_unnamed"
 
 
 _POSITION_FIELDS = frozenset({
@@ -99,7 +112,47 @@ def build(
     job: models.UploadJob,
     payload: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Return the shared hierarchy, route pool, and release provenance."""
+    """Return the shared hierarchy, route pool, and release provenance.
+
+    SIX RAISES, AND WHICH IS WHICH (spec-step8 D8.4 / S9). ``SnapshotError``
+    now means only "this snapshot genuinely cannot be built"; a row that
+    cannot be carried is skipped and RECORDED, so Outputs 02/04 build from
+    the sound rows instead of one row costing every question in the
+    chapter.
+
+    * GENUINE IMPOSSIBILITY, kept — no frozen ``sha256:`` source-document
+      hash. It is the seal every downstream hash verification joins on, it
+      cannot be minted here without inventing provenance, and D8.4 names
+      this exact raise as the one ``SnapshotError`` retained.
+    * GENUINE IMPOSSIBILITY, kept — the ``ValueError`` arm around the
+      hierarchy. After S9 that call raises for exactly one reason, "this
+      upload has no staged release", and a snapshot of nothing is not a
+      snapshot.
+    * GENUINE IMPOSSIBILITY, kept — concepts and records differing in
+      count. The two lists are built one-to-one by the same loop, so this
+      can only be a coding fault in the projection, and every
+      ``zip(concepts, records)`` below would silently mis-pair a question
+      with another concept's identity. Nothing here can be repaired by
+      dropping a row.
+    * GENUINE IMPOSSIBILITY, kept — a duplicate ``concept_key``. The key
+      is minted from the release hash plus the row's own position, so a
+      collision means positions repeated; every later join is by that key.
+    * RECORDABLE DEFECT, de-raised — a row with no machine identity. It is
+      one row that cannot be addressed (T9 B1: a thing that must be
+      addressable cannot be addressed). Skipping it costs that concept's
+      questions and names them; raising cost the whole Master.
+    * RECORDABLE DEFECT, de-raised — a row with no explicit display name.
+      Same shape, same cost, same remedy. The row reaches no sheet, is
+      named, and the DB write is refused through ``defects``.
+
+    ``defects`` rides the returned bridge and reaches the assessment
+    lane's publication act through ``create_release``'s
+    ``frozen["errors"]`` → ``diagnostics["payload_errors"]`` →
+    ``_readiness`` BLOCKED — the transport T5-1's duplicate
+    ``question_label`` already uses. It is NOT routed through
+    ``build_concepts_release.structural_defects``, whose payload is the
+    concept lane's ``records`` (D8.5b).
+    """
 
     release = copy.deepcopy(dict(payload))
     source_document_hash = str(
@@ -111,7 +164,7 @@ def build(
         )
     release_sha = source_release_sha256(release)
     try:
-        chapter, concepts, records = (
+        chapter, concepts, records, hierarchy_defects = (
             build_concepts_release_files.transient_release_hierarchy(
                 db, job, payload=release
             )
@@ -122,11 +175,18 @@ def build(
         raise SnapshotError(
             "staged concept records and transient concepts differ in count"
         )
+    defects: list[dict[str, Any]] = [
+        dict(finding) for finding in hierarchy_defects
+    ]
 
     concept_rows: list[dict[str, Any]] = []
     route_concepts: list[dict[str, Any]] = []
     provenance: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
+    # The rows that were actually CARRIED, parallel to ``concept_rows``. It
+    # exists because a skipped row must not shift the topic join below by
+    # one — the defect S9 would otherwise trade the raise for.
+    carried: list[models.Concept] = []
     for position, (concept, record) in enumerate(
         zip(concepts, records), start=1
     ):
@@ -134,18 +194,48 @@ def build(
         if concept_key in seen_keys:
             raise SnapshotError(f"duplicate release concept key {concept_key!r}")
         seen_keys.add(concept_key)
-        machine_id = f"REL{release_sha[:12].upper()}C{position:03d}"
+        # T4-4: the machine id comes off the PERSISTED column, not the
+        # release hash. It used to be f"REL{release_sha[:12].upper()}C###", so
+        # editing one character of any staged content re-minted every concept
+        # id — and with it every ``group_key`` and every ``question_label``
+        # built off it. ``source_release_sha256`` no longer participates in
+        # identity at all. Transient staged rows carry the id
+        # ``transient_release_hierarchy`` stamped, which is the same string
+        # the publication will persist.
+        machine_id = identity.machine_id_for_concept(concept)
+        if not machine_id:
+            # DE-RAISED (see the docstring): one unaddressable row, named.
+            defects.append({
+                "code": SNAPSHOT_ROW_UNADDRESSABLE,
+                "position": int(position),
+                "message": (
+                    f"staged concept row {position} has no machine "
+                    "identity, so no question can name it as its home and "
+                    "the row carries no question into Output 02/04"
+                ),
+            })
+            continue
         title = str(concept.concept_title or "").strip()
         display_name = str(concept.concept_display_name or "").strip()
         if not title or not display_name:
-            raise SnapshotError(
-                f"staged concept row {position} has no explicit display name"
-            )
-        identity = _record_identity(record, position)
+            # DE-RAISED (see the docstring): one unnameable row, named.
+            defects.append({
+                "code": SNAPSHOT_ROW_UNNAMED,
+                "position": int(position),
+                "concept_machine_id": machine_id,
+                "message": (
+                    f"staged concept row {position} has no explicit display "
+                    "name, so no learner-visible group name can be composed "
+                    "for it and the row carries no question into Output "
+                    "02/04"
+                ),
+            })
+            continue
+        row_identity = _record_identity(record, position)
         row = {
             "concept_key": concept_key,
             "concept_machine_id": machine_id,
-            "release_row_identity": identity,
+            "release_row_identity": row_identity,
             "concept_title": title,
             "concept_display_name": display_name,
             "parent_concept": str(concept.parent_concept or ""),
@@ -156,6 +246,7 @@ def build(
             "concept_source": str(concept.sources or ""),
         }
         concept_rows.append(row)
+        carried.append(concept)
         route_row = {
             "concept_key": concept_key,
             "concept_title": title,
@@ -174,12 +265,12 @@ def build(
         route_concepts.append(route_row)
         provenance.append({
             "concept_key": concept_key,
-            "release_row_identity": identity,
+            "release_row_identity": row_identity,
         })
 
     rows_by_topic_object: dict[int, list[dict[str, Any]]] = {}
     topic_objects: dict[int, models.Topic] = {}
-    for concept, row in zip(concepts, concept_rows):
+    for concept, row in zip(carried, concept_rows):
         topic = concept.topic
         marker = id(topic)
         topic_objects[marker] = topic
@@ -192,11 +283,23 @@ def build(
     for marker, topic in ordered_topics:
         snapshot_topics.append({
             "topic_title": str(topic.topic_title or ""),
+            # The topic's persisted identity (spec-step8 B4); the renderer
+            # composes the title cell off it and strips it from cells.
+            "topic_machine_id": identity.machine_id_for_topic(topic),
             "topic_display_name": str(
                 topic.topic_display_name or topic.topic_title or ""
             ),
             "pre_post_learning": str(topic.pre_post_learning or ""),
-            "topic_concept_labels": "",
+            # §6:509-512's Topic→Concept join, filled on 23/23 populated
+            # gold rows and hard-coded "" here until now (spec-step8 T3.7).
+            # Composed off the SHARED ``identity.titled`` over this topic's
+            # own concept rows, so the roster reads exactly as each
+            # concept's own title cell does.
+            "topic_concept_labels": ", ".join(
+                identity.titled(
+                    row["concept_title"], row["concept_machine_id"])
+                for row in rows_by_topic_object[marker]
+            ),
             "related_topics": str(topic.related_topics or ""),
             "topic_description": str(topic.topic_description or ""),
             "concepts": rows_by_topic_object[marker],
@@ -211,6 +314,11 @@ def build(
             "chapter_display_name": str(
                 chapter.chapter_display_name or chapter.chapter_title or ""
             ),
+            # Carried, not omitted (spec-step8 T12/M4): the profile's
+            # ``forced_blank_fields`` decides whether it ships, and a key
+            # the snapshot never carries leaves that lever with nothing to
+            # un-blank.
+            "chapter_duration": str(chapter.chapter_duration or ""),
             "pre_topics": str(chapter.pre_topics or ""),
             "post_topics": str(chapter.post_topics or ""),
             "chapter_description": str(chapter.chapter_description or ""),
@@ -255,4 +363,11 @@ def build(
         },
         "metadata": metadata,
         "question_task_inventory": question_task_inventory,
+        # S9: what could not be carried, named. READ by
+        # ``assessment_release_run`` (which stamps it onto the payload as
+        # ``concept_snapshot_defects``) and from there by
+        # ``assessment_release_service.create_release``, which appends it to
+        # ``frozen["errors"]`` so the assessment lane's DB write is refused
+        # while all four downloads stay open.
+        "defects": defects,
     }

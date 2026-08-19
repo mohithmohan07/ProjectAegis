@@ -22,6 +22,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
 from .. import config
+from . import assessment_profile
 from . import assessment_release as rel
 from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
@@ -290,6 +291,7 @@ def _adopted_contract(
 
 def _prepare_pair(
     pair: Any, position: int,
+    profile: Mapping | str | None = None,
 ) -> tuple[str, dict[str, Any], dict[str, Any], Decimal, dict[str, Any]]:
     if not isinstance(pair, (tuple, list)) or len(pair) != 2:
         raise MarkingError(
@@ -318,7 +320,8 @@ def _prepare_pair(
         )
 
     kind = cell.get("sheet_kind")
-    if kind not in rel.SHEET_KINDS:
+    # The RUN profile decides the allowed kinds (spec-step8 B2).
+    if kind not in assessment_profile.sheet_kinds(profile):
         raise MarkingError(
             f"marking blueprint cell {cell_id!r} has invalid sheet_kind "
             f"{kind!r}"
@@ -826,8 +829,13 @@ def decide_markings(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
+    profile: Mapping | str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return one cached marking verdict per candidate/cell pair, in order."""
+    """Return one cached marking verdict per candidate/cell pair, in order.
+
+    ``profile`` is validation input ONLY (spec-step8 B2); it never joins the
+    decision payload, so decision keys are unchanged.
+    """
 
     envelope_sha = _envelope_hash(envelope_sha256)
     metadata = _metadata(meta)
@@ -837,7 +845,7 @@ def decide_markings(
     seen_candidates: set[str] = set()
     seen_cells: set[str] = set()
     for position, pair in enumerate(pairs, start=1):
-        unit = _prepare_pair(pair, position)
+        unit = _prepare_pair(pair, position, profile)
         candidate_id, _candidate, cell, _marks, _contract = unit
         cell_id = str(cell["cell_id"])
         if candidate_id in seen_candidates:

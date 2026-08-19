@@ -1589,14 +1589,33 @@ def test_canonicalization_does_not_compact_to_hit_a_row_count(monkeypatch):
     # One pass only: no second call demanding a smaller row count.
     assert len(calls) == 1, f"a compaction retry ran: {calls}"
     assert len(out) == 43, f"rows were compacted to {len(out)}"
+    # There is no advisory guide left to exceed: the volume arithmetic behind
+    # it (topics x 6) went with the floor rather than sit in the tree shaping
+    # nothing.
+    assert not hasattr(g, "_canonicalize_target_bounds")
 
-    min_keep, max_keep = g._canonicalize_target_bounds(records)
-    # The advisory guide is still exceeded — and deliberately not acted on.
-    assert len(out) > max_keep
 
+def test_canonicalization_no_longer_reverts_on_a_row_count(monkeypatch):
+    """A collapse that loses no named family is the model's call to make.
 
-def test_canonicalization_still_refuses_to_over_merge(monkeypatch):
-    """The floor is enforced: collapsing the map is unrecoverable."""
+    This asserted the opposite until the volume-derived floor was purged: a
+    44-row skeleton compacted to 3 used to trip ``max(4, topics x 2, families)``
+    and be thrown away for the raw skeleton. These rows carry no parent family
+    distinct from their topic, so canonicalization has no source-backed family
+    identity to lose here — and the topics themselves are not this pass's job
+    to defend: ``_recover_missing_topics_after_human_direction`` runs
+    immediately afterwards.
+
+    That successor is narrower than it sounds and the limit is stated here
+    rather than implied. It defends only topics carried in
+    ``source_topic_excerpts``, only at TOPIC granularity, and it does not
+    recover anything by itself — it PAUSES for a human
+    (``source_topic_decision.resolve_or_pause``), one of the allowed pre-spend
+    pauses. A distinction collapsed *inside* a topic that still has one
+    concept is not recovered by it or by anything else, and that is a trade
+    made knowingly: the only guard that could fire on it would be a count of
+    concepts per topic, which is the arithmetic this purge exists to delete.
+    """
 
     topics = [
         "The French Revolution and the Idea of the Nation",
@@ -1621,9 +1640,10 @@ def test_canonicalization_still_refuses_to_over_merge(monkeypatch):
     monkeypatch.setattr(
         g, "_repair_records_via_api", lambda rows, **kwargs: rows)
 
+    assert g._skeleton_family_labels(records) == []
+
     out = g._consolidate_concepts_via_api(records, subject="History")
 
-    # Over-merging still gets a retry, and still falls back to the full
-    # skeleton rather than shipping a collapsed map.
-    assert len(calls) == 2, f"the over-merge retry did not run: {calls}"
-    assert len(out) == len(records)
+    assert len(calls) == 1, f"a row-count retry ran: {calls}"
+    assert len(out) == 3
+    assert len(out) != len(records), "the raw skeleton was reinstated"

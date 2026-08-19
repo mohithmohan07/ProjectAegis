@@ -136,7 +136,6 @@ def _mock_live_deposit(concept_id: int):
             {
                 "written": 1,
                 "sources_updated": 0,
-                "parent_column": True,
                 "grounding_certificate": copy.deepcopy(certificate),
             },
         )

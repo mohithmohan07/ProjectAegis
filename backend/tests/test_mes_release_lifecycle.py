@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 
 from app import config, models
-from app.bulk_import import assessment_workbook as mp
 from app.services import assessment_grouping as ag
 from app.services import assessment_release_service as svc
 
@@ -72,7 +71,7 @@ def _payload(
     return {"groups": groups, "candidates": [candidate]}
 
 
-def _fresh_release(db, *, flags=None, mutate=None):
+def _fresh_release(db, *, flags=None, mutate=None, provider_identity=None):
     concept = _chapter_concept(db)
     concept_key = f"db:{concept.id}"
     concept_name = concept.concept_display_name
@@ -91,6 +90,7 @@ def _fresh_release(db, *, flags=None, mutate=None):
         chapter_id=concept.topic.chapter_id,
         payload=payload,
         owner_sub=OWNER,
+        provider_identity=provider_identity,
     )
     return release, payload, label
 
@@ -202,10 +202,20 @@ def test_duplicate_group_key_is_named_and_publication_fails_closed(db):
     assert f"duplicate group_key {duplicate_key!r}" in (
         release.diagnostics["payload_errors"])
 
-    with pytest.raises(mp.WorkbookRenderError, match="duplicate group_key"):
-        svc.publish_release(db, release)
-    assert release.state == "materialized"
-    assert not release.publication
+    # INVERTED by spec-step8 T7.5/B4, the second amendment this spec makes
+    # to this otherwise-verbatim file: publication no longer RAISES on a
+    # duplicate group_key. A raise inside the renderer meant no workbook for
+    # ANY of the four outputs — an R3/§4 breach traded for an R4 one — while
+    # the same defect was already refused at freeze and is refused again by
+    # the read-back. The release publishes, every download ships, readiness
+    # is BLOCKED and the database write is refused.
+    svc.publish_release(db, release)
+    assert release.publication
+    assert release.diagnostics["readiness"] == svc.BLOCKED
+    assert svc.published_artifact(release, svc.MASTER_FILENAME)
+    assert svc.published_artifact(release, svc.CONCEPTS_FILENAME)
+    with pytest.raises(svc.UploadRefused, match="blocked"):
+        svc.upload_master_to_database(db, release, owner_sub=release.owner_sub)
 
 
 def test_shell_completion_never_parses_a_tagged_title_as_a_friendly_name():
@@ -259,7 +269,11 @@ def test_flagged_content_publishes_with_warnings_and_still_uploads(db):
     assert published.state == "uploaded"
 
 
-def test_staged_master_waits_for_exact_output01_publication(db):
+def test_staged_master_waits_for_exact_output03_publication(db):
+    # Renamed from ``..._output01_...`` under OD4: the Post lane's concept
+    # file is Output 03, and the refusal string now says so. The satisfying
+    # fixture row carries the ``machine_id`` the S10 resolver reads — the
+    # persisted identity, not the five-field byte match.
     chapter = _chapter_concept(db).topic.chapter
     token = uuid.uuid4().hex[:12]
     concept_key = f"release:{token}:0001"
@@ -316,7 +330,7 @@ def test_staged_master_waits_for_exact_output01_publication(db):
     )
     published = svc.publish_release(db, release)
 
-    with pytest.raises(svc.UploadRefused, match="Output-01 identity"):
+    with pytest.raises(svc.UploadRefused, match="Output-03 identity"):
         svc.upload_master_to_database(db, published, owner_sub=OWNER)
     assert published.state == "ready_for_upload"
 
@@ -335,6 +349,7 @@ def test_staged_master_waits_for_exact_output01_publication(db):
         concept_details="Exact staged teaching content.",
         keywords="staged, exact",
         sources="fixture",
+        machine_id=machine_id,
     )
     db.add(concept)
     for tier in ag.TIER_CODES:

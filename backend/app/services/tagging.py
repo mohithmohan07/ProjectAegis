@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import config, models
 from ..bulk_import import workbook_sync, writer
-from . import assessment_grouping, generation
+from . import assessment_grouping, identity
 
 
 # --------------------------------------------------------------------------- #
@@ -40,7 +40,12 @@ def _group_of_type(db: Session, concept: models.Concept, group_type: str) -> mod
     visible_name = assessment_grouping.friendly_group_name(
         concept.concept_display_name, group_type
     )
-    machine_base = generation.question_label(concept, 1).rsplit(" Q", 1)[0]
+    # T4-3: read the PERSISTED id. Recomposing it from
+    # ``question_label(concept, 1).rsplit(" Q", 1)[0]`` fed a re-derived base
+    # into ``group_key_for``, and ``Group.group_key`` is persisted — so groups
+    # minted before and after any content edit landed in different key
+    # families.
+    machine_base = identity.machine_id_for_concept(concept)
     group = models.Group(
         concept_id=concept.id,
         group_type=group_type,

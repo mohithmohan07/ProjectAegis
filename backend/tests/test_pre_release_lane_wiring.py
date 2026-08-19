@@ -72,9 +72,14 @@ def _post_records():
 
 
 def _pre_map(*, rows=True, refused="", topic="Counting",
-             concept="Counting to ten"):
+             concept="Counting to ten", verdict="assumes_nothing",
+             verdict_review_flags=()):
     if not rows:
-        return {
+        # After spec-step8 S9 an empty capture is never bare: ``premap.build``
+        # spends one verdict on it and stamps the result here. ``verdict=None``
+        # models the pre-S9 shape — an empty map nobody decided — which is
+        # exactly what the release lane must keep refusing.
+        empty = {
             "rows": [],
             "topics": [],
             "needed_for": {},
@@ -87,6 +92,17 @@ def _pre_map(*, rows=True, refused="", topic="Counting",
             "validation": [],
             "refused": refused,
         }
+        if verdict:
+            empty[release.PRE_LANE_VERDICT_FIELD] = {
+                "verdict": verdict,
+                "rationale": "the chapter opens from first principles",
+                "review_flags": list(verdict_review_flags),
+            }
+            if verdict_review_flags:
+                empty["decision_flags"]["empty_capture"] = list(
+                    verdict_review_flags
+                )
+        return empty
     return {
         "rows": [
             {
@@ -370,7 +386,10 @@ def test_output_04_refuses_a_job_with_no_staged_pre_release(db):
 
     with pytest.raises(run.ReleaseRunError) as raised:
         run.run_pre_release_for_job(db, job.id, owner_sub=OWNER)
-    assert "Output-03" in str(raised.value)
+    # OD4 (Round 7): the missing PRE concept release is Output 01, and the
+    # Master it blocks is Output 02.
+    assert "Output-01 Pre-Learning" in str(raised.value)
+    assert "Output 02" in str(raised.value)
 
 
 # --------------------------------------------------------------------------- #
@@ -460,7 +479,7 @@ def test_neither_manifest_offers_the_pre_entries_without_a_pre_release(db):
 # 3. BOTH snapshot writers
 # --------------------------------------------------------------------------- #
 
-def test_both_snapshot_writers_are_lane_correct_for_output_04(db):
+def test_both_snapshot_writers_are_lane_correct_for_output_02(db):
     """Two writers project the concept hierarchy; both must say Pre.
 
     ``assessment_release_snapshot.build`` reads the staged payload;
@@ -570,12 +589,25 @@ def test_the_published_pre_concept_carries_no_audit_marker(db):
 # --------------------------------------------------------------------------- #
 
 _POST_PAYLOAD_KEYS = {
-    "version", "released_at", "release_reason", "job_id", "learning_kind",
-    "source_book", "filename", "source_document_hash", "target_chapter_id",
-    "directory_metadata", "target_identity", "checkpoint_stage",
-    "checkpoint_progress", "records", "issues", "type_case_rows",
-    "question_task_inventory", "extraction_provenance", "mined_types",
-    "pending_decision_snapshot", "final_grounding_certificate",
+    "version", "staged_version", "staged_release_uid", "released_at",
+    "release_reason", "job_id",
+    "learning_kind", "source_book", "filename", "source_document_hash",
+    "target_chapter_id", "directory_metadata", "target_identity",
+    "checkpoint_stage", "checkpoint_progress", "records", "issues",
+    # spec-step8 S9 adds exactly one key: the row-level defect record the
+    # state split needs somewhere to live. A defect discovered at staging
+    # with no place in the payload is a producer with no consumer — the
+    # hole S8 closed for ``unplaced``, one lane over.
+    "staged_row_defects",
+    # S11 (V2/T10-0) adds the input-artifact defect transport the Pre
+    # lane has carried since S9 (dormant parity until a Post caller
+    # records one), and Round 9 adds the QC audit's own blocking key —
+    # split from ``snapshot_defects`` because the snapshot reader's
+    # sentence was a false preamble on a coverage finding.
+    "snapshot_defects",
+    "qc_blocking_defects",
+    "type_case_rows", "question_task_inventory", "extraction_provenance",
+    "mined_types", "pending_decision_snapshot", "final_grounding_certificate",
     "chapter_meta", "instruction_set", "summary",
 }
 
@@ -587,6 +619,18 @@ def test_the_post_release_payload_keeps_its_recorded_shape(db):
     shape and every recorded release fixture with it. Pinned as an exact
     key set, and pinned on a job that HAS a Pre sibling, so the Pre lane
     cannot leak a key into the Post payload.
+
+    ``staged_version`` is the key spec-step8 S6 adds, and it is added
+    deliberately rather than tolerated: staging used to OVERWRITE this
+    slot, which is why §7:551's "a new immutable release version per
+    applied round" was unexpressible on it and why a ``force_release``
+    after a Master had been frozen could move the payload with nothing on
+    either side recording that it had. ``staged_release_uid`` is its
+    Round-7 sibling — the draft LINEAGE the seal gate keys on, because the
+    version counter [measured] restarts on a legitimate inventory reset.
+    The slot is still one slot — the staging DRAFT — and these are the
+    draft's version and lineage. It is deliberately NOT a lane-keyed
+    sub-map, which is the shape this test exists to refuse.
     """
 
     chapter = _chapter_with_concepts(db)
@@ -594,6 +638,8 @@ def test_the_post_release_payload_keeps_its_recorded_shape(db):
     payload = release.release_payload(job)
 
     assert set(payload) == _POST_PAYLOAD_KEYS
+    assert payload["staged_version"] == 1
+    assert payload["version"] == release.RELEASE_VERSION
     assert payload["learning_kind"] == "post"
     assert release.RELEASE_LANE_FIELD not in payload
     assert set(payload["summary"]) == {
@@ -629,23 +675,22 @@ def test_the_post_downloads_are_untouched_by_the_lane_parameter(db, client):
 # 6. An EMPTY Pre map ships cleanly
 # --------------------------------------------------------------------------- #
 
-def test_a_chapter_that_assumes_nothing_ships_a_clean_empty_pre_release(db):
-    """A chapter needing no prior knowledge is legal, not an error.
+def test_an_empty_but_decided_pre_release_is_ready(db, client):
+    """REPLACES ``test_a_chapter_that_assumes_nothing_ships_a_clean_empty_
+    pre_release`` (spec-step8 S9), which pinned the behaviour this slice
+    inverts.
 
-    It stages a real Output 03 with zero rows: downloads exist, nothing
-    is flagged, and the only thing blocked is the database write —
-    because there is no row to write, which is the same refusal on the
-    same message the Post lane has always made for a release with
-    nothing in it.
+    [measured at 76c84fb] that release read *Diagnostic release* with the
+    defect "the release contains no concept rows to upload", and
+    ``release-bulk-import.xlsx`` 404'd while the other three downloads
+    returned 200. Two separate wrongs, and they are two because the
+    questions were two: EMPTINESS is not CORRUPTION (D8.1), and a defect
+    blocks the database write, never a download (Rule E).
 
-    The state that block produces is asserted as it actually is, not as
-    one would wish it: *Diagnostic release*. §4 defines that name as
-    "structural/import integrity failed", and nothing failed here, so
-    the name fits this case poorly — but the blocking behaviour is
-    correct and the alternative is a fourth named state, which is a §4
-    change and therefore step 8's convergence work. Recorded here so the
-    mismatch is a known one rather than a contradiction between a
-    docstring and the code beneath it.
+    A chapter that genuinely assumes nothing is legal. What makes it legal
+    is not that its list is empty — that is the inference Rule 1 forbids —
+    but that the run POSITIVELY DECIDED it, and the verdict rides the
+    payload.
     """
 
     chapter = _chapter_with_concepts(db)
@@ -654,21 +699,158 @@ def test_a_chapter_that_assumes_nothing_ships_a_clean_empty_pre_release(db):
     payload = release.release_payload(job, lane="pre")
     assert payload is not None, "an empty Pre map still stages a release"
     assert payload["records"] == []
-    assert payload["issues"] == []
     assert payload["generated_questions"] == []
     assert payload["summary"]["row_count"] == 0
-    # No flags, and nothing semantic to doubt.
-    assert release.structural_defects(payload) == [
-        "the release contains no concept rows to upload"
-    ]
-    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+
+    # Emptiness is answered by its OWN question now.
+    assert release.nothing_to_publish(payload) is True
+    assert release.structural_defects(payload) == []
+    assert release.release_state(payload) == release.READY
+
+    # ALL FOUR downloads, including the one that 404'd.
+    for name in (
+        "release-bulk-import.xlsx", "release.xlsx",
+        "diagnostics.zip", "release.json",
+    ):
+        response = client.get(
+            f"/build-concepts/uploads/{job.id}/{name}?lane=pre")
+        assert response.status_code == 200, name
+        assert response.content, name
+
+    # And publishing nothing is the idempotent zero-row success (D8.2).
+    result = publication.upload_release_to_database(
+        db, job.id, owner_sub=OWNER, lane="pre")
+    assert result["database_uploaded"] is True
+    assert result["created_concept_ids"] == []
+    assert result["updated_concept_ids"] == []
+    # Idempotent: the second act reports the same thing and writes nothing.
+    again = publication.upload_release_to_database(
+        db, job.id, owner_sub=OWNER, lane="pre")
+    assert again["database_uploaded"] is True
+    assert again["created_concept_ids"] == []
 
     # The run itself is unaffected: the Post release is untouched and
     # still publishes.
     assert release.release_state(
         release.release_payload(job)
     ) in (release.READY, release.READY_WITH_FLAGS)
-    result = publication.upload_release_to_database(db, job.id, owner_sub=OWNER)
+    post = publication.upload_release_to_database(
+        db, job.id, owner_sub=OWNER, lane="post")
+    assert post["database_uploaded"] is True
+
+
+def test_an_empty_capture_without_a_positive_verdict_still_blocks(db, client):
+    """D8.3 — the whole reason premap spends the verdict at all.
+
+    An OCR-degraded scan and a chapter that genuinely assumes nothing both
+    produce an empty capture. Only a recorded ``assumes_nothing`` opens the
+    zero-row publication; ``capture_incomplete`` and — the case that
+    matters most — NO verdict at all keep the release Diagnostic, because
+    what is missing may be missing from the CAPTURE rather than from the
+    chapter (R4).
+    """
+
+    chapter = _chapter_with_concepts(db)
+
+    for verdict, expected_open in (
+        (None, False),
+        ("capture_incomplete", False),
+        ("assumes_nothing", True),
+    ):
+        pre_map = _pre_map(rows=False, verdict=verdict)
+        job = _both_lanes_job(db, chapter, pre_rows=False)
+        release.stage_pre_release(
+            db, job, target_chapter_id=chapter.id, pre_map=pre_map,
+            pre_questions={}, reason="verdict fixture",
+        )
+        db.refresh(job)
+        payload = release.release_payload(job, lane="pre")
+        defects = release.structural_defects(payload)
+        if expected_open:
+            assert defects == [], verdict
+            assert release.release_state(payload) == release.READY
+        else:
+            assert defects, verdict
+            assert release.release_state(payload) == (
+                release.DIAGNOSTIC_RELEASE)
+            with pytest.raises(ValueError):
+                publication.upload_release_to_database(
+                    db, job.id, owner_sub=OWNER, lane="pre")
+
+        # EVERY download stays 200 in all three cases — that is Rule E,
+        # and it is the half the state must never take away.
+        for name in (
+            "release-bulk-import.xlsx", "release.xlsx",
+            "diagnostics.zip", "release.json",
+        ):
+            response = client.get(
+                f"/build-concepts/uploads/{job.id}/{name}?lane=pre")
+            assert response.status_code == 200, (verdict, name)
+
+
+def test_the_empty_capture_critics_dissent_reaches_the_release(db, client):
+    """Q10 at the release boundary, not only at the decision.
+
+    [measured before this test existed] a critic that dissented on the
+    empty-capture verdict — the ONE decision that decides whether an empty
+    Pre release is *Ready* or *Diagnostic* — reached the release nowhere at
+    all. Its words were in ``pre_map["decision_flags"]``, and
+    ``grep -n decision_flags backend/app/services/build_concepts_release.py``
+    returns nothing: ``stage_pre_release`` copies the verdict row and
+    nothing else, so a search of the whole staged payload for "missing
+    pages" returned False.
+
+    Q10 says the dissent is a recorded advisory flag. Recorded means where
+    the reviewer of THIS artefact reads it, and advisory means it flags
+    without blocking — so the assertions below are both halves: the words
+    are in the release, AND the publication still opens.
+    """
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter, pre_rows=False)
+    release.stage_pre_release(
+        db, job, target_chapter_id=chapter.id,
+        pre_map=_pre_map(
+            rows=False,
+            verdict_review_flags=[
+                "critic: rejected (confidence 0.42)",
+                "critic: the source shows two missing pages",
+            ],
+        ),
+        pre_questions={}, reason="critic dissent fixture",
+    )
+    db.refresh(job)
+    payload = release.release_payload(job, lane="pre")
+
+    # It rides the payload's verdict row, which is what every reader copies.
+    assert payload[release.PRE_LANE_VERDICT_FIELD]["review_flags"] == [
+        "critic: rejected (confidence 0.42)",
+        "critic: the source shows two missing pages",
+    ]
+    # It is a NAMED release issue a reviewer reads without the payload.
+    flagged = [
+        issue for issue in payload["issues"]
+        if issue["code"] == "pre_learning_empty_capture_review_flag"
+    ]
+    assert len(flagged) == 2
+    assert any("missing pages" in issue["message"] for issue in flagged)
+
+    # ADVISORY, never a gate: the verdict stands, nothing is corrupt, and
+    # the zero-row publication is still open. The release only wears the
+    # flag — which is the whole difference between advising and vetoing.
+    assert release.structural_defects(payload) == []
+    assert release.release_state(payload) == release.READY_WITH_FLAGS
+    for name in (
+        "release-bulk-import.xlsx", "release.xlsx",
+        "diagnostics.zip", "release.json",
+    ):
+        response = client.get(
+            f"/build-concepts/uploads/{job.id}/{name}?lane=pre")
+        assert response.status_code == 200, name
+    assert "missing pages" in response.text
+
+    result = publication.upload_release_to_database(
+        db, job.id, owner_sub=OWNER, lane="pre")
     assert result["database_uploaded"] is True
 
 
@@ -828,8 +1010,9 @@ def test_publishing_one_lane_never_publishes_the_other(db):
     assert pre["summary"]["concept_ids"]
     assert not set(pre["summary"]["concept_ids"]) & set(job.result_ids or [])
 
-    # Publication title-cases the labels it writes, so compare on the
-    # normalised form rather than the authored one.
+    # Topic identity is matched leniently on both sides (S10 stopped
+    # rewriting the labels themselves), so compare on the normalised form
+    # rather than the authored one.
     lanes = {
         str(topic.topic_title).casefold(): topic.pre_post_learning
         for topic in db.query(models.Topic).filter(

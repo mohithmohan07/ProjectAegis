@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
 from .. import models
+from . import text_normalize
 
 # Trailing context is intentionally loose: codes are followed by "_" which is a
 # word char, so a trailing \b would never match (e.g. "10CBMA_Circles").
@@ -322,12 +323,53 @@ def chapter_titled_cell(
     return f"{clean} ({chapter_tag(board, grade, subject, book=book)})"
 
 
+# Column-fit bound for the raw-token fallback of ``normalized_grade``.
+# ``models.Chapter.grade`` is ``String(8)``; this is twice that, and it is the
+# only segment of a machine id that is not fixed width.
+_GRADE_TOKEN_LENGTH = 16
+
+
+def normalized_grade(grade: str) -> tuple[str, bool]:
+    """``(token, fell_back)`` for one chapter's grade label.
+
+    [measured] the raw grade reaches ``code_prefix`` verbatim today, so one
+    chapter minted ``6CBSC`` / ``06CBSC`` / ``VICBSC`` / ``' 6 CBSC'`` —
+    four identity families for one class. ``text_normalize.normalize_grade``
+    maps ``6``/``06``/``VI``/``' 6 '``/``६`` to ``06``, but returns ``''`` for
+    ``KG``, ``Nursery`` and ``Class VI``.
+
+    T4-2: normalise when the parse succeeds; retain the STRIPPED RAW TOKEN
+    when it does not, and let the caller record the fallback as a review flag.
+    ``00`` is never stamped over a token that failed to parse — collapsing KG
+    and Nursery into one family is CLAUDE.md:48-50's exact failure mode, and
+    lower grades are where it bites hardest. ``00`` is used only when there is
+    no grade token at all, which loses nothing because nothing was said.
+
+    The fallback token is BOUNDED. It is the one unbounded segment of an id
+    that ends up inside ``models.Question.question_label``'s ``String(128)``
+    ([measured] a 54-character grade label produced an 87-character label with
+    no margin), and ``models.Chapter.grade`` is itself ``String(8)`` — so the
+    bound is twice what the column can even store. Column-fit mechanics, not a
+    judgment about what a grade means; the chapter id inside ``h8`` still
+    carries the uniqueness if two long tokens ever share a prefix.
+    """
+    raw = str(grade or "").strip()
+    normalized = text_normalize.normalize_grade(raw)
+    if normalized:
+        return normalized, False
+    token = "".join(re.findall(r"[A-Za-z0-9]+", raw))[:_GRADE_TOKEN_LENGTH]
+    if not token:
+        return "00", False
+    return token, True
+
+
 def code_prefix(board: str, grade: str, subject: str) -> str:
     """ID prefix like '09CBSS' (grade + board code + subject code)."""
     subject = effective_subject_for_tags(board, subject)
     b = bi.BOARD_CODE_INV.get(board, (board[:2] or "XX").upper())
     s = subject_code(board, subject)
-    return f"{grade or '00'}{b}{s}"
+    token, _fallback = normalized_grade(grade)
+    return f"{token}{b}{s}"
 
 
 def chapter_code_full(board: str, grade: str, subject: str, chapter_title: str) -> str:

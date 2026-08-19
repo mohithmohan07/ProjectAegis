@@ -303,13 +303,28 @@ _XLSX_MEDIA = (
 
 
 def _release_summary(release) -> dict:
+    from ..services import release_core
+
     diagnostics = release.diagnostics or {}
     return {
         "id": release.id,
         "release_uid": release.release_uid,
         "version": release.version,
+        # THE public release vocabulary, and the only one (spec-step8 T1).
+        # One name for both release systems, so a reviewer reading the
+        # assessment release and a reviewer reading the concept release
+        # are reading the same three §4 names about the same run.
+        "release_state": release_core.release_state(release),
+        # DIAGNOSTICS, kept beside it and deliberately not removed.
+        # ``state`` is B's 7-state internal lifecycle and ``readiness``
+        # its 3-value publication verdict — the thing that actually
+        # refuses the database write, at
+        # ``assessment_release_service.py``'s ``if readiness == BLOCKED``.
+        # Both remain exactly as truthful as they were; what changed is
+        # that neither is a second PUBLIC name for the release any more.
         "state": release.state,
         "readiness": diagnostics.get("readiness", ""),
+        "lane": release_core.lane_of(release),
         "concept_snapshot_sha256": release.concept_snapshot_sha256,
         "workbook_sha256s": release.workbook_hashes or {},
         "published": bool((release.publication or {}).get("manifest")),
@@ -351,6 +366,13 @@ def get_assessment_release_issues(
         "payload_errors": diagnostics.get("payload_errors", []),
         "read_back": diagnostics.get("read_back", {}),
         "issues": diagnostics.get("issues", {}),
+        # ``release_notes`` carries the ``question_label_reissued`` record of
+        # Rule G's idempotent second act. Written durably to the release row and
+        # projected here, because a note on no read path is not a record: the
+        # POST that performs the upload returns ``labels_reissued`` to whoever
+        # is standing there, and this is how anyone reading the release LATER
+        # learns which labels the second act skipped.
+        "release_notes": diagnostics.get("release_notes", []),
     }
 
 
@@ -461,12 +483,12 @@ def run_pre_release_from_job(
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Output 04 — the Pre Master — from one Build Concepts job.
+    """Output 02 — the Pre Master (OD4) — from one Build Concepts job.
 
     Its own route rather than a flag on the Post one: the two outputs are
     separate artefacts with separate publications, and a lane is never a
     default anyone can fall into. The generated questions come from the
-    staged Output-03 payload; the chapter's own questions cannot reach
+    staged Output-01 payload; the chapter's own questions cannot reach
     this lane (assessment_release_run's leak barrier, bound to the Pre
     slot).
     """

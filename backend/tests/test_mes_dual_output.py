@@ -10,10 +10,10 @@ import copy
 import io
 
 import openpyxl
-import pytest
 
 from app.bulk_import import assessment_workbook as mp
 from app.services import assessment_grouping as ag
+from app.services import assessment_release as rel
 
 
 def _snapshot() -> dict:
@@ -198,26 +198,42 @@ def test_master_contains_everything_including_questionless_concepts():
     assert provenance[("Objective", 3)] == "(06MSMA_T01_TwoDim) BG01"
     assert provenance[("Descriptive", 3)] == "(06MSMA_T01_TwoDim) IG01"
     assert provenance[("Objective", 4)] == "(06MSMA_T01_TwoDim) AG01"
-    assert parsed["sheets"]["Objective"]["row_numbers"] == [3, 4, 5, 6, 7]
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [3, 4, 5]
     assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
 
-    # One objective question row + catalogue rows for the five groups no
-    # question represents (2 concepts x 3 shells - the occupied BG01... the
-    # occupied IG01 lives on the Descriptive sheet).
+    # One objective question row, one catalogue row for the AG01 the
+    # occupied concept's questions do not represent (its IG01 lives on the
+    # Descriptive sheet), and ONE tail row for the questionless concept
+    # (OWNER RULING OD5).
     question_rows = [r for r in objective_rows if r["question_label"]]
     catalogue_rows = [r for r in objective_rows if not r["question_label"]]
     assert len(question_rows) == 1
-    assert len(catalogue_rows) == 4
-    # The questionless concept appears via its shells.
-    assert any(
-        r["concept_title"].startswith("Three-dimensional")
-        for r in catalogue_rows)
-    shells = {r["group_name"] for r in catalogue_rows}
-    assert "Three-dimensional shape — Basic" in shells
+    assert len(catalogue_rows) == 2
+    tail = [
+        r for r in catalogue_rows
+        if r["concept_title"].startswith("Three-dimensional")]
+    assert len(tail) == 1
+    assert tail[0] is catalogue_rows[-1]
     assert all(
-        r["group_description"] == "NA" for r in catalogue_rows
-        if r["group_type"] in {"Basic", "Intermediate", "Advanced"}
-        and r["concept_title"].startswith("Three-dimensional"))
+        not str(tail[0].get(field) or "").strip()
+        for field in (
+            "group_name", "group_display_name", "group_description",
+            "group_status", "group_type", "group_question_labels",
+            "related_digicards", "concept_question_labels",
+        )
+    )
+    assert [
+        item["concept_title"] for item in issues["questionless_concepts"]
+    ] == ["Three-dimensional shape (06MSMA_T01_ThreeDim)"]
+    assert sorted(
+        issues["questionless_concepts"][0]["shell_group_keys"]) == [
+        "(06MSMA_T01_ThreeDim) AG01",
+        "(06MSMA_T01_ThreeDim) BG01",
+        "(06MSMA_T01_ThreeDim) IG01",
+    ]
+    # The shells stay in the payload; the difference is RECORDED, not silent.
+    assert {g["group_key"] for g in _snapshot()["groups"]} >= set(
+        issues["questionless_concepts"][0]["shell_group_keys"])
 
     q = question_rows[0]
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
@@ -325,7 +341,14 @@ def test_master_provenance_distinguishes_shared_friendly_group_names():
     assert result["valid"], result["manifest"]["read_back"]
 
 
-def test_master_refuses_duplicate_internal_group_keys():
+def test_master_records_a_duplicate_group_key_instead_of_raising():
+    """INVERTED by spec-step8 T7.5/B4.
+
+    The raise cost every row on every sheet of all four outputs while the
+    same defect was already refused at freeze by
+    ``rel.duplicate_group_keys`` and again by ``validate_master_file``'s
+    read-back. The workbook is now written and the defect is recorded.
+    """
     snapshot = copy.deepcopy(_snapshot())
     duplicate = copy.deepcopy(snapshot["groups"][0])
     duplicate["concept_key"] = "C_B"
@@ -333,33 +356,64 @@ def test_master_refuses_duplicate_internal_group_keys():
     duplicate["group_name"] = "Three-dimensional shape — Advanced"
     duplicate["group_display_name"] = duplicate["group_name"]
     snapshot["groups"].append(duplicate)
-    with pytest.raises(mp.WorkbookRenderError, match="duplicate group_key"):
-        mp.render_master_file(snapshot)
+    master, issues = mp.render_master_file(snapshot)
+    assert master
+    assert any(
+        "duplicate group_key" in item["message"]
+        for item in issues["group_defects"])
+    # The staging twin, unchanged and still refusing at freeze.
+    assert rel.duplicate_group_keys(snapshot["groups"]) == [
+        "(06MSMA_T01_TwoDim) BG01"]
+    # And the read-back twin.
+    assert any(
+        "duplicate group_key" in error
+        for error in mp.validate_master_file(
+            mp.parse_workbook(master), snapshot))
 
 
-def test_master_refuses_non_q12_visible_group_names():
+def test_a_non_q12_visible_group_name_is_a_named_defect_not_a_render_error():
     snapshot = copy.deepcopy(_snapshot())
     group = snapshot["groups"][0]
     group["group_name"] = group["group_key"]
     group["group_display_name"] = group["group_key"]
-    with pytest.raises(mp.WorkbookRenderError, match="visible names"):
-        mp.render_master_file(snapshot)
+    master, _ = mp.render_master_file(snapshot)
+    assert master
+    codes = {
+        f["code"] for f in rel.unresolved_question_homes(snapshot)}
+    assert rel.GROUP_VISIBLE_NAME_MISMATCH in codes
 
     missing_display = copy.deepcopy(_snapshot())
     missing_display["topics"][0]["concepts"][0][
         "concept_display_name"
     ] = ""
-    with pytest.raises(
-        mp.WorkbookRenderError, match="no explicit concept_display_name",
-    ):
-        mp.render_master_file(missing_display)
+    master, _ = mp.render_master_file(missing_display)
+    assert master
+    assert rel.GROUP_HOME_UNNAMED in {
+        f["code"] for f in rel.unresolved_question_homes(missing_display)}
 
 
-def test_master_refuses_candidate_group_concept_mismatch():
+def test_a_group_home_disagreement_is_a_defect_not_a_render_error():
+    """INVERTED by spec-step8 T7.5/B4 — the ``:373`` raise.
+
+    Today it cost all four workbooks; now all four are written, the
+    candidate reaches no data row, and the defect is NAMED at staging so
+    the database write is refused.
+    """
     snapshot = copy.deepcopy(_snapshot())
     snapshot["candidates"][0]["concept_key"] = "C_B"
-    with pytest.raises(mp.WorkbookRenderError, match="does not match group"):
-        mp.render_master_file(snapshot)
+    master, issues = mp.render_master_file(snapshot)
+    assert master
+    assert [item["question_label"] for item in issues["unplaced"]] == [
+        "06MSMA_T01_TwoDim Q01"]
+    findings = rel.unresolved_question_homes(snapshot)
+    assert [f["code"] for f in findings] == [rel.GROUP_HOME_DISAGREEMENT]
+    assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
+    # And the label reaches NO data row.
+    parsed = mp.parse_workbook(master)
+    for sheet in parsed["sheets"].values():
+        assert all(
+            row.get("question_label") != "06MSMA_T01_TwoDim Q01"
+            for row in sheet["rows"])
 
 
 def test_master_provenance_uses_physical_sheet_row_numbers():
@@ -372,7 +426,7 @@ def test_master_provenance_uses_physical_sheet_row_numbers():
     workbook.close()
 
     parsed = mp.parse_workbook(buffer.getvalue())
-    assert parsed["sheets"]["Objective"]["row_numbers"] == [4, 5, 6, 7, 8]
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [4, 5, 6]
     assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
     shifted_provenance = copy.deepcopy(issues["group_provenance"])
     for item in shifted_provenance:
@@ -392,14 +446,190 @@ def test_formula_injection_and_cell_limit_guards():
          if r["question_label"]][0]
     assert q["question"] == "'=HYPERLINK evil"
 
+    # INVERTED by spec-step8 S9, and inverted deliberately rather than
+    # deleted: this assertion pinned a REAL behaviour that is now wrong.
+    # [measured at 76c84fb] a 40 000-character question raised
+    # ``WorkbookRenderError`` out of ``render_master_file`` — costing every
+    # row on every sheet of ALL FOUR outputs for one cell — while the
+    # staged verdict returned ``[]``, so nothing refused the database write
+    # either. Rule E says a defect blocks the write, never a download. The
+    # new contract is asserted here in full, and the coverage this test had
+    # is strengthened, not weakened: it now pins the workbook, the
+    # truncation marker, the whole recorded value, and the staged refusal.
     oversized = copy.deepcopy(_snapshot())
-    oversized["candidates"][0]["question"] = "x" * (mp.CELL_LIMIT + 1)
-    with pytest.raises(mp.WorkbookRenderError, match="exceeds"):
-        mp.render_master_file(oversized)
+    full_text = "x" * (mp.CELL_LIMIT + 1)
+    oversized["candidates"][0]["question"] = full_text
+    master, issues = mp.render_master_file(oversized)
+    assert master, "the Master File is written, not refused"
+
+    recorded = [
+        row for row in issues["oversized_cells"]
+        if row["reason"] == mp.CELL_TEXT_TOO_LONG
+    ]
+    assert recorded, "the oversized cell is recorded, never silently cut"
+    # R4: the SILENCE is the defect. The complete value is where a
+    # reviewer reads it, unabridged.
+    assert recorded[0]["full_value"] == full_text
+    assert recorded[0]["actual"] == len(full_text)
+    assert recorded[0]["cap"] == mp.CELL_LIMIT
+
+    # And the cell itself says the tail is elsewhere.
+    written = [
+        row for row in mp.parse_workbook(master)["sheets"]["Objective"]["rows"]
+        if row["question_label"]
+    ][0]["question"]
+    assert len(written) <= mp.CELL_LIMIT
+    assert "the complete value is recorded" in written.lower()
+
+    # The database write is refused, by name, at STAGING.
+    findings = [
+        f for f in rel.unresolved_question_homes(oversized)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert [f["field"] for f in findings] == ["question"]
+    assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
 
 
-def test_capacity_overflow_is_refused_with_the_label_named():
+def test_a_control_character_is_repaired_not_raised():
+    """The second half of the ``render_shape_overflow`` family (S9).
+
+    [measured at 76c84fb] a single ``\\x01`` in a question reached openpyxl
+    and raised ``IllegalCharacterError`` out of ``wb.save`` — an exception
+    from a third-party library, with no defect name, no record, and all
+    four outputs gone. XML 1.0 forbids those code points; the cell is
+    repaired, the whole original is recorded, and the write is refused.
+    """
+    ctl = copy.deepcopy(_snapshot())
+    ctl["candidates"][0]["question"] = "bad\x01char"
+
+    master, issues = mp.render_master_file(ctl)
+    assert master, "the Master File is written, not refused"
+
+    recorded = [
+        row for row in issues["oversized_cells"]
+        if row["reason"] == mp.CELL_TEXT_ILLEGAL_CHARACTER
+    ]
+    assert recorded, "the illegal character is recorded"
+    assert recorded[0]["full_value"] == "bad\x01char"
+    assert recorded[0]["code_points"] == ["U+0001"]
+
+    written = [
+        row for row in mp.parse_workbook(master)["sheets"]["Objective"]["rows"]
+        if row["question_label"]
+    ][0]["question"]
+    assert written == "badchar"
+
+    findings = [
+        f for f in rel.unresolved_question_homes(ctl)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert [f["reason"] for f in findings] == [
+        mp.CELL_TEXT_ILLEGAL_CHARACTER
+    ]
+
+
+def test_a_cell_that_is_both_too_long_and_illegal_is_repaired_for_both():
+    """The compound case — S9's own failure mode, still reachable until now.
+
+    [measured on the first cut of S9] ``cell_text_defect`` returned the
+    FIRST reason only. A value that was over the cap AND carried an
+    XML-illegal code point reported ``cell_text_too_long``, ``_cell_value``
+    dispatched on that one reason, truncated, and never stripped — so the
+    illegal code point rode into openpyxl and
+
+        aw.render_master_file(snap)
+        -> openpyxl.utils.exceptions.IllegalCharacterError
+
+    took all four outputs, the exact loss this slice exists to end. It was
+    data-position-dependent: the same defect at the tail was truncated away
+    by luck, so one chapter shipped and the next did not. Staging named the
+    length only, so a reviewer reading the findings could not have known
+    what actually broke the file.
+
+    Both halves are asserted, on the cell and at staging, plus the two cap
+    arithmetic facts the same repair path owns.
+    """
+    both = copy.deepcopy(_snapshot())
+    full_text = "\x01" + "y" * (mp.CELL_LIMIT + 5000)
+    both["candidates"][0]["question"] = full_text
+
+    master, issues = mp.render_master_file(both)
+    assert master, "the Master File is written, not refused"
+    assert mp.build_dual_output(both)["valid"], "and it reads back clean"
+
+    reasons = [
+        row["reason"] for row in issues["oversized_cells"]
+        if row["context"].endswith(":question")
+    ]
+    assert reasons == [mp.CELL_TEXT_TOO_LONG, mp.CELL_TEXT_ILLEGAL_CHARACTER]
+    assert all(
+        row["full_value"] == full_text for row in issues["oversized_cells"]
+        if row["context"].endswith(":question")
+    ), "both entries carry the WHOLE value; neither is a partial record"
+
+    written = [
+        row for row in mp.parse_workbook(master)["sheets"]["Objective"]["rows"]
+        if row["question_label"]
+    ][0]["question"]
+    assert "\x01" not in written
+    assert len(written) <= mp.CELL_LIMIT
+
+    # Staging names BOTH, so the findings say what broke the file.
+    findings = [
+        f for f in rel.unresolved_question_homes(both)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert sorted({f["reason"] for f in findings}) == sorted({
+        mp.CELL_TEXT_TOO_LONG, mp.CELL_TEXT_ILLEGAL_CHARACTER,
+    })
+
+
+def test_the_truncated_cell_states_a_true_count_and_stays_under_the_cap():
+    """Two arithmetic defects in one repair, both measured, both fixed.
+
+    * the note said "holds the first 32585 of 40000 characters" while
+      holding 32589 — ``kept`` was computed from the unformatted TEMPLATE
+      (182 chars) and the cut used the FORMATTED mark (178). A false
+      sentence inside a repair whose whole justification is that the record
+      stays true.
+    * the formula-injection guard ran AFTER the truncation and PREPENDED a
+      character, so a truncated cell beginning ``=`` was written at
+      ``CELL_LIMIT + 1``. openpyxl does not enforce the cap, so it saved —
+      violating the format limit the module says it is honouring.
+    """
+    import re
+
+    plain = mp._cell_value("z" * 40000, context="t")
+    stated = int(re.search(r"first (\d+) of (\d+)", plain).group(1))
+    assert stated == plain.index("\n[Aegis:"), "the count is the true count"
+    assert len(plain) <= mp.CELL_LIMIT
+
+    guarded = mp._cell_value("=" + "x" * 40000, context="t")
+    assert guarded.startswith("'=")
+    assert len(guarded) <= mp.CELL_LIMIT
+    stated = int(re.search(r"first (\d+) of (\d+)", guarded).group(1))
+    # One for the guard prefix, which is reserved before the cut now.
+    assert stated == guarded.index("\n[Aegis:") - 1
+
+
+def test_capacity_overflow_is_a_named_defect_with_the_label_named():
+    """INVERTED by spec-step8 T7.5/B4 — ``_question_record``'s four caps.
+
+    The cap is the LAYOUT's own column count, so a row that overflows it
+    cannot be written whole. Raising cost every row on every sheet of all
+    four outputs; now the row ships with the slots the layout has, the
+    overflow is named ``render_shape_overflow`` at staging with the label,
+    the cap and the actual count, and the database write is refused.
+    """
     snapshot = copy.deepcopy(_snapshot())
     snapshot["candidates"][0]["answers"] *= 4  # 8 options
-    with pytest.raises(mp.WorkbookRenderError, match="Q01"):
-        mp.render_master_file(snapshot)
+    master, _ = mp.render_master_file(snapshot)
+    assert master
+    findings = [
+        f for f in rel.unresolved_question_homes(snapshot)
+        if f["code"] == rel.RENDER_SHAPE_OVERFLOW
+    ]
+    assert len(findings) == 1
+    assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
+    assert findings[0]["cap"] == mp.MAX_OBJECTIVE_OPTIONS
+    assert findings[0]["actual"] == 8

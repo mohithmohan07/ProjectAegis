@@ -14,8 +14,8 @@ schema migration is required and checkpoint export retains the complete audit.
 
 **Two lanes, two sibling slots (spec T3).** One run produces all four
 outputs (Q3), so one job stages two release payloads: the Post-Learning
-one under ``RELEASE_KEY`` (Outputs 01/02) and the Pre-Learning one under
-the sibling ``PRE_RELEASE_KEY`` (Outputs 03/04). They are siblings, not a
+one under ``RELEASE_KEY`` (Outputs 03/04) and the Pre-Learning one under
+the sibling ``PRE_RELEASE_KEY`` (Outputs 01/02). They are siblings, not a
 lane-keyed sub-map inside one slot: a sub-map would change the Post
 payload's byte shape and every recorded release fixture. Which slot a
 payload came out of IS its lane — every reader that must know takes the
@@ -40,6 +40,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
@@ -49,7 +50,7 @@ from . import generation, uploads
 
 RELEASE_VERSION = "aegis-concept-release-1"
 RELEASE_KEY = "_aegis_release_output"
-# The Pre-Learning sibling slot (spec T3). Outputs 03/04 live here; the
+# The Pre-Learning sibling slot (spec T3). Outputs 01/02 live here; the
 # key itself carries the lane.
 PRE_RELEASE_KEY = "_aegis_pre_release_output"
 LANE_POST = "post"
@@ -61,6 +62,39 @@ RELEASE_LANES = (LANE_POST, LANE_PRE)
 # lets ``payload_lane`` catch a Pre payload mis-staged into the POST slot.
 # It is never the authority when the key is available.
 RELEASE_LANE_FIELD = "release_lane"
+# The staged draft's VERSION (spec-step8 T1/T2/S6).
+#
+# This slot used to be overwritten in place — ``durable_inventory[KEY] =
+# payload`` — which is why §7:551's "a new immutable release version per
+# applied round" was unexpressible on it and why the hazard T2 names was
+# live: publish the Concept File, then ``force_release`` re-stages, the
+# payload changes, ``source_release_sha256`` changes, and the already
+# published Master can never be matched to its source again.
+#
+# The slot is still ONE slot — after the convergence it is the staging
+# DRAFT, and ``models.AssessmentRelease`` is the immutable row of record
+# (T2). What changes here is that every staging MINTS a version instead
+# of silently replacing what was there: the number is monotonic per lane,
+# it travels into the frozen row's ``provider_identity``, and a re-stage
+# after a freeze is therefore visible on both sides instead of being an
+# overwrite nothing recorded.
+STAGED_VERSION_FIELD = "staged_version"
+# The draft's LINEAGE (S10 repair, Round 7). The version above is a per-slot
+# counter, and [measured] it RESTARTS at 1 whenever ``question_inventory``
+# is legitimately cleared (``replace_file``, ``convert_job``, the
+# source-review checkpoint reset) — so "same version" cannot distinguish
+# "the same draft, edited in place" from "a fresh draft that happens to
+# count from 1 again", and the seal gate built on the version alone accused
+# a legitimate fresh run of tampering. Every staging act therefore mints one
+# opaque uid; the freeze records it; the seal gate compares seals only
+# within one recorded lineage.
+STAGED_RELEASE_UID_FIELD = "staged_release_uid"
+# One recorded, named issue: the lane's Master File did not build on this
+# run (spec-step8 T15-2). It is an ISSUE, never a structural defect — the
+# CONCEPT payload is not corrupt, a later lane simply did not produce, and
+# refusing the concept lane's database write for a fault in a different
+# lane is Rule G's two-publication separation collapsed.
+ASSESSMENT_LANE_UNAVAILABLE = "assessment_lane_unavailable"
 RELEASE_STATUS = "released"
 RELEASE_ROW_STATUS_FIELD = "_aegis_release_status"
 RELEASE_ROW_ERRORS_FIELD = "_aegis_release_errors"
@@ -70,6 +104,16 @@ RELEASE_ROW_ROUTES_FIELD = "_aegis_release_type_case_routes"
 RELEASE_ROW_REFINED_FIELD = "_aegis_release_refined"
 RELEASE_ROW_LANE_FIELD = "_aegis_release_lane"
 PRE_ROW_GENERATED_QUESTIONS_FIELD = "_aegis_pre_generated_questions"
+# OD3/T3.3: the Pre row's ``related_concepts`` CONTENT — the resolved,
+# persisted Post ``machine_id``s this pre-concept is needed for. Resolved
+# at STAGING (there is no durable Post identity to join on at render time,
+# and a title join is forbidden by T11.2), stamped here, read by the
+# renderer, and lifted onto the DB column at publication so the column does
+# not empty the moment a reviewer clicks Upload (T3.3b).
+PRE_ROW_RELATED_CONCEPTS_FIELD = "_aegis_pre_related_concepts"
+# A link that does not resolve is a RECORDED REVIEW FLAG on the row, never
+# a blank and never a block (T3.3).
+PRE_ROW_RELATED_UNRESOLVED_FIELD = "_aegis_pre_related_concepts_unresolved"
 
 _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_STATUS_FIELD,
@@ -99,10 +143,23 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # phase3/premap.py): the captured prerequisites a pre-concept teaches,
     # and its explicit needed-for links to the Post concepts that require
     # it. Both ride the release for the reviewer's audit and are stripped
-    # before DB upload; their column home is step 8's related_concepts
-    # (Q5), and neither adds a house-format section.
+    # before DB upload. CORRECTED (spec-step8 T3.3): only ONE of the two
+    # has ``related_concepts`` as its column home. ``_aegis_needed_for``
+    # does — resolved to persisted Post ``machine_id``s at Pre staging and
+    # carried on ``PRE_ROW_RELATED_CONCEPTS_FIELD`` below.
+    # ``_aegis_pre_prerequisites`` does NOT: it is
+    # ``{prerequisite_id, text}``, copied provenance prose rather than a
+    # label, and putting prose in a join column would corrupt the join.
     "_aegis_pre_prerequisites",
     "_aegis_needed_for",
+    # The RESOLVED form of ``_aegis_needed_for``: the persisted Post
+    # ``machine_id``s this Pre concept is needed for, newline-joined
+    # (concept titles legitimately contain commas). Publication LIFTS it
+    # into an explicit ``related_concepts`` key before this frozenset is
+    # applied — see ``_lift_resolved_related_concepts`` — because
+    # ``_strip_release_fields`` drops every key here by construction.
+    "_aegis_pre_related_concepts",
+    "_aegis_pre_related_concepts_unresolved",
     # Assessment grouping verdicts (step 6): private release audit carried by
     # candidates/groups and stripped before concept-row database publication.
     # The assessment renderer has no visible slots for these records.
@@ -118,13 +175,13 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # Slice-5 Master Refiner decisions. Candidate and group units share one
     # private audit marker while retaining distinct decision kinds/policies.
     "_aegis_assessment_master_refinement",
-    # Output 03 (spec T3): the row-private marks the Pre release stamps on
+    # Output 01 (spec T3): the row-private marks the Pre release stamps on
     # every one of its concept rows. ``_aegis_release_lane`` says which
     # lane's slot the row shipped in, so a row lifted out of the payload
     # into a diagnostics export still says what it is; and
     # ``_aegis_pre_generated_questions`` carries the identities of the
-    # GENERATED questions Output 04 authored for that pre-concept, so a
-    # reviewer holding Output 03 can see what Output 04 shipped for each
+    # GENERATED questions Output 02 authored for that pre-concept, so a
+    # reviewer holding Output 01 can see what Output 02 shipped for each
     # row. Both ride the release for the reviewer's audit and are stripped
     # before DB upload like every other audit field; neither adds a
     # house-format section and neither is ever workbook-visible.
@@ -307,7 +364,7 @@ def normalize_lane(lane: object) -> str:
     """``"post"`` unless the caller explicitly asked for the Pre lane.
 
     Mechanics: a name lookup over two known slot names, defaulting to the
-    lane that existed before Outputs 03/04 did, so every caller that has
+    lane that existed before Outputs 01/02 did, so every caller that has
     not been told about the Pre lane keeps reading the Post slot.
     """
 
@@ -397,6 +454,137 @@ def staged_release_for_lane(
     return payload, payload_lane(payload)
 
 
+def staged_version(payload: Mapping[str, Any] | None) -> int:
+    """The staged draft's version, or 0 when it carries none.
+
+    0 means "staged before this counter existed", not "version zero": a
+    release payload recorded by an earlier build has no such key and must
+    keep opening.
+    """
+
+    if not isinstance(payload, Mapping):
+        return 0
+    try:
+        return int(payload.get(STAGED_VERSION_FIELD) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def next_staged_version(
+    job: models.UploadJob, *, lane: object = LANE_POST,
+) -> int:
+    """Mint the next version for one lane's staging slot.
+
+    Mechanics: read what is in the slot, add one. Per LANE, because the
+    two lanes are separate drafts with separate publications (Rule G), and
+    a shared counter would make a Pre re-stage look like a Post one.
+    """
+
+    return staged_version(release_payload(job, lane=lane)) + 1
+
+
+def assessment_lane_issue(
+    payload: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """The recorded ``assessment_lane_unavailable`` issue, or None.
+
+    The read half of the transport ``record_assessment_lane_unavailable``
+    writes: the manifest's Master entry uses it as the stated reason the
+    entry is disabled, so the reviewer is told WHY the file is missing
+    instead of only that it is.
+    """
+
+    if not isinstance(payload, Mapping):
+        return None
+    recorded = [
+        dict(issue)
+        for issue in payload.get("issues") or []
+        if isinstance(issue, Mapping)
+        and _normal(issue.get("code")) == ASSESSMENT_LANE_UNAVAILABLE
+    ]
+    return recorded[-1] if recorded else None
+
+
+def record_assessment_lane_unavailable(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    lane: object,
+    error: BaseException,
+) -> dict[str, Any] | None:
+    """Record that one lane's Master File did not build, and keep going.
+
+    Q13, and the reason is the whole point rather than a robustness
+    nicety: by the time this is called the two CONCEPT outputs are
+    finished and durable — the payload is staged, the bulk-import workbook
+    already renders for both lanes. An exception escaping the assessment
+    lane would propagate out of ``generate_post_learning`` and take them
+    with it: a mid-run halt after the model budget is spent, which
+    CLAUDE.md and Q13 forbid. So the failure is CAUGHT, and then it is
+    NAMED — nothing is guessed silently and nothing finished is lost.
+
+    It touches ``issues`` and NOTHING else, and both halves of that are
+    deliberate:
+
+    * it is not a re-stage. It is also seal-safe by measurement —
+      ``assessment_release_snapshot.source_release_sha256`` hashes
+      thirteen payload keys and ``issues`` is not among them — so
+      appending here moves no seal, no ``machine_id`` and no
+      ``concept_snapshot_sha256``, and the frozen Master of the OTHER
+      lane still matches its source.
+    * it does not touch ``summary``. The concept release's
+      ``release_state`` reads the summary counts, and a later lane's
+      fault must not change the CONCEPT lane's public state or close its
+      database upload (T15-2). The counts and this ledger therefore
+      disagree by one on a failed run, deliberately: the alternative is a
+      Master-lane fault silently downgrading a clean Concept File.
+
+    Never raises. A recorder that can raise is the same defect one level
+    up.
+    """
+
+    try:
+        resolved = normalize_lane(lane)
+        payload = release_payload(job, lane=resolved)
+        if payload is None:
+            return None
+        issue = _issue(
+            code=ASSESSMENT_LANE_UNAVAILABLE,
+            severity="error",
+            phase="assessment_release",
+            message=(
+                f"The {resolved!r} lane's Master File was not built on this "
+                f"run: {type(error).__name__}: {error}. The Concept File for "
+                "this lane is unaffected and its database upload is still "
+                "open; re-run the lane from the release page."
+            ),
+            details={
+                "lane": resolved,
+                "exception": type(error).__name__,
+                "error": str(error),
+                STAGED_VERSION_FIELD: staged_version(payload),
+            },
+        )
+        key = release_key_for_lane(resolved)
+        durable = copy.deepcopy(dict(job.question_inventory or {}))
+        slot = durable.get(key)
+        if not isinstance(slot, Mapping):
+            return None
+        slot = copy.deepcopy(dict(slot))
+        slot["issues"] = list(slot.get("issues") or []) + [issue]
+        durable[key] = slot
+        job.question_inventory = durable
+        db.commit()
+        db.refresh(job)
+        return issue
+    except Exception:  # pragma: no cover - the recorder must never raise
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+
 def release_available(
     job: models.UploadJob, *, lane: object = LANE_POST,
 ) -> bool:
@@ -410,13 +598,13 @@ def pre_release_available(job: models.UploadJob) -> bool:
 def staged_generated_questions(
     job: models.UploadJob,
 ) -> list[dict[str, Any]] | None:
-    """The GENERATED questions the staged Pre release carries for Output 04.
+    """The GENERATED questions the staged Pre release carries for Output 02.
 
     None when there is no staged Pre release at all — which is different
     from a staged Pre release that authored no question, and the two must
     stay distinguishable: the first means "this run built no Pre lane",
     the second means "it built one and it is empty", and only the second
-    is a legal empty Output 04.
+    is a legal empty Output 02.
     """
 
     payload = release_payload(job, lane=LANE_PRE)
@@ -437,6 +625,128 @@ READY = "ready"
 READY_WITH_FLAGS = "ready_with_flags"
 DIAGNOSTIC_RELEASE = "diagnostic_release"
 
+# --------------------------------------------------------------------------- #
+# S9 — the row-level projection gate, decided ONCE at staging
+#
+# D8.5's proof: ``structural_defects`` is a pure function of the staged
+# payload, and ``transient_release_hierarchy`` runs only at DOWNLOAD time.
+# A row skipped at projection time could therefore reach the release state
+# only by mutating a frozen payload during a GET. So the verdict is taken
+# at STAGING, rides the payload under ``staged_row_defects``, and the
+# projection reads a decision the payload already holds.
+#
+# ONE implementation for both (T1): ``build_concepts_release_files.
+# transient_release_hierarchy`` calls the same function on the same rows,
+# so the reviewer's issue and the skipped row can never disagree.
+#
+# It compares presence of the two join identities. It judges nothing about
+# what a row MEANS — a gate under CLAUDE.md's "mechanics, not meaning".
+# --------------------------------------------------------------------------- #
+
+STAGED_ROW_DEFECTS_FIELD = "staged_row_defects"
+STAGED_ROW_UNUSABLE = "staged_row_unusable"
+
+# T9-1's closed concept-lane identity set (S11): issue codes that name an
+# IDENTITY corruption and therefore block the database write. Enumerated,
+# never derived — extending it is a deliberate spec change, not a one-line
+# edit. T9-2's stays-flags list (``unassigned_inventory_qid``,
+# ``case_uniqueness_qid_render_count_mismatch``,
+# ``case_uniqueness_example_less_case_shell``) is deliberately absent.
+# T9-1's machine-id pair (a duplicate persisted id, a row still blank
+# after the mint) is NOT here and cannot be: machine ids exist only on
+# persisted rows, never in this payload (S10), so those two block at the
+# publication act, where the ids exist (Round 9, correcting Round 8's
+# mis-assignment).
+T9_IDENTITY_DEFECT_CODES = frozenset({
+    "duplicate_qid_assignment",
+    "unknown_type_case_qid",
+    "case_uniqueness_duplicate_case_identity",
+    "case_uniqueness_duplicate_qid_route",
+    "type_catalog_unreadable",
+})
+
+# Round 9: the QC audit's blocking findings ride their OWN named key.
+# V2/T10-0 ordered them onto ``snapshot_defects`` — and [measured] that
+# reader stamps every entry "an input snapshot could not be read", a false
+# factual preamble on a coverage finding, and the Pre lane's issue minting
+# turned each one into a spurious ``pre_learning_snapshot_unreadable``.
+# The receipt may not claim a fact nobody measured, so the blocking set
+# gets a key whose reader says what it is; ``snapshot_defects`` keeps its
+# original meaning (input-artifact unreadability) on both lanes.
+QC_BLOCKING_FIELD = "qc_blocking_defects"
+
+
+def row_projection_defect(
+    row: object, position: int,
+) -> dict[str, Any] | None:
+    """Why this staged concept row cannot be projected, or ``None``.
+
+    The three conditions ``transient_release_hierarchy`` used to raise on,
+    one row at a time. Raising cost every one of the four outputs for one
+    bad row; naming the row costs the row and ships the rest (Rule E).
+    """
+
+    if not isinstance(row, Mapping):
+        return {
+            "code": STAGED_ROW_UNUSABLE,
+            "position": int(position),
+            "message": (
+                f"staged concept row {position} is not an object, so it "
+                "reaches no workbook row and no database row"
+            ),
+        }
+    if not _normal(row.get("topic")):
+        return {
+            "code": STAGED_ROW_UNUSABLE,
+            "position": int(position),
+            "concept_title": _normal(
+                row.get("concept_title") or row.get("concept")
+            ),
+            "message": (
+                f"staged concept row {position} has no topic, so it has no "
+                "place in the chapter hierarchy the outputs are projected "
+                "onto"
+            ),
+        }
+    if not _normal(row.get("concept_title") or row.get("concept")):
+        return {
+            "code": STAGED_ROW_UNUSABLE,
+            "position": int(position),
+            "topic": _normal(row.get("topic")),
+            "message": (
+                f"staged concept row {position} has no concept title, so it "
+                "cannot be addressed by a machine id or a workbook cell"
+            ),
+        }
+    return None
+
+
+def staged_row_defects(records: object) -> list[dict[str, Any]]:
+    """Every unusable row in one staged record list, in source order."""
+
+    findings: list[dict[str, Any]] = []
+    for position, row in enumerate(records or [], start=1):
+        finding = row_projection_defect(row, position)
+        if finding is not None:
+            findings.append(finding)
+    return findings
+
+
+# --------------------------------------------------------------------------- #
+# S9 / D8.3 — the Pre lane's empty-capture verdict, as the payload records it
+#
+# ``phase3/premap.build`` spends ONE model verdict when the prerequisite
+# capture is empty: does this chapter genuinely assume no prior knowledge,
+# or did the capture fail to reach it? An empty list cannot answer that,
+# and inferring "empty therefore fine" is exactly the shape-inference
+# Rule 1 forbids. The verdict rides the Pre map, then this payload, and
+# ``structural_defects`` reads it — it never re-decides it.
+# --------------------------------------------------------------------------- #
+
+PRE_LANE_VERDICT_FIELD = "pre_lane_verdict"
+PRE_LANE_ASSUMES_NOTHING = "assumes_nothing"
+PRE_LANE_CAPTURE_INCOMPLETE = "capture_incomplete"
+
 
 def _publishable_record(record: object) -> bool:
     """A row the deterministic publication can actually deposit.
@@ -454,20 +764,92 @@ def _publishable_record(record: object) -> bool:
     )
 
 
+# The two keys that make a payload the ASSESSMENT release's payload rather
+# than a concept release's. This reads which SCHEMA is in hand — not what
+# any content means — and the two shapes are disjoint by construction:
+# neither staged concept payload (Post or Pre) carries either key, and the
+# assessment payload carries no ``records``.
+#
+# It exists because ``release_state`` became the ONE public vocabulary for
+# both release systems (spec-step8 T1). [measured] before this,
+# ``release_state({"source_atoms": …, "candidates": …, "groups": …})``
+# returned ``diagnostic_release``, because the only depositable unit this
+# function knew about was a concept row — so every healthy assessment
+# release was labelled structurally corrupt the moment the shared core
+# started asking.
+_ASSESSMENT_PAYLOAD_KEYS = ("candidates", "groups")
+
+
+def _is_assessment_payload(payload: Mapping[str, Any]) -> bool:
+    return any(key in payload for key in _ASSESSMENT_PAYLOAD_KEYS)
+
+
+def _publishable_candidate(candidate: object) -> bool:
+    """The assessment lane's depositable unit.
+
+    The same mechanic one level over: it has the two identities the
+    assessment upsert joins on — its home concept and its group. No
+    reading of what the question means, and no judgment about whether it
+    is a GOOD question; that is what the flags and the model's own
+    verdicts are for.
+    """
+
+    return (
+        isinstance(candidate, Mapping)
+        and bool(_normal(candidate.get("concept_key")))
+        and bool(_normal(candidate.get("group_key")))
+    )
+
+
+def nothing_to_publish(payload: Mapping[str, Any] | None) -> bool:
+    """True when this lane has no depositable unit — EMPTINESS, not corruption.
+
+    Split out of ``structural_defects`` by spec-step8 D8.1, because the two
+    answer different questions and conflating them refused an
+    empty-but-correct Pre release as if it were corrupt. "This release has
+    nothing in it" and "this release is broken" are not the same fact, and
+    only the second one is a reason to distrust what IS in it.
+
+    What follows from emptiness is D8.2: publishing nothing is the
+    idempotent zero-row success, not an error — §4:475-478 asks
+    publication to be "idempotent, model-free, never drops a highlighted
+    row", and writing nothing when there is nothing IS that answer.
+
+    Counts identities; reads no content.
+    """
+
+    if not isinstance(payload, Mapping):
+        return True
+    if _is_assessment_payload(payload):
+        return not [
+            candidate for candidate in payload.get("candidates") or []
+            if _publishable_candidate(candidate)
+        ]
+    return not [
+        row for row in payload.get("records") or []
+        if _publishable_record(row)
+    ]
+
+
 def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
     """Structural/import-integrity defects that block the database upload.
 
     "Semantic doubt flags; structural corruption blocks" (§4). This is the
-    structural half, and it is deliberately the SAME set of conditions the
-    explicit upload already refused before the Pre lane existed — a
-    payload with no depositable row — plus the two new structural states
-    the Pre lane can reach: a lane that refused its own artefact (the
-    fail-closed source-question barrier) and therefore has nothing to
-    publish, and an input snapshot that was on disk and unreadable, so
-    what this release is missing is missing from the ARTEFACT rather than
-    from the chapter. A gate that refuses a broken artifact, judging
-    nothing about content: it counts identities, reads a recorded
-    refusal, and reads whether a file parsed.
+    structural half: a lane that refused its own artefact (the fail-closed
+    source-question barrier), an input snapshot that was on disk and
+    unreadable, a staged row that cannot be projected onto any output, and
+    a Pre lane whose empty capture no verdict has accounted for. A gate
+    that refuses a broken artifact, judging nothing about content: it
+    counts identities, reads a recorded refusal, reads whether a file
+    parsed, and reads a verdict the model already made.
+
+    **CORRUPTION ONLY, since spec-step8 D8.1.** "The release contains no
+    concept rows to upload" has MOVED to ``nothing_to_publish`` — it is
+    emptiness, not corruption, and while it lived here an empty-but-correct
+    Pre release was named *Diagnostic release* and refused as if the
+    artefact were broken. §4 defines that name as "structural/import
+    integrity failed"; nothing failed. This is why no fourth state was
+    needed: the two questions were always two questions.
 
     The unreadable-snapshot case is what makes this a safety property
     rather than bookkeeping. Publishing a Pre release whose questions
@@ -482,6 +864,29 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
 
     if not isinstance(payload, Mapping):
         return ["no staged release"]
+    if _is_assessment_payload(payload):
+        # B's payload shape (spec-step8 S6). Its depositable unit is a
+        # candidate carrying its home concept and its group, not a
+        # concept row — asking for ``records`` here labelled every
+        # healthy assessment release ``diagnostic_release``.
+        #
+        # This does NOT take over the assessment lane's publication gate.
+        # That stays where it is: ``diagnostics["payload_errors"]`` and
+        # ``_readiness``'s read of the renderer's ``unplaced`` list, both
+        # in ``assessment_release_service``, are what refuse the write.
+        # This function only says which of the three §4 NAMES the row
+        # wears, through one vocabulary for both lanes.
+        #
+        # RESIDUE, named rather than left implicit: D8.1's emptiness split
+        # is applied to the CONCEPT branch only. The assessment lane's own
+        # publication act (``assessment_release_service``) is S10's
+        # convergence, and moving its zero-candidate refusal out of here
+        # ahead of that would open its database write with nothing on the
+        # other side yet deciding a zero-row publication is correct for a
+        # lane whose depositable unit is a QUESTION.
+        if nothing_to_publish(payload):
+            return ["the release contains no assessment rows to upload"]
+        return []
     defects: list[str] = []
     refused = _normal(payload.get("refused"))
     if refused:
@@ -492,12 +897,183 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
                 "an input snapshot could not be read, so this release is "
                 f"incomplete rather than empty: {_normal(defect)}"
             )
-    if not [
-        row for row in payload.get("records") or []
-        if _publishable_record(row)
-    ]:
-        defects.append("the release contains no concept rows to upload")
+    # A ``records`` value that is not an array carries no row at all, and
+    # the emptiness split must not let it read as an empty release. It is
+    # CORRUPTION — [measured] with only ``nothing_to_publish`` answering,
+    # ``records={"a": 1}`` returned no defect, read *Ready with flags* and
+    # published as a zero-row success, because ``payload.get("records") or
+    # []`` iterates a dict's KEYS and none of them is a publishable record.
+    # A pure read of the payload's own shape; it judges no content.
+    records = payload.get("records")
+    if records is not None and not isinstance(records, list):
+        defects.append(
+            "the staged release concept records are not an array, so no "
+            "concept row can be read from them and this release is corrupt "
+            "rather than empty"
+        )
+    # S9: the row-level verdict the payload already holds, taken at staging
+    # (D8.5). Every entry names one row that reaches no output — the
+    # producer whose consumer this is.
+    #
+    # FAIL CLOSED WHEN THE PAYLOAD DOES NOT HOLD IT. A payload with no
+    # ``staged_row_defects`` key at all is not a payload with no defects —
+    # it is a payload staged before this key existed, restored from an
+    # export, or built by a caller other than the two staging functions.
+    # [measured] reading the key alone, a Post payload whose single record
+    # had no ``topic`` and no such key returned NO defect, read *Ready with
+    # flags*, and published ``database_uploaded: True`` with an empty id
+    # list and a receipt that said the emptiness was correct — the row
+    # dropped in silence, and ``database_uploaded`` latched so no later
+    # attempt could find it. At 76c84fb that same payload was refused.
+    # Recomputing is legal and cannot drift: ``staged_row_defects`` is a
+    # pure function of the payload calling the SAME
+    # ``row_projection_defect`` the projection and the staging pass call,
+    # and D8.5 forbids a projection-time DISCOVERY mutating a frozen
+    # payload, not a pure recomputation inside the gate.
+    recorded = (
+        payload.get(STAGED_ROW_DEFECTS_FIELD)
+        if STAGED_ROW_DEFECTS_FIELD in payload
+        else staged_row_defects(records if isinstance(records, list) else [])
+    )
+    for finding in recorded or []:
+        if not isinstance(finding, Mapping):
+            continue
+        message = _normal(finding.get("message"))
+        if message:
+            defects.append(
+                "a staged concept row cannot be projected onto any output, "
+                f"so publishing this release would deposit it nowhere: "
+                f"{message}"
+            )
+    # T9-1 (S11): the concept lane's CLOSED identity set. A recorded issue
+    # whose code names an identity corruption — the same QID placed twice,
+    # a rendered QID the inventory never owned, a duplicate rendered Case
+    # identity or QID route, a Type catalog that would not parse — blocks
+    # the DATABASE WRITE, never a download. [measured] before this,
+    # ``duplicate_qid_assignment`` was an ordinary (error-severity) issue
+    # that this gate simply never read, so a duplicate QID published
+    # without complaint while keyword checks halted finished runs — the
+    # exact polarity T9 inverts. The set is CLOSED and enumerated: T9-2
+    # keeps ``unassigned_inventory_qid`` (a coverage verdict — R4 says
+    # Placed OR Flagged) and the two text-derived ``case_uniqueness_*``
+    # codes (``qid_render_count_mismatch``, ``example_less_case_shell``)
+    # as flags, because a reviewer reword of ``concept_details`` must
+    # never refuse the upload on a deterministic prose comparison (§7:577).
+    #
+    # Round 9, twice over: (a) FAIL CLOSED like the row gate above — a
+    # payload with no ``issues`` key at all (restored from an export,
+    # built by another caller) recomputes the identity issues from its own
+    # ``mined_types``/inventory rather than passing on absence; (b) NO
+    # severity carve-out — T9-1 conditions blocking on the CODE, and a
+    # display severity must not be a one-word side door out of a set whose
+    # own comment says extending it is a spec change.
+    recorded_issues = (
+        payload.get("issues")
+        if "issues" in payload
+        else _recomputed_identity_issues(payload, records)
+    )
+    for issue in recorded_issues or []:
+        if not isinstance(issue, Mapping):
+            continue
+        code = _normal(issue.get("code"))
+        if code in T9_IDENTITY_DEFECT_CODES:
+            defects.append(
+                f"identity corruption recorded by the release audit "
+                f"({code}): {_normal(issue.get('message'))}"
+            )
+    # Round 9: the QC audit's blocking findings, under their own honest
+    # preamble — never the input-snapshot sentence, which states a fact
+    # these findings did not measure.
+    for defect in payload.get(QC_BLOCKING_FIELD) or []:
+        text = _normal(defect)
+        if text:
+            defects.append(
+                f"the release QC audit recorded a blocking finding: {text}"
+            )
+    defects.extend(_pre_lane_verdict_defects(payload))
     return defects
+
+
+def _recomputed_identity_issues(
+    payload: Mapping[str, Any], records: object,
+) -> list[dict[str, Any]]:
+    """The T9 identity issues, recomputed from the payload's own material.
+
+    Pure, like the row-defect recompute above: ``audit_type_cases`` and
+    ``_case_uniqueness_issues`` are functions of the payload's
+    ``mined_types`` and inventory, so a payload stripped of its recorded
+    ``issues`` cannot pass the identity gate on absence alone.
+    """
+
+    mined = payload.get("mined_types")
+    inventory = payload.get("question_task_inventory")
+    try:
+        _rows, issues, _routes = audit_type_cases(
+            dict(mined) if isinstance(mined, Mapping) else {},
+            dict(inventory) if isinstance(inventory, Mapping) else {},
+        )
+    except Exception as exc:  # noqa: BLE001 — named and blocking, never a void
+        issues = [_issue(
+            code="type_catalog_unreadable",
+            message=(
+                "the identity recompute could not read the staged "
+                f"mined-Type material ({type(exc).__name__}: {exc}); the "
+                "release cannot pass the identity gate on absence"
+            ),
+            severity="error",
+            phase="type_case_release",
+        )]
+    issues = list(issues)
+    issues.extend(_case_uniqueness_issues(
+        [row for row in (records if isinstance(records, list) else [])
+         if isinstance(row, Mapping)],
+        mined,
+    ))
+    return issues
+
+
+def _pre_lane_verdict_defects(payload: Mapping[str, Any]) -> list[str]:
+    """The empty Pre lane's one question: was the emptiness DECIDED?
+
+    D8.3. ``lane_content_decided`` recorded "Phase 03 ran", which cannot
+    tell an OCR-degraded scan, a thin lower-grade chapter and a chapter
+    that genuinely assumes nothing apart. So premap spends one verdict and
+    this reads it — an empty capture opens the zero-row publication only
+    on a positive ``assumes_nothing``; ``capture_incomplete``, a Fixer
+    decision that could not reach either, and a run that recorded no
+    verdict at all all keep the release *Diagnostic*.
+
+    Reads a recorded verdict. Decides nothing itself, and above all does
+    not answer the question with a count.
+    """
+
+    if _normal(payload.get(RELEASE_LANE_FIELD)) != LANE_PRE:
+        return []
+    if not nothing_to_publish(payload):
+        return []
+    verdict_row = payload.get(PRE_LANE_VERDICT_FIELD)
+    verdict_row = verdict_row if isinstance(verdict_row, Mapping) else {}
+    verdict = _normal(verdict_row.get("verdict"))
+    if verdict == PRE_LANE_ASSUMES_NOTHING:
+        return []
+    if not verdict:
+        return [
+            "this Pre-Learning release has no concept row and no recorded "
+            "verdict on whether the chapter genuinely assumes no prior "
+            "knowledge, so an empty capture and a failed one are not "
+            "distinguishable here"
+        ]
+    return [
+        "the Pre-Learning capture was empty and the run decided "
+        f"{verdict!r} rather than {PRE_LANE_ASSUMES_NOTHING!r}, so what "
+        "this release is missing may be missing from the CAPTURE rather "
+        "than from the chapter"
+        + (
+            f": {_normal(verdict_row.get('rationale'))}"
+            if _normal(verdict_row.get("rationale"))
+            else ""
+        )
+    ]
 
 
 def release_state(payload: Mapping[str, Any] | None) -> str:
@@ -593,18 +1169,38 @@ def _extraction_provenance_issues(
         return []
     issues: list[dict[str, Any]] = []
     if not provenance.get("chapter_outline_applied"):
-        issues.append(_issue(
-            code="chapter_outline_not_applied",
-            severity="warning",
-            phase="source-conversion",
-            message=(
-                "No model-decided chapter outline reached this run, so topics "
-                "and question boundaries fell back to deterministic reading. "
-                "Multi-part exercise sections are likely to have stayed whole. "
-                "Re-run the source conversion for this chapter."
-            ),
-            details=dict(provenance),
-        ))
+        if provenance.get("task_verdict_ledger_applied"):
+            # QX (docs/spec-qx.md): the text lane has no outline, but every
+            # source block received a recorded model membership verdict, so
+            # "nobody read this chapter" is no longer true. Record the
+            # authority positively instead of warning about the outline.
+            issues.append(_issue(
+                code="task_membership_model_verdict",
+                severity="info",
+                phase="source-conversion",
+                message=(
+                    "Task membership for this chapter was adjudicated "
+                    "block-by-block by the QX author verdict ledger "
+                    f"({int(provenance.get('task_missed_asks_recovered') or 0)}"
+                    " ask(s) recovered beyond the parser, "
+                    f"{int(provenance.get('task_candidates_rejected') or 0)}"
+                    " candidate(s) ruled not_task)."
+                ),
+                details=dict(provenance),
+            ))
+        else:
+            issues.append(_issue(
+                code="chapter_outline_not_applied",
+                severity="warning",
+                phase="source-conversion",
+                message=(
+                    "No model-decided chapter outline reached this run, so topics "
+                    "and question boundaries fell back to deterministic reading. "
+                    "Multi-part exercise sections are likely to have stayed whole. "
+                    "Re-run the source conversion for this chapter."
+                ),
+                details=dict(provenance),
+            ))
     elif not provenance.get("chapter_outline_topics"):
         issues.append(_issue(
             code="chapter_outline_topics_unusable",
@@ -628,6 +1224,53 @@ def _extraction_provenance_issues(
                 "outline, even after a follow-up pass. They shipped whole, so "
                 "any independent questions inside them are not in this "
                 "release."
+            ),
+            details=dict(provenance),
+        ))
+    fixer_count = int(provenance.get("task_fixer_decisions") or 0)
+    if fixer_count:
+        issues.append(_issue(
+            code="task_membership_fixer_decided",
+            severity="warning",
+            phase="source-conversion",
+            message=(
+                f"{fixer_count} source block(s) could not be decided by the "
+                "ordinary QX author pass; The Fixer recorded a best-judgment "
+                "membership verdict for each and the affected occurrences "
+                "carry review flags."
+            ),
+            details=dict(provenance),
+        ))
+    dissents = int(provenance.get("task_critic_dissents") or 0)
+    ledger_flags = [
+        str(flag)
+        for flag in provenance.get("task_ledger_review_flags") or []
+    ]
+    if dissents or ledger_flags:
+        issues.append(_issue(
+            code="task_membership_critic_dissent",
+            severity="warning",
+            phase="source-conversion",
+            message=(
+                f"The QX membership critic recorded {dissents} dissent(s); "
+                "the affected occurrences carry review flags"
+                + (
+                    f" and {len(ledger_flags)} finding(s) could not be "
+                    "attached to a single occurrence (see details)."
+                    if ledger_flags else "."
+                )
+            ),
+            details=ledger_flags or dict(provenance),
+        ))
+    if provenance.get("task_critic_unavailable"):
+        issues.append(_issue(
+            code="task_membership_critic_unavailable",
+            severity="info",
+            phase="source-conversion",
+            message=(
+                "The QX membership critic pass was unavailable for this "
+                "chapter; the author verdicts stand unreviewed: "
+                + str(provenance.get("task_critic_unavailable"))
             ),
             details=dict(provenance),
         ))
@@ -948,17 +1591,28 @@ def audit_type_cases(
     return output, issues, routes
 
 
-_QUESTION_TEXT_NOISE_RE = re.compile(r"[^0-9a-z ]+")
+# T10-5 (S11): Unicode-aware, and the key casefolds first. [measured] the
+# old class (``r"[^0-9a-z ]+"``) deleted every uppercase letter and every
+# non-Latin character, so the repeated-question audit was inert for
+# Devanagari sources, for capitalised wording, and for any recased text —
+# the audit that stops one learner meeting the same question twice could
+# not read most of what learners actually read.
+_QUESTION_TEXT_NOISE_RE = re.compile(r"[^\w\s]+", re.UNICODE)
 # Only a LEADING item marker — "(2)", "3.", "b)", "(iv)". Digits inside the
-# question are part of it ("What is 2 + 3?") and must survive.
+# question are part of it ("What is 2 + 3?") and must survive. A shape
+# judgment that survives deliberately: it decides that a leading "(iv)" is
+# numbering rather than part of the question, and it is recorded in
+# docs/release-qc-checklist.md as a named residue rather than called
+# "exact wording".
 _QUESTION_ITEM_MARKER_RE = re.compile(
     r"^\(?\s*(?:[0-9]{1,3}|[a-z]|[ivxl]{1,5})\s*[\).:]\s+"
 )
 
 
 def _question_text_key(value: object) -> str:
-    """Compare questions by their words, not their punctuation or numbering."""
-    text = _QUESTION_ITEM_MARKER_RE.sub("", _normal(value))
+    """Compare questions by their words — not punctuation, case or
+    numbering."""
+    text = _QUESTION_ITEM_MARKER_RE.sub("", _normal(value).casefold())
     text = _QUESTION_TEXT_NOISE_RE.sub(" ", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -978,9 +1632,14 @@ def _repeated_question_issues(
             continue
         key = _question_text_key(row.get("example_prompt"))
         qid = _normal(row.get("example_qid"))
-        if len(key) < 25 or not qid:
-            # Very short prompts ("Why?", "Explain.") legitimately recur as
-            # the tail of different questions; they are not a repeat.
+        if not key or not qid:
+            # No wording or no identity — nothing to compare. The
+            # ``len(key) < 25`` threshold that stood here was a character
+            # count deciding whether two questions are the same question
+            # (T10-5); a short repeat is now REPORTED as one grouped
+            # warning a reviewer dismisses in one glance — reporting a
+            # collision is identity accounting, suppressing it was the
+            # judgment.
             continue
         seen = qids_by_text.setdefault(key, [])
         if qid not in seen:
@@ -1021,13 +1680,29 @@ def _case_uniqueness_issues(
     rows = [dict(row) for row in records if isinstance(row, Mapping)]
     if not rows:
         return []
+    catalog_defects: list[dict[str, Any]] = []
     try:
         _types, cases = p3_assemble._type_catalog(
             {"mined_types": dict(mined_types or {})
              if isinstance(mined_types, Mapping) else {}}
         )
-    except Exception:  # noqa: BLE001 - a malformed catalog never blocks release
+    except Exception as exc:  # noqa: BLE001 — named, never swallowed (T9-3)
+        # A catalog that will not parse used to silently disable this
+        # audit — ``except Exception: cases = {}`` with a comment calling
+        # that safety. It is a NAMED structural finding now: the audit
+        # still runs over what it can read, and the reviewer is told the
+        # gate ran half-blind instead of being led to believe it ran.
         cases = {}
+        catalog_defects.append(_issue(
+            code="type_catalog_unreadable",
+            message=(
+                "the staged mined-Type catalog could not be parsed "
+                f"({type(exc).__name__}: {exc}); the case-uniqueness audit "
+                "ran without its expected-example evidence"
+            ),
+            severity="error",
+            phase="type_case_release",
+        ))
     prompt_by_qid: dict[str, str] = {}
     for case in cases.values():
         for example in case.get("examples") or []:
@@ -1042,7 +1717,7 @@ def _case_uniqueness_issues(
             for qid, prompt in sorted(prompt_by_qid.items())
         ],
     )
-    return [
+    return catalog_defects + [
         _issue(
             code=f"case_uniqueness_{finding.get('code')}",
             message=str(finding.get("message") or ""),
@@ -1129,12 +1804,26 @@ _FINAL_TOPOLOGY_ARTIFACT = "source.phase31-final-topology-cache.json"
 _SETTLED_ROWS_ARTIFACT = "source.phase3-settled-rows.json"
 
 
-def _learner_analysis_count(rows: Iterable[Mapping[str, Any]]) -> int:
+def _analysis_allotment_count(rows: Iterable[Mapping[str, Any]]) -> int:
+    """Rows carrying the recorded Q1 allotment marker.
+
+    T10-6 (S11): this replaces ``_learner_analysis_count``, which counted
+    rows whose ``concept_details`` contained the English substring
+    "misconception" — a keyword vocabulary classifying content AND a count
+    deciding meaning, scored against the every-concept requirement Q1
+    retired, so a chapter that correctly followed Q1 scored low and had
+    its validated topology discarded. The allotment marker is a recorded
+    model verdict stamped at inventory adjudication, and the analysis
+    section rides with it by construction. A legacy cache with no markers
+    on either side now scores 0-0 and the CURRENT rows ship — no verdict,
+    no swap.
+    """
+
     return sum(
         1
         for row in rows
         if isinstance(row, Mapping)
-        and "misconception" in _normal(row.get("concept_details")).casefold()
+        and (row.get("_aegis_analysis_allotments") or [])
     )
 
 
@@ -1192,12 +1881,12 @@ def _validated_artifact_topology(
             for row in rows
             if isinstance(row, Mapping)
         ]
-        if best is None or _learner_analysis_count(candidate) > (
-            _learner_analysis_count(best)
+        if best is None or _analysis_allotment_count(candidate) > (
+            _analysis_allotment_count(best)
         ):
             best = candidate
-    if best is None or _learner_analysis_count(best) <= (
-        _learner_analysis_count(current_rows)
+    if best is None or _analysis_allotment_count(best) <= (
+        _analysis_allotment_count(current_rows)
     ):
         return None
     return best
@@ -1291,9 +1980,17 @@ def _directory_metadata_for_release(
 ) -> dict[str, Any]:
     """Freeze the target Chapter fields later projections may consume.
 
+    LANE-GENERIC: [measured] both lanes call this — the Post staging path
+    at ``:1426`` and ``stage_pre_release`` at ``:2051`` — so it names no
+    output number. The pre-OD4 text said "the staged Output-01 payload"
+    and was already lane-specific for a helper that serves both; carrying
+    that forward as "Output-03" would have preserved the defect under a
+    new number. T14's remedy for the same shape is
+    ``assessment_release_run.py:1459``: stop naming a lane.
+
     Topic and Concept meaning comes from the released records. The Chapter is
     only a directory anchor, but even that metadata must travel with the staged
-    Output-01 payload: rereading a mutable Chapter after staging would let the
+    release payload: rereading a mutable Chapter after staging would let the
     same release seal produce different workbooks and model decisions.
     """
 
@@ -1331,6 +2028,7 @@ def stage_release(
     error: Exception | None = None,
     reason: str = "",
     refinements: Mapping[str, Any] | None = None,
+    snapshot_defects: Sequence[str] = (),
 ) -> dict[str, Any]:
     """Persist one release payload and clear every manual decision gate.
 
@@ -1338,6 +2036,15 @@ def stage_release(
     (docs/aegis-restructure.md §8.3): its changes, summary, review flags,
     and re-seal marker. ``None`` (callers that never entered the Refiner
     seam) stores no key; the payload stays byte-compatible.
+
+    ``snapshot_defects`` (S11, V2/T10-0): the Post lane's transport for
+    input-artifact and audit BLOCKING findings — the parameter and the
+    payload key ``stage_pre_release`` has carried since S9, gained here
+    because [measured] the audit's blocking set had NOWHERE to land on the
+    Post lane: the grep for ``"snapshot_defects"`` returned exactly the
+    read in ``structural_defects`` and the Pre write, so a blocking
+    finding on this lane would have been silently dropped — the failure
+    the audit exists to prevent.
     """
 
     checkpoint_value = copy.deepcopy(
@@ -1399,6 +2106,19 @@ def stage_release(
             ),
             phase="release",
         ))
+    # S9: the row-level projection verdict, decided HERE because
+    # ``structural_defects`` is a pure function of this payload and the
+    # projection runs at download time (D8.5). Recorded twice on purpose —
+    # as a reviewer-facing issue and as the machine-readable key
+    # ``structural_defects`` reads — because a defect with no place in the
+    # state vocabulary is invisible.
+    row_defects = staged_row_defects(record_rows)
+    for finding in row_defects:
+        issues.append(_issue(
+            code=STAGED_ROW_UNUSABLE,
+            message=finding["message"],
+            phase="release",
+        ))
     provenance = _extraction_provenance(inventory_value)
     issues.extend(_extraction_provenance_issues(provenance))
     if upgraded_from_cache:
@@ -1413,6 +2133,29 @@ def stage_release(
             phase="release",
             severity="info",
         ))
+
+    # T10-0 (S11): the QC audit runs at STAGING, for both lanes,
+    # immediately before the payload dict is assembled — never at download
+    # time, never inside an artifact builder, never at the publication
+    # act. Its issues join the existing ledger; its blocking findings ride
+    # ``snapshot_defects``, which ``structural_defects`` reads.
+    from . import release_qc
+
+    qc_issues, qc_blocking = release_qc.audit({
+        "records": record_rows,
+        "issues": issues,
+        "question_task_inventory": inventory_value,
+        "mined_types": types_value,
+        "type_case_rows": type_case_rows,
+        "learning_kind": job.learning_kind,
+    })
+    issues.extend(qc_issues)
+    staged_snapshot_defects = [
+        _normal(defect) for defect in snapshot_defects if _normal(defect)
+    ]
+    qc_blocking_defects = [
+        _normal(defect) for defect in qc_blocking if _normal(defect)
+    ]
 
     annotated = _annotate_records(record_rows, issues, routes)
     summary = _release_summary(annotated, issues)
@@ -1436,6 +2179,10 @@ def stage_release(
     released_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "version": RELEASE_VERSION,
+        # The SCHEMA version above; the DRAFT version here. Minted, not
+        # overwritten (spec-step8 T2/S6) — read the constant's note.
+        STAGED_VERSION_FIELD: next_staged_version(job, lane=LANE_POST),
+        STAGED_RELEASE_UID_FIELD: uuid4().hex,
         "released_at": released_at,
         "release_reason": _normal(reason) or (
             "Generation completed and was staged for explicit publication."
@@ -1462,6 +2209,22 @@ def stage_release(
         ),
         "records": _json_safe(annotated),
         "issues": _json_safe(issues),
+        # S9 — the row-level defect record. It is a NEW key on the Post
+        # payload's recorded shape (``tests/test_pre_release_lane_wiring``'s
+        # ``_POST_PAYLOAD_KEYS`` gains it here), added deliberately: the
+        # state split is only half a fix without somewhere for a
+        # staging-time row defect to live, and S8 closed exactly this
+        # producer-with-no-consumer hole for ``unplaced``.
+        STAGED_ROW_DEFECTS_FIELD: _json_safe(row_defects),
+        # S11 (V2) — the Post lane's input-artifact defect transport, in
+        # the exact shape ``stage_pre_release`` writes: normalised
+        # non-empty strings, defaulting to []. Dormant until a Post caller
+        # records one; kept for lane parity and for the honest reader
+        # (its entries really are unreadable-input findings).
+        "snapshot_defects": _json_safe(staged_snapshot_defects),
+        # Round 9 — the QC audit's blocking findings, on their own key
+        # with their own honest reader (see ``QC_BLOCKING_FIELD``).
+        QC_BLOCKING_FIELD: _json_safe(qc_blocking_defects),
         "type_case_rows": _json_safe(type_case_rows),
         "question_task_inventory": _json_safe(inventory_value),
         "extraction_provenance": _json_safe(provenance),
@@ -1520,7 +2283,7 @@ def _run_snapshot(
     which is also how they survive a resume that skips the whole phase-3
     run. Reading them back here is the same move
     ``concept_topology_contract.restored_prerequisites`` already makes,
-    and it keeps Outputs 03/04 out of the generation call chain entirely.
+    and it keeps Outputs 01/02 out of the generation call chain entirely.
 
     THREE states, kept distinguishable (R4) — this used to be two:
 
@@ -1532,7 +2295,7 @@ def _run_snapshot(
     Collapsing the third into the first is the failure this signature
     exists to prevent. An unreadable questions snapshot would otherwise
     be indistinguishable from "the lane authored no question", and
-    Output 04 would ship empty, flagless and ``ready`` with a chapter's
+    Output 02 would ship empty, flagless and ``ready`` with a chapter's
     worth of generated questions gone — "silently losing a learner's
     question is never recoverable" (CLAUDE.md). An unreadable map would
     be indistinguishable from a run that never reached Phase 03.
@@ -1573,12 +2336,16 @@ def _refine_pre_records(
     job: models.UploadJob,
     pre_map: Mapping[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """The Refiner's designed hook, for Output 03 (§8.3).
+    """The Refiner's designed hook, for Output 01 (§8.3).
 
     ``release_refiner``'s docstring reserved this seam for "the Phase 03
     prerequisite (Pre) outputs — … the replacement outputs 03/04 join this
     seam when step 7 builds them", with an ``output_kind`` parameter so
-    they join without redesign. This is that join: the Pre rows carry the
+    they join without redesign. (That quotation is left verbatim; under
+    the owner's numbering — OD4 / register entry D9-Q22 — the same pair
+    of Pre-Learning files is Outputs 01/02. Renumbering the words inside
+    the quotation marks would make it a quotation of something nobody
+    wrote.) This is that join: the Pre rows carry the
     same rendered house format (Description + Achieving Mastery, plus the
     Misconception/ Error Analysis section its own Q1 inventory allotted),
     so the same whitelist mechanics apply unchanged — nothing about the
@@ -1663,7 +2430,7 @@ def stage_pre_release_from_run(
     inventory: Mapping[str, Any] | None = None,
     reason: str = "",
 ) -> dict[str, Any] | None:
-    """Stage Outputs 03/04 from this run's recorded Phase 03 snapshots.
+    """Stage Outputs 01/02 from this run's recorded Phase 03 snapshots.
 
     Never raises: the Pre lane must not be able to take down a finished
     Post release ("finished work always ships"). A failure is logged and
@@ -1721,7 +2488,7 @@ def stage_pre_release_from_run(
         progress.log(
             "The Pre-Learning outputs could not be staged "
             f"({type(exc).__name__}: {exc}); the Post-Learning release is "
-            "unaffected and ships. Outputs 03/04 are not available for this "
+            "unaffected and ships. Outputs 01/02 are not available for this "
             "run and their absence is recorded here rather than reported as "
             "an empty Pre map.",
             level="error",
@@ -1734,6 +2501,7 @@ def _pre_release_issues(
     pre_questions: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
     snapshot_defects: Sequence[str] = (),
+    row_defects: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Everything the Pre lane recorded, as release issues.
 
@@ -1762,6 +2530,71 @@ def _pre_release_issues(
             ),
             phase="phase03",
         ))
+    for finding in row_defects:
+        # S9: the same row-level verdict the Post lane records, on the same
+        # code, so a reviewer reading either lane's issues reads one
+        # vocabulary. It reaches ``structural_defects`` through the
+        # payload's ``staged_row_defects`` key, not through this issue.
+        issues.append(_issue(
+            code=STAGED_ROW_UNUSABLE,
+            message=_normal(finding.get("message")),
+            phase="release",
+        ))
+    verdict_row = pre_map.get(PRE_LANE_VERDICT_FIELD)
+    verdict = (
+        _normal(verdict_row.get("verdict"))
+        if isinstance(verdict_row, Mapping) else ""
+    )
+    if verdict and verdict != PRE_LANE_ASSUMES_NOTHING:
+        # ONLY the non-positive verdict becomes an issue. A recorded
+        # ``assumes_nothing`` is PROVENANCE, not doubt: an issue for it
+        # would count toward ``issue_count`` and name a correct empty
+        # release *Ready with flags*, and flags mean "a human should look
+        # at this", which is the opposite of what the run just decided.
+        # The positive verdict is still visible to a reviewer holding only
+        # the workbook — ``_provenance_manifest_rows`` writes it — and it
+        # rides ``payload["pre_lane_verdict"]`` for every reader.
+        issues.append(_issue(
+            code="pre_learning_empty_capture_verdict",
+            message=(
+                "The prerequisite capture was empty and the run decided "
+                f"{verdict!r} rather than "
+                f"{PRE_LANE_ASSUMES_NOTHING!r}: "
+                + (
+                    _normal(verdict_row.get("rationale"))
+                    or "no rationale was recorded"
+                )
+            ),
+            phase="phase03",
+        ))
+    # Q10, enforced at the release boundary rather than only at the
+    # decision. The empty-capture critic ADVISES and never gates — but its
+    # dissent is the codebase's own second pass on the ONE decision that
+    # decides whether an empty Pre release is *Ready* or *Diagnostic*, and
+    # [measured] it reached the release nowhere: not an issue, not a flag,
+    # not a manifest row, not even as a substring of the payload. A critic
+    # that said "the source shows two missing pages" on that decision was
+    # readable only inside premap's own return value. An advisory flag a
+    # reviewer cannot read is not recorded, it is discarded.
+    #
+    # It becomes an ISSUE, not a defect: it is doubt about what the source
+    # means, so it flags. The release moves to *Ready with flags*, every
+    # download stays open, and the publication stays open too — which is
+    # exactly what "the critic never gates" means.
+    for flag in (
+        verdict_row.get("review_flags") or []
+        if isinstance(verdict_row, Mapping) else []
+    ):
+        if _normal(flag):
+            issues.append(_issue(
+                code="pre_learning_empty_capture_review_flag",
+                message=(
+                    "The empty-capture verdict carries a review flag from "
+                    "its own second pass, which advises and never gates: "
+                    + _normal(flag)
+                ),
+                phase="phase03",
+            ))
     map_refused = _normal(pre_map.get("refused"))
     if map_refused:
         issues.append(_issue(
@@ -1824,14 +2657,14 @@ def _account_for_source_identity(
     payload: dict[str, Any],
     inventory: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Identity accounting at Output 03's release boundary.
+    """Identity accounting at Output 01's release boundary.
 
     The owner steer of 17 Aug 2026 makes this mechanical and names both
     halves of the Pre lane: "no QID from the chapter's question/task
     inventory may appear anywhere in a Pre row **or the Pre release
-    payload**. That is identity accounting, not judgment". Output 04
+    payload**. That is identity accounting, not judgment". Output 02
     already does exactly this at its own boundary
-    (``assessment_release_run``); Output 03 is a Pre release too, and
+    (``assessment_release_run``); Output 01 is a Pre release too, and
     this is the same two acts, in the same order, over the same
     identities — reused from that module rather than re-implemented, so
     the two boundaries can never drift into disagreeing about what a
@@ -1861,7 +2694,7 @@ def _account_for_source_identity(
     stages a Pre release that records the refusal and ships no rows: the
     evidence still downloads, the database write is blocked
     (``structural_defects`` reads ``refused``), and the reviewer is told
-    exactly which identity was found. Losing Outputs 03/04 without a word
+    exactly which identity was found. Losing Outputs 01/02 without a word
     would be the R4 failure; halting the run would spend a finished
     Post release on a Pre-lane defect.
     """
@@ -1877,7 +2710,7 @@ def _account_for_source_identity(
     source_qids = premap.inventory_qids({"inventory": source})
     if not source_qids:
         return payload
-    # Output 03's audit channels. The shared set covers ``review_flags``
+    # Output 01's audit channels. The shared set covers ``review_flags``
     # and the Refiner's diff; ``issues`` is this payload's own, and it is
     # the reachable one — ``_pre_release_issues`` transcribes every
     # review flag into it verbatim, so a critic dissent naming the source
@@ -1888,11 +2721,26 @@ def _account_for_source_identity(
     payload = release_run._redact_audit_source_qids(
         payload, source_qids, audit_keys=audit_keys,
     )
+    # The two reviewer-visible strings below are RENUMBERED here, under the
+    # owner's ruling OD4 / register entry D9-Q22: this is the PRE lane, and
+    # the Pre-Learning Concept File is Output 01, not Output 03.
+    #
+    # T14's string table listed both against S9 because S9 is the slice it
+    # expected to open this file first. T14's own rule is "renumbered in the
+    # slice that already opens its file", and S3 opens it — so they are
+    # corrected now rather than left inverted for six more slices. They are
+    # live reviewer text, not comments: the second is the ``message`` of an
+    # issue that ships in the payload. [measured] no test asserts either
+    # string — ``tests/test_pre_release_lane_wiring.py:1551`` asserts the
+    # ``code``, which does not move.
+    #
+    # S9 still owns the surrounding REGION (the ``:1918-1975`` rewrite and
+    # the release-state split). Only the numbers move here.
     try:
         premap._refuse_source_qids(
             release_run._authored_surface(payload, audit_keys=audit_keys),
             list(source_qids),
-            where="the staged Pre-Learning release payload (Output 03)",
+            where="the staged Pre-Learning release payload (Output 01)",
         )
     except premap.PreExtractionError as exc:
         payload["records"] = []
@@ -1905,7 +2753,7 @@ def _account_for_source_identity(
         issues.append(_issue(
             code="pre_learning_source_identity_refused",
             message=(
-                "Output 03 was refused at its release boundary and ships "
+                "Output 01 was refused at its release boundary and ships "
                 "no rows: " + str(exc)
             ),
             phase="phase03",
@@ -1913,6 +2761,99 @@ def _account_for_source_identity(
         payload["issues"] = _json_safe(issues)
         payload["summary"] = _release_summary([], issues)
     return payload
+
+
+# --------------------------------------------------------------------------- #
+# T3.3 — the Pre lane's ``related_concepts`` content, resolved at staging
+# --------------------------------------------------------------------------- #
+
+def _post_machine_ids_by_concept_id(db, job) -> dict[str, tuple[str, str]]:
+    """``CONCEPT-%04d`` → (persisted Post ``machine_id``, concept title).
+
+    ``phase3.place.mint_concept_ids`` mints those ids POSITIONALLY over the
+    settled+created row list, and the Post release records are that list in
+    that order. So the join is positional bookkeeping, not a title match
+    (T11.2 forbids the latter) — and the recorded ``post_concept_title`` is
+    used only to CONFIRM the position, never to find it.
+
+    Never raises: a job with no staged Post release resolves nothing, every
+    link becomes a recorded review flag, and the Pre lane still ships.
+    """
+
+    from . import build_concepts_release_files as release_files
+
+    try:
+        post = release_payload(job, lane=LANE_POST)
+        if not post:
+            return {}
+        _chapter, concepts, records, _defects = (
+            release_files.transient_release_hierarchy(db, job, payload=post))
+    except Exception:  # noqa: BLE001 - the Pre lane never blocks on this
+        return {}
+    resolved: dict[str, tuple[str, str]] = {}
+    for position, (concept, record) in enumerate(
+        zip(concepts, records), start=1
+    ):
+        machine_id = str(getattr(concept, "machine_id", "") or "")
+        if not machine_id:
+            continue
+        title = str(
+            record.get("concept_title") or record.get("concept") or "")
+        resolved[f"CONCEPT-{position:04d}"] = (machine_id, title)
+    return resolved
+
+
+def _resolve_needed_for(
+    row: Mapping[str, Any], post_ids: Mapping[str, tuple[str, str]],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Return (resolved machine ids, unresolved links) for one Pre row."""
+
+    resolved: list[str] = []
+    unresolved: list[dict[str, Any]] = []
+    for link in row.get("_aegis_needed_for") or []:
+        if not isinstance(link, Mapping):
+            continue
+        concept_id = _normal(link.get("post_concept_id"))
+        recorded_title = _normal(link.get("post_concept_title"))
+        entry = post_ids.get(concept_id)
+        if entry is None:
+            unresolved.append({
+                "post_concept_id": concept_id,
+                "post_concept_title": recorded_title,
+                "reason": "no Post concept was staged under this id",
+            })
+            continue
+        machine_id, title = entry
+        if recorded_title and _normal(title) != recorded_title:
+            # The position and the recorded identity disagree. Never
+            # guessed silently: the link becomes a review flag on the row.
+            unresolved.append({
+                "post_concept_id": concept_id,
+                "post_concept_title": recorded_title,
+                "reason": (
+                    f"the Post concept staged at this position is "
+                    f"{title!r}"),
+            })
+            continue
+        if machine_id not in resolved:
+            resolved.append(machine_id)
+    return resolved, unresolved
+
+
+def _lift_resolved_related_concepts(row: Mapping[str, Any]) -> dict[str, Any]:
+    """Lift the resolved marker onto an explicit ``related_concepts`` key.
+
+    Called at publication, BEFORE ``_strip_release_fields`` (T3.3b): the
+    marker is a registered audit field, so the strip drops it by
+    construction and the column would empty at exactly the moment the
+    reviewer publishes.
+    """
+
+    lifted = dict(row)
+    resolved = str(lifted.get(PRE_ROW_RELATED_CONCEPTS_FIELD) or "")
+    if resolved:
+        lifted["related_concepts"] = resolved
+    return lifted
 
 
 def stage_pre_release(
@@ -1927,9 +2868,9 @@ def stage_pre_release(
     refinements: Mapping[str, Any] | None = None,
     snapshot_defects: Sequence[str] = (),
 ) -> dict[str, Any] | None:
-    """Stage Outputs 03/04 into the sibling slot on THIS job.
+    """Stage Outputs 01/02 into the sibling slot on THIS job.
 
-    Outputs 03 and 04 are projections of one accepted snapshot exactly as
+    Outputs 01 and 02 are projections of one accepted snapshot exactly as
     01 and 02 are (§4's first release invariant): the Pre concept rows and
     the generated questions authored against them are staged together,
     once, and every later projection reads this payload rather than
@@ -1937,26 +2878,24 @@ def stage_pre_release(
 
     Returns ``None`` — staging nothing — when the run built no Pre lane at
     all. That is not the same as an empty Pre map: a chapter that
-    genuinely assumes no prior knowledge stages a real, empty Output 03
+    genuinely assumes no prior knowledge stages a real, empty Output 01
     (``pre_map`` present with zero rows), while a run that never reached
     Phase 03 stages no sibling at all. Collapsing the two would make
     "this run has no Pre map" indistinguishable from "this chapter needs
     nothing" — exactly the R4 confusion the capture snapshot's own
     absent-marker exists to prevent.
 
-    That empty release DOWNLOADS but does not PUBLISH, and the docstring
-    used to claim otherwise. ``structural_defects`` reports "the release
-    contains no concept rows to upload" for it — the same refusal the
-    Post lane has always made for a release with nothing to deposit, on
-    the same message — so ``release_state`` reads *Diagnostic release*
-    and the database write is blocked. Stated plainly rather than left as
-    a contradiction between prose and code: the block is correct (there
-    is genuinely nothing to write, and publishing nothing is not a
-    publication), but the STATE NAME is a poor fit for a healthy chapter
-    that assumes nothing, because §4 defines *Diagnostic release* as
-    "structural/import integrity failed" and nothing failed here.
-    Renaming it needs a fourth named state, which is a §4 change and
-    therefore step 8's convergence work, not this slice's.
+    That empty release DOWNLOADS, and since spec-step8 S9 it also
+    PUBLISHES — as a zero-row idempotent success — but only when the run
+    positively DECIDED the emptiness. ``structural_defects`` no longer
+    reports "the release contains no concept rows to upload" (that moved
+    to ``nothing_to_publish``, D8.1: emptiness is not corruption, and §4
+    defines *Diagnostic release* as "structural/import integrity failed",
+    which an empty-but-correct chapter is not). What decides it now is
+    premap's recorded ``pre_lane_verdict``: ``assumes_nothing`` reads
+    *Ready*, anything else — including no verdict at all — keeps the
+    release *Diagnostic*. That replaced the fourth named state §4 would
+    otherwise have needed, so §4's three names are unamended.
 
     ``snapshot_defects`` carries input artefacts that were on disk and
     unreadable. They ride the payload, become error issues, and block the
@@ -1986,6 +2925,11 @@ def stage_pre_release(
             if isinstance(row, Mapping)
         ]
     generated: list[dict[str, Any]] = []
+    # T3.3: resolve every ``_aegis_needed_for[].post_concept_id`` against
+    # the POST payload staged in the SAME run. ``_stage_pre_sibling`` runs
+    # after the Post release is staged and both slots hang off this one
+    # job, so the identity exists here and exists nowhere earlier.
+    post_ids = _post_machine_ids_by_concept_id(db, job)
     for row in raw_rows:
         pre_concept_id = _normal(row.get("_pre_concept_id"))
         authored = questions_by_concept.get(pre_concept_id) or []
@@ -1993,11 +2937,35 @@ def stage_pre_release(
         row[PRE_ROW_GENERATED_QUESTIONS_FIELD] = [
             _normal(entry.get("pre_question_id")) for entry in authored
         ]
+        resolved, unresolved = _resolve_needed_for(row, post_ids)
+        row[PRE_ROW_RELATED_CONCEPTS_FIELD] = "\n".join(resolved)
+        row[PRE_ROW_RELATED_UNRESOLVED_FIELD] = unresolved
         generated.extend(copy.deepcopy(entry) for entry in authored)
 
+    row_defects = staged_row_defects(raw_rows)
+    # T10-0 (S11): the QC audit's Pre-lane call, immediately before the
+    # payload dict is assembled. Its blocking findings join the
+    # input-artifact defects on the transport this lane already carries.
+    from . import release_qc
+
+    qc_issues, qc_blocking = release_qc.audit({
+        "records": raw_rows,
+        "issues": [],
+        "question_task_inventory": dict(inventory or {}),
+        RELEASE_LANE_FIELD: LANE_PRE,
+    })
+    # Round 9: QC blocking findings ride their OWN key. Folding them into
+    # ``snapshot_defects`` [measured] minted one spurious
+    # ``pre_learning_snapshot_unreadable`` issue per finding — a fake
+    # snapshot-corruption record for a coverage verdict.
+    qc_blocking_defects = [
+        _normal(defect) for defect in qc_blocking if _normal(defect)
+    ]
     issues = _pre_release_issues(
         source, questions_source, raw_rows, snapshot_defects,
+        row_defects=row_defects,
     )
+    issues.extend(qc_issues)
     annotated = _annotate_records(raw_rows, issues, {})
     summary = _release_summary(annotated, issues)
     target = int(
@@ -2013,6 +2981,10 @@ def stage_pre_release(
     )
     payload = {
         "version": RELEASE_VERSION,
+        # Minted per LANE, so a Pre re-stage never reads as a Post one
+        # (spec-step8 T2/S6).
+        STAGED_VERSION_FIELD: next_staged_version(job, lane=LANE_PRE),
+        STAGED_RELEASE_UID_FIELD: uuid4().hex,
         RELEASE_LANE_FIELD: LANE_PRE,
         "released_at": datetime.now(timezone.utc).isoformat(),
         "release_reason": _normal(reason) or (
@@ -2033,6 +3005,16 @@ def stage_pre_release(
         ),
         "records": _json_safe(annotated),
         "issues": _json_safe(issues),
+        # S9 — the row-level defect record, the same key and the same shape
+        # the Post lane carries.
+        STAGED_ROW_DEFECTS_FIELD: _json_safe(row_defects),
+        # S9 / D8.3 — premap's recorded empty-capture verdict, carried
+        # verbatim. ``structural_defects`` reads it; nothing re-decides it.
+        PRE_LANE_VERDICT_FIELD: _json_safe(
+            dict(source.get(PRE_LANE_VERDICT_FIELD))
+            if isinstance(source.get(PRE_LANE_VERDICT_FIELD), Mapping)
+            else {}
+        ),
         # DELIBERATELY EMPTY, and this is the steer's own mechanical rule.
         # The Post payload carries the chapter's question/task inventory
         # here; the Pre payload must not, because "no QID from the
@@ -2043,7 +3025,7 @@ def stage_pre_release(
         # downloads. The key stays, empty, so every reader of a release
         # payload finds the shape it expects.
         #
-        # Output 04's leak barrier still needs that identity set, and this
+        # Output 02's leak barrier still needs that identity set, and this
         # is exactly why it does not read it from here: it reads it from
         # the job's own inventory column and the Post sibling slot (see
         # ``assessment_release_run._generated_lane_source_qids``), which
@@ -2053,6 +3035,9 @@ def stage_pre_release(
         "snapshot_defects": _json_safe(
             [_normal(defect) for defect in snapshot_defects if _normal(defect)]
         ),
+        # Round 9 — the QC audit's blocking findings, on their own key
+        # (see ``QC_BLOCKING_FIELD``'s note).
+        QC_BLOCKING_FIELD: _json_safe(qc_blocking_defects),
         "refused": _normal(source.get("refused")),
         "pre_topics": _json_safe([
             topic for topic in source.get("topics") or []
@@ -2060,7 +3045,7 @@ def stage_pre_release(
         ]),
         "needed_for": _json_safe(source.get("needed_for") or {}),
         "analysis": _json_safe(source.get("analysis") or {}),
-        # Output 04's material, staged beside Output 03 so the pair is
+        # Output 02's material, staged beside Output 01 so the pair is
         # projected from one snapshot and the assessment lane never
         # re-derives Pre meaning.
         "generated_questions": _json_safe(generated),
@@ -2094,61 +3079,72 @@ def release_result(
     payload = release_payload(job, lane=resolved)
     if payload is None:
         raise ReleaseUnavailableError("this upload has no staged release")
-    if resolved == LANE_PRE:
-        summary = copy.deepcopy(payload.get("summary") or {})
-        query = f"?lane={LANE_PRE}"
-        return {
-            "job_id": job.id,
-            "lane": LANE_PRE,
-            "status": RELEASE_STATUS,
-            "released": True,
-            "release_state": release_state(payload),
-            "structural_defects": structural_defects(payload),
-            "database_uploaded": bool(summary.get("database_uploaded")),
-            "row_count": int(summary.get("row_count") or 0),
-            "affected_row_count": int(summary.get("affected_row_count") or 0),
-            "issue_count": int(summary.get("issue_count") or 0),
-            "generated_question_count": len(
-                payload.get("generated_questions") or []
-            ),
-            "release_workbook_url": (
-                f"/build-concepts/uploads/{job.id}/release.xlsx{query}"
-            ),
-            "release_bulk_import_url": (
-                f"/build-concepts/uploads/{job.id}"
-                f"/release-bulk-import.xlsx{query}"
-            ),
-            "diagnostics_url": (
-                f"/build-concepts/uploads/{job.id}/diagnostics.zip{query}"
-            ),
-            "release_payload_url": (
-                f"/build-concepts/uploads/{job.id}/release.json{query}"
-            ),
-            "database_upload_url": (
-                f"/build-concepts/uploads/{job.id}/upload-release{query}"
-            ),
-            "detail": job.detail,
-        }
     summary = copy.deepcopy(payload.get("summary") or {})
+    # ONE builder for both lanes.
+    #
+    # These were two branches, and the Post branch omitted five of the
+    # Pre branch's keys — ``lane``, ``release_state``,
+    # ``structural_defects``, ``generated_question_count`` and
+    # ``release_bulk_import_url``. The Post dict IS the terminal
+    # ``{"type": "result"}`` event of a Build Concepts run, so the Post
+    # lane's release state was computed by ``release_state`` and
+    # surfaced by nothing: a reviewer could be shown a finished run whose
+    # publication the structural gate would refuse, with no way to see
+    # that from the result. A lane-shaped answer to "what is this
+    # release?" is the defect; one shape, filled per lane, is the fix.
+    #
+    # The lane rides the query string, and for the four DOWNLOADS the Post
+    # lane's suffix is empty — those four URLs are byte-identical to the
+    # ones already published, so no reviewer's bookmark and no recorded
+    # URL moves.
+    #
+    # The PUBLISH url is the one exception, and deliberately so: the
+    # publish endpoint (``api/build_concepts.upload_released_output_to_
+    # database``) refuses a blank or absent lane, because a defaulted
+    # lane there is an authenticated write against a lane nobody named.
+    # A server that refuses a lane-less publication must not itself hand
+    # the reviewer a lane-less publish URL, so this one always states its
+    # lane — including "post", which the download URLs still leave
+    # implicit.
+    query = f"?lane={LANE_PRE}" if resolved == LANE_PRE else ""
+    publish_query = f"?lane={resolved}"
     return {
         "job_id": job.id,
+        "lane": resolved,
         "status": RELEASE_STATUS,
         "released": True,
+        "release_state": release_state(payload),
+        "structural_defects": structural_defects(payload),
         "database_uploaded": bool(summary.get("database_uploaded")),
         "row_count": int(summary.get("row_count") or 0),
         "affected_row_count": int(summary.get("affected_row_count") or 0),
         "issue_count": int(summary.get("issue_count") or 0),
+        # ALWAYS 0 on the Post lane, and that is the shape, not a count.
+        # ``generated_questions`` is a key only the Pre payload carries —
+        # the Post lane's questions belong to the assessment release, not
+        # to the concept release — so on Post this reads "the Post concept
+        # release does not carry generated questions", NOT "this run
+        # generated none". The identical key set is what makes one reader
+        # able to read both lanes; the alternative was omitting the key on
+        # Post, which is precisely the asymmetry this builder replaces.
+        "generated_question_count": len(
+            payload.get("generated_questions") or []
+        ),
         "release_workbook_url": (
-            f"/build-concepts/uploads/{job.id}/release.xlsx"
+            f"/build-concepts/uploads/{job.id}/release.xlsx{query}"
+        ),
+        "release_bulk_import_url": (
+            f"/build-concepts/uploads/{job.id}"
+            f"/release-bulk-import.xlsx{query}"
         ),
         "diagnostics_url": (
-            f"/build-concepts/uploads/{job.id}/diagnostics.zip"
+            f"/build-concepts/uploads/{job.id}/diagnostics.zip{query}"
         ),
         "release_payload_url": (
-            f"/build-concepts/uploads/{job.id}/release.json"
+            f"/build-concepts/uploads/{job.id}/release.json{query}"
         ),
         "database_upload_url": (
-            f"/build-concepts/uploads/{job.id}/upload-release"
+            f"/build-concepts/uploads/{job.id}/upload-release{publish_query}"
         ),
         "detail": job.detail,
     }
@@ -2172,6 +3168,13 @@ def force_release(
         raise uploads.JobAlreadyRunningError(
             "generation is still running; release it after the active request finishes"
         )
+    # MINTS a new staged version rather than overwriting the slot
+    # (spec-step8 T2/S6). This is the route that made the hazard concrete:
+    # it refuses only when ``job.status == "generated"``, so a reviewer
+    # could re-stage after the Master File had already been frozen against
+    # the previous draft, and nothing on either side recorded that the
+    # source had moved. ``stage_release`` mints the version; the frozen
+    # row carries it.
     stage_release(
         db,
         job,

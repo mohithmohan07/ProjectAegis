@@ -27,6 +27,7 @@ from .. import config, models
 from ..bulk_import import assessment_workbook
 from . import assessment_grouping as grouping
 from . import assessment_release as rel
+from . import identity
 
 _TITLE_TAG_RE = re.compile(r"\(([^()]+)\)\s*$")
 
@@ -38,6 +39,11 @@ MANIFEST_FILENAME = "manifest.json"
 READY = "ready"
 RELEASED_WITH_WARNINGS = "released_with_warnings"
 BLOCKED = "blocked_for_database_upload"
+
+# The recorded name for Rule G's idempotent second act (T5-2). It exists so
+# that "this label was already published by this release" is a note a reviewer
+# can read, rather than a bare ``continue``.
+QUESTION_LABEL_REISSUED = "question_label_reissued"
 
 # ``models.Question.origin`` values this release lane may mint.  A
 # reused source question keeps the long-standing value; a GENERATED
@@ -115,9 +121,31 @@ def snapshot_from_chapter(
             "topic_title": topic.topic_title,
             "topic_display_name": topic.topic_display_name,
             "pre_post_learning": topic.pre_post_learning,
-            "topic_concept_labels": "",
+            # §6:509-512 makes this column the Topic→Concept join
+            # ("joined by exact text labels"), and the gold fills it on
+            # 23/23 populated rows. Hard-coding "" here deleted the join
+            # from every projection that reads this snapshot (T3.7). The
+            # composition is the SHARED ``identity.titled``, not a second
+            # copy of it.
+            "topic_concept_labels": ", ".join(
+                identity.titled(
+                    concept.concept_title,
+                    identity.machine_id_for_concept(concept),
+                )
+                for concept in concepts
+            ),
             "related_topics": topic.related_topics,
             "topic_description": topic.topic_description,
+            # DELIBERATELY no identity keys on this lane (spec-step8 B4
+            # repair round): ``_machine_id`` below prefers
+            # ``concept_machine_id``, and ``_complete_required_shells``
+            # turns its return into PERSISTED ``group_key`` strings — adding
+            # the key here re-keyed every auto-completed shell on this lane
+            # and made the upload mint duplicate shells beside rows holding
+            # the legacy "(C<db id>) …" keys. This lane is dormant for
+            # release creation (create_release's only caller always supplies
+            # ``concept_snapshot``); its bare-cell rendering is a recorded
+            # residue owned by S10, which owns publication convergence.
             "concepts": [
                 {
                     "concept_key": f"db:{concept.id}",
@@ -136,6 +164,11 @@ def snapshot_from_chapter(
         "chapter": {
             "chapter_title": chapter.chapter_title,
             "chapter_display_name": chapter.chapter_display_name,
+            # Carried, not omitted (spec-step8 T12/M4): the profile's
+            # ``forced_blank_fields`` is what decides whether it ships, and
+            # a key the snapshot never carries leaves that lever with
+            # nothing to un-blank.
+            "chapter_duration": chapter.chapter_duration,
             "pre_topics": chapter.pre_topics,
             "post_topics": chapter.post_topics,
             "chapter_description": chapter.chapter_description,
@@ -149,7 +182,7 @@ def snapshot_from_chapter(
 
 
 def snapshot_from_staged_release(payload: Mapping) -> dict:
-    """Assemble Output 02 from the immutable staged Output-01 hierarchy."""
+    """The lane's Master snapshot from the immutable staged hierarchy."""
 
     source = payload.get("concept_snapshot")
     if not isinstance(source, Mapping):
@@ -248,6 +281,31 @@ def _complete_required_shells(snapshot: dict) -> None:
                 groups_by_home_key.setdefault(home_key, []).append(shell)
 
 
+def _run_profile(provider_identity: Mapping | None) -> Mapping | str | None:
+    """The run's profile off the run context, as a name OR a dict.
+
+    ``release_core.run_context`` writes a NAME under ``profile``;
+    spec-step8 T12/M7 also names ``assessment_profile``, and
+    ``assessment_release_run`` builds ``{"assessment_profile": <dict>}``
+    for the refiner.  Coercing with ``str()`` turned a dict into
+    ``"{'name': …}"`` and ``get_profile`` then raised ``KeyError: unknown
+    assessment profile`` out of ``freeze_payload`` — no release row, no
+    workbooks, on a slice whose whole theme is that nothing costs the four
+    outputs.  Everything downstream (``freeze_payload``,
+    ``unresolved_question_homes``, ``build_dual_output``) already accepts
+    ``Mapping | str | None``, so the Mapping is passed straight through.
+    An empty value resolves to the default rather than raising on
+    ``get_profile("")``.
+    """
+    # NOT named ``identity``: this module imports ``identity`` for the
+    # shared title composition, and a local of that name would shadow it.
+    context = provider_identity or {}
+    value = context.get("assessment_profile") or context.get("profile")
+    if isinstance(value, Mapping):
+        return value
+    return str(value or "").strip() or None
+
+
 def create_release(
     db: Session,
     *,
@@ -256,9 +314,22 @@ def create_release(
     job_id: int | None = None,
     owner_sub: str,
     supersedes: models.AssessmentRelease | None = None,
+    lane: str = "",
+    layout_id: str = "",
+    provider_identity: Mapping | None = None,
 ) -> models.AssessmentRelease:
-    """Assemble and persist one immutable release (state: materialized)."""
-    frozen = rel.freeze_payload(payload)
+    """Assemble and persist one immutable release (state: materialized).
+
+    ``lane``, ``layout_id`` and ``provider_identity`` are the run context
+    the converged core records on the row (spec-step8 T2/S6): which lane
+    this row is the release of record for, which workbook layout the run
+    executed under, and the provider/model/prompt identity plus the staged
+    draft version it was frozen from. All three default to empty, because
+    a legacy Build Assessments payload declares no lane and inventing one
+    for it would put a row into a lane's manifest on no evidence.
+    """
+    run_profile = _run_profile(provider_identity)
+    frozen = rel.freeze_payload(payload, run_profile)
     staged = payload.get("concept_snapshot")
     if isinstance(staged, Mapping):
         staged_chapter_id = int(staged.get("target_chapter_id") or 0)
@@ -288,12 +359,45 @@ def create_release(
             pre_post=str(payload.get("pre_post_learning") or "") or None,
         )
     )
+    # THE STAGED HOME/SHAPE VERDICT (spec-step8 T7.5, D8.5b). It goes
+    # BETWEEN the snapshot and the diagnostics dict for one measured reason:
+    # it needs the concept universe, and ``freeze_payload`` sees only the
+    # payload (the ``snapshot_from_chapter`` branch carries no
+    # ``concept_snapshot`` key at all, so it could not reach the concepts
+    # even in principle). Its findings append to ``frozen["errors"]`` — the
+    # transport the duplicate ``question_label`` of S5 already uses — so
+    # ``_readiness`` BLOCKED and the upload refusal need NO new wiring.
+    #
+    # This lands in the SAME change that deletes ``_readiness``'s read of
+    # the renderer's unplaced list below. Either half alone is a hole:
+    # the deletion without this leaves an unresolved home refused by
+    # nothing (the R4 breach), and this without the deletion leaves two
+    # vocabularies refusing one defect.
+    frozen["errors"].extend(
+        f"{finding['code']}: {finding['message']}"
+        for finding in rel.unresolved_question_homes(snapshot, run_profile)
+    )
+    # S9: the staged concept rows ``assessment_release_snapshot.build``
+    # could not carry. They used to be ``SnapshotError`` raises that cost
+    # the whole Master (and, through ``ReleaseRunError``, 400'd the build
+    # route); they are now recorded rows refused on the SAME transport as
+    # the home/shape verdict above, so Outputs 02/04 build from the sound
+    # rows and only the database write is refused.
+    frozen["errors"].extend(
+        f"{str(finding.get('code') or 'concept_snapshot_defect')}: "
+        f"{str(finding.get('message') or finding)}"
+        for finding in payload.get("concept_snapshot_defects") or []
+        if isinstance(finding, Mapping)
+    )
     release = models.AssessmentRelease(
         release_uid=(
             supersedes.release_uid if supersedes else rel.new_release_uid()),
         version=(supersedes.version + 1 if supersedes else 1),
         owner_sub=owner_sub,
         job_id=job_id,
+        lane=str(lane or "").strip().lower(),
+        layout_id=str(layout_id or ""),
+        provider_identity=dict(provider_identity or {}),
         state=rel.advance_state("draft", "materialized"),
         concept_snapshot=snapshot,
         concept_snapshot_sha256=assessment_workbook.snapshot_sha256(snapshot),
@@ -316,17 +420,28 @@ def create_release(
 # --------------------------------------------------------------------------- #
 
 def _readiness(release: models.AssessmentRelease, manifest: Mapping) -> str:
+    """Readiness from the STAGED verdict, never from a projection-time one.
+
+    The read of the renderer's unplaced list that used to sit below
+    the payload-error check is GONE (spec-step8 T7.5 item 5), deleted in the
+    same change that landed
+    ``assessment_release.unresolved_question_homes`` and wired it into
+    ``create_release``. Two vocabularies refusing one defect is what T1
+    exists to end, and the reviewer's experience improves in the same
+    commit: instead of an unexplained BLOCKED they get a named defect
+    carrying the candidate's ``question_label``.
+
+    The renderer's unplaced list is still WRITTEN and still durable —
+    ``publish_release`` puts the whole issues manifest on disk as
+    ``manifest.json`` — so every unplaced candidate survives with its
+    identity, reason and flags. What is gone is the DECIDER, not the record.
+    """
     read_back = manifest.get("read_back") or {}
     if (
         read_back.get("concepts_errors")
         or read_back.get("master_errors")
         or (release.diagnostics or {}).get("payload_errors")
     ):
-        return BLOCKED
-    unplaced = (manifest.get("issues") or {}).get("unplaced") or []
-    if unplaced:
-        # A question with no resolved home can corrupt graph identity on
-        # import: downloads stay available, the database stays protected.
         return BLOCKED
     flagged = [
         c for c in (release.payload or {}).get("candidates") or []
@@ -353,7 +468,14 @@ def publish_release(
     served, so a release with only one successfully published file cannot
     exist (spec §13.2 step 7).
     """
-    output = assessment_workbook.build_dual_output(release.concept_snapshot)
+    # The run's own profile, read back off the row it was persisted on
+    # (spec-step8 T12/M7), through the same accessor ``create_release``
+    # staged it with — so a run whose context carried a profile DICT
+    # publishes instead of raising ``KeyError`` and shipping no workbook.
+    output = assessment_workbook.build_dual_output(
+        release.concept_snapshot,
+        _run_profile(release.provider_identity),
+    )
     target = _version_dir(release)
     staging = target.with_name(target.name + ".staging")
     staging_parent = staging.parent
@@ -597,20 +719,88 @@ def upload_master_to_database(
                 group.get("semantic_description") or "")
             groups_by_key[group_key] = record
 
-        existing_labels = {
-            q.question_label
-            for q in db.query(models.Question).all()
-            if q.question_label
-        }
+        # The label a row was published under, with the release that published
+        # it. ``route_audit.release_uid`` is the key because it is the one
+        # identity this insert ALREADY writes (:648-651) and the only one that
+        # exists for both lanes: a generated pre-learning question is permitted
+        # to carry no source atom at all, so it stores ``source_qid = ""`` and
+        # a source-identity key cannot tell two of them apart.
+        #
+        # Only the two columns the verdict reads are materialised: the whole
+        # corpus as ORM objects costs the same table scan and materially more
+        # memory as it grows, for information the label check never touches.
+        #
+        # THE ROW THIS RELEASE OWNS WINS. A database that already carries the
+        # same label twice is precisely the database ``db._ensure_question_
+        # label_index`` deliberately keeps bootable rather than crashing, and on
+        # it a first-row-wins lookup makes the verdict depend on row order: if
+        # a foreign row happens to sort first, a LEGITIMATE second act of the
+        # owning release compares against the wrong row and refuses. The
+        # direction is safe — a wrong pick refuses rather than drops — but a
+        # refusal on a legitimate re-publication is the failure this branch is
+        # atomic with T5-3 to prevent, and it would fire on exactly the
+        # databases a reviewer is trying to repair. Preferring the row whose
+        # ``route_audit.release_uid`` is ours removes the order dependence
+        # without weakening the refusal: if no row is ours, any of them refuses.
+        existing_by_label: dict[str, str] = {}
+        for label, route_audit in db.query(
+            models.Question.question_label, models.Question.route_audit
+        ):
+            if not label:
+                continue
+            prior_uid = str((route_audit or {}).get("release_uid") or "")
+            if label not in existing_by_label or (
+                prior_uid and prior_uid == release.release_uid
+            ):
+                existing_by_label[label] = prior_uid
         questions_created = 0
+        labels_reissued: list[str] = []
+        # Rows this loop has already inserted are not in the query above, and
+        # they are the one collision the freeze-time check cannot cover for a
+        # release FROZEN BEFORE T5-1 existed: its ``payload_errors`` were
+        # computed without ``duplicate_question_labels``, so a pre-existing
+        # snapshot carrying one label twice reaches this loop with readiness
+        # READY.
+        #
+        # [measured] what happened then depended on the database, and the worse
+        # branch is the one this slice exists for. WITH the partial index, the
+        # second insert raised and the generic ``except Exception`` below
+        # converted it into ``upload failed and was rolled back
+        # (IntegrityError: UNIQUE constraint failed…)`` — safe, but it names a
+        # driver error instead of the label and the reason. WITHOUT the index —
+        # i.e. on exactly the database ``db._ensure_question_label_index``
+        # declines to index rather than crash on, the database a reviewer is in
+        # the middle of repairing — the upload SUCCEEDED with
+        # ``questions_created: 2`` and wrote TWO rows under one
+        # ``question_label``: identity corruption committed to the database,
+        # the T9-1 B1 defect the publication act is supposed to block. Refused
+        # by name on both, before anything is written.
+        written_here: set[str] = set()
         for candidate in snapshot.get("candidates") or []:
             label = str(candidate.get("question_label") or "")
             if not label:
                 raise UploadRefused(
                     f"candidate {candidate.get('candidate_id')!r} carries "
                     "no question label")
-            if label in existing_labels:
-                continue  # append-only: an uploaded label is immutable
+            if label in written_here:
+                raise UploadRefused(
+                    f"{label}: two candidates in this release carry the same "
+                    "question label")
+            if label in existing_by_label:
+                prior_uid = existing_by_label[label]
+                if prior_uid and prior_uid == release.release_uid:
+                    # Rule G's idempotent second act: this exact release
+                    # already put this exact label in the database. Skipping is
+                    # correct — but it is RECORDED, because an unflagged
+                    # ``continue`` here is what made a learner's question
+                    # disappear between the release and the database (R4).
+                    labels_reissued.append(label)
+                    continue
+                # A different candidate wants a label that is already
+                # published. Never drop it: refuse the whole upload, keep both
+                # downloads, and let a reviewer resolve the collision.
+                raise UploadRefused(
+                    f"{label}: already published under different content")
             group = groups_by_key.get(str(candidate.get("group_key") or ""))
             if group is None:
                 raise UploadRefused(
@@ -649,6 +839,7 @@ def upload_master_to_database(
                     "version": release.version,
                 },
             ))
+            written_here.add(label)
             questions_created += 1
 
         result = {
@@ -656,7 +847,31 @@ def upload_master_to_database(
             "version": release.version,
             "groups_created": groups_created,
             "questions_created": questions_created,
+            "labels_reissued": list(labels_reissued),
         }
+        if labels_reissued:
+            notes = list((release.diagnostics or {}).get("release_notes") or [])
+            note = {
+                "code": QUESTION_LABEL_REISSUED,
+                "release_uid": release.release_uid,
+                "version": release.version,
+                "question_labels": list(labels_reissued),
+                "detail": (
+                    "this release had already published these labels; the "
+                    "second act skipped them and wrote nothing new"
+                ),
+            }
+            # Recorded once, not once per act. Every field of the note is
+            # constant for one release row, so a third and fourth second act
+            # append a byte-identical copy and grow ``release_notes`` without
+            # adding anything a reviewer can read. The note says WHAT was
+            # skipped; the count of acts is the publication record's business.
+            if note not in notes:
+                notes.append(note)
+                release.diagnostics = {
+                    **(release.diagnostics or {}),
+                    "release_notes": notes,
+                }
         release.publication = {
             **publication,
             "uploaded_key": idempotency_key,
@@ -685,9 +900,23 @@ def _resolve_snapshot_concept_ids(
 ) -> dict[str, int]:
     """Resolve private release keys only against exact published identities.
 
-    A staged Output-01 concept is never inferred from similar text.  Until its
-    exact concept release has been explicitly uploaded, Master publication is
-    refused while both downloadable workbooks remain available.
+    A staged concept row carrying its ``concept_machine_id`` resolves by the
+    persisted ``models.Concept.machine_id`` alone (S10), scoped to the
+    chapter and the topic row's lane — the identity the concept-lane
+    publication mints, whatever the titles now say. The five-field byte
+    match below survives ONLY as the recorded legacy fallback for snapshot
+    rows frozen before the identity column existed: [measured] against live
+    rows it refused a Master upload over a recased topic title nobody had
+    edited (MC6), and its content half made an ordinary post-upload edit to
+    a published concept block the Master — drift protection is the frozen
+    seal's job (S10-g), not a byte-compare against mutable rows. Either
+    way, a staged concept is never inferred from similar text: until the
+    lane's exact concept release has been explicitly uploaded, Master
+    publication is refused while both downloadable workbooks remain
+    available. A published row still carrying a blank ``machine_id``
+    (published before the column) refuses against an id-carrying snapshot;
+    republishing that concept release mints the ids, which is the recorded
+    migration path.
     """
 
     chapter_id = int(snapshot.get("target_chapter_id") or 0)
@@ -695,6 +924,14 @@ def _resolve_snapshot_concept_ids(
     for topic in snapshot.get("topics") or []:
         topic_title = str(topic.get("topic_title") or "")
         pre_post = str(topic.get("pre_post_learning") or "")
+        # OD4, per topic row: the Pre lane's concept file is Output 01, the
+        # Post lane's is Output 03. Normalized exactly as the id's own lane
+        # token is, so the message and the identity can never disagree.
+        output_name = (
+            "Output-01"
+            if str(pre_post or "").strip().casefold().startswith("pre")
+            else "Output-03"
+        )
         for concept in topic.get("concepts") or []:
             key = str(concept.get("concept_key") or "")
             if not key or key in concept_ids:
@@ -708,6 +945,45 @@ def _resolve_snapshot_concept_ids(
                 raise UploadRefused(
                     "staged concept snapshot has no target chapter identity"
                 )
+            machine_id = str(concept.get("concept_machine_id") or "").strip()
+            if machine_id:
+                matches = (
+                    db.query(models.Concept)
+                    .join(models.Topic)
+                    .filter(
+                        models.Topic.chapter_id == chapter_id,
+                        models.Topic.pre_post_learning == pre_post,
+                        models.Concept.machine_id == machine_id,
+                    )
+                    .all()
+                )
+                # Round 7 guard, defence in depth: the resolved row's own
+                # topic must BE this snapshot row's topic through the one
+                # lenient normaliser (T4-6). The id is the join; the topic
+                # read CONFIRMS it — [measured] without this, a snapshot
+                # whose stamped ids had drifted from the persisted rows
+                # attached a question to an unrelated concept in a
+                # different topic, silently, where the old five-field match
+                # at least refused. A recased title still resolves; a
+                # different topic never does.
+                exact = [
+                    row for row in matches
+                    if identity.topic_identity(
+                        str(row.topic.topic_title or ""))
+                    == identity.topic_identity(topic_title)
+                ]
+                if len(matches) != 1 or len(exact) != 1:
+                    raise UploadRefused(
+                        f"concept {concept.get('concept_title')!r} under "
+                        f"topic {topic_title!r} does not have one exact "
+                        f"published {output_name} identity; upload that "
+                        "concept release first"
+                    )
+                concept_ids[key] = exact[0].id
+                continue
+            # Legacy fallback, recorded: this snapshot row was frozen before
+            # ``concept_machine_id`` existed, so the only identity it carries
+            # is its exact text. Byte-exact or refused — never similar.
             matches = (
                 db.query(models.Concept)
                 .join(models.Topic)
@@ -735,7 +1011,8 @@ def _resolve_snapshot_concept_ids(
                 raise UploadRefused(
                     f"concept {concept.get('concept_title')!r} under "
                     f"topic {topic_title!r} does not have one exact published "
-                    "Output-01 identity; upload that concept release first"
+                    f"{output_name} identity; upload that concept release "
+                    "first"
                 )
             concept_ids[key] = exact[0].id
     return concept_ids

@@ -6,6 +6,7 @@ import copy
 import pytest
 
 from app.bulk_import import assessment_workbook as workbook
+from app.services import assessment_release as rel
 from tests.test_mes_dual_output import _snapshot
 
 
@@ -69,14 +70,33 @@ def _clear_descriptive_answers(row: dict) -> None:
         ),
     ],
 )
-def test_renderer_has_no_duration_or_keyboard_fallback(
+def test_the_duration_and_keyboard_refusal_moved_to_freeze(
     candidate_index: int, field: str, value, expected: str,
 ) -> None:
+    """INVERTED by spec-step8 T7.5/B4 — ``_question_record``'s ``:207``,
+    ``:213`` and ``:217``.
+
+    Each already had a staging twin in ``rel.validate_candidate``, so the
+    renderer's copy of the decision bought nothing and cost every row on
+    every sheet of all four outputs. The renderer now writes the workbook
+    and the SAME refusal fires at freeze, where it reaches
+    ``diagnostics["payload_errors"]`` and refuses only the database write.
+    """
     snapshot = _snapshot()
     snapshot["candidates"][candidate_index][field] = value
 
-    with pytest.raises(workbook.WorkbookRenderError, match=expected):
-        workbook.render_master_file(snapshot)
+    data, _ = workbook.render_master_file(snapshot)
+    assert data[:2] == b"PK"
+
+    candidate = dict(snapshot["candidates"][candidate_index])
+    candidate.setdefault("blueprint_cell_id", "CELL-1")
+    candidate.setdefault("restriction_reason", "bounded")
+    candidate.setdefault("source_atom_ids", ["QINV-0001"])
+    assert any(
+        expected.replace("must be authored", "must be finite") in error
+        or expected in error
+        for error in rel.validate_candidate(candidate)
+    )
 
 
 @pytest.mark.parametrize(
