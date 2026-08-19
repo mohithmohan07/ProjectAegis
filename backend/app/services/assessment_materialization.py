@@ -108,6 +108,7 @@ def _envelope_hash(value: str) -> str:
 
 def _validate_obligation(
     atom: Mapping | None, cell: Mapping, meta: Mapping,
+    profile: Mapping | str | None = None,
 ) -> str:
     if atom is not None and not isinstance(atom, Mapping):
         raise MaterializationError("source atom is not an object")
@@ -119,7 +120,10 @@ def _validate_obligation(
     if not cell_id:
         raise MaterializationError("blueprint cell has no cell_id")
     if str(cell.get("sheet_kind") or "") not in (
-        assessment_profile.sheet_kinds()
+        # The RUN profile decides the allowed kinds (spec-step8 B2); bare
+        # sheet_kinds() resolved DEFAULT_PROFILE and rejected a widened
+        # profile's cells before staging saw them.
+        assessment_profile.sheet_kinds(profile)
     ):
         raise MaterializationError(
             f"blueprint cell {cell_id!r} has an unknown sheet_kind"
@@ -511,10 +515,15 @@ def materialize_candidate(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
+    profile: Mapping | str | None = None,
 ) -> dict:
-    """Materialize one obligation through a content-addressed decision."""
+    """Materialize one obligation through a content-addressed decision.
 
-    candidate_id = _validate_obligation(atom, cell, meta)
+    ``profile`` is validation input ONLY (spec-step8 B2). It never joins
+    ``meta`` or the decision payload, so decision keys are unchanged.
+    """
+
+    candidate_id = _validate_obligation(atom, cell, meta, profile)
     envelope_sha = _envelope_hash(envelope_sha256)
     provider, critic, fixer = _live_authorities(provider, critic, fixer)
     return _materialize_prepared(
@@ -541,8 +550,13 @@ def materialize_candidates(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
+    profile: Mapping | str | None = None,
 ) -> dict:
-    """Materialize every obligation in order with exact-once accounting."""
+    """Materialize every obligation in order with exact-once accounting.
+
+    ``profile`` is validation input ONLY (spec-step8 B2); see
+    ``materialize_candidate``.
+    """
 
     if not isinstance(meta, Mapping):
         raise MaterializationError("materialization metadata is not an object")
@@ -555,7 +569,7 @@ def materialize_candidates(
                 f"materialization pair {position} is not an atom/cell pair"
             )
         atom, cell = pair
-        candidate_id = _validate_obligation(atom, cell, meta)
+        candidate_id = _validate_obligation(atom, cell, meta, profile)
         if candidate_id in seen:
             raise MaterializationError(
                 "materialization obligations repeat candidate_id "

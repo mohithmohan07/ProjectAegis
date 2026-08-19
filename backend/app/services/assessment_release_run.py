@@ -682,6 +682,7 @@ def _bind_explicit_cells(
     assessment_blueprint.validate_cells(
         cells,
         strict_profile=True,
+        profile=profile,
     )
     # The profile answers this, through the one accessor (spec-step8
     # T12/M5b).
@@ -1004,7 +1005,9 @@ def _bind_generated_cells(
             "generated assessment blueprint failed validation: "
             + "; ".join(defects[:20])
         )
-    assessment_blueprint.validate_cells(cells, strict_profile=True)
+    assessment_blueprint.validate_cells(
+        cells, strict_profile=True, profile=profile,
+    )
     return cells
 
 
@@ -1615,6 +1618,7 @@ def run_release_for_job(
     materialized = materialization.materialize_candidates(
         obligations,
         meta=meta,
+        profile=profile,
         context={
             "source_concept_release_sha256": source_release_sha,
             "released_hierarchy": bridge["snapshot"],
@@ -1747,6 +1751,7 @@ def run_release_for_job(
     marking_rows = marking.decide_markings(
         list(zip(candidates, cells)),
         meta=meta,
+        profile=profile,
         envelope_sha256=envelope_sha,
         provider=marking_provider,
         critic=marking_critic,

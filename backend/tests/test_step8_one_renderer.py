@@ -652,7 +652,10 @@ def test_no_volume_derived_chapter_duration_or_description_survives():
 def test_the_identity_trio_never_reaches_a_workbook_record():
     entry = {
         "chapter": {"chapter_title": "C"},
-        "topic": {"topic_title": "T"},
+        # ``topic_machine_id`` joined the strip list in the B4 repair round;
+        # the fixture carries it so a leak of the key into the record fails
+        # here (the audit measured the earlier fixture could not detect it).
+        "topic": {"topic_title": "T", "topic_machine_id": "X_PL_T01"},
         "concept": {
             "concept_key": "C_A",
             "concept_machine_id": "M1",

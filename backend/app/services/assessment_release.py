@@ -20,6 +20,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
 
 from . import assessment_profile
+# Aliased: three functions in this module use ``identity`` as a local.
+from . import identity as identity_mod
 
 # --------------------------------------------------------------------------- #
 # Release state machine (spec §5.6)
@@ -668,10 +670,21 @@ def unresolved_question_homes(
             ).strip()
             # The concept band is written into every Master row and into
             # every Concept File row, so a concept cell no XLSX cell can
-            # hold is the same defect one band over (S9). The snapshot's
-            # concept row IS the rendered record for those columns.
+            # hold is the same defect one band over (S9). The renderer now
+            # COMPOSES the title cell off the machine id (B4), so the
+            # measured mapping must carry the composed value or this gate
+            # measures a string the renderer no longer writes (the audit's
+            # near-limit truncation hole).
+            concept_machine_id = str(
+                concept.get("concept_machine_id") or "").strip()
+            rendered_shape = dict(concept)
+            if concept_machine_id:
+                rendered_shape["concept_title"] = identity_mod.titled(
+                    str(concept.get("concept_title") or ""),
+                    concept_machine_id,
+                )
             findings.extend(_cell_shape_findings(
-                concept,
+                rendered_shape,
                 f"concept {concept.get('concept_title') or ''}".strip(),
                 concept_key=str(concept.get("concept_key") or ""),
             ))

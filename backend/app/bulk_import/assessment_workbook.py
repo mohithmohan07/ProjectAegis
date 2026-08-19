@@ -42,6 +42,7 @@ from openpyxl.styles import Alignment, Font
 
 from ..services import assessment_profile
 from ..services import assessment_release as rel
+from ..services import identity
 from . import layouts
 
 CELL_LIMIT = 32_767
@@ -343,15 +344,88 @@ def _concept_rows(snapshot: Mapping) -> list[dict]:
 # manifest-union gate from reporting two identity fields as structural
 # defects on every release.
 _IDENTITY_TRIO = ("concept_key", "concept_machine_id", "release_row_identity")
+# The topic's identity key, stripped from cells for the same reason.
+_TOPIC_IDENTITY = ("topic_machine_id",)
+
+
+def _titled_topic(topic: Mapping) -> str:
+    """The topic title CELL: the shared composed identity (T14/B4).
+
+    Same conditional as ``_titled_concept`` below, same gold-safety
+    reasoning: no id, verbatim title.  NOTE the deliberate format
+    difference from the bulk-import workbook: ``writer.composed_topic_title``
+    prefixes ``"Topic NN: "``; this renderer's cell is the bare composed
+    title.  Both shapes round-trip the reader's ``strip_topic_title`` and
+    the audit could not construct a divergence, but they are two formats,
+    not one.
+    """
+    title = str(topic.get("topic_title") or "")
+    machine_id = str(topic.get("topic_machine_id") or "").strip()
+    return identity.titled(title, machine_id) if machine_id else title
+
+
+def _identity_tag_replacement(kind: str, mapping: Mapping) -> dict | None:
+    """A record for a baked minted-grammar tag replaced by a DIFFERENT id.
+
+    ``identity.titled`` replaces a minted-shaped carried tag with the
+    persisted id; when the two disagree the loser must not vanish silently
+    (R4 — the reader records the mirror case as ``machine_id_conflict``).
+    Detection only; the replacement itself stays with ``identity.titled``.
+    """
+    title_key, id_key = (
+        ("topic_title", "topic_machine_id") if kind == "topic"
+        else ("concept_title", "concept_machine_id")
+    )
+    raw = str(mapping.get(title_key) or "")
+    machine_id = str(mapping.get(id_key) or "").strip()
+    if not machine_id:
+        return None
+    carried = identity.title_tag(raw)
+    if not carried or carried == machine_id:
+        return None
+    minted_shape = (
+        identity.minted_topic_ordinal(carried) is not None
+        or identity.minted_concept_ordinal(carried) is not None
+    )
+    if not minted_shape:
+        return None
+    return {
+        "kind": kind,
+        "title": raw,
+        "carried_tag": carried,
+        "applied_machine_id": machine_id,
+    }
+
+
+def _titled_concept(concept: Mapping) -> str:
+    """The concept title CELL: the shared composed identity (T14/B4).
+
+    ``identity.titled`` over the persisted ``concept_machine_id``, so the
+    cell reads exactly as ``topic_concept_labels`` names it and a re-import
+    restores the persisted id instead of re-minting. A concept with no id
+    keeps its title verbatim — the gold reference snapshots never mint, and
+    ``titled(name, "")`` would strip a tag baked into a gold title.
+    """
+    title = str(concept.get("concept_title") or "")
+    machine_id = str(concept.get("concept_machine_id") or "").strip()
+    return identity.titled(title, machine_id) if machine_id else title
 
 
 def _bands_record(entry: Mapping) -> dict:
     record: dict = {}
     record.update(entry["chapter"])
-    record.update(entry["topic"])
+    record.update({
+        k: v for k, v in entry["topic"].items() if k not in _TOPIC_IDENTITY
+    })
+    record["topic_title"] = _titled_topic(entry["topic"])
     record.update({
         k: v for k, v in entry["concept"].items() if k not in _IDENTITY_TRIO
     })
+    # The one composition point for the title cell of every row this
+    # concept owns, in both renderers (spec-step8 T14/B4): before this,
+    # Outputs 02/04 shipped the bare title while the roster carried the
+    # tagged one, and a re-import re-minted every identity.
+    record["concept_title"] = _titled_concept(entry["concept"])
     return record
 
 
@@ -515,8 +589,14 @@ def render_master_file(
     THIS FUNCTION RAISES NOTHING (spec-step8 T7.5/B4).  Its seven former
     raises are gone.  Three of them (blank ``group_key``, duplicate
     ``group_key``, invalid ``group_type``) already have a staging twin in
-    ``assessment_release.validate_group`` / ``duplicate_group_keys`` and a
-    second read-back twin in ``validate_master_file``; the other four are
+    ``assessment_release.validate_group`` / ``duplicate_group_keys``; the
+    first two ALSO have a read-back twin in ``validate_master_file``, but
+    invalid ``group_type`` does NOT — the read-back compares ``group_type``
+    only against the snapshot's own value, never against the valid set, so
+    an invalid value that round-trips consistently passes it; the one
+    validity twin is ``validate_group`` at freeze (the S8 commit measured
+    this; an earlier version of this docstring claimed a read-back twin
+    for all three).  The other four are
     named at staging by ``assessment_release.unresolved_question_homes`` as
     ``group_concept_home_unknown``, ``group_home_unnamed``,
     ``group_visible_name_mismatch`` and ``group_home_disagreement``.  A raise
@@ -723,12 +803,33 @@ def render_master_file(
                 entry["concept"].get("concept_machine_id") or ""),
             "concept_title": str(
                 entry["concept"].get("concept_title") or ""),
+            # The string the tail row's cell ACTUALLY reads (composed);
+            # the bare title above names no cell once an id exists.
+            "rendered_concept_title": _titled_concept(entry["concept"]),
             "shell_group_keys": shells_by_concept.get(concept_key, []),
         })
+
+    tag_replacements = []
+    seen_replacement_keys: set[tuple] = set()
+    for entry in _concept_rows(snapshot):
+        for kind, mapping in (("topic", entry["topic"]),
+                              ("concept", entry["concept"])):
+            record = _identity_tag_replacement(kind, mapping)
+            if record is None:
+                continue
+            key = (record["kind"], record["title"],
+                   record["applied_machine_id"])
+            if key in seen_replacement_keys:
+                continue
+            seen_replacement_keys.add(key)
+            tag_replacements.append(record)
 
     issues = {
         "unplaced": unplaced,
         "placed_questions": question_rows,
+        # A baked tag that disagreed with the persisted id was REPLACED in
+        # the cell; the loser is recorded here, never dropped silently (R4).
+        "identity_tag_replacements": tag_replacements,
         "groups": len(groups),
         "group_provenance": group_provenance,
         "questionless_concepts": questionless,
@@ -1013,14 +1114,22 @@ def validate_concept_file(
         return errors
     rows = parsed["sheets"]["Objective"]["rows"]
     expected = [
-        str(e["concept"].get("concept_title") or "")
-        for e in _concept_rows(snapshot)
+        _titled_concept(e["concept"]) for e in _concept_rows(snapshot)
     ]
     actual = [str(r.get("concept_title") or "") for r in rows]
     if actual != expected:
         errors.append(
             f"concept rows differ: expected {len(expected)}, "
             f"got {len(actual)} (or out of source order)")
+    # The topic cell's read-back twin (B4 repair round: the composed topic
+    # cell shipped with no verification at all while the concept cell had
+    # three).
+    expected_topics = [
+        _titled_topic(e["topic"]) for e in _concept_rows(snapshot)
+    ]
+    actual_topics = [str(r.get("topic_title") or "") for r in rows]
+    if actual_topics != expected_topics:
+        errors.append("topic title cells differ from the snapshot's topics")
     # The must-keep-blank list reads the SAME profile key the renderer's
     # ``_row_values`` reads (spec-step8 T12/M4), so the read-back gate and
     # the renderer can never disagree about what ships blank.
@@ -1050,6 +1159,7 @@ def validate_master_file(
     *, group_provenance: list[Mapping[str, Any]] | None = None,
 ) -> list[str]:
     profile = assessment_profile.resolve(profile)
+    forced_blank = assessment_profile.forced_blank_fields(profile)
     errors = _header_errors(parsed)
     if errors:
         return errors
@@ -1146,6 +1256,13 @@ def validate_master_file(
     question_rows = 0
     aggregate_by_group: dict[str, set[str]] = {}
     visited_provenance: set[tuple[str, int]] = set()
+    # The topic cell's read-back twin (B4 repair round): keyed off the
+    # COMPOSED concept title, which embeds the machine id, so two
+    # same-titled concepts under two topics map to their own topics.
+    expected_topic_by_concept = {
+        _titled_concept(e["concept"]): _titled_topic(e["topic"])
+        for e in _concept_rows(snapshot)
+    }
     for name in ("Objective", "Descriptive"):
         sheet_rows = parsed["sheets"][name]["rows"]
         row_numbers = parsed["sheets"][name].get("row_numbers")
@@ -1156,7 +1273,15 @@ def validate_master_file(
                 f"{name}: read-back row number ledger differs from rows")
             row_numbers = list(range(3, 3 + len(sheet_rows)))
         for i, row in zip(row_numbers, sheet_rows):
-            seen_concepts.add(str(row.get("concept_title") or ""))
+            row_concept_title = str(row.get("concept_title") or "")
+            seen_concepts.add(row_concept_title)
+            expected_topic = expected_topic_by_concept.get(row_concept_title)
+            if expected_topic is not None and (
+                str(row.get("topic_title") or "") != expected_topic
+            ):
+                errors.append(
+                    f"{name} row {i}: topic_title does not match the "
+                    "snapshot's topic for this concept")
             group_name = str(row.get("group_name") or "")
             coordinate = (name, i)
             group_key = provenance_by_row.get(coordinate, "")
@@ -1203,8 +1328,8 @@ def validate_master_file(
                         f"{name} row {i}: {group_key!r} has unknown "
                         f"concept home {group_concept_key!r}")
                 else:
-                    expected_concept_title = str(
-                        concept_entry["concept"].get("concept_title") or "")
+                    expected_concept_title = _titled_concept(
+                        concept_entry["concept"])
                     if str(row.get("concept_title") or "") != (
                         expected_concept_title
                     ):
@@ -1213,11 +1338,13 @@ def validate_master_file(
                             f"{group_key!r}")
                 aggregate_by_group.setdefault(group_key, set()).add(
                     str(row.get("group_question_labels") or ""))
-            if str(row.get("chapter_duration") or "").strip():
-                errors.append(f"{name} row {i}: chapter_duration must be blank")
-            if str(row.get("question_disclaimer") or "").strip():
-                errors.append(
-                    f"{name} row {i}: question_disclaimer must be blank")
+            # The fourth C10 site (spec-step8): the read-back blanks by the
+            # SAME profile key the renderer blanked by, so a profile that
+            # un-blanks a field cannot fail its own read-back on the value
+            # it just rendered.
+            for field in forced_blank:
+                if str(row.get(field) or "").strip():
+                    errors.append(f"{name} row {i}: {field} must be blank")
             label = str(row.get("question_label") or "")
             if not label:
                 continue
@@ -1257,9 +1384,12 @@ def validate_master_file(
                 ))
 
     # Every concept (questionless included) and every created group appears.
+    # Keyed on the COMPOSED title, which embeds the machine id: two
+    # same-titled concepts under two topics are two distinct expected
+    # members, so dropping one of two same-titled tail rows is visible
+    # (spec-step8 B4; before this the set collapsed them).
     expected_concepts = {
-        str(e["concept"].get("concept_title") or "")
-        for e in _concept_rows(snapshot)
+        _titled_concept(e["concept"]) for e in _concept_rows(snapshot)
     }
     for concept_title in sorted(expected_concepts - seen_concepts):
         errors.append(f"concept missing from Master: {concept_title!r}")

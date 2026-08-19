@@ -136,6 +136,16 @@ def snapshot_from_chapter(
             ),
             "related_topics": topic.related_topics,
             "topic_description": topic.topic_description,
+            # DELIBERATELY no identity keys on this lane (spec-step8 B4
+            # repair round): ``_machine_id`` below prefers
+            # ``concept_machine_id``, and ``_complete_required_shells``
+            # turns its return into PERSISTED ``group_key`` strings — adding
+            # the key here re-keyed every auto-completed shell on this lane
+            # and made the upload mint duplicate shells beside rows holding
+            # the legacy "(C<db id>) …" keys. This lane is dormant for
+            # release creation (create_release's only caller always supplies
+            # ``concept_snapshot``); its bare-cell rendering is a recorded
+            # residue owned by S10, which owns publication convergence.
             "concepts": [
                 {
                     "concept_key": f"db:{concept.id}",

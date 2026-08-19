@@ -282,6 +282,9 @@ def build(
     for marker, topic in ordered_topics:
         snapshot_topics.append({
             "topic_title": str(topic.topic_title or ""),
+            # The topic's persisted identity (spec-step8 B4); the renderer
+            # composes the title cell off it and strips it from cells.
+            "topic_machine_id": identity.machine_id_for_topic(topic),
             "topic_display_name": str(
                 topic.topic_display_name or topic.topic_title or ""
             ),
