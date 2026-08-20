@@ -210,6 +210,13 @@ export const api = {
     }),
   authLogout: () =>
     http<{ ok: boolean }>("/auth/logout", { method: "POST" }),
+  // Store apps only: swaps the one-time ticket from the system-browser
+  // Google flow (aegis://auth?ticket=…) for the normal session cookie.
+  authNativeExchange: (ticket: string) =>
+    http<AuthSession>("/auth/native/exchange", {
+      method: "POST",
+      body: JSON.stringify({ ticket }),
+    }),
 
   // Directory / database
   tree: () => http<BoardNode[]>("/directory/tree"),

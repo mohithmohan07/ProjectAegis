@@ -7,6 +7,7 @@ const apiMock = vi.hoisted(() => ({
   authMe: vi.fn(),
   authGoogle: vi.fn(),
   authLogout: vi.fn(),
+  authNativeExchange: vi.fn(),
 }));
 
 vi.mock("./api/client", () => ({
@@ -24,6 +25,7 @@ beforeEach(() => {
 
 afterEach(() => {
   delete window.google;
+  delete window.Capacitor;
 });
 
 test("fails closed when auth configuration cannot be loaded and retries", async () => {
@@ -122,6 +124,81 @@ test("an expired session returns the app to the sign-in gate", async () => {
   ).toBeDefined();
   // The config reload fetched a fresh CSRF pair for the next sign-in.
   await waitFor(() => expect(apiMock.authConfig).toHaveBeenCalledTimes(2));
+});
+
+test("the store-app shell signs in through the system browser and the deep-link ticket", async () => {
+  // Google blocks Identity Services inside embedded WebViews, so the
+  // Capacitor shell must never render the GIS button: it opens
+  // /auth/native/start in the system browser and finishes sign-in by
+  // exchanging the aegis://auth ticket the OS hands back.
+  let urlOpenHandler: ((data: { url: string }) => void) | undefined;
+  const browserOpen = vi.fn(() => Promise.resolve());
+  window.Capacitor = {
+    isNativePlatform: () => true,
+    Plugins: {
+      App: {
+        addListener: vi.fn((_event, handler: (data: { url: string }) => void) => {
+          urlOpenHandler = handler;
+          return { remove: vi.fn() };
+        }),
+        getLaunchUrl: vi.fn(() => Promise.resolve({ url: undefined })),
+      },
+      Browser: { open: browserOpen, close: vi.fn(() => Promise.resolve()) },
+    },
+  };
+  const googleConfig = {
+    mode: "google",
+    google_client_id: "client-id",
+    allowed_google_domain: "up.school",
+    csrf_token: "csrf",
+  };
+  apiMock.authConfig.mockResolvedValue(googleConfig);
+  apiMock.authMe
+    .mockResolvedValueOnce({ authenticated: false, user: null })
+    .mockResolvedValueOnce({
+      authenticated: true,
+      user: {
+        sub: "user-1",
+        email: "teacher@up.school",
+        name: "Teacher",
+        hd: "up.school",
+      },
+    });
+  apiMock.authNativeExchange.mockResolvedValueOnce({
+    authenticated: true,
+    user: {
+      sub: "user-1",
+      email: "teacher@up.school",
+      name: "Teacher",
+      hd: "up.school",
+    },
+  });
+
+  render(
+    <AuthProvider>
+      <AuthGate>
+        <div>Protected app</div>
+      </AuthGate>
+    </AuthProvider>,
+  );
+
+  const nativeButton = await screen.findByTestId("native-google-signin");
+  expect(screen.queryByLabelText("Sign in with Google")).toBeNull();
+
+  fireEvent.click(nativeButton);
+  await waitFor(() => {
+    expect(browserOpen).toHaveBeenCalledWith({
+      url: `${window.location.origin}/auth/native/start`,
+    });
+  });
+
+  await waitFor(() => expect(urlOpenHandler).toBeTypeOf("function"));
+  await act(async () => {
+    urlOpenHandler?.({ url: "aegis://auth?ticket=one-time-ticket" });
+  });
+
+  expect(apiMock.authNativeExchange).toHaveBeenCalledWith("one-time-ticket");
+  expect(await screen.findByText("Protected app")).toBeDefined();
 });
 
 test("refreshes CSRF configuration after logout before another Google sign-in", async () => {

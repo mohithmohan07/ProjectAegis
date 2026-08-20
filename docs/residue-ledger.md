@@ -58,6 +58,19 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Step-12 interrupted-path injections (spec residue) | RESOLVED: `test_fault_injection_interrupted.py` pins both contracts — staging is atomic-at-the-end (a crash in the last assembly helper leaves the slot byte-untouched; retry re-mints cleanly), publication is one transaction with full rollback (zero partial rows, latch not set; retry publishes idempotently, no duplicate rows). No real defect found |
 | Step 9 — review/edit surface | BUILT: `release_review.py` (view projection, verbatim manual edits, one bounded instruction pass), `models.ConceptReleaseVersion` (append-only §7 version rows incl. recorded failed rounds), three routes under `/build-concepts/uploads/{id}/release-review`, frontend page at `/build-concepts/review/:jobId` with house rich-text rendering. Recorded step-9 residues: R-S9a/b/c below |
 
+## Store apps round (2026-08-20 night, round 5) — PWA + Play TWA + iOS Capacitor + native sign-in
+
+| Item | Disposition |
+|---|---|
+| PWA layer (universal, no store needed) | `frontend/public/`: manifest.webmanifest, sw.js, icon set rendered from the Constellation Shield mark (192/512 any, 192/512 maskable, 180 apple-touch). SW registered in main.tsx (PROD only): network-first navigations falling back to the cached shell, cache-first hashed `/assets/*`, stale-while-revalidate icons/manifest — API calls, uploads, and NDJSON streams are never intercepted, so run/reattach behavior is byte-identical to the plain tab. index.html gains manifest/apple-touch/iOS meta; `.webmanifest` MIME registered in main.py |
+| Native Google sign-in (both shells) | Google blocks GIS in WebViews, so `backend/app/api/native_auth.py` runs the sanctioned system-browser code flow: /auth/native/start → Google → /auth/native/callback (server-side code exchange, AEGIS_GOOGLE_CLIENT_SECRET) → 302 `aegis://auth?ticket=…` → POST /auth/native/exchange sets the normal cookie. The ticket IS `auth.encode_session` with a 90s expiry + in-memory single-use guard — one token authority. All routes 404 until the secret is set; HMAC state (SESSION_SECRET, 10 min). Frontend: Capacitor shell detection in Auth.tsx renders "Continue with Google" (system browser + appUrlOpen/getLaunchUrl deep-link listener) instead of the GIS button. 7 backend pins (test_native_auth.py) + an Auth.test.tsx shell test |
+| Play Store path | `/.well-known/assetlinks.json` served from AEGIS_ANDROID_PACKAGE_NAME (default school.up.aegis) + comma-separated AEGIS_ANDROID_CERT_SHA256 (empty list until keys exist). `mobile/twa/twa-manifest.json` = complete Bubblewrap project |
+| App Store path | `mobile/capacitor/` = Capacitor iOS shell, `server.url` → the deployed site (site deploys update the app without store review). aegis:// scheme goes in Info.plist on the build machine. Apple Guideline 4.2 wrapper-rejection risk documented honestly with mitigations |
+| Owner actions (cannot be done from here) | docs/mobile-stores.md is the runbook: Play Console ($25) + Apple Developer ($99/yr) accounts; Google OAuth client secret + redirect URI; Android keystore → AEGIS_ANDROID_CERT_SHA256; builds need Android SDK / a Mac with Xcode |
+| Residue: exchange guard is per-process | The single-use ticket set is in-memory — a multi-machine deployment would let one replay per extra machine inside the 90s window (fly.toml runs one machine; the expiry bounds it regardless). Move to the DB if the deployment ever scales out |
+| Residue: sw.js is public/, not built | The service worker is plain JS copied by Vite; it has no test net beyond review. Its scope is deliberately narrow (three GET path classes) to keep the blast radius near zero |
+| Residue: store screenshots/graphics | Play listing needs screenshots + a 1024×500 feature graphic; App Store needs screenshots per device class. Not generated here — take them from the deployed phone UI |
+
 ## Performance round (2026-08-20)
 
 | Item | Disposition |

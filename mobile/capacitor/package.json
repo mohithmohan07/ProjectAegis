@@ -1,0 +1,20 @@
+{
+  "name": "aegis-mobile-shell",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Capacitor shell for the Aegis App Store build (loads the deployed site).",
+  "scripts": {
+    "ios:add": "cap add ios",
+    "ios:sync": "cap sync ios",
+    "ios:open": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/app": "^6.0.0",
+    "@capacitor/browser": "^6.0.0",
+    "@capacitor/core": "^6.0.0",
+    "@capacitor/ios": "^6.0.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.0.0"
+  }
+}

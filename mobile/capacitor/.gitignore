@@ -1,0 +1,6 @@
+node_modules/
+# `cap add ios` generates the native project on the build machine; commit
+# it from there once Info.plist has the aegis:// scheme if you want CI
+# builds, otherwise regenerate per docs/mobile-stores.md.
+ios/
+android/

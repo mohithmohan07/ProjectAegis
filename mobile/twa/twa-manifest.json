@@ -1,0 +1,30 @@
+{
+  "//": "Bubblewrap project config for the Play Store app (Trusted Web Activity). Run `npx @bubblewrap/cli build` in this directory on a machine with the Android SDK — see docs/mobile-stores.md for the full runbook. `host` must match the deployed site; verification also requires /.well-known/assetlinks.json to serve the signing key's SHA-256 (set AEGIS_ANDROID_CERT_SHA256 on the server).",
+  "packageId": "school.up.aegis",
+  "host": "projectaegis.fly.dev",
+  "name": "Aegis — Content Intelligence Engine",
+  "launcherName": "Aegis",
+  "display": "standalone",
+  "themeColor": "#0b0d13",
+  "navigationColor": "#0b0d13",
+  "backgroundColor": "#0b0d13",
+  "startUrl": "/",
+  "iconUrl": "https://projectaegis.fly.dev/icons/icon-512.png",
+  "maskableIconUrl": "https://projectaegis.fly.dev/icons/icon-512-maskable.png",
+  "webManifestUrl": "https://projectaegis.fly.dev/manifest.webmanifest",
+  "splashScreenFadeOutDuration": 300,
+  "enableNotifications": false,
+  "isChromeOSOnly": false,
+  "orientation": "default",
+  "fallbackType": "customtabs",
+  "features": {},
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "appVersionName": "1.0.0",
+  "appVersionCode": 1,
+  "minSdkVersion": 21,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "aegis"
+  }
+}

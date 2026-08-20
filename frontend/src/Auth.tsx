@@ -28,6 +28,26 @@ type GoogleIdentityApi = {
   disableAutoSelect: () => void;
 };
 
+// Injected by the Capacitor shell when the site runs inside the store
+// apps. Only the two plugins the sign-in flow needs are typed here.
+type CapacitorListenerHandle = { remove: () => void };
+type CapacitorShell = {
+  isNativePlatform?: () => boolean;
+  Plugins?: {
+    App?: {
+      addListener: (
+        event: "appUrlOpen",
+        handler: (data: { url: string }) => void,
+      ) => CapacitorListenerHandle | Promise<CapacitorListenerHandle>;
+      getLaunchUrl?: () => Promise<{ url?: string } | null | undefined>;
+    };
+    Browser?: {
+      open: (options: { url: string }) => Promise<void>;
+      close?: () => Promise<void>;
+    };
+  };
+};
+
 declare global {
   interface Window {
     google?: {
@@ -35,6 +55,15 @@ declare global {
         id: GoogleIdentityApi;
       };
     };
+    Capacitor?: CapacitorShell;
+  }
+}
+
+function isNativeShell(): boolean {
+  try {
+    return window.Capacitor?.isNativePlatform?.() === true;
+  } catch {
+    return false;
   }
 }
 
@@ -250,10 +279,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
           account. Your uploads and resumable checkpoints are kept separate
           from other signed-in users.
         </p>
-        <GoogleSignInButton
-          config={auth.config}
-          onCredential={auth.signInWithGoogle}
-        />
+        {isNativeShell() ? (
+          <NativeGoogleSignIn onSignedIn={auth.reload} />
+        ) : (
+          <GoogleSignInButton
+            config={auth.config}
+            onCredential={auth.signInWithGoogle}
+          />
+        )}
         {auth.error && <div className="error-box">{auth.error}</div>}
       </section>
     </main>
@@ -371,6 +404,116 @@ function GoogleSignInButton({
   return (
     <div className="google-signin">
       <div ref={containerRef} aria-label="Sign in with Google" />
+      {error && <div className="error-box">{error}</div>}
+    </div>
+  );
+}
+
+/* Sign-in inside the store apps (Capacitor shell). Google refuses its
+   Identity Services flow in embedded WebViews, so the app opens
+   /auth/native/start in the SYSTEM browser; after Google, the server
+   bounces a 90-second one-time ticket back on the aegis://auth deep
+   link, and exchanging it here sets the normal session cookie in the
+   app's WebView. */
+function NativeGoogleSignIn({
+  onSignedIn,
+}: {
+  onSignedIn: () => Promise<void>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [exchanging, setExchanging] = useState(false);
+  const exchangingRef = useRef(false);
+
+  const completeFromUrl = useCallback(async (url: string) => {
+    if (!url.startsWith("aegis://auth")) return;
+    let ticket = "";
+    try {
+      ticket = new URL(url).searchParams.get("ticket") ?? "";
+    } catch {
+      ticket = "";
+    }
+    if (!ticket) {
+      setError("The sign-in link was missing its ticket. Try again.");
+      return;
+    }
+    if (exchangingRef.current) return;
+    exchangingRef.current = true;
+    setExchanging(true);
+    setError(null);
+    try {
+      await window.Capacitor?.Plugins?.Browser?.close?.();
+    } catch {
+      // The in-app browser sheet may already be gone; signing in matters,
+      // closing the sheet doesn't.
+    }
+    try {
+      const session = await api.authNativeExchange(ticket);
+      if (!session.authenticated) {
+        throw new Error("The sign-in ticket did not create a session.");
+      }
+      await onSignedIn();
+    } catch (exchangeError) {
+      setError(String(exchangeError));
+    } finally {
+      exchangingRef.current = false;
+      setExchanging(false);
+    }
+  }, [onSignedIn]);
+
+  useEffect(() => {
+    const appPlugin = window.Capacitor?.Plugins?.App;
+    if (!appPlugin) return;
+    let removed = false;
+    let handle: CapacitorListenerHandle | null = null;
+    Promise.resolve(
+      appPlugin.addListener("appUrlOpen", (data) => {
+        void completeFromUrl(String(data?.url ?? ""));
+      }),
+    ).then((listener) => {
+      if (removed) listener.remove();
+      else handle = listener;
+    }).catch(() => {
+      // Without the listener the button still works via getLaunchUrl on
+      // a cold start; warm-start deep links would be lost, so surface it.
+      setError("The app could not listen for the sign-in redirect.");
+    });
+    // Cold start straight from the deep link: the event fired before
+    // this component mounted, so ask for the launch URL explicitly.
+    void appPlugin.getLaunchUrl?.()?.then((launch) => {
+      if (launch?.url) void completeFromUrl(String(launch.url));
+    }).catch(() => undefined);
+    return () => {
+      removed = true;
+      handle?.remove();
+    };
+  }, [completeFromUrl]);
+
+  const openSystemBrowser = useCallback(async () => {
+    setError(null);
+    const url = `${window.location.origin}/auth/native/start`;
+    try {
+      const browserPlugin = window.Capacitor?.Plugins?.Browser;
+      if (browserPlugin) await browserPlugin.open({ url });
+      else window.open(url, "_blank");
+    } catch {
+      window.open(url, "_blank");
+    }
+  }, []);
+
+  return (
+    <div className="google-signin">
+      <button
+        type="button"
+        onClick={() => void openSystemBrowser()}
+        disabled={exchanging}
+        data-testid="native-google-signin"
+      >
+        {exchanging ? "Finishing sign-in…" : "Continue with Google"}
+      </button>
+      <p className="muted">
+        Google opens in your browser to sign you in, then returns you to
+        the app automatically.
+      </p>
       {error && <div className="error-box">{error}</div>}
     </div>
   );

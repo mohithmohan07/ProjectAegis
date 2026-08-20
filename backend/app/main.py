@@ -1,4 +1,5 @@
 import logging
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +24,7 @@ from .api import (
     build_assessments as build_assessments_api,
     build_concepts as build_concepts_api,
     data as data_api,
+    native_auth as native_auth_api,
     source_artifacts as source_artifacts_api,
     source_assets as source_assets_api,
     tagging as tagging_api,
@@ -104,6 +106,10 @@ def health():
 build_concepts_release_api_contract.install(build_concepts_api.router)
 
 app.include_router(auth_api.router)
+# Native app sign-in routes self-gate (404 until AEGIS_GOOGLE_CLIENT_SECRET
+# is set) and must be reachable before a session exists.
+app.include_router(native_auth_api.router)
+app.include_router(native_auth_api.wellknown_router)
 app.include_router(source_assets_api.router)
 _authenticated = [Depends(auth_svc.require_user)]
 app.include_router(directory_api.router, dependencies=_authenticated)
@@ -120,6 +126,10 @@ app.include_router(admin_api.router, dependencies=_authenticated)
 # (uvicorn --reload, no `npm run build`) this directory won't exist and
 # the block is skipped — Vite's dev server handles the UI on :5173.
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST_DIR", "/app/frontend_dist"))
+
+# Python's mimetypes table predates the PWA manifest extension; without
+# this the SPA route serves it as application/octet-stream.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
 def _safe_frontend_file(root: Path, request_path: str) -> Path | None:

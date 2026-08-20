@@ -22,6 +22,19 @@ DB_URL = os.environ.get(
 # deployments opt into Google Identity explicitly.
 AUTH_MODE = os.environ.get("AEGIS_AUTH_MODE", "local").strip().lower()
 GOOGLE_CLIENT_ID = os.environ.get("AEGIS_GOOGLE_CLIENT_ID", "").strip()
+# The OAuth client secret enables the NATIVE app sign-in flow (system
+# browser authorization-code exchange, api/native_auth.py). The web
+# page's one-tap flow needs only the client id; leave this empty and the
+# native routes answer 404.
+GOOGLE_CLIENT_SECRET = os.environ.get(
+    "AEGIS_GOOGLE_CLIENT_SECRET", "").strip()
+# Android app-link verification for the Play Store TWA: package name and
+# comma-separated SHA-256 signing-cert fingerprints, served at
+# /.well-known/assetlinks.json (empty = route serves an empty list).
+ANDROID_PACKAGE_NAME = os.environ.get(
+    "AEGIS_ANDROID_PACKAGE_NAME", "school.up.aegis").strip()
+ANDROID_CERT_SHA256 = os.environ.get(
+    "AEGIS_ANDROID_CERT_SHA256", "").strip()
 ALLOWED_GOOGLE_DOMAIN = (
     os.environ.get("AEGIS_ALLOWED_GOOGLE_DOMAIN", "up.school")
     .strip()
@@ -58,7 +71,9 @@ CORS_ORIGINS = [
 
 # Canonical source assets created by the GPT PDF-to-ACSD fallback need stable
 # public HTTPS URLs because Bulk Import rich text accepts only public images.
-# Hosted deployments set this to their same-origin application URL.
+# Hosted deployments set this to their same-origin application URL. The
+# native sign-in flow (api/native_auth.py) reuses it as the OAuth redirect
+# origin; when empty the request's forwarded headers decide there.
 PUBLIC_BASE_URL = os.environ.get("AEGIS_PUBLIC_BASE_URL", "").strip().rstrip("/")
 SOURCE_ASSET_SECRET = (
     os.environ.get("AEGIS_SOURCE_ASSET_SECRET", "").strip()
