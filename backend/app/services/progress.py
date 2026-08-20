@@ -136,18 +136,41 @@ def stream(
     fn: Callable[[], Any],
     *,
     title: str = "",
+    journal_job_id: int | None = None,
 ) -> "StreamingResponse":  # type: ignore[name-defined]
     """Run ``fn`` in a worker thread, streaming its progress as NDJSON.
 
     The final event is ``{"type":"result","data":...}`` on success or
     ``{"type":"error","message":...}`` on failure.
+
+    ``journal_job_id`` tees every event — the terminal result/error
+    included — into that job's durable run journal, stamped with a
+    monotonic ``seq`` (run_journal.py). The work itself already survives
+    a dropped client; the journal preserves the events emitted while
+    nobody was attached, so a returning client catches up losslessly via
+    ``run-events?after=N`` instead of guessing from job status.
     """
     from fastapi.responses import StreamingResponse
 
     events: "queue.Queue[Any]" = queue.Queue()
 
+    journal = None
+    if journal_job_id is not None:
+        from . import run_journal
+
+        try:
+            journal = run_journal.RunJournal(journal_job_id)
+        except OSError:
+            journal = None  # an assist, never a gate
+
+    def publish(event: dict) -> None:
+        if journal is not None:
+            journal.publish(event, events.put)
+        else:
+            events.put(event)
+
     def sink(event: dict) -> None:
-        events.put(event)
+        publish(event)
 
     def worker() -> None:
         token = _sink.set(sink)
@@ -167,9 +190,9 @@ def stream(
                 and "openai_usage" not in result
             ):
                 result = {**result, "openai_usage": summary}
-            events.put({"type": "result", "data": result, "ts": time.time()})
+            publish({"type": "result", "data": result, "ts": time.time()})
         except Exception as exc:  # noqa: BLE001 — surface to the client stream
-            events.put({
+            publish({
                 "type": "error",
                 "message": str(exc) or exc.__class__.__name__,
                 "trace": traceback.format_exc(limit=4),
@@ -181,6 +204,8 @@ def stream(
             _track.reset(track_token)
             _history.reset(history_token)
             _sink.reset(token)
+            if journal is not None:
+                journal.close()
             events.put(_SENTINEL)
 
     def generator() -> Iterator[bytes]:

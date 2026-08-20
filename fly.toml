@@ -38,9 +38,16 @@ primary_region = 'ams'
 [http_service]
   internal_port = 8000
   force_https = true
+  # A generation run executes on a worker thread INSIDE this machine.
+  # With min_machines_running = 0, Fly stopped the machine as soon as no
+  # HTTP connection was open — which is exactly what happens when the
+  # operator's phone tab freezes mid-run — and the run died with it
+  # (owner report, 2026-08-20: "resumed from its saved checkpoint").
+  # One machine stays up so runs genuinely continue in the background;
+  # auto_stop still reclaims any extra machines.
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
 
   [http_service.concurrency]
     type = 'requests'

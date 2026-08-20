@@ -148,6 +148,26 @@ def get_upload(
         raise HTTPException(404, str(e))
 
 
+@router.get("/uploads/{job_id}/run-events")
+def get_run_events(
+    job_id: int,
+    after: int = 0,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """The run's journaled events after a cursor (see build_concepts)."""
+    from ..services import run_journal
+
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_assessments")
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    payload = run_journal.read_after(job_id, after)
+    payload["running"] = bool(job.generation_running)
+    return payload
+
+
 @router.put("/uploads/{job_id}/file", response_model=schemas.UploadJobOut)
 async def replace_upload_file(
     job_id: int, file: UploadFile = File(...), db: Session = Depends(get_db),
@@ -203,7 +223,11 @@ def convert_upload(
             )
         finally:
             worker_db.close()
-    return progress.stream(work, title="Converting document to MMD")
+    return progress.stream(
+        work,
+        title="Converting document to MMD",
+        journal_job_id=job_id,
+    )
 
 
 @router.post("/uploads/{job_id}/textbook-mode", response_model=schemas.UploadJobOut)
@@ -291,7 +315,11 @@ def generate_from_upload(
             )
         finally:
             worker_db.close()
-    return progress.stream(work, title="Build Assessments — generating from upload")
+    return progress.stream(
+        work,
+        title="Build Assessments — generating from upload",
+        journal_job_id=job_id,
+    )
 
 
 # --------------------------------------------------------------------------- #

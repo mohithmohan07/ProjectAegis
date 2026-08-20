@@ -11,13 +11,14 @@ const pending = vi.hoisted(() => [] as Array<{
 }>);
 
 const getUploadJobMock = vi.hoisted(() => vi.fn());
+const getRunEventsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./api/client", () => ({
   streamNdjson: vi.fn(
     (_path: string, _init: RequestInit, onEvent: (event: StreamEvent) => void) =>
       new Promise((resolve, reject) => pending.push({ onEvent, resolve, reject })),
   ),
-  api: { getUploadJob: getUploadJobMock },
+  api: { getUploadJob: getUploadJobMock, getRunEvents: getRunEventsMock },
 }));
 
 function transportError(message: string): Error {
@@ -170,14 +171,15 @@ test("an awaiting-decision result stays paused at its checkpoint", async () => {
 });
 
 
-test("a network drop re-attaches and resumes instead of failing the run", async () => {
+test("a mid-run drop tails the journal silently and resumes only if the worker died", async () => {
   vi.useFakeTimers();
   try {
-    // Job is still running on the first poll, then stopped with a durable
-    // checkpoint (status "converted") -- the designed resume-by-re-POST case.
-    getUploadJobMock
-      .mockResolvedValueOnce({ generation_running: true, status: "converted" })
-      .mockResolvedValueOnce({ generation_running: false, status: "converted" });
+    // The journal has nothing new, the worker is gone (machine restart),
+    // and job status says stopped-at-checkpoint: the ONE spoken case.
+    getRunEventsMock.mockResolvedValue({ events: [], next: 0, running: false });
+    getUploadJobMock.mockResolvedValue({
+      generation_running: false, status: "converted",
+    });
 
     function ReattachProbe() {
       const { run, state } = useRunConsole();
@@ -209,27 +211,21 @@ test("a network drop re-attaches and resumes instead of failing the run", async 
 
     const first = pending.length;
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
-    expect(pending).toHaveLength(first + 1);
-
-    // The connection dies mid-stream.
     await act(async () => {
       pending[first].reject(transportError("network connection lost"));
       await Promise.resolve();
     });
-    // Not an error: the console announces the wait instead.
+
+    // No drop message of any kind: the console holds its state.
     expect(screen.getByTestId("status").textContent).toBe("running");
-    expect(screen.getByTestId("lines").textContent).toContain(
+    expect(screen.getByTestId("lines").textContent).not.toContain(
       "Network connection lost",
     );
 
-    // First poll: still running. Second poll: stopped at a checkpoint.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(300);
     });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    expect(getUploadJobMock).toHaveBeenCalledTimes(2);
+    expect(getRunEventsMock).toHaveBeenCalledWith("concepts", 7, 0);
     expect(screen.getByTestId("lines").textContent).toContain(
       "Resuming the run from its saved checkpoint",
     );
@@ -248,23 +244,26 @@ test("a network drop re-attaches and resumes instead of failing the run", async 
     vi.useRealTimers();
     pending.length = 0;
     getUploadJobMock.mockReset();
+    getRunEventsMock.mockReset();
   }
 });
 
 
-test("a tab-switch drop re-attaches calmly, immediately, and spends no budget", async () => {
+test("a drop while the run continues catches up from the journal and finishes silently", async () => {
   vi.useFakeTimers();
-  const setVisibility = (value: "visible" | "hidden") => {
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => value,
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
   try {
-    getUploadJobMock
-      .mockResolvedValueOnce({ generation_running: true, status: "converted" })
-      .mockResolvedValueOnce({ generation_running: false, status: "converted" });
+    // First tail poll: the lines missed while away plus the terminal
+    // result — the run FINISHES through the journal, no re-POST, and
+    // not a single meta-message.
+    getRunEventsMock.mockResolvedValueOnce({
+      events: [
+        { type: "log", level: "info", message: "missed while away", seq: 3 },
+        { type: "progress", value: 0.9, label: "Polishing", seq: 4 },
+        { type: "result", data: { status: "generated" }, seq: 5 },
+      ],
+      next: 5,
+      running: false,
+    });
 
     function ReattachProbe() {
       const { run, state } = useRunConsole();
@@ -297,58 +296,38 @@ test("a tab-switch drop re-attaches calmly, immediately, and spends no budget", 
     const first = pending.length;
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
-    // The user switches tabs; the phone freezes the page and kills the
-    // stream. The error only surfaces once they come back.
-    setVisibility("hidden");
-    setVisibility("visible");
+    // Two live events arrive (seq 1-2), then the tab freeze kills the
+    // stream.
+    act(() => {
+      pending[first].onEvent({
+        type: "log", level: "info", message: "seen live", seq: 1,
+      });
+      pending[first].onEvent({ type: "progress", value: 0.5, seq: 2 });
+    });
     await act(async () => {
-      pending[first].reject(transportError("network connection lost"));
+      pending[first].reject(transportError("connection dropped"));
       await Promise.resolve();
     });
 
-    // Attributed to the tab switch: calm wording, no network warning.
-    expect(screen.getByTestId("status").textContent).toBe("running");
-    expect(screen.getByTestId("lines").textContent).toContain(
-      "Screen was away",
-    );
-    expect(screen.getByTestId("lines").textContent).not.toContain(
-      "Network connection lost",
-    );
-
-    // The first poll is immediate (250ms), not a 3s backoff, and the
-    // reader is told the run is still active on that FIRST poll.
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300);
     });
-    expect(getUploadJobMock).toHaveBeenCalledTimes(1);
-    expect(screen.getByTestId("lines").textContent).toContain(
-      "the run is still active",
-    );
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    expect(getUploadJobMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByTestId("lines").textContent).toContain(
-      "Resuming the run from its saved checkpoint",
-    );
-
-    expect(pending).toHaveLength(first + 2);
-    await act(async () => {
-      pending[first + 1].onEvent(
-        { type: "result", data: { status: "generated" } },
-      );
-      pending[first + 1].resolve({ status: "generated" });
-      await Promise.resolve();
-    });
+    // The cursor asked only for what was missed…
+    expect(getRunEventsMock).toHaveBeenCalledWith("concepts", 7, 2);
+    // …the missed line is painted, the run is done, and the log carries
+    // ZERO reconnect chatter.
+    const lines = screen.getByTestId("lines").textContent ?? "";
+    expect(lines).toContain("seen live");
+    expect(lines).toContain("missed while away");
+    expect(lines).not.toContain("Network connection lost");
+    expect(lines).not.toContain("Re-attach");
+    expect(lines).not.toContain("Resuming");
     expect(screen.getByTestId("status").textContent).toBe("done");
+    expect(getUploadJobMock).not.toHaveBeenCalled();
   } finally {
     vi.useRealTimers();
     pending.length = 0;
     getUploadJobMock.mockReset();
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => "visible",
-    });
+    getRunEventsMock.mockReset();
   }
 });

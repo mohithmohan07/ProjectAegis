@@ -73,29 +73,12 @@ const SMALL_SCREEN =
   && window.matchMedia("(max-width: 960px)").matches;
 
 /* Phone browsers freeze background tabs and kill their open streams: a
-   tab switch or screen lock is the COMMON reason the run stream drops,
-   and it is not a network problem. Track visibility transitions so a
-   drop that happens while hidden — or surfaces in the first seconds
-   after returning, which is when a frozen page's dead socket is finally
-   noticed — is attributed to backgrounding: reattached immediately,
-   reported calmly, and never charged against the bounded reattach
-   budget that exists to surface genuinely dying runs. */
-let lastVisibleReturnAt = 0;
-if (typeof document !== "undefined") {
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      lastVisibleReturnAt = Date.now();
-    }
-  });
-}
-
-function droppedByBackgrounding(): boolean {
-  if (typeof document === "undefined") return false;
-  return (
-    document.visibilityState === "hidden"
-    || Date.now() - lastVisibleReturnAt < 5000
-  );
-}
+   tab switch or screen lock is the COMMON way the run stream drops, and
+   it is not a network problem. The run keeps executing on the server
+   and journals every event, so a drop of ANY kind is handled by tailing
+   the journal silently (see withReattach) — the console holds its last
+   state while away and repaints to exactly-current the moment the tab
+   is visible again. */
 
 const INITIAL: RunState = {
   active: false, open: !SMALL_SCREEN, title: "", lines: [], progress: 0,
@@ -169,9 +152,22 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
     });
     openRef.current = true;
 
+    // The durable journal's cursor: events carry a monotonic `seq` on
+    // both the live stream and the catch-up reads, so an event is
+    // applied exactly once however it arrives.
+    let lastSeq = 0;
+    const applyOnce = (event: StreamEvent) => {
+      const seq = (event as { seq?: number }).seq;
+      if (typeof seq === "number") {
+        if (seq <= lastSeq) return;
+        lastSeq = seq;
+      }
+      apply(event);
+    };
+
     const attempt = () =>
       streamNdjson<T>(path, { method: "POST", ...init }, (event) => {
-        if (runIdRef.current === runId) apply(event);
+        if (runIdRef.current === runId) applyOnce(event);
       });
 
     const note = (message: string, level = "warning") => {
@@ -214,51 +210,63 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
           if (!reattach || !isTransport || runIdRef.current !== runId) {
             throw err;
           }
-          const backgrounded = droppedByBackgrounding();
-          if (backgrounded) {
-            // A tab switch / screen lock killed the stream, not the
-            // network. Any number of these must survive — the budget is
-            // for runs that keep dying on their own.
-            note(
-              "Screen was away — the run kept going on the server. "
-              + "Re-attaching…",
-              "info",
-            );
-          } else {
-            if (reattachesLeft <= 0) throw err;
-            reattachesLeft -= 1;
-            note(
-              "Network connection lost — the run continues on the server. "
-              + "Waiting for the network and re-attaching…",
-            );
-          }
-          // Wait out the outage, then watch the job until the worker is
-          // done. Every successful poll is also traffic that keeps (or
-          // wakes) the server machine. After a tab switch the first poll
-          // fires immediately; sleep() also returns early the moment the
-          // tab becomes visible again.
-          let delay = backgrounded ? 250 : 3000;
-          // After a tab switch, confirm on the FIRST successful poll —
-          // not after the 30s heartbeat interval.
-          let lastHeartbeat = backgrounded ? 0 : Date.now();
+          // The stream dropped — a tab switch, a screen lock, a flaky
+          // radio. The run keeps executing on the server and every event
+          // it emits lands in the durable journal, so this client tails
+          // that journal SILENTLY: the console keeps its last state
+          // while away, repaints to exactly-current on return (sleep()
+          // resolves the moment the tab is visible again), and even
+          // finishes the run from the journal's terminal event. Nothing
+          // is said unless the network is genuinely gone for a while, or
+          // the worker itself died and a checkpoint resume is needed —
+          // only the latter consumes the bounded budget.
+          let delay = 250;
+          let outageNoted = false;
+          let lastPollOk = Date.now();
           for (;;) {
             if (runIdRef.current !== runId) throw err;
             await sleep(delay);
+            let tail;
+            try {
+              tail = await httpApi.getRunEvents(
+                reattach.module, reattach.jobId, lastSeq,
+              );
+            } catch {
+              delay = Math.min(Math.max(delay * 2, 1000), 15000);
+              if (
+                !outageNoted
+                && document.visibilityState === "visible"
+                && Date.now() - lastPollOk > 10000
+              ) {
+                outageNoted = true;
+                note(
+                  "Network connection lost — the run continues on the "
+                  + "server. Waiting for the network…",
+                );
+              }
+              continue;
+            }
+            lastPollOk = Date.now();
+            outageNoted = false;
+            delay = 2000;
+            for (const event of tail.events) {
+              if (runIdRef.current !== runId) throw err;
+              applyOnce(event);
+              if (event.type === "result") return event.data as T;
+              if (event.type === "error") throw new Error(event.message);
+            }
+            if (tail.running) continue;
+            // Journal exhausted, worker not running, no terminal event:
+            // the server process itself stopped mid-run (a machine
+            // restart). Older runs without a journal land here too —
+            // fall back to job status before resuming from checkpoint.
             let job;
             try {
               job = await httpApi.getUploadJob(reattach.module, reattach.jobId);
             } catch {
-              delay = Math.min(delay * 2, 15000);
               continue;
             }
-            delay = 5000;
-            if (job.generation_running) {
-              if (Date.now() - lastHeartbeat > 30000) {
-                lastHeartbeat = Date.now();
-                note("Re-attached to the server: the run is still active.", "info");
-              }
-              continue;
-            }
+            if (job.generation_running) continue;
             if (job.status === "generated") {
               note("The run finished while the connection was down.", "info");
               if (reattach.recoverResult) return await reattach.recoverResult();
@@ -267,9 +275,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
                 + "reload the page to see the result.",
               );
             }
-            // The worker stopped mid-run with a durable checkpoint. Re-POST
-            // the same request: the server resumes from that checkpoint and
-            // replays finished work from cache, then streams the real result.
+            if (reattachesLeft <= 0) throw err;
+            reattachesLeft -= 1;
+            // Re-POST the same request: the server resumes from the
+            // durable checkpoint and replays finished work from cache.
             note("Resuming the run from its saved checkpoint…", "info");
             break;
           }

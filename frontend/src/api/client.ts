@@ -72,14 +72,17 @@ export type ModelProviderInfo = {
   note: string;
 };
 
+/* `seq` is the durable run journal's monotonic cursor: it rides both the
+   live stream and the run-events catch-up reads, so a client that saw an
+   event once can recognise (and skip) it arriving again. */
 export type StreamEvent =
-  | { type: "log"; level?: string; message: string; ts?: number }
-  | { type: "step"; label: string; ts?: number }
-  | { type: "progress"; value: number; label?: string; ts?: number }
-  | { type: "usage"; data: OpenAIUsage; ts?: number }
-  | { type: "result"; data: unknown; ts?: number }
-  | { type: "error"; message: string; trace?: string; openai_usage?: OpenAIUsage; ts?: number }
-  | { type: "heartbeat"; ts?: number };
+  | { type: "log"; level?: string; message: string; ts?: number; seq?: number }
+  | { type: "step"; label: string; ts?: number; seq?: number }
+  | { type: "progress"; value: number; label?: string; ts?: number; seq?: number }
+  | { type: "usage"; data: OpenAIUsage; ts?: number; seq?: number }
+  | { type: "result"; data: unknown; ts?: number; seq?: number }
+  | { type: "error"; message: string; trace?: string; openai_usage?: OpenAIUsage; ts?: number; seq?: number }
+  | { type: "heartbeat"; ts?: number; seq?: number };
 
 /**
  * The connection died mid-stream — the network dropped, the tab lost
@@ -258,6 +261,15 @@ export const api = {
   getUploadJob: (module: "assessments" | "concepts", jobId: number) =>
     http<UploadJob>(
       `/build-${module === "assessments" ? "assessments" : "concepts"}/uploads/${jobId}`),
+  /** The run's journaled events after a cursor: lossless catch-up for a
+   * client that was away (frozen tab, dropped connection). Includes the
+   * terminal result/error event, so a run can FINISH through this. */
+  getRunEvents: (
+    module: "assessments" | "concepts", jobId: number, after: number,
+  ) =>
+    http<{ events: StreamEvent[]; next: number; running: boolean }>(
+      `/build-${module === "assessments" ? "assessments" : "concepts"}`
+      + `/uploads/${jobId}/run-events?after=${after}`),
   replaceAssessmentFile: (jobId: number, file: File) => {
     const fd = new FormData();
     fd.append("file", file);

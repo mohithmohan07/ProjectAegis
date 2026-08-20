@@ -124,6 +124,7 @@ def _post_generate_endpoint(
     return progress.stream(
         work,
         title="Build Concepts — post-learning generation",
+        journal_job_id=job_id,
     )
 
 

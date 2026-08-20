@@ -69,6 +69,15 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
 | Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
 
+## Cohesive background runs (2026-08-20 night, round 2)
+
+| Item | Disposition |
+|---|---|
+| Runs now genuinely background | Three layers. (1) `fly.toml` keeps `min_machines_running = 1`: with 0, Fly stopped the machine the moment no HTTP connection was open — a frozen phone tab mid-run killed the worker (the owner's "resumed from saved checkpoint" case). (2) The run was already connection-independent in-process (daemon worker thread, unbounded queue); now every streamed event — terminal result/error included — is teed into a durable per-job journal (`run_journal.py`, `run-events.ndjson` beside the job's artifacts) stamped with a monotonic `seq`, via one publish seam inside `progress.stream` covering all job endpoints (incl. the monkey-patched live generate route). (3) `GET /uploads/{id}/run-events?after=N` (concepts + assessments) serves lossless catch-up with the cursor |
+| Silent catch-up client | On any stream drop the console says NOTHING and holds its last state; it tails the journal (first poll 250ms, visibility-aware sleeps), repaints exactly-current the moment the tab returns, dedupes the live/journal overlap by `seq`, and FINISHES the run from the journal's terminal event — no re-POST, no reconnect chatter. Spoken lines remain only for: a genuinely dead network >10s while visible, and a worker that actually died (checkpoint resume — the only consumer of the bounded budget). The prior round's "Screen was away" note is gone (owner: no messages at all) |
+| Verified | 5 backend pins (threaded seq/file/sink order, cursor + torn-tail reads, heartbeat exclusion, END-TO-END: a real convert run journaled and served with matching seqs, journal truncation on a fresh run, owner-scoped 404) + reworked RunConsole pins (silent tail finishing from the journal with zero meta-messages; checkpoint resume only when the worker died). Full suites green |
+| Residue | The journal caps nothing (a run's events are bounded by the run); `data_reset` wipes it with the job dir as intended. Assessment SESSION streams (no job id) are unjournaled |
+
 ## Tab-switch stream drops (2026-08-20 night)
 
 | Item | Disposition |

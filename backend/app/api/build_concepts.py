@@ -156,6 +156,33 @@ def get_upload(
         raise HTTPException(404, str(e))
 
 
+@router.get("/uploads/{job_id}/run-events")
+def get_run_events(
+    job_id: int,
+    after: int = 0,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """The run's journaled events after a cursor — lossless catch-up.
+
+    A phone that was away reads everything it missed here and rejoins the
+    live tail exactly current; the run itself never depended on the
+    client being attached. ``next`` is the cursor to poll with; the
+    terminal ``result``/``error`` event is in the journal too, so a
+    reader can finish a run without re-POSTing it.
+    """
+    from ..services import run_journal
+
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts")
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    payload = run_journal.read_after(job_id, after)
+    payload["running"] = bool(job.generation_running)
+    return payload
+
+
 @router.post(
     "/uploads/{job_id}/decisions/{decision_id}",
     response_model=schemas.HumanSemanticDecisionResponse,
@@ -769,7 +796,11 @@ def convert_upload(
             )
         finally:
             worker_db.close()
-    return progress.stream(work, title="Preparing the document source")
+    return progress.stream(
+        work,
+        title="Preparing the document source",
+        journal_job_id=job_id,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -843,4 +874,8 @@ def post_learning_generate(
             # Queue the post-accounting state as well as each stage checkpoint.
             drive_checkpoints.schedule_checkpoint_backup(job_id)
             worker_db.close()
-    return progress.stream(work, title="Build Concepts — post-learning generation")
+    return progress.stream(
+        work,
+        title="Build Concepts — post-learning generation",
+        journal_job_id=job_id,
+    )
