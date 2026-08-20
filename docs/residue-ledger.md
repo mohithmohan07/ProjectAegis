@@ -69,6 +69,12 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
 | Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
 
+## Console flexibility on phones (2026-08-20 night, round 3)
+
+| Item | Disposition |
+|---|---|
+| "Restricted to the logs" (owner screen recording) | The open sheet was mostly chrome — the 7-tile usage block + filters left a sliver for log lines — and scrolling the sheet took the header (with Hide) off-screen, trapping the reader. FIXED: the header is sticky (Copy/Clear/Expand/Hide always reachable); the usage block folds behind a one-line summary ("Model usage · N tokens · $cost"), folded by default on phones, open on desktop; an Expand/Shrink toggle grows the sheet to the full screen (100dvh) for serious log reading. Verified with Playwright at 390×844 |
+
 ## Cohesive background runs (2026-08-20 night, round 2)
 
 | Item | Disposition |

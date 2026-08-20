@@ -991,6 +991,20 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   white-space: nowrap;
 }
 
+/* The usage block folds behind a one-line summary; on phones it starts
+   folded so the log keeps the room (RunConsolePanel). */
+.console-usage-fold > summary {
+  padding: 8px 14px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  color: var(--console-muted);
+  border-bottom: 1px solid var(--console-border);
+  cursor: pointer;
+  user-select: none;
+}
+.console-usage-fold > summary:hover { color: var(--console-text); }
+.console-expand-btn { display: none; }
+
 /* Compact usage block inside the console keeps the terminal palette. */
 .console .api-usage-compact {
   flex-shrink: 0;
@@ -1251,6 +1265,19 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   }
   body.console-open .main {
     padding-bottom: calc(min(62vh, 560px) + 24px);
+  }
+  /* The head must never scroll away with the sheet's chrome — Hide and
+     Expand stay reachable however far the reader is into the log. */
+  .console-head {
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    background: var(--console-bg);
+  }
+  .console-expand-btn { display: inline-flex; }
+  .console.console-expanded {
+    height: 100vh;
+    height: 100dvh;
   }
   .console-tab {
     top: auto;
