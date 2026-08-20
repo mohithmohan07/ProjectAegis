@@ -52,10 +52,11 @@ step-level narration is the product's voice; keep emitting it.
 
 - Real KaTeX typesetting on the review page is still a follow-up (chip shows
   raw LaTeX).
-- The final logo mark awaits the owner's pick from the concept gallery; the
-  shield-check placeholder in `Logo.tsx` and the `index.html` favicon are the
-  swap points.
+- The mark is the owner's pick: the Constellation Shield (five graph nodes
+  tracing a shield, amber hub — "the concept map is the armor"), with the
+  Clarius Blue accent direction. `Logo.tsx` and the `index.html` favicon
+  remain the two swap points.
 - UpSchool's exact brand palette could not be fetched from this environment
-  (network egress blocked for up.school / examin8.com); the accent tokens are
-  an indigo chosen to sit well next to typical edtech blues and are built to
-  be swapped.
+  (network egress blocked for up.school / examin8.com); the owner chose the
+  Clarius Blue direction from the gallery — exact parent-brand matching
+  stays a five-line token swap when the real values arrive.

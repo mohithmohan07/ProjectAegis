@@ -8,12 +8,13 @@
    ========================================================================== */
 
 :root {
-  /* Brand accent — swap these five to re-skin the whole app. */
-  --accent: #4c55e0;            /* interactive fills (buttons, chips, links on hover) */
-  --accent-deep: #3b43c8;       /* pressed / gradient end */
-  --accent-fg: #4650d8;         /* accent as TEXT/BORDER on the page background */
-  --accent-tint: rgba(76, 85, 224, 0.09);
-  --accent-ring: rgba(76, 85, 224, 0.38);
+  /* Brand accent — swap these five to re-skin the whole app.
+     Current palette: "Clarius Blue" (owner's pick, brand gallery accent B). */
+  --accent: #0a6cdf;            /* interactive fills (buttons, chips, links on hover) */
+  --accent-deep: #0857b4;       /* pressed / gradient end */
+  --accent-fg: #0861c9;         /* accent as TEXT/BORDER on the page background */
+  --accent-tint: rgba(10, 108, 223, 0.09);
+  --accent-ring: rgba(10, 108, 223, 0.38);
 
   /* Neutrals (light) */
   --bg: #f5f6fa;
@@ -61,11 +62,11 @@
 }
 
 [data-theme="dark"] {
-  --accent: #5560ee;
-  --accent-deep: #444ee0;
-  --accent-fg: #97a0ff;
-  --accent-tint: rgba(115, 125, 255, 0.13);
-  --accent-ring: rgba(130, 140, 255, 0.45);
+  --accent: #1f7ae8;
+  --accent-deep: #0f68d4;
+  --accent-fg: #6fb1ff;
+  --accent-tint: rgba(95, 165, 255, 0.13);
+  --accent-ring: rgba(110, 175, 255, 0.45);
 
   --bg: #0b0d13;
   --panel: #14161e;
@@ -909,7 +910,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   border-width: 0 0 1px;
   border-color: var(--console-border);
   border-radius: 0;
-  background: rgba(85, 96, 238, 0.07);
+  background: rgba(31, 122, 232, 0.08);
 }
 .console .api-usage-metric { background: var(--console-panel); border-color: var(--console-border); }
 .console .api-usage-metric dt { color: var(--console-muted); }
@@ -966,7 +967,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .console-time { color: var(--console-muted); flex-shrink: 0; }
 .console-msg { flex: 1; }
 .log-info .console-msg { color: var(--console-text); }
-.log-step .console-msg { color: #9aa3ff; font-weight: 600; }
+.log-step .console-msg { color: #7db4ff; font-weight: 600; }
 .log-success .console-msg { color: #4ed07a; }
 .log-warn .console-msg { color: #e2a93b; }
 .log-error .console-msg { color: #f4695f; }
@@ -990,7 +991,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 
 .status-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .dot-idle { background: var(--console-muted); }
-.dot-running { background: #6a74ff; animation: pulse 1.2s infinite; }
+.dot-running { background: #4a95f5; animation: pulse 1.2s infinite; }
 .dot-paused { background: #e2a93b; }
 .dot-done { background: #4ed07a; }
 .dot-error { background: #f4695f; }

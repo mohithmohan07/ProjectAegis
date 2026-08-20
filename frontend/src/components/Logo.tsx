@@ -1,9 +1,12 @@
-/* The Aegis mark. Decorative (aria-hidden) — the brand NAME stays a real
-   text node next to it, which both accessibility and the App test contract
-   ("Aegis" must render as its own text) depend on.
+/* The Aegis mark: the Constellation Shield (owner's pick, gallery #3).
+   Five nodes trace a heater-shield silhouette and an amber hub links the
+   corners and the apex — the concept map itself is the armor. Decorative
+   (aria-hidden): the brand NAME stays a real text node next to it, which
+   both accessibility and the App test contract ("Aegis" must render as its
+   own text) depend on.
 
-   The artwork lives in one <path> pair so the mark can be swapped for the
-   owner's chosen concept without touching any call site. */
+   The graph inherits currentColor (the brand accent in both themes); the
+   hub keeps its amber literal, which reads on light and dark grounds. */
 
 export default function Logo({ className = "brand-mark" }: { className?: string }) {
   return (
@@ -13,26 +16,30 @@ export default function Logo({ className = "brand-mark" }: { className?: string 
       aria-hidden="true"
       focusable="false"
     >
-      <path
-        d="M32 6 L54 14 V32 C54 45 45 54 32 58 C19 54 10 45 10 32 V14 Z"
-        fill="currentColor"
-        opacity="0.14"
-      />
-      <path
-        d="M32 6 L54 14 V32 C54 45 45 54 32 58 C19 54 10 45 10 32 V14 Z"
+      <g
         fill="none"
         stroke="currentColor"
-        strokeWidth="4"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M22 32 L29 39 L43 25"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="4.5"
+        strokeWidth="3"
         strokeLinecap="round"
         strokeLinejoin="round"
-      />
+      >
+        <line x1="13" y1="12" x2="51" y2="12" />
+        <line x1="13" y1="12" x2="16" y2="31.5" />
+        <line x1="51" y1="12" x2="48" y2="31.5" />
+        <line x1="16" y1="31.5" x2="32" y2="53" />
+        <line x1="48" y1="31.5" x2="32" y2="53" />
+        <line x1="32" y1="27" x2="13" y2="12" />
+        <line x1="32" y1="27" x2="51" y2="12" />
+        <line x1="32" y1="27" x2="32" y2="53" />
+      </g>
+      <g fill="currentColor">
+        <circle cx="13" cy="12" r="4.75" />
+        <circle cx="51" cy="12" r="4.75" />
+        <circle cx="16" cy="31.5" r="4.75" />
+        <circle cx="48" cy="31.5" r="4.75" />
+        <circle cx="32" cy="53" r="4.75" />
+      </g>
+      <circle cx="32" cy="27" r="6" fill="#F59E0B" />
     </svg>
   );
 }

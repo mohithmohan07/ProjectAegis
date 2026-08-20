@@ -8,7 +8,7 @@ export default function Home() {
 
   return (
     <>
-      <h1>Aegis — Integrated Content Management Tool</h1>
+      <h1>Aegis — Content Intelligence Engine</h1>
       <div className="subtitle">
         One tool over the Bulk Import workbook database. Build Assessments and
         Build Concepts; everything is written back in the canonical Bulk Import

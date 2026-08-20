@@ -62,8 +62,8 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 
 | # | Residue | Location | Consequence | Downstream safe? | Owner / fix point |
 |---|---|---|---|---|---|
-| R-UI1 | Final logo mark awaits the owner's pick from the concept gallery; a shield-check placeholder ships | `frontend/src/components/Logo.tsx`, favicon in `index.html` | Brand ships with the placeholder until chosen | Yes | Owner picks from the gallery artifact; swap is two files |
-| R-UI2 | UpSchool's exact brand palette unfetchable (up.school and examin8.com egress-blocked); accent is a chosen indigo | `styles.css` `--accent*` token block | Palette may not match the parent brand until provided | Yes (5-line swap by design) | Owner shares brand colors or a screenshot |
+| R-UI1 | RESOLVED: owner picked the Constellation Shield (gallery #3) with the Clarius Blue accent (B); wired through Logo.tsx, the favicon, and the accent tokens | `frontend/src/components/Logo.tsx`, `index.html`, `styles.css` | — | Yes | Done |
+| R-UI2 | UpSchool's exact brand palette unfetchable (up.school and examin8.com egress-blocked); owner chose the Clarius Blue direction, exact parent-brand match still unverified | `styles.css` `--accent*` token block | Hue may sit near but not exactly on the parent brand until provided | Yes (5-line swap by design) | Owner shares brand colors or a screenshot |
 | R-UI3 | Untested pages (Home, Database, Tagging, Workbooks, Admin, BuildAssessments) were restructured with no behavioral test net; tsc + App smoke only | `frontend/src/pages/*` | A missed regression on those pages would not be caught by CI | Yes (presentation-only changes; API calls untouched) | Follow-up: page-level tests |
 | R-UI4 | `vite preview`/production serving assumed SPA-fallback for deep links; dev proxy now bypasses page URLs explicitly | `frontend/vite.config.ts` | A production server without HTML fallback would 404 deep links (pre-existing) | Yes | Deploy-time check |
 
