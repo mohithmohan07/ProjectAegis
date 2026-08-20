@@ -99,7 +99,7 @@ function ConceptEditForm({
     <div className="concept-edit-form">
       {EDITABLE_FIELDS.map(({ field, label, multiline }) => (
         <label key={field} className="concept-edit-field">
-          <span className="muted">{label}</span>
+          <span>{label}</span>
           {multiline ? (
             <textarea
               data-testid={`edit-field-${field}`}
@@ -129,14 +129,20 @@ function ConceptEditForm({
           onClick={save}
           disabled={busy}
         >
-          {busy ? "Saving…" : "Save"}
+          {busy ? (
+            <>
+              <span className="spinner" aria-hidden="true" /> Saving…
+            </>
+          ) : (
+            "Save"
+          )}
         </button>
         <button className="ghost" onClick={onCancel} disabled={busy}>
           Cancel
         </button>
       </div>
       {error && (
-        <div className="error-box" role="alert" style={{ marginTop: 8 }}>
+        <div className="error-box mt-8" role="alert">
           {error}
         </div>
       )}
@@ -240,14 +246,19 @@ export default function ReleaseReview() {
       </div>
 
       {loadError && (
-        <div className="error-box" role="alert" style={{ marginBottom: 16 }}>
+        <div className="error-box mb-16" role="alert">
           {loadError}{" "}
           <button className="ghost" onClick={() => void load()}>
             Reload
           </button>
         </div>
       )}
-      {!view && !loadError && <div className="muted">Loading…</div>}
+      {!view && !loadError && (
+        <div className="row muted">
+          <span className="spinner" aria-hidden="true" />
+          <span>Loading…</span>
+        </div>
+      )}
 
       {view && (
         <>
@@ -273,15 +284,14 @@ export default function ReleaseReview() {
             </div>
           </div>
 
-          <div className="card" style={{ marginTop: 16 }}>
-            <div className="section-title" style={{ marginTop: 0 }}>
-              Describe a change
-            </div>
+          <div className="section-title">Describe a change</div>
+          <div className="card">
             <p className="muted">
               Aegis applies your instruction to this staged release and shows
               the result here as a new version. Nothing is published by this.
             </p>
             <textarea
+              className="textarea-block"
               data-testid="instruction-box"
               aria-label="What needs changing?"
               rows={4}
@@ -293,127 +303,143 @@ export default function ReleaseReview() {
               }
               onChange={(event) => setInstruction(event.target.value)}
             />
-            <p>
+            <div className="row mt-12">
               <button
                 className="primary"
                 data-testid="apply-instruction"
                 onClick={() => void applyInstruction()}
                 disabled={applying || !instruction.trim()}
               >
-                {applying ? "Applying…" : "Apply changes"}
+                {applying ? (
+                  <>
+                    <span className="spinner" aria-hidden="true" /> Applying…
+                  </>
+                ) : (
+                  "Apply changes"
+                )}
               </button>
-            </p>
+            </div>
             {instructionError && (
-              <div className="error-box" role="alert">
+              <div className="error-box mt-12" role="alert">
                 {instructionError}
               </div>
             )}
           </div>
 
           {view.issues.length > 0 && (
-            <div className="card" style={{ marginTop: 16 }}>
-              <div className="section-title" style={{ marginTop: 0 }}>
-                Issues
+            <>
+              <div className="section-title">Issues</div>
+              <div className="card">
+                <ul className="stack" data-testid="issues-list">
+                  {view.issues.map((issue, index) => (
+                    <li key={`${issue.code}-${index}`}>
+                      <span
+                        className={`badge ${
+                          issue.severity === "error" ? "red" : "yellow"
+                        }`}
+                      >
+                        {issue.severity}
+                      </span>{" "}
+                      <span className="mono">{issue.code}</span> —{" "}
+                      {issue.message}
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <ul data-testid="issues-list">
-                {view.issues.map((issue, index) => (
-                  <li key={`${issue.code}-${index}`}>
-                    <span
-                      className={`badge ${
-                        issue.severity === "error" ? "red" : "yellow"
-                      }`}
-                    >
-                      {issue.severity}
-                    </span>{" "}
-                    <span className="mono">{issue.code}</span> — {issue.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
+            </>
           )}
 
           {view.topics.map((topicGroup) => (
             <section key={topicGroup.topic} data-testid="review-topic">
               <div className="section-title">{topicGroup.topic}</div>
-              {topicGroup.concepts.map((concept: ReleaseReviewConcept) => (
-                <div
-                  className="card"
-                  data-testid="review-concept"
-                  key={concept.record_index}
-                  style={{ marginBottom: 10 }}
-                >
-                  {editingIndex === concept.record_index ? (
-                    <ConceptEditForm
-                      recordIndex={concept.record_index}
-                      original={{
-                        topic: topicGroup.topic,
-                        parent_concept: concept.parent_concept,
-                        concept_title: concept.concept_title,
-                        concept_details: concept.concept_details,
-                        keywords: concept.keywords,
-                      }}
-                      busy={editBusy}
-                      error={editError}
-                      onSave={(edits) => void saveEdits(edits)}
-                      onCancel={() => {
-                        setEditingIndex(null);
-                        setEditError("");
-                      }}
-                    />
-                  ) : (
-                    <>
-                      <div className="row">
-                        <strong>{concept.concept_title}</strong>
-                        {concept.review_flags.map((flag) => (
-                          <span key={flag} className="badge yellow">
-                            {flag}
-                          </span>
-                        ))}
-                        {concept.release_status && (
-                          <span className="badge">
-                            {concept.release_status}
-                          </span>
-                        )}
-                        <div className="spacer" />
-                        <button
-                          className="ghost"
-                          data-testid="edit-concept"
-                          onClick={() => {
-                            setEditingIndex(concept.record_index);
-                            setEditError("");
-                          }}
-                        >
-                          Edit
-                        </button>
-                      </div>
-                      <div className="muted">
-                        Parent concept: {concept.parent_concept}
-                      </div>
-                      <RichDetails details={concept.concept_details} />
-                      <div className="muted">
-                        Keywords: {concept.keywords}
-                      </div>
-                      {concept.release_errors.length > 0 && (
-                        <div className="error-box" style={{ marginTop: 8 }}>
-                          {concept.release_errors.join("\n")}
+              <div className="stack">
+                {topicGroup.concepts.map((concept: ReleaseReviewConcept) => (
+                  <div
+                    className="card"
+                    data-testid="review-concept"
+                    key={concept.record_index}
+                  >
+                    {editingIndex === concept.record_index ? (
+                      <ConceptEditForm
+                        recordIndex={concept.record_index}
+                        original={{
+                          topic: topicGroup.topic,
+                          parent_concept: concept.parent_concept,
+                          concept_title: concept.concept_title,
+                          concept_details: concept.concept_details,
+                          keywords: concept.keywords,
+                        }}
+                        busy={editBusy}
+                        error={editError}
+                        onSave={(edits) => void saveEdits(edits)}
+                        onCancel={() => {
+                          setEditingIndex(null);
+                          setEditError("");
+                        }}
+                      />
+                    ) : (
+                      <>
+                        <div className="row">
+                          <strong>{concept.concept_title}</strong>
+                          {concept.release_status && (
+                            <span className="badge">
+                              {concept.release_status}
+                            </span>
+                          )}
+                          <div className="spacer" />
+                          <button
+                            className="ghost"
+                            data-testid="edit-concept"
+                            onClick={() => {
+                              setEditingIndex(concept.record_index);
+                              setEditError("");
+                            }}
+                          >
+                            Edit
+                          </button>
                         </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              ))}
+                        {concept.review_flags.length > 0 && (
+                          <div className="row mt-8">
+                            {concept.review_flags.map((flag) => (
+                              <span key={flag} className="badge yellow">
+                                {flag}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        <div className="muted mt-8">
+                          Parent concept: {concept.parent_concept}
+                        </div>
+                        <RichDetails details={concept.concept_details} />
+                        <div className="muted">
+                          Keywords: {concept.keywords}
+                        </div>
+                        {concept.release_errors.length > 0 && (
+                          <div className="error-box mt-8">
+                            {concept.release_errors.join("\n")}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
             </section>
           ))}
 
-          <div className="card" style={{ marginTop: 16 }}>
-            <div className="section-title" style={{ marginTop: 0 }}>
-              Version history
-            </div>
-            <ol data-testid="version-history">
+          <div className="section-title">Version history</div>
+          <div className="card">
+            {view.versions.length === 0 && (
+              <p className="empty">
+                No review rounds yet — the history starts with your first
+                edit or instruction.
+              </p>
+            )}
+            <ol className="stack" data-testid="version-history">
               {view.versions.map((version) => (
                 <li key={version.version}>
-                  <span className="mono">v{version.version}</span> —{" "}
-                  {version.origin}
+                  <span className="mono">v{version.version}</span>{" "}
+                  <span className="badge">{version.origin}</span>
                   {version.change_count > 0 &&
                     ` (${version.change_count} change${
                       version.change_count === 1 ? "" : "s"

@@ -58,6 +58,15 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Step-12 interrupted-path injections (spec residue) | RESOLVED: `test_fault_injection_interrupted.py` pins both contracts — staging is atomic-at-the-end (a crash in the last assembly helper leaves the slot byte-untouched; retry re-mints cleanly), publication is one transaction with full rollback (zero partial rows, latch not set; retry publishes idempotently, no duplicate rows). No real defect found |
 | Step 9 — review/edit surface | BUILT: `release_review.py` (view projection, verbatim manual edits, one bounded instruction pass), `models.ConceptReleaseVersion` (append-only §7 version rows incl. recorded failed rounds), three routes under `/build-concepts/uploads/{id}/release-review`, frontend page at `/build-concepts/review/:jobId` with house rich-text rendering. Recorded step-9 residues: R-S9a/b/c below |
 
+## UI-makeover residues (2026-08-20)
+
+| # | Residue | Location | Consequence | Downstream safe? | Owner / fix point |
+|---|---|---|---|---|---|
+| R-UI1 | Final logo mark awaits the owner's pick from the concept gallery; a shield-check placeholder ships | `frontend/src/components/Logo.tsx`, favicon in `index.html` | Brand ships with the placeholder until chosen | Yes | Owner picks from the gallery artifact; swap is two files |
+| R-UI2 | UpSchool's exact brand palette unfetchable (up.school and examin8.com egress-blocked); accent is a chosen indigo | `styles.css` `--accent*` token block | Palette may not match the parent brand until provided | Yes (5-line swap by design) | Owner shares brand colors or a screenshot |
+| R-UI3 | Untested pages (Home, Database, Tagging, Workbooks, Admin, BuildAssessments) were restructured with no behavioral test net; tsc + App smoke only | `frontend/src/pages/*` | A missed regression on those pages would not be caught by CI | Yes (presentation-only changes; API calls untouched) | Follow-up: page-level tests |
+| R-UI4 | `vite preview`/production serving assumed SPA-fallback for deep links; dev proxy now bypasses page URLs explicitly | `frontend/vite.config.ts` | A production server without HTML fallback would 404 deep links (pre-existing) | Yes | Deploy-time check |
+
 ## Step-9 residues
 
 | # | Residue | Location | Consequence | Downstream safe? | Owner / fix point |

@@ -1,3 +1,5 @@
+import { useId } from "react";
+
 /**
  * Book-source picker: free text with suggestions (NCERT, RD Sharma, …).
  * Concepts/questions arriving from a second book merge into existing entries
@@ -14,16 +16,20 @@ export default function SourceBookInput({
   options: string[];
   disabled?: boolean;
 }) {
+  const inputId = useId();
+
   return (
     <div className="field">
-      <div className="field-label">Source book (for multi-source tagging)</div>
+      <label className="field-label" htmlFor={inputId}>
+        Source book (for multi-source tagging)
+      </label>
       <input
+        id={inputId}
         list="book-sources-list"
         value={value}
         disabled={disabled}
         placeholder="e.g. NCERT, RD Sharma…"
         onChange={(e) => onChange(e.target.value)}
-        style={{ maxWidth: 320 }}
       />
       <datalist id="book-sources-list">
         {options.map((o) => (

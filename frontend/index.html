@@ -3,7 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Aegis — the content intelligence engine behind Clarius. Textbook-grounded concept maps and assessments, verified against the source." />
+    <meta name="theme-color" content="#f5f6fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0b0d13" media="(prefers-color-scheme: dark)" />
     <title>Aegis — Content Intelligence Engine</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cpath d='M32 6 L54 14 V32 C54 45 45 54 32 58 C19 54 10 45 10 32 V14 Z' fill='%234c55e0'/%3E%3Cpath d='M22 32 L29 39 L43 25' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+    <script>
+      // Apply a saved theme before first paint so there is no flash.
+      (function () {
+        try {
+          var t = localStorage.getItem("aegis-theme");
+          if (t === "light" || t === "dark") {
+            document.documentElement.setAttribute("data-theme", t);
+          }
+        } catch (e) { /* storage unavailable: follow the system */ }
+      })();
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

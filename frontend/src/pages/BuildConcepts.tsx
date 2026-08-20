@@ -155,7 +155,8 @@ export default function BuildConcepts() {
         workbook.
       </div>
       {resumeDiscoveryLoading && (
-        <div className="muted" role="status" style={{ marginBottom: 12 }}>
+        <div className="row muted mb-12" role="status">
+          <span className="spinner" aria-hidden="true" />
           Checking your saved concept runs…
         </div>
       )}
@@ -180,12 +181,11 @@ export default function BuildConcepts() {
 
       {path && (
         <button
-          className="ghost"
+          className="ghost mb-16"
           onClick={() => {
             setPath(null);
             setResumeJob(null);
           }}
-          style={{ marginBottom: 16 }}
         >
           ← Back to options
         </button>
@@ -199,7 +199,7 @@ export default function BuildConcepts() {
         />
       )}
       {resumeError && !pendingResume && (
-        <div className="error-box" style={{ marginTop: 16 }}>
+        <div className="error-box mt-16">
           {resumeError}
         </div>
       )}
@@ -380,45 +380,45 @@ function PostLearningFlow({
             />
             <SyllabusUploader disabled={busy} onLoaded={() => setTreeReload((n) => n + 1)} />
             {modelProvider && (
-              <div className="row" style={{ marginTop: 12 }}>
-                <label className="muted" htmlFor="model-provider-select">
+              <div className="field mt-16">
+                <label className="field-label" htmlFor="model-provider-select">
                   Model provider
                 </label>
-                <select
-                  id="model-provider-select"
-                  value={modelProvider.provider}
-                  disabled={busy}
-                  onChange={(event) =>
-                    void chooseModelProvider(event.target.value)}
-                >
-                  <option value="openai" disabled={!modelProvider.openai_available}>
-                    OpenAI ({modelProvider.openai_model})
-                  </option>
-                  <option value="gemini" disabled={!modelProvider.gemini_available}>
-                    Gemini ({modelProvider.gemini_model})
-                  </option>
-                </select>
-                <span className="muted">
-                  {modelProvider.note
-                    || `Next run uses ${modelProvider.model}.`}
-                </span>
+                <div className="row">
+                  <select
+                    id="model-provider-select"
+                    value={modelProvider.provider}
+                    disabled={busy}
+                    onChange={(event) =>
+                      void chooseModelProvider(event.target.value)}
+                  >
+                    <option value="openai" disabled={!modelProvider.openai_available}>
+                      OpenAI ({modelProvider.openai_model})
+                    </option>
+                    <option value="gemini" disabled={!modelProvider.gemini_available}>
+                      Gemini ({modelProvider.gemini_model})
+                    </option>
+                  </select>
+                  <span className="hint">
+                    {modelProvider.note
+                      || `Next run uses ${modelProvider.model}.`}
+                  </span>
+                </div>
               </div>
             )}
             {modelProviderError && (
-              <div className="error-box">{modelProviderError}</div>
+              <div className="error-box mb-12">{modelProviderError}</div>
             )}
-            <div className="row" style={{ marginTop: 12 }}>
+            <div className="row mt-16">
               <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
               <div className="spacer" />
-              {(
-                <button disabled={!scope || busy} onClick={generate}>
-                  {job.checkpoint_available
-                    ? `Resume from ${Math.round(
-                      (job.checkpoint_progress ?? 0) * 100,
-                    )}% checkpoint`
-                    : "Parse & generate concepts"}
-                </button>
-              )}
+              <button className="primary" disabled={!scope || busy} onClick={generate}>
+                {job.checkpoint_available
+                  ? `Resume from ${Math.round(
+                    (job.checkpoint_progress ?? 0) * 100,
+                  )}% checkpoint`
+                  : "Parse & generate concepts"}
+              </button>
             </div>
           </div>
         </>
@@ -429,7 +429,7 @@ function PostLearningFlow({
       )}
       {result && job && <ConceptReviewPanel jobId={job.id} />}
       {error && (
-        <div className="error-box" style={{ marginTop: 16 }}>{error}</div>
+        <div className="error-box mt-16">{error}</div>
       )}
       {result && (
         <ConceptResult
@@ -450,52 +450,41 @@ function CarriedSemanticIssue({ issue }: { issue: PendingSemanticDecision }) {
   const typeTitle = issue.item?.type_title ?? "";
   const qids = issue.item?.qids ?? [];
   return (
-    <div className="card" style={{ marginTop: 16 }}>
+    <div className="card mt-16">
       <div className="section-title">Semantic issue carried into the release</div>
       <p className="muted">
         Generation did not stop for this. The issue and its source evidence are
         included in the release workbook and the diagnostics export, where the
         affected rows are highlighted.
       </p>
-      <dl className="mono">
+      <dl className="kv">
         {topic && (
-          <>
+          <div>
             <dt>Topic</dt>
             <dd>{topic}</dd>
-          </>
+          </div>
         )}
         {typeTitle && (
-          <>
+          <div>
             <dt>Type</dt>
             <dd>{typeTitle}</dd>
-          </>
+          </div>
         )}
         {qids.length > 0 && (
-          <>
+          <div>
             <dt>QIDs</dt>
-            <dd>{qids.join(", ")}</dd>
-          </>
+            <dd className="mono">{qids.join(", ")}</dd>
+          </div>
         )}
-        <dt>Reference</dt>
-        <dd>{issue.decision_id}</dd>
+        <div>
+          <dt>Reference</dt>
+          <dd className="mono">{issue.decision_id}</dd>
+        </div>
       </dl>
-      {issue.conflict && <p className="mono">{issue.conflict}</p>}
+      {issue.conflict && <p className="muted mt-12">{issue.conflict}</p>}
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function pendingDecisionFrom(
   result: Record<string, unknown>,
@@ -508,28 +497,6 @@ function pendingDecisionFrom(
   if (typeof decisionId !== "string" || !decisionId.trim()) return null;
   return candidate as PendingSemanticDecision;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 function ResumeCheckpointPrompt({
   job,
@@ -602,7 +569,7 @@ function ResumeCheckpointPrompt({
         <div className="row resume-actions">
           {!running && (
             <>
-              <button type="button" disabled={busy} onClick={onResume}>
+              <button className="primary" type="button" disabled={busy} onClick={onResume}>
                 Resume
               </button>
               <button
@@ -611,6 +578,7 @@ function ResumeCheckpointPrompt({
                 disabled={busy}
                 onClick={onDiscard}
               >
+                {busy && <><span className="spinner" aria-hidden="true" />{" "}</>}
                 {busy ? "Discarding…" : "Discard"}
               </button>
             </>
@@ -759,9 +727,29 @@ function ConceptResult({
   const jobId = result.job_id as number | undefined;
   const inventoryItems = (result.inventory_items as number | undefined) ?? 0;
   const usage = result.openai_usage as OpenAIUsage | undefined;
+  const status = typeof result.status === "string" ? result.status : "";
+  const rowCount = typeof result.row_count === "number" ? result.row_count : null;
+  const issueCount = typeof result.issue_count === "number" ? result.issue_count : null;
   return (
-    <div className="card success-card" style={{ marginTop: 16 }}>
-      <strong>Concepts written to the Bulk Import workbook (append-only)</strong>
+    <div className="card success-card mt-16">
+      <div className="row">
+        <strong>Concepts written to the Bulk Import workbook (append-only)</strong>
+        {status && <span className="badge green">{status}</span>}
+      </div>
+      {(rowCount !== null || issueCount !== null) && (
+        <div className="row mt-8">
+          {rowCount !== null && (
+            <span className="muted">
+              rows released for review: <strong>{rowCount}</strong>
+            </span>
+          )}
+          {issueCount !== null && (
+            <span className="muted">
+              issues attached: <strong>{issueCount}</strong>
+            </span>
+          )}
+        </div>
+      )}
       <ApiUsageSummary
         usage={usage}
         filename={filename}
@@ -769,16 +757,15 @@ function ConceptResult({
         cumulative={jobId != null || Boolean(filename)}
         resumed={resumed}
       />
-      <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
-      <div className="row" style={{ marginTop: 12 }}>
+      <div className="row mt-12">
         {ids.length > 0 && (
-          <a href={api.exportConceptsUrl(ids)}>
-            <button>⬇ Download Excel (Bulk Import)</button>
+          <a className="button-link" href={api.exportConceptsUrl(ids)}>
+            ⬇ Download Excel (Bulk Import)
           </a>
         )}
         {jobId != null && inventoryItems > 0 && (
-          <a href={api.inventoryCsvUrl(jobId)}>
-            <button className="ghost">⬇ Question/Task Inventory (CSV)</button>
+          <a className="button-link ghost" href={api.inventoryCsvUrl(jobId)}>
+            ⬇ Question/Task Inventory (CSV)
           </a>
         )}
         <span className="muted">
@@ -790,6 +777,10 @@ function ConceptResult({
             : "Download the full output workbook from the Database tab."}
         </span>
       </div>
+      <details className="mt-12">
+        <summary>Raw result JSON</summary>
+        <pre className="mono mt-8">{JSON.stringify(result, null, 2)}</pre>
+      </details>
     </div>
   );
 }

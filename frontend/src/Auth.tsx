@@ -9,6 +9,7 @@ import {
 } from "react";
 import { api, SESSION_EXPIRED_EVENT } from "./api/client";
 import type { AuthConfig, AuthSession, AuthUser } from "./types";
+import Logo from "./components/Logo";
 
 type GoogleCredentialResponse = {
   credential?: string;
@@ -239,8 +240,9 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     <main className="auth-page">
       <section className="card auth-card" aria-labelledby="auth-title">
         <div className="brand">
+          <Logo />
           Aegis
-          <small>Integrated Content Tool</small>
+          <small>Content Intelligence Engine</small>
         </div>
         <h1 id="auth-title">Sign in to continue</h1>
         <p className="muted">

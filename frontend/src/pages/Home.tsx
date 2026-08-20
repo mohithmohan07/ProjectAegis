@@ -15,7 +15,7 @@ export default function Home() {
         format, append-only.
       </div>
 
-      <div className="grid cols-2" style={{ marginTop: 8 }}>
+      <div className="grid cols-2 mt-8">
         <button className="module-card" onClick={() => nav("/build-assessments")}>
           <div className="module-title">1 · Build Assessments</div>
           <div className="module-desc">
@@ -41,7 +41,7 @@ export default function Home() {
             <Stat label="Concepts" value={stats.data.concepts} />
             <Stat label="Questions" value={stats.data.questions} />
           </div>
-          <div className="row" style={{ marginTop: 12 }}>
+          <div className="row mt-12">
             <span className={`badge ${stats.data.openai_live ? "green" : "yellow"}`}>
               OpenAI {stats.data.openai_live ? "live" : "keys missing"}
             </span>
@@ -55,7 +55,7 @@ export default function Home() {
           </div>
         </>
       )}
-      {stats.error && <div className="error-box">{stats.error}</div>}
+      {stats.error && <div className="error-box mt-16">{stats.error}</div>}
     </>
   );
 }

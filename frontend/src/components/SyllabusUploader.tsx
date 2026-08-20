@@ -33,13 +33,14 @@ export default function SyllabusUploader({
   }
 
   return (
-    <div className="card" style={{ marginTop: 8 }}>
-      <div className="muted" style={{ marginBottom: 8 }}>
+    <div className="card mt-8">
+      <div className="muted mb-8">
         Upload your syllabus structure workbooks (CBSE, ICSE, Maharashtra, Karnataka,
         English Language). This fills the directory so you can <strong>manually pick</strong>{" "}
         where to deposit concepts — nothing is inferred from the PDF filename.
       </div>
       <label className="upload-label">
+        {busy && <span className="spinner" aria-hidden="true" />}
         Upload syllabus Excel files
         <input
           type="file"
@@ -50,8 +51,8 @@ export default function SyllabusUploader({
           onChange={(e) => upload(e.target.files)}
         />
       </label>
-      {msg && <div className="muted mono" style={{ marginTop: 8 }}>{msg}</div>}
-      {error && <div className="error-box" style={{ marginTop: 8 }}>{error}</div>}
+      {msg && <div className="muted mono mt-8">{msg}</div>}
+      {error && <div className="error-box mt-8">{error}</div>}
     </div>
   );
 }

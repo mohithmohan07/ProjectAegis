@@ -56,7 +56,7 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
   const openFlags = latest?.flagged_placements ?? [];
 
   return (
-    <div className="card" style={{ marginTop: 16 }}>
+    <div className="card mt-16">
       <div className="section-title">Review and correct the output</div>
       <p className="muted">
         Download the output, read it, then describe anything that needs
@@ -106,12 +106,12 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
           data-testid="open-review-page"
           to={`/build-concepts/review/${jobId}?lane=post`}
         >
-          Open review page
+          Open the review & edit page
         </Link>
       </p>
 
       {openFlags.length > 0 && (
-        <div className="mono" data-testid="flagged-placements">
+        <div className="mono mt-12" data-testid="flagged-placements">
           <strong>Aegis placed these by its own best reading:</strong>
           <ul>
             {openFlags.map((flag, index) => (
@@ -121,31 +121,35 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
         </div>
       )}
 
-      <label htmlFor="revision-instruction">
-        What needs changing?
-      </label>
-      <textarea
-        id="revision-instruction"
-        rows={5}
-        value={instruction}
-        placeholder={
-          "e.g. Move “How d governs Sn” under Sum of First n Terms — it needs " +
-          "the sum formula, so the earlier topic is only a prerequisite. And " +
-          "add a concept under §5.2 on recognising a real-world sequence as " +
-          "an AP; it is missing."
-        }
-        onChange={(event) => setInstruction(event.target.value)}
-        disabled={busy}
-      />
-      <p>
+      <div className="field mt-16">
+        <label className="field-label" htmlFor="revision-instruction">
+          What needs changing?
+        </label>
+        <textarea
+          className="textarea-block"
+          id="revision-instruction"
+          rows={5}
+          value={instruction}
+          placeholder={
+            "e.g. Move “How d governs Sn” under Sum of First n Terms — it needs " +
+            "the sum formula, so the earlier topic is only a prerequisite. And " +
+            "add a concept under §5.2 on recognising a real-world sequence as " +
+            "an AP; it is missing."
+          }
+          onChange={(event) => setInstruction(event.target.value)}
+          disabled={busy}
+        />
+      </div>
+      <div className="row">
         <button
           className="primary"
           onClick={() => void submit()}
           disabled={busy || !instruction.trim()}
         >
+          {busy && <><span className="spinner" aria-hidden="true" />{" "}</>}
           {busy ? "Applying…" : "Apply changes"}
         </button>
-      </p>
+      </div>
 
       {error && (
         <p className="error" role="alert">
@@ -158,8 +162,8 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
           <div className="section-title">Revision history</div>
           <ol>
             {revisions.map((revision) => (
-              <li key={revision.id}>
-                <div className="mono">
+              <li key={revision.id} className="mb-12">
+                <div className="mono muted">
                   Round {revision.round_number} — {revision.status}
                   {revision.status === "applied" &&
                     ` (${revision.change_count} change${

@@ -7,7 +7,7 @@ import type { Outcome, PreviewResult, Question, Scope, TagResult } from "../type
 const OUTCOME_CLASS: Record<Outcome, string> = {
   ADD: "green",
   TAG: "accent",
-  SKIP: "",
+  SKIP: "yellow",
 };
 
 export default function Tagging() {
@@ -65,8 +65,9 @@ function TagAssessment({ questions }: { questions: Question[] }) {
       <div className="section-title">Tag an assessment under another concept</div>
       <div className="card">
         <div className="field">
-          <div className="field-label">Assessment</div>
+          <label className="field-label" htmlFor="tag-assessment">Assessment</label>
           <select
+            id="tag-assessment"
             value={questionId ?? ""}
             onChange={(e) => setQuestionId(e.target.value ? Number(e.target.value) : null)}
             style={{ width: "100%" }}
@@ -79,9 +80,11 @@ function TagAssessment({ questions }: { questions: Question[] }) {
             ))}
           </select>
         </div>
-        <div className="field-label">Target concept (pick a single concept)</div>
-        <DirectoryPicker onScope={setScope} />
-        <div className="row" style={{ marginTop: 12 }}>
+        <div className="field">
+          <div className="field-label">Target concept (pick a single concept)</div>
+          <DirectoryPicker onScope={setScope} />
+        </div>
+        <div className="row">
           <span className="muted">
             {targetConcept
               ? `Target: ${scope?.label}`
@@ -92,12 +95,9 @@ function TagAssessment({ questions }: { questions: Question[] }) {
             Tag assessment here
           </button>
         </div>
-        {error && <div className="error-box" style={{ marginTop: 12 }}>{error}</div>}
+        {error && <div className="error-box mt-12">{error}</div>}
         {result && (
-          <div
-            className={`card ${result.status === "tagged" ? "success-card" : ""}`}
-            style={{ marginTop: 12 }}
-          >
+          <div className={`card mt-12 ${result.status === "tagged" ? "success-card" : ""}`}>
             {result.status === "tagged" ? (
               <span>
                 <span className="badge green">tagged</span>{" "}
@@ -145,14 +145,14 @@ function ImportPreview({ questions }: { questions: Question[] }) {
     <>
       <div className="section-title">Import preview — what the CMS will do per row</div>
       <div className="card">
-        <div className="muted" style={{ marginBottom: 8 }}>
+        <div className="muted mb-8">
           Select assessments and preview each row the export will emit against the
           current append-only output workbook:
           {" "}<span className="badge green">ADD</span> new ·{" "}
           <span className="badge accent">TAG</span> existing under a new placement ·{" "}
-          <span className="badge">SKIP</span> already present (CMS shows an error).
+          <span className="badge yellow">SKIP</span> already present (CMS shows an error).
         </div>
-        <div className="pick-list" style={{ maxHeight: 220 }}>
+        <div className="pick-list">
           {questions.slice(0, 60).map((q) => (
             <label key={q.id} className="pick-item">
               <input type="checkbox" checked={picked.includes(q.id)} onChange={() => toggle(q.id)} />
@@ -161,43 +161,53 @@ function ImportPreview({ questions }: { questions: Question[] }) {
             </label>
           ))}
         </div>
-        <div className="row" style={{ marginTop: 12 }}>
+        <div className="row mt-12">
           <span className="muted">{picked.length} selected</span>
           <div className="spacer" />
           <button disabled={busy || picked.length === 0} onClick={run}>
             Preview outcome
           </button>
         </div>
-        {error && <div className="error-box" style={{ marginTop: 12 }}>{error}</div>}
+        {error && <div className="error-box mt-12">{error}</div>}
       </div>
 
       {preview && (
-        <div className="card" style={{ marginTop: 12 }}>
+        <div className="card mt-12">
           <div className="row">
             <span className="badge green">ADD {preview.summary.ADD ?? 0}</span>
             <span className="badge accent">TAG {preview.summary.TAG ?? 0}</span>
-            <span className="badge">SKIP {preview.summary.SKIP ?? 0}</span>
+            <span className="badge yellow">SKIP {preview.summary.SKIP ?? 0}</span>
           </div>
-          <table style={{ marginTop: 10 }}>
-            <thead>
-              <tr>
-                <th>Outcome</th><th>Identity</th><th>Chapter</th>
-                <th>Topic</th><th>Concept</th><th>Group</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.rows.map((r, i) => (
-                <tr key={i}>
-                  <td><span className={`badge ${OUTCOME_CLASS[r.outcome]}`}>{r.outcome}</span></td>
-                  <td className="mono">{r.identity}</td>
-                  <td>{r.placement.chapter}</td>
-                  <td>{r.placement.topic}</td>
-                  <td>{r.placement.concept ?? "—"}</td>
-                  <td>{r.placement.group_type ?? "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {preview.rows.length === 0 ? (
+            <div className="empty">No rows to preview yet.</div>
+          ) : (
+            <div className="table-wrap mt-12">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Outcome</th>
+                    <th scope="col">Identity</th>
+                    <th scope="col">Chapter</th>
+                    <th scope="col">Topic</th>
+                    <th scope="col">Concept</th>
+                    <th scope="col">Group</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.rows.map((r, i) => (
+                    <tr key={i}>
+                      <td><span className={`badge ${OUTCOME_CLASS[r.outcome]}`}>{r.outcome}</span></td>
+                      <td className="mono">{r.identity}</td>
+                      <td>{r.placement.chapter}</td>
+                      <td>{r.placement.topic}</td>
+                      <td>{r.placement.concept ?? "—"}</td>
+                      <td>{r.placement.group_type ?? "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </>

@@ -75,24 +75,29 @@ export default function Database() {
 
       <div className="card">
         <div className="row">
-          <a href={api.exportUrl("all")}>
-            <button className="ghost">Export full database (.xlsx)</button>
+          <a className="button-link ghost" href={api.exportUrl("all")}>
+            Export full database (.xlsx)
           </a>
-          <a href={api.exportUrl("output")}>
-            <button className="ghost">Export append-only output (.xlsx)</button>
+          <a className="button-link ghost" href={api.exportUrl("output")}>
+            Export append-only output (.xlsx)
           </a>
           <div className="spacer" />
           <label className="upload-label">
             Import Bulk Import workbook
-            <input type="file" accept=".xlsx" disabled={busy} style={{ display: "none" }}
-              onChange={(e) => e.target.files?.[0] && importWorkbook(e.target.files[0])} />
+            <input
+              type="file"
+              accept=".xlsx"
+              disabled={busy}
+              style={{ display: "none" }}
+              onChange={(e) => e.target.files?.[0] && importWorkbook(e.target.files[0])}
+            />
           </label>
-          <button className="ghost" disabled={busy} onClick={clearAll}>
+          <button className="danger" disabled={busy} onClick={clearAll}>
             Clear all data
           </button>
         </div>
-        {importMsg && <div className="muted mono" style={{ marginTop: 8 }}>{importMsg}</div>}
-        {resetMsg && <div className="muted mono" style={{ marginTop: 8 }}>{resetMsg}</div>}
+        {importMsg && <div className="muted mono mt-8">{importMsg}</div>}
+        {resetMsg && <div className="muted mono mt-8">{resetMsg}</div>}
       </div>
 
       <div className="section-title">Syllabus structure (units & chapters)</div>
@@ -103,10 +108,10 @@ export default function Database() {
           setSyllabusMsg("Syllabus loaded — use Build Concepts to deposit into a chapter.");
         }}
       />
-      {syllabusMsg && <div className="muted mono" style={{ marginTop: 8 }}>{syllabusMsg}</div>}
+      {syllabusMsg && <div className="muted mono mt-8">{syllabusMsg}</div>}
 
       {stats.data && (
-        <div className="grid cols-4" style={{ marginTop: 16 }}>
+        <div className="grid cols-4 mt-16">
           <Stat label="Chapters" value={stats.data.chapters} />
           <Stat label="Topics" value={stats.data.topics} />
           <Stat label="Concepts" value={stats.data.concepts} />
@@ -117,7 +122,7 @@ export default function Database() {
       <CreateWorkbook />
 
       <div className="section-title">Questions ({sheet})</div>
-      <div className="card" style={{ marginBottom: 12 }}>
+      <div className="card mb-12">
         <div className="row">
           {SHEETS.map((s) => (
             <button key={s} className={sheet === s ? "" : "ghost"} onClick={() => setSheet(s)}>
@@ -127,34 +132,36 @@ export default function Database() {
         </div>
       </div>
 
-      {questions.error && <div className="error-box">{questions.error}</div>}
+      {questions.error && <div className="error-box mb-12">{questions.error}</div>}
       <div className="card">
-        <table>
-          <thead>
-            <tr>
-              <th>Label</th>
-              <th>Category</th>
-              <th>Cognitive</th>
-              <th>Difficulty</th>
-              <th>Marks</th>
-              <th>Question</th>
-              <th>Origin</th>
-            </tr>
-          </thead>
-          <tbody>
-            {questions.data?.map((q) => (
-              <tr key={q.id}>
-                <td className="mono">{q.question_label}</td>
-                <td>{q.question_category}</td>
-                <td><span className="badge">{q.cognitive_skills}</span></td>
-                <td>{q.level_of_difficulty}</td>
-                <td>{q.marks}</td>
-                <td>{q.question.slice(0, 140)}</td>
-                <td><span className="badge accent">{q.origin}</span></td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Label</th>
+                <th scope="col">Category</th>
+                <th scope="col">Cognitive</th>
+                <th scope="col">Difficulty</th>
+                <th scope="col">Marks</th>
+                <th scope="col">Question</th>
+                <th scope="col">Origin</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {questions.data?.map((q) => (
+                <tr key={q.id}>
+                  <td className="mono">{q.question_label}</td>
+                  <td>{q.question_category}</td>
+                  <td><span className="badge">{q.cognitive_skills}</span></td>
+                  <td>{q.level_of_difficulty}</td>
+                  <td>{q.marks}</td>
+                  <td>{q.question.slice(0, 140)}</td>
+                  <td><span className="badge accent">{q.origin}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         {questions.data?.length === 0 && <div className="empty">No questions in this sheet yet.</div>}
       </div>
     </>
@@ -189,25 +196,54 @@ function CreateWorkbook() {
     <>
       <div className="section-title">Create Bulk Import Workbook (subject-wise)</div>
       <div className="card">
-        <div className="muted" style={{ marginBottom: 8 }}>
+        <div className="muted mb-12">
           Generate a canonical 3-sheet <strong>Bulk Import Excel workbook</strong> for
           one subject — a blank authoring template, or pre-filled with the subject's
           existing content. Headers always match the canonical format exactly.
           (For student revision-workbook PDFs, use the Create Workbooks tab.)
         </div>
+        <div className="grid cols-3">
+          <div className="field">
+            <label className="field-label" htmlFor="cw-board">Board</label>
+            <div className="row">
+              <select
+                id="cw-board"
+                value={board}
+                onChange={(e) => { setBoard(e.target.value); setSubject(""); }}
+              >
+                <option value="">All boards</option>
+                {boards.map((b) => <option key={b}>{b}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="cw-grade">Grade</label>
+            <div className="row">
+              <select
+                id="cw-grade"
+                value={grade}
+                onChange={(e) => { setGrade(e.target.value); setSubject(""); }}
+              >
+                <option value="">All grades</option>
+                {grades.map((g) => <option key={g}>{g}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="field">
+            <label className="field-label" htmlFor="cw-subject">Subject</label>
+            <div className="row">
+              <select
+                id="cw-subject"
+                value={subject}
+                onChange={(e) => setSubject(e.target.value)}
+              >
+                <option value="">Subject…</option>
+                {subjects.map((s) => <option key={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
         <div className="row">
-          <select value={board} onChange={(e) => { setBoard(e.target.value); setSubject(""); }}>
-            <option value="">All boards</option>
-            {boards.map((b) => <option key={b}>{b}</option>)}
-          </select>
-          <select value={grade} onChange={(e) => { setGrade(e.target.value); setSubject(""); }}>
-            <option value="">All grades</option>
-            {grades.map((g) => <option key={g}>{g}</option>)}
-          </select>
-          <select value={subject} onChange={(e) => setSubject(e.target.value)}>
-            <option value="">Subject…</option>
-            {subjects.map((s) => <option key={s}>{s}</option>)}
-          </select>
           <label className="radio">
             <input type="radio" checked={mode === "content"} onChange={() => setMode("content")} />
             With existing content
@@ -217,9 +253,13 @@ function CreateWorkbook() {
             Blank template
           </label>
           <div className="spacer" />
-          <a href={subject ? api.createWorkbookUrl(subject, board, grade, mode) : undefined}>
-            <button disabled={!subject}>Create workbook (.xlsx)</button>
-          </a>
+          {subject ? (
+            <a className="button-link" href={api.createWorkbookUrl(subject, board, grade, mode)}>
+              Create workbook (.xlsx)
+            </a>
+          ) : (
+            <button disabled>Create workbook (.xlsx)</button>
+          )}
         </div>
       </div>
     </>

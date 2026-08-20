@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { BoardNode, ChapterDetail, ChapterRef, Scope } from "../types";
 
@@ -36,6 +36,7 @@ export default function DirectoryPicker({
   const [picked, setPicked] = useState<number[]>([]);
   const [initialSelectionMessage, setInitialSelectionMessage] = useState("");
   const appliedInitialIdentityRef = useRef("");
+  const idBase = useId();
 
   useEffect(() => {
     setLoading(true);
@@ -163,12 +164,17 @@ export default function DirectoryPicker({
 
   return (
     <div className="dir-picker">
-      {loading && <div className="muted">Loading directory…</div>}
+      {loading && (
+        <div className="row muted">
+          <span className="spinner" aria-hidden="true" />
+          <span>Loading directory…</span>
+        </div>
+      )}
       {!loading && loadError && (
-        <div className="error-box" style={{ marginBottom: 8 }}>{loadError}</div>
+        <div className="error-box mb-8">{loadError}</div>
       )}
       {!loading && !loadError && tree.length === 0 && (
-        <div className="error-box" style={{ marginBottom: 8 }}>
+        <div className="error-box mb-8">
           No units or chapters are loaded yet. Upload your syllabus structure
           Excel files below, then pick Board → Class → Subject → Unit → Chapter
           manually. The PDF is never auto-matched to a chapter.
@@ -178,54 +184,79 @@ export default function DirectoryPicker({
         <div
           className={
             initialSelectionMessage.startsWith("Saved checkpoint")
-              ? "resume-target-ok"
-              : "error-box"
+              ? "resume-target-ok mb-8"
+              : "error-box mb-8"
           }
           role="status"
-          style={{ marginBottom: 8 }}
         >
           {initialSelectionMessage}
         </div>
       )}
       <div className="row">
-        <select value={board} onChange={(e) => { setBoard(e.target.value); reset("board"); }}
-          disabled={loading || tree.length === 0}>
-          <option value="">Board…</option>
-          {tree.map((b) => <option key={b.board}>{b.board}</option>)}
-        </select>
-        <select value={grade} disabled={!boardNode}
-          onChange={(e) => { setGrade(e.target.value); reset("grade"); }}>
-          <option value="">Class…</option>
-          {boardNode?.grades.map((g) => <option key={g.grade}>{g.grade}</option>)}
-        </select>
-        <select value={subject} disabled={!gradeNode}
-          onChange={(e) => { setSubject(e.target.value); reset("subject"); }}>
-          <option value="">Subject…</option>
-          {gradeNode?.subjects.map((s) => <option key={s.subject}>{s.subject}</option>)}
-        </select>
-        <select value={unit} disabled={!subjectNode}
-          onChange={(e) => { setUnit(e.target.value); reset("unit"); }}>
-          <option value="">Unit…</option>
-          {subjectNode?.units.map((u) => <option key={u.unit}>{u.unit}</option>)}
-        </select>
-        <select value={chapter?.id ?? ""} disabled={!unitNode}
-          onChange={(e) => {
-            const id = Number(e.target.value);
-            setChapter(unitNode?.chapters.find((c) => c.id === id) ?? null);
-            setScopeType("chapter");
-            setPicked([]);
-            setInitialSelectionMessage("");
-          }}>
-          <option value="">Chapter…</option>
-          {unitNode?.chapters.map((c) => (
-            <option key={c.id} value={c.id}>{c.chapter_title} ({c.concept_count} concepts)</option>
-          ))}
-        </select>
+        <div className="field">
+          <label className="field-label" htmlFor={`${idBase}-board`}>
+            Board
+          </label>
+          <select id={`${idBase}-board`} value={board}
+            onChange={(e) => { setBoard(e.target.value); reset("board"); }}
+            disabled={loading || tree.length === 0}>
+            <option value="">Board…</option>
+            {tree.map((b) => <option key={b.board}>{b.board}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor={`${idBase}-grade`}>
+            Class
+          </label>
+          <select id={`${idBase}-grade`} value={grade} disabled={!boardNode}
+            onChange={(e) => { setGrade(e.target.value); reset("grade"); }}>
+            <option value="">Class…</option>
+            {boardNode?.grades.map((g) => <option key={g.grade}>{g.grade}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor={`${idBase}-subject`}>
+            Subject
+          </label>
+          <select id={`${idBase}-subject`} value={subject} disabled={!gradeNode}
+            onChange={(e) => { setSubject(e.target.value); reset("subject"); }}>
+            <option value="">Subject…</option>
+            {gradeNode?.subjects.map((s) => <option key={s.subject}>{s.subject}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor={`${idBase}-unit`}>
+            Unit
+          </label>
+          <select id={`${idBase}-unit`} value={unit} disabled={!subjectNode}
+            onChange={(e) => { setUnit(e.target.value); reset("unit"); }}>
+            <option value="">Unit…</option>
+            {subjectNode?.units.map((u) => <option key={u.unit}>{u.unit}</option>)}
+          </select>
+        </div>
+        <div className="field">
+          <label className="field-label" htmlFor={`${idBase}-chapter`}>
+            Chapter
+          </label>
+          <select id={`${idBase}-chapter`} value={chapter?.id ?? ""} disabled={!unitNode}
+            onChange={(e) => {
+              const id = Number(e.target.value);
+              setChapter(unitNode?.chapters.find((c) => c.id === id) ?? null);
+              setScopeType("chapter");
+              setPicked([]);
+              setInitialSelectionMessage("");
+            }}>
+            <option value="">Chapter…</option>
+            {unitNode?.chapters.map((c) => (
+              <option key={c.id} value={c.id}>{c.chapter_title} ({c.concept_count} concepts)</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {chapter && !chapterOnly && (
-        <div className="card" style={{ marginTop: 12 }}>
-          <div className="row" style={{ marginBottom: 8 }}>
+        <div className="card mt-12">
+          <div className="row mb-8">
             <strong>Scope:</strong>
             {(["chapter", "topic", ...(allowConceptScope ? ["concept" as const] : [])] as const).map((t) => (
               <label key={t} className="radio">

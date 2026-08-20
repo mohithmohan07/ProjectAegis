@@ -10,6 +10,8 @@ import Admin from "./pages/Admin";
 import { RunConsoleProvider } from "./RunConsole";
 import RunConsolePanel from "./components/RunConsolePanel";
 import { AuthAccount, AuthGate, AuthProvider } from "./Auth";
+import Logo from "./components/Logo";
+import { THEME_LABEL, useTheme } from "./theme";
 
 const NAV = [
   { to: "/home", label: "Home" },
@@ -21,6 +23,22 @@ const NAV = [
   { to: "/admin", label: "Admin" },
 ];
 
+function ThemeToggle() {
+  const { choice, cycle } = useTheme();
+  return (
+    <button
+      type="button"
+      className="theme-toggle"
+      onClick={cycle}
+      aria-label="Switch theme"
+      title="Switch between auto, light and dark themes"
+    >
+      <span aria-hidden="true">◐</span>
+      {THEME_LABEL[choice]} theme
+    </button>
+  );
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -29,8 +47,9 @@ export default function App() {
           <div className="layout">
             <aside className="sidebar">
               <div className="brand">
+                <Logo />
                 Aegis
-                <small>Integrated Content Tool</small>
+                <small>Content Intelligence Engine</small>
               </div>
               <nav className="nav">
                 {NAV.map((n) => (
@@ -43,6 +62,8 @@ export default function App() {
                 The Bulk Import workbook is the single source of truth. Every
                 generation is written back to it — append-only.
               </div>
+              <div className="spacer" />
+              <ThemeToggle />
               <AuthAccount />
             </aside>
             <main className="main">

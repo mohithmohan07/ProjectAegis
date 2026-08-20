@@ -52,7 +52,7 @@ export default function BuildAssessments() {
       )}
 
       {path && (
-        <button className="ghost" onClick={() => setPath(null)} style={{ marginBottom: 16 }}>
+        <button className="ghost mb-16" onClick={() => setPath(null)}>
           ← Back to options
         </button>
       )}
@@ -166,7 +166,7 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
       <div className="section-title">1 · Select scope from the directory</div>
       <div className="card">
         <DirectoryPicker onScope={setScope} />
-        <div className="row" style={{ marginTop: 12 }}>
+        <div className="row mt-12">
           <span className="muted">{scope ? `Scope: ${scope.type} — ${scope.label}` : "No scope selected"}</span>
           <div className="spacer" />
           <button disabled={!scope || busy || !!session} onClick={startSession}>
@@ -198,45 +198,57 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
               value={categories} onChange={setCategories} />
             <MultiSelect label="Appears In (assessment purpose)" options={vocab.appears_in}
               value={appearsIn} onChange={setAppearsIn} />
-            <div className="row" style={{ marginTop: 8 }}>
-              <div className="field-label" style={{ margin: 0 }}>No. of questions per sub-category</div>
-              <input type="number" min={1} max={20} value={count}
-                onChange={(e) => setCount(Math.max(1, Number(e.target.value)))} style={{ width: 80 }} />
+            <div className="field">
+              <label className="field-label" htmlFor="cm-question-count">
+                No. of questions per sub-category
+              </label>
+              <input id="cm-question-count" type="number" min={1} max={20} value={count}
+                onChange={(e) => setCount(Math.max(1, Number(e.target.value)))} className="input-sm" />
+            </div>
+            <div className="row">
               <div className="spacer" />
               <button className="ghost" disabled={busy} onClick={saveSettings}>Save settings</button>
             </div>
           </div>
 
-          {session.batches.length > 0 && (
-            <div className="card" style={{ marginTop: 12 }}>
-              <strong>Saved blueprint batches</strong>
-              <table style={{ marginTop: 8 }}>
-                <thead>
-                  <tr><th>#</th><th>Type</th><th>Skills</th><th>Difficulty</th><th>Categories</th><th>Qs each</th></tr>
-                </thead>
-                <tbody>
-                  {session.batches.map((b, i) => (
-                    <tr key={b.id}>
-                      <td>{i + 1}</td>
-                      <td><span className="badge accent">{b.question_type}</span></td>
-                      <td>{b.cognitive_skills.join(", ")}</td>
-                      <td>{b.difficulty_levels.join(", ")}</td>
-                      <td>{b.categories.join(", ")}</td>
-                      <td>{b.num_questions}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div className="row" style={{ marginTop: 12 }}>
-                <div className="spacer" />
-                <button disabled={busy} onClick={generate}>Generate questions</button>
+          <div className="section-title">3 · Saved blueprint batches</div>
+          <div className="card">
+            {session.batches.length === 0 ? (
+              <div className="empty">
+                No blueprint batches saved yet. Save settings above to stack the first batch.
               </div>
-            </div>
-          )}
+            ) : (
+              <>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>#</th><th>Type</th><th>Skills</th><th>Difficulty</th><th>Categories</th><th>Qs each</th></tr>
+                    </thead>
+                    <tbody>
+                      {session.batches.map((b, i) => (
+                        <tr key={b.id}>
+                          <td>{i + 1}</td>
+                          <td><span className="badge accent">{b.question_type}</span></td>
+                          <td>{b.cognitive_skills.join(", ")}</td>
+                          <td>{b.difficulty_levels.join(", ")}</td>
+                          <td>{b.categories.join(", ")}</td>
+                          <td>{b.num_questions}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="row mt-12">
+                  <div className="spacer" />
+                  <button className="primary" disabled={busy} onClick={generate}>Generate questions</button>
+                </div>
+              </>
+            )}
+          </div>
         </>
       )}
 
-      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {error && <div className="error-box mt-16">{error}</div>}
       {result && <ResultCard result={result} />}
     </>
   );
@@ -320,7 +332,7 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
   return (
     <>
       <div className="section-title">1 · Upload type & file</div>
-      <div className="field">
+      <div className="card mb-12">
         <div className="field-label">Type of upload</div>
         <div className="chips">
           {vocab.upload_types.map((t) => (
@@ -361,7 +373,7 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
           <div className="section-title">{job!.upload_type === "textbook" ? "3" : "2"} · Where to deposit</div>
           <div className="card">
             <DirectoryPicker onScope={setScope} />
-            <div className="row" style={{ marginTop: 12 }}>
+            <div className="row mt-12">
               <span className="muted">{scope ? `${scope.type} — ${scope.label}` : "Select board → subject → chapter (mandatory)"}</span>
               <div className="spacer" />
               <button disabled={!scope || busy || job!.status === "deposited" || job!.status === "generated"}
@@ -377,26 +389,28 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
         <>
           <div className="section-title">Generate</div>
           <div className="card">
-            <div className="muted" style={{ marginBottom: 8 }}>
+            <div className="muted mb-8">
               Aegis absorbs whatever the document contains. Leave this on{" "}
               <strong>Auto</strong> to detect and extract a mix of objective,
               subjective and descriptive questions (sub-questions included), or
               force a single type.
             </div>
-            <div className="row">
-              <div className="field-label" style={{ margin: 0 }}>Question type</div>
-              <select value={qType} onChange={(e) => setQType(e.target.value)}>
+            <div className="field">
+              <label className="field-label" htmlFor="upload-question-type">Question type</label>
+              <select id="upload-question-type" value={qType} onChange={(e) => setQType(e.target.value)}>
                 <option value="auto">Auto — detect all types</option>
                 {vocab.question_types.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
+            </div>
+            <div className="row">
               <div className="spacer" />
-              <button disabled={busy} onClick={generate}>Identify & generate questions</button>
+              <button className="primary" disabled={busy} onClick={generate}>Identify & generate questions</button>
             </div>
           </div>
         </>
       )}
 
-      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {error && <div className="error-box mt-16">{error}</div>}
       {result && <ResultCard result={result} filename={job?.filename} />}
     </>
   );
@@ -413,20 +427,43 @@ function ResultCard({
 }) {
   const ids = (result.question_ids as number[] | undefined) ?? [];
   const usage = result.openai_usage as OpenAIUsage | undefined;
+  const status = typeof result.status === "string" ? result.status : "complete";
+  // Mechanical display of whatever counts the result reports: numbers as-is,
+  // arrays by length. No interpretation — the raw JSON stays available below.
+  const counts = Object.entries(result).flatMap(([key, value]): Array<[string, number]> => {
+    if (typeof value === "number") return [[key, value]];
+    if (Array.isArray(value)) return [[key, value.length]];
+    return [];
+  });
   return (
-    <div className="card success-card" style={{ marginTop: 16 }}>
-      <strong>Generated · post-generation pipeline complete</strong>
+    <div className="card success-card mt-16">
+      <div className="row">
+        <strong>Generated · post-generation pipeline complete</strong>
+        <span className={`badge ${/error|fail/i.test(status) ? "red" : "green"}`}>{status}</span>
+      </div>
+      {counts.length > 0 && (
+        <div className="row mt-8">
+          {counts.map(([key, n]) => (
+            <span key={key} className="muted">
+              {key.replace(/_/g, " ")}: <strong>{n}</strong>
+            </span>
+          ))}
+        </div>
+      )}
       <ApiUsageSummary
         usage={usage}
         filename={filename}
         fileLabel="Source file"
         cumulative={Boolean(filename)}
       />
-      <pre className="mono" style={{ marginTop: 8 }}>{JSON.stringify(result, null, 2)}</pre>
-      <div className="row" style={{ marginTop: 12 }}>
+      <details className="mt-12">
+        <summary>Raw result JSON</summary>
+        <pre className="mono mt-8">{JSON.stringify(result, null, 2)}</pre>
+      </details>
+      <div className="row mt-12">
         {ids.length > 0 && (
-          <a href={api.exportQuestionsUrl(ids)}>
-            <button>⬇ Download Excel (Bulk Import)</button>
+          <a className="button-link" href={api.exportQuestionsUrl(ids)}>
+            ⬇ Download Excel (Bulk Import)
           </a>
         )}
         <span className="muted">
@@ -480,77 +517,82 @@ function ReleaseReviewFlow() {
   const unplaced = issues?.issues?.unplaced ?? [];
 
   return (
-    <div className="card">
-      <h2>Assessment Release</h2>
-      <div className="row" style={{ gap: 8 }}>
-        <input
-          placeholder="Release id"
-          value={releaseId}
-          onChange={(e) => setReleaseId(e.target.value)}
-          style={{ width: 120 }}
-        />
-        <button onClick={load}>Load</button>
-      </div>
-      {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
-      {release && (
-        <div style={{ marginTop: 12 }}>
-          <div>
-            <strong>{release.release_uid}</strong> v{release.version} — state{" "}
-            <code>{release.state}</code>, readiness{" "}
-            <code>{release.readiness || "unpublished"}</code>
-          </div>
-          {release.published ? (
-            <div className="row" style={{ gap: 12, marginTop: 8 }}>
-              <a href={api.releaseConceptsUrl(release.id)}>
-                Download Concept File
-              </a>
-              <a href={api.releaseMasterUrl(release.id)}>
-                Download Master File
-              </a>
-            </div>
-          ) : (
-            <div style={{ marginTop: 8 }}>
-              This release has no published artifacts yet.
-            </div>
-          )}
-          {(issues?.payload_errors?.length ?? 0) > 0 && (
-            <div className="error" style={{ marginTop: 8 }}>
-              {issues!.payload_errors.map((e, i) => <div key={i}>{e}</div>)}
-            </div>
-          )}
-          {unplaced.length > 0 && (
-            <div className="error" style={{ marginTop: 8 }}>
-              {unplaced.map((u, i) => (
-                <div key={i}>
-                  Unplaced: {u.question_label || u.candidate_id} — {u.reason}
-                </div>
-              ))}
-            </div>
-          )}
-          <div style={{ marginTop: 12 }}>
-            <button
-              disabled={busy || blocked || !release.published || release.uploaded}
-              onClick={upload}
-              title={blocked
-                ? "Blocked for database upload — resolve the named issues and publish a new version"
-                : undefined}
-            >
-              {release.uploaded
-                ? "Already uploaded"
-                : blocked
-                  ? "Blocked for database upload"
-                  : "Upload Master to Database"}
-            </button>
-          </div>
-          {uploadResult && (
-            <div style={{ marginTop: 8 }}>
-              Uploaded {uploadResult.release_uid} v{uploadResult.version}:{" "}
-              {uploadResult.questions_created} question(s),{" "}
-              {uploadResult.groups_created} group(s) created.
-            </div>
-          )}
+    <>
+      <div className="section-title">Assessment Release</div>
+      <div className="card">
+        <div className="row">
+          <input
+            aria-label="Release id"
+            placeholder="Release id"
+            value={releaseId}
+            onChange={(e) => setReleaseId(e.target.value)}
+            className="input-sm"
+          />
+          <button onClick={load}>Load</button>
         </div>
-      )}
-    </div>
+        {error && <div className="error mt-8">{error}</div>}
+        {release && (
+          <div className="mt-12">
+            <div>
+              <strong>{release.release_uid}</strong> v{release.version} — state{" "}
+              <code>{release.state}</code>, readiness{" "}
+              <code>{release.readiness || "unpublished"}</code>
+            </div>
+            {release.published ? (
+              <div className="row mt-12">
+                <a className="button-link ghost" href={api.releaseConceptsUrl(release.id)}>
+                  Download Concept File
+                </a>
+                <a className="button-link ghost" href={api.releaseMasterUrl(release.id)}>
+                  Download Master File
+                </a>
+              </div>
+            ) : (
+              <div className="muted mt-8">
+                This release has no published artifacts yet.
+              </div>
+            )}
+            {(issues?.payload_errors?.length ?? 0) > 0 && (
+              <div className="error mt-8">
+                {issues!.payload_errors.map((e, i) => <div key={i}>{e}</div>)}
+              </div>
+            )}
+            {unplaced.length > 0 && (
+              <div className="error mt-8">
+                {unplaced.map((u, i) => (
+                  <div key={i}>
+                    Unplaced: {u.question_label || u.candidate_id} — {u.reason}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-12">
+              <button
+                className="primary"
+                disabled={busy || blocked || !release.published || release.uploaded}
+                onClick={upload}
+                title={blocked
+                  ? "Blocked for database upload — resolve the named issues and publish a new version"
+                  : undefined}
+              >
+                {busy && <><span className="spinner" aria-hidden="true" />{" "}</>}
+                {release.uploaded
+                  ? "Already uploaded"
+                  : blocked
+                    ? "Blocked for database upload"
+                    : "Upload Master to Database"}
+              </button>
+            </div>
+            {uploadResult && (
+              <div className="mt-8">
+                Uploaded {uploadResult.release_uid} v{uploadResult.version}:{" "}
+                {uploadResult.questions_created} question(s),{" "}
+                {uploadResult.groups_created} group(s) created.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
   );
 }

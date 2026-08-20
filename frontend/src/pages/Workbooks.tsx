@@ -48,7 +48,7 @@ export default function Workbooks() {
         {meta.data && (
           <>
             {" "}
-            <span className={`badge ${meta.data.live ? "green" : ""}`}>
+            <span className={`badge ${meta.data.live ? "green" : "yellow"}`}>
               {meta.data.live ? "live mode" : "keys missing — live required"}
             </span>
           </>
@@ -72,20 +72,22 @@ export default function Workbooks() {
           </select>
           <div className="spacer" />
           <button disabled={!file || !subject || busy} onClick={generate}>
-            {busy ? "Generating…" : "Generate workbook"}
+            {busy
+              ? <><span className="spinner" aria-hidden="true" /> Generating…</>
+              : "Generate workbook"}
           </button>
         </div>
-        <div className="muted" style={{ marginTop: 8 }}>
+        <div className="muted mt-8">
           Filename must follow the NCERT convention, e.g.{" "}
           <span className="mono">CBSE_NCERT_G08_CH04_QUADRILATERALS.pdf</span> —
           grade, chapter number and title are read from it.
         </div>
       </div>
 
-      {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+      {error && <div className="error-box mt-16">{error}</div>}
 
       {result && (
-        <div className="card success-card" style={{ marginTop: 16 }}>
+        <div className="card success-card mt-16">
           <div className="row">
             <strong>
               {result.meta.chapter_title} — {result.meta.subject} ·{" "}
@@ -94,13 +96,16 @@ export default function Workbooks() {
             <span className={`badge ${result.mode === "live" ? "green" : "accent"}`}>
               {result.mode}
             </span>
-            <span className={`badge ${result.valid ? "green" : ""}`}>
+            <span className={`badge ${result.valid ? "green" : "yellow"}`}>
               {result.valid ? "valid" : "issues"}
             </span>
             <div className="spacer" />
-            <a href={api.workbookFileUrl(
-              `${result.meta.grade_folder}/${result.meta.subject}/${result.meta.stem}.pdf`)}>
-              <button className="ghost">Download PDF</button>
+            <a
+              className="button-link ghost"
+              href={api.workbookFileUrl(
+                `${result.meta.grade_folder}/${result.meta.subject}/${result.meta.stem}.pdf`)}
+            >
+              Download PDF
             </a>
           </div>
           <ApiUsageSummary
@@ -117,42 +122,49 @@ export default function Workbooks() {
           <div className="empty">No workbooks generated yet.</div>
         )}
         {(library.data?.length ?? 0) > 0 && (
-          <table>
-            <thead>
-              <tr>
-                <th>Class</th><th>Subject</th><th>Workbook</th><th>Size</th>
-                <th>API tokens</th><th>Est. OpenAI cost</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {library.data!.map((e) => (
-                <tr key={e.rel}>
-                  <td>{e.class_folder}</td>
-                  <td>{e.subject}</td>
-                  <td className="mono">{e.name}</td>
-                  <td>{(e.size / 1024).toFixed(0)} KB</td>
-                  <td
-                    className="mono"
-                    title={e.openai_usage
-                      ? `${formatTokenCount(e.openai_usage.input_tokens)} input + ${formatTokenCount(e.openai_usage.output_tokens)} output`
-                      : undefined}
-                  >
-                    {e.openai_usage ? formatTokenCount(e.openai_usage.total_tokens) : "—"}
-                  </td>
-                  <td className="mono">
-                    {e.openai_usage
-                      ? formatEstimatedCost(e.openai_usage.estimated_cost_usd)
-                      : "—"}
-                  </td>
-                  <td>
-                    <a href={api.workbookFileUrl(e.rel)}>
-                      <button className="ghost">PDF</button>
-                    </a>
-                  </td>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th scope="col">Class</th>
+                  <th scope="col">Subject</th>
+                  <th scope="col">Workbook</th>
+                  <th scope="col">Size</th>
+                  <th scope="col">API tokens</th>
+                  <th scope="col">Est. OpenAI cost</th>
+                  <th scope="col"></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {library.data!.map((e) => (
+                  <tr key={e.rel}>
+                    <td>{e.class_folder}</td>
+                    <td>{e.subject}</td>
+                    <td className="mono">{e.name}</td>
+                    <td>{(e.size / 1024).toFixed(0)} KB</td>
+                    <td
+                      className="mono"
+                      title={e.openai_usage
+                        ? `${formatTokenCount(e.openai_usage.input_tokens)} input + ${formatTokenCount(e.openai_usage.output_tokens)} output`
+                        : undefined}
+                    >
+                      {e.openai_usage ? formatTokenCount(e.openai_usage.total_tokens) : "—"}
+                    </td>
+                    <td className="mono">
+                      {e.openai_usage
+                        ? formatEstimatedCost(e.openai_usage.estimated_cost_usd)
+                        : "—"}
+                    </td>
+                    <td>
+                      <a className="button-link ghost" href={api.workbookFileUrl(e.rel)}>
+                        PDF
+                      </a>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </>

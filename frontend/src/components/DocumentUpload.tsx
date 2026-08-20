@@ -337,24 +337,26 @@ export default function DocumentUpload({
           options={bookSources}
           disabled={controlsDisabled}
         />
-        <div className="row" style={{ marginTop: 8 }}>
+        <div className="row mt-8">
           <input ref={inputRef} type="file" disabled={controlsDisabled}
             onChange={(e) => {
               invalidateSavedJobRestore();
               setFile(e.target.files?.[0] ?? null);
             }} />
           <button disabled={!file || controlsDisabled} onClick={upload}>
-            {busy ? "Uploading…" : "Upload"}
+            {busy
+              ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
+              : "Upload"}
           </button>
           {file && <span className="muted mono">{file.name}</span>}
         </div>
-        <div className="muted" style={{ marginTop: 8 }}>
+        <div className="hint mt-8">
           Uploading only stores the file — it is <strong>not</strong> processed yet, so you
           can swap it if you picked the wrong one. Convert to MMD as a separate step.
         </div>
         {restoringSavedJob && (
-          <div className="muted" role="status" style={{ marginTop: 8 }}>
-            Checking for a saved run…
+          <div className="muted mt-8" role="status">
+            <span className="spinner" aria-hidden="true" /> Checking for a saved run…
           </div>
         )}
         {module === "concepts" && (
@@ -399,7 +401,7 @@ export default function DocumentUpload({
             )}
           </div>
         )}
-        {error && <div className="error-box" style={{ marginTop: 8 }}>{error}</div>}
+        {error && <div className="error-box mt-8">{error}</div>}
       </div>
     );
   }
@@ -458,11 +460,13 @@ export default function DocumentUpload({
       </div>
 
       {!converted && (
-        <div className="row" style={{ marginTop: 10 }}>
+        <div className="row mt-12">
           <button disabled={controlsDisabled} onClick={convert}>
             Convert to MMD
           </button>
-          <span className="muted">Runs conversion/normalization — watch the Console for progress.</span>
+          <span className="hint">
+            Runs conversion/normalization — watch the Console for progress.
+          </span>
         </div>
       )}
 
@@ -541,7 +545,7 @@ export default function DocumentUpload({
             )}
             {job.checkpoint_available && !released && !generated && (
               <button
-                className="ghost"
+                className="danger"
                 disabled={controlsDisabled}
                 onClick={clearSavedCheckpoint}
               >
@@ -552,7 +556,7 @@ export default function DocumentUpload({
           <PersistedDiagnostics job={job} />
         </div>
       )}
-      {error && <div className="error-box" style={{ marginTop: 8 }}>{error}</div>}
+      {error && <div className="error-box mt-8">{error}</div>}
     </div>
   );
 }
@@ -689,7 +693,7 @@ function SourceArtifactsCard({
   }
 
   return (
-    <div className="checkpoint-card" style={{ marginTop: 10 }}>
+    <div className="checkpoint-card">
       <div>
         <div className="row">
           <strong>{title}</strong>
@@ -710,16 +714,16 @@ function SourceArtifactsCard({
             </span>
           )}
         </div>
-        <div className="muted" style={{ marginTop: 6 }}>
+        <div className="muted mt-8">
           {description}
         </div>
-        {counts && <div className="muted mono" style={{ marginTop: 6 }}>{counts}</div>}
-        <div className="muted mono" style={{ marginTop: 4 }}>
+        {counts && <div className="muted mono mt-8">{counts}</div>}
+        <div className="muted mono mt-8">
           ACSD {manifest.schema_version} · compiler {manifest.compiler_version}
           {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}
         </div>
         {actionMessage && (
-          <div className="muted" role="status" style={{ marginTop: 6 }}>
+          <div className="muted mt-8" role="status">
             {actionMessage}
           </div>
         )}
@@ -735,7 +739,9 @@ function SourceArtifactsCard({
                 key={artifact.kind}
                 onClick={() => void publishRelease(artifact)}
               >
-                {actionBusy ? "Uploading…" : artifact.label}
+                {actionBusy
+                  ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
+                  : artifact.label}
               </button>
             );
           }

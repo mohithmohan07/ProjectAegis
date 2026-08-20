@@ -75,14 +75,7 @@ export type ModelProviderInfo = {
 export type StreamEvent =
   | { type: "log"; level?: string; message: string; ts?: number }
   | { type: "step"; label: string; ts?: number }
-  | {
-    type: "progress";
-    value: number;
-    label?: string;
-    eta_seconds?: number;
-    eta_label?: string;
-    ts?: number;
-  }
+  | { type: "progress"; value: number; label?: string; ts?: number }
   | { type: "usage"; data: OpenAIUsage; ts?: number }
   | { type: "result"; data: unknown; ts?: number }
   | { type: "error"; message: string; trace?: string; openai_usage?: OpenAIUsage; ts?: number }
