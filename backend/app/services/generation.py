@@ -809,13 +809,21 @@ def _live_identify_questions_from_mmd(
         f"{len(chunks)} chunk(s) (type: {question_type}, "
         f"{'extract' if extract else 'create'}).")
 
+    from .phase3 import kernel as _kernel
+
+    def _identify_chunk(numbered: tuple[int, str]) -> dict:
+        i, chunk = numbered
+        user = f"DOCUMENT (MMD) — section {i} of {len(chunks)}:\n{chunk}\n\n{tail}"
+        return _openai_json(system, user, purpose="source_extraction")
+
     records: list[dict] = []
     seen: set[str] = set()
-    for i, chunk in enumerate(chunks, start=1):
-        progress.step(f"Question identification — chunk {i}/{len(chunks)}",
-                      value=(i - 1) / max(len(chunks), 1))
-        user = f"DOCUMENT (MMD) — section {i} of {len(chunks)}:\n{chunk}\n\n{tail}"
-        data = _openai_json(system, user, purpose="source_extraction")
+
+    def _apply_chunk(index: int, _item, data) -> None:
+        # Applied in chunk order whatever order the parallel reads
+        # finished in, so cross-chunk dedup keeps the same survivor —
+        # the first occurrence by document order — as a sequential run.
+        i = index + 1
         added = 0
         for row in (data.get("questions") or []):
             rec = _identify_row_to_record(row, auto=auto, question_type=question_type)
@@ -834,7 +842,20 @@ def _live_identify_questions_from_mmd(
                     f"of {_IDENTIFY_SAFETY_CAP}; refusing a truncated success "
                     "because source-question coverage is not proven complete"
                 )
+        progress.step(
+            f"Question identification — chunk {i}/{len(chunks)} read",
+            value=i / max(len(chunks), 1))
         progress.log(f"  chunk {i}/{len(chunks)}: {added} new questions")
+
+    _kernel.parallel_map_in_order(
+        list(enumerate(chunks, start=1)),
+        _identify_chunk,
+        max_workers=config.source_chunk_workers(),
+        labels=[f"Identify · chunk {i}/{len(chunks)}"
+                for i in range(1, len(chunks) + 1)],
+        announce="Question identification",
+        on_result=_apply_chunk,
+    )
     if not records:
         raise RuntimeError("live question identification returned no questions")
     progress.set_progress(1.0, label="Question identification complete")
@@ -7420,7 +7441,11 @@ def _extract_question_task_inventory_via_api(
     if not chunks and sections:
         chunks = [{"sections": sections, "text": _format_section_chunk(sections)}]
     progress.log(f"Building Question / Task Inventory from {len(chunks)} chunk(s).")
-    for i, chunk in enumerate(chunks, start=1):
+
+    from .phase3 import kernel as _kernel
+
+    def _inventory_chunk(numbered) -> list[dict]:
+        i, chunk = numbered
         user = (
             _metadata_block(meta)
             + f"\nQuestion / Task Inventory chunk {i} of {len(chunks)}:\n"
@@ -7485,7 +7510,19 @@ def _extract_question_task_inventory_via_api(
                     "satisfy exact coverage"
                 )
             items = retry_items
-        for item in items:
+        return items
+
+    for chunk_items in _kernel.parallel_map_in_order(
+        list(enumerate(chunks, start=1)),
+        _inventory_chunk,
+        max_workers=config.source_chunk_workers(),
+        labels=[f"Inventory · chunk {i}/{len(chunks)}"
+                for i in range(1, len(chunks) + 1)],
+        announce="Question / Task Inventory",
+    ):
+        # Appended in chunk order whatever order the parallel reads
+        # finished in — QINV numbering below stays document-ordered.
+        for item in chunk_items:
             inventory["items"].append(item)
 
     anchors = _source_task_anchors(sections)
@@ -17672,26 +17709,18 @@ def _extract_skeleton_via_api(
             "skeleton chunk(s) from the saved checkpoint.",
             level="success",
         )
-    for i, chunk in enumerate(chunks, start=1):
-        fraction = (i - 1) / max(len(chunks), 1)
-        progress.step(f"Concept skeleton — chunk {i}/{len(chunks)}",
-                      value=progress_start
-                      + (progress_end - progress_start) * fraction)
+    from .phase3 import kernel as _kernel
+
+    def _skeleton_chunk(numbered) -> list[dict]:
+        i, chunk = numbered
         if i in restored_by_index:
             chunk_records = copy.deepcopy(restored_by_index[i])
-            all_records.extend(chunk_records)
             progress.log(
                 f"  chunk {i}/{len(chunks)} restored from checkpoint: "
                 f"{len(chunk_records)} skeleton row(s).",
                 level="success",
             )
-            progress.set_progress(
-                progress_start
-                + (progress_end - progress_start)
-                * (i / max(len(chunks), 1)),
-                label=f"Concept skeleton chunk {i}/{len(chunks)} restored",
-            )
-            continue
+            return chunk_records
         chunk_headings = _topic_headings(chunk.get("sections") or [])
         method_anchors = _method_coverage_anchors(
             chunk.get("sections") or [])
@@ -17865,18 +17894,31 @@ def _extract_skeleton_via_api(
             )
         chunk_records = _ensure_parent_concepts(chunk_records)
         progress.log(f"  chunk {i}/{len(chunks)} skeleton rows: {len(chunk_records)}")
+        return chunk_records
+
+    def _absorb_chunk(index: int, numbered, chunk_records: list[dict]) -> None:
+        # Runs in strict chunk order as the parallel reads land, so every
+        # durable checkpoint carries a clean contiguous prefix — the
+        # resume path above restores exactly such prefixes.
+        i, chunk = numbered
         all_records.extend(chunk_records)
+        chunk_progress = (
+            progress_start
+            + (progress_end - progress_start)
+            * (i / max(len(chunks), 1))
+        )
+        if i in restored_by_index:
+            progress.set_progress(
+                chunk_progress,
+                label=f"Concept skeleton chunk {i}/{len(chunks)} restored",
+            )
+            return
         completed_chunks.append({
             "chunk_index": i,
             "chunk_count": len(chunks),
             "chunk_sha256": _chunk_checkpoint_sha256(chunk),
             "records": copy.deepcopy(chunk_records),
         })
-        chunk_progress = (
-            progress_start
-            + (progress_end - progress_start)
-            * (i / max(len(chunks), 1))
-        )
         _emit_concept_checkpoint(
             checkpoint_callback,
             "skeleton_chunks",
@@ -17889,6 +17931,16 @@ def _extract_skeleton_via_api(
             chunk_progress,
             label=f"Concept skeleton — chunk {i}/{len(chunks)} complete",
         )
+
+    _kernel.parallel_map_in_order(
+        list(enumerate(chunks, start=1)),
+        _skeleton_chunk,
+        max_workers=config.source_chunk_workers(),
+        labels=[f"Skeleton · chunk {i}/{len(chunks)}"
+                for i in range(1, len(chunks) + 1)],
+        announce="Concept skeleton extraction",
+        on_result=_absorb_chunk,
+    )
     out = _merge_concept_records(all_records)
     progress.log(f"Rows after skeleton merge: {len(out)}.")
     repaired = _repair_records_via_api(out, meta=meta, stage="skeleton")

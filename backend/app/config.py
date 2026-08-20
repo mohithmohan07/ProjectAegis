@@ -229,6 +229,29 @@ def phase3_decision_workers() -> int:
     if raw:
         return max(1, int(raw))
     return 6
+
+
+def source_chunk_workers() -> int:
+    """Per-run parallel workers for Phase 2 source chunks and packets.
+
+    Governs the chunk fan-outs that read the source (question
+    identification, the Question/Task Inventory, skeleton extraction) and
+    the Phase 2.2 evidence-packet adjudication. Chunks are decided in
+    parallel and APPLIED in input order, so output — including cross-chunk
+    dedup and QID numbering — is byte-identical to a sequential run.
+
+    Counts against the same shared OPENAI_MAX_CONCURRENCY gate as
+    AEGIS_PHASE3_DECISION_WORKERS (the two never run at the same moment
+    within one run, so they don't add up). Same multi-creator sizing rule:
+    N simultaneous creators x workers <= the gate. Set to 1 for strictly
+    sequential chunk reads.
+    """
+    raw = os.environ.get("AEGIS_SOURCE_CHUNK_WORKERS", "").strip()
+    if raw:
+        return max(1, int(raw))
+    return 4
+
+
 OPENAI_TRANSIENT_RETRIES = max(
     0, int(os.environ.get("AEGIS_OPENAI_TRANSIENT_RETRIES", "10")))
 OPENAI_BACKOFF_MAX_SECONDS = max(

@@ -67,7 +67,17 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Chapter Reading exempted on the PDF lane | Mirrors the QX reader-identity exemption (`adjudication_exempt`, one authority): block kinds on GPT-read sources are already model-decided and page-verified, so the chapter is not re-read or re-billed; the skip is logged. Text-MMD uploads keep the pass |
 | Page-bundle reuse | Phase 3 adopts the convert-time `source.gpt-page-acsd.json` when its own copy is absent (validated by the same seals) and no longer writes a duplicate bundle |
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
-| Deferred (next round) | Critic overlap (~2x on Phase 3 at unchanged spend); split-phase fan-out of skeleton/inventory chunks and phase22 packets; Place∥Analyse∥Polish stage-level fan-out; per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare |
+| Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
+
+## Performance round 2 — stage overlap (2026-08-20)
+
+| Item | Disposition |
+|---|---|
+| Place ∥ Analyse ∥ Polish | The three passes read the same frozen post-Host input and write disjoint artifacts meeting only in deterministic Assemble, so the runner runs them as parallel lanes (each on its own deep copy of the rows; `min(3, AEGIS_PHASE3_DECISION_WORKERS)`; 1 = sequential). Lane logs carry `[Place]`/`[Analyse]`/`[Polish]`, and label scopes now COMPOSE (`[Place · batch 2/4]`) so nested pools stay attributable |
+| Capture riders (critic overlap, highest-value form) | The settle/host stage-boundary prerequisite captures ride on a side thread over deep-copied boundary evidence while the next stage runs; place/analyse captures ride inside their lanes. The merge consumes the capture list in canonical stage order whatever finished first. Removes four full author+critic round trips from the critical path |
+| Phase 2 chunk fan-outs | Question identification chunks, Question/Task Inventory chunks (incl. per-chunk completeness verdict + retry), skeleton chunks, and Phase 2.2 evidence packets decide in parallel (`AEGIS_SOURCE_CHUNK_WORKERS`, default 4) and APPLY in input order — cross-chunk dedup, QINV numbering, canonical repairs, and the adjudication marker are byte-identical to sequential. Skeleton durable checkpoints stream via the new ordered `on_result` hook, so every checkpoint still carries a clean contiguous chunk prefix and resume semantics are unchanged |
+| Kernel `on_result` | `parallel_map_in_order` gained an ordered side-effect hook (caller's thread, strict input order) for prefix checkpoints and monotone progress; pinned in tests |
+| Residual critic overlap NOT taken | A kernel-level deferred-review primitive (store the decision only after an async critic lands) would compress the remaining single-decision seams (merge, premap chain, prequestions plan). Pooled stages already overlap author-of-N with critic-of-M across units, so the marginal gain is small next to its surgery on `decide()`'s store-put contract — recorded, not built |
 
 ## UI-makeover residues (2026-08-20)
 

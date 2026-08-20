@@ -75,6 +75,65 @@ def test_a_label_count_mismatch_is_refused():
         )
 
 
+def test_nested_label_scopes_compose_across_worker_threads():
+    # A pool inside an outer labelled scope (a stage lane in the Phase 3
+    # overlap) must tag lines with BOTH the lane and the unit.
+    events: list[dict] = []
+    token = progress._sink.set(events.append)
+    try:
+        with progress.label_scope("Place"):
+            kernel.parallel_map_in_order(
+                [1, 2], lambda n: progress.log(f"unit {n}"), max_workers=2,
+                labels=["batch 1/2", "batch 2/2"],
+            )
+    finally:
+        progress._sink.reset(token)
+    messages = [e["message"] for e in events if e.get("type") == "log"]
+    assert any(m == "[Place · batch 1/2] unit 1" for m in messages)
+    assert any(m == "[Place · batch 2/2] unit 2" for m in messages)
+
+
+def test_on_result_streams_in_input_order_whatever_finishes_first():
+    import time
+
+    absorbed: list[tuple] = []
+
+    def worker(n: int) -> int:
+        time.sleep((3 - n) * 0.02)  # later items finish first
+        return n * 10
+
+    out = kernel.parallel_map_in_order(
+        [1, 2, 3], worker, max_workers=3,
+        on_result=lambda index, item, result: absorbed.append(
+            (index, item, result)),
+    )
+    assert out == [10, 20, 30]
+    # The hook saw clean ordered prefixes — this is what durable resume
+    # checkpoints ("chunks 1..k complete") ride on.
+    assert absorbed == [(0, 1, 10), (1, 2, 20), (2, 3, 30)]
+
+
+def test_on_result_applies_on_the_sequential_degrade_path_too():
+    absorbed: list[int] = []
+    kernel.parallel_map_in_order(
+        [4, 5], lambda n: n, max_workers=1,
+        on_result=lambda index, item, result: absorbed.append(result),
+    )
+    assert absorbed == [4, 5]
+
+
+def test_an_on_result_failure_fails_the_run_fast():
+    import pytest
+
+    def refuse(index, item, result):
+        raise RuntimeError("safety cap")
+
+    with pytest.raises(RuntimeError):
+        kernel.parallel_map_in_order(
+            [1, 2, 3], lambda n: n, max_workers=2, on_result=refuse,
+        )
+
+
 # --------------------------------------------------------------------- #
 # Usage accounting under threads
 # --------------------------------------------------------------------- #

@@ -1565,41 +1565,66 @@ def adjudicate_job_source(
         level="warning",
     )
 
-    for index, packet in enumerate(packets, start=1):
+    from .phase3 import kernel as _kernel
+
+    def _adjudicate_one(numbered: tuple[int, dict[str, Any]]) -> tuple[str, dict[str, Any], str]:
+        """Decide one packet (cache probe → evidence pages → provider).
+
+        Only the DECIDE half runs here — applying a verified repair
+        mutates the shared canonical, so application stays below, in
+        packet order, and the adjudication marker reads exactly as a
+        sequential run's. The cache key hashes stable source identity
+        (source sha, PDF sha, packet fingerprint), never repaired
+        content, so parallel siblings cannot perturb it.
+        """
+        index, packet = numbered
         cache_key = _cache_key(canonical=canonical, source_path=source_path, packet=packet)
         cached = _read_cache(cache_key)
         if cached is not None and (cached.get("result") or {}).get("status") == "verified":
             result = copy.deepcopy(cached.get("result") or {})
-            cache_state = "hit"
             progress.log(
                 f"Source packet {index}/{len(packets)} cache: verified hit.",
                 level="success",
             )
-        else:
-            pages = collect_evidence_pages(
-                source_path, packet, source_chars=source_chars
+            return cache_key, result, "hit"
+        pages = collect_evidence_pages(
+            source_path, packet, source_chars=source_chars
+        )
+        progress.log(
+            f"Source packet {index}/{len(packets)} ({packet['issue_type']}) "
+            f"candidate pages: "
+            + ", ".join(
+                f"{page.evidence_id}=PDF {page.page_number}" for page in pages
             )
-            progress.log(
-                f"Source packet {index}/{len(packets)} ({packet['issue_type']}) "
-                f"candidate pages: "
-                + ", ".join(
-                    f"{page.evidence_id}=PDF {page.page_number}" for page in pages
-                )
-                + ". Cache: miss."
-            )
-            result = provider(copy.deepcopy(packet), pages)
-            cache_state = "miss"
-            if result.get("status") == "verified":
-                cache_payload = {
-                    "version": ADJUDICATION_VERSION,
-                    "created_at": time.time(),
-                    "packet_fingerprint": packet["fingerprint"],
-                    "source_file_sha256": _pdf_sha256(source_path),
-                    "model": config.OPENAI_MODEL,
-                    "result": result,
-                }
-                _write_cache(cache_key, cache_payload)
+            + ". Cache: miss."
+        )
+        result = provider(copy.deepcopy(packet), pages)
+        if result.get("status") == "verified":
+            cache_payload = {
+                "version": ADJUDICATION_VERSION,
+                "created_at": time.time(),
+                "packet_fingerprint": packet["fingerprint"],
+                "source_file_sha256": _pdf_sha256(source_path),
+                "model": config.OPENAI_MODEL,
+                "result": result,
+            }
+            _write_cache(cache_key, cache_payload)
+        return cache_key, result, "miss"
 
+    adjudicated = _kernel.parallel_map_in_order(
+        list(enumerate(packets, start=1)),
+        _adjudicate_one,
+        max_workers=config.source_chunk_workers(),
+        labels=[
+            f"Packet {index}/{len(packets)} · {packet['issue_type']}"
+            for index, packet in enumerate(packets, start=1)
+        ],
+        announce="Phase 2.2 source adjudication",
+    )
+
+    for (index, packet), (cache_key, result, cache_state) in zip(
+        enumerate(packets, start=1), adjudicated
+    ):
         entry = {
             "issue_id": packet["issue_id"],
             "issue_type": packet["issue_type"],

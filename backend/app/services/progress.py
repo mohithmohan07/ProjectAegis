@@ -42,8 +42,15 @@ _label: contextvars.ContextVar[str] = contextvars.ContextVar(
 
 @contextlib.contextmanager
 def label_scope(label: str):
-    """Prefix every ``log`` line emitted in this scope with ``[label]``."""
-    token = _label.set(str(label))
+    """Prefix every ``log`` line emitted in this scope with ``[label]``.
+
+    Scopes nest by composition: a pool running inside an outer labelled
+    scope (a batch inside a Phase 3 stage lane) emits ``[outer · inner]``,
+    so an interleaved console still says which lane AND which unit spoke.
+    """
+    current = _label.get()
+    composed = f"{current} · {label}" if current else str(label)
+    token = _label.set(composed)
     try:
         yield
     finally:

@@ -152,6 +152,7 @@ def parallel_map_in_order(
     max_workers: int,
     labels: Sequence[str] | None = None,
     announce: str = "",
+    on_result=None,
 ) -> list:
     """Run ``worker`` over ``items`` on a bounded pool; results in input order.
 
@@ -168,6 +169,13 @@ def parallel_map_in_order(
     ``announce`` logs the fan-out width once, so the log says HOW the
     stage ran, not just what it produced. Both apply on the sequential
     degrade path too, so a one-worker run reads the same.
+
+    ``on_result(index, item, result)``, when given, runs in the CALLER's
+    thread in strict input order as each result becomes collectable —
+    item 3 finishing early still waits for items 1 and 2. It exists for
+    ordered side effects that must see a clean prefix: durable resume
+    checkpoints ("chunks 1..k complete") and monotone progress updates.
+    A worker that raises fails fast before its ``on_result`` runs.
     """
     items = list(items)
     label_list = [str(label) for label in labels] if labels is not None else None
@@ -187,7 +195,13 @@ def parallel_map_in_order(
             f"{max(1, workers)} parallel worker(s)"
         )
     if max_workers <= 1 or len(items) <= 1:
-        return [run_one(index, item) for index, item in enumerate(items)]
+        results = []
+        for index, item in enumerate(items):
+            result = run_one(index, item)
+            if on_result is not None:
+                on_result(index, item, result)
+            results.append(result)
+        return results
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
 
@@ -198,8 +212,11 @@ def parallel_map_in_order(
         ]
         results = []
         try:
-            for future in futures:
-                results.append(future.result())
+            for index, future in enumerate(futures):
+                result = future.result()
+                if on_result is not None:
+                    on_result(index, items[index], result)
+                results.append(result)
         except BaseException:
             # Fail fast: a failed decision stops the run, so queued sibling
             # batches must not keep spending provider calls.

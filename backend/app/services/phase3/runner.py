@@ -13,6 +13,9 @@ the caller's failure release ships them.
 """
 from __future__ import annotations
 
+import contextvars
+import copy
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -200,7 +203,14 @@ def run(
     store_dir: str | Path | None = None,
     providers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Settle → Host → Place → Analyse → Polish → Assemble.
+    """Settle → Host → (Place ∥ Analyse ∥ Polish) → Assemble.
+
+    Place, Analyse, and Polish read the same frozen post-Host input and
+    write disjoint artifacts, so they run as parallel lanes (sequential
+    when ``AEGIS_PHASE3_DECISION_WORKERS=1``); the stage-boundary
+    prerequisite captures for Settle and Host ride on a side thread over
+    deep-copied boundary evidence. Every decision payload is identical to
+    the sequential order's, so the decision store and the output are too.
 
     ``providers`` is test-only injection ({"topology", "grounding",
     "analysis", "host", "place", "analyse", "analyse_allot", "prelearn",
@@ -232,15 +242,24 @@ def run(
     env = envelope_mod.validate(env)
     store = kernel.DecisionStore(store_dir)
     injected = dict(providers or {})
+    from ... import config as _config
+
     # Phase 03 (doc §4, Q3): the running pre-requisite capture. One
     # decision per stage boundary, each over the evidence THAT stage had
     # in hand — which is why it lives here and not inside any pass: the
     # runner is the only place that controls each payload, and no
     # existing pass's payload, checker, or policy_version is touched.
-    captures: list[dict[str, Any]] = []
+    #
+    # A capture's result is consumed only by the merge, so the settle and
+    # host captures ride on a side thread while the next stage runs —
+    # their payloads are deep-copied at the boundary, so the decision each
+    # one makes is over exactly the evidence the sequential run showed it.
+    # The ``captures`` list handed to the merge is assembled in canonical
+    # stage order regardless of when each rider finished.
+    workers = _config.phase3_decision_workers()
 
-    def _capture(stage: str, **evidence: Any) -> None:
-        captures.append(prelearn_mod.capture_stage(
+    def _decide_capture(stage: str, **evidence: Any) -> dict[str, Any]:
+        return prelearn_mod.capture_stage(
             env,
             stage,
             provider=injected.get("prelearn"),
@@ -248,7 +267,20 @@ def run(
             store=store,
             fixer=injected.get("fixer"),
             **evidence,
-        ))
+        )
+
+    def _schedule_capture(
+        pool: ThreadPoolExecutor | None, stage: str, **evidence: Any
+    ) -> Future:
+        def decide() -> dict[str, Any]:
+            with progress.label_scope(f"Capture · {stage}"):
+                return _decide_capture(stage, **evidence)
+
+        if pool is None:
+            done: Future = Future()
+            done.set_result(decide())
+            return done
+        return pool.submit(contextvars.copy_context().run, decide)
 
     progress.step(
         "Phase 3 — Settle: topology, grounding, and content authoring",
@@ -264,58 +296,99 @@ def run(
         fixer=injected.get("fixer"),
     )
     _snapshot_settled_rows(env, settled, store_dir)
-    _capture("settle", settled=settled)
-    progress.step(
-        "Phase 3 — Host: certifying Type/Case and QID hosts", value=0.91
-    )
-    hosts = host_mod.host(
-        env,
-        settled,
-        provider=injected.get("host"),
-        critic=injected.get("critic"),
-        store=store,
-        fixer=injected.get("fixer"),
-    )
-    _capture("host")
-    # Phase 2.2 (doc §4): pool Container-02 chapter-wide and let the model
-    # place every activity, info hub, and unclaimed figure BEFORE Polish
-    # converges content — the placements ride into Assemble, which stamps
-    # them on the rows the deposit pipeline renders. An empty pool skips
-    # the pass without a decision.
-    progress.step(
-        "Phase 3 — Place: pooling Container 02 for model placement",
-        value=0.93,
-    )
-    placements = place_mod.place(
-        env,
-        [*settled, *(hosts.get("new_concepts") or [])],
-        provider=injected.get("place"),
-        critic=injected.get("critic"),
-        store=store,
-        fixer=injected.get("fixer"),
-    )
-    _snapshot_place(placements, store_dir)
-    _capture("place")
-    # Phase 2.4 + 4.3 (Q1): the chapter's misconception/error-analysis
-    # inventory is built over chapter-wide evidence and each item is
-    # allotted to exactly one concept. Assemble stamps the allotments;
-    # the rendered section exists only where an item landed.
-    progress.step(
-        "Phase 3 — Analyse: chapter misconception/error-analysis "
-        "inventory",
-        value=0.935,
-    )
-    analysis = analyse_mod.analyse(
-        env,
-        [*settled, *(hosts.get("new_concepts") or [])],
-        provider=injected.get("analyse"),
-        allot_provider=injected.get("analyse_allot"),
-        critic=injected.get("critic"),
-        store=store,
-        fixer=injected.get("fixer"),
-    )
-    _snapshot_analysis(analysis, store_dir)
-    _capture("analyse", analysis=analysis)
+    rider_pool = ThreadPoolExecutor(max_workers=2) if workers > 1 else None
+    try:
+        settle_capture = _schedule_capture(
+            rider_pool, "settle", settled=copy.deepcopy(settled)
+        )
+        progress.step(
+            "Phase 3 — Host: certifying Type/Case and QID hosts", value=0.91
+        )
+        hosts = host_mod.host(
+            env,
+            settled,
+            provider=injected.get("host"),
+            critic=injected.get("critic"),
+            store=store,
+            fixer=injected.get("fixer"),
+        )
+        host_capture = _schedule_capture(rider_pool, "host")
+        # Phase 2.2 places Container-02 chapter-wide, Phase 2.4 + 4.3 (Q1)
+        # builds the misconception/error-analysis inventory, and the
+        # terminal quality pass converges content — three passes that all
+        # read the SAME frozen input (the settled rows plus host-created
+        # concepts) and write disjoint artifacts that only meet in
+        # deterministic Assemble. So they run as parallel lanes, each on
+        # its own deep copy of the rows; the placements ride into
+        # Assemble, the inventory allots to concept ids, and Polish still
+        # converges content BEFORE Assemble seals anything. An empty
+        # Container-02 pool skips its pass without a decision, exactly as
+        # in the sequential order.
+        stage_rows = [*settled, *(hosts.get("new_concepts") or [])]
+        progress.step(
+            "Phase 3 — Place ∥ Analyse ∥ Polish: placement, error "
+            "analysis, and content convergence",
+            value=0.93,
+        )
+
+        def _place_lane():
+            placements = place_mod.place(
+                env,
+                copy.deepcopy(stage_rows),
+                provider=injected.get("place"),
+                critic=injected.get("critic"),
+                store=store,
+                fixer=injected.get("fixer"),
+            )
+            return placements, _decide_capture("place")
+
+        def _analyse_lane():
+            analysis = analyse_mod.analyse(
+                env,
+                copy.deepcopy(stage_rows),
+                provider=injected.get("analyse"),
+                allot_provider=injected.get("analyse_allot"),
+                critic=injected.get("critic"),
+                store=store,
+                fixer=injected.get("fixer"),
+            )
+            return analysis, _decide_capture("analyse", analysis=analysis)
+
+        def _polish_lane():
+            return polish_mod.polish(
+                env,
+                copy.deepcopy(stage_rows),
+                provider=injected.get("polish"),
+                store=store,
+                fixer=injected.get("fixer"),
+            )
+
+        lane_results = kernel.parallel_map_in_order(
+            [_place_lane, _analyse_lane, _polish_lane],
+            lambda lane: lane(),
+            max_workers=min(3, workers),
+            labels=["Place", "Analyse", "Polish"],
+            announce="Phase 3 stage overlap",
+        )
+        placements, place_capture = lane_results[0]
+        analysis, analyse_capture = lane_results[1]
+        polished = lane_results[2]
+        _snapshot_place(placements, store_dir)
+        _snapshot_analysis(analysis, store_dir)
+        # The merge consumes the captures in canonical stage order,
+        # whatever order the riders and lanes actually finished in.
+        captures = [
+            settle_capture.result(),
+            host_capture.result(),
+            place_capture,
+            analyse_capture,
+        ]
+    finally:
+        if rider_pool is not None:
+            rider_pool.shutdown(wait=True)
+    settled = polished[:len(settled)]
+    hosts = {**hosts, "new_concepts": polished[len(settled):]}
+    _snapshot_settled_rows(env, settled, store_dir)
     # Phase 03 (Q3): the running capture is consolidated into one
     # prerequisite set. The model decides which captures are the same
     # prerequisite seen from two stages; the checker only refuses a
@@ -327,7 +400,7 @@ def run(
     progress.step(
         "Phase 3 — Prerequisites: consolidating the running Phase 03 "
         "capture",
-        value=0.937,
+        value=0.94,
     )
     prerequisites = prelearn_mod.merge(
         env,
@@ -338,25 +411,6 @@ def run(
         fixer=injected.get("fixer"),
     )
     _snapshot_prelearn(prerequisites, store_dir)
-    # Terminal content quality (generic analysis, verbatim Descriptions)
-    # is converged BEFORE Assemble seals anything, on settled and
-    # host-created rows alike; only failing rows cost a model call.
-    progress.step(
-        "Phase 3 — Polish: converging content on the terminal quality "
-        "gate",
-        value=0.94,
-    )
-    new_concepts = hosts.get("new_concepts") or []
-    polished = polish_mod.polish(
-        env,
-        [*settled, *new_concepts],
-        provider=injected.get("polish"),
-        store=store,
-        fixer=injected.get("fixer"),
-    )
-    settled = polished[:len(settled)]
-    hosts = {**hosts, "new_concepts": polished[len(settled):]}
-    _snapshot_settled_rows(env, settled, store_dir)
     progress.step(
         "Phase 3 — Assemble: embedding Types and routing QIDs "
         "(deterministic)",
