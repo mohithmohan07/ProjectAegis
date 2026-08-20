@@ -250,3 +250,105 @@ test("a network drop re-attaches and resumes instead of failing the run", async 
     getUploadJobMock.mockReset();
   }
 });
+
+
+test("a tab-switch drop re-attaches calmly, immediately, and spends no budget", async () => {
+  vi.useFakeTimers();
+  const setVisibility = (value: "visible" | "hidden") => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => value,
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  };
+  try {
+    getUploadJobMock
+      .mockResolvedValueOnce({ generation_running: true, status: "converted" })
+      .mockResolvedValueOnce({ generation_running: false, status: "converted" });
+
+    function ReattachProbe() {
+      const { run, state } = useRunConsole();
+      return (
+        <>
+          <button
+            onClick={() => void run(
+              "Generate",
+              "/generate",
+              {},
+              undefined,
+              { module: "concepts", jobId: 7 },
+            ).catch(() => undefined)}
+          >
+            Generate
+          </button>
+          <output data-testid="status">{state.status}</output>
+          <output data-testid="lines">
+            {state.lines.map((line) => line.message).join(" | ")}
+          </output>
+        </>
+      );
+    }
+    render(
+      <RunConsoleProvider>
+        <ReattachProbe />
+      </RunConsoleProvider>,
+    );
+
+    const first = pending.length;
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    // The user switches tabs; the phone freezes the page and kills the
+    // stream. The error only surfaces once they come back.
+    setVisibility("hidden");
+    setVisibility("visible");
+    await act(async () => {
+      pending[first].reject(transportError("network connection lost"));
+      await Promise.resolve();
+    });
+
+    // Attributed to the tab switch: calm wording, no network warning.
+    expect(screen.getByTestId("status").textContent).toBe("running");
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "Screen was away",
+    );
+    expect(screen.getByTestId("lines").textContent).not.toContain(
+      "Network connection lost",
+    );
+
+    // The first poll is immediate (250ms), not a 3s backoff, and the
+    // reader is told the run is still active on that FIRST poll.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(getUploadJobMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "the run is still active",
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(getUploadJobMock).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "Resuming the run from its saved checkpoint",
+    );
+
+    expect(pending).toHaveLength(first + 2);
+    await act(async () => {
+      pending[first + 1].onEvent(
+        { type: "result", data: { status: "generated" } },
+      );
+      pending[first + 1].resolve({ status: "generated" });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("status").textContent).toBe("done");
+  } finally {
+    vi.useRealTimers();
+    pending.length = 0;
+    getUploadJobMock.mockReset();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "visible",
+    });
+  }
+});

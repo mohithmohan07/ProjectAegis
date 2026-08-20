@@ -72,6 +72,31 @@ const SMALL_SCREEN =
   && typeof window.matchMedia === "function"
   && window.matchMedia("(max-width: 960px)").matches;
 
+/* Phone browsers freeze background tabs and kill their open streams: a
+   tab switch or screen lock is the COMMON reason the run stream drops,
+   and it is not a network problem. Track visibility transitions so a
+   drop that happens while hidden — or surfaces in the first seconds
+   after returning, which is when a frozen page's dead socket is finally
+   noticed — is attributed to backgrounding: reattached immediately,
+   reported calmly, and never charged against the bounded reattach
+   budget that exists to surface genuinely dying runs. */
+let lastVisibleReturnAt = 0;
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      lastVisibleReturnAt = Date.now();
+    }
+  });
+}
+
+function droppedByBackgrounding(): boolean {
+  if (typeof document === "undefined") return false;
+  return (
+    document.visibilityState === "hidden"
+    || Date.now() - lastVisibleReturnAt < 5000
+  );
+}
+
 const INITIAL: RunState = {
   active: false, open: !SMALL_SCREEN, title: "", lines: [], progress: 0,
   progressLabel: "", startedAt: null, status: "idle", usage: null,
@@ -157,8 +182,22 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
         progressLabel: message,
       }));
     };
+    // Waits ms — but returns EARLY the moment the tab becomes visible
+    // again, so the first poll after a tab switch is immediate instead
+    // of stuck behind a background-throttled timer.
     const sleep = (ms: number) =>
-      new Promise<void>((resolve) => window.setTimeout(resolve, ms));
+      new Promise<void>((resolve) => {
+        const finish = () => {
+          window.clearTimeout(timer);
+          document.removeEventListener("visibilitychange", onVisible);
+          resolve();
+        };
+        const onVisible = () => {
+          if (document.visibilityState === "visible") finish();
+        };
+        const timer = window.setTimeout(finish, ms);
+        document.addEventListener("visibilitychange", onVisible);
+      });
 
     const withReattach = async (): Promise<T> => {
       // Bounded: a run that keeps dying for non-network reasons must surface,
@@ -172,24 +211,36 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
           // recognised as one.
           const isTransport =
             err instanceof Error && err.name === "StreamTransportError";
-          if (
-            !reattach
-            || !isTransport
-            || runIdRef.current !== runId
-            || reattachesLeft <= 0
-          ) {
+          if (!reattach || !isTransport || runIdRef.current !== runId) {
             throw err;
           }
-          reattachesLeft -= 1;
-          note(
-            "Network connection lost — the run continues on the server. "
-            + "Waiting for the network and re-attaching…",
-          );
-          // Wait out the outage, then watch the job until the worker is done.
-          // Every successful poll is also traffic that keeps (or wakes) the
-          // server machine.
-          let delay = 3000;
-          let lastHeartbeat = Date.now();
+          const backgrounded = droppedByBackgrounding();
+          if (backgrounded) {
+            // A tab switch / screen lock killed the stream, not the
+            // network. Any number of these must survive — the budget is
+            // for runs that keep dying on their own.
+            note(
+              "Screen was away — the run kept going on the server. "
+              + "Re-attaching…",
+              "info",
+            );
+          } else {
+            if (reattachesLeft <= 0) throw err;
+            reattachesLeft -= 1;
+            note(
+              "Network connection lost — the run continues on the server. "
+              + "Waiting for the network and re-attaching…",
+            );
+          }
+          // Wait out the outage, then watch the job until the worker is
+          // done. Every successful poll is also traffic that keeps (or
+          // wakes) the server machine. After a tab switch the first poll
+          // fires immediately; sleep() also returns early the moment the
+          // tab becomes visible again.
+          let delay = backgrounded ? 250 : 3000;
+          // After a tab switch, confirm on the FIRST successful poll —
+          // not after the 30s heartbeat interval.
+          let lastHeartbeat = backgrounded ? 0 : Date.now();
           for (;;) {
             if (runIdRef.current !== runId) throw err;
             await sleep(delay);

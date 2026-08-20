@@ -69,6 +69,13 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
 | Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
 
+## Tab-switch stream drops (2026-08-20 night)
+
+| Item | Disposition |
+|---|---|
+| "Network connection lost" on every tab switch | Phone browsers freeze background tabs and kill the run stream; the client treated that as a network outage — warning line, 3–15s throttled backoff, and one of only 5 bounded reattach credits burned per switch (six switches would fail a healthy run). FIXED: visibility transitions are tracked; a drop while hidden or within 5s of returning is attributed to backgrounding — calm info line ("Screen was away — the run kept going on the server"), first poll at 250ms, confirmation on that first poll, no budget spent. The reattach sleep also resolves early the moment the tab becomes visible. Genuine network drops keep the old wording, backoff, and bounded budget. Pinned in RunConsole.test.tsx |
+| Residue: live tail during an uninterrupted run | After any drop the client polls until the worker stops, then re-POSTs (checkpoint replay) — the live log tail is not re-attached mid-run because the run endpoint accepts no second attach while running. A true mid-run stream re-attach endpoint is unbuilt |
+
 ## Mobile interface round (2026-08-20 night)
 
 | Item | Disposition |
