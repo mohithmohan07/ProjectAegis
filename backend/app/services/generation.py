@@ -3352,6 +3352,26 @@ def _inventory_chunks_by_topic(
     return chunks
 
 
+def _unique_title_index(rows: list[dict]) -> dict[str, dict]:
+    """Title -> row, ONLY for titles that appear exactly once (audit F4).
+
+    A chapter-wide title fallback that tolerates repeats mismaps metadata,
+    flags, or repairs onto the wrong same-named concept. Exact-once is a
+    mechanical fact; an ambiguous title simply yields no fallback.
+    """
+    counts: dict[str, int] = {}
+    for row in rows:
+        key = bi.normalize_question_text(row.get("concept_title", ""))
+        counts[key] = counts.get(key, 0) + 1
+    return {
+        bi.normalize_question_text(row.get("concept_title", "")): row
+        for row in rows
+        if counts.get(
+            bi.normalize_question_text(row.get("concept_title", ""))
+        ) == 1
+    }
+
+
 def _record_key(rec: dict) -> tuple[str, str]:
     return (
         _topic_comparison_key(rec.get("topic") or ""),
@@ -11412,10 +11432,10 @@ def _add_missing_type_method_concepts_via_api(
         )
         return records
 
-    existing_titles = {
-        bi.normalize_question_text(record.get("concept_title", ""))
-        for record in records
-    }
+    # Audit F4: identity is topic-scoped — a chapter-wide title screen
+    # silently vetoed a model-authored addition because ANOTHER topic
+    # already used the words.
+    existing_titles = {_record_key(record) for record in records}
     accepted: list[tuple[int, dict]] = []
     supported_by_addition: set[str] = set()
     for addition in (data or {}).get("additions") or []:
@@ -11436,7 +11456,10 @@ def _add_missing_type_method_concepts_via_api(
             != _topic_comparison_key(topic)
             or not title
             or cr.is_culmination(title)
-            or bi.normalize_question_text(title) in existing_titles
+            or (
+                _topic_comparison_key(topic),
+                bi.normalize_question_text(title),
+            ) in existing_titles
             or not supporting
             or all(type_id in supported_by_addition for type_id in supporting)
         ):
@@ -12741,10 +12764,7 @@ def _carry_type_origin_metadata(
     if not candidate:
         return candidate
     by_key = {_record_key(row): row for row in original}
-    by_title = {
-        bi.normalize_question_text(row.get("concept_title", "")): row
-        for row in original
-    }
+    by_title = _unique_title_index(original)
     for index, row in enumerate(candidate):
         source = by_key.get(_record_key(row)) or by_title.get(
             bi.normalize_question_text(row.get("concept_title", ""))
@@ -12832,10 +12852,7 @@ def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict
         # may reorder rows, so position alone would move a recorded decision
         # onto the wrong concept.
         by_key = {_record_key(row): row for row in records}
-        by_title = {
-            bi.normalize_question_text(row.get("concept_title", "")): row
-            for row in records
-        }
+        by_title = _unique_title_index(records)
         for index, row in enumerate(merged):
             original = by_key.get(_record_key(row)) or by_title.get(
                 bi.normalize_question_text(row.get("concept_title", "")))
@@ -12844,7 +12861,7 @@ def _merge_repaired_rows(records: list[dict], repaired: list[dict]) -> list[dict
             _carry_review_flags(original, row)
         return merged
     by_key = {_record_key(r): r for r in repaired}
-    by_title = {bi.normalize_question_text(r.get("concept_title", "")): r for r in repaired}
+    by_title = _unique_title_index(repaired)
     out: list[dict] = []
     for rec in records:
         replacement = by_key.get(_record_key(rec)) or by_title.get(
@@ -16729,14 +16746,38 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
         )
         if key[1] and key in seen:
             kept_index = seen[key]
+            kept_row = out[kept_index]
+            # Audit F4: only a true RESTATEMENT may be dropped — the same
+            # topic+title with the same normalized teaching content. Two
+            # rows sharing wording but carrying DIFFERENT content are two
+            # claims on one identity that a mechanical pass must not
+            # adjudicate: both survive, both flagged, and the topic-scoped
+            # duplicate validator surfaces them for review.
+            same_content = bi.normalize_question_text(
+                rec.get("concept_details", "")
+            ) == bi.normalize_question_text(
+                kept_row.get("concept_details", "")
+            )
+            if not same_content:
+                note = (
+                    "duplicate_identity_distinct_content: another row in "
+                    "this topic shares this title with different teaching "
+                    "content; both rows were kept for review"
+                )
+                for row in (rec, kept_row):
+                    flags = row.setdefault("review_flags", [])
+                    if note not in flags:
+                        flags.append(note)
+                out.append(rec)
+                continue
             if (
                 _method_anchor_ids(rec)
-                and not _method_anchor_ids(out[kept_index])
+                and not _method_anchor_ids(kept_row)
             ):
-                _carry_review_flags(out[kept_index], rec)
+                _carry_review_flags(kept_row, rec)
                 out[kept_index] = rec
             else:
-                _carry_review_flags(rec, out[kept_index])
+                _carry_review_flags(rec, kept_row)
             dropped += 1
             continue
         if key[1]:
@@ -18394,22 +18435,25 @@ def _recover_missing_topic_concepts_via_api(
             for group in missing
             if _topic_comparison_key(group.get("topic") or "")
         }
-        existing_keys = {
-            bi.normalize_question_text(record.get("concept_title", ""))
-            for record in out
-        }
+        # Audit F4: the duplicate screen is topic-scoped identity, never
+        # chapter-wide wording.
+        existing_keys = {_record_key(record) for record in out}
         added = 0
         for candidate in _concept_rows_to_records(data):
             topic_key = _topic_comparison_key(candidate.get("topic") or "")
             title_key = bi.normalize_question_text(
                 candidate.get("concept_title", ""))
-            if topic_key not in allowed or not title_key or title_key in existing_keys:
+            if (
+                topic_key not in allowed
+                or not title_key
+                or (topic_key, title_key) in existing_keys
+            ):
                 continue
             candidate["topic"] = allowed[topic_key]
             if not (candidate.get("parent_concept") or "").strip():
                 candidate["parent_concept"] = allowed[topic_key]
             out.append(candidate)
-            existing_keys.add(title_key)
+            existing_keys.add((topic_key, title_key))
             added += 1
         progress.log(
             f"Topic coverage recovery added {added} concept row(s).",
@@ -18648,10 +18692,11 @@ def _recover_chapter_opening_concepts_via_api(
     candidates = _concept_rows_to_records({
         "rows": raw_candidates,
     })
-    existing_titles = {
-        bi.normalize_question_text(row.get("concept_title") or "")
-        for row in records
-    }
+    # Audit F4: only a duplicate within the DESTINATION topic is a
+    # mechanical duplicate; the same words under another topic are a
+    # different concept.
+    opening_topic_key = _topic_comparison_key(opening["topic"])
+    existing_titles = {_record_key(row) for row in records}
     additions: list[dict] = []
     for candidate in candidates:
         title = (candidate.get("concept_title") or "").strip()
@@ -18660,7 +18705,7 @@ def _recover_chapter_opening_concepts_via_api(
         # mechanical duplicates/culminations are screened out here.
         if (
             not title_key
-            or title_key in existing_titles
+            or (opening_topic_key, title_key) in existing_titles
             or cr.is_culmination(title)
         ):
             continue
@@ -18668,7 +18713,7 @@ def _recover_chapter_opening_concepts_via_api(
         if not (candidate.get("parent_concept") or "").strip():
             candidate["parent_concept"] = opening["topic"]
         additions.append(candidate)
-        existing_titles.add(title_key)
+        existing_titles.add((opening_topic_key, title_key))
     if not additions:
         return records
     # Rare-case clubbing (team review): one or two recovered opening
@@ -18814,11 +18859,32 @@ def _restructure_topics_via_api(
         + payload
     )
     data = _openai_json(system, user, purpose="concept_mapping")
+    # Audit F4: a title carried by the response under TWO topics cannot
+    # re-home every same-named record to whichever row came last. Only an
+    # unambiguous title -> topic mapping is applied; ambiguous titles are
+    # left unchanged and named in the log.
+    topics_by_title: dict[str, set[str]] = {}
+    for r in _concept_rows_to_records(data):
+        if not (r.get("topic") or "").strip():
+            continue
+        key = bi.normalize_question_text(r["concept_title"])
+        topics_by_title.setdefault(key, set()).add(r["topic"].strip())
     topic_by_title = {
-        bi.normalize_question_text(r["concept_title"]): r["topic"].strip()
-        for r in _concept_rows_to_records(data)
-        if (r.get("topic") or "").strip()
+        key: next(iter(topics))
+        for key, topics in topics_by_title.items()
+        if len(topics) == 1
     }
+    ambiguous_titles = sorted(
+        key for key, topics in topics_by_title.items() if len(topics) > 1
+    )
+    if ambiguous_titles:
+        progress.log(
+            "Topic restructure left "
+            f"{len(ambiguous_titles)} record title(s) unchanged: the "
+            "response mapped the same title to more than one topic "
+            f"({', '.join(ambiguous_titles[:5])}).",
+            level="warning",
+        )
     updated = 0
     for rec in records:
         if _method_anchor_ids(rec):

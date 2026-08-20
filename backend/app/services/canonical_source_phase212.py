@@ -428,11 +428,17 @@ def _prompt_identity_sha() -> str:
 # Deterministic validation (mechanics)
 # ---------------------------------------------------------------------------
 
-def _locate_evidence(block_text: str, evidence: str) -> int:
-    """Verbatim offset of the quoted evidence inside its block, or -1."""
+def _locate_evidence(block_text: str, evidence: str, start: int = 0) -> int:
+    """Verbatim offset of the quoted evidence inside its block, or -1.
+
+    ``start`` makes repeated identical evidence resolvable: the Nth declared
+    ask with the same quote binds to the Nth printed occurrence (audit F16),
+    so two genuinely repeated asks in one block receive distinct spans and
+    therefore distinct identities.
+    """
     if not evidence:
         return -1
-    return block_text.find(evidence)
+    return block_text.find(evidence, start)
 
 
 def verdict_defects(
@@ -539,6 +545,7 @@ def verdict_defects(
                 block_id=block_id,
             )
         block_text = str(block_by_id[block_id].get("raw_text") or "")
+        evidence_counts: dict[str, int] = {}
         for item in missed:
             ref = str(item.get("task_ref") or "").strip()
             evidence = str(item.get("evidence_text") or "")
@@ -557,11 +564,17 @@ def verdict_defects(
                 )
             else:
                 declared_refs[ref] = block_id
-            if _locate_evidence(block_text, evidence) < 0:
+            # Occurrence-aware (audit F16): the Nth identical quote needs an
+            # Nth printed occurrence, or two asks would share one span and
+            # collide into one minted identity.
+            seen_before = evidence_counts.get(evidence, 0)
+            evidence_counts[evidence] = seen_before + 1
+            if not evidence or block_text.count(evidence) <= seen_before:
                 defect(
                     "evidence_not_locatable",
                     f"missed-ask evidence in block {block_id} is not a "
-                    "verbatim quote of that block",
+                    "verbatim quote of that block (occurrence "
+                    f"{seen_before + 1} not found)",
                     block_id=block_id,
                 )
 
@@ -589,6 +602,16 @@ def verdict_defects(
             refs.extend(
                 str(v) for v in entry.get("context_for_task_refs") or []
             )
+            if not [r for r in refs if r]:
+                # Audit F3: context that supports no resolvable task is a
+                # dead accounting entry — the stimulus would never reach
+                # the learner's question. Mechanical anchoring requirement.
+                defect(
+                    "task_context_unanchored",
+                    f"block {block_id} is task_context but names no task "
+                    "it supports",
+                    block_id=block_id,
+                )
         for ref in refs:
             if not ref:
                 if verdict == "task_continuation":
@@ -637,19 +660,29 @@ def _created_task(
     *,
     task_ref: str,
     block_id: str,
+    search_from: int = 0,
 ) -> dict[str, Any]:
     """A task built directly from quoted block evidence.
 
     Field template follows the Phase-2.1 recovery append so every later
     mechanic (renumbering, leaf materialization, inventory render) sees a
     complete task object. Membership is model-decided; the KIND is a
-    neutral default awaiting a kind ruling, and says so.
+    neutral default awaiting a kind ruling, and says so. Explicit figure
+    references in the evidence are resolved mechanically against the
+    canonical Figure ledger (audit F3) — resolved figures ride the task;
+    genuinely unresolved/ambiguous references stay recorded and follow the
+    existing citation policy instead of being cleared.
     """
     sections = _section_by_id(canonical)
     section_id = str(block.get("section_id") or "")
     section = sections.get(section_id, {})
-    offset = max(0, _locate_evidence(str(block.get("raw_text") or ""), evidence))
+    offset = max(0, _locate_evidence(
+        str(block.get("raw_text") or ""), evidence, search_from
+    ))
     source_start = int(block.get("source_start") or 0) + offset
+    figure_refs, image_urls, unresolved, ambiguous = (
+        structure._resolved_leaf_figures(canonical, prompt=evidence)
+    )
     return {
         "task_id": "",
         "qid": "",
@@ -677,15 +710,19 @@ def _created_task(
         ],
         "chapter_wide": False,
         "activity_origin": False,
-        "requires_visual": False,
+        # requires_visual only when a canonical image actually resolved:
+        # unresolved/ambiguous references keep their own recorded fields and
+        # flow through the existing citation policy — marking them
+        # required-with-no-image would trip the wrong gate.
+        "requires_visual": bool(image_urls),
         "requires_context": False,
-        "image_urls": [],
-        "figure_refs": [],
+        "image_urls": list(image_urls),
+        "figure_refs": list(figure_refs),
         "explicit_figure_reference_ids": structure._figure_reference_ids(
             evidence
         ),
-        "unresolved_figure_reference_ids": [],
-        "ambiguous_figure_reference_ids": [],
+        "unresolved_figure_reference_ids": list(unresolved),
+        "ambiguous_figure_reference_ids": list(ambiguous),
         "display_overrides": [],
         "membership_authority": "model_verdict",
         "origin": "qx_model_missed_ask",
@@ -791,12 +828,23 @@ def reconcile(
     for block in blocks:
         block_id = str(block.get("block_id") or "")
         entry = verdicts.get(block_id) or {}
+        block_text = str(block.get("raw_text") or "")
+        cursors: dict[str, int] = {}
         for item in entry.get("missed_asks") or []:
             ref = str(item.get("task_ref") or "")
             evidence = str(item.get("evidence_text") or "")
-            created_by_ref[ref] = _created_task(
-                canonical, block, evidence, task_ref=ref, block_id=block_id
+            # Audit F16: the Nth identical quote binds to the Nth printed
+            # occurrence so repeated asks mint distinct spans/identities.
+            search_from = cursors.get(evidence, 0)
+            created = _created_task(
+                canonical, block, evidence, task_ref=ref,
+                block_id=block_id, search_from=search_from,
             )
+            found_at = _locate_evidence(block_text, evidence, search_from)
+            cursors[evidence] = (
+                found_at + 1 if found_at >= 0 else search_from + 1
+            )
+            created_by_ref[ref] = created
 
     fixer_flagged: set[str] = set()
     for decision in ledger_core.get("fixer_decisions") or []:
@@ -823,17 +871,47 @@ def reconcile(
             _continuation_row(canonical, block, owner)
         )
 
+    # Audit F3: task_context is ATTACHED, not merely recorded — the ruled
+    # stimulus (a data table, a scenario) travels on the task the learner
+    # receives, via the same shared_context field the leaf machinery and
+    # inventory render already carry.
+    def _owner_for_ref(ref: str) -> dict[str, Any] | None:
+        if ref in created_by_ref:
+            return created_by_ref[ref]
+        for task in kept:
+            if (task.get("qx_ruling") or {}).get("candidate_id") == ref:
+                return task
+        return None
+
     context_links: list[dict[str, Any]] = []
     for block in blocks:
         block_id = str(block.get("block_id") or "")
         entry = verdicts.get(block_id) or {}
         if str(entry.get("verdict") or "") != "task_context":
             continue
+        refs = [
+            str(v) for v in entry.get("context_for_task_refs") or [] if v
+        ]
+        attached: list[str] = []
+        context_text = str(block.get("raw_text") or "").strip()
+        for ref in refs:
+            owner = _owner_for_ref(ref)
+            if owner is None:
+                continue  # validation guarantees resolvability; defensive
+            existing = str(owner.get("shared_context") or "").strip()
+            if context_text and context_text not in existing:
+                owner["shared_context"] = "\n\n".join(
+                    part for part in (existing, context_text) if part
+                )
+            owner["requires_context"] = True
+            owner.setdefault("qx_context_block_ids", [])
+            if block_id not in owner["qx_context_block_ids"]:
+                owner["qx_context_block_ids"].append(block_id)
+            attached.append(ref)
         context_links.append({
             "block_id": block_id,
-            "task_refs": [
-                str(v) for v in entry.get("context_for_task_refs") or []
-            ],
+            "task_refs": refs,
+            "attached_task_refs": attached,
         })
 
     new_tasks = kept + [
@@ -844,12 +922,15 @@ def reconcile(
             ),
         )
     ]
+    fixer_blocks_with_occurrence: set[str] = set()
     for task in new_tasks:
         ruling = task.get("qx_ruling") or {}
         touched_blocks = set(ruling.get("confirmed_by_blocks") or [])
         if ruling.get("block_id"):
             touched_blocks.add(str(ruling.get("block_id")))
-        if touched_blocks & fixer_flagged:
+        hit = touched_blocks & fixer_flagged
+        if hit:
+            fixer_blocks_with_occurrence.update(hit)
             flags = task.setdefault("review_flags", [])
             note = (
                 "qx_fixer_decided: membership for this occurrence was "
@@ -857,6 +938,15 @@ def reconcile(
             )
             if note not in flags:
                 flags.append(note)
+    # Audit F6: a Fixer decision that left NO surviving occurrence (e.g. it
+    # rejected the candidate) still gets a durable, truthful record — on the
+    # ledger, since there is no row to flag.
+    orphan_fixer_flags = [
+        f"qx_fixer_decided: block {block_id} was decided by The Fixer and "
+        "no task occurrence survived to carry the flag"
+        for block_id in sorted(fixer_flagged - fixer_blocks_with_occurrence)
+        if block_id
+    ]
 
     canonical["tasks"] = new_tasks
     structure.renumber_tasks(canonical)
@@ -895,6 +985,7 @@ def reconcile(
             "qx critic unavailable: "
             + str(critic.get("unavailable"))
         )
+    critic_flags.extend(orphan_fixer_flags)
 
     verdict_counts: dict[str, int] = {}
     for entry in verdicts.values():
@@ -938,6 +1029,47 @@ def _source_sha(canonical: Mapping[str, Any]) -> str:
     return ""
 
 
+def _author_context_sha(
+    canonical: Mapping[str, Any],
+    blocks: Sequence[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
+) -> str:
+    """Identity of everything ELSE the author actually sees (audit F15).
+
+    Block kind and section title, candidate provenance and block mapping,
+    the batching policy that assigns neighbour context, and the Phase-2
+    compiler/schema identity all shape the provider's evidence; a sealed
+    verdict must not replay when any of them changed.
+    """
+    titles = _section_titles(canonical)
+    contract = canonical.get("source_contract") or {}
+    material = "␟".join([
+        str(contract.get("schema_version") or ""),
+        str(contract.get("compiler_version") or ""),
+        str(contract.get("hardening_version") or ""),
+        str(_batch_size()),
+        json.dumps(fixer_schema("BLK-00001"), sort_keys=True),
+        "␞".join(
+            "␝".join([
+                str(b.get("block_id") or ""),
+                str(b.get("kind") or ""),
+                titles.get(str(b.get("section_id") or ""), ""),
+            ])
+            for b in blocks
+        ),
+        "␞".join(
+            "␝".join([
+                str(c.get("candidate_id") or ""),
+                str(c.get("provenance") or ""),
+                ",".join(c.get("block_ids") or []),
+                str(c.get("nearest_block_id") or ""),
+            ])
+            for c in candidates
+        ),
+    ])
+    return canonical_source._sha256_text(material)
+
+
 def ledger_cache_key(
     canonical: Mapping[str, Any],
     blocks: Sequence[Mapping[str, Any]],
@@ -951,6 +1083,7 @@ def ledger_cache_key(
         _block_identity_sha(blocks),
         _candidate_identity_sha(candidates),
         _prompt_identity_sha(),
+        _author_context_sha(canonical, blocks, candidates),
     ])
     return canonical_source._sha256_text(material)
 
@@ -1041,8 +1174,13 @@ def _fixer_decide(
     titles: Mapping[str, str],
     *,
     reason: str,
+    blocks: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     block_id = str(block.get("block_id") or "")
+    # Audit F6: a candidate attributed here through nearest_block_id (no
+    # overlap anywhere) must still reach the Fixer's evidence, and the
+    # neighbouring blocks travel too — a bare "Why?" is undecidable
+    # without its stem.
     overlapping = [
         {
             "candidate_id": c["candidate_id"],
@@ -1051,10 +1189,26 @@ def _fixer_decide(
         }
         for c in candidates
         if block_id in c["block_ids"]
+        or (not c["block_ids"] and c.get("nearest_block_id") == block_id)
     ]
+    ordered = list(blocks)
+    index = next(
+        (i for i, b in enumerate(ordered)
+         if str(b.get("block_id") or "") == block_id),
+        -1,
+    )
+    context_before = (
+        str(ordered[index - 1].get("raw_text") or "") if index > 0 else ""
+    )
+    context_after = (
+        str(ordered[index + 1].get("raw_text") or "")
+        if 0 <= index < len(ordered) - 1 else ""
+    )
     prompt = json.dumps({
         "reason_this_reached_you": reason,
+        "context_before": context_before,
         "block": _block_payload(block, titles),
+        "context_after": context_after,
         "candidates_overlapping_this_block": overlapping,
     }, ensure_ascii=False)
     response = _call_provider(
@@ -1086,8 +1240,26 @@ def _critic_review(
     verdicts: Mapping[str, Mapping[str, Any]],
     accounting_preview: Mapping[str, Any],
     tasks: Sequence[Mapping[str, Any]],
+    *,
+    blocks: Sequence[Mapping[str, Any]] = (),
+    candidates: Sequence[Mapping[str, Any]] = (),
+    titles: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
+    # Audit F6: the critic is asked to catch asks wrongly ruled not_task —
+    # it cannot do that without the words, so it receives every source
+    # block and candidate alongside the verdicts.
     prompt = json.dumps({
+        "blocks": [
+            _block_payload(block, titles or {}) for block in blocks
+        ],
+        "candidates": [
+            {
+                "candidate_id": c["candidate_id"],
+                "text": c["raw_prompt"],
+                "block_ids": c["block_ids"],
+            }
+            for c in candidates
+        ],
         "verdicts": {
             block_id: dict(entry) for block_id, entry in verdicts.items()
         },
@@ -1203,28 +1375,59 @@ def adjudicate_task_membership(canonical: dict[str, Any]) -> dict[str, Any]:
             "stage": "deterministic_validation",
             "defects": copy.deepcopy(defects),
         })
+        # Audit F7: the correction is BOUNDED to the defective blocks (plus
+        # the candidates that overlap them) — never the whole chapter — so
+        # one omitted verdict cannot construct a request larger than any
+        # author batch and discard every already-paid batch on transport
+        # failure. Successful verdicts stay in `merged`; only the patched
+        # blocks are replaced.
+        block_index = {
+            str(b.get("block_id") or ""): b for b in blocks
+        }
+        defective_ids: list[str] = []
+        for item in defects:
+            block_id = str(item.get("block_id") or "")
+            if not block_id or block_id not in block_index:
+                candidate_id = str(item.get("candidate_id") or "")
+                match = next(
+                    (c for c in candidates
+                     if c["candidate_id"] == candidate_id), None,
+                )
+                if match:
+                    block_id = (
+                        (match["block_ids"] or [""])[0]
+                        or match.get("nearest_block_id") or ""
+                    )
+            if block_id in block_index and block_id not in defective_ids:
+                defective_ids.append(block_id)
+        window = [block_index[bid] for bid in defective_ids]
+        window_ids = set(defective_ids)
+        window_candidates = [
+            c for c in candidates
+            if (set(c["block_ids"]) & window_ids)
+            or c.get("nearest_block_id") in window_ids
+        ]
         prompt = json.dumps({
             "defects": defects,
             "previous_verdicts": {
-                block_id: entry for block_id, entry in merged.items()
+                block_id: merged[block_id]
+                for block_id in defective_ids if block_id in merged
             },
-            "blocks": [_block_payload(b, titles) for b in blocks],
+            "blocks": [_block_payload(b, titles) for b in window],
             "candidates": [
                 {
                     "candidate_id": c["candidate_id"],
                     "text": c["raw_prompt"],
                     "block_ids": c["block_ids"],
                 }
-                for c in candidates
+                for c in window_candidates
             ],
         }, ensure_ascii=False)
         try:
             corrected = _call_provider(
                 system=_CORRECTION_SYSTEM,
                 prompt=prompt,
-                schema=author_schema(
-                    [str(b.get("block_id") or "") for b in blocks]
-                ),
+                schema=author_schema(defective_ids or ["BLK-00000"]),
             )
         except Exception as exc:
             return _unadjudicated(
@@ -1233,14 +1436,11 @@ def adjudicate_task_membership(canonical: dict[str, Any]) -> dict[str, Any]:
         corrected_merged, corrected_duplicates = _merge_batch_payloads(
             [corrected]
         )
-        # The correction returns the complete set; entries it did not
-        # change are carried verbatim, unknown ids are dropped on record.
-        merged = {
-            block_id: corrected_merged.get(block_id, entry)
-            for block_id, entry in merged.items()
-        }
+        # Patched blocks replace their originals; everything the defects
+        # did not touch is carried verbatim.
         for block_id, entry in corrected_merged.items():
-            merged.setdefault(block_id, entry)
+            if block_id in window_ids or block_id not in merged:
+                merged[block_id] = entry
         defects = corrected_duplicates + verdict_defects(
             merged, blocks, candidates
         )
@@ -1284,6 +1484,7 @@ def adjudicate_task_membership(canonical: dict[str, Any]) -> dict[str, Any]:
                 candidates,
                 titles,
                 reason=unresolved[block_id],
+                blocks=blocks,
             )
         except Exception as exc:
             return _unadjudicated(
@@ -1333,7 +1534,8 @@ def adjudicate_task_membership(canonical: dict[str, Any]) -> dict[str, Any]:
     preview = copy.deepcopy(canonical)
     preview_accounting = reconcile(preview, ledger_core, candidates)
     ledger_core["critic"] = _critic_review(
-        ordered_verdicts, preview_accounting, preview.get("tasks") or []
+        ordered_verdicts, preview_accounting, preview.get("tasks") or [],
+        blocks=blocks, candidates=candidates, titles=titles,
     )
 
     accounting = reconcile(canonical, ledger_core, candidates)

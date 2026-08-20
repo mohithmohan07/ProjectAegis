@@ -174,6 +174,25 @@ def upload_release_to_database(
             else (job.result_ids or [])
         )
 
+    # "Semantic doubt flags; structural corruption blocks" (§4). A
+    # Diagnostic release keeps every download open and refuses only the
+    # database write. The defect list is the same one the upload already
+    # refused on before the Pre lane existed, so the Post lane's behaviour
+    # and its message are unchanged.
+    defects = structural_defects(payload)
+    if defects:
+        raise ValueError("; ".join(defects))
+    # S10-g: a tampered payload refuses BEFORE the zero-row branch — an
+    # in-place edit that emptied the records is still an in-place edit.
+    _refuse_a_moved_seal(db, job, payload, resolved)
+    # Round 10 (audit finding 9c): the ``database_uploaded`` idempotency
+    # latch runs AFTER the structural gate and the seal, never before.
+    # [measured] with the latch first, one successful publication turned
+    # this function into an unconditional receipt printer: a staged
+    # payload mutated in place AFTER the upload re-earned a success
+    # response without any gate ever reading it. An already-uploaded
+    # release re-validates and only then repeats its receipt — idempotent
+    # for the honest payload, refused for the tampered one.
     if summary.get("database_uploaded"):
         return {
             "job_id": job.id,
@@ -191,17 +210,6 @@ def upload_release_to_database(
     chapter = db.get(models.Chapter, chapter_id)
     if chapter is None:
         raise ValueError("the release target chapter no longer exists")
-    # "Semantic doubt flags; structural corruption blocks" (§4). A
-    # Diagnostic release keeps every download open and refuses only the
-    # database write. The defect list is the same one the upload already
-    # refused on before the Pre lane existed, so the Post lane's behaviour
-    # and its message are unchanged.
-    defects = structural_defects(payload)
-    if defects:
-        raise ValueError("; ".join(defects))
-    # S10-g: a tampered payload refuses BEFORE the zero-row branch — an
-    # in-place edit that emptied the records is still an in-place edit.
-    _refuse_a_moved_seal(db, job, payload, resolved)
     # T3.3b: the resolved Post ``machine_id``s ride a registered
     # ``_aegis_*`` marker, and ``_strip_release_fields`` drops every
     # ``_RELEASE_AUDIT_FIELDS`` key BY CONSTRUCTION — so the marker cannot

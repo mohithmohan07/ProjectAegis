@@ -429,6 +429,119 @@ def test_failure_release_reads_the_rewritten_settled_rows_snapshot(
     assert "Validated Cached Concept" in titles
 
 
+def _allotted_row(title, allotments):
+    return {
+        "topic": "Topic A",
+        "parent_concept": "Parent A",
+        "concept_title": title,
+        "concept_details": "Description: A row carrying recorded allotments.",
+        "keywords": "allotted",
+        "_semantic_topic_id": "TOPIC-A",
+        "_semantic_graph_contract": "CONTRACT-1",
+        "_source_block_ids": ["BLK-0007"],
+        "_aegis_analysis_allotments": list(allotments),
+    }
+
+
+def test_a_stale_split_cache_never_beats_the_current_merged_rows(
+    db, tmp_path, monkeypatch,
+):
+    """Audit finding 12: the selection counted ROWS carrying an allotment
+    marker, so a stale split cache (two rows carrying one id each)
+    out-counted the current merged topology (one row carrying both ids)
+    while recording exactly the same allotment identities — row
+    partitioning deciding the swap. The exact identity SETS are compared
+    now: equal sets keep the current rows, no advisory needed."""
+    job, chapter = _job(db)
+    current = [_allotted_row("Merged Current Concept",
+                             ["LA-0001", "LA-0002"])]
+    monkeypatch.setattr(
+        release.generation,
+        "_newest_compatible_concept_checkpoint",
+        lambda _envelope: {"records": copy.deepcopy(current)},
+    )
+    _write_validated_cache(tmp_path, [
+        _allotted_row("Split Cached Concept One", ["LA-0001"]),
+        _allotted_row("Split Cached Concept Two", ["LA-0002"]),
+    ])
+    monkeypatch.setattr(
+        release.uploads,
+        "source_artifact_directory",
+        lambda _job_id: str(tmp_path),
+        raising=False,
+    )
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        error=RuntimeError("failed after creating a durable checkpoint"),
+        reason="Generation failed after creating a durable checkpoint.",
+    )
+
+    payload = release.release_payload(job)
+    titles = [row["concept_title"] for row in payload["records"]]
+    assert titles == ["Merged Current Concept"]
+    assert not any(
+        issue["code"] == "release_rows_upgraded_from_validated_cache"
+        for issue in payload["issues"]
+    )
+    assert not any(
+        issue["code"] == release.TOPOLOGY_ALLOTMENT_AMBIGUITY
+        for issue in payload["issues"]
+    )
+
+
+def test_incomparable_allotment_sets_keep_current_and_record_the_ambiguity(
+    db, tmp_path, monkeypatch,
+):
+    """Audit finding 12: when each side records allotment identities the
+    other lacks, neither is a superset — the current rows ship and the
+    ambiguity is a NAMED advisory issue, never a row-count preference and
+    never a gate."""
+    job, chapter = _job(db)
+    current = [_allotted_row("Merged Current Concept",
+                             ["LA-0001", "LA-0002"])]
+    monkeypatch.setattr(
+        release.generation,
+        "_newest_compatible_concept_checkpoint",
+        lambda _envelope: {"records": copy.deepcopy(current)},
+    )
+    _write_validated_cache(tmp_path, [
+        _allotted_row("Sideways Cached Concept", ["LA-0001", "LA-0003"]),
+    ])
+    monkeypatch.setattr(
+        release.uploads,
+        "source_artifact_directory",
+        lambda _job_id: str(tmp_path),
+        raising=False,
+    )
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        error=RuntimeError("failed after creating a durable checkpoint"),
+        reason="Generation failed after creating a durable checkpoint.",
+    )
+
+    payload = release.release_payload(job)
+    titles = [row["concept_title"] for row in payload["records"]]
+    assert titles == ["Merged Current Concept"]
+    advisories = [
+        issue for issue in payload["issues"]
+        if issue["code"] == release.TOPOLOGY_ALLOTMENT_AMBIGUITY
+    ]
+    assert len(advisories) == 1
+    assert advisories[0]["severity"] == "warning"
+    assert "incomparable" in advisories[0]["message"]
+    # Advisory, never a gate: the ambiguity does not block the write.
+    assert not any(
+        "topology" in defect
+        for defect in release.structural_defects(payload)
+    )
+
+
 def test_captured_final_rows_are_never_overridden_by_cache(
     db, tmp_path, monkeypatch,
 ):
@@ -933,7 +1046,33 @@ def test_repeated_question_detection_is_case_insensitive():
     assert len(repeats[0]["qids"]) == 2
 
 
-def test_punctuation_and_numbering_do_not_hide_a_repeat():
+def test_a_combining_vowel_sign_difference_is_not_a_repeat():
+    """Audit finding 18: Python's ``\\w`` excludes Unicode combining marks,
+    so the old noise class deleted every Devanagari matra and two DISTINCT
+    prompts (differing only by a vowel sign) collided into one false
+    ``repeated_question_text`` warning. The key is lossless now."""
+    types = _mined_types()
+    cases = types["types"][0]["case_prompts"]
+    # "की कौन?" vs "क कौन?" — identical except the combining vowel sign
+    # U+0940 on the first akshara.
+    cases[0]["examples"][0]["prompt"] = "की कौन?"
+    cases[1]["examples"][0]["prompt"] = "क कौन?"
+
+    _rows, issues, _routes = release.audit_type_cases(types, _inventory())
+
+    assert not [
+        issue for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ]
+
+
+def test_the_repeat_key_is_lossless_case_and_whitespace_fold_nothing_else():
+    """RE-AUTHORED under audit finding 18 (this test used to pin the lossy
+    behaviour: punctuation stripped, a leading "(2)" discarded). The
+    mechanical duplicate warning may only compare, never classify —
+    punctuation and numbering are wording now, so prompts differing in
+    them are distinct; case and whitespace runs, the lossless folds, still
+    collide."""
     types = _mined_types()
     cases = types["types"][0]["case_prompts"]
     cases[0]["examples"][0]["prompt"] = (
@@ -945,10 +1084,28 @@ def test_punctuation_and_numbering_do_not_hide_a_repeat():
 
     _rows, issues, _routes = release.audit_type_cases(types, _inventory())
 
-    assert [
-        issue["code"] for issue in issues
+    assert not [
+        issue for issue in issues
         if issue["code"] == "repeated_question_text"
-    ] == ["repeated_question_text"]
+    ]
+
+    types = _mined_types()
+    cases = types["types"][0]["case_prompts"]
+    cases[0]["examples"][0]["prompt"] = (
+        "Explain  how a plant\nresponds to sunlight."
+    )
+    cases[1]["examples"][0]["prompt"] = (
+        "EXPLAIN HOW A PLANT RESPONDS TO SUNLIGHT."
+    )
+
+    _rows, issues, _routes = release.audit_type_cases(types, _inventory())
+
+    repeats = [
+        issue for issue in issues
+        if issue["code"] == "repeated_question_text"
+    ]
+    assert len(repeats) == 1
+    assert len(repeats[0]["qids"]) == 2
 
 
 def test_diagnostics_archive_carries_the_pre_learning_lane(

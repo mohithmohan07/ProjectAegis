@@ -25,8 +25,11 @@ owner's corpus and the staging corpus separately accountable.
 ## D2 — Source medium per case
 
 - **MMD cases**: checked-in UTF-8 `.mmd` files, byte-identity-locked (sha256 in
-  the manifest), driven through the real HTTP lane (upload → convert → generate)
-  with zero patching — the dry path exercises Phase 2/Phase 3 source
+  the manifest), driven through the real HTTP lane (upload → convert → generate).
+  One suite-wide authority stand-in applies (stated honestly, audit F17): the
+  conftest QX echo author supplies the task-membership verdicts the compile
+  seam now requires, since tests run with no live provider. Beyond that the
+  drive is unpatched — the dry path exercises Phase 2/Phase 3 source
   compilation, subject adapters, deposit, culmination, and workbook append.
 - **PDF and scanned cases**: built at test time with fitz (text-layer pages for
   "text", rasterized-image-only pages for "scanned") and driven through

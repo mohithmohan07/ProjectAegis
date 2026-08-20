@@ -28,10 +28,38 @@ from . import progress
 _CONTRACT_VERSION = 1
 
 
+def _gpt_page_ledger_reader(canonical: dict[str, Any]) -> bool:
+    """The recorded MMD reader identifies the GPT PDF page ledger.
+
+    The PDF lane's rendered MMD stamps its reader into the header
+    (``<!-- source_reader: gpt-pdf-to-acsd-... -->``), and phase2's
+    ``_reader_stamp`` records that header into
+    ``source_contract.source_reader``. On that lane task membership is
+    already a model verdict — every block's kind was model-decided and
+    independently verified against the original page images — so QX must
+    not re-judge (or re-bill) it, whether or not the chapter outline has
+    been attached to the compiled canonical yet (the reconstruct path
+    attaches it only AFTER the compile). Reading a recorded reader
+    identity is mechanical provenance, not a content judgment.
+    """
+    from . import canonical_source_phase221_fallback as fallback
+
+    contract = canonical.get("source_contract")
+    if not isinstance(contract, dict):
+        return False
+    reader = str(contract.get("source_reader") or "")
+    compiler_id = reader.split("+", 1)[0]
+    return bool(compiler_id) and compiler_id.startswith(
+        fallback.MMD_SOURCE_ORIGIN
+    )
+
+
 def adjudication_exempt(canonical: dict[str, Any]) -> bool:
     """A model membership authority already ruled this bundle (PDF lane)."""
     outline = canonical.get("chapter_outline")
-    return isinstance(outline, dict) and bool(outline.get("version"))
+    if isinstance(outline, dict) and bool(outline.get("version")):
+        return True
+    return _gpt_page_ledger_reader(canonical)
 
 
 def membership_adjudicated(canonical: dict[str, Any]) -> bool:
@@ -150,6 +178,38 @@ def install(generation: ModuleType | None = None) -> None:
         source_contract["task_count"] = len(tasks)
         if isinstance(canonical.get("statistics"), dict):
             canonical["statistics"]["tasks"] = len(tasks)
+
+        # Audit F1: a count-changing adjudication must leave the Phase-2.1
+        # seals CONSISTENT, or the persisted artifact fails
+        # `hardening_artifact_valid` on the next load, recompiles into the
+        # same mismatch, and raises. Reconciliation already refreshed the
+        # canonical marker/source-contract counts (materialize_task_leaf_
+        # cases stamps them); what must be resynced here is the rest of the
+        # marker, the phase21 issue list, and the REPORT's copy of the
+        # marker — all from the same post-adjudication ledger.
+        from . import canonical_source_phase21 as phase21
+        from . import canonical_source_phase21_structure as p21_structure
+
+        source_issues = phase21.source_boundary_issues(canonical)
+        canonical["phase21_issues"] = copy.deepcopy(source_issues)
+        marker = canonical.get("phase21_hardening")
+        if isinstance(marker, dict):
+            parent_count, decomposed_count, inventory_items = (
+                p21_structure.inventory_shape(canonical)
+            )
+            marker.update({
+                "parent_task_count": parent_count,
+                "decomposed_parent_task_count": decomposed_count,
+                "inventory_item_count": inventory_items,
+                "followup_task_prompts_recovered": (
+                    p21_structure.followup_prompt_count(canonical)
+                ),
+                "blocking_issues": len(source_issues),
+            })
+            report["phase21_hardening"] = copy.deepcopy(marker)
+        report["phase21_issues"] = copy.deepcopy(source_issues)
+        shadow_seal = canonical.setdefault("shadow_validation", {})
+        shadow_seal["phase21_blocking_issues"] = len(source_issues)
 
         all_issues = phase2.phase2_inventory_issues(canonical, report)
         ready = not all_issues

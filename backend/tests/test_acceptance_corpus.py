@@ -218,7 +218,12 @@ def test_english_questions_recover_under_an_ask_aware_author(
     canonical = _compiled(filename).canonical
 
     tasks = canonical.get("tasks") or []
-    assert len(tasks) >= 4, "the printed questions must enter the inventory"
+    # Audit F17: both fixtures print exactly six asks (4 + 2); pin the
+    # exact count so a silently dropped ask cannot hide behind ">= 4".
+    assert len(tasks) == 6, (
+        f"all six printed questions must enter the inventory, got "
+        f"{len(tasks)}"
+    )
     accounting = canonical["task_verdict_ledger"]["accounting"]
     assert accounting["unaccounted_block_ids"] == []
     assert accounting["created_from_missed_asks"] == len(tasks)

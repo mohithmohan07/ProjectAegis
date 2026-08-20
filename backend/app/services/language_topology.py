@@ -432,15 +432,35 @@ def _decision_key(
     canonical: Mapping[str, Any],
     instruction_set_sha256: str,
     mode: str,
+    *,
+    work_name: str = "",
 ) -> str:
+    """The plan's replay identity (audit F8).
+
+    Beyond raw source + instructions, the key binds everything the author's
+    verdict actually depends on: the work name (the Detailed Analysis
+    template), the ordered block identity, the adjudicated task/QID
+    identity (a QX policy change that recovers a new ask must re-author the
+    plan), and the compiler/contract versions that shaped the bundle.
+    """
     contract = canonical.get("source_contract") or {}
+    blocks = _content_blocks(canonical)
+    tasks = _task_payloads(canonical)
     material = "␟".join([
         LANGUAGE_ADAPTER_VERSION,
         config.OPENAI_MODEL,
         str(contract.get("source_sha256") or ""),
+        str(contract.get("schema_version") or ""),
+        str(contract.get("compiler_version") or ""),
+        str(contract.get("hardening_version") or ""),
         str(instruction_set_sha256 or ""),
         mode,
+        " ".join(str(work_name or "").split()),
         _prompt_identity_sha(),
+        "␞".join(
+            f"{b.get('block_id')}:{b.get('raw_sha256')}" for b in blocks
+        ),
+        "␞".join(f"{t['qid']}:{t['prompt']}" for t in tasks),
     ])
     return canonical_source._sha256_text(material)
 
@@ -570,12 +590,20 @@ def author_language_plan(
             "topology plan is impossible without them"
         )
 
-    key = _decision_key(canonical, instruction_sha, mode)
+    key = _decision_key(
+        canonical, instruction_sha, mode, work_name=work_name
+    )
     cached = _read_cached(key)
     if cached is not None:
         defects = plan_defects(
             cached.get("plan") or {}, blocks, tasks, work_name=work_name
         )
+        # Audit F8: the sealed hash must authenticate the sealed body — a
+        # well-formed edit that kept the old plan_sha256 is a miss.
+        if str(cached.get("plan_sha256") or "") != plan_sha256(
+            cached.get("plan") or {}
+        ):
+            defects = ["sealed plan_sha256 does not match the sealed plan"]
         if not defects:
             sealed = dict(cached)
             sealed["replayed"] = True
@@ -628,11 +656,18 @@ def author_language_plan(
             ) from exc
         defects = plan_defects(plan, blocks, tasks, work_name=work_name)
     if defects:
+        # Audit F14: the durable Fixer reason records the defects ACTUALLY
+        # sent to it (post-correction), and the round itself is appended to
+        # the history — never the author's initial defect list.
+        fixer_defects = list(defects)
+        correction_history.append({
+            "stage": "fixer", "defects": copy.deepcopy(fixer_defects),
+        })
         try:
             plan = _call_provider(
                 system=_FIXER_SYSTEM,
                 prompt=json.dumps({
-                    "defects": defects,
+                    "defects": fixer_defects,
                     "failed_plan": plan,
                     "mode": mode,
                     "mode_rationale": rationale,
@@ -653,9 +688,7 @@ def author_language_plan(
             )
         fixer_record = {
             "decision_sha256": plan_sha256(plan),
-            "reason": "; ".join(
-                str(d) for d in correction_history[-1]["defects"][:8]
-            ) if correction_history else "author plan invalid",
+            "reason": "; ".join(str(d) for d in fixer_defects[:8]),
         }
 
     review_flags: list[str] = []
@@ -670,7 +703,10 @@ def author_language_plan(
             schema=critic_schema(),
         )
     except Exception as exc:  # advisory: never a gate, never a halt (Q10)
-        critic = {"verdict": "concur", "dissents": [],
+        # Audit F14: a critic that never ran is recorded as UNAVAILABLE,
+        # never as a concurrence that did not happen. (Only the model's own
+        # schema is limited to concur|dissent; this record is ours.)
+        critic = {"verdict": "unavailable", "dissents": [],
                   "unavailable": str(exc)}
         review_flags.append(
             f"language plan critic unavailable ({type(exc).__name__}); "
@@ -737,9 +773,19 @@ def ensure_language_plan(
             and str(stored.get("adapter_version") or "")
             == LANGUAGE_ADAPTER_VERSION
             and str(stored.get("decision_key") or "")
-            == _decision_key(canonical, instruction_sha, mode)
+            == _decision_key(
+                canonical, instruction_sha, mode, work_name=work_name
+            )
             and str(stored.get("plan_sha256") or "")
             == plan_sha256(stored.get("plan") or {})
+            # Audit F8: replay only a plan that still satisfies the
+            # mechanical contract against the CURRENT bundle and work name.
+            and not plan_defects(
+                stored.get("plan") or {},
+                _content_blocks(canonical),
+                _task_payloads(canonical),
+                work_name=work_name,
+            )
         ):
             replayed = dict(stored)
             replayed["replayed"] = True

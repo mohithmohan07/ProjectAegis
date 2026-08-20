@@ -122,3 +122,72 @@ def test_parser_era_artifact_is_stale_for_generation():
     assert not qx_contract.qx_artifact_valid(parser_era, {})
     shadow = {"used_for_generation": False}
     assert qx_contract.qx_artifact_valid(shadow, {})
+
+
+def test_count_changing_adjudication_keeps_the_phase21_seals_valid(
+    monkeypatch, tmp_path
+):
+    """Audit F1: a created (and a rejected) membership verdict must leave
+    canonical AND report Phase-2.1 seals consistent, or the persisted
+    artifact deterministically fails its next load."""
+    from app.services import canonical_source_phase21 as phase21
+
+    monkeypatch.setattr(qx, "_CACHE_DIR", tmp_path / "cache")
+
+    def creating(**kwargs):
+        real = qx._call_provider  # conftest echo (rebound below per call)
+        raise AssertionError("replaced below")
+
+    def make_author(mode):
+        def author(*, system, prompt, schema, purpose="source_extraction",
+                   max_tokens=None):
+            payload = json.loads(prompt)
+            if system == qx._CRITIC_SYSTEM:
+                return {"verdict": "concur", "dissents": []}
+            if system == qx._FIXER_SYSTEM:
+                block = payload["block"]
+                return {
+                    "block_id": block["block_id"], "verdict": "not_task",
+                    "confirmed_candidate_ids": [],
+                    "rejected_candidate_ids": [
+                        c["candidate_id"] for c in
+                        payload["candidates_overlapping_this_block"]
+                    ],
+                    "missed_asks": [], "continues_task_ref": "",
+                    "context_for_task_refs": [], "rationale": "test",
+                }
+            out = []
+            for blk in payload.get("blocks") or []:
+                entry = {
+                    "block_id": blk["block_id"], "verdict": "not_task",
+                    "confirmed_candidate_ids": [],
+                    "rejected_candidate_ids": [],
+                    "missed_asks": [], "continues_task_ref": "",
+                    "context_for_task_refs": [],
+                }
+                if mode == "create" and "Sound travels" in blk["text"]:
+                    entry["verdict"] = "contains_tasks"
+                    entry["missed_asks"] = [{
+                        "evidence_text": "Sound travels through air.",
+                        "task_ref": "NEW-1",
+                    }]
+                out.append(entry)
+            # every candidate must still be ruled: reject them all
+            candidates = payload.get("candidates") or []
+            if out and candidates:
+                out[0]["rejected_candidate_ids"] = [
+                    c["candidate_id"] for c in candidates
+                ]
+            return {"blocks": out}
+        return author
+
+    for mode in ("create", "reject"):
+        monkeypatch.setattr(qx, "_call_provider", make_author(mode))
+        monkeypatch.setattr(qx, "_provider_ready", lambda: True)
+        compiled = phase2.compile_phase2_source(
+            SOURCE, source_filename=f"seal-{mode}.mmd",
+            consumer_module="build_concepts",
+        )
+        assert phase21.hardening_artifact_valid(
+            compiled.canonical, compiled.report
+        ), f"{mode}: the Phase-2.1 seals must survive a count change"

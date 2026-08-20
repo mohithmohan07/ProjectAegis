@@ -73,12 +73,15 @@ Item 7: **no ruling and no wording survive in-repo; open with the owner.**
 T10-7 says "the 23 items plus three extras" and never enumerates them.
 The reconstruction names its own three, **flagged for owner confirmation**:
 
-* **E1 — the repeated-question collision audit** (T10-5): Unicode-aware,
-  casefolded, threshold-free; every collision one grouped warning carrying
-  the QIDs and the shared wording. Named residue, recorded rather than
-  smoothed over: `_QUESTION_ITEM_MARKER_RE` still decides a leading
-  "(iv)" is numbering rather than question text — a shape judgment owned
-  by the step that replaces regex extraction with a model verdict.
+* **E1 — the repeated-question collision audit** (T10-5, tightened by
+  audit finding 18): lossless, casefolded, threshold-free; every collision
+  one grouped warning carrying the QIDs and the shared wording. The key is
+  NFC + whitespace-run collapse + casefold and NOTHING else — the former
+  punctuation/`\w` noise class deleted Unicode combining marks (two
+  distinct Devanagari strings collided into one false warning), and the
+  leading item-marker strip was a shape judgment that could not be
+  verified lossless; both are gone, so the warning compares exact wording
+  and classifies nothing.
 * **E2 — Type-catalog parseability** (T9-3): a catalog that will not parse
   is the named defect `type_catalog_unreadable` (blocking via the closed
   identity set), never a swallowed exception that silently disables the

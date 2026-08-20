@@ -122,6 +122,26 @@ def test_cbse10_physics_figures_text_pdf(tmp_path, monkeypatch):
     assert "Describe Fig. 10.1 in your own words." in bundle["mmd_text"]
     assert (tmp_path / "artifacts" / "assets").exists()
     assert any((tmp_path / "artifacts" / "assets").iterdir())
+    # Audit F17: the task-to-figure RELATIONSHIP is the point of this case
+    # — the cross-page "Fig. 10.1" reference must resolve to the canonical
+    # Figure, not merely coexist with it in the text.
+    from app.services import canonical_source_phase2 as phase2
+
+    compiled = phase2.compile_phase2_source(
+        bundle["mmd_text"],
+        source_filename="cbse10_physics_figures.mmd",
+        consumer_module="pdf_corpus_check",
+    )
+    describe_tasks = [
+        task for task in compiled.canonical.get("tasks") or []
+        if "Describe Fig. 10.1" in str(task.get("raw_prompt") or "")
+    ]
+    assert describe_tasks, "the figure task must survive compilation"
+    task = describe_tasks[0]
+    assert task.get("figure_refs"), (
+        "the cross-page figure reference must resolve to a canonical "
+        f"Figure id, got unresolved={task.get('unresolved_figure_reference_ids')}"
+    )
 
 
 def test_mh6_maths_scanned_image_only(tmp_path, monkeypatch):

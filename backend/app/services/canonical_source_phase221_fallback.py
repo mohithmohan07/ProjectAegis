@@ -53,6 +53,13 @@ _LOGGER = logging.getLogger(__name__)
 # omitted running header/footer/page number ships verbatim in the page's
 # ``dropped_furniture`` (R4: dropped and listed as dropped, with what it
 # said). Bumped so cached transcriptions without the record are re-read.
+# NOT bumped for the sealed-bundle ``result_sha256`` integrity digest: that
+# added no new extraction/verification rule — no cached judgment became
+# stale — and the reuse gate itself already treats a legacy seal without
+# the digest as a miss (it re-extracts, free where the per-batch caches
+# still hold their verified pages, and reseals with the digest). A bump
+# here would instead discard every paid page transcription for a change
+# that altered none of their content.
 FALLBACK_VERSION = "2.4.0"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
@@ -615,6 +622,27 @@ def _bundle_cache_key(pdf_sha256: str) -> str:
         "full-verified-bundle",
     ])
     return _sha256_text(material)
+
+
+def _bundle_pages_sha256(bundle: dict[str, Any]) -> str:
+    """Canonical integrity digest of a sealed bundle's verified pages.
+
+    Written beside the seal at seal time and recomputed at reuse: a sealed
+    bundle whose cached page content no longer matches its recorded digest
+    is a cache MISS that re-extracts, never verified source. Deliberately
+    digests the PAGES ONLY \u2014 the chapter outline is legitimately (re)derived
+    AFTER the reuse gate runs (a bundle sealed under an older OUTLINE_VERSION
+    is upgraded in place), so including the outline would invalidate every
+    seal on an outline upgrade without any change to the paid, verified page
+    transcription.
+    """
+    return hashlib.sha256(
+        json.dumps(
+            bundle.get("pages") or [],
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 def _batch_cache_key(path: Path, pages: list[PdfPage]) -> str:
@@ -1922,9 +1950,23 @@ def extract_pdf_to_page_acsd(
     sealed = _read_verified_batch_cache(_bundle_cache_key(pdf_sha))
     if sealed is not None and isinstance(sealed.get("result"), dict):
         bundle = copy.deepcopy(sealed["result"])
+        # Integrity gate on the sealed evidence: beyond the source hash and
+        # page count, the pages the cache actually holds must reproduce the
+        # digest recorded at seal time. A well-formed edit to the cached
+        # bundle (block text swapped, sha256 and page count preserved) must
+        # never replay as verified source; any mismatch — including a legacy
+        # seal written before the digest existed — is a MISS that falls
+        # through to re-extraction (free where the per-batch caches still
+        # hold their verified judgments) and reseals with the digest.
+        # Refusing a defective artifact is mechanics, not a content judgment.
+        recorded_digest = str(sealed.get("result_sha256") or "")
         if (
             bundle.get("pdf_sha256") == pdf_sha
             and len(bundle.get("pages") or []) == page_count
+            and recorded_digest
+            and hmac.compare_digest(
+                recorded_digest, _bundle_pages_sha256(bundle)
+            )
         ):
             progress.log(
                 "Reusing the sealed verified GPT PDF-to-ACSD bundle for this "
@@ -2108,6 +2150,11 @@ def extract_pdf_to_page_acsd(
         "created_at": time.time(),
         "model": config.OPENAI_MODEL,
         "pdf_sha256": pdf_sha,
+        # Integrity digest of the sealed pages, required at reuse. PAGES
+        # ONLY, never the outline: the outline may be (re)derived after the
+        # reuse gate under a newer OUTLINE_VERSION, and that upgrade must
+        # not invalidate the seal (see _bundle_pages_sha256).
+        "result_sha256": _bundle_pages_sha256(bundle),
         "result": copy.deepcopy(bundle),
     })
     return bundle
@@ -2151,11 +2198,33 @@ def materialize_visual_assets(
             for block in page_row.get("blocks") or []:
                 if block.get("kind") != "figure":
                     continue
-                clip = _clip_bbox(page, list(block.get("bbox") or []))
-                pixmap = page.get_pixmap(
-                    matrix=fitz.Matrix(2.0, 2.0), clip=clip, alpha=False
-                )
-                data = pixmap.tobytes("jpeg", jpg_quality=88)
+                try:
+                    clip = _clip_bbox(page, list(block.get("bbox") or []))
+                    pixmap = page.get_pixmap(
+                        matrix=fitz.Matrix(2.0, 2.0), clip=clip, alpha=False
+                    )
+                    data = pixmap.tobytes("jpeg", jpg_quality=88)
+                except Exception as exc:
+                    # One unusable crop (a degenerate bbox, a renderer
+                    # refusal) is a recorded, flagged degradation — never a
+                    # conversion abort (Q13). The verified page bundle is
+                    # already paid for, and aborting here replayed the same
+                    # exception deterministically on every retry. The figure
+                    # keeps its identity, bbox, caption, and page evidence;
+                    # no asset URL is ever invented for it, and the named
+                    # flag rides this page's review_flags into the published
+                    # bundle so the release surface shows exactly what was
+                    # not materialized and why (R4). Every other figure on
+                    # every page still materializes below.
+                    flag = (
+                        "figure asset could not be materialized (page "
+                        f"{page_number}, reading order "
+                        f"{int(block.get('reading_order') or 0)}): {exc}"
+                    )
+                    page_row.setdefault("review_flags", []).append(flag)
+                    progress.log(flag, level="warning")
+                    _LOGGER.warning(flag)
+                    continue
                 filename = f"{_sha256_bytes(data)}.jpg"
                 destination = asset_dir / filename
                 if not destination.exists():
@@ -2195,7 +2264,10 @@ def pin_existing_job_assets() -> int:
     Assets minted before the store existed live only under their job's
     artifact directory, so the URLs already embedded in published content
     would still die with that directory. Idempotent and cheap once caught up
-    (two existence checks per crop), so it runs at every boot.
+    (one small-crop digest verification per crop), so it runs at every boot.
+    A stored copy whose bytes no longer match the name they live under is
+    never silently kept: it is re-pinned from a verified job copy when one
+    exists, otherwise the loss is recorded by name.
     """
     from . import uploads
 
@@ -2233,12 +2305,32 @@ def pin_existing_job_assets() -> int:
             try:
                 if not crop.is_file() or not _BBOX_RE.fullmatch(crop.name):
                     continue
-                if (
-                    source_asset_store.stored_asset_path(crop.name).exists()
-                    and source_asset_store.manifest_path(crop.name).exists()
-                ):
-                    continue
+                expected = crop.name[: -len(".jpg")]
+                stored = source_asset_store.stored_asset_path(crop.name)
+                stored_bytes_rotted = False
+                if stored.exists():
+                    # Existence is not health: a stored file must still hash
+                    # to the name it lives under before it can short-circuit
+                    # the sweep (crops are small, so this stays boot-cheap).
+                    if _sha256_bytes(stored.read_bytes()) == expected:
+                        if source_asset_store.manifest_path(crop.name).exists():
+                            continue
+                    else:
+                        stored_bytes_rotted = True
                 data = crop.read_bytes()
+                if stored_bytes_rotted and _sha256_bytes(data) != expected:
+                    # The store's copy rotted AND this job holds no verified
+                    # bytes to re-pin it from. Serve-time verification already
+                    # refuses the corrupt store bytes; the loss is recorded by
+                    # name, never silently kept (R4).
+                    mismatched += 1
+                    _LOGGER.warning(
+                        "stored source asset %s no longer matches its content "
+                        "hash and job %s holds no verified copy to re-pin it "
+                        "from; the corrupt store copy is refused at serve time",
+                        crop.name, job_id,
+                    )
+                    continue
                 try:
                     url = asset_url(job_id, crop.name)
                 except ValueError:

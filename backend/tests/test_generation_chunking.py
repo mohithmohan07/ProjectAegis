@@ -299,14 +299,13 @@ def test_a_q13_flag_survives_the_repair_pass_that_runs_after_it(monkeypatch):
 def test_a_q13_flag_survives_the_title_dedupe_that_runs_after_it(monkeypatch):
     """A carried-back row that restates a kept concept still tells the reviewer.
 
-    A family disappears from the identity ledger most naturally when the model
-    re-parents its rows under another family, keeping the concept titles. The
-    carried-back rows then collide with rows the model kept, and chapter-wide
-    title de-duplication drops them — the validator refuses two rows with one
-    title, so keeping both was never an option. What may not happen is the
-    decision vanishing with the row: the flag moves to the row that keeps the
-    title, and ``_account_shipped_families`` verifies that against the map
-    that actually ships.
+    Audit F4 re-authored this contract: a carried-back Q13 row that shares a
+    topic+title with a kept row but carries DIFFERENT content is a second
+    claim on one identity — a mechanical pass must not adjudicate which
+    teaching survives, so BOTH rows ship, both flagged for review (the
+    topic-scoped duplicate validator surfaces them). Only a byte-equivalent
+    restatement may be dropped. The Q13 decision therefore no longer has to
+    hop rows: it ships on the row it was made on.
     """
     records = [
         _family_row("Rational Numbers", "Number line"),
@@ -326,9 +325,19 @@ def test_a_q13_flag_survives_the_title_dedupe_that_runs_after_it(monkeypatch):
 
     out = g._consolidate_concepts_via_api(records, subject="Math")
 
-    # No duplicate title ships, so the map still validates ...
-    titles = [row["concept_title"] for row in out]
-    assert len(titles) == len(set(titles))
+    # Both claimants of each shared identity ship, flagged — nothing is
+    # silently adjudicated away by a mechanical pass (R4).
+    from collections import Counter
+
+    title_counts = Counter(row["concept_title"] for row in out)
+    duplicated_titles = {t for t, n in title_counts.items() if n > 1}
+    assert duplicated_titles, "the carried-back claimants must survive"
+    for row in out:
+        if row["concept_title"] in duplicated_titles:
+            assert any(
+                "duplicate_identity_distinct_content" in flag
+                for flag in row.get("review_flags") or []
+            ), row
     # ... and the lost family is named to the reviewer on a shipped row.
     assert any(
         "Integers" in flag

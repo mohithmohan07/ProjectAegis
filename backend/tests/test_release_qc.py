@@ -646,6 +646,55 @@ def test_a_stripped_issues_key_cannot_pass_the_identity_gate():
     )
 
 
+def test_a_stale_empty_issues_list_cannot_hide_a_duplicate_qid():
+    """Round 10 (audit finding 9a): Round 9 recomputed only when the
+    ``issues`` key was ABSENT, so a present-but-empty list won and one
+    in-place edit (``issues = []``) hid ``duplicate_qid_assignment``. The
+    recompute is unconditional now and UNIONS with the recorded list.
+    """
+    payload = {
+        "records": [dict(row) for row in _sound_records()],
+        "staged_row_defects": [],
+        "issues": [],
+        "mined_types": _mined_types(duplicate=True),
+        "question_task_inventory": _inventory(),
+    }
+    assert any(
+        "duplicate_qid_assignment" in defect
+        for defect in release.structural_defects(payload)
+    )
+
+
+def test_a_cleared_qc_blocking_list_cannot_pass_the_gate():
+    """Round 10 (audit finding 9b): the recorded ``qc_blocking_defects``
+    key was trusted verbatim, so clearing the list was one in-place edit
+    away from publishing an unaccounted question. The gate now unions the
+    recorded key with a live ``release_qc.audit`` recompute of the same
+    payload material.
+    """
+    payload = {
+        "records": [],
+        "staged_row_defects": [],
+        "issues": [],
+        "type_case_rows": [],
+        "question_task_inventory": {
+            "items": [{
+                "qid": "QINV-0100", "source_kind": "exercise",
+                "raw_task": "Where did this question go?",
+            }],
+        },
+        "learning_kind": "post",
+        release.QC_BLOCKING_FIELD: [],
+    }
+    defects = release.structural_defects(payload)
+    assert any("QINV-0100" in defect for defect in defects)
+    assert any(
+        "recomputes a blocking finding this payload does not record"
+        in defect
+        for defect in defects
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 7. T9-1 B1's machine-id pair blocks at the publication act (Round 9)
 # --------------------------------------------------------------------------- #
@@ -715,6 +764,48 @@ def test_a_duplicate_persisted_machine_id_refuses_the_publication(db):
     with pytest.raises(
         ValueError, match="duplicate persisted machine identity"
     ):
+        publication.upload_release_to_database(
+            db, job.id, owner_sub=OWNER, lane="post")
+
+
+def test_the_uploaded_latch_revalidates_before_repeating_its_receipt(db):
+    """Round 10 (audit finding 9c): the ``database_uploaded`` latch used to
+    return its success receipt BEFORE any gate ran, so one successful
+    publication turned the function into an unconditional receipt printer
+    — a staged payload mutated in place after the upload re-earned
+    ``database_uploaded: True`` unseen. The latch runs after the
+    structural gate and the seal now: an honest re-request stays an
+    idempotent success, a tampered one is refused.
+    """
+    job, chapter = _job(db)
+    release.stage_release(
+        db, job, target_chapter_id=chapter.id,
+        records=_sound_records(),
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+    )
+    first = publication.upload_release_to_database(
+        db, job.id, owner_sub=OWNER, lane="post")
+    assert first["database_uploaded"] is True
+
+    # The honest repeat is still the idempotent success it always was.
+    again = publication.upload_release_to_database(
+        db, job.id, owner_sub=OWNER, lane="post")
+    assert again["database_uploaded"] is True
+
+    # Post-upload strip-tamper: the audit trail is cleared and the staged
+    # mined-Type material now implies a duplicate QID assignment.
+    inventory_col = copy.deepcopy(dict(job.question_inventory or {}))
+    slot = copy.deepcopy(dict(inventory_col[release.RELEASE_KEY]))
+    slot["mined_types"] = _mined_types(duplicate=True)
+    slot["issues"] = []
+    slot[release.QC_BLOCKING_FIELD] = []
+    inventory_col[release.RELEASE_KEY] = slot
+    job.question_inventory = inventory_col
+    db.commit()
+    db.refresh(job)
+
+    with pytest.raises(ValueError, match="duplicate_qid_assignment"):
         publication.upload_release_to_database(
             db, job.id, owner_sub=OWNER, lane="post")
 

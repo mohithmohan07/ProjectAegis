@@ -37,6 +37,7 @@ import copy
 import hashlib
 import json
 import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -960,36 +961,85 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
     # as flags, because a reviewer reword of ``concept_details`` must
     # never refuse the upload on a deterministic prose comparison (§7:577).
     #
-    # Round 9, twice over: (a) FAIL CLOSED like the row gate above — a
-    # payload with no ``issues`` key at all (restored from an export,
-    # built by another caller) recomputes the identity issues from its own
-    # ``mined_types``/inventory rather than passing on absence; (b) NO
+    # Round 9, twice over: (a) FAIL CLOSED like the row gate above; (b) NO
     # severity carve-out — T9-1 conditions blocking on the CODE, and a
     # display severity must not be a one-word side door out of a set whose
     # own comment says extending it is a spec change.
-    recorded_issues = (
-        payload.get("issues")
-        if "issues" in payload
-        else _recomputed_identity_issues(payload, records)
+    #
+    # Round 10 (audit finding 9a): the recompute is UNCONDITIONAL and
+    # UNIONED with the recorded list. Round 9 recomputed only when the
+    # ``issues`` key was ABSENT, so a present-but-stale list won — replacing
+    # the recorded issues with ``[]`` was one in-place edit away from
+    # publishing a ``duplicate_qid_assignment``. The T9 identity issues are
+    # a pure function of the payload's own records/mined-Type material
+    # (the same recompute the absent-key branch already ran), so BOTH
+    # sources are read: an honest record nothing recomputes still blocks,
+    # and a recomputed corruption nothing records blocks too — neither
+    # absence nor tampering can open the gate. Mechanics, not meaning: the
+    # union counts identities twice over and judges no content.
+    recorded_issues = payload.get("issues")
+    identity_sources: list[Any] = (
+        list(recorded_issues)
+        if isinstance(recorded_issues, (list, tuple))
+        else []
     )
-    for issue in recorded_issues or []:
+    identity_sources.extend(_recomputed_identity_issues(payload, records))
+    seen_identity_defects: set[str] = set()
+    for issue in identity_sources:
         if not isinstance(issue, Mapping):
             continue
         code = _normal(issue.get("code"))
-        if code in T9_IDENTITY_DEFECT_CODES:
-            defects.append(
-                f"identity corruption recorded by the release audit "
-                f"({code}): {_normal(issue.get('message'))}"
-            )
+        if code not in T9_IDENTITY_DEFECT_CODES:
+            continue
+        line = (
+            f"identity corruption recorded by the release audit "
+            f"({code}): {_normal(issue.get('message'))}"
+        )
+        if line in seen_identity_defects:
+            continue
+        seen_identity_defects.add(line)
+        defects.append(line)
     # Round 9: the QC audit's blocking findings, under their own honest
     # preamble — never the input-snapshot sentence, which states a fact
     # these findings did not measure.
-    for defect in payload.get(QC_BLOCKING_FIELD) or []:
-        text = _normal(defect)
-        if text:
-            defects.append(
-                f"the release QC audit recorded a blocking finding: {text}"
-            )
+    #
+    # Round 10 (audit finding 9b): the recorded key is UNIONED with a live
+    # recompute, exactly like the identity gate above. Round 9 trusted
+    # ``qc_blocking_defects`` verbatim, so clearing the list was one
+    # in-place edit away from publishing an unaccounted question.
+    # ``release_qc.audit`` is a pure function of this payload's own
+    # material (it is what wrote the recorded key at staging) and it NEVER
+    # raises — a pass that cannot run returns its own named blocking
+    # finding — so recomputing here is cheap and honest. Chosen over
+    # sealing the key into ``source_release_sha256``: the seal exists only
+    # once a Master froze this draft, while the recompute holds from the
+    # moment the payload exists — and the seal deliberately excludes
+    # ``issues``/``summary`` so the publication's own recorded writes
+    # never move it (see ``_refuse_a_moved_seal``).
+    recorded_qc = list(dict.fromkeys(
+        text
+        for defect in payload.get(QC_BLOCKING_FIELD) or []
+        if (text := _normal(defect))
+    ))
+    from . import release_qc as _release_qc
+
+    recomputed_qc = list(dict.fromkeys(
+        text
+        for defect in _release_qc.audit(payload)[1]
+        if (text := _normal(defect))
+    ))
+    for text in recorded_qc:
+        defects.append(
+            f"the release QC audit recorded a blocking finding: {text}"
+        )
+    recorded_qc_set = set(recorded_qc)
+    for text in recomputed_qc:
+        if text in recorded_qc_set:
+            continue
+        defects.append(
+            "the release QC audit recomputes a blocking finding this "
+            f"payload does not record: {text}"
+        )
     defects.extend(_pre_lane_verdict_defects(payload))
     return defects
 
@@ -1001,8 +1051,10 @@ def _recomputed_identity_issues(
 
     Pure, like the row-defect recompute above: ``audit_type_cases`` and
     ``_case_uniqueness_issues`` are functions of the payload's
-    ``mined_types`` and inventory, so a payload stripped of its recorded
-    ``issues`` cannot pass the identity gate on absence alone.
+    ``mined_types`` and inventory. Round 10 (audit finding 9a) runs this
+    UNCONDITIONALLY and unions it with the recorded ``issues`` — a payload
+    stripped of the key, or one whose present list went stale or was
+    emptied in place, cannot pass the identity gate on what it records.
     """
 
     mined = payload.get("mined_types")
@@ -1591,30 +1643,30 @@ def audit_type_cases(
     return output, issues, routes
 
 
-# T10-5 (S11): Unicode-aware, and the key casefolds first. [measured] the
-# old class (``r"[^0-9a-z ]+"``) deleted every uppercase letter and every
-# non-Latin character, so the repeated-question audit was inert for
-# Devanagari sources, for capitalised wording, and for any recased text —
-# the audit that stops one learner meeting the same question twice could
-# not read most of what learners actually read.
-_QUESTION_TEXT_NOISE_RE = re.compile(r"[^\w\s]+", re.UNICODE)
-# Only a LEADING item marker — "(2)", "3.", "b)", "(iv)". Digits inside the
-# question are part of it ("What is 2 + 3?") and must survive. A shape
-# judgment that survives deliberately: it decides that a leading "(iv)" is
-# numbering rather than part of the question, and it is recorded in
-# docs/release-qc-checklist.md as a named residue rather than called
-# "exact wording".
-_QUESTION_ITEM_MARKER_RE = re.compile(
-    r"^\(?\s*(?:[0-9]{1,3}|[a-z]|[ivxl]{1,5})\s*[\).:]\s+"
-)
-
-
 def _question_text_key(value: object) -> str:
-    """Compare questions by their words — not punctuation, case or
-    numbering."""
-    text = _QUESTION_ITEM_MARKER_RE.sub("", _normal(value).casefold())
-    text = _QUESTION_TEXT_NOISE_RE.sub(" ", text)
-    return re.sub(r"\s+", " ", text).strip()
+    """Compare questions by their exact text, losslessly normalized.
+
+    T10-5 (S11) made the key Unicode-aware; Round 10 (audit finding 18)
+    makes it LOSSLESS. [measured] the successor key (a ``[^\\w\\s]+`` noise
+    class plus a leading item-marker strip) was still a semantic
+    classifier: Python's ``\\w`` excludes Unicode combining marks, so the
+    noise class deleted every Devanagari vowel sign and two DISTINCT
+    strings (e.g. one differing from the other only by a matra) collided
+    into one false ``repeated_question_text`` warning. The item-marker
+    strip was a shape judgment ("a leading '(iv)' is numbering") that
+    cannot be verified lossless, so it is gone too (CLAUDE.md Rule 1 — the
+    mechanical duplicate warning may only compare, never classify).
+
+    What remains is exactly the lossless set: NFC canonical normalization
+    (one encoding of the same glyphs), whitespace-run collapse
+    (``_normal``), and ``casefold`` — nothing is deleted, so no two
+    distinct wordings can be folded into one.
+    """
+    text = unicodedata.normalize("NFC", _normal(value)).casefold()
+    # Casefolding can denormalize a composed sequence; re-normalize so the
+    # key is one canonical spelling, still byte-for-byte reversible in
+    # meaning (canonical equivalence only, never compatibility folding).
+    return unicodedata.normalize("NFC", text)
 
 
 def _repeated_question_issues(
@@ -1804,50 +1856,87 @@ _FINAL_TOPOLOGY_ARTIFACT = "source.phase31-final-topology-cache.json"
 _SETTLED_ROWS_ARTIFACT = "source.phase3-settled-rows.json"
 
 
-def _analysis_allotment_count(rows: Iterable[Mapping[str, Any]]) -> int:
-    """Rows carrying the recorded Q1 allotment marker.
+# Round 10 (audit finding 12): the two cached-topology sides recorded
+# incomparable (or unreadable) allotment identity sets, so neither can be
+# preferred over the other and the CURRENT rows ship. Advisory only — a
+# review question, never a gate.
+TOPOLOGY_ALLOTMENT_AMBIGUITY = "failure_release_topology_ambiguous"
 
-    T10-6 (S11): this replaces ``_learner_analysis_count``, which counted
-    rows whose ``concept_details`` contained the English substring
-    "misconception" — a keyword vocabulary classifying content AND a count
-    deciding meaning, scored against the every-concept requirement Q1
-    retired, so a chapter that correctly followed Q1 scored low and had
-    its validated topology discarded. The allotment marker is a recorded
-    model verdict stamped at inventory adjudication, and the analysis
-    section rides with it by construction. A legacy cache with no markers
-    on either side now scores 0-0 and the CURRENT rows ship — no verdict,
-    no swap.
+
+def _analysis_allotment_ids(
+    rows: Iterable[Mapping[str, Any]],
+) -> frozenset[str] | None:
+    """The exact set of recorded Q1 allotment identities on these rows.
+
+    T10-6 (S11) replaced the "misconception" keyword count with the
+    recorded ``_aegis_analysis_allotments`` marker; Round 10 (audit
+    finding 12) replaces COUNTING ROWS that carry the marker with the SET
+    of identities the markers record. [measured] the row count re-derived
+    meaning from partitioning: a stale split cache (two rows carrying one
+    allotment id each) out-counted the current merged topology (one row
+    carrying both ids) while recording exactly the same allotments — a
+    volume-derived preference of the kind CLAUDE.md Rule 1 bans. The id
+    SET is pure identity accounting: it cannot be moved by how the same
+    recorded verdicts are distributed across rows.
+
+    Returns ``None`` when a recorded marker cannot be read as identities
+    (a truthy non-list marker, or a non-string entry) — an unreadable side
+    is never preferred, and the caller records the ambiguity.
     """
 
-    return sum(
-        1
-        for row in rows
-        if isinstance(row, Mapping)
-        and (row.get("_aegis_analysis_allotments") or [])
-    )
+    ids: set[str] = set()
+    for row in rows:
+        if not isinstance(row, Mapping):
+            continue
+        marker = row.get("_aegis_analysis_allotments")
+        if not marker:
+            continue
+        if not isinstance(marker, (list, tuple)):
+            return None
+        for item in marker:
+            text = item.strip() if isinstance(item, str) else ""
+            if not text:
+                return None
+            ids.add(text)
+    return frozenset(ids)
 
 
 def _validated_artifact_topology(
     job: models.UploadJob,
     current_rows: Sequence[Mapping[str, Any]],
-) -> list[dict[str, Any]] | None:
-    """Return the validated final-topology rows when they beat the checkpoint.
+) -> tuple[list[dict[str, Any]] | None, list[dict[str, Any]]]:
+    """Return ``(validated rows when they beat the checkpoint, advisories)``.
 
     Job 23 failed after caching a fully validated topology (every normal
     concept carrying complete learner analysis) and then released the older
     81% checkpoint rows without any learner analysis. A failure release must
     ship the most complete rows the run actually produced and verified.
+
+    Round 10 (audit finding 12): "more complete" is decided by the exact
+    SETS of recorded allotment identities, never by counting rows. A side
+    is preferred only when its id set is a STRICT SUPERSET of the other's
+    — it records everything the other side records, plus more. Equal sets
+    keep the current rows (nothing is gained by swapping); incomparable
+    sets — each side records identities the other lacks — or unreadable
+    markers keep the current rows AND append a named advisory issue
+    (``failure_release_topology_ambiguous``), because neither side's
+    record contains the other and preferring one would silently drop the
+    other's recorded verdicts. The advisory rides the release's issue
+    ledger; it flags, it never gates.
     """
+    advisories: list[dict[str, Any]] = []
     helper = getattr(uploads, "source_artifact_directory", None)
     if not callable(helper) or not getattr(job, "id", None):
-        return None
+        return None, advisories
     try:
         directory = Path(helper(int(job.id))).resolve()
     except Exception:
-        return None
+        return None, advisories
     from . import canonical_source_phase3 as phase3
 
     best: list[dict[str, Any]] | None = None
+    best_ids: frozenset[str] = frozenset()
+    best_name = ""
     # The rewritten Phase 3 snapshots its settled rows separately from the
     # legacy validated-topology cache; a failure release must consider both
     # (job 26 shipped bare checkpoint rows because it only knew the old one).
@@ -1881,15 +1970,72 @@ def _validated_artifact_topology(
             for row in rows
             if isinstance(row, Mapping)
         ]
-        if best is None or _analysis_allotment_count(candidate) > (
-            _analysis_allotment_count(best)
-        ):
-            best = candidate
-    if best is None or _analysis_allotment_count(best) <= (
-        _analysis_allotment_count(current_rows)
-    ):
-        return None
-    return best
+        candidate_ids = _analysis_allotment_ids(candidate)
+        if candidate_ids is None:
+            advisories.append(_issue(
+                code=TOPOLOGY_ALLOTMENT_AMBIGUITY,
+                message=(
+                    f"the cached topology {filename} carries an allotment "
+                    "marker that cannot be read as recorded identities, so "
+                    "it was never preferred over the checkpoint rows — "
+                    "review which topology is the complete one"
+                ),
+                severity="warning",
+                phase="release",
+            ))
+            continue
+        if best is None or candidate_ids > best_ids:
+            best, best_ids, best_name = candidate, candidate_ids, filename
+        elif not (candidate_ids <= best_ids):
+            # The two caches record incomparable identity sets: preferring
+            # either would drop allotments the other records.
+            advisories.append(_issue(
+                code=TOPOLOGY_ALLOTMENT_AMBIGUITY,
+                message=(
+                    f"the cached topologies {best_name} and {filename} "
+                    "record incomparable allotment identity sets (each "
+                    "carries identities the other lacks); the checkpoint "
+                    "rows were kept — review which topology is the "
+                    "complete one"
+                ),
+                severity="warning",
+                phase="release",
+            ))
+            return None, advisories
+    if best is None:
+        return None, advisories
+    current_ids = _analysis_allotment_ids(current_rows)
+    if current_ids is None:
+        advisories.append(_issue(
+            code=TOPOLOGY_ALLOTMENT_AMBIGUITY,
+            message=(
+                "the checkpoint rows carry an allotment marker that cannot "
+                "be read as recorded identities, so no cached topology was "
+                "preferred over them — review which topology is the "
+                "complete one"
+            ),
+            severity="warning",
+            phase="release",
+        ))
+        return None, advisories
+    if best_ids > current_ids:
+        return best, advisories
+    if best_ids <= current_ids:
+        # The checkpoint records everything the cache records (or more):
+        # the current rows are at least as complete, no ambiguity.
+        return None, advisories
+    advisories.append(_issue(
+        code=TOPOLOGY_ALLOTMENT_AMBIGUITY,
+        message=(
+            f"the cached topology {best_name} and the checkpoint rows "
+            "record incomparable allotment identity sets (each carries "
+            "identities the other lacks); the checkpoint rows were kept — "
+            "review which topology is the complete one"
+        ),
+        severity="warning",
+        phase="release",
+    ))
+    return None, advisories
 
 
 def _chapter_meta_for_release(
@@ -2041,10 +2187,10 @@ def stage_release(
     input-artifact and audit BLOCKING findings — the parameter and the
     payload key ``stage_pre_release`` has carried since S9, gained here
     because [measured] the audit's blocking set had NOWHERE to land on the
-    Post lane: the grep for ``"snapshot_defects"`` returned exactly the
-    read in ``structural_defects`` and the Pre write, so a blocking
-    finding on this lane would have been silently dropped — the failure
-    the audit exists to prevent.
+    Post lane. The audit's blocking findings ride ``qc_blocking_defects``
+    (their own key with their own honest reader in ``structural_defects``);
+    ``snapshot_defects`` keeps its original unreadable-input-snapshot
+    meaning on both lanes and is NOT the QC transport.
     """
 
     checkpoint_value = copy.deepcopy(
@@ -2061,8 +2207,11 @@ def stage_release(
         if isinstance(row, Mapping)
     ]
     upgraded_from_cache = False
+    topology_advisories: list[dict[str, Any]] = []
     if records is None:
-        validated = _validated_artifact_topology(job, record_rows)
+        validated, topology_advisories = _validated_artifact_topology(
+            job, record_rows
+        )
         if validated is not None:
             record_rows = validated
             upgraded_from_cache = True
@@ -2133,6 +2282,9 @@ def stage_release(
             phase="release",
             severity="info",
         ))
+    # Round 10 (audit finding 12): a topology choice that could not be
+    # decided by identity-set containment is RECORDED, never guessed.
+    issues.extend(topology_advisories)
 
     # T10-0 (S11): the QC audit runs at STAGING, for both lanes,
     # immediately before the payload dict is assembled — never at download

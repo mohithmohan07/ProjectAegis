@@ -3,9 +3,12 @@
 One pass over the staged payload (and, when supplied, the rendered
 artifacts and the coverage ledger), returning ``(issues, blocking)``.
 ``issues`` merge into the release's existing ledger; ``blocking`` rides
-``payload["snapshot_defects"]``, which ``structural_defects`` reads on
-both lanes — so a blocking finding makes the release *Diagnostic* and
-refuses the DATABASE WRITE while every download ships (T9, Rule E).
+``payload["qc_blocking_defects"]`` (its OWN key with its own honest
+reader in ``structural_defects`` — Round 9 replaced the original
+``snapshot_defects`` routing, whose reader stamped every finding with a
+false "input snapshot could not be read" provenance) — so a blocking
+finding makes the release *Diagnostic* and refuses the DATABASE WRITE
+while every download ships (T9, Rule E).
 
 The checklist this implements is reconstructed in
 ``docs/release-qc-checklist.md`` with per-item provenance. The polarity is
@@ -212,6 +215,43 @@ def _validation_flag_findings(
     return issues
 
 
+QX_ITEM_REVIEW_FLAG = "qx_item_review_flag"
+
+
+def _qx_item_flag_findings(
+    payload: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Per-occurrence QX flags become visible release issues (audit F6).
+
+    The QX adjudication records critic dissent, Fixer decisions, and
+    kind-pending notes on inventory items as ``_acsd_review_flags``; without
+    this transcription those flags had no production reader — a recorded
+    defect nobody reads is silent loss.
+    """
+    issues: list[dict[str, Any]] = []
+    inventory = payload.get("question_task_inventory")
+    items = (
+        inventory.get("items") if isinstance(inventory, Mapping) else None
+    ) or []
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        for flag in item.get("_acsd_review_flags") or []:
+            text = str(flag or "").strip()
+            if not text:
+                continue
+            issues.append(_issue(
+                code=QX_ITEM_REVIEW_FLAG,
+                message=(
+                    f"inventory item {str(item.get('qid') or '?')} carries "
+                    f"a recorded QX review flag: {text}"
+                ),
+                severity="warning",
+                phase="release_qc",
+            ))
+    return issues
+
+
 def audit(
     payload: Mapping[str, Any],
     *,
@@ -279,5 +319,9 @@ def audit(
     _pass(
         "validation-flag",
         lambda: issues.extend(_validation_flag_findings(payload)),
+    )
+    _pass(
+        "qx-item-flag",
+        lambda: issues.extend(_qx_item_flag_findings(payload)),
     )
     return issues, blocking

@@ -374,7 +374,12 @@ def test_boot_sweep_survives_a_per_crop_failure(tmp_path, monkeypatch, caplog):
     )
 
 
-def test_serve_time_pin_records_a_hash_mismatch(client, tmp_path, monkeypatch, caplog):
+def test_mismatched_job_copy_without_store_is_refused(
+    client, tmp_path, monkeypatch, caplog
+):
+    # Bytes that no longer hash to the URL's content identity are not the
+    # published asset; serving them would cache the wrong image under the
+    # good name for a year. Refuse, record, never pin the unverified bytes.
     job_root = _isolated_serving(tmp_path, monkeypatch)
     claimed = "c" * 64 + ".jpg"
     asset_dir = job_root / "7" / fallback.ASSET_DIRNAME
@@ -384,11 +389,117 @@ def test_serve_time_pin_records_a_hash_mismatch(client, tmp_path, monkeypatch, c
     with caplog.at_level(logging.WARNING, logger="app.api.source_assets"):
         response = client.get(f"/source-assets/7/{claimed}")
 
-    assert response.status_code == 200
+    assert response.status_code == 404
+    # Unverified bytes are never pinned — not under the claimed name, not
+    # under their own hash as a serve side effect.
     assert not source_asset_store.stored_asset_path(claimed).exists()
+    assert not source_asset_store.stored_asset_path(_hash_name(CONTENT)).exists()
     assert any(
         "does not match its content hash" in r.getMessage() for r in caplog.records
     )
+    assert any(
+        "integrity loss" in r.getMessage()
+        and claimed.removesuffix(".jpg") in r.getMessage()
+        and "job copy" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_mismatched_job_copy_is_healed_by_verified_store_copy(
+    client, tmp_path, monkeypatch, caplog
+):
+    job_root = _isolated_serving(tmp_path, monkeypatch)
+    filename = source_asset_store.pin_asset(
+        CONTENT,
+        job_id=7,
+        asset_url=f"https://aegis.example/source-assets/7/{_hash_name(CONTENT)}",
+    )
+    # The job's copy rotted under the same content-hash name.
+    asset_dir = job_root / "7" / fallback.ASSET_DIRNAME
+    asset_dir.mkdir(parents=True)
+    (asset_dir / filename).write_bytes(b"rotted job bytes")
+
+    with caplog.at_level(logging.WARNING, logger="app.api.source_assets"):
+        response = client.get(f"/source-assets/7/{filename}")
+
+    # The verified store copy answers; the learner sees the true image.
+    assert response.status_code == 200
+    assert response.content == CONTENT
+    assert any(
+        "does not match its content hash" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_corrupt_store_copy_is_never_served(client, tmp_path, monkeypatch, caplog):
+    _isolated_serving(tmp_path, monkeypatch)
+    filename = source_asset_store.pin_asset(
+        CONTENT,
+        job_id=7,
+        asset_url=f"https://aegis.example/source-assets/7/{_hash_name(CONTENT)}",
+    )
+    source_asset_store.stored_asset_path(filename).write_bytes(b"rotted bytes")
+
+    with caplog.at_level(logging.WARNING, logger="app.api.source_assets"):
+        response = client.get(f"/source-assets/7/{filename}")
+
+    assert response.status_code == 404
+    assert any(
+        "integrity loss" in r.getMessage() and "store copy" in r.getMessage()
+        for r in caplog.records
+    )
+
+
+def test_boot_sweep_heals_corrupt_stored_bytes_from_verified_job_copy(
+    tmp_path, monkeypatch, caplog
+):
+    job_root = _isolated_serving(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "UPLOAD_DIR", job_root)
+    filename = source_asset_store.pin_asset(
+        CONTENT, job_id=7, asset_url=""
+    )
+    stored = source_asset_store.stored_asset_path(filename)
+    stored.write_bytes(b"rotted store bytes")
+    asset_dir = job_root / "7" / fallback.ASSET_DIRNAME
+    asset_dir.mkdir(parents=True)
+    (asset_dir / filename).write_bytes(CONTENT)
+
+    with caplog.at_level(
+        logging.WARNING, logger="app.services.source_asset_store"
+    ):
+        assert fallback.pin_existing_job_assets() == 1
+
+    assert stored.read_bytes() == CONTENT
+    assert any(
+        "re-pinned from fresh bytes" in r.getMessage() for r in caplog.records
+    )
+    # Healed and caught up: the next sweep is a no-op again.
+    assert fallback.pin_existing_job_assets() == 0
+
+
+def test_boot_sweep_records_corrupt_store_with_no_verified_copy(
+    tmp_path, monkeypatch, caplog
+):
+    job_root = _isolated_serving(tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "UPLOAD_DIR", job_root)
+    filename = source_asset_store.pin_asset(CONTENT, job_id=7, asset_url="")
+    stored = source_asset_store.stored_asset_path(filename)
+    stored.write_bytes(b"rotted store bytes")
+    asset_dir = job_root / "7" / fallback.ASSET_DIRNAME
+    asset_dir.mkdir(parents=True)
+    (asset_dir / filename).write_bytes(b"rotted job bytes")
+
+    with caplog.at_level(
+        logging.WARNING, logger="app.services.canonical_source_phase221_fallback"
+    ):
+        assert fallback.pin_existing_job_assets() == 0
+
+    # Never silently kept: the double corruption is recorded by name and
+    # counted in the boot-level summary (R4).
+    assert any(
+        "no verified copy" in r.getMessage() and filename in r.getMessage()
+        for r in caplog.records
+    )
+    assert any("1 name-mismatched" in r.getMessage() for r in caplog.records)
 
 
 def test_pin_asset_heals_corrupt_stored_bytes(tmp_path, monkeypatch, caplog):

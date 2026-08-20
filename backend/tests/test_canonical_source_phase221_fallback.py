@@ -388,19 +388,24 @@ def test_renderer_preserves_figure_before_task_order_and_restores_ownership(
 def test_signed_source_asset_response_is_inline_not_attachment(
     tmp_path: Path, monkeypatch,
 ):
+    import hashlib
+
+    from app import config
     from app.api import source_assets
     from app.services import uploads
 
     monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "unit-test-secret")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
     monkeypatch.setattr(
         uploads,
         "source_artifact_directory",
         lambda _job_id: tmp_path / "source-shadow",
     )
-    filename = "b" * 64 + ".jpg"
+    data = b"jpeg"
+    filename = f"{hashlib.sha256(data).hexdigest()}.jpg"
     path = fallback.source_asset_path(19, filename)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"jpeg")
+    path.write_bytes(data)
     sig = fallback.asset_signature(19, filename)
 
     response = source_assets.source_asset(19, filename, sig)
@@ -956,3 +961,60 @@ def test_acsd_dropped_furniture_reaches_the_canonical_verbatim(
     page_schema = schema["schema"]["properties"]["pages"]["items"]
     assert "dropped_furniture" in page_schema["properties"]
     assert "dropped_furniture" in page_schema["required"]
+
+
+def test_pdf_lane_rendered_mmd_compiles_exempt_from_qx(monkeypatch, tmp_path):
+    """The PDF lane never pays a QX membership pass: the rendered MMD's
+    recorded reader stamp (source_contract.source_reader, carried from the
+    ``<!-- source_reader: gpt-pdf-to-acsd-... -->`` header) identifies the
+    GPT page ledger as the membership authority BEFORE the Phase 2.1.2
+    contract checks exemption — so QX's provider is never called and no QX
+    ledger stamps claim membership on this lane."""
+    from app.services import canonical_source_phase2 as phase2
+    from app.services import canonical_source_phase212 as qx
+
+    monkeypatch.setattr(qx, "_CACHE_DIR", tmp_path / "qx-cache")
+
+    def explode(**kwargs):  # pragma: no cover - exemption must pre-empt QX
+        raise AssertionError(
+            "the PDF lane must not pay a QX author/critic pass"
+        )
+
+    monkeypatch.setattr(qx, "_call_provider", explode)
+
+    page_acsd = {
+        "pdf_sha256": "abc",
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {"reading_order": 1, "kind": "heading", "heading_level": 1,
+                 "text": "1 Number Patterns"},
+                {"reading_order": 2, "kind": "paragraph",
+                 "text": "A sequence follows a visible rule."},
+                {"reading_order": 3, "kind": "task", "source_label":
+                 "Activity", "text": "Describe the pattern."},
+            ],
+        }],
+    }
+    mmd_text = fallback.render_page_acsd_to_mmd(page_acsd)
+    assert f"<!-- source_reader: {fallback.source_reader_version()} -->" in (
+        mmd_text
+    )
+
+    compiled = phase2.compile_phase2_source(
+        mmd_text,
+        source_filename="source.pdf",
+        consumer_module="build_concepts",
+    )
+    canonical = compiled.canonical
+    assert canonical["task_membership"] == {
+        "status": "exempt",
+        "authority": "gpt_page_ledger",
+    }
+    assert qx.LEDGER_KEY not in canonical
+    codes = {
+        str(issue.get("code") or "")
+        for issue in phase2.phase2_inventory_issues(canonical)
+    }
+    assert "task_membership_unadjudicated" not in codes

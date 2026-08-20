@@ -2,10 +2,11 @@
 
 No product code is edited; frozen files are exercised, never modified.
 Each test injects at a documented seam through the established fixtures
-and pins the CURRENT contract — including two deliberately pinned
-residues (the deterministic asset-retry failure and the sealed-bundle
-tamper-trust asymmetry), labeled as documentation so the owning step has
-a red test to flip when it repairs them.
+and pins the CURRENT contract. The two formerly pinned residues — the
+deterministic asset-retry failure and the sealed-bundle tamper-trust
+asymmetry — have been repaired and their pins FLIPPED: a degenerate crop
+is now a flagged degradation whose conversion (and retry) completes, and
+a tampered seal is rejected by its recorded page digest and re-extracted.
 """
 from __future__ import annotations
 
@@ -152,9 +153,10 @@ def test_quota_death_inside_generation_becomes_a_failure_release(
     client, db, first_chapter, monkeypatch
 ):
     """Quota death mid-generation is contained: the run ends as a recorded
-    release-shaped failure, never a silent crash. The exact status is
-    whatever the containment contract produces today — pinned from the
-    observed drive, with the quota text preserved on the job record."""
+    release-shaped failure, never a silent crash, with the quota reason
+    preserved as a release issue. (Checkpoint retention is a property of
+    runs that reached a checkpointed stage; this drive dies before one, so
+    it is deliberately not asserted here — audit F17.)"""
     files = {"file": ("quota.txt", io.BytesIO(
         b"## Quota Topic\nQuota concept one\nQuota concept two"
     ), "text/plain")}
@@ -218,47 +220,61 @@ def test_quota_death_pre_spend_is_a_true_halt_with_no_release(
 def test_verified_batches_replay_free_after_a_quota_shaped_death(
     tmp_path, monkeypatch
 ):
-    """The free-resume property: batches verified before the death are
-    cached, so the retry replays them with ZERO provider calls."""
+    """The free-resume property, PARTIAL-death shape (audit F17): with two
+    one-page batches, batch 1 verifies and batch 2 dies on quota. The
+    retry must replay batch 1 from cache (no provider call for it) and pay
+    only for batch 2."""
     pdf = tmp_path / "source.pdf"
     _make_pdf(pdf)
     monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(fallback, "_batch_size", lambda: 1)
+    monkeypatch.setattr(fallback, "_parallel_batches", lambda: 1)
     calls = {"n": 0}
 
-    def verified(pages):
+    def verified_then_quota(pages):
         calls["n"] += 1
+        if calls["n"] > 1:
+            raise RuntimeError(_QUOTA_MESSAGE)
         return {
             "status": "verified",
             "pages": _pages_payload(pages),
             "verification": _verification(pages),
         }
 
-    first = fallback.extract_pdf_to_page_acsd(pdf, provider=verified)
-    assert calls["n"] >= 1
-    spent = calls["n"]
+    with pytest.raises(RuntimeError, match="insufficient_quota"):
+        fallback.extract_pdf_to_page_acsd(pdf, provider=verified_then_quota)
+    assert calls["n"] == 2, "batch 1 verified, batch 2 died on quota"
 
-    def quota_dead(_pages):  # the retry's provider is out of quota
-        raise RuntimeError(_QUOTA_MESSAGE)
+    retry_calls = {"n": 0}
 
-    second = fallback.extract_pdf_to_page_acsd(pdf, provider=quota_dead)
-    assert calls["n"] == spent
-    assert {row["page_number"] for row in second["pages"]} == (
-        {row["page_number"] for row in first["pages"]}
+    def verified(pages):
+        retry_calls["n"] += 1
+        return {
+            "status": "verified",
+            "pages": _pages_payload(pages),
+            "verification": _verification(pages),
+        }
+
+    result = fallback.extract_pdf_to_page_acsd(pdf, provider=verified)
+    assert retry_calls["n"] == 1, (
+        "the retry pays ONLY for the batch the quota death interrupted"
     )
+    assert {row["page_number"] for row in result["pages"]} == {1, 2}
 
 
 # ---------------------------------------------------------------------------
-# Seam C — asset failure (pinned residue: deterministic retry failure)
+# Seam C — asset failure (residue repaired: flagged degradation, run completes)
 # ---------------------------------------------------------------------------
 
-def test_degenerate_bbox_fails_conversion_and_fails_retry_identically(
+def test_degenerate_bbox_is_a_flagged_degradation_and_retry_completes(
     tmp_path, monkeypatch
 ):
-    """PINNED RESIDUE (map §6, Q13 tension owned by the asset step): a
-    figure crop below the 8pt floor kills the conversion, and because the
-    sealed evidence replays without asset bytes, the retry dies the same
-    way. A single unusable crop is a place-or-flag decision under R4; the
-    eventual fix flips this test."""
+    """FLIPPED PIN (map §6 residue repaired, Q13/R4): a figure crop below
+    the 8pt floor is one recorded, flagged degradation — the conversion
+    COMPLETES. The figure keeps its identity, bbox, caption, and page
+    evidence with no invented asset URL; the named flag rides the page
+    bundle's review_flags; every other block ships; and the sealed-evidence
+    retry completes IDENTICALLY (still deterministic, now successful)."""
     pdf = tmp_path / "source.pdf"
     _make_pdf(pdf)
     monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
@@ -272,37 +288,84 @@ def test_degenerate_bbox_fails_conversion_and_fails_retry_identically(
             "verification": _verification(pages),
         }
 
-    first_error: str | None = None
-    try:
-        fallback.reconstruct_pdf_to_acsd(
+    def run():
+        return fallback.reconstruct_pdf_to_acsd(
             pdf,
             job_id=91,
             artifact_dir=tmp_path / "artifacts",
             fallback_reason=["pdf_source"],
             provider=with_degenerate_figure,
         )
-    except Exception as exc:  # noqa: BLE001 - pinning the current contract
-        first_error = f"{type(exc).__name__}: {exc}"
-    assert first_error is not None, (
-        "a degenerate crop currently halts the conversion; if this now "
-        "completes, the Q13 repair landed — update the residue ledger"
+
+    def page_flags(result):
+        return [
+            flag
+            for page in result["page_acsd"]["pages"]
+            for flag in page.get("review_flags") or []
+        ]
+
+    first = run()
+
+    flags = page_flags(first)
+    assert any(
+        "figure asset could not be materialized" in flag
+        and "figure bbox is too small" in flag
+        for flag in flags
+    ), "the degradation must be named on the page's review flags"
+    figure = next(
+        block
+        for page in first["page_acsd"]["pages"]
+        for block in page["blocks"]
+        if block.get("kind") == "figure"
+    )
+    # Identity, bbox, caption, and page evidence kept; no URL invented.
+    assert figure["bbox"] == [100, 100, 104, 103]
+    assert figure["caption"] == "Fig. 1 - degenerate crop."
+    assert not figure.get("asset_url")
+    assert not figure.get("asset_filename")
+    # Everything else in the conversion is intact.
+    assert {row["page_number"] for row in first["page_acsd"]["pages"]} == {1, 2}
+    assert "Describe the pattern." in first["mmd_text"]
+    assert first["canonical"]["tasks"], "the learner task must survive"
+    # The flag reaches the PUBLISHED page bundle (the release surface).
+    persisted = json.loads(
+        (tmp_path / "artifacts" / fallback.GPT_PAGE_ACSD_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert any(
+        "figure asset could not be materialized" in flag
+        for page in persisted["pages"]
+        for flag in page.get("review_flags") or []
     )
 
-    second_error: str | None = None
-    try:
-        fallback.reconstruct_pdf_to_acsd(
-            pdf,
-            job_id=91,
-            artifact_dir=tmp_path / "artifacts",
-            fallback_reason=["pdf_source"],
-            provider=with_degenerate_figure,
+    # The retry replays the sealed evidence and completes the same way:
+    # deterministic (same flags, same source) and successful.
+    second = run()
+    assert page_flags(second) == flags
+    assert second["mmd_text"] == first["mmd_text"]
+
+
+def test_page_outside_the_pdf_is_still_fatal_not_a_flag(
+    tmp_path, monkeypatch
+):
+    """The per-figure containment must not swallow corrupt input: a page
+    reference outside the PDF is a broken artifact, not one bad crop, and
+    the deterministic gate still refuses it outright."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", "https://aegis.example")
+    monkeypatch.setenv("AEGIS_SOURCE_ASSET_SECRET", "test-secret")
+    page_acsd = {
+        "pages": [{
+            "page_number": 99,
+            "blocks": [{"kind": "figure", "bbox": [100, 100, 400, 400]}],
+        }]
+    }
+    with pytest.raises(ValueError, match="outside the PDF"):
+        fallback.materialize_visual_assets(
+            pdf, page_acsd, job_id=91, artifact_dir=tmp_path / "artifacts"
         )
-    except Exception as exc:  # noqa: BLE001
-        second_error = f"{type(exc).__name__}: {exc}"
-    assert second_error == first_error, (
-        "the retry must fail the same deterministic way (sealed evidence "
-        "replays without asset bytes)"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -355,14 +418,16 @@ def test_wrong_status_cache_entry_is_never_served(tmp_path, monkeypatch):
     assert calls["n"] == baseline * 2
 
 
-def test_tampered_sealed_bundle_with_preserved_count_is_served_verbatim(
+def test_tampered_sealed_bundle_is_rejected_and_reextracted(
     tmp_path, monkeypatch
 ):
-    """PINNED RESIDUE (map §7, integrity-hardening step): the sealed-bundle
-    gate checks pdf_sha256 and page COUNT only, so well-formed tampered
-    page content replays as verified source. The corrupt-refusal twin
-    above is the safety property; this asymmetry is the documented gap —
-    the hardening fix flips this test."""
+    """FLIPPED PIN (map §7 asymmetry repaired): the seal now records a
+    canonical digest of its pages (result_sha256) and reuse requires it,
+    so well-formed tampered page content — pdf_sha256 and page count
+    preserved — is a cache MISS that re-extracts, never a replay. The
+    per-batch caches are cleared alongside the tamper so the re-extraction
+    is observable as a real provider call (re-bill) instead of a free
+    per-batch replay; either way the tampered text never ships."""
     pdf = tmp_path / "source.pdf"
     _make_pdf(pdf)
     cache_dir = tmp_path / "cache"
@@ -378,6 +443,8 @@ def test_tampered_sealed_bundle_with_preserved_count_is_served_verbatim(
         fallback_reason=["pdf_source"],
         provider=_counting_verified(calls),
     )
+    baseline = calls["n"]
+    assert baseline >= 1
 
     pdf_sha = fallback._pdf_sha256(pdf)
     bundle_path = fallback._batch_cache_path(
@@ -390,18 +457,57 @@ def test_tampered_sealed_bundle_with_preserved_count_is_served_verbatim(
     bundle_path.write_text(
         json.dumps(sealed, ensure_ascii=False), encoding="utf-8"
     )
-
-    def explode(_pages):  # pragma: no cover - bundle replay must not call
-        raise AssertionError("sealed bundle replay must not re-extract")
+    for path in cache_dir.glob("*.json"):
+        if path != bundle_path:
+            path.unlink()
 
     replayed = fallback.reconstruct_pdf_to_acsd(
         pdf,
         job_id=92,
         artifact_dir=tmp_path / "artifacts2",
         fallback_reason=["pdf_source"],
-        provider=explode,
+        provider=_counting_verified(calls),
     )
-    assert tampered_line in json.dumps(replayed, ensure_ascii=False), (
-        "today the tampered bundle is trusted verbatim; if this fails the "
-        "integrity hardening landed — update the residue ledger"
+    assert calls["n"] == baseline * 2, (
+        "a tampered seal must re-extract (re-bill), never replay"
     )
+    assert tampered_line not in json.dumps(replayed, ensure_ascii=False), (
+        "tampered cache content must never reach the result"
+    )
+    # The rebuilt bundle resealed with a digest that matches its pages.
+    resealed = json.loads(bundle_path.read_text(encoding="utf-8"))
+    assert resealed["result_sha256"] == fallback._bundle_pages_sha256(
+        resealed["result"]
+    )
+
+
+def test_legacy_seal_without_digest_is_a_miss_that_reseals(
+    tmp_path, monkeypatch
+):
+    """A seal written before result_sha256 existed is treated as a MISS —
+    re-derived (free: the per-batch caches still hold their verified
+    judgments) and resealed WITH the digest, never replayed on trust."""
+    pdf = tmp_path / "source.pdf"
+    _make_pdf(pdf)
+    cache_dir = tmp_path / "cache"
+    monkeypatch.setattr(fallback, "_CACHE_DIR", cache_dir)
+
+    calls = {"n": 0}
+    fallback.extract_pdf_to_page_acsd(pdf, provider=_counting_verified(calls))
+    baseline = calls["n"]
+
+    bundle_path = fallback._batch_cache_path(
+        fallback._bundle_cache_key(fallback._pdf_sha256(pdf))
+    )
+    legacy = json.loads(bundle_path.read_text(encoding="utf-8"))
+    legacy.pop("result_sha256")
+    bundle_path.write_text(
+        json.dumps(legacy, ensure_ascii=False), encoding="utf-8"
+    )
+
+    fallback.extract_pdf_to_page_acsd(pdf, provider=_counting_verified(calls))
+    assert calls["n"] == baseline, (
+        "the seal-format upgrade must not re-bill verified batches"
+    )
+    resealed = json.loads(bundle_path.read_text(encoding="utf-8"))
+    assert resealed.get("result_sha256"), "the miss must reseal with a digest"

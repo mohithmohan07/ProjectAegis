@@ -766,12 +766,18 @@ def test_mastery_template_is_gone_and_polish_repairs_missing_mastery():
 
 
 def test_duplicate_titles_dedupe_within_topic_and_survive_across_topics():
-    """Step 11: identity is topic-scoped. Two stanza topics may both teach
-    a concept named "Courage"; only a same-topic restatement is dropped."""
+    """Step 11 + audit F4: identity is topic-scoped AND content-lossless.
+
+    Only a true RESTATEMENT (same topic, same title, same normalized
+    content) is dropped. Same wording with different teaching content is
+    two claims on one identity — both survive, flagged for review. The
+    same visible name under another topic is simply another concept."""
     records = [
         _rec("Similarity vs Congruence", "Description: a", topic="T1"),
         _rec("AAA Criterion", "Description: b", topic="T1"),
-        # Same-topic restatement (chunked extraction echo): deduped.
+        # Same-topic byte-equivalent restatement (extraction echo): deduped.
+        _rec("Similarity vs Congruence", "Description: a", topic="T1"),
+        # Same topic + title but DIFFERENT content: both kept, flagged.
         _rec("Similarity vs Congruence", "Description: a again", topic="T1"),
         # Same visible name under ANOTHER topic: a different concept; kept.
         _rec("Similarity vs Congruence", "Description: c", topic="T2"),
@@ -780,8 +786,18 @@ def test_duplicate_titles_dedupe_within_topic_and_survive_across_topics():
     assert [(r["topic"], r["concept_title"]) for r in out] == [
         ("T1", "Similarity vs Congruence"),
         ("T1", "AAA Criterion"),
+        ("T1", "Similarity vs Congruence"),
         ("T2", "Similarity vs Congruence"),
     ]
+    flagged = [
+        r for r in out
+        if any(
+            "duplicate_identity_distinct_content" in f
+            for f in r.get("review_flags") or []
+        )
+    ]
+    assert len(flagged) == 2, "both distinct-content claimants carry the flag"
+    assert not any(r.get("review_flags") for r in out if r["topic"] == "T2")
 
 
 def test_control_chars_are_stripped_from_records_and_cells():

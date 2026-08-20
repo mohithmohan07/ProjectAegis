@@ -22,3 +22,30 @@ sprint continues past all of them.
 | R-S12b | The asset-failure companion (phase3 autonomous downgrade-to-flags twin, map §6) not separately pinned; only the halt+deterministic-retry residue is | `tests/test_fault_injection.py` | The correct-twin behavior is untested | Yes | Step-12 follow-up |
 | R-S12c | Corpus sources are synthetic (copyright: real pages are the owner's call); live-API acceptance over real textbooks remains the operator residue the spec records | `backend/tests/acceptance_corpus/` | Mechanics proven; real-book semantic quality is the live run's business | Yes for build; NO for production sign-off | Owner/operator |
 | R-S12d | The step-12 branch carries the step-8 lane by merge (guardrail 27: corpus must exercise the real final path); its PR must land AFTER #229 or retarget onto it | branch `claude/step-12-acceptance-corpus` | Merging step-12 to main before #229 would ship step-8 code unreviewed | Yes (ordering note) | Owner at merge time |
+
+## E2E audit outcome (GPT audit of 865915b — docs/audit-e2e-main.md)
+
+| Audit finding | Disposition |
+|---|---|
+| F1 seal mismatch on count-changing QX | FIXED (contract resyncs Phase-2.1 seals; create/reject reload regression) |
+| F2 language plan cannot realize topics | CONTAINED: literary modes block pre-spend, named (build_concepts wiring); full topology materialization is the step-11 follow-up. R-S11a superseded by this row |
+| F3 QX context/visual loss | FIXED (task_context attaches to owner tasks' shared_context + anchoring required; created tasks resolve figures mechanically; unresolved refs recorded, not cleared) |
+| F4 title-shape identity | FIXED (topic-scoped addition screens; unique-title-only fallbacks; unambiguous-only re-homing; lossless same-identity dedupe — distinct content survives flagged). The direct-deposit title join (build_concepts.py:552-567) remains a recorded residue |
+| F5 unverified asset serving | FIXED (sha256 verification on every serve, verified-only pinning, digest-checked boot sweep, named integrity-loss 404) |
+| F6 evidence-starved QX review | FIXED (critic gets blocks+candidates; Fixer gets neighbours + nearest-anchored candidates; per-item flags surface as release issues via release_qc qx_item_review_flag; orphan Fixer decisions recorded on the ledger) |
+| F7 unbounded correction | FIXED (correction bounded to defective blocks + their candidates; paid verdicts retained) |
+| F8 stale plan replay | FIXED (decision key binds work name/blocks/tasks/contract versions; sealed hash re-verified; replay re-validated via plan_defects) |
+| F9 unsealed blocking authority | FIXED by the release-gate pass (see commit) |
+| F10 degenerate-crop retry poison | FIXED (per-figure flag-and-continue; pinned test flipped) |
+| F11 sealed-bundle tamper trust | FIXED (canonical pages digest verified on reuse; pinned test flipped) |
+| F12 row-count topology preference | FIXED (allotment-identity superset comparison; ambiguity keeps current rows, recorded) |
+| F13 PDF lane double-spends QX | FIXED (page-ledger authority visible before compile / reader-identity exemption) |
+| F14 false plan receipts | FIXED (Fixer reason = actual defects sent; critic outage recorded as unavailable) |
+| F15 QX cache identity gaps | FIXED (author-context sha joins the sealed key) |
+| F16 repeated-evidence collision | FIXED (occurrence-aware evidence location + validation) |
+| F17 step-12 test truthfulness | FIXED (exact six-ask pins, partial-batch quota resume, task→figure link, honest spec wording, honest quota docstring) |
+| F18 lossy repeated-question normalizer | FIXED by the release-gate pass (lossless normalization only) |
+| F19 persisted volume-derived durations/descriptions win over fresh authoring | OPEN — owner decision (migration policy); recorded in GPT's docs/owner-decisions-open.md. Downstream safe: yes (legacy-data policy, not new loss) |
+| F20 docs/ignore/comment drift | FIXED (.env.example providers+reasoning, .gitignore caches, QC-transport comments) |
+
+Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns were overstated — superseded by the F3/F6/F2 rows above. R-QX8's consequence note is superseded by F7's fix. R-S11b is CLOSED (Output-02/04 identity composition verified repaired at main). R-S12d is CLOSED (merge order completed).
