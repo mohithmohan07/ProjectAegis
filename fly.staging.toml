@@ -1,0 +1,55 @@
+app = 'projectaegis-staging'
+primary_region = 'ams'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[env]
+  AEGIS_ENVIRONMENT = 'staging'
+  AEGIS_ALLOWED_GOOGLE_DOMAIN = 'up.school'
+  AEGIS_AUTH_MODE = 'google'
+  AEGIS_SECURE_COOKIES = '1'
+  AEGIS_CORS_ORIGINS = 'https://projectaegis-staging.fly.dev'
+  AEGIS_DATA_DIR = '/data'
+  AEGIS_DB_URL = 'sqlite:////data/aegis-staging.db'
+  AEGIS_PUBLIC_BASE_URL = 'https://projectaegis-staging.fly.dev'
+  AEGIS_OPENAI_MODEL = 'gpt-5.6-luna'
+  AEGIS_PHASE3_REWRITE = '1'
+  AEGIS_UNATTENDED_COMPLETION = '1'
+  AEGIS_GPT_PDF_ACSD_FALLBACK_ENABLED = '1'
+  AEGIS_GPT_PDF_ACSD_FALLBACK_FORCE = '1'
+  AEGIS_GPT_PDF_RENDER_DPI = '300'
+  AEGIS_OPENAI_MAX_CONCURRENCY = '3'
+  AEGIS_PHASE3_DECISION_WORKERS = '1'
+  AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES = '1'
+  AEGIS_DRIVE_CHECKPOINT_BACKUP_ENABLED = '0'
+  AEGIS_DRIVE_CHECKPOINT_NAMESPACE = 'projectaegis-staging'
+  PORT = '8000'
+
+[[mounts]]
+  source = 'aegis_staging_data'
+  destination = '/data'
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [http_service.concurrency]
+    type = 'requests'
+    hard_limit = 20
+    soft_limit = 10
+
+  [[http_service.checks]]
+    grace_period = '30s'
+    interval = '15s'
+    method = 'GET'
+    path = '/health'
+    timeout = '5s'
+
+[[vm]]
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 1024
