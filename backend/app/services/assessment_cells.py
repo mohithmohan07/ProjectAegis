@@ -44,6 +44,46 @@ CELL_SYSTEM = (
     '"rationale":"evidence-bound reason"}'
 )
 
+GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-1"
+
+GENERATED_CELL_SYSTEM = (
+    "You are the Aegis assessment-cell author for ONE GENERATED "
+    "pre-learning question. The question was authored for a prerequisite "
+    "concept and deliberately carries no tier or difficulty of its own — "
+    "this verdict is that later, independent decision. From the complete "
+    "question, its answer, its rationale, and the pre-learning concept it "
+    "checks, decide the blueprint cell it fulfils as an assessment item: "
+    "sheet kind, question category, cognitive skill (Bloom), difficulty, "
+    "and marks. Never infer meaning from text length or from how many "
+    "questions exist. There is no quota: do not balance or spread "
+    "categories, skills, difficulties, or marks. The no-local-fallback "
+    "invariant applies; give your evidence-bound verdict rather than "
+    "applying a default.\n"
+    "sheet_kind is objective, subjective, or descriptive as allowed by the "
+    "active assessment profile. cognitive_skill is Remember, Understand, "
+    "Apply, Analyse, Evaluate, or Create. difficulty is Less, Moderate, or "
+    "High; Bloom and difficulty are independent. marks is a realistic "
+    "positive number for the task, grade, and response contract.\n"
+    "Return ONLY strict JSON:\n"
+    '{"pre_question_id":"","sheet_kind":"","question_category":"",'
+    '"cognitive_skill":"","difficulty":"","marks":1,'
+    '"rationale":"evidence-bound reason"}'
+)
+
+GENERATED_CELL_CRITIC_SYSTEM = (
+    "You are the independent advisory critic for one Aegis assessment-cell "
+    "verdict over a GENERATED pre-learning question. Audit the proposed "
+    "sheet kind, category, cognitive skill, difficulty, and marks against "
+    "the complete question, its answer, its rationale, the pre-learning "
+    "concept it checks, the metadata, and the active profile. Never infer "
+    "meaning from length or question volume. There is no quota. Do not "
+    "revise, gate, retry, or replace the verdict; dissent ships as review "
+    "evidence while the recorded verdict stands. State your honest "
+    "confidence.\n"
+    "Return ONLY strict JSON:\n"
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+)
+
 CELL_CRITIC_SYSTEM = (
     "You are the independent advisory critic for one Aegis assessment-cell "
     "verdict. Audit the proposed sheet kind, category, cognitive skill, "
@@ -118,17 +158,22 @@ def _profile_payload(profile: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _cell_checker(
-    source_qid: str, allowed_sheet_kinds: tuple[str, ...]
+def _verdict_checker(
+    id_field: str, id_value: str, allowed_sheet_kinds: tuple[str, ...]
 ) -> kernel.Checker:
-    """Mechanics only: identity, required fields, enums, and numeric shape."""
+    """Mechanics only: identity, required fields, enums, and numeric shape.
+
+    Shared by the source-atom checker (identity ``source_qid``) and the
+    generated-question checker (identity ``pre_question_id``); both
+    verdicts demand the same judgment fields.
+    """
 
     def check(response: Mapping[str, Any]) -> list[str]:
         if not isinstance(response, Mapping):
             return ["response is not an object"]
         defects: list[str] = []
-        if str(response.get("source_qid") or "") != source_qid:
-            defects.append(f"source_qid must echo {source_qid!r}")
+        if str(response.get(id_field) or "") != id_value:
+            defects.append(f"{id_field} must echo {id_value!r}")
         if response.get("sheet_kind") not in allowed_sheet_kinds:
             defects.append(
                 "sheet_kind must be one of "
@@ -167,6 +212,20 @@ def _cell_checker(
         return defects
 
     return check
+
+
+def _cell_checker(
+    source_qid: str, allowed_sheet_kinds: tuple[str, ...]
+) -> kernel.Checker:
+    return _verdict_checker("source_qid", source_qid, allowed_sheet_kinds)
+
+
+def _generated_cell_checker(
+    pre_question_id: str, allowed_sheet_kinds: tuple[str, ...]
+) -> kernel.Checker:
+    return _verdict_checker(
+        "pre_question_id", pre_question_id, allowed_sheet_kinds
+    )
 
 
 def _review_flags(decision: Mapping[str, Any]) -> list[str]:
@@ -210,6 +269,26 @@ def _live_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _live_generated_cell(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        GENERATED_CELL_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        purpose="concept_mapping",
+    )
+
+
+def _live_generated_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+
+    return generation._openai_json(
+        GENERATED_CELL_CRITIC_SYSTEM,
+        json.dumps(payload, ensure_ascii=False),
+        purpose="concept_validation",
+    )
+
+
 def _live_authorities(
     provider: kernel.Provider | None,
     critic: kernel.Critic | None,
@@ -223,6 +302,25 @@ def _live_authorities(
 
     envelope_mod.require_live_api()
     return _live_cell, critic or _live_cell_critic, fixer or fixer_mod.live_fixer
+
+
+def _live_generated_authorities(
+    provider: kernel.Provider | None,
+    critic: kernel.Critic | None,
+    fixer: kernel.Provider | None,
+) -> tuple[kernel.Provider, kernel.Critic | None, kernel.Provider | None]:
+    if provider is not None:
+        return provider, critic, fixer
+
+    from .phase3 import envelope as envelope_mod
+    from .phase3 import fixer as fixer_mod
+
+    envelope_mod.require_live_api()
+    return (
+        _live_generated_cell,
+        critic or _live_generated_cell_critic,
+        fixer or fixer_mod.live_fixer,
+    )
 
 
 def decide_cells(
@@ -327,3 +425,156 @@ def decide_cells(
             f"{sorted(duplicate_cell_ids)!r}"
         )
     return rows
+
+
+def decide_generated_cells(
+    questions: list[Mapping],
+    *,
+    meta: Mapping,
+    profile: Mapping,
+    envelope_sha256: str,
+    concept_records_by_key: Mapping[str, Any] | None = None,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+) -> list[dict]:
+    """One recorded cell verdict per GENERATED pre-learning question.
+
+    The generated lane's parallel of ``decide_cells``, deliberately its
+    parallel rather than a widening (the same relationship
+    ``_bind_generated_cells`` has to ``_bind_explicit_cells``): the unit
+    identity is the minted ``pre_question_id``, the evidence is the
+    authored question plus the pre-learning concept it checks, and the
+    resulting cell carries ``concept_key`` = the question's own
+    ``pre_concept_id`` so routing stays mechanical and free. The judgment
+    fields — sheet kind, category, cognitive skill, difficulty, marks —
+    are the model's verdict: a generated question is authored WITHOUT a
+    tier or difficulty by design ("its level is decided later and
+    independently", prequestions.py), and this is that later, independent
+    decision. Output 02 therefore needs no externally supplied blueprint;
+    an explicit ``blueprint_cells`` argument remains the zero-spend path.
+    """
+
+    envelope_sha = _envelope_hash(envelope_sha256)
+    if not isinstance(meta, Mapping):
+        raise CellDecisionError("assessment cell metadata must be an object")
+    if not isinstance(profile, Mapping):
+        raise CellDecisionError("assessment cell profile must be an object")
+    profile_evidence = _profile_payload(profile)
+    allowed_sheet_kinds = tuple(profile_evidence["allowed_sheet_kinds"])
+    concepts = dict(concept_records_by_key or {})
+    # The mechanical PRC → concept_key translation: a staged Pre row
+    # carries the pre_concept_id its questions were authored to
+    # (release_snapshot row projection), and the minted release
+    # concept_key is what routing understands. Both ids were assigned by
+    # this pipeline; the join decides nothing.
+    concept_key_by_pre_id: dict[str, str] = {}
+    for concept_key, row in concepts.items():
+        pre_id = str((row or {}).get("pre_concept_id") or "").strip()
+        if pre_id and pre_id not in concept_key_by_pre_id:
+            concept_key_by_pre_id[pre_id] = str(concept_key)
+
+    prepared: list[tuple[str, str, Mapping]] = []
+    seen: set[str] = set()
+    for position, question in enumerate(questions, start=1):
+        if not isinstance(question, Mapping):
+            raise CellDecisionError(
+                f"generated question {position} is not an object"
+            )
+        pre_question_id = str(question.get("pre_question_id") or "").strip()
+        if not pre_question_id:
+            raise CellDecisionError(
+                f"generated question {position} has no pre_question_id"
+            )
+        if pre_question_id in seen:
+            raise CellDecisionError(
+                "generated questions repeat pre_question_id "
+                f"{pre_question_id!r}"
+            )
+        seen.add(pre_question_id)
+        pre_concept_id = str(question.get("pre_concept_id") or "").strip()
+        concept_key = concept_key_by_pre_id.get(pre_concept_id, "")
+        if not concept_key:
+            # Fail closed with the reason named: the question's home row
+            # is not in the carried snapshot (skipped as defective, or the
+            # payload predates the pre_concept_id projection), so its cell
+            # cannot route mechanically and inventing a home would be a
+            # silent mis-placement.
+            raise CellDecisionError(
+                f"generated question {pre_question_id!r} names pre-concept "
+                f"{pre_concept_id!r}, which the staged Pre release snapshot "
+                "does not carry (row skipped as defective, or a stale "
+                "staged payload without the pre_concept_id projection); "
+                "its assessment cell cannot route mechanically"
+            )
+        prepared.append((pre_question_id, concept_key, question))
+    if not prepared:
+        return []
+
+    provider, critic, fixer = _live_generated_authorities(
+        provider, critic, fixer
+    )
+    store = store or kernel.DecisionStore()
+
+    def decide_one(unit: tuple[str, str, Mapping]) -> dict:
+        pre_question_id, concept_key, question = unit
+        pre_concept_id = str(question.get("pre_concept_id") or "")
+        payload = {
+            "stage": "assessment.generated_cell",
+            "rules": GENERATED_CELL_SYSTEM,
+            "metadata": copy.deepcopy(dict(meta)),
+            "profile": copy.deepcopy(profile_evidence),
+            "generated_question": {
+                "pre_question_id": pre_question_id,
+                "pre_concept_id": pre_concept_id,
+                "question_id": str(question.get("question_id") or ""),
+                "question_text": str(question.get("question_text") or ""),
+                "answer": str(question.get("answer") or ""),
+                "rationale": str(question.get("rationale") or ""),
+            },
+            "pre_concept": _content_evidence(
+                dict(concepts.get(concept_key) or {})
+            ),
+        }
+        decision = kernel.decide(
+            kind="assessment.generated_cell",
+            unit_id=pre_question_id,
+            envelope_sha256=envelope_sha,
+            payload=payload,
+            provider=provider,
+            checker=_generated_cell_checker(
+                pre_question_id, allowed_sheet_kinds
+            ),
+            critic=critic,
+            store=store,
+            policy_version=GENERATED_CELL_POLICY_VERSION,
+            fixer=fixer,
+        )
+        response = copy.deepcopy(dict(decision["response"]))
+        # ``_bind_generated_cells`` owns the mechanical identity fields
+        # (cell_id, count, appears_in, accepted_source_qids, the bound
+        # question) and validates everything again; this record carries
+        # the judgment fields plus the mechanical routing bind and the
+        # decision audit.
+        return {
+            "sheet_kind": str(response.get("sheet_kind") or ""),
+            "question_category": str(response.get("question_category") or ""),
+            "cognitive_skill": str(response.get("cognitive_skill") or ""),
+            "difficulty": str(response.get("difficulty") or ""),
+            "marks": float(response["marks"]),
+            "count": 1,
+            "concept_key": concept_key,
+            "accepted_source_qids": [],
+            "rationale": str(response.get("rationale") or ""),
+            "flags": _review_flags(decision),
+            "authority": _decision_authority(decision),
+        }
+
+    return kernel.parallel_map_in_order(
+        prepared,
+        decide_one,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Cell · {pid}" for pid, _key, _question in prepared],
+        announce="Generated-question cell verdicts",
+    )

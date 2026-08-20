@@ -24,7 +24,19 @@ from . import assessment_release as rel
 from . import katex_rules
 from .phase3 import kernel
 
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-2"
+# -3: the response template now NAMES the answers[]/sub_questions[] object
+# fields (answer_content, correct_answer, text, keywords[].keyword). The
+# checker always required them, but the template showed bare arrays — a
+# provider that never guessed the field names failed every bounded
+# correction AND the Fixer with "exactly one correct option required
+# (got 0)", killing a whole Master file over a shape it was never told.
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-3"
+
+# A candidate whose obligation exhausted the bounded corrections AND The
+# Fixer. It answers for its obligation in the zero-loss accounting but is
+# EXCLUDED from every stage after materialization and never ships as a
+# row — the release records it instead (assessment_release_run).
+BLOCKED_ELIGIBILITY = "blocked"
 
 # Workbook capacities are positional mechanics, not content judgments.
 MAX_OBJECTIVE_OPTIONS = 6
@@ -44,9 +56,15 @@ MATERIALIZE_SYSTEM = (
     "stay strictly inside the supplied curricular evidence. Never invent "
     "facts, values, or constraints.\n"
     "For Objective cells, return no more than six canonical options with "
-    "exactly one correct marker. For Descriptive cells, return a complete "
-    "display answer, complete semantic answer/rubric blocks, and every "
-    "source-owned subquestion with its complete keyword evidence.\n"
+    "exactly one correct marker: each answers[] entry is an object whose "
+    "answer_content carries the option text (never empty, never a "
+    "duplicate) and whose correct_answer is \"1\" on exactly one option "
+    "and \"0\" on every other. For Descriptive cells, return a complete "
+    "display answer, complete semantic answer/rubric blocks (each "
+    "answers[] entry an object whose answer_content carries the block "
+    "text), and every source-owned subquestion with its complete keyword "
+    "evidence (each sub_questions[] entry an object with its text and its "
+    "keywords array of {\"keyword\":\"...\"} objects).\n"
     "Do not decide Open or Specific and do not allocate weights, subquestion "
     "marks, keyword weights, duration, or keyboard mode. Dedicated later "
     "decisions own answer restriction and marking; any such extra values in "
@@ -56,7 +74,9 @@ MATERIALIZE_SYSTEM = (
     "alt text.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","question":"","display_answer":"",'
-    '"answers":[],"sub_questions":[],"answer_explanation":"",'
+    '"answers":[{"answer_content":"","correct_answer":"1"}],'
+    '"sub_questions":[{"text":"","keywords":[{"keyword":""}]}],'
+    '"answer_explanation":"",'
     '"requires_visual":false,"rationale":"evidence-bound reason"}'
 )
 
@@ -230,14 +250,19 @@ def _proposal_defects(
         ]
         if len(correct) != 1:
             defects.append(
-                f"exactly one correct option required (got {len(correct)})"
+                f"exactly one correct option required (got {len(correct)}): "
+                "each answers[] object needs correct_answer \"1\" on the "
+                "one correct option and \"0\" on the rest"
             )
         contents = [
             str(answer.get("answer_content") or "").strip()
             for answer in answers
         ]
         if any(not content for content in contents):
-            defects.append("objective options must have non-empty content")
+            defects.append(
+                "objective options must have non-empty content in each "
+                "answers[] object's answer_content field"
+            )
         populated = [content for content in contents if content]
         if len(set(populated)) != len(populated):
             defects.append("duplicate option text")
@@ -588,18 +613,46 @@ def materialize_candidates(
 
     def decide_one(unit: tuple[Mapping | None, Mapping, str]) -> dict:
         atom, cell, candidate_id = unit
-        return _materialize_prepared(
-            atom,
-            cell,
-            candidate_id=candidate_id,
-            meta=meta,
-            context=context,
-            envelope_sha256=envelope_sha,
-            provider=provider,
-            critic=critic,
-            store=store,
-            fixer=fixer,
-        )
+        try:
+            return _materialize_prepared(
+                atom,
+                cell,
+                candidate_id=candidate_id,
+                meta=meta,
+                context=context,
+                envelope_sha256=envelope_sha,
+                provider=provider,
+                critic=critic,
+                store=store,
+                fixer=fixer,
+            )
+        except kernel.ContractError as error:
+            # The bounded corrections AND The Fixer both exhausted on this
+            # ONE obligation (kernel.decide raises only after both). Taking
+            # the whole Master file down here would discard every other
+            # finished, paid-for question over it — the same trade
+            # prequestions.py refuses, and CLAUDE.md refuses in as many
+            # words ("finished work always ships"). So the obligation
+            # returns as a BLOCKED marker: no fabricated content ships
+            # (shipping a row that failed the mechanical contract is the
+            # broken artifact the checker exists to refuse), every defect
+            # is named, and the caller excludes it from the shipped set
+            # while recording it loudly. Exact-once accounting holds — the
+            # marker answers for its obligation in the zero-loss report.
+            return {
+                "candidate_id": candidate_id,
+                "assessment_eligibility": BLOCKED_ELIGIBILITY,
+                "source_atom_ids": (
+                    [str(atom.get("source_qid") or "")] if atom else []
+                ),
+                "blueprint_cell_id": str(cell.get("cell_id") or ""),
+                "sheet_kind": str(cell.get("sheet_kind") or ""),
+                "flags": [
+                    "materialization blocked after bounded corrections and "
+                    "the Fixer: " + str(defect)
+                    for defect in (error.defects or [str(error)])
+                ],
+            }
 
     candidates = kernel.parallel_map_in_order(
         prepared,

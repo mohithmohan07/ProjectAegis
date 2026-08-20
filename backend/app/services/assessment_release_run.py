@@ -24,6 +24,7 @@ chain.
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -968,12 +969,30 @@ def _bind_generated_cells(
             )
         else:
             cell["concept_key"] = constraint
-        authority = {
-            "decision_key": "",
-            "policy_version": cell_decisions.CELL_POLICY_VERSION,
-            "review_flags": [],
-            "mechanical_basis": "generated_question",
-        }
+        decided_authority = dict(cell.get("authority") or {})
+        if str(decided_authority.get("decision_key") or "").strip():
+            # The cell carries a recorded verdict
+            # (``decide_generated_cells``): its authority and any critic
+            # dissent ride through — overwriting them here would drop the
+            # dissent exactly where Q10 requires it recorded.
+            authority = decided_authority
+            decided_flags = [
+                str(flag) for flag in cell.get("flags") or []
+                if str(flag).strip()
+            ]
+            decided_rationale = (
+                str(cell.get("rationale") or "").strip()
+                or "generated pre-learning question cell"
+            )
+        else:
+            authority = {
+                "decision_key": "",
+                "policy_version": cell_decisions.CELL_POLICY_VERSION,
+                "review_flags": [],
+                "mechanical_basis": "generated_question",
+            }
+            decided_flags = []
+            decided_rationale = "generated pre-learning question cell"
         cell["source_policy"] = GENERATED_SOURCE_POLICY
         # The generated question rides its own cell, which is what the
         # materializer is handed as ``blueprint_cell``.  It is the
@@ -991,11 +1010,11 @@ def _bind_generated_cells(
             "answer": str(question.get("answer") or ""),
             "rationale": str(question.get("rationale") or ""),
         }
-        cell["flags"] = []
+        cell["flags"] = list(decided_flags)
         cell["authority"] = authority
         cell[_CELL_AUDIT_FIELD] = {
-            "rationale": "generated pre-learning question cell",
-            "flags": [],
+            "rationale": decided_rationale,
+            "flags": list(decided_flags),
             "authority": authority,
         }
         cells.append(cell)
@@ -1540,6 +1559,31 @@ def run_release_for_job(
             "question(s); no source question enters this lane."
         )
         atoms = []
+        if blueprint_cells is None and questions:
+            # The supported live path: no external blueprint exists for
+            # generated pre-learning questions — they are authored WITHOUT
+            # a tier or difficulty by design ("its level is decided later
+            # and independently", prequestions.py) — so each question
+            # receives its own recorded cell verdict here, the generated
+            # lane's parallel of the source lane's per-atom verdicts
+            # below. An explicit ``blueprint_cells`` argument remains the
+            # zero-spend path for callers that already hold the cells.
+            progress.log(
+                f"Deciding assessment cells for {len(questions)} generated "
+                "question(s)."
+            )
+            cell_provider, cell_critic = _authority_pair(authorities, "cells")
+            blueprint_cells = cell_decisions.decide_generated_cells(
+                questions,
+                meta=meta,
+                profile=profile,
+                envelope_sha256=envelope_sha,
+                concept_records_by_key=concept_records_by_key,
+                provider=cell_provider,
+                critic=cell_critic,
+                store=store,
+                fixer=fixer,
+            )
         cells = _bind_generated_cells(
             questions,
             blueprint_cells,
@@ -1668,6 +1712,60 @@ def run_release_for_job(
             _append_warning(candidate, _CELL_WARNING)
         if materialization_needs_review:
             _append_warning(candidate, _MATERIALIZATION_WARNING)
+    # A BLOCKED obligation — materialization exhausted the bounded
+    # corrections AND The Fixer — is excluded HERE, at the obligation
+    # seam, because every later stage demands exact ordered coverage of
+    # its input (mid-pipeline skipping is not expressible; marking hard
+    # fails on empty answers). The exclusion is the loud, recorded kind
+    # CLAUDE.md requires: each blocked question rides the payload under
+    # ``materialization_blocked`` with every defect named, the log states
+    # it at error level, and the finished Master ships with the questions
+    # that DID arrive to contract — one impossible question never again
+    # takes the whole Master file down.
+    blocked_candidates = [
+        copy.deepcopy(dict(candidate)) for candidate in candidates
+        if str(candidate.get("assessment_eligibility") or "")
+        == materialization.BLOCKED_ELIGIBILITY
+    ]
+    if blocked_candidates:
+        keep = [
+            index for index, candidate in enumerate(candidates)
+            if str(candidate.get("assessment_eligibility") or "")
+            != materialization.BLOCKED_ELIGIBILITY
+        ]
+        candidates = [candidates[index] for index in keep]
+        obligations = [obligations[index] for index in keep]
+        cells = [cells[index] for index in keep]
+        if not generate_lane:
+            atoms = [atoms[index] for index in keep]
+        for blocked in blocked_candidates:
+            identity_label = (
+                (blocked.get("source_atom_ids") or [""])[0]
+                or str(
+                    (blocked.get("generated_question") or {}).get(
+                        "pre_question_id"
+                    )
+                    or ""
+                )
+                or str(blocked.get("candidate_id") or "")
+            )
+            progress.log(
+                f"Master file: question {identity_label} could not be "
+                "materialized to contract after bounded corrections and "
+                "The Fixer; it is BLOCKED from this Master and recorded "
+                "for review: "
+                + "; ".join(
+                    str(flag) for flag in (blocked.get("flags") or [])[:4]
+                ),
+                level="error",
+            )
+        progress.log(
+            f"Master file continues with {len(candidates)} of "
+            f"{len(candidates) + len(blocked_candidates)} question(s); "
+            f"{len(blocked_candidates)} blocked question(s) are recorded "
+            "on the release for review.",
+            level="warning",
+        )
     if generate_lane:
         # The barrier's first run, before a single later stage has spent
         # anything: a leak is cheapest to refuse here, and every remaining
@@ -2176,6 +2274,12 @@ def run_release_for_job(
         "candidates": candidates,
         "groups": groups,
         "placements": placements,
+        # R4: obligations whose materialization exhausted the bounded
+        # corrections AND The Fixer. They shipped as no row — shipping a
+        # row that failed its mechanical contract is the broken artifact
+        # the checker refuses — but they are never silent: every one is
+        # named here with its defects, for review and re-run.
+        "materialization_blocked": blocked_candidates,
     }
     if staged_lane == build_concepts_release.LANE_PRE:
         # Which lane this Master belongs to, stated rather than inferred —

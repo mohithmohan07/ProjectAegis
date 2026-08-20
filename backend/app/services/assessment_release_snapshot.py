@@ -236,6 +236,13 @@ def build(
             "concept_key": concept_key,
             "concept_machine_id": machine_id,
             "release_row_identity": row_identity,
+            # The Pre lane's mechanical join: a staged Pre row carries the
+            # PRC id its generated questions were authored to
+            # (``_pre_concept_id``, stage_pre_release), and this is the one
+            # place that id meets the minted concept_key — the generated
+            # lane's cell decisions translate through it. Post rows carry
+            # no such field and read "".
+            "pre_concept_id": str(record.get("_pre_concept_id") or ""),
             "concept_title": title,
             "concept_display_name": display_name,
             "parent_concept": str(concept.parent_concept or ""),

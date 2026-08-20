@@ -226,7 +226,7 @@ def release_state(release: models.AssessmentRelease | None) -> str:
         group.get("flags")
         for group in payload.get("groups") or []
         if isinstance(group, Mapping)
-    )
+    ) or bool(payload.get("materialization_blocked"))
     return READY_WITH_FLAGS if flagged else READY
 
 

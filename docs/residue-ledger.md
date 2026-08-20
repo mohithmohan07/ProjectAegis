@@ -69,6 +69,16 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
 | Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
 
+## Master-file blockers (2026-08-20, live run CH01 3-D Shapes MSBSHSE)
+
+| Item | Disposition |
+|---|---|
+| Output 02 required a blueprint nobody supplies | The generated lane demanded `blueprint_cells` 1:1 with generated questions; the live route passes none (only tests injected cells), so any Pre release with questions died with "blueprint provides 0 cells". FIXED: `assessment_cells.decide_generated_cells` — one recorded model verdict per generated question (sheet kind/category/skill/difficulty/marks; the question's level is "decided later and independently" by design, and this is that decision), wired into `run_release_for_job` when `blueprint_cells is None`. Explicit cells remain the zero-spend path. Concept routing stays mechanical via the new `pre_concept_id` projection on snapshot rows (the previously missing PRC → release concept_key translation) |
+| Materialize contract never named its fields | `MATERIALIZE_SYSTEM`'s template showed bare `"answers":[]`; the checker demanded `answer_content`/`correct_answer` — a provider that never guessed the names failed all bounded corrections AND the Fixer ("exactly one correct option required (got 0)"). FIXED: template + prose now name every object shape; defect strings name the fields so corrections converge; policy bumped to `assessment-materialize-3` (old cached materialize decisions re-key) |
+| One impossible question killed the whole Master | A terminal per-candidate ContractError propagated and discarded every finished sibling question. FIXED at the obligation seam (the only expressible place — every later stage demands exact ordered coverage): the blocked obligation returns a marker (`assessment_eligibility="blocked"`), is excluded from candidates/obligations/cells/atoms together, ships as `payload["materialization_blocked"]` with every defect named, logs at error level, and flips `release_state` to Ready-with-flags. Zero-loss accounting holds (the marker answers for its slot) |
+| Residue: blocked questions have no frontend counter | The record is complete (payload + logs + Ready-with-flags badge) but no UI surface renders "N blocked question(s)" or the entries; review requires reading the payload/manifest. Frontend follow-up |
+| Residue: an orphaned generated question fails closed | A question whose Pre row the snapshot dropped as defective raises `CellDecisionError` naming both ids (no silent mis-routing); the run dies rather than blocking just that question. Acceptable now (the row defect is itself recorded upstream); revisit if hit live |
+
 ## Performance round 2 — stage overlap (2026-08-20)
 
 | Item | Disposition |
