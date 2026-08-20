@@ -295,3 +295,82 @@ def test_plan_slot_rides_the_phase3_suffix():
             "grade_band_vocabulary": "",
         }},
     }) == ""
+
+
+# ---------------------------------------------------------------------------
+# Audit F2 resolution: the plan's topics ARE the graph's topics
+# ---------------------------------------------------------------------------
+
+def _plan_metadata(plan):
+    return {
+        "board": "ICSE", "grade": "10", "subject": "English",
+        "chapter_title": WORK,
+        "language_topology_plan": json.dumps(plan, ensure_ascii=False),
+    }
+
+
+def test_plan_topics_materialize_as_graph_topics(monkeypatch, tmp_path):
+    from app.services import canonical_source_phase3 as phase3
+
+    canonical = _canonical()
+    plan = _valid_plan(canonical)
+
+    def exploding_hierarchy(_payload):  # pragma: no cover
+        raise AssertionError(
+            "the plan owns the topics; the hierarchy call is double spend"
+        )
+
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=POEM,
+        metadata=_plan_metadata(plan),
+        hierarchy_provider=exploding_hierarchy,
+    )
+    titles = [row["title"] for row in graph["topics"]]
+    assert titles == [
+        "Stanza 1 — the brook sets out",
+        lt.detailed_analysis_title(WORK),
+    ]
+    assert [row["plan_topic_id"] for row in graph["topics"]] == [
+        "PT-1", "PT-2",
+    ]
+    assert all(
+        row["source"] == "language_topology_plan" for row in graph["topics"]
+    )
+    assert [row["topic_id"] for row in graph["topics"]] == [
+        "TOPIC-0001", "TOPIC-0002",
+    ]
+    # Spans partition: every position resolves to exactly one topic.
+    starts = [row["source_start"] for row in graph["topics"]]
+    assert starts == sorted(starts)
+    assert graph["topics"][0]["source_end"] == (
+        graph["topics"][1]["source_start"]
+    )
+    assert graph["topics"][-1]["source_end"] == len(POEM)
+
+
+def test_without_a_plan_the_graph_topics_are_untouched():
+    from app.services import canonical_source_phase3 as phase3
+
+    canonical = _canonical()
+    graph, _report = phase3.compile_semantic_graph(
+        canonical,
+        source_text=POEM,
+        metadata={"chapter_title": WORK, "subject": "English"},
+    )
+    assert all(
+        row.get("source") != "language_topology_plan"
+        for row in graph["topics"]
+    )
+
+
+def test_an_unreadable_plan_slot_fails_closed():
+    from app.services import canonical_source_phase3 as phase3
+
+    canonical = _canonical()
+    with pytest.raises(ValueError, match="not readable JSON"):
+        phase3.compile_semantic_graph(
+            canonical,
+            source_text=POEM,
+            metadata={"language_topology_plan": "{not json"},
+        )

@@ -1265,6 +1265,100 @@ def _forced_structural_roles(
                 classifications[section_id]["structural_number"] = number
 
 
+def _language_plan_topics(
+    metadata: dict[str, Any],
+    canonical: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Materialize the step-11 language plan's topics as graph topics.
+
+    Audit F2: for a literary chapter the plan IS the topic authority — the
+    stanza/story topics the author recorded must become the graph topics
+    the skeleton and Settle iterate, not advice beside heading-derived
+    ones. Mechanics only: spans come from the plan's own evidence blocks
+    (falling back to its concepts' blocks when a topic records no direct
+    evidence), ordering is source order, ids are the graph's ordinary
+    positional TOPIC-#### mints. An unreadable plan or a topic with no
+    resolvable blocks fails closed — this is sealed configuration, and a
+    silent fall-back to heading topology is exactly the under-delivery
+    the audit named.
+    """
+    raw = str((metadata or {}).get("language_topology_plan") or "").strip()
+    if not raw:
+        return []
+    try:
+        plan = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"the language topology plan slot is not readable JSON: {exc}"
+        )
+    plan_topics = [
+        row for row in (plan or {}).get("topics") or []
+        if isinstance(row, dict)
+    ]
+    if not plan_topics:
+        raise ValueError("the language topology plan carries no topics")
+    blocks_by_id = {
+        str(block.get("block_id") or ""): block
+        for block in canonical.get("blocks") or []
+        if isinstance(block, dict)
+    }
+    rows: list[dict[str, Any]] = []
+    for plan_index, topic in enumerate(plan_topics, start=1):
+        evidence_ids = [
+            str(value) for value in topic.get("evidence_block_ids") or []
+        ]
+        concept_ids: list[str] = []
+        for concept in topic.get("concepts") or []:
+            if isinstance(concept, dict):
+                concept_ids.extend(
+                    str(value)
+                    for value in concept.get("source_block_ids") or []
+                )
+        # Span from the topic's OWN evidence when it names any: analytical
+        # topics (Detailed Analysis) legitimately cite early blocks from
+        # their concepts, and letting those widen the span would swallow
+        # the stanzas.
+        span_ids = evidence_ids or concept_ids
+        resolved = [
+            blocks_by_id[value] for value in span_ids if value in blocks_by_id
+        ]
+        if not resolved:
+            raise ValueError(
+                "language plan topic "
+                f"{str(topic.get('plan_topic_id') or plan_index)!r} "
+                "references no resolvable source blocks"
+            )
+        starts = [int(block.get("source_start") or 0) for block in resolved]
+        ends = [int(block.get("source_end") or 0) for block in resolved]
+        title = _plain_title(
+            str(topic.get("display_name") or "")
+        ) or f"Topic {plan_index}"
+        rows.append({
+            "_plan_order": plan_index,
+            "title": title,
+            "display_title": title,
+            "structural_number": "",
+            "section_id": str(resolved[0].get("section_id") or ""),
+            "source_start": min(starts),
+            "source_end": max(ends),
+            "source": "language_topology_plan",
+            "plan_topic_id": str(topic.get("plan_topic_id") or ""),
+            "_plan_section_ids": sorted({
+                str(block.get("section_id") or "")
+                for block in resolved
+                if block.get("section_id")
+            }),
+        })
+    rows.sort(key=lambda row: (
+        int(row["source_start"]), int(row["_plan_order"])
+    ))
+    for index, row in enumerate(rows, start=1):
+        row["topic_id"] = f"TOPIC-{index:04d}"
+        row["order"] = index
+        row.pop("_plan_order")
+    return rows
+
+
 def compile_semantic_graph(
     canonical: dict[str, Any],
     *,
@@ -1277,6 +1371,13 @@ def compile_semantic_graph(
     """Compile a stable graph from ACSD and optional API/PDF evidence."""
     metadata = dict(metadata or {})
     canonical = copy.deepcopy(canonical)
+    # Step 11 (audit F2): a literary chapter's plan supplies the topics, so
+    # the hierarchy model call would be double spend for an answer the plan
+    # already owns.
+    language_plan_topics = _language_plan_topics(metadata, canonical)
+    if language_plan_topics:
+        hierarchy_provider = None
+        critic_provider = None
     chapter_title = str(
         metadata.get("chapter_title")
         or (canonical.get("document") or {}).get("chapter_title")
@@ -1541,6 +1642,22 @@ def compile_semantic_graph(
             topics[index + 1]["source_start"] if index + 1 < len(topics)
             else len(str(source_text or ""))
         )
+
+    if language_plan_topics:
+        # The plan's stanza/story topics REPLACE the heading-derived ones —
+        # this is the step-11 contract, not a preference. Sections bind to
+        # their plan topic through the evidence blocks; everything else
+        # resolves by position exactly as before.
+        topics = language_plan_topics
+        topic_by_section = {}
+        for topic in topics:
+            for sid in topic.pop("_plan_section_ids", []):
+                topic_by_section.setdefault(sid, topic)
+        for index, topic in enumerate(topics):
+            topic["source_end"] = (
+                topics[index + 1]["source_start"] if index + 1 < len(topics)
+                else len(str(source_text or ""))
+            )
 
     def topic_for_position(position: int) -> dict[str, Any]:
         prior = [row for row in topics if int(row["source_start"]) <= position]

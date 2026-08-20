@@ -281,6 +281,9 @@ def test_concepts_wrapper_activates_verified_graph_and_semantic_source(
     # assembled no set, keeping legacy graph identities unchanged.
     assert observed["metadata"] == {
         **_metadata(), "instruction_set_sha256": "",
+        # Step 11 (audit F2): the plan slot rides graph metadata; empty on
+        # non-literary runs so nothing re-keys.
+        "language_topology_plan": "",
     }
     assert session["graph"] is graph
 

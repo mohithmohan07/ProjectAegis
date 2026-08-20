@@ -4368,24 +4368,12 @@ def generate_post_learning(
         from . import canonical_source_phase2 as _phase2
         from . import language_topology
 
-        # Audit F2 containment: the authored plan currently reaches the
-        # Phase-3 instruction suffix but CANNOT create or rename the
-        # stanza/story topics it records — the semantic graph and skeleton
-        # never materialize plan topics. Running a literary chapter would
-        # therefore ship a general topology while the sealed plan and the
-        # composed hash claim otherwise. Until the step-11 integration
-        # materializes plan topics end to end (docs/residue-ledger.md
-        # R-S11a / audit F2), a literary selection blocks HERE — pre-spend,
-        # named, never a silent expository fallback.
-        raise language_topology.LanguagePlanError(
-            "the Architect selected the literary mode "
-            f"{language_mode!r}, but the language topology integration is "
-            "not complete: the authored plan cannot yet materialize its "
-            "stanza/story topics into the concept map (audit F2, residue "
-            "R-S11a). Literary chapters are blocked before any paid call "
-            "until that integration lands; expository chapters are "
-            "unaffected."
-        )
+        # Step 11 integration (audit F2, resolved): the authored plan's
+        # topics are MATERIALIZED as the semantic graph's topics — the
+        # phase-3 contract threads the plan slot into graph metadata and
+        # compile_semantic_graph builds the literary topic topology from
+        # the plan's own evidence blocks. The containment raise that stood
+        # here while that integration was missing is retired.
         canonical_bundle = _phase2.active_canonical()
         if canonical_bundle is None:
             # No canonical bundle (legacy/no-ACSD path): the adapter cannot

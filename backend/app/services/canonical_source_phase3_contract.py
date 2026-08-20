@@ -172,6 +172,15 @@ def install(generation: ModuleType | None = None) -> None:
             "instruction_set_sha256": (
                 kwargs.get("instruction_set_sha256") or ""
             ),
+            # Step 11 (audit F2): the language topology plan is graph
+            # EVIDENCE — its topics are the literary chapter's topics, so
+            # the compiler receives the plan itself, not only the hash the
+            # composed instruction identity already carries.
+            "language_topology_plan": str(
+                (kwargs.get("instruction_slots") or {}).get(
+                    "language_topology_plan"
+                ) or ""
+            ),
         }
         resume_review = generation._newest_compatible_concept_checkpoint(
             kwargs.get("resume_checkpoint"),
