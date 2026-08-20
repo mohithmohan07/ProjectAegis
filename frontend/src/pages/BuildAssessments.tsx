@@ -308,6 +308,19 @@ function UploadFlow({ vocab }: { vocab: Vocab }) {
           fileLabel: "Source file",
           initialUsage: job.openai_usage,
         },
+        {
+          module: "assessments",
+          jobId: job.id,
+          recoverResult: async () => {
+            const finished = await api.getUploadJob("assessments", job.id);
+            return {
+              status: finished.status,
+              reattached: true,
+              job_id: finished.id,
+              openai_usage: finished.openai_usage,
+            } as Record<string, unknown>;
+          },
+        },
       );
       setResult(data);
       try {

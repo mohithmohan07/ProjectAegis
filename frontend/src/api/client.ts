@@ -98,6 +98,12 @@ export class StreamTransportError extends Error {
     this.name = "StreamTransportError";
     this.cause = cause;
   }
+
+  /** Page error boxes render String(err); a person should read what
+   * happened, not the class name. */
+  toString(): string {
+    return this.message;
+  }
 }
 
 /**

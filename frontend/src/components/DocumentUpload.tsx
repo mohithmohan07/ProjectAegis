@@ -261,7 +261,28 @@ export default function DocumentUpload({
         mmd_chars: number;
         source_artifacts?: UploadJob["source_artifacts"];
         openai_usage?: UploadJob["openai_usage"];
-      }>(`Converting ${job.filename} to MMD`, path);
+      }>(
+        `Converting ${job.filename} to MMD`,
+        path,
+        {},
+        undefined,
+        {
+          module,
+          jobId: job.id,
+          // The conversion finished while the connection was down:
+          // rebuild the result from the completed job itself.
+          recoverResult: async () => {
+            const finished = await api.getUploadJob(module, job.id);
+            return {
+              status: finished.status,
+              mmd_text: finished.mmd_text,
+              mmd_chars: finished.mmd_text.length,
+              source_artifacts: finished.source_artifacts,
+              openai_usage: finished.openai_usage,
+            };
+          },
+        },
+      );
       if (savedJobRequestGenerationRef.current !== requestGeneration) return;
       emit({
         ...job,

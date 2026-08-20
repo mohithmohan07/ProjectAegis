@@ -69,6 +69,14 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
 | Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
 
+## Reattach coverage completed (2026-08-20 night, round 4)
+
+| Item | Disposition |
+|---|---|
+| Convert stream had NO reattach wiring | A tab switch during a document conversion threw the raw transport error onto the page (the owner's "StreamTransportError: network connection lost while the run was streaming" screenshot). The convert run() now carries {module, jobId, recoverResult} — journal tail + silent catch-up apply to conversions exactly as to generations; a conversion that finished while away recovers its result from the completed job. The assessments upload-generate got the same wiring |
+| Raw class name in error boxes | StreamTransportError.toString() now returns the message; any residual surface reads as a sentence, not a class name |
+| Residue | The assessments SESSION generate (no job id) and Create Workbooks streams remain unjournaled/unreattached — a drop there surfaces the (readable) transport message. Wire a journal key for sessions/workbook run ids if these flows matter on phones |
+
 ## Console flexibility on phones (2026-08-20 night, round 3)
 
 | Item | Disposition |
