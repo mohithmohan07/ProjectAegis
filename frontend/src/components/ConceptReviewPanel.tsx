@@ -59,47 +59,11 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
     <div className="card mt-16">
       <div className="section-title">Review and correct the output</div>
       <p className="muted">
-        Download the output, read it, then describe anything that needs
-        changing — move a concept to another topic, reword it, or add one that
-        is missing. Aegis applies your instruction and rebuilds the files. You
-        can do this as many times as you need.
+        The files are in the Run outputs section above. Read them, then
+        describe anything that needs changing — move a concept to another
+        topic, reword it, or add one that is missing. Aegis applies your
+        instruction and rebuilds the files, as many times as you need.
       </p>
-
-      <div className="downloads">
-        <a
-          className="download primary"
-          href={api.conceptReleaseBulkImportUrl(jobId)}
-          download
-          data-testid="download-bulk-import"
-        >
-          <span className="download-name">Bulk Import workbook</span>
-          <span className="download-note">
-            The deliverable — canonical import format, ready to upload
-          </span>
-        </a>
-        <a
-          className="download"
-          href={api.inventoryCsvUrl(jobId)}
-          download
-          data-testid="download-inventory"
-        >
-          <span className="download-name">Question / Task Inventory</span>
-          <span className="download-note">
-            Every question found in the source, and where it landed (CSV)
-          </span>
-        </a>
-        <a
-          className="download"
-          href={api.conceptReleaseUrl(jobId)}
-          download
-          data-testid="download-output"
-        >
-          <span className="download-name">Review workbook</span>
-          <span className="download-note">
-            Diagnostics only — release status, routing and issues
-          </span>
-        </a>
-      </div>
 
       <p>
         <Link

@@ -20,7 +20,7 @@ type Path = null | "post";
 
 export default function BuildConcepts() {
   const auth = useOptionalAuth();
-  const [path, setPath] = useState<Path>(null);
+  const [path, setPath] = useState<Path>("post");
   const [resumeJob, setResumeJob] = useState<UploadJob | null>(null);
   const [pendingResume, setPendingResume] =
     useState<ResumableCheckpoint | null>(null);
@@ -109,11 +109,6 @@ export default function BuildConcepts() {
     };
   }, [ownerKey, pendingResume?.generation_running, pendingResume?.id]);
 
-  function choosePath(nextPath: Exclude<Path, null>) {
-    setResumeJob(null);
-    setPath(nextPath);
-  }
-
   function keepCheckpointForLater(job: ResumableCheckpoint) {
     acknowledgeCheckpointPrompt(ownerKey, job);
     setPendingResume(null);
@@ -165,35 +160,7 @@ export default function BuildConcepts() {
         </div>
       )}
 
-      {!path && (
-        // One card, so no cols-2: that grid is a fixed two-column template
-        // and would render the lone card at half width beside an empty
-        // column. Step 9 collapses this chooser entirely.
-        <div className="grid">
-          <button
-            className="module-card"
-            disabled={resumeDiscoveryLoading}
-            onClick={() => choosePath("post")}
-          >
-            <div className="module-title">Post Learning</div>
-            <div className="module-desc">
-              Upload a document → convert to MMD → parse concepts → deposit under a chapter.
-            </div>
-          </button>
-        </div>
-      )}
 
-      {path && (
-        <button
-          className="ghost mb-16"
-          onClick={() => {
-            setPath(null);
-            setResumeJob(null);
-          }}
-        >
-          ← Back to options
-        </button>
-      )}
       {path === "post" && (
         <PostLearningFlow
           bookSources={bookSources}

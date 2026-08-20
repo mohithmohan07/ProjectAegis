@@ -52,17 +52,16 @@ beforeEach(() => {
   apiMock.listConceptRevisions.mockResolvedValue({ job_id: 7, revisions: [] });
 });
 
-test("offers the current output for download", async () => {
+test("hosts no downloads of its own — the Run outputs section owns them", async () => {
   renderPanel();
 
-  const bulkImport = await screen.findByTestId("download-bulk-import");
-  expect(bulkImport.getAttribute("href")).toBe(
-    "/release/7-bulk-import.xlsx",
-  );
-  const inventory = await screen.findByTestId("download-inventory");
-  expect(inventory.getAttribute("href")).toBe("/inventory/7.csv");
-  const review = await screen.findByTestId("download-output");
-  expect(review.getAttribute("href")).toBe("/release/7.xlsx");
+  // The panel used to duplicate Output 03 and the diagnostics as its own
+  // download cards; the manifest's Run outputs grid is now the one home.
+  await screen.findByTestId("open-review-page");
+  expect(screen.queryByTestId("download-bulk-import")).toBeNull();
+  expect(screen.queryByTestId("download-inventory")).toBeNull();
+  expect(screen.queryByTestId("download-output")).toBeNull();
+  expect(screen.getByText(/Run outputs section above/i)).toBeDefined();
 });
 
 test("deep-links to the release review page for this job", async () => {
@@ -162,29 +161,3 @@ test("an empty instruction cannot be submitted", async () => {
   expect(apiMock.submitConceptRevision).not.toHaveBeenCalled();
 });
 
-test("labels each download so the deliverable is not confused with diagnostics", async () => {
-  apiMock.listConceptRevisions.mockResolvedValue({ revisions: [] });
-  renderPanel();
-  await waitFor(() => expect(apiMock.listConceptRevisions).toHaveBeenCalled());
-
-  const bulk = screen.getByTestId("download-bulk-import");
-  const inventory = screen.getByTestId("download-inventory");
-  const diagnostics = screen.getByTestId("download-output");
-
-  // Each says what it is, so a reviewer does not grab the wrong file.
-  expect(bulk.textContent).toMatch(/Bulk Import workbook/i);
-  expect(bulk.textContent).toMatch(/deliverable/i);
-  expect(inventory.textContent).toMatch(/Question \/ Task Inventory/i);
-  expect(diagnostics.textContent).toMatch(/Diagnostics only/i);
-
-  // The deliverable is the visually primary choice.
-  expect(bulk.className).toMatch(/primary/);
-  expect(diagnostics.className).not.toMatch(/primary/);
-
-  // The old markup used a `.btn` class the stylesheet never defined, so all
-  // three rendered as bare links.
-  for (const element of [bulk, inventory, diagnostics]) {
-    expect(element.className).not.toMatch(/\bbtn\b/);
-    expect(element.className).toMatch(/download/);
-  }
-});
