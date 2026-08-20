@@ -182,6 +182,7 @@ function ImportPreview({ questions }: { questions: Question[] }) {
             <div className="empty">No rows to preview yet.</div>
           ) : (
             <div className="table-wrap mt-12">
+              <div className="table-scroll">
               <table>
                 <thead>
                   <tr>
@@ -206,6 +207,7 @@ function ImportPreview({ questions }: { questions: Question[] }) {
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>

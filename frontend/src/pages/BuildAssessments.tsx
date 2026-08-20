@@ -220,6 +220,7 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
             ) : (
               <>
                 <div className="table-wrap">
+                  <div className="table-scroll">
                   <table>
                     <thead>
                       <tr><th>#</th><th>Type</th><th>Skills</th><th>Difficulty</th><th>Categories</th><th>Qs each</th></tr>
@@ -237,6 +238,7 @@ function ConceptMappingFlow({ vocab }: { vocab: Vocab }) {
                       ))}
                     </tbody>
                   </table>
+                  </div>
                 </div>
                 <div className="row mt-12">
                   <div className="spacer" />
@@ -571,9 +573,6 @@ function ReleaseReviewFlow() {
                 className="primary"
                 disabled={busy || blocked || !release.published || release.uploaded}
                 onClick={upload}
-                title={blocked
-                  ? "Blocked for database upload — resolve the named issues and publish a new version"
-                  : undefined}
               >
                 {busy && <><span className="spinner" aria-hidden="true" />{" "}</>}
                 {release.uploaded
@@ -582,6 +581,12 @@ function ReleaseReviewFlow() {
                     ? "Blocked for database upload"
                     : "Upload Master to Database"}
               </button>
+              {blocked && (
+                <div className="hint mt-8">
+                  Blocked for database upload — resolve the named issues
+                  and publish a new version.
+                </div>
+              )}
             </div>
             {uploadResult && (
               <div className="mt-8">

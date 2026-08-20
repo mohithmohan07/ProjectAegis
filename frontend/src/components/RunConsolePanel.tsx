@@ -38,6 +38,14 @@ export default function RunConsolePanel() {
   const [copied, setCopied] = useState(false);
   const [, forceTick] = useState(0);
 
+  // On phones the open console is a fixed bottom sheet; this class lets
+  // the page reserve matching bottom space so content and focused inputs
+  // can always scroll clear of it (styles.css, ≤960px block).
+  useEffect(() => {
+    document.body.classList.toggle("console-open", state.open);
+    return () => document.body.classList.remove("console-open");
+  }, [state.open]);
+
   // A once-a-second tick keeps the elapsed clock honest while a run is live.
   useEffect(() => {
     if (!state.active || !state.startedAt) return;

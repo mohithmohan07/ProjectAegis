@@ -24,6 +24,7 @@ export default function SourceBookInput({
         Source book (for multi-source tagging)
       </label>
       <input
+        className="input-md"
         id={inputId}
         list="book-sources-list"
         value={value}

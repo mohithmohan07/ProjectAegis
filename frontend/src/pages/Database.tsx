@@ -135,6 +135,7 @@ export default function Database() {
       {questions.error && <div className="error-box mb-12">{questions.error}</div>}
       <div className="card">
         <div className="table-wrap">
+          <div className="table-scroll">
           <table>
             <thead>
               <tr>
@@ -161,6 +162,7 @@ export default function Database() {
               ))}
             </tbody>
           </table>
+          </div>
         </div>
         {questions.data?.length === 0 && <div className="empty">No questions in this sheet yet.</div>}
       </div>

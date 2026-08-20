@@ -34,7 +34,7 @@ function ThemeToggle() {
       title="Switch between auto, light and dark themes"
     >
       <span aria-hidden="true">◐</span>
-      {THEME_LABEL[choice]} theme
+      <span className="theme-toggle-label">{THEME_LABEL[choice]} theme</span>
     </button>
   );
 }

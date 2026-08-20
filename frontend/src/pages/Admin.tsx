@@ -149,10 +149,10 @@ function PromptManager({ token, onLogout }: { token: string; onLogout: () => voi
               </select>
               <input
                 aria-label="Search prompts"
+                className="input-md"
                 placeholder="Search prompts…"
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
-                style={{ minWidth: 240 }}
               />
               <div className="spacer" />
               <span className="muted">{visible.length} prompt(s)</span>

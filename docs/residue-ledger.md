@@ -69,6 +69,18 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
 | Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
 
+## Mobile interface round (2026-08-20 night)
+
+| Item | Disposition |
+|---|---|
+| Console = phone bottom sheet, closed by default | On ≤960px viewports the run console starts CLOSED (a floating Console pill reopens it) and still auto-opens the moment a run starts; open sheet is 62dvh with safe-area padding, scrollable chrome, a log-body floor, and `body.console-open` reserves matching page bottom-padding so content and focused inputs always scroll clear |
+| Top bar | Sticky brand + edge-faded scrolling nav (42px targets) + icon-only theme toggle (restored — it was display:none, the app's only theme control) + compact account; safe-area insets; viewport-fit=cover |
+| Overflow guards | img/svg/video max-width; pre scroll-contained; overflow-wrap:anywhere on .mono/code/.kv dd/.rich-section-body/.katex-inline/.error-box (the KaTeX chip was the one true overflow blocker — space-free LaTeX); all five data tables wrapped in .table-scroll; .main overflow-x: clip on phones |
+| Touch & type floors (≤700px) | 40px buttons/links/upload-labels/radios/pick-items, 16px form text (kills iOS focus zoom, broadened past text/number types), 12px badge/label/th floors, dvh dialogs, single-column .kv, full-width selects |
+| Page fixes | Workbooks: filename is the download link (was a 7th-column PDF link off-screen), token split visible (was hover-only); BuildAssessments: blocked-upload reason visible (was title-only); Admin search input declassed from inline 240px |
+| Verified | Audit: 7-area parallel workflow (81 findings triaged); Playwright at 390×844, both themes, all 8 routes, with a horizontal-overflow detector: zero overflow, zero page errors, before/after screenshots on record |
+| Residue | .table-scroll has no edge-fade hint (scrollbar only); saved-batches table could be cards on phones; console usage block could collapse to one line on very short viewports |
+
 ## Owner review package (2026-08-20 evening)
 
 | Item | Disposition |

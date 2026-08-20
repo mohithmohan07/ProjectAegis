@@ -62,8 +62,18 @@ interface RunConsoleApi {
 /* The console is the run's full record: keep enough lines that even a long
    multi-phase generation stays reviewable end to end. */
 const MAX_LINES = 3000;
+
+/* On a phone the docked console would cover half the viewport, so it
+   starts CLOSED there and opens itself the moment a run starts — the
+   log appears exactly when there is a log to watch. Desktop keeps the
+   always-open panel. */
+const SMALL_SCREEN =
+  typeof window !== "undefined"
+  && typeof window.matchMedia === "function"
+  && window.matchMedia("(max-width: 960px)").matches;
+
 const INITIAL: RunState = {
-  active: false, open: true, title: "", lines: [], progress: 0,
+  active: false, open: !SMALL_SCREEN, title: "", lines: [], progress: 0,
   progressLabel: "", startedAt: null, status: "idle", usage: null,
   usagePresentation: null,
 };
@@ -72,7 +82,7 @@ const RunConsoleContext = createContext<RunConsoleApi | null>(null);
 
 export function RunConsoleProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<RunState>(INITIAL);
-  const openRef = useRef(true);
+  const openRef = useRef(!SMALL_SCREEN);
   const runIdRef = useRef(0);
 
   const apply = useCallback((evt: StreamEvent) => {

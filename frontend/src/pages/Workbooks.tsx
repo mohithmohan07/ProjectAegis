@@ -123,6 +123,7 @@ export default function Workbooks() {
         )}
         {(library.data?.length ?? 0) > 0 && (
           <div className="table-wrap">
+            <div className="table-scroll">
             <table>
               <thead>
                 <tr>
@@ -132,7 +133,6 @@ export default function Workbooks() {
                   <th scope="col">Size</th>
                   <th scope="col">API tokens</th>
                   <th scope="col">Est. OpenAI cost</th>
-                  <th scope="col"></th>
                 </tr>
               </thead>
               <tbody>
@@ -140,30 +140,34 @@ export default function Workbooks() {
                   <tr key={e.rel}>
                     <td>{e.class_folder}</td>
                     <td>{e.subject}</td>
-                    <td className="mono">{e.name}</td>
+                    <td className="mono">
+                      {/* The filename IS the download: the row's one
+                          action lives in the first visible text cell, so
+                          a phone user never swipes 7 columns to reach a
+                          trailing PDF link. */}
+                      <a href={api.workbookFileUrl(e.rel)}>{e.name}</a>
+                    </td>
                     <td>{(e.size / 1024).toFixed(0)} KB</td>
-                    <td
-                      className="mono"
-                      title={e.openai_usage
-                        ? `${formatTokenCount(e.openai_usage.input_tokens)} input + ${formatTokenCount(e.openai_usage.output_tokens)} output`
-                        : undefined}
-                    >
+                    <td className="mono">
                       {e.openai_usage ? formatTokenCount(e.openai_usage.total_tokens) : "—"}
+                      {e.openai_usage && (
+                        <div className="hint">
+                          {formatTokenCount(e.openai_usage.input_tokens)} in
+                          {" · "}
+                          {formatTokenCount(e.openai_usage.output_tokens)} out
+                        </div>
+                      )}
                     </td>
                     <td className="mono">
                       {e.openai_usage
                         ? formatEstimatedCost(e.openai_usage.estimated_cost_usd)
                         : "—"}
                     </td>
-                    <td>
-                      <a className="button-link ghost" href={api.workbookFileUrl(e.rel)}>
-                        PDF
-                      </a>
-                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
+            </div>
           </div>
         )}
       </div>
