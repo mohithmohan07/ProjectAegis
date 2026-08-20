@@ -43,6 +43,21 @@ def install(generation: ModuleType | None = None) -> None:
                 config.use_live_generation() if live is None else bool(live)
             )
             raw = str(mmd_text or "")
+            if use_live and raw and _reader_already_ruled():
+                # The GPT PDF reader already decided every block's kind and
+                # verified it against the original page images, and its
+                # furniture drops are ledgered on the canonical. Re-reading
+                # the derived MMD would re-bill a decision that is already
+                # on the ledger — the same reader-identity exemption QX
+                # applies (phase212_contract.adjudication_exempt), read
+                # from the same recorded provenance.
+                progress.log(
+                    "Chapter Reading skipped: this source was read by the "
+                    "GPT PDF reader — block kinds are already "
+                    "model-decided and page-verified, so the chapter is "
+                    "not re-read (or re-billed)."
+                )
+                return original_concepts_from_mmd(mmd_text, *args, **kwargs)
             if use_live and raw:
                 reading = _reading_for_run(generation, raw, kwargs)
                 if reading is not None:
@@ -81,6 +96,16 @@ def install(generation: ModuleType | None = None) -> None:
 
         active_semantic_source._chapter_reading_installed = True
         phase22.active_semantic_source = active_semantic_source
+
+
+def _reader_already_ruled() -> bool:
+    """One authority: the QX exemption predicate, on the active canonical."""
+    from . import canonical_source_phase212_contract as phase212_contract
+
+    canonical = phase2.active_canonical()
+    if not isinstance(canonical, dict):
+        return False
+    return phase212_contract.adjudication_exempt(canonical)
 
 
 def _assessment_sections() -> tuple[str, ...]:

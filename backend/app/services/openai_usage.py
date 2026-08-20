@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import contextvars
 import os
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -185,8 +186,9 @@ class UsageAccumulator:
                 request_cost = Decimal(str(estimated_cost_usd))
             except (ValueError, TypeError):
                 request_cost = None
-        item = self.models.setdefault(model, ModelUsage(model=model))
-        item.add(
+        with _MUTATION_LOCK:
+            item = self.models.setdefault(model, ModelUsage(model=model))
+            item.add(
             request_count=request_count,
             input_tokens=input_tokens,
             cached_input_tokens=cached_input_tokens,
@@ -195,7 +197,7 @@ class UsageAccumulator:
             reasoning_tokens=reasoning_tokens,
             total_tokens=total,
             estimated_cost_usd=request_cost,
-        )
+            )
 
     def summary(self) -> dict[str, Any]:
         model_rows = [_model_summary(item) for item in self.models.values()]
@@ -238,6 +240,13 @@ class UsageAccumulator:
             "pricing_as_of": PRICING_AS_OF,
             "pricing_source": _pricing_source(model_rows),
         }
+
+
+# Workers under the bounded decision pool share ONE accumulator object per
+# run (contextvars copy the reference, not the value), and ``ModelUsage.add``
+# is a read-modify-write. One process-wide lock keeps the cost report exact;
+# contention is negligible next to a model call.
+_MUTATION_LOCK = threading.Lock()
 
 
 _active: contextvars.ContextVar[UsageAccumulator | None] = contextvars.ContextVar(

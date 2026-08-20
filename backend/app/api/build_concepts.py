@@ -706,7 +706,7 @@ def convert_upload(
             )
         finally:
             worker_db.close()
-    return progress.stream(work, title="Converting document to MMD")
+    return progress.stream(work, title="Preparing the document source")
 
 
 # --------------------------------------------------------------------------- #

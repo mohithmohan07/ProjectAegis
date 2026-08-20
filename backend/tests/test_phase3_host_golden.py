@@ -202,9 +202,11 @@ def test_a_fabricated_host_title_fails_closed_after_bounded_corrections(
             for unit in request["units"]
         ]}
 
-    # Batches run sequentially by default (AEGIS_PHASE3_DECISION_WORKERS
-    # unset), so the per-decision attempt budget is the only variable.
-    monkeypatch.delenv("AEGIS_PHASE3_DECISION_WORKERS", raising=False)
+    # Pin sequential batches so the call count isolates the per-decision
+    # attempt budget: the shipped default is now parallel (workers 6), and
+    # under the pool the sibling batches already in flight legitimately
+    # finish their own bounded attempts before the fail-fast cancel lands.
+    monkeypatch.setenv("AEGIS_PHASE3_DECISION_WORKERS", "1")
     with pytest.raises(kernel.ContractError) as failed:
         host_mod.host(
             golden_envelope, settled_rows,

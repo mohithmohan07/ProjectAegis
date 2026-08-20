@@ -5894,25 +5894,40 @@ def load_page_evidence(
         return None
     artifact_path = Path(artifact_dir) / VISION_ACSD_FILENAME
     pdf_sha = page_acsd._pdf_sha256(source_path)
-    bundle: dict[str, Any] | None = None
-    if artifact_path.exists():
+
+    def _validated(path: Path) -> dict[str, Any] | None:
+        # The schema gate uses the producer's constant: a hardcoded
+        # version here previously never matched what the extractor
+        # stamped, so this cache was dead and every Phase 3 rebuild
+        # re-entered the full PDF-to-ACSD lane.
+        if not path.exists():
+            return None
         try:
-            cached = json.loads(artifact_path.read_text(encoding="utf-8"))
-            # The schema gate uses the producer's constant: a hardcoded
-            # version here previously never matched what the extractor
-            # stamped, so this cache was dead and every Phase 3 rebuild
-            # re-entered the full PDF-to-ACSD lane.
-            if (
-                isinstance(cached, dict)
-                and cached.get("pdf_sha256") == pdf_sha
-                and cached.get("compiler_version") == page_acsd.FALLBACK_COMPILER
-                and cached.get("schema_version")
-                == page_acsd.PAGE_ACSD_SCHEMA_VERSION
-            ):
-                bundle = cached
+            cached = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-            bundle = None
+            return None
+        if (
+            isinstance(cached, dict)
+            and cached.get("pdf_sha256") == pdf_sha
+            and cached.get("compiler_version") == page_acsd.FALLBACK_COMPILER
+            and cached.get("schema_version")
+            == page_acsd.PAGE_ACSD_SCHEMA_VERSION
+        ):
+            return cached
+        return None
+
+    bundle = _validated(artifact_path)
+    freshly_built = False
     if bundle is None:
+        # The convert step already extracted and verified this exact bundle
+        # (same producer, same seals) under its own artifact name. Adopt it
+        # instead of re-entering batch orchestration on a cold cache or
+        # writing a second full copy of the same pages.
+        bundle = _validated(
+            Path(artifact_dir) / page_acsd.GPT_PAGE_ACSD_FILENAME
+        )
+    if bundle is None:
+        freshly_built = True
         progress.step("Canonical source — Phase 3 full PDF evidence fusion", value=0.01)
         progress.log(
             "Phase 3 is extracting and independently verifying every original PDF "
@@ -5935,7 +5950,9 @@ def load_page_evidence(
                 job_id=int(job_id),
                 artifact_dir=Path(artifact_dir),
             )
-    _atomic_write(artifact_path, _json_text(bundle))
+            freshly_built = True
+    if freshly_built:
+        _atomic_write(artifact_path, _json_text(bundle))
     return bundle
 
 

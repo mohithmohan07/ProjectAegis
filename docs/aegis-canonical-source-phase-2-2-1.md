@@ -17,13 +17,15 @@ provenance.
 
 ## 2. GPT PDF-to-ACSD fallback
 
-Mathpix remains the preferred converter. The fallback activates only for a PDF
-when Mathpix hard-fails, is explicitly forced for testing, or an objective
-quality gate classifies the result as broadly unusable. The quality gate checks
-empty/truncated output, semantic density, broad canonical failures, and, when a
-usable PDF text layer exists, conservative token coverage against the original
-document. Isolated heading/task or Figure gaps remain in the cheaper bounded-
-adjudication lane.
+SUPERSEDED IN CODE: Mathpix was removed entirely (`app/services/mmd.py`
+raises for every PDF). The GPT PDF-to-ACSD reader is now the ONLY PDF
+converter — the Build Concepts convert step for a PDF *is* this reader
+(`canonical_source_phase221_contract` short-circuits the generic convert),
+and the MMD it emits is a deterministic rendering of the reader's verified
+output, serving as the identity/audit key downstream. There is no second
+converter to compare against and therefore no quality gate choosing
+between converters. Isolated heading/task or Figure gaps still route
+through the cheaper bounded-adjudication lane at generate time.
 
 The fallback pipeline is:
 
@@ -48,7 +50,6 @@ A verified fallback stores:
 
 - `source.gpt-page-acsd.json`, the page/block extraction and verification ledger;
 - `source.raw.mmd`, deterministic MMD rendered from verified page ACSD;
-- `source.mathpix.raw.mmd`, when Mathpix returned a rejected partial source;
 - normal canonical JSON, derived Aegis MMD and source validation report;
 - immutable signed source-image crops under the upload's canonical-source assets.
 

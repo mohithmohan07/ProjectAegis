@@ -12,15 +12,19 @@ Doctrine (docs/phase3-rewrite-spec.md §4, "Decide once"):
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import json
+import os
+import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Mapping, Sequence
 
 from . import envelope as envelope_mod
+from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
 
 MAX_ATTEMPTS = 3
@@ -112,13 +116,27 @@ class DecisionStore:
                     return copy.deepcopy(existing)
                 self._memory[key] = record
                 return copy.deepcopy(record)
-        existing = self.get(key)
-        if existing is not None:
-            return existing
-        self._path(key).write_text(
-            json.dumps(record, ensure_ascii=False, indent=1),
-            encoding="utf-8",
-        )
+        # Locked and atomic: parallel workers store distinct keys today, but
+        # a torn write would hand a RESUMED run half a decision — the one
+        # corruption the immutability guarantee exists to prevent.
+        with self._lock:
+            existing = self.get(key)
+            if existing is not None:
+                return existing
+            path = self._path(key)
+            fd, tmp = tempfile.mkstemp(
+                dir=str(self._directory), prefix=".decision-", suffix=".tmp",
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(json.dumps(record, ensure_ascii=False, indent=1))
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(tmp, path)
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp)
+                raise
         return copy.deepcopy(record)
 
     def keys(self) -> list[str]:
@@ -127,7 +145,14 @@ class DecisionStore:
         return sorted(p.stem for p in self._directory.glob("*.json"))
 
 
-def parallel_map_in_order(items, worker, *, max_workers: int) -> list:
+def parallel_map_in_order(
+    items,
+    worker,
+    *,
+    max_workers: int,
+    labels: Sequence[str] | None = None,
+    announce: str = "",
+) -> list:
     """Run ``worker`` over ``items`` on a bounded pool; results in input order.
 
     For independent decisions only (Settle topics, Host unit batches): the
@@ -137,19 +162,39 @@ def parallel_map_in_order(items, worker, *, max_workers: int) -> list:
     runs under a copy of the caller's contextvars so progress events keep
     flowing to the active sink. ``max_workers <= 1`` degrades to a plain
     loop.
+
+    ``labels`` (one per item) tags every log line a worker emits with its
+    unit — the console stays attributable when lines interleave — and
+    ``announce`` logs the fan-out width once, so the log says HOW the
+    stage ran, not just what it produced. Both apply on the sequential
+    degrade path too, so a one-worker run reads the same.
     """
     items = list(items)
+    label_list = [str(label) for label in labels] if labels is not None else None
+    if label_list is not None and len(label_list) != len(items):
+        raise ValueError("labels must match items one-to-one")
+
+    def run_one(index: int, item):
+        if label_list is None:
+            return worker(item)
+        with progress.label_scope(label_list[index]):
+            return worker(item)
+
+    workers = min(int(max_workers), len(items))
+    if announce and len(items) > 0:
+        progress.log(
+            f"{announce}: {len(items)} unit(s) across "
+            f"{max(1, workers)} parallel worker(s)"
+        )
     if max_workers <= 1 or len(items) <= 1:
-        return [worker(item) for item in items]
+        return [run_one(index, item) for index, item in enumerate(items)]
     import contextvars
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(
-        max_workers=min(int(max_workers), len(items))
-    ) as pool:
+    with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
-            pool.submit(contextvars.copy_context().run, worker, item)
-            for item in items
+            pool.submit(contextvars.copy_context().run, run_one, index, item)
+            for index, item in enumerate(items)
         ]
         results = []
         try:

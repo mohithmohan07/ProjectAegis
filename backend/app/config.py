@@ -189,7 +189,7 @@ OPENAI_MAX_INPUT_CHARS = OPENAI_MAX_INPUT_TOKENS
 #     with exponential backoff, honouring the server's Retry-After when given.
 #     A job only fails after the API has been unavailable for several minutes.
 OPENAI_MAX_CONCURRENCY = max(
-    1, int(os.environ.get("AEGIS_OPENAI_MAX_CONCURRENCY", "3")))
+    1, int(os.environ.get("AEGIS_OPENAI_MAX_CONCURRENCY", "8")))
 # Keep each provider request finite. The generation layer owns retries so it
 # can report them to the live console and retain a resumable checkpoint.
 OPENAI_REQUEST_TIMEOUT_SECONDS = max(
@@ -219,14 +219,16 @@ def phase3_decision_workers() -> int:
         N x AEGIS_PHASE3_DECISION_WORKERS <= AEGIS_OPENAI_MAX_CONCURRENCY
 
     or slot queue waits grow toward AEGIS_OPENAI_SLOT_WAIT_TIMEOUT_SECONDS
-    and can fail runs. The DEFAULT is 1 — exactly the sequential behavior —
-    so parallelism inside one run is always an explicit deployment choice
-    made together with the gate size (e.g. 3 creators: gate 9, workers 3).
+    and can fail runs. The DEFAULT is 6 against the default gate of 8 —
+    sized for the single-creator deployment this ships to, where a chapter
+    run was latency-bound on sequential calls. Multi-creator deployments
+    set both knobs together per the rule above (e.g. 3 creators: gate 9,
+    workers 3). Set to 1 to restore strictly sequential decisions.
     """
     raw = os.environ.get("AEGIS_PHASE3_DECISION_WORKERS", "").strip()
     if raw:
         return max(1, int(raw))
-    return 1
+    return 6
 OPENAI_TRANSIENT_RETRIES = max(
     0, int(os.environ.get("AEGIS_OPENAI_TRANSIENT_RETRIES", "10")))
 OPENAI_BACKOFF_MAX_SECONDS = max(

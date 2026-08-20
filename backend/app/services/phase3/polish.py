@@ -375,7 +375,7 @@ def polish(
         "(identity, topology, and routing stay untouched)."
     )
 
-    for start in range(0, len(indexes), _BATCH_SIZE):
+    def _decide_batch(start: int) -> dict:
         batch_indexes = indexes[start:start + _BATCH_SIZE]
         batch = [
             {"row_ref": index, "row": out[index]}
@@ -432,7 +432,7 @@ def polish(
                 for index in batch_indexes
             ],
         }
-        decision = kernel.decide(
+        return kernel.decide(
             kind="polish.rows",
             unit_id=f"rows#{start}",
             envelope_sha256=envelope_sha,
@@ -451,6 +451,25 @@ def polish(
             ),
             fixer=fixer,
         )
+
+    # Each failing row is its own decision (batch size 1) reading only its
+    # own pre-loop state: decisions fan out, application stays in row order
+    # below, so repaired rows and flags land byte-identically.
+    from ... import config as _config
+
+    starts = list(range(0, len(indexes), _BATCH_SIZE))
+    decisions = kernel.parallel_map_in_order(
+        starts,
+        _decide_batch,
+        max_workers=_config.phase3_decision_workers(),
+        labels=[
+            f"Polish row {indexes[start]} ({pos + 1}/{len(starts)})"
+            for pos, start in enumerate(starts)
+        ],
+        announce="Polish repairs",
+    )
+    for start, decision in zip(starts, decisions):
+        batch_indexes = indexes[start:start + _BATCH_SIZE]
         for row in decision["response"].get("rows") or []:
             if not isinstance(row, Mapping):
                 continue

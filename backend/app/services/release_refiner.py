@@ -673,7 +673,11 @@ def _refine(
         f"Refiner: reading {len(projection)} rendered release row(s) "
         "(identities untouchable; every change is recorded on the release)."
     )
-    for index in sorted(projection):
+    from .. import config
+
+    ordered_indices = sorted(projection)
+
+    def _decide_row(index: int) -> dict[str, Any]:
         rendered = projection[index]
         unit_id = rendered["unit_id"]
         payload = {
@@ -695,7 +699,7 @@ def _refine(
                 }
             ],
         }
-        decision = kernel.decide(
+        return kernel.decide(
             kind="refiner.row",
             unit_id=unit_id,
             envelope_sha256=envelope_sha,
@@ -706,6 +710,25 @@ def _refine(
             store=store,
             policy_version=REFINER_POLICY_VERSION,
         )
+
+    # Decisions fan out (each row is independent and content-addressed);
+    # APPLICATION stays sequential in row order below, so flags, applied
+    # rationales and the refined rows land byte-identically to the
+    # sequential path.
+    decisions = kernel.parallel_map_in_order(
+        ordered_indices,
+        _decide_row,
+        max_workers=config.phase3_decision_workers(),
+        labels=[
+            f"Refine {projection[idx]['unit_id']} "
+            f"({pos + 1}/{len(ordered_indices)})"
+            for pos, idx in enumerate(ordered_indices)
+        ],
+        announce="Refiner decisions",
+    )
+    for index, decision in zip(ordered_indices, decisions):
+        rendered = projection[index]
+        unit_id = rendered["unit_id"]
         response_row = next(
             (
                 row

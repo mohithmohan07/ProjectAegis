@@ -8,6 +8,7 @@ same service functions keep working for non-streaming callers and tests.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import json
 import queue
@@ -31,6 +32,24 @@ _track: contextvars.ContextVar[list | None] = contextvars.ContextVar(
     "aegis_progress_track", default=None,
 )
 
+# The active worker label (e.g. "Refine 12/58"): parallel workers set it so
+# every log line says which unit produced it, in the live console and in the
+# persisted generation log alike.
+_label: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "aegis_progress_label", default="",
+)
+
+
+@contextlib.contextmanager
+def label_scope(label: str):
+    """Prefix every ``log`` line emitted in this scope with ``[label]``."""
+    token = _label.set(str(label))
+    try:
+        yield
+    finally:
+        _label.reset(token)
+
+
 _SENTINEL = object()
 
 # Decision stages may emit from a bounded worker pool (parallel Settle
@@ -52,7 +71,9 @@ def _emit(event: dict) -> None:
 
 def log(message: str, *, level: str = "info") -> None:
     """Emit a console log line (info | success | warn | error | debug)."""
-    _emit({"type": "log", "level": level, "message": str(message)})
+    label = _label.get()
+    text = f"[{label}] {message}" if label else str(message)
+    _emit({"type": "log", "level": level, "message": text})
 
 
 def step(label: str, *, value: float | None = None) -> None:

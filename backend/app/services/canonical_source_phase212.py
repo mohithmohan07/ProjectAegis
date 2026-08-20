@@ -1144,8 +1144,9 @@ def _author_batches(
 ) -> list[dict[str, Any]]:
     """Live author calls over block batches; returns raw payloads."""
     size = _batch_size()
-    payloads: list[dict[str, Any]] = []
-    for start in range(0, len(blocks), size):
+    starts = list(range(0, len(blocks), size))
+
+    def _author_one(start: int) -> dict[str, Any]:
         batch = list(blocks[start:start + size])
         before = blocks[start - 1] if start else None
         after_index = start + size
@@ -1157,14 +1158,31 @@ def _author_batches(
             context_before=str((before or {}).get("raw_text") or ""),
             context_after=str((after or {}).get("raw_text") or ""),
         )
-        payloads.append(_call_provider(
+        return _call_provider(
             system=_AUTHOR_SYSTEM,
             prompt=prompt,
             schema=author_schema(
                 [str(b.get("block_id") or "") for b in batch]
             ),
-        ))
-    return payloads
+        )
+
+    # Batches read only their own static slice plus fixed neighbours, and
+    # the payload list merges in start order — byte-identical to the
+    # sequential path. The shared OpenAI gate bounds real concurrency.
+    from .phase3 import kernel as _kernel
+    from .. import config as _config
+
+    return _kernel.parallel_map_in_order(
+        starts,
+        _author_one,
+        max_workers=_config.phase3_decision_workers(),
+        labels=[
+            f"Questions · blocks {start + 1}-{min(start + size, len(blocks))}"
+            f"/{len(blocks)}"
+            for start in starts
+        ],
+        announce="Question adjudication",
+    )
 
 
 def _fixer_decide(
@@ -1473,23 +1491,36 @@ def adjudicate_task_membership(canonical: dict[str, Any]) -> dict[str, Any]:
                 block_id, "the author recorded an uncertain verdict"
             )
 
-    for block_id in sorted(
+    fixer_order = sorted(
         unresolved,
         key=lambda bid: int(block_by_id[bid].get("source_start") or 0),
-    ):
-        try:
-            decision = _fixer_decide(
+    )
+    # Each unresolved block is an independent Fixer decision reading only
+    # static evidence; decisions fan out, and the ledger/merge below applies
+    # them in source order — byte-identical to the sequential path.
+    from .phase3 import kernel as _kernel
+    from .. import config as _config
+
+    try:
+        fixer_results = _kernel.parallel_map_in_order(
+            fixer_order,
+            lambda bid: _fixer_decide(
                 canonical,
-                block_by_id[block_id],
+                block_by_id[bid],
                 candidates,
                 titles,
-                reason=unresolved[block_id],
+                reason=unresolved[bid],
                 blocks=blocks,
-            )
-        except Exception as exc:
-            return _unadjudicated(
-                "provider_error", f"the Fixer call failed: {exc}"
-            )
+            ),
+            max_workers=_config.phase3_decision_workers(),
+            labels=[f"Fixer · {bid}" for bid in fixer_order],
+            announce="Fixer decisions" if fixer_order else "",
+        )
+    except Exception as exc:
+        return _unadjudicated(
+            "provider_error", f"the Fixer call failed: {exc}"
+        )
+    for block_id, decision in zip(fixer_order, fixer_results):
         fixer_decisions.append(decision)
         merged[block_id] = dict(decision["entry"])
 

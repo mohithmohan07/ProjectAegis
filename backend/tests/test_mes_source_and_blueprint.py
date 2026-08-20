@@ -252,7 +252,11 @@ def test_multi_concept_routing_is_a_kernel_judgment(tmp_path):
     assert [placement["concept_key"] for placement in placements] == [
         "db:22", "db:22"]
     assert all(placement["basis"] == "api_router" for placement in placements)
-    assert [call["candidate"]["question_text"] for call in calls] == [
+    # Each candidate is decided exactly once with its full evidence. CALL
+    # order is unpinned: routing decisions fan out on the bounded pool, so
+    # arrival order is scheduling, not contract — placement ORDER (asserted
+    # above) is the guaranteed property.
+    assert sorted(call["candidate"]["question_text"] for call in calls) == [
         "Full evidence one", "Full evidence two"]
 
 

@@ -58,6 +58,17 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Step-12 interrupted-path injections (spec residue) | RESOLVED: `test_fault_injection_interrupted.py` pins both contracts — staging is atomic-at-the-end (a crash in the last assembly helper leaves the slot byte-untouched; retry re-mints cleanly), publication is one transaction with full rollback (zero partial rows, latch not set; retry publishes idempotently, no duplicate rows). No real defect found |
 | Step 9 — review/edit surface | BUILT: `release_review.py` (view projection, verbatim manual edits, one bounded instruction pass), `models.ConceptReleaseVersion` (append-only §7 version rows incl. recorded failed rounds), three routes under `/build-concepts/uploads/{id}/release-review`, frontend page at `/build-concepts/review/:jobId` with house rich-text rendering. Recorded step-9 residues: R-S9a/b/c below |
 
+## Performance round (2026-08-20)
+
+| Item | Disposition |
+|---|---|
+| Parallel defaults ON | Gate 3→8, phase-3 decision workers 1→6, PDF page batches 1→4 (config defaults; env-reversible). Prerequisite hardenings landed: usage-accumulator mutation lock (exact cost reports under threads), atomic + locked DecisionStore directory writes |
+| Pool given to the skipped loops | Release Refiner rows, Polish repairs, Settle topology/grounding/authoring batches (nested under the topic pool), QX author batches and Fixer decisions — all via `kernel.parallel_map_in_order`, decisions fan out, application stays in input order (byte-identical outputs). Worker log lines carry `[unit]` labels; each fan-out announces its width |
+| Chapter Reading exempted on the PDF lane | Mirrors the QX reader-identity exemption (`adjudication_exempt`, one authority): block kinds on GPT-read sources are already model-decided and page-verified, so the chapter is not re-read or re-billed; the skip is logged. Text-MMD uploads keep the pass |
+| Page-bundle reuse | Phase 3 adopts the convert-time `source.gpt-page-acsd.json` when its own copy is absent (validated by the same seals) and no longer writes a duplicate bundle |
+| Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
+| Deferred (next round) | Critic overlap (~2x on Phase 3 at unchanged spend); split-phase fan-out of skeleton/inventory chunks and phase22 packets; Place∥Analyse∥Polish stage-level fan-out; per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare |
+
 ## UI-makeover residues (2026-08-20)
 
 | # | Residue | Location | Consequence | Downstream safe? | Owner / fix point |

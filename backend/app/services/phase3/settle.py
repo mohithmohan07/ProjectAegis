@@ -717,8 +717,16 @@ def settle(
             return [], {}, []
 
         # -- stage 1: topology -------------------------------------------
+        # Batches inside each stage fan out (payloads read only the batch
+        # plus static topic context); APPLICATION stays in batch order, so
+        # settled rows, flag indexes and culmination riders land
+        # byte-identically to the sequential path. The shared OpenAI gate
+        # bounds real concurrency under the nested topic x batch pools.
         topic_settled: list[dict[str, Any]] = []
-        for batch_index, batch in enumerate(_batched(topic_concepts), 1):
+        topology_batches = list(enumerate(_batched(topic_concepts), 1))
+
+        def _decide_topology(pair):
+            batch_index, batch = pair
             payload = {
                 "stage": "topology",
                 "rules": (
@@ -764,7 +772,7 @@ def settle(
                 ],
                 "source_blocks": topic_blocks,
             }
-            decision = kernel.decide(
+            return kernel.decide(
                 kind="settle.topology",
                 unit_id=f"{topic_id}#batch{batch_index}",
                 envelope_sha256=envelope_sha,
@@ -776,6 +784,20 @@ def settle(
                 policy_version=policy,
                 fixer=fixer,
             )
+
+        topology_decisions = kernel.parallel_map_in_order(
+            topology_batches,
+            _decide_topology,
+            max_workers=config.phase3_decision_workers(),
+            labels=[
+                f"Settle {topic_title} · topology {index}/"
+                f"{len(topology_batches)}"
+                for index, _batch in topology_batches
+            ],
+        )
+        for (batch_index, batch), decision in zip(
+            topology_batches, topology_decisions
+        ):
             response_by_id = {
                 str(row.get("concept_id") or ""): row
                 for row in decision["response"].get("decisions") or []
@@ -824,7 +846,9 @@ def settle(
                     topic_settled.append(settled_row)
 
         # -- stage 2: grounding ------------------------------------------
-        for offset_batch in _batched(list(range(len(topic_settled)))):
+        grounding_batches = _batched(list(range(len(topic_settled))))
+
+        def _decide_grounding(offset_batch):
             batch_rows = [topic_settled[i] for i in offset_batch]
             concept_ids = [
                 f"{row['_phase32_origin_concept_id']}"
@@ -871,7 +895,7 @@ def settle(
                     for row in rows
                 ],
             }
-            decision = kernel.decide(
+            return kernel.decide(
                 kind="settle.grounding",
                 unit_id=f"{topic_id}#ground{offset_batch[0]}",
                 envelope_sha256=envelope_sha,
@@ -887,6 +911,26 @@ def settle(
                 policy_version=policy,
                 fixer=fixer,
             )
+
+        grounding_decisions = kernel.parallel_map_in_order(
+            grounding_batches,
+            _decide_grounding,
+            max_workers=config.phase3_decision_workers(),
+            labels=[
+                f"Settle {topic_title} · grounding {pos + 1}/"
+                f"{len(grounding_batches)}"
+                for pos in range(len(grounding_batches))
+            ],
+        )
+        for offset_batch, decision in zip(
+            grounding_batches, grounding_decisions
+        ):
+            batch_rows = [topic_settled[i] for i in offset_batch]
+            concept_ids = [
+                f"{row['_phase32_origin_concept_id']}"
+                f"#{row['_phase32_segment_order']}"
+                for row in batch_rows
+            ]
             grounded_by_id = {
                 str(row.get("concept_id") or ""): row
                 for row in decision["response"].get("concepts") or []
@@ -943,7 +987,9 @@ def settle(
             # without one, and no consolidation prose is authored for it.
             topic_culms = []
         culm_consolidations: dict[str, str] = {}
-        for offset_batch in _batched(list(range(len(topic_settled)))):
+        authoring_batches = _batched(list(range(len(topic_settled))))
+
+        def _decide_authoring(offset_batch):
             batch_rows = [topic_settled[i] for i in offset_batch]
             concept_ids = [
                 f"{row['_phase32_origin_concept_id']}"
@@ -1028,7 +1074,7 @@ def settle(
                     else {}
                 ),
             }
-            decision = kernel.decide(
+            return kernel.decide(
                 kind="settle.author",
                 unit_id=f"{topic_id}#author{offset_batch[0]}",
                 envelope_sha256=envelope_sha,
@@ -1042,6 +1088,26 @@ def settle(
                 policy_version=policy + AUTHOR_POLICY_SUFFIX,
                 fixer=fixer,
             )
+
+        authoring_decisions = kernel.parallel_map_in_order(
+            authoring_batches,
+            _decide_authoring,
+            max_workers=config.phase3_decision_workers(),
+            labels=[
+                f"Settle {topic_title} · authoring {pos + 1}/"
+                f"{len(authoring_batches)}"
+                for pos in range(len(authoring_batches))
+            ],
+        )
+        for offset_batch, decision in zip(
+            authoring_batches, authoring_decisions
+        ):
+            batch_rows = [topic_settled[i] for i in offset_batch]
+            concept_ids = [
+                f"{row['_phase32_origin_concept_id']}"
+                f"#{row['_phase32_segment_order']}"
+                for row in batch_rows
+            ]
             for position, concept_id in zip(offset_batch, concept_ids):
                 flags = _pin_flags(
                     list(decision.get("review_flags") or []),
