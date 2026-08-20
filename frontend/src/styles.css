@@ -794,6 +794,55 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .api-usage-cost dd { color: var(--green); }
 .api-usage-note { color: var(--muted); font-size: 10.5px; line-height: 1.5; margin-top: 10px; }
 
+/* ============================== Run outputs ============================= */
+/* The four deliverables (01 Pre Concept · 02 Pre Master · 03 Post Concept ·
+   04 Post Master) get a first-class grid; everything evidentiary lives in
+   a quiet disclosure below it. An output that is not available on this run
+   stays VISIBLE with its reason — absence must never look like "does not
+   apply" (P16). */
+
+.outputs-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.output-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+  box-shadow: var(--shadow-sm);
+}
+.output-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.output-name { font-weight: 650; font-size: 13.5px; }
+.output-meta { font-size: 11px; color: var(--muted); }
+.output-card .button-link { align-self: flex-start; margin-top: 4px; padding: 5px 14px; font-size: 12.5px; }
+.output-disabled { background: var(--panel-2); box-shadow: none; }
+.output-disabled .output-name { color: var(--text-2); }
+.output-reason { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
+
+.artifact-evidence { margin-top: 14px; }
+.artifact-evidence > summary { padding: 2px 0; }
+.artifact-evidence .row { margin-top: 10px; }
+
+@media (max-width: 700px) {
+  .outputs-grid { grid-template-columns: 1fr; }
+}
+
 /* ============================== Downloads =============================== */
 /* Three files ship with every run and they are NOT interchangeable: the
    Bulk Import workbook is the deliverable, the inventory is the audit, the

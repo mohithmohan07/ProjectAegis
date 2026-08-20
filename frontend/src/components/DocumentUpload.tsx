@@ -16,6 +16,7 @@ type ActionableArtifact = {
   download_url: string;
   action?: "download" | "post" | string;
   disabled?: boolean;
+  disabled_reason?: string;
   requires_confirmation?: boolean;
 };
 
@@ -692,6 +693,16 @@ function SourceArtifactsCard({
     }
   }
 
+  // The owner's four outputs (OD4 numbering) get the first-class grid; the
+  // publish actions follow them; every evidence artifact — real, but not a
+  // deliverable — lives in the disclosure below.
+  const files = manifest.files.map((raw) => raw as ActionableArtifact);
+  const outputs = files.filter((f) => f.kind in OUTPUT_META);
+  const publishActions = files.filter((f) => f.action === "post");
+  const evidence = files.filter(
+    (f) => !(f.kind in OUTPUT_META) && f.action !== "post",
+  );
+
   return (
     <div className="checkpoint-card">
       <div>
@@ -714,38 +725,89 @@ function SourceArtifactsCard({
             </span>
           )}
         </div>
-        <div className="muted mt-8">
-          {description}
-        </div>
         {counts && <div className="muted mono mt-8">{counts}</div>}
-        <div className="muted mono mt-8">
-          ACSD {manifest.schema_version} · compiler {manifest.compiler_version}
-          {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}
-        </div>
         {actionMessage && (
           <div className="muted mt-8" role="status">
             {actionMessage}
           </div>
         )}
       </div>
-      <div className="row">
-        {manifest.files.map((rawArtifact) => {
-          const artifact = rawArtifact as ActionableArtifact;
-          if (artifact.action === "post") {
-            return (
-              <button
-                className="ghost"
-                disabled={actionBusy || artifact.disabled}
-                key={artifact.kind}
-                onClick={() => void publishRelease(artifact)}
-              >
-                {actionBusy
-                  ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
-                  : artifact.label}
-              </button>
-            );
-          }
-          return (
+
+      {outputs.length > 0 && (
+        <div>
+          <div className="section-title">Run outputs</div>
+          <div className="outputs-grid">
+            {outputs.map((artifact) => {
+              const meta = OUTPUT_META[artifact.kind];
+              return (
+                <div
+                  className={`output-card${artifact.disabled ? " output-disabled" : ""}`}
+                  key={artifact.kind}
+                >
+                  <div className="output-eyebrow">
+                    <span>{meta.num}</span>
+                    <span className={`badge ${meta.pre ? "accent" : "green"}`}>
+                      {meta.lane}
+                    </span>
+                  </div>
+                  <div className="output-name">{meta.name}</div>
+                  {artifact.disabled ? (
+                    <div className="output-reason">
+                      {artifact.disabled_reason
+                        || "Not available for this run."}
+                    </div>
+                  ) : (
+                    <>
+                      {artifact.size_bytes > 0 && (
+                        <div className="output-meta">
+                          {formatBytes(artifact.size_bytes)}
+                        </div>
+                      )}
+                      <a
+                        className="button-link"
+                        href={artifact.download_url}
+                        download={artifact.filename || undefined}
+                        aria-label={artifact.label}
+                      >
+                        Download
+                      </a>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {publishActions.length > 0 && (
+        <div className="row">
+          {publishActions.map((artifact) => (
+            <button
+              className="ghost"
+              disabled={actionBusy || artifact.disabled}
+              key={artifact.kind}
+              onClick={() => void publishRelease(artifact)}
+            >
+              {actionBusy
+                ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
+                : artifact.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <details className="artifact-evidence">
+        <summary>Source pipeline details &amp; evidence files</summary>
+        <div className="muted mt-8">
+          {description}
+        </div>
+        <div className="muted mono mt-8">
+          ACSD {manifest.schema_version} · compiler {manifest.compiler_version}
+          {manifest.phase ? ` · ${manifest.phase.replace(/-/g, " ")}` : ""}
+        </div>
+        <div className="row">
+          {evidence.map((artifact) => (
             <a
               className="button-link ghost"
               href={artifact.download_url}
@@ -757,12 +819,32 @@ function SourceArtifactsCard({
             >
               {artifact.label}
             </a>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      </details>
     </div>
   );
 }
+
+/* The owner's output numbering (OD4 / D9-Q22). Kind strings deliberately
+   carry no digits (T14) — the numbers live here, at the presentation. */
+const OUTPUT_META: Record<
+  string,
+  { num: string; lane: string; name: string; pre: boolean }
+> = {
+  pre_release_bulk_import: {
+    num: "01", lane: "Pre-Learning", name: "Concept File", pre: true,
+  },
+  pre_release_master: {
+    num: "02", lane: "Pre-Learning", name: "Master File", pre: true,
+  },
+  release_bulk_import: {
+    num: "03", lane: "Post-Learning", name: "Concept File", pre: false,
+  },
+  release_master: {
+    num: "04", lane: "Post-Learning", name: "Master File", pre: false,
+  },
+};
 
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "unknown size";

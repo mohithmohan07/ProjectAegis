@@ -638,3 +638,28 @@ def test_clear_checkpoint_keeps_converted_source(client, db):
     db.refresh(job)
     assert job.generation_checkpoint == {}
     assert job.mmd_text
+
+
+def test_a_finished_run_is_not_offered_for_resume_again(db):
+    """A released/published job keeps its checkpoint stored (idempotent
+    re-release replays from it) but is NOT a run awaiting resume: the UI
+    used to re-offer "Resume this run?" forever after completion."""
+
+    job = _job(db)
+    db.commit()
+    assert job.checkpoint_available is True
+    listed, _total = checkpoints.resumable_jobs(db, learning_kind="post")
+    assert any(row["id"] == job.id for row in listed)
+
+    for finished in ("released", "generated"):
+        job.status = finished
+        db.commit()
+        assert job.checkpoint_available is False, finished
+        listed, _total = checkpoints.resumable_jobs(db, learning_kind="post")
+        assert not any(row["id"] == job.id for row in listed), finished
+        # The checkpoint itself is untouched — only the OFFER is gone.
+        assert job.generation_checkpoint.get("stage")
+
+    job.status = "converted"
+    db.commit()
+    assert job.checkpoint_available is True

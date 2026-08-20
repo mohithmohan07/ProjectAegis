@@ -34,7 +34,6 @@ export default function BuildConcepts() {
 
   useEffect(() => {
     if (auth?.loading || discoveredForUserRef.current === ownerKey) return;
-    discoveredForUserRef.current = ownerKey;
     let active = true;
     setResumeDiscoveryLoading(true);
     setResumeError(null);
@@ -44,6 +43,11 @@ export default function BuildConcepts() {
     api.resumableConceptCheckpoints("post")
       .then((post) => {
         if (!active) return;
+        // Marked discovered only once a result APPLIES: marking before the
+        // fetch resolves let an unmounted first attempt (StrictMode's dev
+        // double-mount, a fast navigation away) permanently swallow
+        // discovery for this owner.
+        discoveredForUserRef.current = ownerKey;
         const candidate = post.items
           .filter((job) => job.checkpoint_available)
           .sort((left, right) =>
@@ -648,9 +652,12 @@ function checkpointPromptKey(
   ].join(":");
 }
 
+/* Durable acknowledgement: "Keep for later" must hold across browser
+   sessions, not just tabs — the key is revision-aware (checkpoint saved_at),
+   so a genuinely NEW checkpoint on the same job prompts again. */
 function safeSessionGet(key: string): string | null {
   try {
-    return window.sessionStorage.getItem(key);
+    return window.localStorage.getItem(key);
   } catch {
     return null;
   }
@@ -658,7 +665,7 @@ function safeSessionGet(key: string): string | null {
 
 function safeSessionSet(key: string): void {
   try {
-    window.sessionStorage.setItem(key, "acknowledged");
+    window.localStorage.setItem(key, "acknowledged");
   } catch {
     // The prompt still behaves once for the mounted page when storage is blocked.
   }
@@ -723,9 +730,7 @@ function ConceptResult({
   filename?: string;
   resumed?: boolean;
 }) {
-  const ids = (result.concept_ids as number[] | undefined) ?? [];
   const jobId = result.job_id as number | undefined;
-  const inventoryItems = (result.inventory_items as number | undefined) ?? 0;
   const usage = result.openai_usage as OpenAIUsage | undefined;
   const status = typeof result.status === "string" ? result.status : "";
   const rowCount = typeof result.row_count === "number" ? result.row_count : null;
@@ -757,25 +762,10 @@ function ConceptResult({
         cumulative={jobId != null || Boolean(filename)}
         resumed={resumed}
       />
-      <div className="row mt-12">
-        {ids.length > 0 && (
-          <a className="button-link" href={api.exportConceptsUrl(ids)}>
-            ⬇ Download Excel (Bulk Import)
-          </a>
-        )}
-        {jobId != null && inventoryItems > 0 && (
-          <a className="button-link ghost" href={api.inventoryCsvUrl(jobId)}>
-            ⬇ Question/Task Inventory (CSV)
-          </a>
-        )}
-        <span className="muted">
-          {ids.length > 0
-            ? `${ids.length} concept(s) in the canonical Bulk Import format.` +
-              (inventoryItems > 0
-                ? ` ${inventoryItems} extracted question(s)/task(s) in the inventory CSV.`
-                : "")
-            : "Download the full output workbook from the Database tab."}
-        </span>
+      <div className="muted mt-12">
+        The four run outputs (Concept and Master Files for both lanes)
+        download from the Run outputs section above; review and publishing
+        stay separate, explicit acts.
       </div>
       <details className="mt-12">
         <summary>Raw result JSON</summary>

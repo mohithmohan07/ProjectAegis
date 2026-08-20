@@ -335,9 +335,18 @@ class UploadJob(Base):
 
     @property
     def checkpoint_available(self) -> bool:
+        """True when an UNFINISHED saved run is waiting to be resumed.
+
+        A released or published job keeps its checkpoint stored (it is the
+        durable artifact idempotent re-release replays from), but it is not
+        "a run awaiting resume" — surfacing it as resumable made the UI
+        re-offer finished runs forever. ``checkpoints.resumable_jobs``
+        applies the same predicate in SQL; the two must stay in step.
+        """
         return bool(
             isinstance(self.generation_checkpoint, dict)
             and self.generation_checkpoint.get("stage")
+            and self.status not in ("released", "generated")
         )
 
     @property

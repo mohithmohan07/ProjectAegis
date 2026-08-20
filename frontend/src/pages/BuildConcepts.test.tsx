@@ -284,6 +284,9 @@ function savedSummary(
 beforeEach(() => {
   vi.clearAllMocks();
   streamMock.mockReset();
+  // The Keep-for-later acknowledgement is durable (localStorage) so a
+  // parked run stays parked across browser sessions; tests isolate it here.
+  window.localStorage.clear();
   window.sessionStorage.clear();
   apiMock.vocab.mockResolvedValue({ book_sources: [] });
   // Single lane. The mock answers whatever lane it is asked for, so a
@@ -337,7 +340,7 @@ test("offers a resumable checkpoint and Resume restores setup without generating
   expect(streamMock).not.toHaveBeenCalled();
 });
 
-test("Keep for later acknowledges this checkpoint for the browser session", async () => {
+test("Keep for later acknowledges this checkpoint durably across visits", async () => {
   const first = renderPage();
   expect(await screen.findByRole("dialog")).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Keep for later" }));

@@ -1896,6 +1896,11 @@ def resumable_jobs(
         models.UploadJob.learning_kind == kind,
         stage.is_not(None),
         stage != "",
+        # A finished run is not resumable. Its checkpoint stays stored (the
+        # durable artifact re-release replays from), but offering it here
+        # made the UI re-prompt "Resume this run?" forever after completion.
+        # SQL twin of ``models.UploadJob.checkpoint_available``.
+        models.UploadJob.status.notin_(("released", "generated")),
     )
     total = int(
         db.query(func.count(models.UploadJob.id)).filter(*filters).scalar() or 0
