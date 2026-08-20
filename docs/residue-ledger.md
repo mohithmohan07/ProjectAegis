@@ -49,3 +49,19 @@ sprint continues past all of them.
 | F20 docs/ignore/comment drift | FIXED (.env.example providers+reasoning, .gitignore caches, QC-transport comments) |
 
 Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns were overstated — superseded by the F3/F6/F2 rows above. R-QX8's consequence note is superseded by F7's fix. R-S11b is CLOSED (Output-02/04 identity composition verified repaired at main). R-S12d is CLOSED (merge order completed).
+
+## Post-audit follow-up round (finishing sprint)
+
+| Item | Disposition |
+|---|---|
+| Audit F2 / R-S11a topology half | RESOLVED: the language plan's topics are MATERIALIZED as semantic-graph topics (compile_semantic_graph builds them from the plan's evidence blocks; the phase-3 contract threads the plan slot into graph metadata; the hierarchy model call is skipped as double spend). The pre-spend literary block is retired. Remaining R-S11a half: per-record semantic_role transport onto skeleton rows (culmination consumers still read titles) — still open, flagged plans carry roles for review |
+| Step-12 interrupted-path injections (spec residue) | RESOLVED: `test_fault_injection_interrupted.py` pins both contracts — staging is atomic-at-the-end (a crash in the last assembly helper leaves the slot byte-untouched; retry re-mints cleanly), publication is one transaction with full rollback (zero partial rows, latch not set; retry publishes idempotently, no duplicate rows). No real defect found |
+| Step 9 — review/edit surface | BUILT: `release_review.py` (view projection, verbatim manual edits, one bounded instruction pass), `models.ConceptReleaseVersion` (append-only §7 version rows incl. recorded failed rounds), three routes under `/build-concepts/uploads/{id}/release-review`, frontend page at `/build-concepts/review/:jobId` with house rich-text rendering. Recorded step-9 residues: R-S9a/b/c below |
+
+## Step-9 residues
+
+| # | Residue | Location | Consequence | Downstream safe? | Owner / fix point |
+|---|---|---|---|---|---|
+| R-S9a | §7 merge / split / remove operations are not in the instruction schema (changes + additions only) | `release_review._instruction_schema` | A reviewer asking to merge or delete rows gets a failed round (recorded), not a silent partial apply | Yes | Step-9 follow-up: extend the operation vocabulary |
+| R-S9b | A reviewer's edit leaves the row's source-grounding seal describing the PRE-edit provenance; the edit's own record is the `_aegis_manual_edit_rounds` trail + review flag | `release_review.apply_manual_edits` | Grounding audits on an edited row must read the trail to see the text is the reviewer's, not the source's | Yes (flagged, recorded) | Step-9 follow-up: re-seal or annotate grounding on edit |
+| R-S9c | Real KaTeX typesetting is not done on the review page — raw LaTeX shows in a styled inline chip | `frontend/src/lib/richText.tsx` | Formulas legible but unrendered in review; workbooks unaffected | Yes | Frontend follow-up (KaTeX dependency is the owner's call) |

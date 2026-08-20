@@ -12,6 +12,10 @@ import type {
   Stats,
   ConceptRevision,
   ConceptRevisionList,
+  ReleaseInstructionBody,
+  ReleaseManualEditBody,
+  ReleaseReviewLane,
+  ReleaseReviewView,
   ResumableCheckpoints,
   SemanticDecisionSubmission,
   SemanticDecisionSubmissionResult,
@@ -345,6 +349,26 @@ export const api = {
     http<Record<string, unknown>>(
       `/build-concepts/uploads/${jobId}/upload-release?lane=${lane}`,
       { method: "POST" },
+    ),
+
+  // Release review (step 9): read the staged release, edit it in place or
+  // via a plain-language instruction. Every write carries the
+  // staged_release_uid it was read from, so a concurrent edit 409s instead
+  // of being silently overwritten. `lane` is mandatory for the same reason
+  // it is on uploadConceptRelease: a defaulted lane writes the OTHER release.
+  getReleaseReview: (jobId: number, lane: ReleaseReviewLane) =>
+    http<ReleaseReviewView>(
+      `/build-concepts/uploads/${jobId}/release-review?lane=${lane}`,
+    ),
+  submitReleaseManualEdit: (jobId: number, body: ReleaseManualEditBody) =>
+    http<ReleaseReviewView>(
+      `/build-concepts/uploads/${jobId}/release-review/manual-edit`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  applyReleaseInstruction: (jobId: number, body: ReleaseInstructionBody) =>
+    http<ReleaseReviewView>(
+      `/build-concepts/uploads/${jobId}/release-review/apply-instruction`,
+      { method: "POST", body: JSON.stringify(body) },
     ),
 
   // Streaming endpoint paths (consumed via streamNdjson / RunConsole)

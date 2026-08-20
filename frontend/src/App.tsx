@@ -2,6 +2,7 @@ import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import Home from "./pages/Home";
 import BuildAssessments from "./pages/BuildAssessments";
 import BuildConcepts from "./pages/BuildConcepts";
+import ReleaseReview from "./pages/ReleaseReview";
 import Tagging from "./pages/Tagging";
 import Workbooks from "./pages/Workbooks";
 import Database from "./pages/Database";
@@ -50,6 +51,8 @@ export default function App() {
                 <Route path="/home" element={<Home />} />
                 <Route path="/build-assessments" element={<BuildAssessments />} />
                 <Route path="/build-concepts" element={<BuildConcepts />} />
+                {/* Deep-linked review surface — deliberately not a NAV tab. */}
+                <Route path="/build-concepts/review/:jobId" element={<ReleaseReview />} />
                 <Route path="/tagging" element={<Tagging />} />
                 <Route path="/workbooks" element={<Workbooks />} />
                 <Route path="/database" element={<Database />} />

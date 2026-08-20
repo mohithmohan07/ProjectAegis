@@ -6,6 +6,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
 import { RunConsoleProvider } from "../RunConsole";
 import type {
   OpenAIUsage,
@@ -308,10 +309,14 @@ afterEach(() => {
 });
 
 function renderPage() {
+  // ConceptReviewPanel deep-links to the release-review page, so the page
+  // needs a Router here exactly as in the app.
   return render(
-    <RunConsoleProvider>
-      <BuildConcepts />
-    </RunConsoleProvider>,
+    <MemoryRouter>
+      <RunConsoleProvider>
+        <BuildConcepts />
+      </RunConsoleProvider>
+    </MemoryRouter>,
   );
 }
 

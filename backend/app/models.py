@@ -546,3 +546,49 @@ class ConceptRevision(Base):
     @property
     def change_count(self) -> int:
         return len(self.changes) if isinstance(self.changes, list) else 0
+
+
+class ConceptReleaseVersion(Base):
+    """Append-only history of staged concept-release rounds (§7, step 9).
+
+    The job's release SLOT stays the ONE authority for the CURRENT staged
+    payload; every review round — the pre-edit staging snapshot, a
+    reviewer's verbatim manual edit, an applied (or failed) instruction —
+    appends one immutable row here carrying the full payload, the
+    instruction, the operations, and the diff. An applied round is
+    therefore a NEW recorded release version, never an untracked overwrite
+    (docs/aegis-restructure.md §7: "Every applied round produces a new
+    immutable release version with the instruction, operations and diff
+    preserved"). Rows are never updated or deleted; lineage is by
+    ``staged_release_uid`` because the numeric version restarts when the
+    inventory column is legitimately cleared.
+    """
+
+    __tablename__ = "concept_release_versions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner_sub: Mapped[str] = mapped_column(
+        String(255), default="local:default", index=True)
+    job_id: Mapped[int] = mapped_column(
+        ForeignKey("upload_jobs.id"), index=True)
+    lane: Mapped[str] = mapped_column(String(8), default="post")
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    staged_release_uid: Mapped[str] = mapped_column(String(64), default="")
+    parent_uid: Mapped[str] = mapped_column(String(64), default="")
+    # "staged" | "manual_edit" | "instruction" | "instruction_failed"
+    origin: Mapped[str] = mapped_column(String(32), default="staged")
+    instruction: Mapped[str] = mapped_column(Text, default="")
+    operations: Mapped[list] = mapped_column(JSON, default=list)
+    diff: Mapped[dict] = mapped_column(JSON, default=dict)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id",
+            "lane",
+            "staged_release_uid",
+            "origin",
+            name="uq_concept_release_version_uid",
+        ),
+    )

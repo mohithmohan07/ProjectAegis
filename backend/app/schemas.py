@@ -453,3 +453,82 @@ class ConceptRevisionOut(BaseModel):
 class ConceptRevisionListOut(BaseModel):
     job_id: int
     revisions: list[ConceptRevisionOut] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Step 9 — the staged-release review & edit surface (doc §7).
+# The view is a projection of the release SLOT (the one authority for the
+# current staged payload); edits go back through release_review.py, which
+# mints a new staged_release_uid + staged_version per applied round.
+# --------------------------------------------------------------------------- #
+
+class ReleaseReviewEditIn(BaseModel):
+    """One verbatim field replacement on one staged record."""
+
+    record_index: int
+    field: str
+    before: str = ""
+    after: str = ""
+
+
+class ReleaseReviewManualEditIn(BaseModel):
+    lane: str = "post"
+    staged_release_uid: str
+    edits: list[ReleaseReviewEditIn] = Field(min_length=1)
+
+
+class ReleaseReviewInstructionIn(BaseModel):
+    lane: str = "post"
+    staged_release_uid: str
+    instruction: str = Field(min_length=1, max_length=20_000)
+
+
+class ReleaseReviewConceptOut(BaseModel):
+    record_index: int
+    parent_concept: str = ""
+    concept_title: str = ""
+    concept_details: str = ""
+    keywords: str = ""
+    review_flags: list[str] = Field(default_factory=list)
+    release_status: str = ""
+    release_errors: list[str] = Field(default_factory=list)
+
+
+class ReleaseReviewTopicOut(BaseModel):
+    topic: str = ""
+    concepts: list[ReleaseReviewConceptOut] = Field(default_factory=list)
+
+
+class ReleaseReviewSummaryOut(BaseModel):
+    row_count: int = 0
+    issue_count: int = 0
+    error_count: int = 0
+    warning_count: int = 0
+    database_uploaded: bool = False
+
+
+class ReleaseReviewIssueOut(BaseModel):
+    code: str = ""
+    severity: str = ""
+    message: str = ""
+
+
+class ReleaseReviewVersionOut(BaseModel):
+    version: int = 0
+    staged_release_uid: str = ""
+    origin: str = ""
+    instruction: str | None = None
+    change_count: int = 0
+    created_at: str = ""
+
+
+class ReleaseReviewViewOut(BaseModel):
+    job_id: int
+    lane: str
+    staged_version: int = 0
+    staged_release_uid: str = ""
+    state: str = ""
+    summary: ReleaseReviewSummaryOut
+    topics: list[ReleaseReviewTopicOut] = Field(default_factory=list)
+    issues: list[ReleaseReviewIssueOut] = Field(default_factory=list)
+    versions: list[ReleaseReviewVersionOut] = Field(default_factory=list)

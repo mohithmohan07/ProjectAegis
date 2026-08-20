@@ -554,3 +554,87 @@ export interface ConceptRevisionList {
   job_id: number;
   revisions: ConceptRevision[];
 }
+
+/* ---- Release review (step 9: the review/edit surface) ------------------ */
+
+export type ReleaseReviewLane = "post" | "pre";
+
+/** One released concept row, addressed by `record_index` for edits. */
+export interface ReleaseReviewConcept {
+  record_index: number;
+  parent_concept: string;
+  concept_title: string;
+  /** House format: " // "-joined sections, later ones "Label:"-prefixed. */
+  concept_details: string;
+  keywords: string;
+  review_flags: string[];
+  release_status: string;
+  release_errors: string[];
+}
+
+export interface ReleaseReviewTopic {
+  topic: string;
+  concepts: ReleaseReviewConcept[];
+}
+
+export interface ReleaseReviewIssue {
+  code: string;
+  severity: string;
+  message: string;
+}
+
+export interface ReleaseReviewVersion {
+  version: number;
+  staged_release_uid: string;
+  origin: "staged" | "manual_edit" | "instruction";
+  instruction: string | null;
+  change_count: number;
+  created_at: string;
+}
+
+export interface ReleaseReviewSummary {
+  row_count: number;
+  issue_count: number;
+  error_count: number;
+  warning_count: number;
+  database_uploaded: boolean;
+}
+
+export interface ReleaseReviewView {
+  job_id: number;
+  lane: ReleaseReviewLane;
+  staged_version: number;
+  staged_release_uid: string;
+  state: "ready" | "ready_with_flags" | "diagnostic_release";
+  summary: ReleaseReviewSummary;
+  topics: ReleaseReviewTopic[];
+  issues: ReleaseReviewIssue[];
+  versions: ReleaseReviewVersion[];
+}
+
+export type ReleaseReviewEditField =
+  | "topic"
+  | "parent_concept"
+  | "concept_title"
+  | "concept_details"
+  | "keywords";
+
+/** One field-level change; `before` lets the server detect stale edits. */
+export interface ReleaseReviewEdit {
+  record_index: number;
+  field: ReleaseReviewEditField;
+  before: string;
+  after: string;
+}
+
+export interface ReleaseManualEditBody {
+  lane: ReleaseReviewLane;
+  staged_release_uid: string;
+  edits: ReleaseReviewEdit[];
+}
+
+export interface ReleaseInstructionBody {
+  lane: ReleaseReviewLane;
+  staged_release_uid: string;
+  instruction: string;
+}

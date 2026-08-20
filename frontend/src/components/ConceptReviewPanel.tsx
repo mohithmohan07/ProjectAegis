@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { api } from "../api/client";
 import type { ConceptRevision } from "../types";
@@ -99,6 +100,15 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
           </span>
         </a>
       </div>
+
+      <p>
+        <Link
+          data-testid="open-review-page"
+          to={`/build-concepts/review/${jobId}?lane=post`}
+        >
+          Open review page
+        </Link>
+      </p>
 
       {openFlags.length > 0 && (
         <div className="mono" data-testid="flagged-placements">

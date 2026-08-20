@@ -913,3 +913,25 @@ input, select, textarea {
   line-height: 1.45;
   color: var(--muted);
 }
+
+/* ---- Release review page (step 9) ------------------------------------- */
+/* Rendered concept_details: " // "-joined sections as titled blocks. Raw
+   LaTeX stays visibly raw in a <code> chip until real typesetting lands
+   (recorded follow-up). */
+.rich-details { margin: 10px 0; }
+.rich-section { margin: 6px 0; }
+.rich-section-label { font-weight: 700; font-size: 12.5px; }
+.rich-section-body { font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.rich-section-body img { max-width: 100%; border: 1px solid var(--border); border-radius: 6px; display: block; margin: 6px 0; }
+.katex-inline {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+.concept-edit-field { display: block; margin-bottom: 10px; }
+.concept-edit-field > span { display: block; font-size: 12px; margin-bottom: 3px; }
+.concept-edit-field input,
+.concept-edit-field textarea { width: 100%; box-sizing: border-box; }

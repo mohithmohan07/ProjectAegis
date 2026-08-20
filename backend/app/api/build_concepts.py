@@ -11,6 +11,7 @@ from ..services import (
     concept_revisions as revisions_svc,
     build_concepts_release_files as release_files,
     build_concepts_release_publication as release_publication,
+    release_review as review_svc,
     checkpoints,
     drive_checkpoints,
     progress,
@@ -563,6 +564,110 @@ def list_concept_revisions(
             )
         ],
     }
+
+
+# --------------------------------------------------------------------------- #
+# Step 9 — the staged-release review & edit surface (doc §7)
+#
+# The reviewer opens the STAGED release as a rendered page, edits fields in
+# place (applied verbatim, recorded, nothing re-runs), or types a
+# plain-language instruction (ONE bounded model pass). Every applied round
+# mints a new staged_release_uid + staged_version and an immutable
+# ConceptReleaseVersion row; a stale uid is refused with 409 so two open
+# tabs can never silently overwrite each other. Publication stays the
+# separate explicit act above (Rule G) — this surface never uploads.
+# --------------------------------------------------------------------------- #
+
+def _review_job(db: Session, job_id: int, owner_sub: str):
+    try:
+        return uploads.get_job(
+            db, job_id, owner_sub=owner_sub, module="build_concepts")
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+
+
+@router.get(
+    "/uploads/{job_id}/release-review",
+    response_model=schemas.ReleaseReviewViewOut,
+)
+def get_release_review(
+    job_id: int,
+    lane: str = LANE_QUERY,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """The staged release rendered for review (read-only projection)."""
+
+    job = _review_job(db, job_id, user.sub)
+    try:
+        return review_svc.review_view(db, job, _lane(lane))
+    except review_svc.ReviewUnavailable as e:
+        raise HTTPException(404, str(e))
+
+
+@router.post(
+    "/uploads/{job_id}/release-review/manual-edit",
+    response_model=schemas.ReleaseReviewViewOut,
+)
+def apply_release_manual_edit(
+    job_id: int,
+    payload: schemas.ReleaseReviewManualEditIn,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Apply the reviewer's verbatim field edits as one recorded round."""
+
+    job = _review_job(db, job_id, user.sub)
+    try:
+        return review_svc.apply_manual_edits(
+            db, job,
+            lane=_lane(payload.lane),
+            staged_release_uid=payload.staged_release_uid,
+            edits=[edit.model_dump() for edit in payload.edits],
+            owner_sub=user.sub,
+        )
+    except review_svc.ReviewUnavailable as e:
+        raise HTTPException(404, str(e))
+    except review_svc.ReviewConflict as e:
+        raise HTTPException(409, str(e))
+    except review_svc.ReviewEditError as e:
+        raise HTTPException(422, str(e))
+
+
+@router.post(
+    "/uploads/{job_id}/release-review/apply-instruction",
+    response_model=schemas.ReleaseReviewViewOut,
+)
+def apply_release_instruction(
+    job_id: int,
+    payload: schemas.ReleaseReviewInstructionIn,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """One bounded model pass applies the reviewer's change list (§7).
+
+    A failed pass is 502 — the round is already recorded as an
+    ``instruction_failed`` version row (the reviewer's words are never
+    lost with the outage), and the staged release is unchanged.
+    """
+
+    job = _review_job(db, job_id, user.sub)
+    try:
+        return review_svc.apply_instruction_round(
+            db, job,
+            lane=_lane(payload.lane),
+            staged_release_uid=payload.staged_release_uid,
+            instruction=payload.instruction,
+            owner_sub=user.sub,
+        )
+    except review_svc.ReviewUnavailable as e:
+        raise HTTPException(404, str(e))
+    except review_svc.ReviewConflict as e:
+        raise HTTPException(409, str(e))
+    except review_svc.ReviewEditError as e:
+        raise HTTPException(422, str(e))
+    except review_svc.InstructionRoundFailed as e:
+        raise HTTPException(502, str(e))
 
 
 @router.post("/uploads/{job_id}/convert")

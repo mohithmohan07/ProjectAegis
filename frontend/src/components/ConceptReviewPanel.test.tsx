@@ -1,4 +1,5 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, expect, test, vi } from "vitest";
 
 import type { ConceptRevision } from "../types";
@@ -16,6 +17,16 @@ const apiMock = vi.hoisted(() => ({
 vi.mock("../api/client", () => ({ api: apiMock }));
 
 import { ConceptReviewPanel } from "./ConceptReviewPanel";
+
+// The panel carries a <Link> to the release-review page, so a Router is
+// required here exactly as in the app.
+function renderPanel() {
+  return render(
+    <MemoryRouter>
+      <ConceptReviewPanel jobId={7} />
+    </MemoryRouter>,
+  );
+}
 
 function revision(overrides: Partial<ConceptRevision> = {}): ConceptRevision {
   return {
@@ -42,7 +53,7 @@ beforeEach(() => {
 });
 
 test("offers the current output for download", async () => {
-  render(<ConceptReviewPanel jobId={7} />);
+  renderPanel();
 
   const bulkImport = await screen.findByTestId("download-bulk-import");
   expect(bulkImport.getAttribute("href")).toBe(
@@ -54,13 +65,20 @@ test("offers the current output for download", async () => {
   expect(review.getAttribute("href")).toBe("/release/7.xlsx");
 });
 
+test("deep-links to the release review page for this job", async () => {
+  renderPanel();
+
+  const link = await screen.findByTestId("open-review-page");
+  expect(link.getAttribute("href")).toBe("/build-concepts/review/7?lane=post");
+});
+
 test("submits an instruction and refreshes the history", async () => {
   apiMock.submitConceptRevision.mockResolvedValue(revision());
   apiMock.listConceptRevisions
     .mockResolvedValueOnce({ job_id: 7, revisions: [] })
     .mockResolvedValueOnce({ job_id: 7, revisions: [revision()] });
 
-  render(<ConceptReviewPanel jobId={7} />);
+  renderPanel();
 
   const box = await screen.findByLabelText("What needs changing?");
   fireEvent.change(box, {
@@ -88,7 +106,7 @@ test("there is no round limit: history keeps growing", async () => {
     revisions: many,
   });
 
-  render(<ConceptReviewPanel jobId={7} />);
+  renderPanel();
 
   const history = await screen.findByTestId("revision-history");
   expect(history.textContent).toContain("Round 30");
@@ -109,7 +127,7 @@ test("shows what Aegis placed by its own reading", async () => {
     ],
   });
 
-  render(<ConceptReviewPanel jobId={7} />);
+  renderPanel();
 
   expect(
     (await screen.findByTestId("flagged-placements")).textContent,
@@ -124,7 +142,7 @@ test("a failed round surfaces its error without losing the history", async () =>
     ],
   });
 
-  render(<ConceptReviewPanel jobId={7} />);
+  renderPanel();
 
   const history = await screen.findByTestId("revision-history");
   expect(history.textContent).toContain("failed");
@@ -133,7 +151,7 @@ test("a failed round surfaces its error without losing the history", async () =>
 });
 
 test("an empty instruction cannot be submitted", async () => {
-  render(<ConceptReviewPanel jobId={7} />);
+  renderPanel();
 
   const button = (await screen.findByText("Apply changes")) as HTMLButtonElement;
   expect(button.disabled).toBe(true);
@@ -146,7 +164,7 @@ test("an empty instruction cannot be submitted", async () => {
 
 test("labels each download so the deliverable is not confused with diagnostics", async () => {
   apiMock.listConceptRevisions.mockResolvedValue({ revisions: [] });
-  render(<ConceptReviewPanel jobId={7} />);
+  renderPanel();
   await waitFor(() => expect(apiMock.listConceptRevisions).toHaveBeenCalled());
 
   const bulk = screen.getByTestId("download-bulk-import");

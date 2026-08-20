@@ -115,6 +115,11 @@ PRE_ROW_RELATED_CONCEPTS_FIELD = "_aegis_pre_related_concepts"
 # A link that does not resolve is a RECORDED REVIEW FLAG on the row, never
 # a blank and never a block (T3.3).
 PRE_ROW_RELATED_UNRESOLVED_FIELD = "_aegis_pre_related_concepts_unresolved"
+# Step 9 (doc §7): the reviewer edit trail a review round stamps on every
+# row it touched — who changed which field, from what, to what, in which
+# staged version. Rides the staged payload for the audit; the published
+# concept row carries the edited VALUES, never the trail.
+MANUAL_EDIT_TRAIL_FIELD = "_aegis_manual_edit_rounds"
 
 _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_STATUS_FIELD,
@@ -194,6 +199,11 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # the day someone renames the constant.
     RELEASE_ROW_LANE_FIELD,
     PRE_ROW_GENERATED_QUESTIONS_FIELD,
+    # Step 9's reviewer edit trail (doc §7, release_review.py): preserved
+    # verbatim in the staged payload across rounds, stripped before DB
+    # publication — the reviewer's edited values publish, the audit of how
+    # they got there stays in the release record.
+    MANUAL_EDIT_TRAIL_FIELD,
 })
 
 _UNIT_ID_RE = re.compile(
