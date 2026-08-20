@@ -398,7 +398,11 @@ function PostLearningFlow({
       {carriedIssue && (
         <CarriedSemanticIssue issue={carriedIssue} />
       )}
-      {result && job && <ConceptReviewPanel jobId={job.id} />}
+      {job
+        && (result
+          || job.status === "generated"
+          || job.status === "released")
+        && <ConceptReviewPanel jobId={job.id} />}
       {error && (
         <div className="error-box mt-16">{error}</div>
       )}

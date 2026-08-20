@@ -1279,8 +1279,14 @@ def build(
                 ],
                 NEEDED_FOR_FIELD: [],
             }
-            if map_flags:
-                review_flags[concept_id] = list(map_flags)
+            # A flag naming one pre-concept lands on that row only; a
+            # genuinely map-wide flag reaches every row (kernel.pin_flags
+            # — settle's staging fix).
+            pinned = kernel.pin_flags(
+                list(map_flags), list(concept_ids), str(concept_id)
+            )
+            if pinned:
+                review_flags[concept_id] = pinned
             rows.append(row)
         topics.append({
             "pre_topic_id": topic_id,
@@ -1374,12 +1380,18 @@ def build(
         ):
             if flags:
                 decision_flags[f"needed_for#{start}"] = list(flags)
+            batch_pre_ids = [
+                str(batch_pre_id) for batch_pre_id, _v in decided_batch
+            ]
             for pre_id, verdict in decided_batch:
                 needed_for[pre_id] = _ref_list(
                     verdict.get("post_concept_ids")
                 )
-                if flags:
-                    review_flags.setdefault(pre_id, []).extend(flags)
+                pinned = kernel.pin_flags(
+                    list(flags), batch_pre_ids, str(pre_id)
+                )
+                if pinned:
+                    review_flags.setdefault(pre_id, []).extend(pinned)
 
     by_pre_id = {row["_pre_concept_id"]: row for row in rows}
     for pre_id, row in by_pre_id.items():

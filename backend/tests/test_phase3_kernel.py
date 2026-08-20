@@ -224,3 +224,35 @@ def test_pure_confidence_shortfall_ships_flagged_after_bounded_attempts():
         "0.880 is below 0.920" in flag and "shipped for review" in flag
         for flag in decision["review_flags"]
     )
+
+
+def test_a_clean_pass_emits_nothing_and_the_band_is_gone():
+    """Owner steer 2026-08-20: no human-review band.
+
+    A verified audit at 0.91 — squarely in what used to be the
+    0.900-0.919 band — with no issues emits NOTHING. An issue the critic
+    names still records whatever the verdict label says (Q10:
+    dissent-content is dissent); a "verified" at sub-floor confidence is
+    a broken audit and never looks clean. The acceptance floor's
+    [confidence] mechanics are a separate, untouched path.
+    """
+    from app.services.phase3 import kernel
+
+    assert kernel.advisory_flags({
+        "verdict": "verified", "confidence": 0.91, "issues": [],
+    }) == []
+    noted = kernel.advisory_flags({
+        "verdict": "verified", "confidence": 0.99,
+        "issues": ["a concern the audit still names"],
+    })
+    assert noted == ["critic: a concern the audit still names"]
+    subfloor = kernel.advisory_flags({
+        "verdict": "verified", "confidence": 0.5, "issues": [],
+    })
+    assert any("sub-floor" in flag for flag in subfloor)
+    dissent = kernel.advisory_flags({
+        "verdict": "dissent", "confidence": 0.91,
+        "issues": ["the named defect"],
+    })
+    assert any("dissent" in flag for flag in dissent)
+    assert any(flag == "critic: the named defect" for flag in dissent)

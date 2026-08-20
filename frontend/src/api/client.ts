@@ -344,6 +344,17 @@ export const api = {
       { method: "POST" },
     ),
 
+  /** The reviewer's locally edited Concept workbook: applied as one
+   * recorded review round, then published to the CMS in the same act. */
+  uploadEditedWorkbook: (jobId: number, lane: "post" | "pre", file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<Record<string, unknown>>(
+      `/build-concepts/uploads/${jobId}/upload-edited-workbook?lane=${lane}`,
+      { method: "POST", body: fd },
+    );
+  },
+
   // Release review (step 9): read the staged release, edit it in place or
   // via a plain-language instruction. Every write carries the
   // staged_release_uid it was read from, so a concurrent edit 409s instead

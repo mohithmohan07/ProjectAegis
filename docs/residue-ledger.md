@@ -69,6 +69,20 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Truth fixes | Convert stream title no longer claims "Converting document to MMD"; the Phase 2.2.1 doc's Mathpix claims corrected (Mathpix is deleted; the GPT reader IS the converter) |
 | Deferred (next round) | Per-call OpenAI client reuse at high concurrency; phase36 turnover double-prepare; kernel-level deferred-critic primitive (see round 2 note below) |
 
+## Owner review package (2026-08-20 evening)
+
+| Item | Disposition |
+|---|---|
+| Human-review band removed | `kernel.advisory_flags` no longer emits the 0.900–0.919 band flag — a clean pass (verified, no issues) emits nothing (pinned). Kept, per existing pins: an issue the critic names records whatever the verdict label says (Q10: dissent-content is dissent), and a "verified" at sub-floor confidence is flagged as a broken audit, never clean. Verified emit-only before removal: nothing routed/gated/paused on the band; the 0.92 floor and `[confidence]` mechanics untouched. The review PAGE stays clean via the projection filter, not by dropping records |
+| Flag fan-out fixed at source | `kernel.pin_flags` (settle's staging fix, now the one shared implementation) applied to Place, Host (units + QIDs), Analyse (build + allotments), Premap (map + links), Polish; assemble's three flag merges deduped. A flag naming one unit lands on that unit only |
+| Review page = editing surface | `review_view` projects errors-only issues and filters critic/BLK audit prose from row flags (all stays recorded in the payload + workbook Issues note). The review entry on Build Concepts now renders from durable job state (survives reload) and links BOTH lanes; the view always returns the post-round latest state (existing contract, verified by tests) |
+| Excel → CMS in one act | New `release_workbook_edits.apply_workbook_and_publish` + `POST /uploads/{job_id}/upload-edited-workbook?lane=`: the downloaded Concept workbook, edited locally, uploads as ONE recorded review round (same trail/versions as the review page) then publishes through the one publication writer. Matching by the workbook's own identity tags (rebuilt via the same transient hierarchy that rendered the download) with exact title fallback; unmatched rows refuse loudly. Replaces the separate upload-to-database buttons in the UI (endpoints kept). Closes the /data/import trap (silent no-op on content edits, duplicate row on title edits) |
+| Pre coverage target re-set | Q4 plan calibration now records the owner's target: ~10 generated questions per pre-concept, around 5 Basic + 5 Intermediate (was 40/20/20). Still a recorded target, not a quota — model decides, deviation carries rationale; norm-location tests re-pinned |
+| Output cards + console theme | Disabled-output cards show the first sentence with an expandable full reason; grid no longer stretches short cards. Console follows the theme (light palette in light mode, terminal palette in dark); log-level colors tokenized; system-dark accent corrected from pre-rebrand indigo to Clarius Blue |
+| Residue: Master workbook has no edited-Excel import | The Excel→CMS act covers the CONCEPT workbook; Masters still publish from the immutable snapshot via their own upload-to-database. An edited-Master import path is unbuilt |
+| Residue: "regenerate after edits" | Concept downloads re-render from the edited staged slot already; Masters must be re-run from the release page to pick up edits. A one-click regenerate-Masters affordance on the review page is unbuilt |
+| Residue: run-report band bucket | `concept_run_report` still buckets rows_in_human_review_band in its diagnostics artifact (read-only); remove if the owner wants the band concept fully gone |
+
 ## Master-file blockers (2026-08-20, live run CH01 3-D Shapes MSBSHSE)
 
 | Item | Disposition |

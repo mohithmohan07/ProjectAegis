@@ -597,6 +597,11 @@ def host(
             if isinstance(row, Mapping)
         }
         flags = list(decision.get("review_flags") or [])
+        # A flag naming one unit or QID lands only on that unit/QID, never
+        # on its whole batch (kernel.pin_flags — settle's staging fix).
+        batch_flag_ids = [
+            str(unit["unit_id"]) for unit in batch
+        ] + [str(qid) for unit in batch for qid in unit["qids"]]
         for unit in batch:
             verdict = assigned[unit["unit_id"]]
             if str(verdict.get("decision")) == "create_new":
@@ -644,8 +649,11 @@ def host(
                 "topic_id": str(entry_source.get("_semantic_topic_id") or ""),
                 "confidence": confidence,
             }
-            if flags:
-                entry["review_flags"] = list(flags)
+            unit_flags = kernel.pin_flags(
+                flags, batch_flag_ids, str(unit["unit_id"])
+            )
+            if unit_flags:
+                entry["review_flags"] = list(unit_flags)
             batch_hosts[unit["unit_id"]] = entry
             # House routing rule, applied BY THE MODEL: placing a question
             # means understanding it against the concepts, so the API names
@@ -700,7 +708,9 @@ def host(
                     ],
                     "placement_reason": _normal(placement.get("reason")),
                 }
-                qid_flags = list(flags)
+                qid_flags = kernel.pin_flags(
+                    flags, batch_flag_ids, str(qid)
+                )
                 membership_rows = [
                     row
                     for row in (

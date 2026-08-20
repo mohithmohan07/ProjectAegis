@@ -145,15 +145,11 @@ def _pin_flags(
 ) -> list[str]:
     """Attach concept-specific flags to their concept; general ones to all.
 
-    A critic issue naming a specific concept must land only on that row
-    (staging showed whole batches flagged for one concept's dissent).
+    This stage found the bug (staging showed whole batches flagged for
+    one concept's dissent); the one shared implementation now lives in
+    ``kernel.pin_flags`` and every batched stage uses it.
     """
-    pinned = [flag for flag in flags if row_id in flag]
-    general = [
-        flag for flag in flags
-        if not any(candidate in flag for candidate in batch_ids)
-    ]
-    return pinned + general
+    return kernel.pin_flags(flags, batch_ids, row_id)
 
 
 def _topology_checker(

@@ -656,36 +656,47 @@ function SourceArtifactsCard({
     .map(([label, value]) => `${value} ${label}`)
     .join(" · ");
 
-  async function publishRelease(artifact: ActionableArtifact) {
-    if (actionBusy || artifact.disabled) return;
-    // WHICH LANE THIS BUTTON PUBLISHES, read off the entry the button was
+  function artifactLane(artifact: ActionableArtifact): "post" | "pre" {
+    // WHICH LANE THIS CONTROL PUBLISHES, read off the entry it was
     // rendered from. One job stages two releases (Outputs 01/02 and
-    // Outputs 03/04) and the manifest offers a publish entry for each; the
-    // lane rides the entry's own download_url, exactly as the four
-    // download links do. This used to call the lane-less endpoint, so the
-    // Pre button published the POST lane — a wrong-lane, authenticated,
-    // explicitly-confirmed write, and if Post was already published it was
-    // a silent no-op that still reported success while Output 03 stayed
-    // unpublished.
-    const lane: "post" | "pre" =
-      new URLSearchParams(artifact.download_url.split("?")[1] ?? "").get("lane") === "pre"
-        ? "pre"
-        : "post";
+    // Outputs 03/04); the lane rides the entry's own download_url,
+    // exactly as the four download links do.
+    return new URLSearchParams(
+      artifact.download_url.split("?")[1] ?? "",
+    ).get("lane") === "pre" ? "pre" : "post";
+  }
+
+  // Owner steer 2026-08-20: the way into the CMS is the reviewer's own
+  // file — download the Concept workbook, edit it locally in Excel, and
+  // upload it back. The upload is applied as one recorded review round
+  // and published in the same act; the separate "upload to database"
+  // button is gone with it.
+  async function uploadEditedWorkbook(
+    artifact: ActionableArtifact, file: File,
+  ) {
+    if (actionBusy || artifact.disabled) return;
+    const lane = artifactLane(artifact);
     const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
     if (
-      artifact.requires_confirmation
-      && !window.confirm(
-        `Upload the released ${laneLabel} rows to the database now? `
-        + "Highlighted rows and their audit remain in the release export.",
+      !window.confirm(
+        `Apply ${file.name} as ${laneLabel} edits and upload to the CMS `
+        + "now? Your changes are recorded as a review round first.",
       )
     ) return;
     setActionBusy(true);
     setActionMessage(null);
     try {
-      await api.uploadConceptRelease(jobId, lane);
+      const summary = await api.uploadEditedWorkbook(jobId, lane, file);
       const fresh = await api.getUploadJob("concepts", jobId);
       onPublished(fresh);
-      setActionMessage(`Released ${laneLabel} rows were uploaded to the database.`);
+      const changed = Number(summary["changed_fields"] ?? 0);
+      setActionMessage(
+        `${laneLabel}: ${file.name} applied`
+        + (changed > 0
+          ? ` (${changed} field change${changed === 1 ? "" : "s"} recorded)`
+          : " (no field changes)")
+        + " and uploaded to the CMS.",
+      );
     } catch (e) {
       setActionMessage(String(e));
     } finally {
@@ -753,8 +764,17 @@ function SourceArtifactsCard({
                   <div className="output-name">{meta.name}</div>
                   {artifact.disabled ? (
                     <div className="output-reason">
-                      {artifact.disabled_reason
-                        || "Not available for this run."}
+                      {(() => {
+                        const reason = artifact.disabled_reason
+                          || "Not available for this run.";
+                        const brief = reason.split(/(?<=\.)\s+/)[0];
+                        return brief.length < reason.length ? (
+                          <details>
+                            <summary>{brief}</summary>
+                            <div className="mt-8">{reason}</div>
+                          </details>
+                        ) : reason;
+                      })()}
                     </div>
                   ) : (
                     <>
@@ -782,18 +802,38 @@ function SourceArtifactsCard({
 
       {publishActions.length > 0 && (
         <div className="row">
-          {publishActions.map((artifact) => (
-            <button
-              className="ghost"
-              disabled={actionBusy || artifact.disabled}
-              key={artifact.kind}
-              onClick={() => void publishRelease(artifact)}
-            >
-              {actionBusy
-                ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
-                : artifact.label}
-            </button>
-          ))}
+          {publishActions.map((artifact) => {
+            const lane = artifactLane(artifact);
+            const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
+            const inputId = `edited-workbook-${jobId}-${lane}`;
+            return (
+              <span key={artifact.kind}>
+                <input
+                  accept=".xlsx"
+                  data-testid={`upload-edited-${lane}`}
+                  disabled={actionBusy || artifact.disabled}
+                  id={inputId}
+                  onChange={(event) => {
+                    const file = event.target.files?.[0];
+                    event.target.value = "";
+                    if (file) void uploadEditedWorkbook(artifact, file);
+                  }}
+                  style={{ display: "none" }}
+                  type="file"
+                />
+                <button
+                  className="ghost"
+                  disabled={actionBusy || artifact.disabled}
+                  onClick={() =>
+                    document.getElementById(inputId)?.click()}
+                >
+                  {actionBusy
+                    ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
+                    : `Upload edited ${laneLabel} Excel to CMS`}
+                </button>
+              </span>
+            );
+          })}
         </div>
       )}
 

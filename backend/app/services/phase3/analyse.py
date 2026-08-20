@@ -320,10 +320,17 @@ def analyse(
         })
     build_flags = list(build_decision.get("review_flags") or [])
 
+    # A flag naming one inventory item lands on that item only; only a
+    # genuinely chapter-scope flag (naming no item) reaches every item
+    # (kernel.pin_flags — settle's staging fix).
+    all_item_ids = [str(item["item_id"]) for item in inventory]
     review_flags: dict[str, list[str]] = {}
     for item in inventory:
-        if build_flags:
-            review_flags[item["item_id"]] = list(build_flags)
+        pinned = kernel.pin_flags(
+            build_flags, all_item_ids, str(item["item_id"])
+        )
+        if pinned:
+            review_flags[item["item_id"]] = pinned
 
     progress.log(
         f"Analyse: chapter inventory holds {len(inventory)} distinct "
@@ -416,13 +423,19 @@ def analyse(
         _decide_batch,
         max_workers=workers,
     ):
+        batch_item_ids = [
+            str(batch_item_id) for batch_item_id, _v, _f in batch_result
+        ]
         for item_id, verdict, flags in batch_result:
             allotments[item_id] = str(verdict.get("concept_id") or "")
             rationale = _normal(verdict.get("rationale"))
             if rationale:
                 rationales[item_id] = rationale
-            if flags:
-                review_flags.setdefault(item_id, []).extend(flags)
+            pinned = kernel.pin_flags(
+                list(flags), batch_item_ids, str(item_id)
+            )
+            if pinned:
+                review_flags.setdefault(item_id, []).extend(pinned)
 
     progress.log(
         f"Analyse: {len(allotments)} item(s) allotted, each to exactly "

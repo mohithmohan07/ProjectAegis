@@ -70,7 +70,14 @@ export function ConceptReviewPanel({ jobId }: { jobId: number }) {
           data-testid="open-review-page"
           to={`/build-concepts/review/${jobId}?lane=post`}
         >
-          Open the review & edit page
+          Open the review & edit page (Post-Learning)
+        </Link>
+        {" · "}
+        <Link
+          data-testid="open-review-page-pre"
+          to={`/build-concepts/review/${jobId}?lane=pre`}
+        >
+          Pre-Learning
         </Link>
       </p>
 

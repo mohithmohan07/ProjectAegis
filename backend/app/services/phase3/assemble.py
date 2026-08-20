@@ -568,7 +568,8 @@ def assemble(
             marks.append(str(qid))
             marks.sort()
         for flag in place_flags.get(str(qid), []):
-            row.setdefault("review_flags", []).append(flag)
+            if flag not in row.setdefault("review_flags", []):
+                row["review_flags"].append(flag)
 
     figure_dispositions: dict[str, dict[str, str]] = {}
     for block_id, verdict in sorted(
@@ -603,7 +604,8 @@ def assemble(
             str(entry.get("block_id") or ""), str(entry.get("url") or "")
         ))
         for flag in place_flags.get(block_id, []):
-            row.setdefault("review_flags", []).append(flag)
+            if flag not in row.setdefault("review_flags", []):
+                row["review_flags"].append(flag)
 
     # Q1: stamp the chapter analysis inventory's allotments before the
     # deterministic pipeline — the rendered section exists only where an
@@ -834,7 +836,14 @@ def assemble(
         row["_aegis_release_type_case_routes"] = sorted(routes_by_key[key])
     for key, flags in flags_by_key.items():
         row = row_by_key[key]
-        row["review_flags"] = [*(row.get("review_flags") or []), *flags]
+        merged = list(row.get("review_flags") or [])
+        # Many host units map to one concept row; the same batch flag must
+        # not land on the row once per unit (pure dedupe, same membership
+        # test the analyse merge above already uses).
+        for flag in flags:
+            if flag not in merged:
+                merged.append(flag)
+        row["review_flags"] = merged
     for qid, entry in qid_map.items():
         key = _host_key(entry)
         if key not in row_by_key:

@@ -147,8 +147,16 @@ def review_view(
                 or ""
             ),
             "keywords": str(row.get("keywords") or ""),
+            # The page is an EDITING surface (owner steer, 2026-08-20):
+            # machine-audit prose — critic lines and source-block (BLK)
+            # references — stays recorded in the payload but is not
+            # projected here; the reviewer sees the content to change,
+            # not the pipeline's internal audit trail.
             "review_flags": [
                 str(flag) for flag in row.get("review_flags") or []
+                if not str(flag).startswith("critic: ")
+                and not str(flag).startswith("independent critic ")
+                and "BLK-" not in str(flag)
             ],
             "release_status": str(
                 row.get(bcr.RELEASE_ROW_STATUS_FIELD) or ""
@@ -174,6 +182,10 @@ def review_view(
             "database_uploaded": bool(summary.get("database_uploaded")),
         },
         "topics": topics,
+        # Errors only (owner steer, 2026-08-20): a blocking structural
+        # issue belongs in front of the editor; warning-grade transcripts
+        # of per-block audit flags do not. The full issue list stays on
+        # the payload and in the workbook's Issues note.
         "issues": [
             {
                 "code": str(issue.get("code") or ""),
@@ -182,6 +194,7 @@ def review_view(
             }
             for issue in payload.get("issues") or []
             if isinstance(issue, Mapping)
+            and str(issue.get("severity") or "").lower() == "error"
         ],
         "versions": [
             {

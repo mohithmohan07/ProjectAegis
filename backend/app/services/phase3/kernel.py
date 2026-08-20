@@ -226,8 +226,40 @@ def parallel_map_in_order(
         return results
 
 
+def pin_flags(
+    flags: list[str],
+    batch_ids: list[str],
+    unit_id: str,
+) -> list[str]:
+    """Attach unit-specific flags to their unit; general ones to all.
+
+    A critic issue naming a specific unit must land only on that unit —
+    staging showed whole batches flagged for one concept's dissent
+    (settle's fix, now the one shared implementation for every batched
+    stage: Settle, Place, Host, Analyse, Premap, Polish).
+    """
+    unit = str(unit_id or "")
+    ids = [str(candidate) for candidate in batch_ids if str(candidate)]
+    pinned = [flag for flag in flags if unit and unit in flag]
+    general = [
+        flag for flag in flags
+        if not any(candidate in flag for candidate in ids)
+    ]
+    return pinned + general
+
+
 def advisory_flags(review: Mapping[str, Any] | None) -> list[str]:
-    """Convert a critic response into review flags. Never raises."""
+    """Convert a critic response into review flags. Never raises.
+
+    Only genuine DISSENT flags (owner steer, 2026-08-20): a passing
+    audit emits nothing — not its confidence, not its side notes. The
+    0.900–0.919 "human-review band" flag is gone with it: nothing in the
+    pipeline ever routed on it (emit-only, verified before removal), the
+    0.92 acceptance floor and its ``[confidence]`` defect mechanics are
+    untouched, and anything the machine can rectify is the Refiner's and
+    The Fixer's job — a human is asked to review dissent, never a
+    passing number.
+    """
 
     if not isinstance(review, Mapping):
         return ["critic returned no readable review; decision stands"]
@@ -244,11 +276,19 @@ def advisory_flags(review: Mapping[str, Any] | None) -> list[str]:
             f"{confidence:.3f} (band: {band}); decision stands under "
             "decide-once and this dissent is recorded for review"
         )
-    elif band == "human_review":
+    elif band in ("rejected", "invalid"):
+        # "Verified" at sub-floor confidence contradicts itself — that is
+        # a broken audit, not a passing one, and it must never look
+        # clean (the malformed/subfloor pins in the assessment suites).
         flags.append(
-            f"independent critic confidence {confidence:.3f} is in the "
-            "0.900–0.919 human-review band; decision stands, flagged"
+            f"critic verified at sub-floor confidence {confidence:.3f} "
+            f"(band: {band}); decision stands, audit recorded as "
+            "unreliable"
         )
+    # A clean pass's CONFIDENCE is never a flag (the 0.900–0.919 band is
+    # gone), but any issue the critic names records whatever the verdict
+    # label says — dissent-content is dissent (Q10). The review page
+    # projects these notes out of the editor's way (release_review).
     for issue in list(review.get("issues") or [])[:8]:
         text = str(issue).strip()
         if text:

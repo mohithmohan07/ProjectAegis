@@ -499,6 +499,69 @@ def upload_released_output_to_database(
         raise HTTPException(400, str(e))
 
 
+@router.post("/uploads/{job_id}/upload-edited-workbook")
+async def upload_edited_workbook_to_cms(
+    job_id: int,
+    lane: str = PUBLISH_LANE_QUERY,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """The reviewer's local Excel edits, applied and published in one act.
+
+    Owner steer, 2026-08-20: the downloaded Concept workbook, edited in
+    Excel on the reviewer's machine, is uploaded here — it becomes one
+    recorded review round (same trail and version rows as the review
+    page) and is then published to the CMS through the one publication
+    writer. This replaces the separate upload-to-database button for the
+    concept outputs. ``lane`` is REQUIRED, exactly as it is for every
+    other publication act.
+    """
+
+    import tempfile
+    from pathlib import Path as _Path
+
+    from ..services import release_workbook_edits
+    from ..services import release_review as review_svc_errors
+
+    resolved = _publish_lane(lane)
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts"
+        )
+        raw_bytes = await read_limited_upload(
+            file, description="edited Concept workbook"
+        )
+        with tempfile.NamedTemporaryFile(
+            suffix=".xlsx", delete=False
+        ) as handle:
+            handle.write(raw_bytes)
+            temp_path = _Path(handle.name)
+        try:
+            return release_workbook_edits.apply_workbook_and_publish(
+                db, job,
+                lane=resolved,
+                workbook_path=temp_path,
+                owner_sub=user.sub,
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+    except release_workbook_edits.WorkbookEditError as e:
+        raise HTTPException(422, str(e))
+    except review_svc_errors.ReviewConflict as e:
+        raise HTTPException(409, str(e))
+    except review_svc_errors.ReviewEditError as e:
+        raise HTTPException(422, str(e))
+    except uploads.UploadJobNotFound as e:
+        raise HTTPException(404, str(e))
+    except release_svc.ReleaseUnavailableError as e:
+        raise HTTPException(404, str(e))
+    except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # --------------------------------------------------------------------------- #
 # Post-run reviewer revisions
 #

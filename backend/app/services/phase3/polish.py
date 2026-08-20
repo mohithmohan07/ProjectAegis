@@ -482,8 +482,18 @@ def polish(
             if _normal(row.get("keywords")):
                 out[ref]["keywords"] = _normal(row.get("keywords"))
         flags = list(decision.get("review_flags") or [])
-        for flag in flags:
-            for index in batch_indexes:
+        # A flag naming one concept lands on that row only, never on its
+        # whole repair batch (kernel.pin_flags — settle's staging fix).
+        batch_titles = [
+            str(out[index].get("concept_title") or "")
+            for index in batch_indexes
+        ]
+        for index in batch_indexes:
+            pinned = kernel.pin_flags(
+                flags, batch_titles,
+                str(out[index].get("concept_title") or ""),
+            )
+            for flag in pinned:
                 out[index]["review_flags"] = [
                     *(out[index].get("review_flags") or []), flag,
                 ]

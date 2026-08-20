@@ -8,6 +8,7 @@ const streamNdjsonMock = vi.hoisted(() => vi.fn());
 const apiMock = vi.hoisted(() => ({
   getUploadJob: vi.fn(),
   uploadConceptRelease: vi.fn(),
+  uploadEditedWorkbook: vi.fn(),
   checkpointUrl: vi.fn((id: number) => `/checkpoint/${id}`),
   clearConceptCheckpoint: vi.fn(),
   importConceptCheckpoint: vi.fn(),
@@ -309,15 +310,18 @@ function bothLanesJob(): UploadJob {
 }
 
 test.each([
-  ["pre_database_upload", "Upload released Pre-Learning output to database", "pre", "Pre-Learning"],
-  ["database_upload", "Upload released output to database", "post", "Post-Learning"],
+  ["pre", "Pre-Learning"],
+  ["post", "Post-Learning"],
 ] as const)(
-  "the %s button publishes its OWN lane (%s -> %s)",
-  async (_kind, label, lane, laneLabel) => {
+  "the edited-workbook control uploads its OWN lane (%s)",
+  async (lane, laneLabel) => {
+    // Owner steer 2026-08-20: the CMS is fed by the reviewer's edited
+    // Excel, applied as a recorded round + published in one act. The
+    // separate "upload to database" button is gone.
     const confirmSpy = vi
       .spyOn(window, "confirm")
       .mockImplementation(() => true);
-    apiMock.uploadConceptRelease.mockResolvedValue({});
+    apiMock.uploadEditedWorkbook.mockResolvedValue({ changed_fields: 2 });
     apiMock.getUploadJob.mockResolvedValue(bothLanesJob());
 
     render(
@@ -331,10 +335,18 @@ test.each([
       </RunConsoleProvider>,
     );
 
-    screen.getByRole("button", { name: label }).click();
+    const file = new File(["x"], "edited.xlsx", {
+      type: "application/vnd.openxmlformats-officedocument"
+        + ".spreadsheetml.sheet",
+    });
+    const input = screen.getByTestId(`upload-edited-${lane}`);
+    await import("@testing-library/react").then(({ fireEvent }) =>
+      fireEvent.change(input, { target: { files: [file] } }));
 
     await vi.waitFor(() =>
-      expect(apiMock.uploadConceptRelease).toHaveBeenCalledWith(81, lane),
+      expect(apiMock.uploadEditedWorkbook).toHaveBeenCalledWith(
+        81, lane, file,
+      ),
     );
     // ...and the reviewer was told WHICH lane they were authorising.
     expect(confirmSpy.mock.calls[0][0]).toContain(laneLabel);

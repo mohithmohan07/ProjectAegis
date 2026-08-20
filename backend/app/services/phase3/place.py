@@ -337,11 +337,18 @@ def place(
         _decide_batch,
         max_workers=workers,
     ):
+        batch_refs = [
+            str(batch_entry["item_ref"])
+            for batch_entry, _verdict, _flags in batch_result
+        ]
         for entry, verdict, flags in batch_result:
             ref = entry["item_ref"]
             rationales[ref] = _normal(verdict.get("rationale"))
-            if flags:
-                review_flags[ref] = list(flags)
+            # A flag naming one item lands on that item only, never on its
+            # whole batch (kernel.pin_flags — settle's staging fix).
+            pinned = kernel.pin_flags(list(flags), batch_refs, str(ref))
+            if pinned:
+                review_flags[ref] = pinned
             disposition = str(verdict.get("disposition") or "").strip()
             if entry["pool_kind"] == "figure":
                 figure_placements[ref] = disposition or str(

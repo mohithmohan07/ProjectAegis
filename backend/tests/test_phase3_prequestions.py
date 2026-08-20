@@ -324,7 +324,7 @@ def test_no_literal_forty_in_any_validator_anywhere_in_the_backend():
 
 
 def test_the_stated_norm_lives_only_in_the_plan_payloads_rules_prose():
-    """40 appears in exactly one place in this module: labelled prose.
+    """The norm (10, owner steer 2026-08-20) lives only in labelled prose.
 
     Not a constant, not a default, not a threshold, not a comparison —
     only inside the plan payload's rules text, where Q4's own qualifiers
@@ -335,13 +335,13 @@ def test_the_stated_norm_lives_only_in_the_plan_payloads_rules_prose():
     tree = ast.parse(source)
     holders: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and node.value == 40:
-            holders.append("numeric literal 40")
+        if isinstance(node, ast.Constant) and node.value == 10:
+            holders.append("numeric literal 10")
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if "40" in node.value:
+            if "about 10 questions" in node.value:
                 holders.append(node.value[:40])
-    # No numeric 40 anywhere in the module at all…
-    assert "numeric literal 40" not in holders
+    # No numeric 10 anywhere in the module at all…
+    assert "numeric literal 10" not in holders
     # …and every textual mention is inside _plan_rules' calibration prose.
     rules = next(
         node for node in ast.walk(tree)
@@ -350,7 +350,7 @@ def test_the_stated_norm_lives_only_in_the_plan_payloads_rules_prose():
     inside = {
         sub.value for sub in ast.walk(rules)
         if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
-        and "40" in sub.value
+        and "about 10 questions" in sub.value
     }
     assert inside, "the calibration prose must state the norm"
     # …and Q4's own qualifiers are attached to it wherever it is stated.
@@ -360,11 +360,11 @@ def test_the_stated_norm_lives_only_in_the_plan_payloads_rules_prose():
     )
     assert "CALIBRATION (the reference point, not a rule)" in prose
     assert "neither a mandatory quota nor a maximum" in prose
-    assert "is never padded to reach 40" in prose
+    assert "is never padded to reach it" in prose
     module_mentions = {
         node.value for node in ast.walk(tree)
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        and "40" in node.value
+        and "about 10 questions" in node.value
     }
     # The module docstring may discuss the ruling; no other string may.
     assert module_mentions - inside - {
@@ -381,14 +381,15 @@ def test_the_registered_prompts_do_not_carry_the_norm():
         "PREQUESTIONS_AUTHOR_SYSTEM",
         "PREQUESTIONS_CRITIC_SYSTEM",
     ):
-        assert "40" not in getattr(prompts, name)
-        assert "20" not in getattr(prompts, name)
+        assert "about 10 questions" not in getattr(prompts, name)
+        assert "around 5 Basic" not in getattr(prompts, name)
 
 
 def test_the_norm_is_stated_as_a_recorded_target_not_as_anyones_practice():
     """The calibration prose must not invent a provenance for the norm.
 
-    Q4 records "an adaptive target of 40"; no doc attributes that figure
+    Q4 recorded an adaptive target; the owner re-set it to ~10 (5 Basic
+    + 5 Intermediate, steer 2026-08-20). No doc attributes the figure
     to a school, a board or a grade's usual practice. Presenting it as an
     observed norm — above all of the reference school, whose accepted
     workbooks Q5 makes the schema of record — would turn the target into
@@ -397,7 +398,8 @@ def test_the_norm_is_stated_as_a_recorded_target_not_as_anyones_practice():
     hold off.
     """
     prose = prequestions._plan_rules("")
-    assert "recorded adaptive target" in prose
+    assert "recorded target" in prose
+    assert "around 5 Basic" in prose
     assert "not an observed practice of any school, board or grade" in prose
     for invented in (
         "reference school", "'s usual", " usual ", "typical", "average",
