@@ -971,6 +971,9 @@ def test_mine_types_uses_duplicate_backstop_only_after_repairs(monkeypatch):
 
 
 def test_pipeline_builds_culminations_before_types(monkeypatch):
+    # This test stubs the WHOLE extraction function, which the Q19 early
+    # inventory track legitimately bypasses — pin the sequential path.
+    monkeypatch.setenv("AEGIS_SOURCE_CHUNK_WORKERS", "1")
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
     order: list[str] = []
 
