@@ -39,6 +39,25 @@ _label: contextvars.ContextVar[str] = contextvars.ContextVar(
     "aegis_progress_label", default="",
 )
 
+# The active STAGE (the last ``step`` label seen in this context). Worker
+# threads copy the context at spawn, so a pool's calls attribute to the
+# stage that spawned it — which is the stage that paid for them. Read by
+# the usage accumulator to build the per-stage time/cost table the run
+# console renders.
+_stage: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "aegis_progress_stage", default="",
+)
+
+
+def current_stage() -> str:
+    """The last ``step`` label seen in this context ("" before the first)."""
+    return _stage.get()
+
+
+def current_lane() -> str:
+    """The composed worker-label scope active in this context ("" outside)."""
+    return _label.get()
+
 
 @contextlib.contextmanager
 def label_scope(label: str):
@@ -80,14 +99,30 @@ def log(message: str, *, level: str = "info") -> None:
     """Emit a console log line (info | success | warn | error | debug)."""
     label = _label.get()
     text = f"[{label}] {message}" if label else str(message)
-    _emit({"type": "log", "level": level, "message": text})
+    event = {"type": "log", "level": level, "message": text}
+    if label:
+        # The lane as a structured field beside the [label] text prefix,
+        # so the console can render parallel tracks as separate rails
+        # while the raw view and persisted logs keep the prefixed line.
+        event["lane"] = label
+    _emit(event)
 
 
 def step(label: str, *, value: float | None = None) -> None:
     """Emit a named step; optionally also set the progress fraction (0..1)."""
+    _stage.set(str(label))
     _emit({"type": "step", "label": str(label)})
     if value is not None:
         set_progress(value, label=label)
+    # A stage boundary is the natural moment to refresh the console's
+    # time/cost table. Lazy import mirrors stream(); a run with no
+    # recorded usage emits nothing extra.
+    from . import openai_usage
+
+    if openai_usage.is_tracking():
+        summary = openai_usage.visible_summary()
+        if summary.get("request_count"):
+            usage(summary)
 
 
 def set_progress(value: float, *, label: str = "") -> None:

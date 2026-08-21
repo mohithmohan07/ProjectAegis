@@ -84,8 +84,25 @@ export interface Stats {
  * Other endpoints may expose a single-run total. `cached_input_tokens` is a
  * subset of `input_tokens`, not an additional count.
  */
+/** Per-(stage, lane) usage attribution for the run console's stage cards.
+    Run-scoped: describes the current run only, never persisted history. */
+export interface StageUsageRow {
+  stage: string;
+  lane: string;
+  request_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+  estimated_cost_usd: number | null;
+  pricing_complete: boolean;
+  first_ts: number;
+  last_ts: number;
+}
+
 export interface OpenAIUsage {
   model: string;
+  stages?: StageUsageRow[];
   models?: Array<{
     model: string;
     request_count: number;

@@ -11,6 +11,8 @@ export interface RunLine {
   level: string;
   message: string;
   ts: number;
+  /** The parallel track (label scope) that emitted this line, if any. */
+  lane?: string;
 }
 
 export interface RunState {
@@ -115,7 +117,12 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
         next.progressLabel = evt.label;
         next.lines = [...s.lines, { level: "step", message: evt.label, ts: evt.ts ?? Date.now() / 1000 }];
       } else if (evt.type === "log") {
-        next.lines = [...s.lines, { level: evt.level ?? "info", message: evt.message, ts: evt.ts ?? Date.now() / 1000 }];
+        next.lines = [...s.lines, {
+          level: evt.level ?? "info",
+          message: evt.message,
+          ts: evt.ts ?? Date.now() / 1000,
+          ...(evt.lane ? { lane: evt.lane } : {}),
+        }];
       } else if (evt.type === "usage") {
         next.usage = presentedUsage(s, evt.data);
       } else if (evt.type === "result") {
