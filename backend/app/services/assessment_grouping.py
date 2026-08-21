@@ -19,9 +19,10 @@ from typing import Any, Mapping
 
 from .. import config
 from . import assessment_release as rel
+from . import identity
 from .phase3 import kernel
 
-TIER_CODES = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
+TIER_CODES = identity.GROUP_TIER_CODES
 
 LEVEL_POLICY_VERSION = "assessment-level-1"
 VARIANT_CLUSTER_POLICY_VERSION = "assessment-variant-cluster-1"
@@ -128,25 +129,16 @@ class GroupingError(ValueError):
 
 
 def group_key_for(concept_machine_id: str, tier: str, sequence: int) -> str:
-    code = TIER_CODES[tier]
-    return f"({concept_machine_id}) {code}{int(sequence):02d}"
+    """The SOP §3.2 group ID: ``(<ConceptID>) <BG|IG|AG>##``.
 
-
-def friendly_group_name(concept_name: str, tier: str) -> str:
-    """Return Q12's learner-visible name from an explicit concept name.
-
-    Machine identity is deliberately not accepted as a fallback here.  The
-    caller must supply the concept's explicit display name, while
-    ``group_key_for`` owns internal identity.
+    Since the owner's 2026-08-21 nomenclature ruling (Q16, superseding
+    Q12's friendly names) this single composition ALSO supplies the
+    visible ``group_name`` / ``group_display_name`` — SOP §6.1 says both
+    carry the group ID itself. One composer, three columns.
     """
-    name = str(concept_name or "").strip()
-    if not name:
-        raise GroupingError(
-            "an explicit concept display name is required for "
-            "the visible group name")
     if tier not in TIER_CODES:
         raise GroupingError(f"unknown group tier {tier!r}")
-    return f"{name} — {tier}"
+    return identity.compose_group_key(concept_machine_id, tier, sequence)
 
 
 def group_record(
@@ -162,10 +154,13 @@ def group_record(
     flags: list[str] | None = None,
     authority: Mapping | None = None,
 ) -> dict:
-    """AssessmentGroup record (spec §5.5) under the §8.2 naming contract:
-    visible names are friendly and machine identity remains in group_key."""
+    """AssessmentGroup record (spec §5.5) under the SOP §6.1 naming
+    contract (Q16): ``group_name`` and ``group_display_name`` both carry
+    the group ID itself — the same value as ``group_key``. ``concept_name``
+    stays in the signature as call-site evidence of the group's home; it
+    no longer feeds the visible name."""
     key = group_key_for(concept_machine_id, tier, sequence)
-    visible_name = friendly_group_name(concept_name, tier)
+    visible_name = key
     return {
         "group_key": key,
         "concept_id": concept_id,

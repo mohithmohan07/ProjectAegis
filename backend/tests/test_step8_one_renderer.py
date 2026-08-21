@@ -1058,28 +1058,25 @@ def test_a_truncated_row_is_recorded_in_the_manifest_not_only_at_staging():
 def test_the_visible_group_name_has_exactly_one_owner():
     """A second copy of the composition would block every release.
 
-    ``unresolved_question_homes`` spelled ``f"{concept_name} — {tier}"``
-    inline while ``assessment_grouping.friendly_group_name`` composed the
-    value actually written. A change to the separator in one of them flags
-    ``group_visible_name_mismatch`` on every group of every release.
+    ``unresolved_question_homes`` once spelled ``f"{concept_name} — {tier}"``
+    inline while another function composed the value actually written; a
+    change to the separator in one of them flagged
+    ``group_visible_name_mismatch`` on every group of every release. Under
+    Q16 (SOP §6.1) the one owner is the group ID itself: the validator
+    compares both visible names to ``group_key`` and composes nothing.
     """
 
-    from app.services import assessment_grouping as grouping
-
     source = inspect.getsource(rel.unresolved_question_homes)
-    assert "friendly_group_name(" in source
     code = "\n".join(
         line.split("#")[0] for line in source.splitlines())
     assert "— {tier}" not in code
+    assert "friendly_group_name(" not in code
 
     snapshot = copy.deepcopy(_snapshot())
     group = snapshot["groups"][0]
-    concept = snapshot["topics"][0]["concepts"][0]
-    expected = grouping.friendly_group_name(
-        concept["concept_display_name"], group["group_type"])
-    assert group["group_name"] == expected
+    assert group["group_name"] == group["group_key"]
     assert rel.unresolved_question_homes(snapshot) == []
-    group["group_name"] = expected + "!"
+    group["group_name"] = group["group_key"] + "!"
     assert rel.GROUP_VISIBLE_NAME_MISMATCH in {
         finding["code"]
         for finding in rel.unresolved_question_homes(snapshot)}

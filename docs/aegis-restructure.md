@@ -394,10 +394,10 @@ are built (the SOP is the reference).
 
 Group identity remains the machine key `(<ConceptID>) BG01` internally —
 BG/IG/AG for the level, the two-digit suffix numbering the variant families.
-**Decided (Q12):** in the workbook, `group_name` and `group_display_name`
-both carry the friendly title — "*Concept name — Tier*" — exactly as the
-accepted gold workbooks do; the machine identity stays internal
-(`group_key`). Level calls and variant clustering are model verdicts with
+**Decided (Q12, naming half superseded by Q16):** the friendly-title
+projection is retired — per the SOP Bulk-Import guide, `group_name` and
+`group_display_name` both carry the group ID itself (the `group_key`
+value). Level calls and variant clustering are model verdicts with
 independent verification whose dissent flags (Q10); unresolved clusterings
 ship as flagged singletons, never guessed.
 
@@ -908,11 +908,13 @@ their v1 Open classification. Revisit only when Clarius' Specific grading
 provably honours recorded equivalents. The registry is versioned evidence for
 the model — never executable classification.
 
-### Q12 · Decided — group naming follows the accepted gold convention
+### Q12 · Decided — group naming follows the accepted gold convention (naming half superseded by Q16)
 
-`group_name` and `group_display_name` both carry the friendly "Concept name —
-Tier" title, exactly as the reference school accepted; the machine identity
-stays internal in `group_key`. GPT's D7 split is set aside.
+`group_name` and `group_display_name` both carried the friendly "Concept
+name — Tier" title, exactly as the reference school accepted; the machine
+identity stays internal in `group_key`. GPT's D7 split is set aside. The
+naming half is superseded by Q16 (2026-08-21): both visible names now
+carry the group ID itself, per the SOP Bulk-Import guide.
 
 ### Q13 · Decided — The Fixer always passes the run through; the Q7 halt is retired
 
@@ -982,6 +984,29 @@ with no duplicates removes nothing.
 
 The same review's oral-activity complaint (T01_C08 Q01) stays flag-only —
 the owner selected duplicate removal alone.
+
+### Q16 · Decided — group names follow the SOP Bulk-Import guide; Q12's friendly names are retired
+
+Owner ruling, 21 Aug 2026, answering the job-65 nomenclature flag with
+"It's there in the SOP Bulk-Import file": SOP §3.2 defines the Group ID
+`(<ConceptID>) <BG|IG|AG>##`, and §6.1 says `group_display_name` carries
+"the group ID" and `group_name` is "same as group_display_name". Both
+visible names therefore carry the group ID itself — the exact value
+`group_key` already holds — and Q12's friendly "*Concept name — Tier*"
+projection is retired everywhere it was composed: the release group
+records, the release-freeze validator (which now checks both names equal
+the group ID), the required-shell completer, the CMS export writer (which
+composes the ID for legacy rows whose stored names predate this ruling),
+tagging, the legacy Build-Assessments append lane, post-generation
+synchronisation, and the deposit shells (named once the concept's machine
+identity settles — never by front-running the publication lane's carried
+ids or position-anchored minting).
+
+One composer owns the format: `identity.compose_group_key` (with the
+`GROUP_TIER_CODES` alphabet beside the rest of the id grammar), which
+`assessment_grouping.group_key_for` — every lane's entry point — now
+delegates to. Q12's second half (level calls and variant clustering as
+model verdicts, Q10 dissent flags, flagged singletons) stands untouched.
 
 ---
 

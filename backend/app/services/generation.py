@@ -1557,6 +1557,10 @@ Rules:
   truncated mid-sentence.
 - Paraphrase source prose into original teacher-facing language. Do not copy a
   long contiguous sentence or paragraph from the textbook into Description.
+- For a poem, story, or other literary source, quote ONLY the exact line or
+  two the teaching point needs, clearly marked as a quotation — never the
+  full poem, a whole stanza run, or a long passage (owner ruling,
+  2026-08-21). The chapter carries the text; the Description teaches it.
 - A derivation/proof/formula-building concept MUST include one compact,
   source-grounded worked derivation cue introduced with "Worked Example:".
   It must demonstrate that derivation's reasoning, not merely apply or verify

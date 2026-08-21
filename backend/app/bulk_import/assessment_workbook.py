@@ -43,6 +43,7 @@ from openpyxl.styles import Alignment, Font
 from ..services import assessment_profile
 from ..services import assessment_release as rel
 from ..services import identity
+from ..services import katex_rules
 from . import layouts
 
 CELL_LIMIT = 32_767
@@ -526,6 +527,9 @@ def _question_record(
         capped_answers = _cap("answers", answers, MAX_OBJECTIVE_OPTIONS)
         for n, answer in enumerate(capped_answers, start=1):
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
+            # ``answer_content`` is BODY text (SOP §4.3's wrapped list; the
+            # accepted gold workbooks wrap Equation-typed content here) —
+            # only keyword cells are raw, below.
             record[f"answer_content_{n}"] = answer.get("answer_content", "")
             # The CMS import (and the reference workbooks) mark the
             # correct option "Yes" / wrong options "No"; the pipeline's
@@ -576,6 +580,7 @@ def _question_record(
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
+            # BODY text, wrapped — see the Objective note above.
             record[f"answer_content_{n}"] = answer.get("answer_content", "")
         sub_questions = [
             s for s in candidate.get("sub_questions") or []
@@ -597,7 +602,11 @@ def _question_record(
                 record[f"sq{n}_answer_type_{m}"] = keyword.get(
                     "answer_type", "")
                 record[f"sq{n}_weightage_{m}"] = keyword.get("weightage", "")
-                record[f"sq{n}_keyword_{m}"] = keyword.get("keyword", "")
+                # SOP §4.3: keyword cells are raw for Equation/Image too.
+                record[f"sq{n}_keyword_{m}"] = katex_rules.raw_answer_cell(
+                    keyword.get("answer_type", ""),
+                    keyword.get("keyword", ""),
+                )
     return record
 
 

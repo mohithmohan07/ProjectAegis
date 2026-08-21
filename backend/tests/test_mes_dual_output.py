@@ -189,8 +189,10 @@ def test_master_contains_everything_including_questionless_concepts():
     group_keys = {group["group_key"] for group in _snapshot()["groups"]}
     for row in [*objective_rows, *descriptive_rows]:
         assert row["group_name"] == row["group_display_name"]
-        assert row["group_name"] not in group_keys
-        assert all(key not in row["group_name"] for key in group_keys)
+        # Q16 (SOP §6.1): the visible group name IS the group ID; the
+        # questionless tail row keeps its group band empty.
+        if str(row.get("group_name") or "").strip():
+            assert row["group_name"] in group_keys
     provenance = {
         (item["sheet"], item["row"]): item["group_key"]
         for item in issues["group_provenance"]
@@ -343,6 +345,26 @@ def test_master_provenance_distinguishes_shared_friendly_group_names():
     assert result["valid"], result["manifest"]["read_back"]
 
 
+def test_equation_keyword_cells_are_raw_and_answer_content_stays_wrapped():
+    """SOP §4.3 as the accepted gold workbooks apply it: keyword cells
+    with a declared Equation/Image type carry the RAW value; Equation
+    ``answer_content`` is body text and keeps its [Katex] wrapper."""
+    snapshot = copy.deepcopy(_snapshot())
+    descriptive = snapshot["candidates"][1]
+    descriptive["answers"][0] = {
+        "answer_type": "Equation", "answer_weightage": "2",
+        "answer_content": "1 mark: States [Katex] 3n=12 [/Katex].",
+    }
+    descriptive["sub_questions"][0]["keywords"][0] = {
+        "answer_type": "Equation", "weightage": "2",
+        "keyword": "[Katex] 3n=3\\times4=12 [/Katex]",
+    }
+    master, _ = mp.render_master_file(snapshot)
+    row = mp.parse_workbook(master)["sheets"]["Descriptive"]["rows"][0]
+    assert row["answer_content_1"] == "1 mark: States [Katex] 3n=12 [/Katex]."
+    assert row["sq1_keyword_1"] == "3n=3\\times4=12"
+
+
 def test_master_records_a_duplicate_group_key_instead_of_raising():
     """INVERTED by spec-step8 T7.5/B4.
 
@@ -373,11 +395,13 @@ def test_master_records_a_duplicate_group_key_instead_of_raising():
             mp.parse_workbook(master), snapshot))
 
 
-def test_a_non_q12_visible_group_name_is_a_named_defect_not_a_render_error():
+def test_a_non_sop_visible_group_name_is_a_named_defect_not_a_render_error():
+    # Q16 inverted this pin: the retired friendly "Concept — Tier" name is
+    # now the mismatch; the group ID itself is the only conforming value.
     snapshot = copy.deepcopy(_snapshot())
     group = snapshot["groups"][0]
-    group["group_name"] = group["group_key"]
-    group["group_display_name"] = group["group_key"]
+    group["group_name"] = "Two-dimensional shape — Basic"
+    group["group_display_name"] = "Two-dimensional shape — Basic"
     master, _ = mp.render_master_file(snapshot)
     assert master
     codes = {

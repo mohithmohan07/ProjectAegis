@@ -513,6 +513,9 @@ def upload_release_to_database(
                         "it; the publication is refused rather than "
                         "persisting an unaddressable row"
                     )
+                # Identity is settled (carried or minted): the group
+                # shells now take their SOP §6.1 names (Q16).
+                build_concepts.stamp_group_shells(concept)
                 db.flush()
                 created_ids.append(concept.id)
                 claimed_ids.add(concept.id)
@@ -542,6 +545,9 @@ def upload_release_to_database(
                     "refused rather than persisting an unaddressable row"
                 )
             existing.sources = bi.merge_sources(existing.sources, source_book)
+            # An adopted row's shells follow the same SOP naming; legacy
+            # blank-key shells gain their key from the settled identity.
+            build_concepts.stamp_group_shells(existing)
             db.flush()
             merged_ids.append(existing.id)
 

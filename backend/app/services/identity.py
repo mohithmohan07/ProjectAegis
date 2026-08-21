@@ -325,6 +325,25 @@ def compose_concept_machine_id(topic_machine_id: str, m: int) -> str:
     return f"{topic_machine_id}_C{int(m):02d}"
 
 
+# SOP §3.2's difficulty prefixes inside a Group ID. The alphabet lives here
+# with the other id grammar; ``assessment_grouping.TIER_CODES`` aliases it.
+GROUP_TIER_CODES = {"Basic": "BG", "Intermediate": "IG", "Advanced": "AG"}
+
+
+def compose_group_key(
+    concept_machine_id: str, tier: str, sequence: int,
+) -> str:
+    """SOP §3.2's Group ID: ``(<ConceptID>) <BG|IG|AG>##``.
+
+    Since the owner's 2026-08-21 nomenclature ruling (Q16, SOP §6.1) this
+    one composition also supplies the visible ``group_name`` and
+    ``group_display_name`` — both carry the group ID itself. Pure
+    composition; the caller owns tier validation and any minting.
+    """
+    code = GROUP_TIER_CODES[tier]
+    return f"({concept_machine_id}) {code}{int(sequence):02d}"
+
+
 def free_slot(compose, start: int, taken) -> str:
     """The first ordinal at or after ``start`` no sibling already holds.
 
