@@ -68,6 +68,31 @@ def _verified(payload):
 # The verdict unit
 # --------------------------------------------------------------------------- #
 
+def test_every_declared_openai_purpose_in_the_app_is_a_known_purpose():
+    """A live default naming an unknown purpose crashes at the first real
+    call — and only there, because tests inject providers. Pin the whole
+    app tree so the mistake (this module shipped ``purpose="assessment"``)
+    cannot recur silently."""
+    import pathlib
+    import re
+
+    from aegis_pipeline.openai_policy import REASONING_EFFORT_BY_PURPOSE
+
+    app_root = pathlib.Path(dedup.__file__).resolve().parents[1]
+    declared = {
+        (path, match)
+        for path in app_root.rglob("*.py")
+        for match in re.findall(
+            r'purpose="([^"]+)"', path.read_text(encoding="utf-8")
+        )
+    }
+    unknown = {
+        (str(path.relative_to(app_root)), purpose)
+        for path, purpose in declared
+        if purpose not in REASONING_EFFORT_BY_PURPOSE
+    }
+    assert unknown == set()
+
 def test_no_duplicates_removes_nothing_and_keeps_order():
     questions = _questions(3)
     survivors, removed = dedup.decide_generated_duplicates(
