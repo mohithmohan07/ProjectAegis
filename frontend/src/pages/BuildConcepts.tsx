@@ -24,6 +24,7 @@ type Path = null | "post";
 
 export default function BuildConcepts() {
   const auth = useOptionalAuth();
+  const { watch: watchRun } = useRunConsole();
   const [path, setPath] = useState<Path>("post");
   const [resumeJob, setResumeJob] = useState<UploadJob | null>(null);
   const [pendingResume, setPendingResume] =
@@ -123,6 +124,20 @@ export default function BuildConcepts() {
     setPendingResume(null);
   }
 
+  function watchRunningJob(job: ResumableCheckpoint) {
+    // Attach-only: the console tails the durable journal from the start
+    // (the replay rebuilds the stage cards with real times and costs).
+    // Nothing is POSTed, nothing resumes, nothing bills.
+    acknowledgeCheckpointPrompt(ownerKey, job);
+    setPendingResume(null);
+    void watchRun(`Watching: ${job.filename}`, {
+      module: "concepts",
+      jobId: job.id,
+    }).catch(() => {
+      /* the console already carries the failure line */
+    });
+  }
+
   async function resumeCheckpoint(job: ResumableCheckpoint) {
     setResumeBusy(true);
     setResumeError(null);
@@ -191,6 +206,7 @@ export default function BuildConcepts() {
           onResume={() => void resumeCheckpoint(pendingResume)}
           onKeep={() => keepCheckpointForLater(pendingResume)}
           onDiscard={() => void discardCheckpoint(pendingResume)}
+          onWatch={() => watchRunningJob(pendingResume)}
         />
       )}
     </>
@@ -489,6 +505,7 @@ function ResumeCheckpointPrompt({
   onResume,
   onKeep,
   onDiscard,
+  onWatch,
 }: {
   job: ResumableCheckpoint;
   busy: boolean;
@@ -496,6 +513,7 @@ function ResumeCheckpointPrompt({
   onResume: () => void;
   onKeep: () => void;
   onDiscard: () => void;
+  onWatch: () => void;
 }) {
   const headingRef = useRef<HTMLHeadingElement>(null);
   useEffect(() => {
@@ -568,8 +586,8 @@ function ResumeCheckpointPrompt({
             </>
           )}
           {running && (
-            <button type="button" disabled>
-              Run is still active
+            <button className="primary" type="button" onClick={onWatch}>
+              Watch live
             </button>
           )}
           <button
