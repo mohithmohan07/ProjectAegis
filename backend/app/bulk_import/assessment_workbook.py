@@ -523,17 +523,53 @@ def _question_record(
     if sheet == "Objective":
         # The layout has exactly this many slots; an overflow is named at
         # staging as ``render_shape_overflow`` and refuses the DB write.
-        for n, answer in enumerate(
-            _cap("answers", answers, MAX_OBJECTIVE_OPTIONS), start=1
-        ):
+        capped_answers = _cap("answers", answers, MAX_OBJECTIVE_OPTIONS)
+        for n, answer in enumerate(capped_answers, start=1):
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
             record[f"answer_content_{n}"] = answer.get("answer_content", "")
-            record[f"correct_answer_{n}"] = answer.get("correct_answer", "")
+            # The CMS import (and the reference workbooks) mark the
+            # correct option "Yes" / wrong options "No"; the pipeline's
+            # internal wire uses "1"/"0". Normalize at the render seam
+            # against the one shared predicate — the read-back and the
+            # reader accept both spellings, so the round-trip holds.
+            record[f"correct_answer_{n}"] = (
+                "Yes" if rel.is_correct_option(
+                    answer.get("correct_answer")) else "No"
+            ) if str(answer.get("correct_answer", "")).strip() != "" else ""
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
+        # ``question_text`` is the CMS's one-cell rendering of the whole
+        # item: for an objective question that is the stem PLUS the
+        # ordered options (the owner's ruling; the reference workbooks
+        # carry the options in the text). The stem-equality gates
+        # upstream stay untouched — this is a render-time composition of
+        # already-decided content, options lettered in answer order.
+        option_lines = [
+            f"{chr(ord('A') + index)}) {str(a.get('answer_content') or '')}"
+            for index, a in enumerate(capped_answers)
+            if str(a.get("answer_content") or "").strip()
+        ]
+        if option_lines:
+            record["question_text"] = (
+                str(record.get("question_text") or "").rstrip()
+                + "\n" + "\n".join(option_lines)
+            ).strip()
     else:  # Descriptive
         record["math_keyboard"] = candidate.get("math_keyboard", "")
         record["display_answer"] = candidate.get("display_answer", "")
+        # SOP (docs/SOP_Bulk_Import_Fill_Guide.docx §5.1): ``question`` is
+        # the stem only; ``question_text`` is the whole question — for a
+        # Descriptive item that includes its sub-questions, one per line.
+        sub_texts = [
+            str(s.get("text") or "").strip()
+            for s in candidate.get("sub_questions") or []
+            if isinstance(s, Mapping) and str(s.get("text") or "").strip()
+        ]
+        if sub_texts:
+            record["question_text"] = (
+                str(record.get("question_text") or "").rstrip()
+                + "\n" + "\n".join(sub_texts)
+            ).strip()
         for n, answer in enumerate(
             _cap("answers", answers, MAX_DESCRIPTIVE_ANSWERS), start=1
         ):

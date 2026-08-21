@@ -18,6 +18,7 @@ import json
 import math
 from typing import Any, Mapping
 
+from .. import bulk_import as bi
 from .. import config
 from . import assessment_profile
 from . import assessment_release as rel
@@ -30,7 +31,7 @@ from .phase3 import kernel
 # provider that never guessed the field names failed every bounded
 # correction AND the Fixer with "exactly one correct option required
 # (got 0)", killing a whole Master file over a shape it was never told.
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-3"
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-4"
 
 # A candidate whose obligation exhausted the bounded corrections AND The
 # Fixer. It answers for its obligation in the zero-loss accounting but is
@@ -58,13 +59,27 @@ MATERIALIZE_SYSTEM = (
     "For Objective cells, return no more than six canonical options with "
     "exactly one correct marker: each answers[] entry is an object whose "
     "answer_content carries the option text (never empty, never a "
-    "duplicate) and whose correct_answer is \"1\" on exactly one option "
-    "and \"0\" on every other. For Descriptive cells, return a complete "
+    "duplicate), whose correct_answer is \"1\" on exactly one option "
+    "and \"0\" on every other, and whose answer_type names the option's "
+    "medium — exactly Phrases, Equation, or Image. The question stem must "
+    "not enumerate the options: options ride only answers[]; a stem that "
+    "restates \"A) ... B) ...\" is a defect. For Descriptive cells, "
+    "return a complete "
     "display answer, complete semantic answer/rubric blocks (each "
     "answers[] entry an object whose answer_content carries the block "
-    "text), and every source-owned subquestion with its complete keyword "
+    "text and whose answer_type is Phrases, Equation, or Image), and "
+    "every source-owned subquestion with its complete keyword "
     "evidence (each sub_questions[] entry an object with its text and its "
-    "keywords array of {\"keyword\":\"...\"} objects).\n"
+    "keywords array of {\"keyword\":\"...\"} objects). Author no "
+    "subquestion the source item does not itself carry: a single-part "
+    "question ships with an empty sub_questions[] — never wrapped in an "
+    "invented part restating the stem.\n"
+    "answer_explanation must open by naming the correct answer — for an "
+    "Objective item, the correct option by its letter and text (e.g. "
+    "\"B) Get ready — ...\") — and then explain why it is correct. For "
+    "Descriptive cells, display_answer and answer_explanation must tell "
+    "one consistent story: the explanation elaborates the display answer, "
+    "never a different answer.\n"
     "Do not decide Open or Specific and do not allocate weights, subquestion "
     "marks, keyword weights, duration, or keyboard mode. Dedicated later "
     "decisions own answer restriction and marking; any such extra values in "
@@ -74,7 +89,8 @@ MATERIALIZE_SYSTEM = (
     "alt text.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","question":"","display_answer":"",'
-    '"answers":[{"answer_content":"","correct_answer":"1"}],'
+    '"answers":[{"answer_content":"","correct_answer":"1",'
+    '"answer_type":"Phrases"}],'
     '"sub_questions":[{"text":"","keywords":[{"keyword":""}]}],'
     '"answer_explanation":"",'
     '"requires_visual":false,"rationale":"evidence-bound reason"}'
@@ -86,7 +102,13 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "complete source atom, curricular evidence, assets, and blueprint cell: "
     "source fidelity, answer correctness, answer-space preservation, "
     "clarity and grade fit, semantic answer/rubric completeness, visual "
-    "dependence, and answer leakage. Do not classify Open/Specific or audit "
+    "dependence, answer leakage, stem/option separation (an Objective stem "
+    "that enumerates its own options), invented subquestions (a part "
+    "the source item does not itself carry), and explanation/answer "
+    "consistency (the explanation must name the correct answer — the "
+    "correct option's letter and text on an Objective item — and agree "
+    "with the display answer). Do not classify Open/Specific "
+    "or audit "
     "mark allocation here. Do not "
     "rewrite, retry, or gate the proposal. Your dissent ships for review and "
     "the authored decision stands. State your honest confidence. There is no "
@@ -238,6 +260,18 @@ def _proposal_defects(
                 subquestions.append(subquestion)
 
     kind = str(cell.get("sheet_kind") or "")
+    if kind in {"objective", "descriptive"}:
+        # The CMS's answer_type column was shipping empty because no pass
+        # ever authored it (owner review, job 65). The medium is the
+        # model's call; the gate is enum membership — the same shape as
+        # the sheet-kind and cognitive-skill gates.
+        for position, answer in enumerate(answers, start=1):
+            if answer.get("answer_type") not in bi.ANSWER_TYPES:
+                defects.append(
+                    f"answer {position} answer_type must be one of "
+                    f"{tuple(bi.ANSWER_TYPES)} "
+                    f"(got {answer.get('answer_type')!r})"
+                )
     if kind == "objective":
         if not 1 <= len(answers) <= MAX_OBJECTIVE_OPTIONS:
             defects.append(

@@ -480,11 +480,13 @@ def run_release_from_job(
     database upload stays a separate explicit action."""
     from ..services import assessment_release_run
     from ..services import assessment_release_service as release_svc
-    from ..services.phase3 import premap
+    from ..services import build_concepts_release as bc_release
+    from ..services import build_concepts_release_contract as release_contract
+    from ..services.phase3 import envelope, kernel, premap
 
     try:
-        release = assessment_release_run.run_release_for_job(
-            db, job_id, owner_sub=user.sub)
+        release = release_contract.rebuild_lane_master(
+            db, job_id, bc_release.LANE_POST, owner_sub=user.sub)
     except assessment_release_run.SourceQuestionLeak as e:
         raise HTTPException(409, str(e))
     except premap.PreExtractionError as e:
@@ -502,6 +504,23 @@ def run_release_from_job(
         raise HTTPException(404, str(e))
     except release_svc.UploadRefused as e:
         raise HTTPException(409, str(e))
+    except kernel.ContractError as e:
+        # A recorded fail-closed exhaustion (author + corrections + Fixer
+        # all declined). Replaying the request replays the same decisions,
+        # so 409: the artefact is refused, not the request malformed.
+        raise HTTPException(409, str(e))
+    except envelope.LiveApiUnavailable as e:
+        raise HTTPException(503, str(e))
+    except ValueError as e:
+        # The stage errors are ValueError subclasses that are NOT
+        # ReleaseRunError (CellDecisionError, MaterializationError,
+        # MarkingError, RoutingError, GroupingError, QualityError,
+        # BlueprintError, WorkbookRenderError, ReleaseNotFound). Each is
+        # a deliberate fail-closed refusal of a defective artefact; this
+        # arm keeps every one a 422 with its reason, never an unhandled
+        # 500 that hides the message. The failure is also durably
+        # recorded on the lane by ``rebuild_lane_master``.
+        raise HTTPException(422, str(e))
     return _release_summary(release)
 
 
@@ -522,11 +541,13 @@ def run_pre_release_from_job(
     """
     from ..services import assessment_release_run
     from ..services import assessment_release_service as release_svc
-    from ..services.phase3 import premap
+    from ..services import build_concepts_release as bc_release
+    from ..services import build_concepts_release_contract as release_contract
+    from ..services.phase3 import envelope, kernel, premap
 
     try:
-        release = assessment_release_run.run_pre_release_for_job(
-            db, job_id, owner_sub=user.sub)
+        release = release_contract.rebuild_lane_master(
+            db, job_id, bc_release.LANE_PRE, owner_sub=user.sub)
     except assessment_release_run.SourceQuestionLeak as e:
         raise HTTPException(409, str(e))
     except premap.PreExtractionError as e:
@@ -541,4 +562,15 @@ def run_pre_release_from_job(
         raise HTTPException(404, str(e))
     except release_svc.UploadRefused as e:
         raise HTTPException(409, str(e))
+    except kernel.ContractError as e:
+        # Same contract as the Post route: a recorded fail-closed
+        # exhaustion answers 409, never an unhandled 500.
+        raise HTTPException(409, str(e))
+    except envelope.LiveApiUnavailable as e:
+        raise HTTPException(503, str(e))
+    except ValueError as e:
+        # Non-ReleaseRunError stage refusals (CellDecisionError et al.);
+        # see the Post route's arm for the enumeration. 422 with the
+        # reason, and the failure is durably recorded on the lane.
+        raise HTTPException(422, str(e))
     return _release_summary(release)

@@ -351,6 +351,16 @@ def _live_host(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _live_type_owner(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import prompts
+    from .. import generation
+
+    return generation._openai_json(
+        prompts.TYPE_OWNER_SYSTEM, prompts.render(payload),
+        purpose="concept_mapping",
+    )
+
+
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
     from .. import generation
@@ -779,4 +789,249 @@ def host(
         "host_map": host_map,
         "qid_map": qid_map,
         "new_concepts": new_concepts,
+    }
+
+
+def consolidate_type_ownership(
+    env: Mapping[str, Any],
+    hosts: dict[str, Any],
+    *,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+) -> dict[str, Any]:
+    """One concept owns each Type (register Q14, owner ruling 21 Aug 2026).
+
+    The Host pass certifies per-Case hosts; those verdicts stay recorded
+    as evidence. When one mined Type's Cases resolved onto DIFFERENT
+    concepts, this pass takes one ownership verdict per split Type —
+    model-decided over the Cases and the candidate hosts, critic-advised,
+    Fixer-backed — and every Case and QID of the Type moves to the owner
+    (Type ownership outranks per-question routing for its members). Moves
+    are flagged per unit and per QID, never silent. A Type whose Cases
+    already share one host costs nothing here, and a concept left with no
+    Types by the choice is a legitimate outcome — the verdict's rules
+    forbid spreading.
+    """
+
+    from . import fixer as fixer_mod
+    from . import prompts as prompts_mod
+
+    env = envelope_mod.validate(env)
+    if provider is None:
+        envelope_mod.require_live_api()
+        provider = _live_type_owner
+        critic = critic if critic is not None else _live_critic
+        fixer = fixer or fixer_mod.live_fixer
+    store = store or kernel.DecisionStore()
+    envelope_sha = str(env.get("envelope_sha256") or "")
+    policy = confidence_policy.POLICY_VERSION
+    rules_suffix = prompts_mod.instruction_rules_suffix(env)
+
+    host_map: dict[str, Any] = dict(hosts.get("host_map") or {})
+    qid_map: dict[str, Any] = dict(hosts.get("qid_map") or {})
+    units = derive_units(env)
+    units_by_type: dict[str, list[dict[str, Any]]] = {}
+    for unit in units:
+        units_by_type.setdefault(str(unit["type_id"]), []).append(unit)
+
+    types_by_id = {
+        str(mined.get("type_id") or ""): mined
+        for mined in env["mined_types"].get("types") or []
+        if isinstance(mined, Mapping)
+    }
+    question_text_by_qid = {
+        str(item.get("qid") or ""): _normal(
+            str(item.get("raw_task") or item.get("question") or "")
+        )[:400]
+        for item in (env.get("inventory") or {}).get("items") or []
+        if isinstance(item, Mapping)
+    }
+
+    def _destination_key(entry: Mapping[str, Any]) -> tuple[str, str]:
+        return (
+            str(entry.get("topic_id") or ""),
+            _normal(entry.get("concept_title")).casefold(),
+        )
+
+    moved_types = 0
+    for type_id, type_units in units_by_type.items():
+        hosted = [
+            (unit, host_map.get(str(unit["unit_id"])))
+            for unit in type_units
+        ]
+        hosted = [(unit, entry) for unit, entry in hosted if entry]
+        destinations: dict[tuple[str, str], Mapping[str, Any]] = {}
+        for _, entry in hosted:
+            destinations.setdefault(_destination_key(entry), entry)
+        if len(destinations) <= 1:
+            continue
+
+        mined = types_by_id.get(type_id) or {}
+        candidates = list(destinations.values())
+        payload = {
+            "stage": "host.type_owner",
+            "rules": (
+                "One concept owns this Type (Q14). Choose "
+                "owner_concept_title as the EXACT concept_title of one "
+                "candidate below — the concepts its Cases were certified "
+                "onto — judging which concept's teaching the Type as a "
+                "whole most genuinely exercises. Never the first Case's "
+                "host, the most common host, or position arithmetic; a "
+                "candidate left with no Types is a legitimate outcome "
+                "and coverage balance must not influence the choice."
+                + rules_suffix
+            ),
+            "type": {
+                "type_id": type_id,
+                "type_title": _normal(mined.get("type_title")),
+                "type_description": _normal(mined.get("type_description")),
+            },
+            "cases": [
+                {
+                    "unit_id": str(unit["unit_id"]),
+                    "case_id": str(unit["case_id"]),
+                    "task": unit["task"],
+                    "qids": list(unit["qids"]),
+                    "questions": [
+                        {
+                            "qid": qid,
+                            "question": question_text_by_qid.get(qid, ""),
+                        }
+                        for qid in unit["qids"]
+                        if question_text_by_qid.get(qid)
+                    ],
+                    "certified_host": {
+                        "concept_title": _normal(
+                            entry.get("concept_title")
+                        ),
+                        "topic": _normal(entry.get("topic")),
+                        "confidence": entry.get("confidence"),
+                    },
+                }
+                for unit, entry in hosted
+            ],
+            "candidate_concepts": [
+                {
+                    "concept_title": _normal(entry.get("concept_title")),
+                    "parent_concept": _normal(entry.get("parent_concept")),
+                    "topic": _normal(entry.get("topic")),
+                    "topic_id": str(entry.get("topic_id") or ""),
+                }
+                for entry in candidates
+            ],
+        }
+        candidate_titles = {
+            _normal(entry.get("concept_title")).casefold(): entry
+            for entry in candidates
+        }
+
+        def _owner_checker(response: Mapping[str, Any]) -> list[str]:
+            if not isinstance(response, Mapping):
+                return ["response is not an object"]
+            defects: list[str] = []
+            if str(response.get("type_id") or "") != type_id:
+                defects.append(f"type_id must echo {type_id!r}")
+            owner = _normal(response.get("owner_concept_title")).casefold()
+            if owner not in candidate_titles:
+                defects.append(
+                    "owner_concept_title must be the exact concept_title "
+                    "of one candidate host concept (got "
+                    f"{response.get('owner_concept_title')!r})"
+                )
+            try:
+                float(response.get("confidence") or 0.0)
+            except (TypeError, ValueError):
+                defects.append("confidence must be numeric")
+            return defects
+
+        decision = kernel.decide(
+            kind="host.type_owner",
+            unit_id=type_id,
+            envelope_sha256=envelope_sha,
+            payload=payload,
+            provider=provider,
+            checker=_owner_checker,
+            critic=critic,
+            store=store,
+            policy_version=policy,
+            fixer=fixer,
+        )
+        response = decision["response"]
+        owner_entry = candidate_titles[
+            _normal(response.get("owner_concept_title")).casefold()
+        ]
+        owner_title = _normal(owner_entry.get("concept_title"))
+        decision_flags = list(decision.get("review_flags") or [])
+        moved_types += 1
+
+        type_qids = {
+            qid for unit in type_units for qid in unit["qids"]
+        }
+        for unit in type_units:
+            unit_id = str(unit["unit_id"])
+            entry = host_map.get(unit_id)
+            if not entry:
+                continue
+            if _destination_key(entry) != _destination_key(owner_entry):
+                moved_from = _normal(entry.get("concept_title"))
+                entry = dict(entry)
+                entry["concept_title"] = owner_title
+                entry["parent_concept"] = _normal(
+                    owner_entry.get("parent_concept")
+                )
+                entry["topic"] = _normal(owner_entry.get("topic"))
+                entry["topic_id"] = str(owner_entry.get("topic_id") or "")
+                entry.setdefault("review_flags", []).append(
+                    f"{unit_id}: Q14 Type ownership moved this Case from "
+                    f"'{moved_from[:60]}' to the Type's owning concept "
+                    f"'{owner_title[:60]}'"
+                )
+                host_map[unit_id] = entry
+        for qid in sorted(type_qids):
+            entry = qid_map.get(qid)
+            if not entry:
+                continue
+            if _destination_key(entry) != _destination_key(owner_entry):
+                moved_from = _normal(entry.get("concept_title"))
+                entry = dict(entry)
+                entry["concept_title"] = owner_title
+                entry["parent_concept"] = _normal(
+                    owner_entry.get("parent_concept")
+                )
+                entry["topic"] = _normal(owner_entry.get("topic"))
+                entry["topic_id"] = str(owner_entry.get("topic_id") or "")
+                entry.setdefault("review_flags", []).append(
+                    f"{qid}: Q14 Type ownership moved this question with "
+                    f"its Type from '{moved_from[:60]}' to "
+                    f"'{owner_title[:60]}'"
+                )
+                qid_map[qid] = entry
+        if decision_flags:
+            # The ownership decision is ABOUT the whole Type, so its
+            # flags (critic dissent, Fixer notes) land on every unit of
+            # the Type — each unit is one rendering of that Type.
+            for unit in type_units:
+                unit_id = str(unit["unit_id"])
+                entry = host_map.get(unit_id)
+                if not entry:
+                    continue
+                entry = dict(entry)
+                existing = entry.setdefault("review_flags", [])
+                for flag in decision_flags:
+                    if flag not in existing:
+                        existing.append(flag)
+                host_map[unit_id] = entry
+
+    if moved_types:
+        progress.log(
+            f"Host: {moved_types} split Type(s) consolidated onto one "
+            "owning concept each (Q14); every move is flagged for review.",
+            level="success",
+        )
+    return {
+        "host_map": host_map,
+        "qid_map": qid_map,
+        "new_concepts": list(hosts.get("new_concepts") or []),
     }

@@ -446,7 +446,13 @@ def test_both_manifest_implementations_carry_the_pre_entries(db):
     assert [row["kind"] for row in eager] == [row["kind"] for row in lazy]
 
 
-def test_neither_manifest_offers_the_pre_entries_without_a_pre_release(db):
+def test_the_pre_pair_is_present_and_disabled_without_a_pre_release(db):
+    """OD4: the four outputs are enumerated ALWAYS. A run that staged no
+    Pre lane shows Outputs 01 and 02 present-and-disabled with their
+    reasons — an absent entry is indistinguishable from a lane that does
+    not apply, which is exactly the silence the owner reported. (This
+    flips the earlier pin that let the pair disappear.)"""
+
     chapter = _chapter_with_concepts(db)
     job = models.UploadJob(
         owner_sub=OWNER,
@@ -472,7 +478,19 @@ def test_neither_manifest_offers_the_pre_entries_without_a_pre_release(db):
         release_files.eager_release_artifact_entries(job),
         release_manifest.release_artifact_entries(job),
     ):
-        assert not _PRE_ENTRY_KINDS & {row["kind"] for row in entries}
+        by_kind = {row["kind"]: row for row in entries}
+        concept_file = by_kind["pre_release_bulk_import"]
+        assert concept_file["disabled"] is True
+        assert "staged no Pre-Learning release" in (
+            concept_file["disabled_reason"]
+        )
+        assert concept_file["download_url"] == ""
+        master = by_kind["pre_release_master"]
+        assert master["disabled"] is True
+        assert master["disabled_reason"]
+        # The db-upload action row still requires a staged payload; only
+        # the two downloadable outputs are enumerated unconditionally.
+        assert "released_pre_concepts" not in by_kind
 
 
 def _output_01(entries):
@@ -1854,6 +1872,47 @@ def test_the_source_question_barrier_answers_409_rather_than_500(db, client):
 
     assert response.status_code == 409, response.text
     assert "QINV-0001" in response.json()["detail"]
+
+
+def test_a_stage_refusal_answers_422_and_is_recorded_on_the_lane(
+    db, client, monkeypatch,
+):
+    """A ``CellDecisionError``-class stage refusal must never surface as an
+    unhandled 500 — and the explicit re-build route must leave the SAME
+    durable ``assessment_lane_unavailable`` record the in-run build does,
+    so the outputs card states why the Master is missing whichever trigger
+    hit the failure. (The arm ORDER is part of the pin: ``CellDecisionError``
+    is a ``ValueError`` that is not a ``ReleaseRunError``, so it must fall
+    through to the 422 arm, not be swallowed by the 400 one.)"""
+
+    from app.services import assessment_cells
+    from app.services import assessment_release_run
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+
+    def raising_runner(db_, job_id, *, owner_sub=None, **kwargs):
+        raise assessment_cells.CellDecisionError(
+            "generated question 'PRQ-X' names pre-concept 'PRC-9999', "
+            "which the staged Pre release snapshot does not carry"
+        )
+
+    monkeypatch.setattr(
+        assessment_release_run, "run_pre_release_for_job", raising_runner)
+
+    response = client.post(
+        f"/build-assessments/releases/from-job/{job.id}/pre"
+    )
+
+    assert response.status_code == 422, response.text
+    assert "PRC-9999" in response.json()["detail"]
+    db.expire_all()
+    refreshed = db.get(models.UploadJob, job.id)
+    issue = release.assessment_lane_issue(
+        release.release_payload(refreshed, lane=release.LANE_PRE)
+    )
+    assert issue, "the failure is recorded where the outputs card reads"
+    assert "PRC-9999" in str(issue.get("message") or issue)
 
 
 # --------------------------------------------------------------------------- #

@@ -189,28 +189,40 @@ def test_runner_produces_publication_ready_output(
     flagged_rows = [
         row for row in result["records"] if row.get("review_flags")
     ]
+    # Re-baselined for Q14 (owner ruling, 21 Aug 2026): this chapter's
+    # six reusable cross-topic Types each consolidated onto one owning
+    # concept, so the moved Cases' rows now carry the Q14 move flags and
+    # the flagged set changed with them. Row and QID counts above are
+    # untouched — ownership moves destinations, never accounting.
     assert sorted(
         _normal(row["concept_title"]) for row in flagged_rows
     ) == [
-        "Autocracy, Censorship, and the Demand for Freedom of the Press",
         "Educated Middle-class Leadership of Liberal-nationalist "
         "Revolutions",
         "Gendered Limits of Liberal Political Rights",
         "Nationalism as Conservative State Power After 1848",
-        "Personifying the Nation Through Female Allegories",
-        "Utopian Nationalism and Democratic-social Republicanism",
+        "Romanticism and the Cultural Construction of the Nation",
+        "Secret Societies and Mazzini’s Republican Nationalism",
+        "The Shift from Liberal Nationalism to Imperial Nationalism",
     ]
     forced_qids: list[str] = []
+    q14_moves = 0
     for row in flagged_rows:
         for flag in row["review_flags"]:
             if flag.startswith("R4: source question "):
                 forced_qids.append(flag.split()[3])
                 assert "force-placed its inventory wording here" in flag
                 continue
+            if "Q14 Type ownership moved this Case" in flag:
+                q14_moves += 1
+                continue
             assert flag.startswith(
                 "Q2: removed the example-less Case shell"
             )
             assert "its Example wording renders under:" in flag
+    assert q14_moves == 18, (
+        "every consolidated Case's move is flagged, never silent"
+    )
     # Every force-placement names its QID, so the reviewer can go back to
     # the source row rather than guessing which Example was synthesised.
     assert sorted(forced_qids) == [
@@ -409,13 +421,12 @@ def test_runner_produces_publication_ready_output(
         assert _normal(cleaned["concept_title"])
         assert cleaned["concept_details"].startswith("Description:")
 
-    # Hosted rows carry the house Types section. One exception is a row
-    # whose ONLY Example is an _activity_origin prompt: the Phase 2.2
-    # placement pass put that item's hub on the concept its content
-    # exercises (the Wolff-account row), and the align pass moves the
-    # assessable Example WITH its hub — the dual-role identity travels
-    # together, so the origin row keeps its route marker (audit) while
-    # the visible Example renders beside its placed hub note.
+    # Hosted rows carry the house Types section. The pre-Q14 baseline
+    # had one exception — a row whose only Example was an
+    # _activity_origin prompt whose hub the placement pass moved away
+    # (the Wolff-account row) — but the Q14 ownership consolidation now
+    # moves that row's whole Type onto it (TYPE-0006's owner), so every
+    # route-marked row renders its Types section.
     hosted = [
         row for row in result["records"]
         if row.get("_aegis_release_type_case_routes")
@@ -425,9 +436,7 @@ def test_runner_produces_publication_ready_output(
         _normal(row["concept_title"]) for row in hosted
         if "// Types:" not in row["concept_details"]
     ]
-    assert without_types == [
-        "Educated Middle-class Leadership of Liberal-nationalist Revolutions"
-    ]
+    assert without_types == []
 
     # Phase 2.2: every pooled hub item was placed by the recorded model
     # verdict and its note renders on the placed row — the marker is the

@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type ModelProviderInfo } from "../api/client";
+import {
+  api,
+  isNonTransientStatus,
+  type ModelProviderInfo,
+} from "../api/client";
 import { useOptionalAuth } from "../Auth";
 import { useAsync } from "../hooks";
 import { useRunConsole } from "../RunConsole";
@@ -98,7 +102,12 @@ export default function BuildConcepts() {
           setResumeError(
             `Could not refresh the active run: ${String(pollError)}`,
           );
-          timer = window.setTimeout(poll, 5000);
+          // A non-transient refusal (session expired, job gone) never
+          // improves on retry — stop the poll instead of spinning every
+          // 5s in the background for as long as the tab lives.
+          if (!isNonTransientStatus(pollError)) {
+            timer = window.setTimeout(poll, 5000);
+          }
         }
       }
     };

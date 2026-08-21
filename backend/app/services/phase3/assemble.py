@@ -118,10 +118,14 @@ def render_types_section(
         piece = f"Type {_ordinal(type_id, 'Type'):02d}: {mined['title']}"
         if mined["definition"]:
             piece += f" — {mined['definition']}"
+        # ``\n`` boundaries before every minted marker, matching the
+        # model-authored shape — a bare space made deterministic markers
+        # run on inside the preceding Example's sentence. The structural
+        # parsers are whitespace-agnostic.
         for case_id in sorted(hosted[type_id]):
             if not case_id:
                 for example in hosted[type_id][case_id]:
-                    piece += f" Example: {example}"
+                    piece += f"\nExample: {example}"
                 continue
             case = cases.get((type_id, case_id))
             if case is None:
@@ -129,11 +133,11 @@ def render_types_section(
                     f"hosted unit references unknown {type_id}::{case_id}"
                     " (unreachable after fixer seam — report if hit)"
                 )
-            piece += f" Case {_ordinal(case_id, 'Case'):02d}: {case['title']}"
+            piece += f"\nCase {_ordinal(case_id, 'Case'):02d}: {case['title']}"
             for example in hosted[type_id][case_id]:
-                piece += f" Example: {example}"
+                piece += f"\nExample: {example}"
         pieces.append(piece)
-    return " ".join(pieces)
+    return "\n".join(pieces)
 
 
 def _join_analysis_texts(texts: list[str]) -> str:
@@ -263,13 +267,17 @@ def stamp_analysis_allotments(
                 + removed
             )
         if items is not None:
+            from .. import concept_refiner
+
             misconceptions = _join_analysis_texts([
-                str(item.get("text") or "")
+                concept_refiner.strip_analysis_label_echo(
+                    str(item.get("text") or ""))
                 for item in items
                 if str(item.get("kind") or "") == "misconception"
             ])
             error_analyses = _join_analysis_texts([
-                str(item.get("text") or "")
+                concept_refiner.strip_analysis_label_echo(
+                    str(item.get("text") or ""))
                 for item in items
                 if str(item.get("kind") or "") == "error_analysis"
             ])
@@ -380,6 +388,34 @@ def audit_case_uniqueness(
                     f"case identity {type_id}::{case_id} renders on "
                     f"{len(indexes)} rows ({titles}); each rendered Case "
                     "lands on exactly one concept (Q2)"
+                ),
+                "row_indexes": sorted(indexes),
+                "qids": [],
+            })
+
+    # Q14: one concept owns each Type. The host consolidation pass makes
+    # a cross-concept Type unreachable on the production path, so a hit
+    # here means a lane bypassed it — recorded as a release-audit
+    # finding, never silently repaired.
+    type_rows: dict[str, set[int]] = {}
+    for index, row in enumerate(records):
+        for route in row.get("_aegis_release_type_case_routes") or []:
+            parts = str(route).split("::")
+            if parts and parts[0]:
+                type_rows.setdefault(parts[0], set()).add(index)
+    for type_id, indexes in sorted(type_rows.items()):
+        if len(indexes) > 1:
+            titles = ", ".join(
+                repr(_normal(records[i].get("concept_title"))[:60])
+                for i in sorted(indexes)
+            )
+            findings.append({
+                "code": "duplicate_type_identity",
+                "message": (
+                    f"Type {type_id} renders on {len(indexes)} rows "
+                    f"({titles}); one concept owns each Type (Q14 — the "
+                    "host ownership consolidation should have moved its "
+                    "Cases together)"
                 ),
                 "row_indexes": sorted(indexes),
                 "qids": [],

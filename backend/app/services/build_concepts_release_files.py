@@ -154,6 +154,13 @@ _MASTER_SUPERSEDED = (
     "finished being built. The superseded release keeps its file and its "
     "receipt; the manifest does not point at a superseded release."
 )
+# Output 01's disabled reason when the run staged no Pre lane at all —
+# shared by both manifest twins so they cannot disagree on the sentence.
+PRE_NOT_STAGED = (
+    "This run staged no Pre-Learning release, so there is no Pre Concept "
+    "File to download. The run journal records why; re-running generation "
+    "stages the Pre lane."
+)
 
 
 def master_entry(
@@ -1379,9 +1386,26 @@ def _pre_release_entries(
     """
 
     payload = release_payload(job, lane=LANE_PRE)
-    if payload is None:
-        return []
     stem = _safe_filename(job.filename, "concepts")
+    if payload is None:
+        # The four outputs are enumerated ALWAYS (OD4 / map P16): a run
+        # that staged no Pre lane still shows Outputs 01 and 02, each
+        # present and disabled with its reason, so an absent lane is
+        # never indistinguishable from a lane that does not apply.
+        return in_owner_order([
+            {
+                "kind": "pre_release_bulk_import",
+                "label": "Download the Pre-Learning Concept File",
+                "filename": f"{stem}_pre_bulk_import.xlsx",
+                "media_type": _XLSX_MEDIA_TYPE,
+                "size_bytes": 0,
+                "download_url": "",
+                "action": "download",
+                "disabled": True,
+                "disabled_reason": PRE_NOT_STAGED,
+            },
+            master_entry(job, lane=LANE_PRE),
+        ])
     query = f"?lane={LANE_PRE}"
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
     empty_note = pre_lane_empty_reason(payload)

@@ -194,10 +194,41 @@ def _rows_for_chapter(parsed, sheet: str, chapter_title: str) -> list[dict]:
     ]
 
 
+def _expected_question_text(sheet: str, gold: dict) -> str:
+    """The SOP fill guide (§5.1) and the owner's 2026-08-21 ruling:
+    ``question_text`` is the whole question — the stem PLUS the lettered
+    options (Objective) or the sub-questions (Descriptive), which the
+    renderer composes from the decided blocks. The reference workbooks
+    predate the ruling, so the expectation is composed here the same
+    way."""
+    text = str(gold.get("question_text") or "")
+    if sheet == "Objective":
+        options = []
+        for n in range(1, aw.MAX_OBJECTIVE_OPTIONS + 1):
+            content = str(gold.get(f"answer_content_{n}") or "").strip()
+            if content:
+                options.append(f"{chr(ord('A') + len(options))}) {content}")
+        if not options:
+            return text
+        return (text.rstrip() + "\n" + "\n".join(options)).strip()
+    subs = []
+    for n in range(1, aw.MAX_SUBQUESTIONS + 1):
+        sub = str(gold.get(f"sub_question_{n}") or "").strip()
+        if sub:
+            subs.append(sub)
+    if not subs:
+        return text
+    return (text.rstrip() + "\n" + "\n".join(subs)).strip()
+
+
 def _diff_rows(sheet: str, gold: dict, rendered: dict) -> list[str]:
     diffs = []
     for field in aw.FIELDS[sheet]:
-        got, want = _norm(rendered.get(field)), _norm(gold.get(field))
+        got = _norm(rendered.get(field))
+        if field == "question_text":
+            want = _norm(_expected_question_text(sheet, gold))
+        else:
+            want = _norm(gold.get(field))
         if got != want:
             diffs.append(
                 f"{sheet} {gold.get('question_label')!r} {field}: "

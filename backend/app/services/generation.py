@@ -8490,7 +8490,22 @@ def _inventory_task_text(item: dict) -> str:
     context = kr.canonicalize_rich_text(
         str(item.get("shared_context") or "")).strip()
     if context and item.get("requires_context") and context not in task:
-        task = f"{context} {task}".strip()
+        # A raw substring test misses the case where the context IS the
+        # task's own table, flattened slightly differently (a label
+        # prefix, whitespace, cell separators) — the owner's CH01 review
+        # showed the classification table rendered twice in one Example.
+        # Normalized containment is dedupe mechanics: nothing is judged,
+        # only an already-present body is not prepended a second time.
+        context_body = re.sub(
+            r"(?i)^use the following source table\(s\):\s*", "", context
+        )
+        normalized_task = bi.normalize_question_text(task)
+        normalized_context = bi.normalize_question_text(context_body)
+        if not (
+            normalized_context
+            and normalized_context in normalized_task
+        ):
+            task = f"{context} {task}".strip()
     task = re.sub(r"\s+", " ", task)
     image_urls = list(item.get("image_urls") or [])
     for url in visual_captions:
@@ -11666,7 +11681,9 @@ def _mined_type_to_body(mtype: dict, start_type: int) -> tuple[str, int]:
         parts.append(f"Case {c_i:02d}: {case_title}")
         for example_i, example in enumerate(examples, start=1):
             parts.append(f"Example {example_i:02d}: {example}")
-    return " ".join(parts), n
+    # ``\n`` boundaries match the model-authored shape; see
+    # ``_rebuild_types_body``.
+    return "\n".join(parts), n
 
 
 def _norm_for_compare(text: str) -> str:
@@ -14386,8 +14403,12 @@ def _append_inventory_example_to_record(
             )
         ]
         case_no = (max(case_numbers) if case_numbers else 0) + 1
+        # ``\n`` boundaries, matching the model-authored shape: a bare
+        # space here produced the mixed rendering where minted markers ran
+        # on inside the previous Example's sentence. The structural
+        # parsers are whitespace-agnostic either way.
         addition = (
-            f" Case {case_no:02d}: {case_title} "
+            f"\nCase {case_no:02d}: {case_title}\n"
             f"Example 01: {text.strip()}")
         new_body = (
             body[:existing.end()] + addition + body[existing.end():]
@@ -14395,10 +14416,10 @@ def _append_inventory_example_to_record(
     else:
         type_no = _next_rendered_type_number(body)
         addition = (
-            f"Type {type_no:02d}: {title} "
-            f"Case 01: {case_title} Example 01: {text.strip()}"
+            f"Type {type_no:02d}: {title}\n"
+            f"Case 01: {case_title}\nExample 01: {text.strip()}"
         )
-        new_body = f"{body} {addition}".strip() if body.strip() else addition
+        new_body = f"{body}\n{addition}".strip() if body.strip() else addition
     updated["concept_details"] = _inject_types(details, new_body)
     return updated
 
@@ -15245,8 +15266,10 @@ def _rebuild_types_body(
             for example_i, example in enumerate(examples, start=1):
                 parts.append(
                     f"Example {example_i:02d}: {example.strip()}")
-    # Preserve original Type NN labels from headers; only Case indexes restart.
-    return " ".join(parts)
+    # Preserve original Type NN labels from headers; only Case indexes
+    # restart. ``\n`` boundaries match the model-authored shape (a bare
+    # space made rebuilt markers run on inside the preceding sentence).
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

@@ -900,9 +900,17 @@ def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
         if misconception or error_analysis:
             combined: list[str] = []
             if misconception:
-                combined.append(f"Misconceptions: {misconception}")
+                combined.append(
+                    "Misconceptions: "
+                    + concept_refiner.strip_analysis_label_echo(
+                        misconception)
+                )
             if error_analysis:
-                combined.append(f"Error Analysis: {error_analysis}")
+                combined.append(
+                    "Error Analysis: "
+                    + concept_refiner.strip_analysis_label_echo(
+                        error_analysis)
+                )
             kept.append((
                 "Misconception/ Error Analysis",
                 "; ".join(combined),

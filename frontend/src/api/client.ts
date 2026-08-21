@@ -37,6 +37,28 @@ const BASE = import.meta.env.VITE_API_BASE ?? "";
  */
 export const SESSION_EXPIRED_EVENT = "aegis:session-expired";
 
+// A failed HTTP call carries its status so callers can tell a
+// non-transient refusal (401 session expiry, 403, 404 after a data
+// reset) from a flaky network — the difference between "retry quietly"
+// and "stop polling and say why". The message contract is unchanged.
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+// Statuses no retry loop should ever spin on: the server answered and
+// said no; asking again cannot change the answer.
+export function isNonTransientStatus(error: unknown): boolean {
+  const status = (error as { status?: number } | null)?.status;
+  return (
+    status === 401 || status === 403 || status === 404 || status === 410
+  );
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
   const baseHeaders: Record<string, string> =
     init?.body instanceof FormData ? {} : { "Content-Type": "application/json" };
@@ -56,7 +78,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     if (res.status === 401 && detail === "authentication required") {
       window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
     }
-    throw new Error(detail);
+    throw new ApiError(detail, res.status);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;

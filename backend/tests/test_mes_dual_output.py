@@ -239,7 +239,9 @@ def test_master_contains_everything_including_questionless_concepts():
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
     assert q["answer_restriction"] == "Specific"
     assert q["answer_content_1"] == "Circle"
-    assert str(q["correct_answer_1"]) == "1"
+    # Rendered in the CMS's Yes/No spelling (owner ruling, 2026-08-21);
+    # the wire "1"/"0" and "Yes"/"No" are both accepted on read-back.
+    assert str(q["correct_answer_1"]) == "Yes"
     assert q["group_question_labels"] == "06MSMA_T01_TwoDim Q01"
     assert q["concept_question_labels"] == (
         "06MSMA_T01_TwoDim Q01, 06MSMA_T01_TwoDim Q02")

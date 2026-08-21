@@ -928,6 +928,35 @@ exhausted.
 
 ---
 
+### Q14 · Decided — one concept owns each Type; Rule B's multi-concept rendering is retired
+
+Owner ruling, 21 Aug 2026 (workbook reviews of jobs 61 and 65): "Each type
+should be unique and consistently mapped to the appropriate concept." A Type
+identity renders under exactly ONE concept. When the Host pass's per-Case
+verdicts resolve one Type's Cases onto different concepts, a dedicated
+ownership verdict — model-decided, critic-advised, Fixer-backed, one per
+split Type — chooses the owning concept from among the Cases' certified
+hosts, and every Case and QID of that Type moves with it: for a Type's
+member QIDs, Type ownership outranks per-question routing. Rule C's
+exactly-once accounting is unchanged and re-checked after consolidation.
+
+Two boundaries the ruling sets explicitly. First, the identity-splitting
+alternative (fresh Type numbers per destination) is REJECTED — it is the
+"same type repeated with different type numbering" symptom the same review
+named as a defect. Second, **not every concept needs a Type**: choosing one
+owner may leave other concepts with no Types at all, and that is a
+legitimate outcome — the ownership verdict must never spread Types to cover
+concepts, and no gate may demand a minimum Type count per concept.
+
+`docs/concept-release-and-type-case-routing-rules.md` Rule B is amended in
+place; ownership stays certified at Case/QID granularity BELOW the Type
+(which Cases exist, which QIDs they carry), while the Type's rendering home
+is single. Q2's register row stands for everything except the sentence
+"the Type identity may render under several concepts", which this entry
+supersedes.
+
+---
+
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the
 Open/Specific rubrics (v1 and the corrected v2.0 registry), the
 Question-Paper Blueprint, the GPT Restructuring Architecture v1.0

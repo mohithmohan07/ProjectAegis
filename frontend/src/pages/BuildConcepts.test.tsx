@@ -49,6 +49,12 @@ const streamMock = vi.hoisted(() => vi.fn());
 vi.mock("../api/client", () => ({
   api: apiMock,
   streamNdjson: streamMock,
+  isNonTransientStatus: (error: unknown) => {
+    const status = (error as { status?: number } | null)?.status;
+    return (
+      status === 401 || status === 403 || status === 404 || status === 410
+    );
+  },
 }));
 
 vi.mock("../components/DocumentUpload", () => ({

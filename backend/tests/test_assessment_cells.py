@@ -151,7 +151,7 @@ def test_cell_decision_carries_complete_content_without_print_position(
     assert cell["accepted_source_qids"] == ["QINV-0001"]
     assert cell["flags"] == []
     authority = cell["authority"]
-    assert authority["policy_version"] == "assessment-cell-1"
+    assert authority["policy_version"] == "assessment-cell-2"
     assert authority["review_flags"] == []
     assert "created_at" not in authority
     assert "provider" not in authority
@@ -340,7 +340,7 @@ def test_mechanical_exhaustion_routes_to_recorded_fixer(monkeypatch) -> None:
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.cell",
         "unit_id": "QINV-0001",
-        "policy_version": "assessment-cell-1",
+        "policy_version": "assessment-cell-2",
     }
     assert cell["sheet_kind"] == "descriptive"
     assert cell["authority"]["fixer"] is True

@@ -448,10 +448,10 @@ def test_full_pipeline_publishes_a_ready_release(db):
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
-        ] == "assessment-cell-1"
+        ] == "assessment-cell-2"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-3"
+        ] == "assessment-materialize-4"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
@@ -463,7 +463,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-3"
+        ] == "assessment-marking-4"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
         ]["decomposition_authority"] == "api_per_item_verdict"
