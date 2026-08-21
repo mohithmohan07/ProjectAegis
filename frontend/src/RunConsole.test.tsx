@@ -19,6 +19,12 @@ vi.mock("./api/client", () => ({
       new Promise((resolve, reject) => pending.push({ onEvent, resolve, reject })),
   ),
   api: { getUploadJob: getUploadJobMock, getRunEvents: getRunEventsMock },
+  isNonTransientStatus: (error: unknown) => {
+    const status = (error as { status?: number } | null)?.status;
+    return (
+      status === 401 || status === 403 || status === 404 || status === 410
+    );
+  },
 }));
 
 function transportError(message: string): Error {
@@ -324,6 +330,153 @@ test("a drop while the run continues catches up from the journal and finishes si
     expect(lines).not.toContain("Resuming");
     expect(screen.getByTestId("status").textContent).toBe("done");
     expect(getUploadJobMock).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+    pending.length = 0;
+    getUploadJobMock.mockReset();
+    getRunEventsMock.mockReset();
+  }
+});
+
+
+test("a checkpoint re-POST resets the seq cursor so the resumed run's events apply", async () => {
+  vi.useFakeTimers();
+  try {
+    getRunEventsMock.mockResolvedValue({ events: [], next: 0, running: false });
+    getUploadJobMock.mockResolvedValue({
+      generation_running: false, status: "converted",
+    });
+
+    function ResumeSeqProbe() {
+      const { run, state } = useRunConsole();
+      return (
+        <>
+          <button
+            onClick={() => void run(
+              "Generate",
+              "/generate",
+              {},
+              undefined,
+              { module: "concepts", jobId: 9 },
+            ).catch(() => undefined)}
+          >
+            Generate
+          </button>
+          <output data-testid="lines">
+            {state.lines.map((line) => line.message).join(" | ")}
+          </output>
+          <output data-testid="status">{state.status}</output>
+        </>
+      );
+    }
+    render(
+      <RunConsoleProvider>
+        <ResumeSeqProbe />
+      </RunConsoleProvider>,
+    );
+
+    const first = pending.length;
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    await act(async () => {
+      // The dead run got as far as seq 3 before the worker died.
+      pending[first].onEvent({
+        type: "log", level: "info", message: "before the crash", seq: 3,
+      });
+      pending[first].reject(transportError("network connection lost"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "Resuming the run from its saved checkpoint",
+    );
+
+    // The re-POSTed stream is a NEW journal: seq restarts at 1. Before
+    // the cursor reset, every resumed event was <= the dead run's
+    // watermark and silently dropped — the console froze for the whole
+    // resumed run.
+    expect(pending).toHaveLength(first + 2);
+    await act(async () => {
+      pending[first + 1].onEvent({
+        type: "log", level: "info", message: "resumed and visible", seq: 1,
+      });
+      pending[first + 1].onEvent(
+        { type: "result", data: { status: "generated" }, seq: 2 } as never,
+      );
+      pending[first + 1].resolve({ status: "generated" });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "resumed and visible",
+    );
+    expect(screen.getByTestId("status").textContent).toBe("done");
+  } finally {
+    vi.useRealTimers();
+    pending.length = 0;
+    getUploadJobMock.mockReset();
+    getRunEventsMock.mockReset();
+  }
+});
+
+
+test("a non-transient catch-up failure stops the poll instead of spinning forever", async () => {
+  vi.useFakeTimers();
+  try {
+    getRunEventsMock.mockRejectedValue(
+      Object.assign(new Error("authentication required"), { status: 401 }),
+    );
+
+    function AuthStopProbe() {
+      const { run, state } = useRunConsole();
+      return (
+        <>
+          <button
+            onClick={() => void run(
+              "Generate",
+              "/generate",
+              {},
+              undefined,
+              { module: "concepts", jobId: 11 },
+            ).catch(() => undefined)}
+          >
+            Generate
+          </button>
+          <output data-testid="lines">
+            {state.lines.map((line) => line.message).join(" | ")}
+          </output>
+          <output data-testid="status">{state.status}</output>
+        </>
+      );
+    }
+    render(
+      <RunConsoleProvider>
+        <AuthStopProbe />
+      </RunConsoleProvider>,
+    );
+
+    const first = pending.length;
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+    await act(async () => {
+      pending[first].reject(transportError("network connection lost"));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+
+    // The session died, not the network: the loop stops with a spoken
+    // reason. Left alone this poll ran every 15s for as long as the tab
+    // lived — the "something running continuously in the background".
+    expect(screen.getByTestId("status").textContent).toBe("error");
+    expect(screen.getByTestId("lines").textContent).toContain(
+      "Catch-up stopped",
+    );
+    const callsAfterStop = getRunEventsMock.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60000);
+    });
+    expect(getRunEventsMock.mock.calls.length).toBe(callsAfterStop);
   } finally {
     vi.useRealTimers();
     pending.length = 0;

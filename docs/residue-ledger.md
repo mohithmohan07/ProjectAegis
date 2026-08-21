@@ -50,6 +50,14 @@ sprint continues past all of them.
 
 Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns were overstated — superseded by the F3/F6/F2 rows above. R-QX8's consequence note is superseded by F7's fix. R-S11b is CLOSED (Output-02/04 identity composition verified repaired at main). R-S12d is CLOSED (merge order completed).
 
+## Background-runner round (2026-08-21: owner report — "something running continuously" since the mobile rounds)
+
+| Item | Disposition |
+|---|---|
+| The mobile rounds shipped two unbounded client loops | FOUND AND FIXED. (1) RunConsole's silent journal catch-up retried EVERY failure forever — a 401 after the 12-hour session expiry, or a 404 after a data reset, kept the open tab/PWA polling every 15s for as long as it lived, under a false "Network connection lost" line. (2) The Build Concepts resume banner's status poll re-armed every 5s on the same non-transient failures. Both now stop with a spoken reason on 401/403/404/410 (`client.ApiError` carries the status; `isNonTransientStatus` is the one shared predicate); genuine network flaps keep the silent-catch-up design the owner ordered |
+| The seq-cursor bug could RE-RUN generation silently | FIXED (the money path). A checkpoint re-POST starts a new stream whose journal truncates and restarts at seq 1, but the client's cursor kept the dead run's watermark: every resumed event was dropped as a duplicate, the catch-up tail was filtered server-side forever, and the terminal event could never finish the run — so the client polled on and, run after run, silently re-POSTed the checkpoint resume (each one real model spend; the budget of 5 resets on every page visit). The cursor now resets with the re-POST, so a resumed run paints live and its terminal event ends the loop. Pinned in RunConsole.test.tsx (seq reset applies resumed events; a 401 stops the poll and stays stopped) |
+| What this means for the live burn | The deployed build carries the unfixed client: any phone tab or installed PWA left open on a run keeps polling — and against a run that crash-loops server-side (the deployed Pre-lane bug), each revisit could silently re-POST the run. Closing the tab stops the client loop; `fly machine restart` stops a live worker; nothing server-side auto-resumes at boot |
+
 ## Q14 build round (2026-08-21: one concept owns each Type; SOP authority; ops)
 
 | Item | Disposition |

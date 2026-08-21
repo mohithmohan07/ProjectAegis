@@ -1,5 +1,10 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
-import { api as httpApi, streamNdjson, type StreamEvent } from "./api/client";
+import {
+  api as httpApi,
+  isNonTransientStatus,
+  streamNdjson,
+  type StreamEvent,
+} from "./api/client";
 import type { OpenAIUsage } from "./types";
 
 export interface RunLine {
@@ -231,7 +236,20 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
               tail = await httpApi.getRunEvents(
                 reattach.module, reattach.jobId, lastSeq,
               );
-            } catch {
+            } catch (pollErr) {
+              // The server answered and said no (session expired, job
+              // gone): retrying every 15s forever is the "something is
+              // running continuously in the background" the owner
+              // reported. Stop the loop and say why.
+              if (isNonTransientStatus(pollErr)) {
+                note(
+                  "Catch-up stopped: "
+                  + String((pollErr as Error).message ?? pollErr)
+                  + " — reload the page to reattach.",
+                  "error",
+                );
+                throw pollErr;
+              }
               delay = Math.min(Math.max(delay * 2, 1000), 15000);
               if (
                 !outageNoted
@@ -263,7 +281,16 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             let job;
             try {
               job = await httpApi.getUploadJob(reattach.module, reattach.jobId);
-            } catch {
+            } catch (jobErr) {
+              if (isNonTransientStatus(jobErr)) {
+                note(
+                  "Catch-up stopped: "
+                  + String((jobErr as Error).message ?? jobErr)
+                  + " — reload the page to reattach.",
+                  "error",
+                );
+                throw jobErr;
+              }
               continue;
             }
             if (job.generation_running) continue;
@@ -279,6 +306,14 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             reattachesLeft -= 1;
             // Re-POST the same request: the server resumes from the
             // durable checkpoint and replays finished work from cache.
+            // A re-POST starts a NEW stream, and the journal restarts
+            // with it (run_journal truncates and seq begins at 1 again)
+            // — so the cursor resets too. Without this, every resumed
+            // event arrived <= the dead run's watermark and was dropped
+            // as a duplicate, the catch-up tail was filtered server-side
+            // forever, and the terminal event could never finish the
+            // run — the client kept polling and re-POSTing instead.
+            lastSeq = 0;
             note("Resuming the run from its saved checkpoint…", "info");
             break;
           }
