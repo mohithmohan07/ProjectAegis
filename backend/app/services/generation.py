@@ -15,9 +15,11 @@ import math
 import os
 import random
 import re
+import contextvars
 import threading
 import unicodedata
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Callable
 
@@ -7415,6 +7417,29 @@ def _assign_chapter_wide_inventory_topics_via_api(
 def _extract_question_task_inventory_via_api(
     *, meta: dict, sections: list[dict], records: list[dict] | None = None,
 ) -> dict:
+    """The complete inventory build: extraction, then the topic join.
+
+    Composed of exactly two halves so the early inventory track (Q19)
+    can run the source-only half alongside the concept passes: the
+    pre-join half reads ONLY the sections, and the finish half — topic
+    assignment, then adjudication, in the same order as ever — is the
+    join that needs the concept records. Calling this function whole is
+    byte-identical to the pre-split sequential behaviour.
+    """
+    inventory, anchors = _extract_inventory_pre_join(
+        meta=meta, sections=sections)
+    return _finish_inventory_with_topics(
+        inventory, anchors, meta=meta, sections=sections, records=records)
+
+
+class _EarlyInventoryHalted(RuntimeError):
+    """The early inventory track was told to stop before its next chunk."""
+
+
+def _extract_inventory_pre_join(
+    *, meta: dict, sections: list[dict],
+    should_abort: Callable[[], bool] | None = None,
+) -> tuple[dict, list[dict]]:
     def sanitized_items(data: dict, chunk: dict) -> list[dict]:
         return [
             _sanitize_inventory_item(
@@ -7450,6 +7475,12 @@ def _extract_question_task_inventory_via_api(
 
     def _inventory_chunk(numbered) -> list[dict]:
         i, chunk = numbered
+        if should_abort is not None and should_abort():
+            # Q19's halt-both ruling: a fired human gate stops the early
+            # track before its NEXT chunk spends; in-flight calls finish.
+            raise _EarlyInventoryHalted(
+                f"inventory chunk {i} not started: the run halted"
+            )
         user = (
             _metadata_block(meta)
             + f"\nQuestion / Task Inventory chunk {i} of {len(chunks)}:\n"
@@ -7537,6 +7568,16 @@ def _extract_question_task_inventory_via_api(
     for i, item in enumerate(inventory["items"], start=1):
         item["qid"] = f"QINV-{i:04d}"
         item["order_index"] = i
+    return inventory, anchors
+
+
+def _finish_inventory_with_topics(
+    inventory: dict, anchors: list[dict], *, meta: dict,
+    sections: list[dict], records: list[dict] | None,
+) -> dict:
+    """The join half: topic assignment, then adjudication — same order
+    as the pre-split sequential function, so decision payloads are
+    identical whether the pre-join half ran early or inline."""
     if records:
         inventory = _assign_chapter_wide_inventory_topics_via_api(
             meta=meta,
@@ -19965,6 +20006,57 @@ def _chunk_checkpoint_sha256(chunk: dict) -> str:
     ).hexdigest()
 
 
+class _EarlyInventoryTrack:
+    """Q19 Track A: the source-only inventory half, beside the concept passes.
+
+    Forked before the skeleton — its input is a deep copy of the
+    sections and the metadata, nothing else — and joined at the
+    ``question_inventory`` checkpoint, where the finish half (topic
+    assignment, then adjudication) runs with the settled records: the
+    same payloads, in the same order, as the sequential build.
+
+    Deliberately NO checkpoint of its own: a crash or pause before the
+    join loses only wall-clock, exactly as a pre-checkpoint crash always
+    has, and resume semantics are unchanged — a resumed run that is past
+    ``question_inventory`` never forks at all.
+
+    ``halt()`` is the Q19 halt-both ruling: when a human gate (or any
+    raise) stops the run, the track stops before its NEXT chunk;
+    in-flight provider calls finish and nothing new spends.
+    """
+
+    def __init__(self, *, meta: dict, sections: list[dict]) -> None:
+        self._cancel = threading.Event()
+        self._pool = ThreadPoolExecutor(max_workers=1)
+        context = contextvars.copy_context()
+        self._future = self._pool.submit(
+            context.run,
+            self._run,
+            copy.deepcopy(meta),
+            copy.deepcopy(sections),
+        )
+
+    def _run(
+        self, meta: dict, sections: list[dict],
+    ) -> tuple[dict, list[dict]]:
+        with progress.label_scope("Inventory · early track"):
+            return _extract_inventory_pre_join(
+                meta=meta,
+                sections=sections,
+                should_abort=self._cancel.is_set,
+            )
+
+    def join(self) -> tuple[dict, list[dict]]:
+        try:
+            return self._future.result()
+        finally:
+            self._pool.shutdown(wait=False)
+
+    def halt(self) -> None:
+        self._cancel.set()
+        self._pool.shutdown(wait=True, cancel_futures=True)
+
+
 def _run_live_concept_pre_final_stages(
     mmd_text: str, *,
     subject: str,
@@ -20143,176 +20235,215 @@ def _run_live_concept_pre_final_stages(
             level="success",
         )
 
-    if saved_order < _checkpoint_order("skeleton_complete"):
-        out = _extract_skeleton_via_api(
-            chunks,
-            meta=meta,
-            resume_chunks=(
-                saved.get("completed_chunks") or []
-                if saved_stage == "skeleton_chunks" and saved else []
-            ),
-            checkpoint_callback=checkpoint_callback,
+    # Q19 Track A (owner "Go", 2026-08-21): the source-only inventory
+    # half runs BESIDE the skeleton/description passes instead of after
+    # them — it reads nothing but the sections. The finish half (topic
+    # assignment, then adjudication) is the join below, with payloads in
+    # the exact sequential order. Workers=1 keeps the strictly
+    # sequential path; a resumed run past the inventory never forks.
+    early_inventory = (
+        _EarlyInventoryTrack(meta=meta, sections=sections)
+        if (
+            saved_order < _checkpoint_order("question_inventory")
+            and config.source_chunk_workers() > 1
         )
-        if not out:
-            raise RuntimeError("live concept extraction returned no rows")
-        _emit_concept_checkpoint(
-            checkpoint_callback,
-            "skeleton_complete",
-            records=out,
-        )
+        else None
+    )
+    try:
+        if saved_order < _checkpoint_order("skeleton_complete"):
+            out = _extract_skeleton_via_api(
+                chunks,
+                meta=meta,
+                resume_chunks=(
+                    saved.get("completed_chunks") or []
+                    if saved_stage == "skeleton_chunks" and saved else []
+                ),
+                checkpoint_callback=checkpoint_callback,
+            )
+            if not out:
+                raise RuntimeError("live concept extraction returned no rows")
+            _emit_concept_checkpoint(
+                checkpoint_callback,
+                "skeleton_complete",
+                records=out,
+            )
 
-    if saved_order < _checkpoint_order("source_topic_review"):
-        out = _canonicalize_method_anchor_tags(
-            out, method_anchors, chunk_text=mmd_text, meta=meta)
-        skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
-            out, method_anchors)
-        progress.step("Concept extraction — canonicalizing skeleton", value=0.27)
-        out = _scrub_section_numbers(out)
-        out = _snap_topics_to_headings(
-            out, headings, chapter_title=chapter_title,
-            allow_chapter_title_topic=allow_chapter_title_topic)
-        out = _consolidate_concepts_via_api(
-            out, subject=subject, mmd_text=mmd_text, meta=meta)
-        progress.step("Concept extraction — aligning source topics", value=0.35)
-        if len([h for h in headings if h.strip()]) < 2:
-            # A single heading (or none) leaves nothing to re-segregate
-            # against — the decision space has one option, so no judgment
-            # exists to make. Exact source evidence still assigns what it
-            # can prove.
-            out = _assign_topics_from_source_evidence(
-                out, source_topic_excerpts)
-        else:
-            segregation = _topic_segregation_verdict_via_api(
-                out, meta=meta,
-                source_topic_excerpts=source_topic_excerpts,
-                headings=headings,
-            )
-            reason_suffix = (
-                f": {segregation['reason']}" if segregation["reason"] else "."
-            )
-            if segregation["restructure"]:
-                progress.log(
-                    "Topic segregation judged unfaithful to the source"
-                    + reason_suffix + " Re-segregating topics via API.",
-                    level="warning",
-                )
-                out = _restructure_topics_via_api(
-                    out, meta=meta,
-                    source_topic_excerpts=source_topic_excerpts)
-            else:
-                progress.log(
-                    "Topic segregation judged faithful to the source"
-                    + reason_suffix)
+        if saved_order < _checkpoint_order("source_topic_review"):
+            out = _canonicalize_method_anchor_tags(
+                out, method_anchors, chunk_text=mmd_text, meta=meta)
+            skeleton_method_row_snapshot = _snapshot_method_anchor_rows(
+                out, method_anchors)
+            progress.step("Concept extraction — canonicalizing skeleton", value=0.27)
+            out = _scrub_section_numbers(out)
+            out = _snap_topics_to_headings(
+                out, headings, chapter_title=chapter_title,
+                allow_chapter_title_topic=allow_chapter_title_topic)
+            out = _consolidate_concepts_via_api(
+                out, subject=subject, mmd_text=mmd_text, meta=meta)
+            progress.step("Concept extraction — aligning source topics", value=0.35)
+            if len([h for h in headings if h.strip()]) < 2:
+                # A single heading (or none) leaves nothing to re-segregate
+                # against — the decision space has one option, so no judgment
+                # exists to make. Exact source evidence still assigns what it
+                # can prove.
                 out = _assign_topics_from_source_evidence(
                     out, source_topic_excerpts)
-        out = _snap_topics_to_headings(
-            out, headings, chapter_title=chapter_title,
-            allow_chapter_title_topic=allow_chapter_title_topic)
-
-    if saved_order < _checkpoint_order("canonical_skeleton"):
-        recovery_state = (
-            copy.deepcopy(saved.get("source_topic_recovery") or {})
-            if saved_stage == "source_topic_review" and saved else {}
-        )
-        out = _recover_missing_topics_after_human_direction(
-            out,
-            meta=meta,
-            source_topic_excerpts=source_topic_excerpts,
-            checkpoint_callback=checkpoint_callback,
-            recovery_state=recovery_state,
-            skeleton_method_row_snapshot=skeleton_method_row_snapshot,
-        )
-        out = _reorder_records_by_source_topics(out, headings)
-        out = _restore_method_anchor_rows(
-            out, skeleton_method_row_snapshot)
-        out = _enforce_method_anchor_topics(out, method_anchors)
-        out = _canonicalize_method_anchor_tags(
-            out, method_anchors, chunk_text=mmd_text, meta=meta)
-        out = _consolidate_task_grounded_fragments_via_api(
-            out, meta=meta,
-            source_topic_excerpts=source_topic_excerpts,
-            method_anchors=method_anchors)
-        out = _enforce_method_anchor_topics(out, method_anchors)
-        out = _canonicalize_method_anchor_tags(
-            out, method_anchors, chunk_text=mmd_text, meta=meta)
-        out = _recover_chapter_opening_concepts_via_api(
-            out, meta=meta, sections=sections, headings=headings)
-        out = _reorder_records_by_source_topics(out, headings)
-        _emit_concept_checkpoint(
-            checkpoint_callback,
-            "canonical_skeleton",
-            records=out,
-            skeleton_method_row_snapshot=_serialize_method_row_snapshot(
-                skeleton_method_row_snapshot),
-        )
-
-    if saved_order < _checkpoint_order("description_method_snapshot"):
-        # Description authoring belongs to Settle's single content pass
-        # (description, mastery, and learner analysis in one decision);
-        # the retired dedicated pre-81% Description pass was redundant
-        # API load under concurrent creator runs.
-        out = _ensure_method_worked_examples_via_api(
-            out, anchors=method_anchors, meta=meta)
-        out = _ensure_mastery_lines_via_api(out, meta=meta)
-        out = _restore_method_anchor_rows(
-            out, skeleton_method_row_snapshot)
-        out = _enforce_method_anchor_topics(out, method_anchors)
-        method_row_snapshot = _snapshot_method_anchor_rows(
-            out, method_anchors)
-        unsnapshotted_anchors = [
-            anchor for anchor in method_anchors
-            if (
-                str(anchor.get("anchor_id") or "").upper(),
-                _topic_comparison_key(anchor.get("topic_hint", "")),
-            ) not in method_row_snapshot
-        ]
-        if unsnapshotted_anchors:
-            raise RuntimeError(
-                "post-description method-row restoration could not "
-                "snapshot mandatory full-chapter anchors: "
-                + ", ".join(
-                    anchor["anchor_id"] for anchor in unsnapshotted_anchors)
-            )
-        if method_row_snapshot:
-            snapshotted_rows = {
-                (
-                    _topic_comparison_key(row.get("topic", "")),
-                    bi.normalize_question_text(
-                        row.get("concept_title", "")),
+            else:
+                segregation = _topic_segregation_verdict_via_api(
+                    out, meta=meta,
+                    source_topic_excerpts=source_topic_excerpts,
+                    headings=headings,
                 )
-                for row in method_row_snapshot.values()
-            }
-            progress.log(
-                f"Snapshotted {len(snapshotted_rows)} refined method "
-                f"row(s) covering {len(method_row_snapshot)} mandatory "
-                "anchor(s).")
-        progress.set_progress(
-            0.55, label="Concept extraction — descriptions complete")
-        _emit_concept_checkpoint(
-            checkpoint_callback,
-            "description_method_snapshot",
-            records=out,
-            method_row_snapshot=_serialize_method_row_snapshot(
-                method_row_snapshot),
-        )
+                reason_suffix = (
+                    f": {segregation['reason']}" if segregation["reason"] else "."
+                )
+                if segregation["restructure"]:
+                    progress.log(
+                        "Topic segregation judged unfaithful to the source"
+                        + reason_suffix + " Re-segregating topics via API.",
+                        level="warning",
+                    )
+                    out = _restructure_topics_via_api(
+                        out, meta=meta,
+                        source_topic_excerpts=source_topic_excerpts)
+                else:
+                    progress.log(
+                        "Topic segregation judged faithful to the source"
+                        + reason_suffix)
+                    out = _assign_topics_from_source_evidence(
+                        out, source_topic_excerpts)
+            out = _snap_topics_to_headings(
+                out, headings, chapter_title=chapter_title,
+                allow_chapter_title_topic=allow_chapter_title_topic)
 
-    if saved_order < _checkpoint_order("question_inventory"):
-        progress.step(
-            "Concept extraction — inventorying questions and worked examples",
-            value=0.58,
-        )
-        question_task_inventory = _extract_question_task_inventory_via_api(
-            meta=meta, sections=sections, records=out)
-        progress.set_progress(
-            0.70, label="Concept extraction — question inventory complete")
-        _emit_concept_checkpoint(
-            checkpoint_callback,
-            "question_inventory",
-            records=out,
-            question_task_inventory=question_task_inventory,
-            method_row_snapshot=_serialize_method_row_snapshot(
-                method_row_snapshot),
-        )
+        if saved_order < _checkpoint_order("canonical_skeleton"):
+            recovery_state = (
+                copy.deepcopy(saved.get("source_topic_recovery") or {})
+                if saved_stage == "source_topic_review" and saved else {}
+            )
+            out = _recover_missing_topics_after_human_direction(
+                out,
+                meta=meta,
+                source_topic_excerpts=source_topic_excerpts,
+                checkpoint_callback=checkpoint_callback,
+                recovery_state=recovery_state,
+                skeleton_method_row_snapshot=skeleton_method_row_snapshot,
+            )
+            out = _reorder_records_by_source_topics(out, headings)
+            out = _restore_method_anchor_rows(
+                out, skeleton_method_row_snapshot)
+            out = _enforce_method_anchor_topics(out, method_anchors)
+            out = _canonicalize_method_anchor_tags(
+                out, method_anchors, chunk_text=mmd_text, meta=meta)
+            out = _consolidate_task_grounded_fragments_via_api(
+                out, meta=meta,
+                source_topic_excerpts=source_topic_excerpts,
+                method_anchors=method_anchors)
+            out = _enforce_method_anchor_topics(out, method_anchors)
+            out = _canonicalize_method_anchor_tags(
+                out, method_anchors, chunk_text=mmd_text, meta=meta)
+            out = _recover_chapter_opening_concepts_via_api(
+                out, meta=meta, sections=sections, headings=headings)
+            out = _reorder_records_by_source_topics(out, headings)
+            _emit_concept_checkpoint(
+                checkpoint_callback,
+                "canonical_skeleton",
+                records=out,
+                skeleton_method_row_snapshot=_serialize_method_row_snapshot(
+                    skeleton_method_row_snapshot),
+            )
+
+        if saved_order < _checkpoint_order("description_method_snapshot"):
+            # Description authoring belongs to Settle's single content pass
+            # (description, mastery, and learner analysis in one decision);
+            # the retired dedicated pre-81% Description pass was redundant
+            # API load under concurrent creator runs.
+            out = _ensure_method_worked_examples_via_api(
+                out, anchors=method_anchors, meta=meta)
+            out = _ensure_mastery_lines_via_api(out, meta=meta)
+            out = _restore_method_anchor_rows(
+                out, skeleton_method_row_snapshot)
+            out = _enforce_method_anchor_topics(out, method_anchors)
+            method_row_snapshot = _snapshot_method_anchor_rows(
+                out, method_anchors)
+            unsnapshotted_anchors = [
+                anchor for anchor in method_anchors
+                if (
+                    str(anchor.get("anchor_id") or "").upper(),
+                    _topic_comparison_key(anchor.get("topic_hint", "")),
+                ) not in method_row_snapshot
+            ]
+            if unsnapshotted_anchors:
+                raise RuntimeError(
+                    "post-description method-row restoration could not "
+                    "snapshot mandatory full-chapter anchors: "
+                    + ", ".join(
+                        anchor["anchor_id"] for anchor in unsnapshotted_anchors)
+                )
+            if method_row_snapshot:
+                snapshotted_rows = {
+                    (
+                        _topic_comparison_key(row.get("topic", "")),
+                        bi.normalize_question_text(
+                            row.get("concept_title", "")),
+                    )
+                    for row in method_row_snapshot.values()
+                }
+                progress.log(
+                    f"Snapshotted {len(snapshotted_rows)} refined method "
+                    f"row(s) covering {len(method_row_snapshot)} mandatory "
+                    "anchor(s).")
+            progress.set_progress(
+                0.55, label="Concept extraction — descriptions complete")
+            _emit_concept_checkpoint(
+                checkpoint_callback,
+                "description_method_snapshot",
+                records=out,
+                method_row_snapshot=_serialize_method_row_snapshot(
+                    method_row_snapshot),
+            )
+
+        if saved_order < _checkpoint_order("question_inventory"):
+            progress.step(
+                "Concept extraction — inventorying questions and worked examples",
+                value=0.58,
+            )
+            if early_inventory is not None:
+                # The join (Q19 Track A): the source-only half was
+                # extracted alongside the concept passes; only topic
+                # assignment and adjudication remain, in the exact
+                # sequential order. A track failure surfaces here with
+                # the same exceptions the inline path raises.
+                pre_joined, pre_anchors = early_inventory.join()
+                progress.log(
+                    "Joining the early-track inventory (extracted "
+                    "alongside the concept passes)."
+                )
+                question_task_inventory = _finish_inventory_with_topics(
+                    pre_joined, pre_anchors,
+                    meta=meta, sections=sections, records=out,
+                )
+            else:
+                question_task_inventory = (
+                    _extract_question_task_inventory_via_api(
+                        meta=meta, sections=sections, records=out)
+                )
+            progress.set_progress(
+                0.70, label="Concept extraction — question inventory complete")
+            _emit_concept_checkpoint(
+                checkpoint_callback,
+                "question_inventory",
+                records=out,
+                question_task_inventory=question_task_inventory,
+                method_row_snapshot=_serialize_method_row_snapshot(
+                    method_row_snapshot),
+            )
+    finally:
+        if early_inventory is not None:
+            # Halt-both (Q19): a human gate or any raise between the
+            # fork and the join stops the track before its next chunk;
+            # after a clean join this is an idempotent no-op.
+            early_inventory.halt()
 
     review: dict = {}
     if saved_order < _checkpoint_order(_TYPE_TAXONOMY_CHECKPOINT_STAGE):

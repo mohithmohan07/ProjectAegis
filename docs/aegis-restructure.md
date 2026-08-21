@@ -1082,27 +1082,44 @@ exact-coverage machinery, which is why it is staged rather than rushed.
 
 Owner rulings, 21 Aug 2026, in the cost/time review (a full run measured
 ~2 hours; the account's provider limits support far more concurrency
-than the pipeline can generate). The dependency graph, verified against
-the code, permits three tracks after the source is canonicalized:
-**Track A** — question inventory extraction + polishing + type mining
-and consolidation (source-only; the inventory's topic assignment is the
-one tail that waits for concept records); **Track B** — skeleton →
-descriptions → outline → Phase 3; **Track 3** — the Pre chain (premap →
-preanalyse → prequestions), forked after Settle/Host: its evidence is
-the prerequisite capture (ready at that boundary) and Post Descriptions
-for links (ready at Settle) — it does not need Place/Analyse/Polish.
-Joins where the data joins: inventory topic-assignment and Phase-3
-hosting. Both Masters build concurrently — BUILT (2026-08-21): per-lane
-database sessions, per-lane `assessment-<lane>/` audit snapshots (the
-unscoped filenames silently overwrote the sibling lane's snapshots even
-sequentially), and a lock-serialized failure recorder preserving the
-Q13 one-lane-fault guarantee.
+than the pipeline can generate).
 
-The pause ruling: when the Type-granularity pre-spend pause fires for
-owner review, a parallel run HALTS BOTH tracks — the pause stays a true
-stop-everything gate, at the cost of a little speedup on paused runs
-only. The track forks (A and 3) land with sidecar checkpoints so
-pause/resume stays exactly-once; they are the next build. Recorded
+**Track A — BUILT (2026-08-21).** The question-inventory extraction
+(per-chunk itemization, completeness verdicts, anchors, figures, qid
+numbering) reads nothing but the sections, so it forks on a side thread
+BEFORE the skeleton and runs beside the skeleton/description passes
+(`_EarlyInventoryTrack`; the extraction function is split at its
+`records` seam into a pre-join half and a finish half whose composition
+is byte-identical to the sequential build). The join is the
+`question_inventory` checkpoint: topic assignment, then adjudication, in
+the exact sequential order, so every decision payload is unchanged. The
+track keeps NO checkpoint of its own — a crash or pause before the join
+loses only wall-clock, exactly as a pre-checkpoint crash always has, and
+resume semantics are untouched. Workers=1 restores the strictly
+sequential path.
+
+**Track 3 — corrected, NOT built.** The initial sketch ("fork the Pre
+chain after Settle/Host") is WRONG against the code and is withdrawn:
+the prerequisite merge requires all four stage captures including
+Place's and Analyse's (decided only when those lanes finish), and the
+premap's needed-for links read the ASSEMBLED, POLISHED Post rows — so
+the Pre chain's tail position is load-bearing recorded-evidence design,
+and moving it would re-key every Pre decision onto weaker evidence. The
+chain is also already internally parallel (per-concept question
+authoring, premap batches, preanalyse batches all fan out under the
+worker pool), so there is no idle time to reclaim inside it. The Pre
+MASTER'S build does overlap the Post's — the concurrent Masters below.
+
+**Concurrent Masters — BUILT (2026-08-21):** per-lane database sessions,
+per-lane `assessment-<lane>/` audit snapshots (the unscoped filenames
+silently overwrote the sibling lane's snapshots even sequentially), and
+a lock-serialized failure recorder preserving the Q13 one-lane-fault
+guarantee.
+
+The pause ruling: when a human gate fires (the Type-granularity
+pre-spend pause, or any raise between fork and join), a parallel run
+HALTS BOTH tracks — the early track stops before its next chunk;
+in-flight provider calls finish and nothing new spends. Recorded
 alongside: the owner will later add a Batch-API overnight lane, and
 directs that PDF reading converge on ONE reading pass — the GPT
 PDF-to-ACSD path — rather than an external Mathpix MMD conversion.

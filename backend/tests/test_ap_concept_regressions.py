@@ -937,6 +937,9 @@ def test_pipeline_restores_skeleton_method_rows_before_content_passes(
     the method worked-example pass — must already see every restored
     mandatory method row, and the rows must still reach the 81% boundary.
     """
+    # This test stubs the WHOLE extraction function, which the Q19 early
+    # inventory track legitimately bypasses — pin the sequential path.
+    monkeypatch.setenv("AEGIS_SOURCE_CHUNK_WORKERS", "1")
     anchors = [
         {
             "anchor_id": "METHOD-1111111111",
@@ -1485,6 +1488,9 @@ def test_representative_mathpix_ocr_edges_keep_topics_and_visual_questions():
 
 
 def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
+    # This test stubs the WHOLE extraction function, which the Q19 early
+    # inventory track legitimately bypasses — pin the sequential path.
+    monkeypatch.setenv("AEGIS_SOURCE_CHUNK_WORKERS", "1")
     values: list[tuple[float, str]] = []
 
     def capture_step(label: str, *, value: float | None = None):
