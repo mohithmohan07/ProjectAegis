@@ -427,6 +427,43 @@ def decide_cells(
     return rows
 
 
+def concept_keys_by_pre_id(
+    concept_records_by_key: Mapping[str, Mapping] | None,
+) -> tuple[dict[str, str], dict[str, tuple[str, ...]]]:
+    """The mechanical PRC → concept_key translation, with ambiguity named.
+
+    A staged Pre row carries the ``pre_concept_id`` its questions were
+    authored to (release_snapshot row projection), and the minted release
+    ``concept_key`` is what routing understands. Both ids were assigned by
+    this pipeline; the join decides nothing.
+
+    Returns ``(mapping, ambiguous)``: ``mapping`` holds every
+    ``pre_concept_id`` carried by exactly ONE snapshot row; ``ambiguous``
+    names, per id, the concept keys of every row claiming it. An ambiguous
+    id never routes first-wins — its questions take the blocked path (the
+    release runner) or a named ``CellDecisionError`` (a direct
+    ``decide_generated_cells`` caller). One shared accessor so the runner's
+    partition and this module's join can never drift.
+    """
+
+    claims: dict[str, list[str]] = {}
+    for concept_key, row in dict(concept_records_by_key or {}).items():
+        pre_id = str((row or {}).get("pre_concept_id") or "").strip()
+        if pre_id:
+            claims.setdefault(pre_id, []).append(str(concept_key))
+    mapping = {
+        pre_id: keys[0]
+        for pre_id, keys in claims.items()
+        if len(keys) == 1
+    }
+    ambiguous = {
+        pre_id: tuple(keys)
+        for pre_id, keys in claims.items()
+        if len(keys) > 1
+    }
+    return mapping, ambiguous
+
+
 def decide_generated_cells(
     questions: list[Mapping],
     *,
@@ -464,16 +501,9 @@ def decide_generated_cells(
     profile_evidence = _profile_payload(profile)
     allowed_sheet_kinds = tuple(profile_evidence["allowed_sheet_kinds"])
     concepts = dict(concept_records_by_key or {})
-    # The mechanical PRC → concept_key translation: a staged Pre row
-    # carries the pre_concept_id its questions were authored to
-    # (release_snapshot row projection), and the minted release
-    # concept_key is what routing understands. Both ids were assigned by
-    # this pipeline; the join decides nothing.
-    concept_key_by_pre_id: dict[str, str] = {}
-    for concept_key, row in concepts.items():
-        pre_id = str((row or {}).get("pre_concept_id") or "").strip()
-        if pre_id and pre_id not in concept_key_by_pre_id:
-            concept_key_by_pre_id[pre_id] = str(concept_key)
+    concept_key_by_pre_id, ambiguous_pre_ids = concept_keys_by_pre_id(
+        concepts
+    )
 
     prepared: list[tuple[str, str, Mapping]] = []
     seen: set[str] = set()
@@ -498,9 +528,20 @@ def decide_generated_cells(
         if not concept_key:
             # Fail closed with the reason named: the question's home row
             # is not in the carried snapshot (skipped as defective, or the
-            # payload predates the pre_concept_id projection), so its cell
-            # cannot route mechanically and inventing a home would be a
-            # silent mis-placement.
+            # payload predates the pre_concept_id projection), or two rows
+            # claim its id, so its cell cannot route mechanically and
+            # inventing a home would be a silent mis-placement. The
+            # release runner partitions such questions onto the BLOCKED
+            # path before calling here; a direct caller gets the refusal.
+            if pre_concept_id in ambiguous_pre_ids:
+                claimants = ", ".join(ambiguous_pre_ids[pre_concept_id])
+                raise CellDecisionError(
+                    f"generated question {pre_question_id!r} names "
+                    f"pre-concept {pre_concept_id!r}, which "
+                    f"{len(ambiguous_pre_ids[pre_concept_id])} snapshot "
+                    f"rows claim ({claimants}); the routing is ambiguous "
+                    "and is never resolved first-wins"
+                )
             raise CellDecisionError(
                 f"generated question {pre_question_id!r} names pre-concept "
                 f"{pre_concept_id!r}, which the staged Pre release snapshot "

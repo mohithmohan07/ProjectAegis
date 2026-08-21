@@ -245,3 +245,81 @@ def test_materialize_candidates_returns_a_blocked_marker_in_place():
     )
     assert marker["blueprint_cell_id"] == "CELL-x"
     assert marker["flags"]
+
+
+def test_an_orphaned_generated_question_blocks_itself_not_the_master(db):
+    """The run-level follow-up to the loud refusal above: a question whose
+    home row the snapshot dropped is partitioned onto the blocked ledger
+    BEFORE any cell verdict is paid for, and the Master ships the rest.
+    (The direct ``decide_generated_cells`` contract is unchanged — a
+    caller that skips the runner's partition still gets the named
+    refusal.)"""
+
+    from app.services import assessment_release_run as run
+    from app.services import build_concepts_release as release
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter, questions=2)
+    inventory = copy.deepcopy(job.question_inventory)
+    questions = inventory[release.PRE_RELEASE_KEY]["generated_questions"]
+    orphan_qid = str(questions[1]["pre_question_id"])
+    questions[1]["pre_concept_id"] = "PRC-9999"
+    job.question_inventory = inventory
+    db.commit()
+
+    authorities, _ = _generated_authorities()
+    authorities["cells"] = (
+        _cell_verdict_author,
+        lambda payload: {"verdict": "verified", "confidence": 1.0,
+                         "issues": []},
+    )
+    released = run.run_pre_release_for_job(
+        db,
+        job.id,
+        owner_sub=OWNER,
+        authorities=authorities,
+        **_decision_context(),
+    )
+    payload = released.payload
+    assert len(payload["candidates"]) == 1, "the routable question ships"
+    blocked = payload["materialization_blocked"]
+    assert len(blocked) == 1
+    marker = blocked[0]
+    assert marker["assessment_eligibility"] == (
+        materialization.BLOCKED_ELIGIBILITY
+    )
+    assert marker["generated_question"]["pre_question_id"] == orphan_qid
+    assert any("PRC-9999" in flag for flag in marker["flags"]), (
+        "the defect names the missing snapshot row"
+    )
+    assert release_core.release_state(released) == (
+        release_core.READY_WITH_FLAGS
+    )
+
+
+def test_an_ambiguous_pre_concept_id_never_routes_first_wins():
+    """Two snapshot rows claiming one ``pre_concept_id`` is an ambiguity,
+    refused by name — never resolved by iteration order."""
+
+    concepts = {
+        "release:aaaaaaaaaaaaaaaaaaaa:0001": {"pre_concept_id": "PRC-0001"},
+        "release:aaaaaaaaaaaaaaaaaaaa:0002": {"pre_concept_id": "PRC-0001"},
+        "release:aaaaaaaaaaaaaaaaaaaa:0003": {"pre_concept_id": "PRC-0002"},
+    }
+    mapping, ambiguous = cells_mod.concept_keys_by_pre_id(concepts)
+    assert mapping == {"PRC-0002": "release:aaaaaaaaaaaaaaaaaaaa:0003"}
+    assert set(ambiguous) == {"PRC-0001"}
+    assert len(ambiguous["PRC-0001"]) == 2
+
+    with pytest.raises(cells_mod.CellDecisionError) as raised:
+        cells_mod.decide_generated_cells(
+            _questions(1),
+            meta={},
+            profile=_PROFILE,
+            envelope_sha256=ENVELOPE,
+            concept_records_by_key=concepts,
+            provider=_cell_verdict_author,
+            store=kernel.DecisionStore(),
+        )
+    assert "ambiguous" in str(raised.value)
+    assert "PRC-0001" in str(raised.value)

@@ -301,6 +301,53 @@ def _lane_has_staged_concept_release(
         return True
 
 
+def rebuild_lane_master(
+    db,
+    job_id: int,
+    lane: str,
+    *,
+    owner_sub: str | None = None,
+):
+    """Build one Master lane, recording any failure before it propagates.
+
+    The one recorder site for both triggers of a Master build. The in-run
+    sibling build swallows the re-raise (losing a lane must not cost
+    Outputs 01/03 — see ``_build_master_siblings``); the explicit re-build
+    routes let it propagate to an HTTP status. Either way the failure is
+    already recorded as that lane's ``assessment_lane_unavailable`` issue,
+    so the outputs card carries the reason whether the lane failed inside
+    the run or from the reviewer's re-build (Rule G's idempotent second
+    act).
+    """
+
+    from . import assessment_release_run
+
+    runner = (
+        assessment_release_run.run_pre_release_for_job
+        if lane == release.LANE_PRE
+        else assessment_release_run.run_release_for_job
+    )
+    try:
+        return runner(db, job_id, owner_sub=owner_sub)
+    except Exception as exc:
+        try:
+            db.rollback()
+            job = uploads.get_job(
+                db,
+                job_id,
+                owner_sub=owner_sub,
+                module="build_concepts",
+            )
+            release.record_assessment_lane_unavailable(
+                db, job, lane=lane, error=exc)
+        except Exception:
+            # The recorder is already defensive; this is the second
+            # ring, so that a database that cannot even be read back
+            # still cannot mask the original failure.
+            pass
+        raise
+
+
 def _build_master_siblings(
     db,
     job_id: int,
@@ -349,13 +396,8 @@ def _build_master_siblings(
     never skips the Post build.
     """
 
-    from . import assessment_release_run
-
     built: dict[str, dict[str, Any] | None] = {}
-    for lane, runner in (
-        (release.LANE_PRE, assessment_release_run.run_pre_release_for_job),
-        (release.LANE_POST, assessment_release_run.run_release_for_job),
-    ):
+    for lane in (release.LANE_PRE, release.LANE_POST):
         try:
             if not _lane_has_staged_concept_release(
                 db, job_id, lane, owner_sub=owner_sub,
@@ -368,25 +410,14 @@ def _build_master_siblings(
                 # so nothing about it is silent.
                 built[lane] = None
                 continue
-            built[lane] = {"release_id": runner(
-                db, job_id, owner_sub=owner_sub).id}
-        except Exception as exc:  # noqa: BLE001 — see the docstring
+            built[lane] = {"release_id": rebuild_lane_master(
+                db, job_id, lane, owner_sub=owner_sub).id}
+        except Exception:  # noqa: BLE001 — see the docstring
+            # ``rebuild_lane_master`` already recorded the failure as the
+            # lane's ``assessment_lane_unavailable`` issue; here the
+            # re-raise is swallowed so one Master-lane fault cannot cost
+            # the finished concept outputs.
             built[lane] = None
-            try:
-                db.rollback()
-                job = uploads.get_job(
-                    db,
-                    job_id,
-                    owner_sub=owner_sub,
-                    module="build_concepts",
-                )
-                release.record_assessment_lane_unavailable(
-                    db, job, lane=lane, error=exc)
-            except Exception:
-                # The recorder is already defensive; this is the second
-                # ring, so that a database that cannot even be read back
-                # still cannot cost the finished concept outputs.
-                pass
     return built
 
 

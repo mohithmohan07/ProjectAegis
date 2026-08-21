@@ -142,7 +142,23 @@ def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
 
     payload = release_payload(job, lane=LANE_PRE)
     if payload is None:
-        return []
+        # The four outputs are enumerated ALWAYS (OD4 / map P16) — the
+        # eager twin's rule, mirrored here so production (which serves
+        # THIS list) shows the same present-and-disabled pair.
+        return in_owner_order([
+            {
+                "kind": "pre_release_bulk_import",
+                "label": "Download the Pre-Learning Concept File",
+                "filename": f"{stem}_pre_bulk_import.xlsx",
+                "media_type": _XLSX_MEDIA_TYPE,
+                "size_bytes": 0,
+                "download_url": "",
+                "action": "download",
+                "disabled": True,
+                "disabled_reason": release_files.PRE_NOT_STAGED,
+            },
+            master_entry(job, lane=LANE_PRE),
+        ])
     query = f"?lane={LANE_PRE}"
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
     empty_note = release_files.pre_lane_empty_reason(payload)

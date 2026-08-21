@@ -206,7 +206,8 @@ def test_mined_type_body_includes_definition():
         "type_description": "Adding numbers.",
         "case_prompts": [{"case_prompt": "Find 2+3"}],
     }, 0)
-    assert body2.startswith("Type 01: Adding Numbers Case 01: Given the complete")
+    assert body2.startswith(
+        "Type 01: Adding Numbers\nCase 01: Given the complete")
     assert body2.endswith("Example 01: Find 2+3")
 
 

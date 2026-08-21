@@ -133,6 +133,26 @@ def is_learner_analysis_label(label: str) -> bool:
     )
 
 
+_ANALYSIS_LABEL_ECHO_RE = re.compile(
+    r"^(?:misconceptions?|error\s+analys(?:is|es))\s*:\s*",
+    re.IGNORECASE,
+)
+
+
+def strip_analysis_label_echo(text: str) -> str:
+    """Drop a leading kind-label echo from ONE analysis item's text.
+
+    The composers add the canonical ``Misconceptions:`` / ``Error
+    Analysis:`` prefix themselves; an item whose text already begins with
+    the label would otherwise render it twice ("Error Analysis: Error
+    Analysis: …"). Mechanics only: the item's KIND was decided upstream
+    and is not re-judged here — a single exact leading label token is
+    removed, nothing else, and the pass is idempotent.
+    """
+
+    return _ANALYSIS_LABEL_ECHO_RE.sub("", str(text or ""), count=1).strip()
+
+
 def split_sections(details: str) -> list[tuple[str, str]]:
     """Split ``Label: content // Label: content`` into ordered (label, content)."""
     out: list[tuple[str, str]] = []
@@ -1058,9 +1078,14 @@ def normalize_analysis_sections(details: str) -> str:
         ordered.append(types_block)
     combined: list[str] = []
     if chosen_misconceptions:
-        combined.append(f"Misconceptions: {chosen_misconceptions}")
+        combined.append(
+            "Misconceptions: "
+            + strip_analysis_label_echo(chosen_misconceptions)
+        )
     if chosen_errors:
-        combined.append(f"Error Analysis: {chosen_errors}")
+        combined.append(
+            "Error Analysis: " + strip_analysis_label_echo(chosen_errors)
+        )
     if combined:
         ordered.append((_ANALYSIS_LABEL, "; ".join(combined)))
     return join_sections(ordered)

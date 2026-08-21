@@ -93,6 +93,10 @@ _TABULAR_RE = re.compile(
     r"(?P<body>.*?)\\end\{tabular\}",
     re.IGNORECASE | re.DOTALL,
 )
+_ARRAY_ENV_RE = re.compile(
+    r"\\begin\{array\}\{[^}]*\}.*?\\end\{array\}",
+    re.IGNORECASE | re.DOTALL,
+)
 _FOOTNOTE_RE = re.compile(
     r"\\footnotetext\{(?P<body>[^{}]*(?:\{[^{}]*\}[^{}]*)*)\}",
     re.IGNORECASE | re.DOTALL,
@@ -721,6 +725,13 @@ def repair_unwrapped_math(text: str) -> str:
     ):
         value = pattern.sub(stash, value)
 
+    # A bare ``\begin{array}…\end{array}`` is wrapped WHOLE. The atom
+    # scanner below does not know ``\begin``/``\end``/``\hline``, so
+    # left to it the environment's inner fragments (a ``\text{…}``) get
+    # wrapped one by one and the table is mangled rather than repaired.
+    value = _ARRAY_ENV_RE.sub(
+        lambda match: stash(katex(match.group(0))), value)
+
     ranges = _raw_math_ranges(value)
     if not ranges:
         repaired = value
@@ -785,6 +796,14 @@ def canonicalize_rich_text(text: str) -> str:
         ))
 
     value = _TABULAR_RE.sub(tabular, value)
+
+    # A bare ``\begin{array}…\end{array}`` (the model quoting a source
+    # table) is already math in KaTeX's own dialect; wrap it so it renders
+    # as a table instead of shipping as literal backslash text. An array
+    # inside an existing ``[Katex]`` span was stashed above, so this never
+    # double-wraps and the pass stays idempotent.
+    value = _ARRAY_ENV_RE.sub(
+        lambda match: stash(katex(match.group(0))), value)
     value = _FOOTNOTE_RE.sub(lambda match: match.group("body").strip(), value)
     # Models occasionally emit a literal trailing ``\n`` escape in prose.
     # Convert only delimiter-shaped escapes; a TeX command such as ``\nu``

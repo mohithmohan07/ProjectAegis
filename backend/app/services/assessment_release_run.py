@@ -860,6 +860,44 @@ def _generated_cell_id(pre_question_id: str) -> str:
     ).hexdigest()[:16]
 
 
+def _blocked_generated_candidate(
+    question: Mapping, defect: str
+) -> dict[str, Any]:
+    """A BLOCKED marker for a generated question that cannot route.
+
+    The same shape the materialization seam mints for an obligation that
+    exhausted its corrections (``assessment_materialization``'s blocked
+    return), so the one exclusion seam, the one payload ledger
+    (``materialization_blocked``), and the one ``release_state`` flag
+    cover both. Minted before any cell verdict is paid for: the question's
+    identity is its ``pre_question_id`` and the cell identity that WOULD
+    have been minted for it, so the record stays addressable.
+    """
+
+    pre_question_id = str(question.get("pre_question_id") or "")
+    cell_id = _generated_cell_id(pre_question_id)
+    return {
+        "candidate_id": cell_id,
+        "assessment_eligibility": materialization.BLOCKED_ELIGIBILITY,
+        "source_atom_ids": [],
+        "blueprint_cell_id": cell_id,
+        "sheet_kind": "",
+        "source_policy": GENERATED_SOURCE_POLICY,
+        "origin": GENERATED_QUESTION_ORIGIN,
+        "generated_question": {
+            "pre_question_id": pre_question_id,
+            "pre_concept_id": str(question.get("pre_concept_id") or ""),
+            "question_id": str(question.get("question_id") or ""),
+            "question_text": str(question.get("question_text") or ""),
+            "answer": str(question.get("answer") or ""),
+            "rationale": str(question.get("rationale") or ""),
+        },
+        "flags": [
+            "generated question blocked before its cell verdict: " + defect
+        ],
+    }
+
+
 def _bind_generated_cells(
     questions: list[Mapping],
     blueprint_cells: list[Mapping] | None,
@@ -1547,6 +1585,7 @@ def run_release_for_job(
     concept_keys = set(concept_records_by_key)
     fixer = _authority_pair(authorities, "fixer")[0]
 
+    pre_blocked_generated: list[dict] = []
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
         # is built and none is classified: both of those stages hard-assume
@@ -1558,6 +1597,63 @@ def run_release_for_job(
             f"Assessment release: binding {len(questions)} generated "
             "question(s); no source question enters this lane."
         )
+        # A question whose home row the snapshot dropped (skipped as
+        # defective), or whose ``pre_concept_id`` two snapshot rows claim,
+        # cannot route mechanically. Taking the whole Master down for it
+        # would discard every other finished question — the same trade the
+        # materialization seam refuses — so such a question BLOCKS ITSELF:
+        # it is partitioned out here, before any cell verdict is paid for,
+        # and ships as a recorded ``materialization_blocked`` marker with
+        # the defect named (Ready-with-flags follows). The one distinct
+        # payload-level case stays a loud refusal: a join map that is
+        # entirely empty while questions exist means the staged payload
+        # predates the ``pre_concept_id`` projection — that is not N
+        # per-question defects but one stale artefact, and blocking every
+        # question would ship an empty Master for a payload that a re-run
+        # of generation re-stages correctly.
+        join_map, ambiguous_pre_ids = cell_decisions.concept_keys_by_pre_id(
+            concept_records_by_key
+        )
+        if questions and join_map:
+            routable: list[Mapping] = []
+            for question in questions:
+                pre_cid = (
+                    str(question.get("pre_concept_id") or "").strip()
+                    if isinstance(question, Mapping)
+                    else ""
+                )
+                if not pre_cid or pre_cid in join_map:
+                    # Routable, or an identity defect the cell pass fails
+                    # closed on (identity this pipeline minted is never
+                    # blocked around).
+                    routable.append(question)
+                    continue
+                if pre_cid in ambiguous_pre_ids:
+                    claimants = ", ".join(ambiguous_pre_ids[pre_cid])
+                    defect = (
+                        f"pre-concept {pre_cid!r} is claimed by "
+                        f"{len(ambiguous_pre_ids[pre_cid])} snapshot rows "
+                        f"({claimants}); the routing is ambiguous and is "
+                        "never resolved first-wins"
+                    )
+                else:
+                    defect = (
+                        f"pre-concept {pre_cid!r} is not carried by the "
+                        "staged Pre release snapshot (row skipped as "
+                        "defective upstream)"
+                    )
+                pre_blocked_generated.append(
+                    _blocked_generated_candidate(question, defect)
+                )
+            questions = routable
+        if pre_blocked_generated:
+            progress.log(
+                f"Assessment release: {len(pre_blocked_generated)} "
+                "generated question(s) cannot route to a snapshot row and "
+                "are BLOCKED from this Master, each recorded for review; "
+                f"the remaining {len(questions)} question(s) continue.",
+                level="warning",
+            )
         atoms = []
         if blueprint_cells is None and questions:
             # The supported live path: no external blueprint exists for
@@ -1727,6 +1823,15 @@ def run_release_for_job(
         if str(candidate.get("assessment_eligibility") or "")
         == materialization.BLOCKED_ELIGIBILITY
     ]
+    if pre_blocked_generated:
+        # The pre-cell partition's blocked questions join the same ledger.
+        # They were never in ``candidates``/``obligations``/``cells``, so
+        # the index-aligned exclusion below does not involve them; they
+        # ride ``materialization_blocked`` and the error-level log with
+        # the markers minted here.
+        blocked_candidates = blocked_candidates + [
+            copy.deepcopy(dict(row)) for row in pre_blocked_generated
+        ]
     if blocked_candidates:
         keep = [
             index for index, candidate in enumerate(candidates)
