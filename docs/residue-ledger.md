@@ -50,6 +50,16 @@ sprint continues past all of them.
 
 Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns were overstated — superseded by the F3/F6/F2 rows above. R-QX8's consequence note is superseded by F7's fix. R-S11b is CLOSED (Output-02/04 identity composition verified repaired at main). R-S12d is CLOSED (merge order completed).
 
+## Master cost round (2026-08-21 late night: live-run kill, spend diagnosis, Q20)
+
+| Item | Disposition |
+|---|---|
+| The run was killed mid-Masters (owner) | The first post-console chapter (Grade 6 poem, MSBSHSE) reached the Master lanes at ~66 min; the Post lane alone showed 5.2M tokens / $1.47 through routing and the Pre lane had just begun materializing 67 candidates. The owner stopped the machine; everything decided sits in the durable decide-once store and the 98% checkpoint, so a resume replays finished work at zero spend |
+| Where the money goes (diagnosed from code) | ~7 recorded decisions per question × (author at max effort + critic at high) ≈ 1,100–1,400 Master calls per chapter; every call carries the 128k provider-max completion headroom; the materialization payload re-ships the full released hierarchy per request with the varying candidate_id ahead of it, defeating prefix caching; the answer-space pass ships the 13.5k-token Open/Specific registry every call. The Pre lane is linear in question count — 69 planned questions made it 3.35× the Post lane |
+| Where the time goes | Author→critic serial inside every decide doubles latency though critics are advisory (Q10); the Master passes barrier per stage at 16 workers/lane while the whole cluster/describe/QA/refiner tail is sequential; Settle's 8-concept topic degraded to a serial 3-stage chain (single batch), 13 min |
+| Q20 — RULED AND BUILT | Pre-learning calibration re-set to about 5 questions per concept, tier split left to the model, plus the diagnostic posture ("minimum coverage that genuinely verifies the prerequisite"). Supersedes the 2026-08-20 ~10 steer; register entry Q20 amends Q4 (whose stale 40/20+20 text is also corrected); norm-location regressions re-pinned to the new prose; norm and posture live only in `_plan_rules`' labelled calibration prose |
+| Queued next (owner: "one by one") | Cache-order the Master payloads (stable prefix first, candidate last — after the current chapter finishes; identity-changing, policy bump); critics off the latency path (async advisory); parallelize the sequential grouping/QA tails; author effort tiering (owner call); Batch-API overnight lane |
+
 ## SOP round (2026-08-21: owner answers + "go through the SOP in detail")
 
 | Item | Disposition |

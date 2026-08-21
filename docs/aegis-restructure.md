@@ -350,12 +350,15 @@ the same detailing standard as Post-Learning.
   concepts that require it; the critic verifies necessity, grade boundary,
   non-duplication, and zero current-chapter leakage.
 * The Pre-Learning Master File carries generated questions per pre-concept —
-  **an adaptive target of 40: normally 20 Basic and 20 Intermediate** (Q4,
-  resolved per D3): neither mandatory quota nor maximum; the model authors a
-  concept-specific coverage plan; variance carries an authored,
-  critic-flagged rationale; an explicit blueprint may override; a thin
-  pre-concept is never padded. The Pre Master contains *generated* questions
-  only — current-chapter source questions never appear in it.
+  **an adaptive target of about 5 per concept, tier split left to the
+  model, under the diagnostic posture: the minimum coverage that genuinely
+  verifies the prerequisite** (Q4, resolved per D3; calibration re-set by
+  owner steer 2026-08-20 to ~10 and 2026-08-21 to ~5 — Q20): neither
+  mandatory quota nor maximum; the model authors a concept-specific
+  coverage plan; variance carries an authored, critic-flagged rationale;
+  an explicit blueprint may override; a thin pre-concept is never padded.
+  The Pre Master contains *generated* questions only — current-chapter
+  source questions never appear in it.
 * **Decided (Q3):** there is no separate pre-learning upload and no
   "derive from existing chapters" flow — one **Build Concepts** action
   produces Post and Pre together. Both existing flows and the ported quota
@@ -841,12 +844,16 @@ A single Build Concepts action captures prerequisites throughout all phases
 and produces Outputs 03–04 alongside 01–02. Both separate flows and the
 4–6-topic / 5–7-concept quota engine are removed.
 
-### Q4 · Decided per D3, provisional — the 40-questions default is an adaptive target
+### Q4 · Decided per D3, provisional — the coverage default is an adaptive target
 
-40 (normally 20+20) is neither mandatory quota nor maximum. The model authors
+The recorded target is neither mandatory quota nor maximum. The model authors
 a concept-specific coverage plan; any variance in total or split carries an
 authored, critic-flagged rationale; an explicit blueprint may override; a
-thin pre-concept is never padded to reach 40.
+thin pre-concept is never padded to reach the target. *(Originally 40,
+normally 20+20. Calibration re-set by owner steer 2026-08-20 to ~10 —
+recorded at the time only in the residue ledger — and again 2026-08-21 to
+about 5 per concept with the tier split left to the model, plus the
+diagnostic posture: see Q20, which is the current ruling.)*
 
 ### Q5 · Decided — all four outputs use the SOP/MES reference-school schema family
 
@@ -1123,6 +1130,34 @@ in-flight provider calls finish and nothing new spends. Recorded
 alongside: the owner will later add a Batch-API overnight lane, and
 directs that PDF reading converge on ONE reading pass — the GPT
 PDF-to-ACSD path — rather than an external Mathpix MMD conversion.
+
+### Q20 · Decided — pre-learning coverage calibrates to ~5 per concept under a diagnostic posture (amends Q4)
+
+Owner ruling, 21 Aug 2026, in the Master cost review (the first chapter
+run at the ~10 calibration planned 69 generated questions for 10
+pre-concepts, and every planned question rides the full per-question
+Master pipeline — the Pre lane was 3.35× the Post lane's spend).
+
+The recorded calibration is now **about 5 questions per pre-concept,
+with the split across the tiers left to the model's judgment of the
+prerequisite**, superseding the ~10 (5 Basic + 5 Intermediate) steer of
+2026-08-20. Alongside it the owner records a **diagnostic posture**:
+plan the minimum coverage that genuinely verifies the prerequisite —
+prefer fewer, more diagnostic questions, each earning its place by
+testing something the chapter's learning actually depends on, over
+breadth or drill.
+
+Q4's frame is unchanged and this entry inherits all of it: the figure is
+a recorded target, not an observed practice of any school, board or
+grade; neither mandatory quota nor maximum; every plan carries an
+authored rationale unconditionally; a thin pre-concept is never padded
+and a rich one is never capped; a plan of zero stays legitimate; an
+explicit blueprint may override. The norm and the posture live in
+exactly one place — the labelled CALIBRATION/POSTURE prose inside the
+plan payload's rules — in no constant, checker, threshold, default or
+comparison, with the norm-location regressions re-pinned to the new
+wording. The plan critic's ANCHORING dimension keeps watching that plans
+stay evidence-led rather than drifting to the stated figure.
 
 ---
 

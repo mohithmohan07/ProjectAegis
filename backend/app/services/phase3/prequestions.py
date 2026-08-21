@@ -1,11 +1,13 @@
 """Pass 2.9c — Prequestions: the Pre-Learning coverage plan and its questions.
 
-docs/aegis-restructure.md §4 Phase 03: *"The Pre-Learning Master File
-carries generated questions per pre-concept — an adaptive target of 40:
-normally 20 Basic and 20 Intermediate (Q4, resolved per D3): neither
-mandatory quota nor maximum; the model authors a concept-specific
-coverage plan; variance carries an authored, critic-flagged rationale;
-an explicit blueprint may override; a thin pre-concept is never padded."*
+docs/aegis-restructure.md §4 Phase 03 (Q4, resolved per D3; calibration
+re-set by owner steer 2026-08-20 to ~10, then 2026-08-21 to about 5
+questions per pre-concept with the tier split left to the model, plus
+the diagnostic posture: plan the minimum coverage that genuinely
+verifies the prerequisite): neither mandatory quota nor maximum; the
+model authors a concept-specific coverage plan; variance carries an
+authored, critic-flagged rationale; an explicit blueprint may override;
+a thin pre-concept is never padded.
 
 This pass authors the plan and the questions and carries them. Routing
 them through the assessment lane — cells, materialization, grouping,
@@ -454,13 +456,18 @@ def _plan_rules(rules_suffix: str) -> str:
         "EVERY plan carries a rationale — the one of ordinary size as "
         "much as the unusual one — so state yours whatever your numbers "
         "are. CALIBRATION (the reference point, not a rule): the "
-        "recorded target for pre-learning coverage is about 10 questions "
-        "per concept — around 5 Basic and around 5 Intermediate (owner "
-        "steer, 2026-08-20). That figure is a target this project "
-        "recorded, not an observed practice of any school, board or "
-        "grade, and it is neither a mandatory quota nor a maximum; a "
-        "thin pre-concept is never padded to reach it, and a rich one "
-        "is not capped at it. "
+        "recorded target for pre-learning coverage is about 5 questions "
+        "per concept, with the split across the tiers left to your "
+        "judgment of the prerequisite (owner steer, 2026-08-21; "
+        "supersedes the earlier ~10). That figure is a target this "
+        "project recorded, not an observed practice of any school, "
+        "board or grade, and it is neither a mandatory quota nor a "
+        "maximum; a thin pre-concept is never padded to reach it, and a "
+        "rich one is not capped at it. POSTURE (owner steer, "
+        "2026-08-21): plan the minimum coverage that genuinely verifies "
+        "the prerequisite — prefer fewer, more diagnostic questions, "
+        "each earning its place by testing something the chapter's "
+        "learning actually depends on, over breadth or drill. "
         "Plan what the evidence in front of you supports and say why — a "
         "prerequisite whose evidence supports six questions is planned at "
         "six, and that is a correct answer, not a shortfall. A plan of "
