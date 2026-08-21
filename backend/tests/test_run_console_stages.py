@@ -36,7 +36,13 @@ def test_calls_attribute_to_the_active_stage_and_lane():
                                                    reasoning=1))
         progress.step("Stage Two")
         openai_usage.record_response(_Response())
-        summary = openai_usage.current_summary()
+        summary = openai_usage.console_summary()
+        # Persisted-shape summaries stay EXACTLY as they were: the stage
+        # table rides the live console summary only, never a summary a
+        # checkpoint bundle or job record stores (strict schemas refuse
+        # unknown fields, and free repeats must not move the record).
+        assert "stages" not in openai_usage.current_summary()
+        assert "stages" not in openai_usage.visible_summary()
 
     rows = {(row["stage"], row["lane"]): row for row in summary["stages"]}
     assert set(rows) == {

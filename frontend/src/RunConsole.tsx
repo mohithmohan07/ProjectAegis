@@ -412,6 +412,12 @@ function presentedUsage(
     // fresh-attempt subtotal while a checkpoint retry is starting.
     return state.usage;
   }
+  if (!incoming.stages && state.usage?.stages) {
+    // Only live usage events carry the per-stage table (persisted-shape
+    // summaries on result/error events never do); keep the last table so
+    // the stage cards hold their cost chips through "Done".
+    return { ...incoming, stages: state.usage.stages };
+  }
   return incoming;
 }
 

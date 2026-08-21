@@ -116,11 +116,12 @@ def step(label: str, *, value: float | None = None) -> None:
         set_progress(value, label=label)
     # A stage boundary is the natural moment to refresh the console's
     # time/cost table. Lazy import mirrors stream(); a run with no
-    # recorded usage emits nothing extra.
+    # recorded usage emits nothing extra. console_summary carries the
+    # stage table on the LIVE event only — never a persisted summary.
     from . import openai_usage
 
     if openai_usage.is_tracking():
-        summary = openai_usage.visible_summary()
+        summary = openai_usage.console_summary()
         if summary.get("request_count"):
             usage(summary)
 

@@ -295,10 +295,6 @@ class UsageAccumulator:
                 else "multiple" if model_rows else ""
             ),
             "models": model_rows,
-            # Run-scoped stage/lane attribution for the console's
-            # time-and-cost table (persisted baselines carry none, so a
-            # merged cumulative summary re-attaches the live rows).
-            "stages": self.stage_rows(),
             "request_count": request_count,
             "input_tokens": input_tokens,
             "cached_input_tokens": cached_input_tokens,
@@ -376,14 +372,10 @@ def bind_persisted_summary(
     if key not in accumulator.persistence_baselines:
         accumulator.persistence_baselines[key] = copy.deepcopy(persisted)
     accumulator.visible_persistence_key = key
-    merged = merge_summaries(
+    return merge_summaries(
         accumulator.persistence_baselines[key],
         accumulator.summary(),
     )
-    # ``merge_summaries`` rebuilds from totals and drops attribution; the
-    # stage table is run-scoped, so this run's rows ride the merge whole.
-    merged["stages"] = accumulator.stage_rows()
-    return merged
 
 
 def cumulative_summary(
@@ -402,13 +394,29 @@ def visible_summary() -> dict[str, Any]:
         return UsageAccumulator().summary()
     key = accumulator.visible_persistence_key
     if key and key in accumulator.persistence_baselines:
-        merged = merge_summaries(
+        return merge_summaries(
             accumulator.persistence_baselines[key],
             accumulator.summary(),
         )
-        merged["stages"] = accumulator.stage_rows()
-        return merged
     return accumulator.summary()
+
+
+def console_summary() -> dict[str, Any]:
+    """``visible_summary`` plus the run-scoped per-(stage, lane) table.
+
+    The console's LIVE usage events are the only carrier of the stage
+    table, deliberately: persisted summaries (checkpoint bundles,
+    ``job.openai_usage``, pending-decision ``cumulative_usage``) keep
+    their exact historical shape — a strict checkpoint schema refuses
+    unknown fields, and a free repeated request must not change the
+    durable record. Run-scoped attribution describes THIS run's console
+    view and nothing else.
+    """
+    summary = visible_summary()
+    accumulator = _active.get()
+    if accumulator is not None:
+        summary["stages"] = accumulator.stage_rows()
+    return summary
 
 
 def record_response(response: Any, *, requested_model: str = "") -> dict[str, Any]:
@@ -458,11 +466,12 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     summary = accumulator.summary()
 
     # Local import avoids a module cycle. Outside streamed requests this is a
-    # cheap no-op, while the web UI receives updated aggregate usage live.
+    # cheap no-op, while the web UI receives updated aggregate usage live —
+    # console_summary so the stage/lane table rides the live event only.
     try:
         from . import progress
 
-        progress.usage(visible_summary())
+        progress.usage(console_summary())
     except Exception:  # pragma: no cover - accounting must never break generation
         pass
     return summary
