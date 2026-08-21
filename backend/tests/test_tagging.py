@@ -172,16 +172,16 @@ def test_new_tag_group_uses_explicit_display_name_and_internal_key(db):
 
     group = tagging._group_of_type(db, concept, "Advanced")
 
-    assert group.group_name == group.group_display_name == (
-        "Learner-facing concept name — Advanced"
-    )
+    # Q16 (SOP §6.1): both visible names carry the group ID itself.
     assert group.group_key
-    assert group.group_key != group.group_name
+    assert group.group_name == group.group_display_name == group.group_key
     assert group.group_sequence == 1
 
 
-def test_new_tag_group_requires_display_name_and_unambiguous_variant(db):
+def test_new_tag_group_requires_an_unambiguous_variant(db):
     topic = db.query(models.Topic).order_by(models.Topic.id).first()
+    # Q16 retired name derivation from the display name: a blank display
+    # name no longer blocks tagging — the visible name is the group ID.
     missing_name = models.Concept(
         topic_id=topic.id,
         concept_title="Title is not a visible-name fallback",
@@ -189,8 +189,8 @@ def test_new_tag_group_requires_display_name_and_unambiguous_variant(db):
     )
     db.add(missing_name)
     db.flush()
-    with pytest.raises(ValueError, match="explicit concept display name"):
-        tagging._group_of_type(db, missing_name, "Basic")
+    named = tagging._group_of_type(db, missing_name, "Basic")
+    assert named.group_name == named.group_key
 
     ambiguous = models.Concept(
         topic_id=topic.id,

@@ -238,11 +238,10 @@ def _complete_required_shells(snapshot: dict) -> None:
 
     for group in snapshot["groups"]:
         concept_key = str(group.get("concept_key") or "")
-        concept_name = concept_names.get(concept_key)
-        if concept_name is None:
+        if concept_key not in concept_names:
             continue
-        visible_name = grouping.friendly_group_name(
-            concept_name, str(group.get("group_type") or ""))
+        # SOP §6.1 (Q16): both visible names carry the group ID itself.
+        visible_name = str(group.get("group_key") or "")
         group["group_name"] = visible_name
         group["group_display_name"] = visible_name
 

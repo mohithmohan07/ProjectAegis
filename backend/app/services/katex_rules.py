@@ -74,6 +74,36 @@ def link(text: str, url: str) -> str:
     return f"[{text}]({url})"
 
 
+def raw_answer_cell(answer_type: str, content: str) -> str:
+    """SOP §4.3: an Equation/Image KEYWORD cell is RAW.
+
+    The declared ``answer_type`` already names the value's medium, so the
+    cell carries the bare value — bare LaTeX with no [Katex]...[/Katex]
+    wrapper, a bare URL with no [img ...] tag. Mechanics only, keyed on
+    the declared type: an Equation cell loses its Katex tokens; an Image
+    cell that IS one canonical image tag reduces to its src URL. Any
+    other type, and any content the reduction does not cleanly apply to,
+    passes through verbatim.
+
+    Scope (decided against the accepted gold workbooks, 2026-08-21):
+    this applies to the KEYWORD-style cells the ``RAW_KATEX_FIELDS``
+    contract already names — sub-question ``sqN_keyword`` cells (and the
+    Subjective sheet's answer cells if that sheet is ever rendered).
+    ``answer_content`` is BODY text and keeps its wrappers: SOP §4.3's
+    own wrapped list includes it, and the gold Descriptive sheets carry
+    Equation-typed ``answer_content`` wrapped.
+    """
+    text = str(content or "")
+    kind = str(answer_type or "").strip().lower()
+    if kind == "equation":
+        return _KATEX_TOKEN_RE.sub("", text).strip()
+    if kind == "image":
+        match = _CANONICAL_IMAGE_TAG_RE.search(text)
+        if match and not _CANONICAL_IMAGE_TAG_RE.sub("", text).strip():
+            return match.group("src")
+    return text
+
+
 _KATEX_TAG_RE = re.compile(
     r"\[katex\]\s*(?P<body>.*?)\s*\[/katex\]",
     re.IGNORECASE | re.DOTALL,

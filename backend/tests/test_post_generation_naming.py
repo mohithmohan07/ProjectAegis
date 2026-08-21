@@ -26,10 +26,10 @@ def test_legacy_group_creation_uses_explicit_display_name(db):
         db, concept, "Basic"
     )
 
-    assert group.group_name == group.group_display_name == (
-        f"Visible concept {token} — Basic"
-    )
-    assert f"MACHINE-{token}" not in group.group_name
+    # Q16 (SOP §6.1): both visible names carry the group ID itself; the
+    # tagged internal TITLE still never leaks into the name.
+    assert group.group_name == group.group_display_name == group.group_key
+    assert "Tagged internal title" not in group.group_name
 
     db.rollback()
 
@@ -63,10 +63,10 @@ def test_post_generation_only_synchronises_friendly_group_names(db, tmp_path):
 
     result = post_generation.assessment_tagging(db, [question])
 
-    concept_name = concept.concept_display_name
     assert result == {"clusters": 0, "groups_tagged": 1}
+    # Q16 (SOP §6.1): both visible names carry the group ID itself.
     assert group.group_name == group.group_display_name == (
-        f"{concept_name} — Intermediate")
+        f"(POSTGEN-{token}) IG01")
     assert group.group_key == f"(POSTGEN-{token}) IG01"
     assert group.group_name != question.question_label
     assert group.group_description == (

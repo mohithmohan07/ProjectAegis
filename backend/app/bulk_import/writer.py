@@ -295,12 +295,16 @@ def visible_question_placement_key(
 ) -> tuple:
     """Legacy workbook identity when no internal-key column is available.
 
-    The canonical workbook has only Q12's friendly ``group_name`` slot.  The
-    legacy Build Assessments append lane therefore needs this read-back alias
-    after its internal ``group_key`` and visible name are separated.  MES
-    releases keep using their snapshot ledger and never depend on this alias.
+    The canonical workbook has only the visible ``group_name`` slot.  The
+    legacy Build Assessments append lane therefore needs this read-back
+    alias; it must use the same composed value ``_group_band_values``
+    writes into the sheet (SOP §6.1: the group ID), or a re-read of the
+    workbook this run just wrote would not match its own rows.  MES
+    releases keep using their snapshot ledger and never depend on this
+    alias.
     """
-    return (*question_placement_key(label, group)[:-1], group.group_name)
+    return (*question_placement_key(label, group)[:-1],
+            _sop_group_name(group))
 
 
 def concept_placement_key(concept: models.Concept, topic: models.Topic) -> tuple:
@@ -700,12 +704,32 @@ def composed_topic_display(topic: models.Topic) -> str:
     return clean
 
 
+def _sop_group_name(group: models.Group) -> str:
+    """The exported visible group name: the group ID itself (SOP §6.1, Q16).
+
+    The persisted ``group_key`` when the row has one; otherwise composed
+    from the concept's persisted machine id — minted here exactly as the
+    concept_title column's own id is — with the group's type and sequence.
+    A row the composition cannot reach (no identity, unknown type) exports
+    the stored name it has rather than inventing one.
+    """
+    key = str(group.group_key or "").strip()
+    if key:
+        return key
+    tier = str(group.group_type or "")
+    machine = identity.machine_id_for_concept(group.concept)
+    if machine and tier in identity.GROUP_TIER_CODES:
+        sequence = int(group.group_sequence or 1) or 1
+        return identity.compose_group_key(machine, tier, sequence)
+    return group.group_display_name or group.group_name
+
+
 def _groups_by_type(concept: models.Concept) -> dict[str, str]:
     """All groups of each type, comma-separated (S/T/U columns)."""
     buckets: dict[str, list[str]] = {"Basic": [], "Intermediate": [], "Advanced": []}
     for g in sorted(concept.groups, key=lambda g: g.id):
         if g.group_type in buckets:
-            buckets[g.group_type].append(g.group_display_name or g.group_name)
+            buckets[g.group_type].append(_sop_group_name(g))
     return {k: ", ".join(v) for k, v in buckets.items()}
 
 
@@ -836,8 +860,11 @@ def _group_band_values(q: models.Question, group: models.Group) -> dict:
     second ``question_label`` inside it, and the target carries neither.
     """
     return {
-        "group_name": group.group_name,
-        "group_display_name": group.group_display_name,
+        # SOP §6.1 (Q16): both visible name cells carry the group ID
+        # itself, composed by ``_sop_group_name`` so legacy rows whose
+        # stored names predate the ruling still export conformant cells.
+        "group_name": _sop_group_name(group),
+        "group_display_name": _sop_group_name(group),
         "group_description": group.group_description,
         "group_status": group.group_status,
         "group_type": group.group_type,

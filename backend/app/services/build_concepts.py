@@ -635,15 +635,50 @@ def _add_concept(db: Session, topic: models.Topic, rec: dict,
     )
     db.add(concept)
     db.flush()
-    # Every concept gets the three standard group shells.
+    # Every concept gets the three standard group shells. They are created
+    # UNNAMED and UNKEYED here because their SOP §6.1 names (Q16:
+    # group_name = group_display_name = the group ID) need the concept's
+    # machine identity, and minting here would front-run the caller's own
+    # identity settlement (the publication lane restores carried ids or
+    # mints with its per-release position — S10, Round 7). Each caller
+    # settles identity and then calls ``stamp_group_shells``.
     for g_type in ("Basic", "Intermediate", "Advanced"):
         db.add(models.Group(
             concept_id=concept.id, group_type=g_type,
-            group_name=f"{concept.concept_title} — {g_type}",
-            group_display_name=f"{concept.concept_title} — {g_type}",
+            group_sequence=1,
             group_status="Active",
         ))
     return concept
+
+
+def stamp_group_shells(concept: models.Concept) -> None:
+    """SOP §6.1 naming (Q16) for a concept's persisted groups, mint-free.
+
+    Mechanics only: reads ``concept.machine_id`` verbatim (minting is the
+    caller's act), composes ``group_key`` for a blank shell only when the
+    shell is the sole group of its type — a same-type pair with no keys is
+    somebody's recorded decision to make, never a first-wins stamp — and
+    then makes every keyed group's visible names the group ID itself.
+    Idempotent; a concept with no machine id is left untouched.
+    """
+    from . import assessment_grouping
+    machine_base = str(getattr(concept, "machine_id", "") or "").strip()
+    by_type: dict[str, list[models.Group]] = {}
+    for group in concept.groups:
+        by_type.setdefault(str(group.group_type or ""), []).append(group)
+    for g_type, members in by_type.items():
+        if g_type not in assessment_grouping.TIER_CODES:
+            continue
+        for group in members:
+            if not str(group.group_key or "").strip():
+                if not machine_base or len(members) > 1:
+                    continue
+                sequence = int(group.group_sequence or 1) or 1
+                group.group_key = assessment_grouping.group_key_for(
+                    machine_base, g_type, sequence)
+                group.group_sequence = sequence
+            group.group_name = group.group_key
+            group.group_display_name = group.group_key
 
 
 def _missing_deposit_source_topics(
@@ -1037,6 +1072,10 @@ def _deposit_concepts(
         topic.source_order = topic_positions[topic_key]
         concept = _add_concept(db, topic, rec, source_book)
         concept.source_order = source_order
+        # Identity settles HERE, after source_order, at the same ordinal a
+        # later export would predict; the shells then take their SOP names.
+        identity.machine_id_for_concept(concept, position=source_order)
+        stamp_group_shells(concept)
         db.flush()
         created_ids.append(concept.id)
     return created_ids, merged_ids

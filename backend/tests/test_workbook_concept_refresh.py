@@ -8,6 +8,7 @@ import openpyxl
 from app import bulk_import as bi
 from app import models
 from app.bulk_import import layouts, writer
+from app.services import identity
 
 
 def _write_layout_workbook(path, layout_id: str):
@@ -178,9 +179,13 @@ def test_append_concepts_refreshes_complete_band_after_normalized_title_change(
         is_question_row = bool(
             writer._cell_str(row, writer._q_start("objective")))
         if is_question_row:
-            assert writer._cell_str(row, basic_col) == "Refreshed Basic"
-            assert writer._cell_str(
-                row, intermediate_col) == "Refreshed Intermediate"
+            # Q16 (SOP §6.1): the export composes the group ID itself —
+            # the stale stored "Refreshed …" names never reach the sheet.
+            machine = identity.machine_id_for_concept(concept)
+            assert writer._cell_str(row, basic_col) == (
+                identity.compose_group_key(machine, "Basic", 1))
+            assert writer._cell_str(row, intermediate_col) == (
+                identity.compose_group_key(machine, "Intermediate", 1))
         else:
             assert writer._cell_str(row, basic_col) == ""
             assert writer._cell_str(row, intermediate_col) == ""
@@ -514,6 +519,10 @@ def test_append_concepts_migrates_a_legacy_workbook_then_refreshes_its_fields(
         # related_concepts carries only genuine relations now.
         assert writer._cell_str(row, related_col) == "Current Legacy Relation"
         if writer._cell_str(row, writer._q_start("objective")):
-            assert writer._cell_str(row, basic_col) == "Legacy Basic Updated"
+            # Q16 (SOP §6.1): the export composes the group ID itself;
+            # the stale stored "Legacy Basic Updated" never reaches it.
+            assert writer._cell_str(row, basic_col) == (
+                identity.compose_group_key(
+                    identity.machine_id_for_concept(concept), "Basic", 1))
         else:
             assert writer._cell_str(row, basic_col) == ""

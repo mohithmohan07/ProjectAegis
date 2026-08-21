@@ -626,35 +626,38 @@ def test_level_contract_defect_reaches_the_fixer_once():
     assert any(flag.startswith("fixer:") for flag in result[0]["flags"])
 
 
-def test_group_identity_follows_the_mes_naming_contract():
+def test_group_identity_follows_the_sop_naming_contract():
     key = ag.group_key_for("06MSBMA_3DS_PL_T01_SolidShapes", "Basic", 2)
     assert key == "(06MSBMA_3DS_PL_T01_SolidShapes) BG02"
     record = ag.group_record(
         concept_id=1, concept_machine_id="C1", concept_name="Solid Shapes",
         tier="Advanced", sequence=1, member_candidate_ids=["CAND-1"])
     assert record["group_key"] == "(C1) AG01"
+    # Q16 (SOP §6.1): both visible names carry the group ID itself.
     assert record["group_name"] == record["group_display_name"] == (
-        "Solid Shapes — Advanced")
+        "(C1) AG01")
     assert record["group_status"] == "Active"
     assert record["group_sequence"] == 1
 
 
-def test_visible_group_name_requires_an_explicit_concept_name():
-    with pytest.raises(ag.GroupingError, match="explicit concept"):
-        ag.group_record(
-            concept_id=1, concept_machine_id="C1", concept_name="",
-            tier="Basic", sequence=1, member_candidate_ids=[])
+def test_group_records_no_longer_need_a_concept_name():
+    # Q16 retired name derivation from the concept name; an unknown tier
+    # is still refused by the one composer.
+    record = ag.group_record(
+        concept_id=1, concept_machine_id="C1", concept_name="",
+        tier="Basic", sequence=1, member_candidate_ids=[])
+    assert record["group_name"] == record["group_key"] == "(C1) BG01"
+    with pytest.raises(ag.GroupingError, match="unknown group tier"):
+        ag.group_key_for("C1", "Less", 1)
 
 
 def test_every_concept_carries_the_three_required_shells():
     shells = ag.required_shells(1, "C1", "Solid Shapes")
     assert [s["group_key"] for s in shells] == [
         "(C1) BG01", "(C1) IG01", "(C1) AG01"]
+    # Q16 (SOP §6.1): the shells' visible names are their group IDs.
     assert [s["group_name"] for s in shells] == [
-        "Solid Shapes — Basic",
-        "Solid Shapes — Intermediate",
-        "Solid Shapes — Advanced",
-    ]
+        "(C1) BG01", "(C1) IG01", "(C1) AG01"]
     assert all(s["group_name"] == s["group_display_name"] for s in shells)
     assert all(s["semantic_description"] == "NA" for s in shells)
     assert all(s["member_candidate_ids"] == [] for s in shells)

@@ -64,12 +64,11 @@ def test_group_selection_accepts_only_a_recorded_tier(db) -> None:
         db, concept, "Advanced"
     )
     assert group.group_type == "Advanced"
-    assert group.group_name == group.group_display_name == (
-        "Recorded level concept — Advanced"
-    )
     assert group.group_key == grouping.group_key_for(
         identity.machine_id_for_concept(concept), "Advanced", 1
     )
+    # Q16 (SOP §6.1): both visible names carry the group ID itself.
+    assert group.group_name == group.group_display_name == group.group_key
     assert group.group_sequence == 1
     db.rollback()
 
@@ -120,17 +119,21 @@ def test_group_selection_records_missing_legacy_machine_identity(db) -> None:
         identity.machine_id_for_concept(concept), "Intermediate", 1
     )
     assert selected.group_sequence == 1
+    # Q16 (SOP §6.1): both visible names carry the group ID itself.
     assert selected.group_name == selected.group_display_name == (
-        "Recorded level concept — Intermediate"
+        selected.group_key
     )
     db.rollback()
 
 
-def test_group_selection_requires_explicit_concept_display_name(db) -> None:
+def test_group_selection_no_longer_needs_a_concept_display_name(db) -> None:
+    # Q16 retired name derivation from the concept's display name: the
+    # visible name is the group ID, so a blank display name no longer
+    # blocks the legacy append lane.
     concept = _new_concept(db, display_name="")
 
-    with pytest.raises(grouping.GroupingError, match="display name"):
-        build_assessments._group_for_recorded_tier(db, concept, "Basic")
+    group = build_assessments._group_for_recorded_tier(db, concept, "Basic")
+    assert group.group_name == group.group_display_name == group.group_key
     db.rollback()
 
 

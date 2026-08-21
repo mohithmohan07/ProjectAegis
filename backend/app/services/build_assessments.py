@@ -229,8 +229,6 @@ def _group_for_recorded_tier(
             "recorded assessment tier must be Basic, Intermediate, or "
             f"Advanced (got {tier!r})"
         )
-    visible_name = assessment_grouping.friendly_group_name(
-        concept.concept_display_name, tier)
     matches = [group for group in concept.groups if group.group_type == tier]
     if len(matches) > 1:
         raise ValueError(
@@ -246,19 +244,21 @@ def _group_for_recorded_tier(
                 identity.machine_id_for_concept(concept), tier, sequence
             )
         group.group_sequence = sequence
-        group.group_name = visible_name
-        group.group_display_name = visible_name
+        # SOP §6.1 (Q16): both visible names carry the group ID itself.
+        group.group_name = group.group_key
+        group.group_display_name = group.group_key
         return group
 
     sequence = 1
+    group_key = assessment_grouping.group_key_for(
+        identity.machine_id_for_concept(concept), tier, sequence)
     group = models.Group(
         concept_id=concept.id,
         group_type=tier,
-        group_key=assessment_grouping.group_key_for(
-            identity.machine_id_for_concept(concept), tier, sequence),
+        group_key=group_key,
         group_sequence=sequence,
-        group_name=visible_name,
-        group_display_name=visible_name,
+        group_name=group_key,
+        group_display_name=group_key,
         group_status="Active",
     )
     db.add(group)

@@ -37,24 +37,21 @@ def _group_of_type(db: Session, concept: models.Concept, group_type: str) -> mod
         )
     if matches:
         return matches[0]
-    visible_name = assessment_grouping.friendly_group_name(
-        concept.concept_display_name, group_type
-    )
     # T4-3: read the PERSISTED id. Recomposing it from
     # ``question_label(concept, 1).rsplit(" Q", 1)[0]`` fed a re-derived base
     # into ``group_key_for``, and ``Group.group_key`` is persisted — so groups
     # minted before and after any content edit landed in different key
     # families.
     machine_base = identity.machine_id_for_concept(concept)
+    group_key = assessment_grouping.group_key_for(machine_base, group_type, 1)
     group = models.Group(
         concept_id=concept.id,
         group_type=group_type,
-        group_key=assessment_grouping.group_key_for(
-            machine_base, group_type, 1
-        ),
+        group_key=group_key,
         group_sequence=1,
-        group_name=visible_name,
-        group_display_name=visible_name,
+        # SOP §6.1 (Q16): both visible names carry the group ID itself.
+        group_name=group_key,
+        group_display_name=group_key,
         group_status="Active",
     )
     db.add(group)

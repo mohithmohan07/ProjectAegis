@@ -252,12 +252,21 @@ def _generated_authorities(*, calls=None, critic=None, materialize=None):
             "rationale": "Nothing to polish in this recorded fixture.",
         }
 
+    def dedup_author(payload):
+        record("dedup", payload)
+        return {
+            "duplicate_sets": [],
+            "confidence": 1.0,
+            "rationale": "each question asks a distinct prerequisite",
+        }
+
     def verified_critic(payload):
         record("critic", payload)
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
     stage_critic = critic or verified_critic
     return {
+        "dedup": (dedup_author, stage_critic),
         "materialize": (materialize_author, stage_critic),
         "answer_restriction": (answer_restriction_author, stage_critic),
         "marking": (marking_author, stage_critic),

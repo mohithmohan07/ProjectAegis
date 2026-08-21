@@ -429,9 +429,10 @@ def test_full_pipeline_publishes_a_ready_release(db):
     ]
     assert Counter(grouped_ids) == Counter(candidate_ids)
     assert all(group["group_type"] == "Advanced" for group in occupied)
+    # Q16 (SOP §6.1): both visible names carry the group ID itself.
     assert all(
         group["group_name"] == group["group_display_name"]
-        == f"{first_concept_name} — Advanced"
+        == group["group_key"]
         for group in occupied
     )
     for candidate in payload["candidates"]:
@@ -451,7 +452,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ] == "assessment-cell-2"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-4"
+        ] == "assessment-materialize-5"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]

@@ -394,10 +394,10 @@ are built (the SOP is the reference).
 
 Group identity remains the machine key `(<ConceptID>) BG01` internally —
 BG/IG/AG for the level, the two-digit suffix numbering the variant families.
-**Decided (Q12):** in the workbook, `group_name` and `group_display_name`
-both carry the friendly title — "*Concept name — Tier*" — exactly as the
-accepted gold workbooks do; the machine identity stays internal
-(`group_key`). Level calls and variant clustering are model verdicts with
+**Decided (Q12, naming half superseded by Q16):** the friendly-title
+projection is retired — per the SOP Bulk-Import guide, `group_name` and
+`group_display_name` both carry the group ID itself (the `group_key`
+value). Level calls and variant clustering are model verdicts with
 independent verification whose dissent flags (Q10); unresolved clusterings
 ship as flagged singletons, never guessed.
 
@@ -908,11 +908,13 @@ their v1 Open classification. Revisit only when Clarius' Specific grading
 provably honours recorded equivalents. The registry is versioned evidence for
 the model — never executable classification.
 
-### Q12 · Decided — group naming follows the accepted gold convention
+### Q12 · Decided — group naming follows the accepted gold convention (naming half superseded by Q16)
 
-`group_name` and `group_display_name` both carry the friendly "Concept name —
-Tier" title, exactly as the reference school accepted; the machine identity
-stays internal in `group_key`. GPT's D7 split is set aside.
+`group_name` and `group_display_name` both carried the friendly "Concept
+name — Tier" title, exactly as the reference school accepted; the machine
+identity stays internal in `group_key`. GPT's D7 split is set aside. The
+naming half is superseded by Q16 (2026-08-21): both visible names now
+carry the group ID itself, per the SOP Bulk-Import guide.
 
 ### Q13 · Decided — The Fixer always passes the run through; the Q7 halt is retired
 
@@ -954,6 +956,93 @@ place; ownership stays certified at Case/QID granularity BELOW the Type
 is single. Q2's register row stands for everything except the sentence
 "the Type identity may render under several concepts", which this entry
 supersedes.
+
+### Q15 · Decided — duplicate GENERATED questions are removed by a recorded verdict
+
+Owner ruling, 21 Aug 2026 (job-65 Master review: T01_C01 Q02 and Q03 were
+the same question re-worded): when the model judges two GENERATED
+pre-learning questions to be the same question — a paraphrase, a number or
+a name swapped, the same ask with a different opener — one survivor ships
+and the others are REMOVED from the Master. The removal is a model verdict
+(one per pre-learning concept group, critic-advised, Fixer-backed,
+content-addressed), never string similarity; the mechanical checker only
+refuses impossible citations (an id outside the group, a survivor also
+removed, a question ruled twice, a removal without a reason). It runs
+BEFORE the per-question cell verdicts, so a removed question costs nothing
+downstream.
+
+This amends the flag-only doctrine (Q10) for exactly this case and nothing
+else: removal is allowed because the survivor IS the removed question —
+the learner loses no ask. Every removal rides the release payload under
+``duplicates_removed`` with the full removed question, its survivor, and
+the reason; the release shows *Ready with flags* so it is reviewable,
+never silent (R4 stands: recorded exclusion, not loss). Source questions
+are untouched — their exactly-once accounting is Rule C's, and a generated
+question that duplicates a SOURCE question remains the generation critic's
+flag-only territory. Removal has no quota and is never a goal: a group
+with no duplicates removes nothing.
+
+The same review's oral-activity complaint (T01_C08 Q01) stays flag-only —
+the owner selected duplicate removal alone.
+
+### Q16 · Decided — group names follow the SOP Bulk-Import guide; Q12's friendly names are retired
+
+Owner ruling, 21 Aug 2026, answering the job-65 nomenclature flag with
+"It's there in the SOP Bulk-Import file": SOP §3.2 defines the Group ID
+`(<ConceptID>) <BG|IG|AG>##`, and §6.1 says `group_display_name` carries
+"the group ID" and `group_name` is "same as group_display_name". Both
+visible names therefore carry the group ID itself — the exact value
+`group_key` already holds — and Q12's friendly "*Concept name — Tier*"
+projection is retired everywhere it was composed: the release group
+records, the release-freeze validator (which now checks both names equal
+the group ID), the required-shell completer, the CMS export writer (which
+composes the ID for legacy rows whose stored names predate this ruling),
+tagging, the legacy Build-Assessments append lane, post-generation
+synchronisation, and the deposit shells (named once the concept's machine
+identity settles — never by front-running the publication lane's carried
+ids or position-anchored minting).
+
+One composer owns the format: `identity.compose_group_key` (with the
+`GROUP_TIER_CODES` alphabet beside the rest of the id grammar), which
+`assessment_grouping.group_key_for` — every lane's entry point — now
+delegates to. Q12's second half (level calls and variant clustering as
+model verdicts, Q10 dissent flags, flagged singletons) stands untouched.
+
+### Q17 · Decided — a picture-bank question ships ONE stitched labelled figure; MCQ options keep their own images
+
+Owner ruling, 21 Aug 2026 ("Build it", after the difference was explained
+on the job-61 example: a classification question rendering eight separate
+`[img]` links — Drum, Table surface, Reed pipe, Carrom board, Harmonium,
+Road, Playground, Spinning Top). A question whose body carries two or
+more canonical image tags ships ONE deterministically stitched, labelled
+grid image — tile order = tag order, tile label = each tag's own alt
+text, near-square layout, content-addressed JPEG pinned to the durable
+source-asset store and served from the app's signed `/source-assets`
+route. Objective/MCQ items are exempt: each option must render its own
+image, and the exemption is keyed on RECORDED kind (`sheet_kind` in the
+assessment lane; the inventory item's recorded `options` upstream),
+never on what any picture shows (Rule 1: this pass is pure mechanics).
+
+Failure semantics: a stitch that cannot complete (a download fails, the
+public base URL is unconfigured) leaves the text EXACTLY as it was and
+rides the candidate as `assessment_image_grid_review` with the error
+named in the `_aegis_image_consolidation` audit — never a blocked
+Master, never a half-stitched bank.
+
+Build stages. Stage 1 (built): `question_image_grid` + the assessment
+lane — both Masters stitch at the run, after materialization and before
+the learner-text freeze, so every later stage sees the final
+single-figure body. Stage 2 (designed, next): the concept workbook's
+Example lines — the ruling's original surface — must stitch at the
+INVENTORY item (a `_combined_image_url` stamp consumed by
+`_inventory_task_text`, the one composer every coverage key, boundary,
+and Example flows through), with the coverage ledger's figure accounting
+taught that a source URL inside a consolidation record whose combined
+URL is placed counts as placed, and a staleness guard so an inventory
+refresh that changes `image_urls` silently retires the stamp. Stitching
+any later than the inventory breaks exact-coverage identity; any
+earlier, the refresh passes undo it — which is why stage 2 is its own
+careful change rather than a rider on stage 1.
 
 ---
 

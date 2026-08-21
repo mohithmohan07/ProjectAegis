@@ -45,10 +45,10 @@ def assessment_tagging(db: Session, questions: list[models.Question]) -> dict:
             f"for group ids {missing_keys!r}"
         )
     for group in touched_groups.values():
-        visible_name = assessment_grouping.friendly_group_name(
-            group.concept.concept_display_name, group.group_type)
-        group.group_name = visible_name
-        group.group_display_name = visible_name
+        # SOP §6.1 (Q16): both visible names carry the group ID itself —
+        # the recorded ``group_key`` whose presence was just enforced.
+        group.group_name = group.group_key
+        group.group_display_name = group.group_key
     db.commit()
     return {"clusters": 0, "groups_tagged": len(touched_groups)}
 

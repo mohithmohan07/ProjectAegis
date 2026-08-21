@@ -37,6 +37,7 @@ from .. import models
 from . import assessment_answer_restriction as answer_restriction
 from . import assessment_blueprint
 from . import assessment_cells as cell_decisions
+from . import assessment_dedup
 from . import assessment_grouping as grouping
 from . import assessment_marking as marking
 from . import assessment_materialization as materialization
@@ -50,6 +51,7 @@ from . import assessment_profile
 from . import build_concepts_release
 from . import identity
 from . import progress, uploads
+from . import question_image_grid
 from . import release_core
 from . import release_refiner
 from .phase3 import envelope as phase3_envelope
@@ -69,6 +71,7 @@ _QUALITY_AUDIT_FIELD = "_aegis_assessment_group_quality"
 _MASTER_REFINEMENT_AUDIT_FIELD = (
     "_aegis_assessment_master_refinement"
 )
+_IMAGE_GRID_AUDIT_FIELD = "_aegis_image_consolidation"
 
 _CELL_WARNING = "assessment_cell_review"
 _MATERIALIZATION_WARNING = "assessment_materialization_review"
@@ -80,6 +83,7 @@ _CLUSTER_WARNING = "assessment_variant_cluster_review"
 _DESCRIPTION_WARNING = "assessment_group_description_review"
 _QUALITY_WARNING = "assessment_group_quality_review"
 _MASTER_REFINEMENT_WARNING = "assessment_master_refiner_review"
+_IMAGE_GRID_WARNING = "assessment_image_grid_review"
 
 _CELLS_SNAPSHOT = "source.phase3-assessment-cells.json"
 _MATERIALIZATIONS_SNAPSHOT = "source.phase3-assessment-materializations.json"
@@ -1391,6 +1395,7 @@ def run_release_for_job(
     envelope_sha256: str | None = None,
     decision_store: kernel.DecisionStore | None = None,
     supersedes: models.AssessmentRelease | None = None,
+    image_downloader: question_image_grid.Downloader | None = None,
 ) -> models.AssessmentRelease:
     """Run the complete assessment pipeline for one generated job.
 
@@ -1586,6 +1591,7 @@ def run_release_for_job(
     fixer = _authority_pair(authorities, "fixer")[0]
 
     pre_blocked_generated: list[dict] = []
+    duplicates_removed: list[dict] = []
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
         # is built and none is classified: both of those stages hard-assume
@@ -1654,6 +1660,86 @@ def run_release_for_job(
                 f"the remaining {len(questions)} question(s) continue.",
                 level="warning",
             )
+        if blueprint_cells is None and len(questions) > 1:
+            # Q15 — one recorded duplicate verdict per pre-learning
+            # concept group, run BEFORE any cell verdict is paid for.
+            # Sameness is the model's judgment, never string similarity;
+            # a removed question rides the payload under
+            # ``duplicates_removed`` with its survivor and reason,
+            # reviewable, never silent. Grouping is mechanical identity
+            # (the ``pre_concept_id`` this pipeline minted); a question
+            # with no id keeps its identity defect for the cell pass to
+            # fail closed on, and a group of one costs nothing. Only the
+            # decided-cells path runs it: an explicit ``blueprint_cells``
+            # argument is the zero-spend path whose cells arrive 1:1
+            # with the questions, and it stays exactly that.
+            dedup_provider, dedup_critic = _authority_pair(
+                authorities, "dedup"
+            )
+            grouped: dict[str, list[Mapping]] = {}
+            for question in questions:
+                pre_cid = (
+                    str(question.get("pre_concept_id") or "").strip()
+                    if isinstance(question, Mapping)
+                    else ""
+                )
+                if pre_cid:
+                    grouped.setdefault(pre_cid, []).append(question)
+            removed_ids: set[str] = set()
+            for pre_cid, group in grouped.items():
+                if len(group) < 2:
+                    continue
+                concept = concept_records_by_key.get(
+                    join_map.get(pre_cid, "")
+                )
+                _, removed_records = (
+                    assessment_dedup.decide_generated_duplicates(
+                        group,
+                        concept_id=pre_cid,
+                        concept_evidence=(
+                            _concept_evidence(concept)
+                            if isinstance(concept, Mapping)
+                            else None
+                        ),
+                        meta=meta,
+                        envelope_sha256=envelope_sha,
+                        provider=dedup_provider,
+                        critic=dedup_critic,
+                        store=store,
+                        fixer=fixer,
+                    )
+                )
+                removed_ids.update(
+                    str(record.get("pre_question_id") or "")
+                    for record in removed_records
+                )
+                duplicates_removed.extend(removed_records)
+            if duplicates_removed:
+                for record in duplicates_removed:
+                    progress.log(
+                        "Master file: generated question "
+                        f"{record.get('pre_question_id')!r} is REMOVED "
+                        "as a duplicate of "
+                        f"{record.get('survivor_pre_question_id')!r} "
+                        "(Q15) and recorded on the release for review: "
+                        + str(record.get("reason") or ""),
+                        level="warning",
+                    )
+                questions = [
+                    question for question in questions
+                    if (
+                        str(question.get("pre_question_id") or "")
+                        if isinstance(question, Mapping)
+                        else ""
+                    ) not in removed_ids
+                ]
+                progress.log(
+                    "Assessment release: "
+                    f"{len(duplicates_removed)} duplicate generated "
+                    f"question(s) removed by recorded verdict; "
+                    f"{len(questions)} distinct question(s) continue.",
+                    level="warning",
+                )
         atoms = []
         if blueprint_cells is None and questions:
             # The supported live path: no external blueprint exists for
@@ -1889,6 +1975,54 @@ def run_release_for_job(
         envelope_sha256=envelope_sha,
         candidates=candidates,
     )
+
+    # Owner ruling (2026-08-21, "Build it"): a picture-bank question — two
+    # or more canonical image tags in its body, on a non-Objective sheet —
+    # ships ONE stitched, labelled grid figure instead of a link per
+    # picture. Objective items are exempt: each option must render its own
+    # image. Mechanics keyed on the recorded sheet_kind and the tag count,
+    # never on what any picture shows; a stitch that cannot complete (a
+    # download fails, no public base URL) leaves the text untouched and
+    # rides the candidate as a named review flag — never a blocked Master.
+    # It runs HERE, before the learner-text freeze, so every later stage
+    # and both invariance guards see the final single-figure body.
+    image_grid_cache: dict = {}
+    stitched_count = 0
+    for candidate in candidates:
+        if str(candidate.get("sheet_kind") or "") == "objective":
+            continue
+        if (
+            str(candidate.get("assessment_eligibility") or "")
+            == materialization.BLOCKED_ELIGIBILITY
+        ):
+            continue
+        grid_audits: list[dict] = []
+        for field in ("question", "question_text"):
+            new_text, grid_record = (
+                question_image_grid.consolidate_images(
+                    str(candidate.get(field) or ""),
+                    job_id=job.id,
+                    downloader=image_downloader,
+                    cache=image_grid_cache,
+                )
+            )
+            if grid_record is None:
+                continue
+            grid_audits.append({"field": field, **grid_record})
+            if "error" in grid_record:
+                _append_warning(candidate, _IMAGE_GRID_WARNING)
+            else:
+                candidate[field] = new_text
+        if grid_audits:
+            candidate[_IMAGE_GRID_AUDIT_FIELD] = grid_audits
+            if any("error" not in audit for audit in grid_audits):
+                stitched_count += 1
+    if stitched_count:
+        progress.log(
+            f"Assessment release: {stitched_count} picture-bank "
+            "question(s) now carry one stitched labelled figure each "
+            "(Objective options keep their own images)."
+        )
 
     learner_text_before = _learner_text_snapshot(candidates)
 
@@ -2385,6 +2519,11 @@ def run_release_for_job(
         # the checker refuses — but they are never silent: every one is
         # named here with its defects, for review and re-run.
         "materialization_blocked": blocked_candidates,
+        # Q15: generated questions the duplicate verdict removed, each
+        # with its survivor and reason. A recorded exclusion, not loss —
+        # the survivor asks the same question — and it names the release
+        # Ready-with-flags so every removal is reviewable.
+        "duplicates_removed": duplicates_removed,
     }
     if staged_lane == build_concepts_release.LANE_PRE:
         # Which lane this Master belongs to, stated rather than inferred —

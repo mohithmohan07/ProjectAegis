@@ -721,23 +721,19 @@ def unresolved_question_homes(
         if tier not in GROUP_TYPES or tier not in grouping.TIER_CODES:
             # ``validate_group`` already refuses this at freeze.
             continue
-        # ONE owner for the learner-visible composition.  It used to be
-        # spelled inline here as ``f"{concept_name} — {tier}"`` while
-        # ``assessment_grouping.friendly_group_name`` composed the value
-        # that is actually written — so a change to the separator would
-        # have falsely flagged every group of every release and blocked
-        # every one of them.  The two guards above are exactly the two
-        # conditions ``friendly_group_name`` raises on, so this call cannot
-        # raise and the function stays pure.
-        visible_name = grouping.friendly_group_name(concept_name, tier)
+        # ONE owner for the visible composition (it used to be spelled
+        # inline here, so a composition change would have falsely flagged
+        # every group of every release): SOP §6.1 (Q16, superseding Q12)
+        # says ``group_name`` and ``group_display_name`` both carry the
+        # group ID itself — the ``group_key`` this row already holds.
         if (
-            str(group.get("group_name") or "") != visible_name
-            or str(group.get("group_display_name") or "") != visible_name
+            str(group.get("group_name") or "") != group_key
+            or str(group.get("group_display_name") or "") != group_key
         ):
             findings.append(_finding(
                 GROUP_VISIBLE_NAME_MISMATCH,
                 f"group {group_key!r} visible names must both equal "
-                f"{visible_name!r}",
+                "the group ID itself (SOP §6.1)",
                 group_key=group_key, concept_key=concept_key))
 
     allowed_kinds = assessment_profile.sheet_kinds(profile)

@@ -123,17 +123,19 @@ def test_publish_exposes_both_files_atomically(db, client):
 
 
 def test_release_snapshot_replaces_stale_visible_names_but_keeps_group_keys(db):
+    # Q16 (SOP §6.1): the visible names ARE the group ID; a payload that
+    # arrives with retired friendly names has them replaced by the key.
     def stale_names(payload):
         for group in payload["groups"]:
-            group["group_name"] = group["group_key"]
-            group["group_display_name"] = group["group_key"]
+            stale = f"Stale friendly — {group['group_type']}"
+            group["group_name"] = stale
+            group["group_display_name"] = stale
 
     release, payload, _ = _fresh_release(db, mutate=stale_names)
     concept = _chapter_concept(db)
-    expected = concept.concept_display_name
     assert all(
         group["group_name"] == group["group_display_name"]
-        == f"{expected} — {group['group_type']}"
+        == group["group_key"]
         for group in release.concept_snapshot["groups"]
         if group["concept_key"] == f"db:{concept.id}"
     )
@@ -218,7 +220,10 @@ def test_duplicate_group_key_is_named_and_publication_fails_closed(db):
         svc.upload_master_to_database(db, release, owner_sub=release.owner_sub)
 
 
-def test_shell_completion_never_parses_a_tagged_title_as_a_friendly_name():
+def test_shell_completion_never_parses_a_tagged_title_as_a_name():
+    # Q16 retired name derivation from titles entirely: a tagged title
+    # with no display name completes fine, and every shell's visible
+    # names are its group ID — nothing is ever parsed out of the title.
     snapshot = {
         "topics": [{"concepts": [{
             "concept_key": "db:1",
@@ -227,8 +232,12 @@ def test_shell_completion_never_parses_a_tagged_title_as_a_friendly_name():
         }]}],
         "groups": [],
     }
-    with pytest.raises(ag.GroupingError, match="explicit concept"):
-        svc._complete_required_shells(snapshot)
+    svc._complete_required_shells(snapshot)
+    assert snapshot["groups"], "the three required shells were added"
+    for group in snapshot["groups"]:
+        assert group["group_name"] == group["group_display_name"] == (
+            group["group_key"])
+        assert "Solid Shapes" not in group["group_name"]
 
 
 def test_unpublished_release_serves_no_artifacts(db, client):
@@ -399,9 +408,9 @@ def test_upload_is_idempotent_and_hash_guarded(db):
     assert question.blueprint_cell_id == "CELL-rel1"
     assert question.origin == "assessment_release"
     assert question.group.group_key.endswith("BG01")
-    concept_name = question.group.concept.concept_display_name
+    # Q16 (SOP §6.1): both visible names carry the group ID itself.
     assert question.group.group_name == question.group.group_display_name == (
-        f"{concept_name} — Basic")
+        question.group.group_key)
 
     again = svc.upload_master_to_database(db, published, owner_sub=OWNER)
     assert again == first
