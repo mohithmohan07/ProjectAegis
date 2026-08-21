@@ -1104,8 +1104,14 @@ def build(
             critic=empty_critic,
             store=store or kernel.DecisionStore(),
             fixer=empty_fixer,
-            rules_suffix=prompts_mod.instruction_rules_suffix(
-                env, slots=prompts_mod.PRE_LEARNING_SLOTS
+            # Redacted for the same reason as the map path below: a
+            # literary chapter's plan slot routes task_qids, and the
+            # verdict payload is a Pre-lane payload like any other.
+            rules_suffix=_redact_ids(
+                prompts_mod.instruction_rules_suffix(
+                    env, slots=prompts_mod.PRE_LEARNING_SLOTS
+                ),
+                qids,
             ),
         )
         # THE FLAGS RIDE THE VERDICT ROW, not only ``decision_flags``.
@@ -1170,8 +1176,19 @@ def build(
     analysis_allot_provider = analysis_allot_provider or analysis_provider
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    rules_suffix = prompts_mod.instruction_rules_suffix(
-        env, slots=prompts_mod.PRE_LEARNING_SLOTS
+    # REDACTED at the mint, like every other channel the Pre lane is
+    # shown. The Architect's ``language_topology_plan`` slot (literary
+    # chapters) legitimately routes ``task_qids`` — upstream provenance,
+    # not a lift — and [job 64, 2026-08-21] carrying it verbatim put the
+    # whole chapter inventory into this payload, so the post-condition
+    # refused the entire Pre map and both Pre files shipped empty.
+    # Expository chapters author no such slot: their suffix has no QID,
+    # the redaction is a no-op, and their decision keys do not move.
+    rules_suffix = _redact_ids(
+        prompts_mod.instruction_rules_suffix(
+            env, slots=prompts_mod.PRE_LEARNING_SLOTS
+        ),
+        qids,
     )
 
     # ---- the map decision: built from the capture, never from Post ----

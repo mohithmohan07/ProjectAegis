@@ -450,6 +450,51 @@ def test_the_critic_is_asked_the_anchoring_question_by_name():
 # thin, empty, never padded
 
 
+def test_a_literary_plan_slot_naming_task_qids_never_refuses_the_plan(
+    golden_envelope, pre_map,
+):
+    """[job 64] The same leak the Pre map hit: the Architect's
+    ``language_topology_plan`` slot routes ``task_qids``, and the
+    question-plan payload runs the SAME no-extraction guard. The suffix
+    is redacted at the mint, so questions author instead of the whole
+    lane refusing."""
+    import copy as _copy
+    import json as _json
+
+    from app.services.phase3 import premap as premap_mod
+    from tests import test_phase3_settle_golden as settle_golden
+
+    env = _copy.deepcopy(dict(golden_envelope))
+    env["metadata"] = {
+        **env["metadata"],
+        "instruction_slots": {
+            "language_topology_plan": _json.dumps({
+                "topics": [{
+                    "display_name": "A New Year in Which Everyone Takes Part",
+                    "task_qids": ["QINV-0003", "QINV-0004"],
+                }],
+            }),
+        },
+    }
+    env["envelope_sha256"] = settle_golden.envelope_mod.seal_sha256(env)
+
+    seen: list[dict] = []
+    base = _provider()
+
+    def capturing(request: dict) -> dict:
+        if str(request.get("stage")) == "prequestions.plan":
+            seen.append(_copy.deepcopy(request))
+        return base(request)
+
+    result = _build(env, pre_map, provider=capturing)
+    assert result["questions"]
+    assert not result.get("refused")
+    payload = _json.dumps(seen[0], ensure_ascii=False)
+    assert "QINV-0003" not in payload
+    assert "QINV-0004" not in payload
+    assert "a source question of this chapter" in payload
+
+
 def test_a_thin_pre_concept_is_planned_small_and_never_padded(
     golden_envelope, pre_map
 ):

@@ -557,8 +557,18 @@ def build(
     author_provider = author_provider or provider
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    rules_suffix = prompts_mod.instruction_rules_suffix(
-        env, slots=prompts_mod.PRE_QUESTION_SLOTS
+    # Redacted at the mint (premap._redact_ids, the same authority): the
+    # Architect's ``language_topology_plan`` slot routes ``task_qids`` on
+    # literary chapters, and carrying them verbatim would trip this
+    # payload's own no-extraction post-condition exactly as it tripped
+    # the Pre map's (job 64, 2026-08-21). Expository chapters author no
+    # such slot, so their suffix — and their decision keys — are
+    # unchanged.
+    rules_suffix = premap_mod._redact_ids(
+        prompts_mod.instruction_rules_suffix(
+            env, slots=prompts_mod.PRE_QUESTION_SLOTS
+        ),
+        qids,
     )
     calibration = premap_mod.chapter_calibration(env)
     evidence = [concept_evidence(row) for row in rows]

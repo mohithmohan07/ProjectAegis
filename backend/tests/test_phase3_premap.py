@@ -802,6 +802,66 @@ def test_upstream_evidence_naming_a_qid_is_redacted_never_refused(
     assert calls["n"] == 0
 
 
+def test_a_literary_plan_slot_naming_task_qids_is_redacted_never_refused(
+    golden_envelope,
+):
+    """[job 64, 2026-08-21] The Architect's ``language_topology_plan``
+    slot (literary chapters) legitimately routes ``task_qids`` per
+    planned concept. Carried verbatim into the Pre-lane rules suffix, it
+    put the whole chapter inventory into the map payload, the
+    no-extraction post-condition refused the ENTIRE Pre map, and both
+    Pre files shipped empty. The plan is upstream evidence the Pre lane
+    is SHOWN — the redaction case, by ``_redact_ids``'s own doctrine —
+    so the suffix is redacted at the mint and the map ships."""
+    from app.services.phase3 import prompts
+
+    env = copy.deepcopy(dict(golden_envelope))
+    env["metadata"] = {
+        **env["metadata"],
+        "instruction_slots": {
+            "subject_topology_guidance": (
+                "Treat this as a Grade 6 poem unit."
+            ),
+            "language_topology_plan": json.dumps({
+                "topics": [{
+                    "display_name": "A New Year in Which Everyone Takes Part",
+                    "source_block_ids": ["BLK-00014"],
+                    "task_qids": ["QINV-0003", "QINV-0004"],
+                }],
+            }),
+        },
+    }
+    # The golden envelope is sealed; an authored slot re-seals exactly as
+    # production does when the Architect writes one.
+    env["envelope_sha256"] = settle_golden.envelope_mod.seal_sha256(env)
+    seen: list[dict] = []
+    base = _provider()
+
+    def capturing(request: dict) -> dict:
+        if str(request.get("stage")) == "premap.map":
+            seen.append(copy.deepcopy(request))
+        return base(request)
+
+    result = _build(env, provider=capturing)
+    # The run completes and the map ships — no refusal.
+    assert result["rows"]
+    assert not result.get("refused")
+    # The model saw the plan's teachable content with the identities gone.
+    payload = json.dumps(seen[0], ensure_ascii=False)
+    assert "QINV-0003" not in payload
+    assert "QINV-0004" not in payload
+    assert "a source question of this chapter" in payload
+    assert "A New Year in Which Everyone Takes Part" in payload
+    # An expository chapter (no authored slots) keeps a QID-free suffix
+    # untouched — the redaction is a no-op and its keys do not move.
+    plain = prompts.instruction_rules_suffix(
+        dict(golden_envelope), slots=prompts.PRE_LEARNING_SLOTS
+    )
+    assert plain == premap._redact_ids(
+        plain, premap.inventory_qids(golden_envelope)
+    )
+
+
 def test_the_known_qid_set_covers_umbrella_parent_questions(
     golden_envelope,
 ):
