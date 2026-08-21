@@ -50,6 +50,15 @@ sprint continues past all of them.
 
 Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns were overstated — superseded by the F3/F6/F2 rows above. R-QX8's consequence note is superseded by F7's fix. R-S11b is CLOSED (Output-02/04 identity composition verified repaired at main). R-S12d is CLOSED (merge order completed).
 
+## Q14 build round (2026-08-21: one concept owns each Type; SOP authority; ops)
+
+| Item | Disposition |
+|---|---|
+| Q14 implemented | The host pass gains `consolidate_type_ownership` (runner-wired, after Host, before the parallel lanes): one recorded ownership verdict per split Type — model-decided over the Cases and candidate hosts, critic-advised, Fixer-backed, decide-once — and every Case and QID of the Type moves to the owner with a Q14 flag per moved unit and question. A Type on one host costs nothing; the verdict's rules forbid spreading (a concept with no Types is legitimate, per the owner). The assemble audit gains `duplicate_type_identity` for any lane that bypasses consolidation. Rule B amended in place; register entry Q14 added. Golden re-baseline: the RNE chapter's six cross-topic Types consolidate (18 flagged moves); the one types-less hosted row gains its Types section; the case-split fixture (which drives assemble directly) now names the Q14 finding by design. Pinned in `test_phase3_type_ownership.py` (ownership move + flags, decide-once replay, single-host no-op, out-of-candidates → Fixer, audit detector) |
+| SOP fill guide committed | `docs/SOP_Bulk_Import_Fill_Guide.docx` is the owner-supplied authority for the workbook wire format; it confirms the round-2 contract fixes and adds the Descriptive half of `question_text` (stem + sub-questions), now composed at render and expected by the reference-acceptance pin |
+| CI is manual-only | Owner ruling: no automatic testing on every push. `ci.yml` triggers on `workflow_dispatch` only; restore the push/pull_request triggers to undo |
+| Fly spend (owner report, ~$40 + "still running") | Repo evidence: the Fly.io GitHub app is connected with write access (commits by `Fly.io <noreply@fly.io>` and `fly-io[bot]`; the auto-generated `flyio-scale-from-ui` branch) — it auto-builds on pushes and the sprint pushed to main constantly. `fly apps list` shows NO staging app (fly.staging.toml was never deployed; its always-on pin is fixed regardless) and a deploy 3m35s old that nobody initiated — the owner disconnects the integration (GitHub → Settings → Integrations → Fly.io) and reads `fly releases -a projectaegis` for the release trail; this repo carries no deploy workflow of its own |
+
 ## Owner review round 2 (2026-08-21: math job 61, poem job 65 — Pre/Post/Master files)
 
 | Item | Disposition |

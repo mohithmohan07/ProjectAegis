@@ -67,6 +67,37 @@ def _replay_provider(
         )
 
     def provider(request: dict) -> dict:
+        if request.get("stage") == "host.type_owner":
+            # Q14 replay: the scripted owner is the certified host
+            # carrying the most of the Type's questions (a tie keeps the
+            # first candidate) — deterministic, derived purely from the
+            # request, so replays are byte-stable.
+            counts: dict[str, int] = {}
+            for case in request.get("cases") or []:
+                host_title = str(
+                    (case.get("certified_host") or {}).get(
+                        "concept_title"
+                    ) or ""
+                )
+                counts[host_title] = counts.get(host_title, 0) + len(
+                    case.get("qids") or []
+                )
+            candidates = [
+                str(row.get("concept_title") or "")
+                for row in request.get("candidate_concepts") or []
+            ]
+            owner = max(
+                candidates, key=lambda title: counts.get(title, 0)
+            )
+            return {
+                "type_id": request["type"]["type_id"],
+                "owner_concept_title": owner,
+                "confidence": 0.9,
+                "reason": (
+                    "replay: the certified host carrying most of the "
+                    "Type's questions"
+                ),
+            }
         assignments = []
         for unit in request["units"]:
             title = None

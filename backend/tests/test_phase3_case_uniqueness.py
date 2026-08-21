@@ -228,8 +228,13 @@ def test_a_fanned_out_case_is_split_into_distinct_rendered_cases():
             flag.startswith("Q2 case split: TYPE-0001::CASE-0001")
             for flag in row.get("review_flags") or []
         ), row["concept_title"]
-    # The deterministic audit is clean after the split.
-    assert result["coverage"]["case_audit"] == []
+    # The audit stays clean of CASE duplicates after the split — and,
+    # since Q14, it NAMES the Type spanning two concepts: this fixture
+    # drives assemble directly with split hosts, bypassing the host
+    # ownership consolidation, which is exactly the lane the
+    # ``duplicate_type_identity`` detector exists to catch.
+    codes = [f["code"] for f in result["coverage"]["case_audit"]]
+    assert codes == ["duplicate_type_identity"]
 
 
 def test_split_assembly_is_deterministic():
@@ -259,7 +264,11 @@ def test_audit_catches_a_duplicated_rendered_case():
         },
     ]
     findings = assemble_mod.audit_case_uniqueness(records)
-    assert [f["code"] for f in findings] == ["duplicate_case_identity"]
+    # The duplicated Case also spans two rows AS A TYPE, so since Q14
+    # the audit reports both identities.
+    assert [f["code"] for f in findings] == [
+        "duplicate_case_identity", "duplicate_type_identity",
+    ]
     assert findings[0]["row_indexes"] == [0, 1]
     assert "TYPE-0001::CASE-0001" in findings[0]["message"]
 

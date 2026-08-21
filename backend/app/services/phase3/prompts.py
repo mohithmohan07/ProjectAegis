@@ -463,6 +463,24 @@ HOST_SYSTEM = _SHARED + (
     "(QINV-...) are never source blocks."
 )
 
+TYPE_OWNER_SYSTEM = _SHARED + (
+    " Task: choose the ONE concept that owns a mined Type whose Cases "
+    "were certified onto different concepts (register Q14: a Type "
+    "identity renders under exactly one concept; every Case and question "
+    "of the Type moves to the owner). Response schema: {\"type_id\", "
+    "\"owner_concept_title\", \"confidence\", \"reason\"}. "
+    "owner_concept_title must be the EXACT concept_title of one of the "
+    "candidate host concepts in the request — the concepts the Cases "
+    "were certified onto — never a new concept and never a concept "
+    "outside that list. Choose the concept whose teaching the Type as a "
+    "whole most genuinely exercises, weighing every Case's task, its "
+    "questions, and each candidate concept's description; the owner is "
+    "never the first Case's host, the most common host, or the earliest "
+    "topic by position arithmetic. A concept left without any Types by "
+    "this choice is a legitimate outcome — never spread Types to cover "
+    "concepts, and never let coverage balance influence the owner."
+)
+
 PLACE_SYSTEM = _SHARED + (
     " Task: Phase 2.2 — place the chapter's pooled Container-02 material. "
     "The request pools every activity, experiment task, info hub "

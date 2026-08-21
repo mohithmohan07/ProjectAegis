@@ -393,6 +393,34 @@ def audit_case_uniqueness(
                 "qids": [],
             })
 
+    # Q14: one concept owns each Type. The host consolidation pass makes
+    # a cross-concept Type unreachable on the production path, so a hit
+    # here means a lane bypassed it — recorded as a release-audit
+    # finding, never silently repaired.
+    type_rows: dict[str, set[int]] = {}
+    for index, row in enumerate(records):
+        for route in row.get("_aegis_release_type_case_routes") or []:
+            parts = str(route).split("::")
+            if parts and parts[0]:
+                type_rows.setdefault(parts[0], set()).add(index)
+    for type_id, indexes in sorted(type_rows.items()):
+        if len(indexes) > 1:
+            titles = ", ".join(
+                repr(_normal(records[i].get("concept_title"))[:60])
+                for i in sorted(indexes)
+            )
+            findings.append({
+                "code": "duplicate_type_identity",
+                "message": (
+                    f"Type {type_id} renders on {len(indexes)} rows "
+                    f"({titles}); one concept owns each Type (Q14 — the "
+                    "host ownership consolidation should have moved its "
+                    "Cases together)"
+                ),
+                "row_indexes": sorted(indexes),
+                "qids": [],
+            })
+
     qid_rows: dict[str, set[int]] = {}
     for index, row in enumerate(records):
         for qid in row.get("_aegis_release_qids") or []:

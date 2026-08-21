@@ -1,11 +1,11 @@
 name: CI
 
 on:
-  # Pull-request branches are validated by the pull_request event below. Limiting
-  # push validation to main prevents each PR commit from launching a duplicate run.
-  push:
-    branches: ["main"]
-  pull_request:
+  # Owner ruling (21 Aug 2026): no automatic runs on every push — CI runs
+  # only when triggered by hand. Start it from the repo's Actions tab
+  # ("Run workflow") when a check is wanted. To restore automatic
+  # validation later, re-add the push/pull_request triggers here.
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

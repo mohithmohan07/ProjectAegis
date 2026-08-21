@@ -312,6 +312,18 @@ def run(
             store=store,
             fixer=injected.get("fixer"),
         )
+        # Q14: one concept owns each Type. Per-Case verdicts above stay
+        # recorded as evidence; a Type whose Cases certified onto
+        # different concepts gets one ownership verdict here, and its
+        # Cases and questions move together. No-op when nothing split.
+        hosts = host_mod.consolidate_type_ownership(
+            env,
+            hosts,
+            provider=injected.get("host"),
+            critic=injected.get("critic"),
+            store=store,
+            fixer=injected.get("fixer"),
+        )
         host_capture = _schedule_capture(rider_pool, "host")
         # Phase 2.2 places Container-02 chapter-wide, Phase 2.4 + 4.3 (Q1)
         # builds the misconception/error-analysis inventory, and the
