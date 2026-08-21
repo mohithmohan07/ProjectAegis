@@ -1044,6 +1044,69 @@ any later than the inventory breaks exact-coverage identity; any
 earlier, the refresh passes undo it — which is why stage 2 is its own
 careful change rather than a rider on stage 1.
 
+### Q18 · Decided — prerequisite-recap material is pre-learning's territory; its source questions leave the Post Master by a recorded claim
+
+Owner ruling, 21 Aug 2026 (option b, chosen explicitly over keeping recap
+exercises in the Post Master). Some textbooks open with
+prerequisite-recap material — revision of earlier-class learning the
+chapter re-activates before its own teaching. The classification is a
+MODEL verdict, never position: the owner's own counterexample is the RNE
+chapter's Frederic Sorrieu opener, which sits first and is genuine
+chapter teaching — it must stay Post. "First blocks" is exactly the
+shape-matching Rule 1 forbids.
+
+Stage 1 (built): `assessment_prelearning_claim` — one recorded
+per-chapter verdict over the complete source-atom set (critic-advised,
+Fixer-backed, decide-once, `assessment-pre-claim-1`), run in the Post
+Master's source lane BEFORE any cell verdict is paid for. Claimed
+questions leave the Post Master and ride the release payload under
+`pre_learning_claimed` with their reasons — a recorded, reviewable
+disposition that names the release *Ready with flags*, never loss (R4).
+An empty claim is a legitimate verdict; there is no quota. Two standing
+rules are explicitly unchanged: the 17-Aug steer (no source question is
+ever lifted into any Pre artefact — Output 04 stays generated-only and
+its leak barrier still refuses every source qid, claimed or not), and
+Rule C's exactly-once accounting, which this amends for exactly this
+case the way Q15 amended flag-only: exclusion with a full record.
+
+Stage 2 (designed, lands with the parallel-tracks build — Q19): the
+verdict moves to inventory time so the CONCEPT side follows too —
+recap sections author no Post concepts, their content feeds the Pre
+lane's capture as evidence, the coverage ledger records the claim as a
+disposition (never "missing"), the source-topic recovery and
+deposit-boundary guards treat a claimed heading as accounted, and Type
+mining exempts claimed items. That half threads the human-pause and
+exact-coverage machinery, which is why it is staged rather than rushed.
+
+### Q19 · Decided — the run restructures into parallel tracks; the Type-granularity pause halts everything
+
+Owner rulings, 21 Aug 2026, in the cost/time review (a full run measured
+~2 hours; the account's provider limits support far more concurrency
+than the pipeline can generate). The dependency graph, verified against
+the code, permits three tracks after the source is canonicalized:
+**Track A** — question inventory extraction + polishing + type mining
+and consolidation (source-only; the inventory's topic assignment is the
+one tail that waits for concept records); **Track B** — skeleton →
+descriptions → outline → Phase 3; **Track 3** — the Pre chain (premap →
+preanalyse → prequestions), forked after Settle/Host: its evidence is
+the prerequisite capture (ready at that boundary) and Post Descriptions
+for links (ready at Settle) — it does not need Place/Analyse/Polish.
+Joins where the data joins: inventory topic-assignment and Phase-3
+hosting. Both Masters build concurrently — BUILT (2026-08-21): per-lane
+database sessions, per-lane `assessment-<lane>/` audit snapshots (the
+unscoped filenames silently overwrote the sibling lane's snapshots even
+sequentially), and a lock-serialized failure recorder preserving the
+Q13 one-lane-fault guarantee.
+
+The pause ruling: when the Type-granularity pre-spend pause fires for
+owner review, a parallel run HALTS BOTH tracks — the pause stays a true
+stop-everything gate, at the cost of a little speedup on paused runs
+only. The track forks (A and 3) land with sidecar checkpoints so
+pause/resume stays exactly-once; they are the next build. Recorded
+alongside: the owner will later add a Batch-API overnight lane, and
+directs that PDF reading converge on ONE reading pass — the GPT
+PDF-to-ACSD path — rather than an external Mathpix MMD conversion.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

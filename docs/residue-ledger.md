@@ -70,6 +70,17 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Boundaries the ruling keeps | Source questions untouched (Rule C's exactly-once accounting); a generated question duplicating a SOURCE question stays the generation critic's flag-only territory; removal has no quota (an empty `duplicate_sets` is a legitimate verdict). The same review's oral-activity complaint stays flag-only — the owner selected duplicate removal alone |
 | Recorded, not built (owner answers, 2026-08-21) | No spend cap (owner: "No cap"); cost design stays as-is (owner: "Keep current design"); the image-combining question returned "not understood" — re-explained, re-asked, and RULED later the same day (see the Q17 round) |
 
+## Performance round 3 — owner rulings on cost/time (2026-08-21 evening)
+
+| Item | Disposition |
+|---|---|
+| Where the ~2 hours goes | Diagnosed from the code: ~1,500–2,500 model calls per chapter (author+critic per decision, ~8 stages per Master question, two Masters + the concept pipeline), 9 of 14 request purposes at "max" reasoning effort, all squeezed through a global gate of 8 concurrent calls (workers 6/4). Owner's provider limits (180M TPM / 30k RPM) support far more; advised env bump to gate 48 / workers 16 / chunks 10 for 3 concurrent users |
+| Masters build concurrently — BUILT | `_build_master_siblings` runs Outputs 02 and 04 in parallel via `kernel.parallel_map_in_order`: per-lane DB sessions (one session is not thread-safe; engine already ships WAL + busy_timeout), per-lane `assessment-<lane>/` audit snapshot directories (the unscoped filenames silently overwrote the sibling's snapshots even sequentially — a recording loss now fixed), lock-serialized failure recorder (two lanes failing at once can no longer lose one lane's recorded reason). Q13's one-lane-fault guarantee re-pinned |
+| Q18 stage 1 — BUILT | `assessment_prelearning_claim`: one recorded per-chapter verdict (critic, Fixer, decide-once, `assessment-pre-claim-1`) claims prerequisite-recap source questions OUT of the Post Master before any cell spend; each rides `payload["pre_learning_claimed"]` with its reason; Ready-with-flags; position never evidence (Sorrieu rule in the prompt); empty claim legitimate; 17-Aug no-questions-into-Pre steer and Output 04's leak barrier unchanged. Pinned in `test_assessment_prelearning_claim.py` |
+| Q19 recorded — the tracks | Owner "Go" on the three-track restructure (inventory/types ∥ concepts ∥ Pre-chain after Settle/Host) with sidecar checkpoints; Type-granularity pause HALTS BOTH tracks; Q18 stage 2 (concept-side recap exclusion at inventory time) rides that build. Next round's work |
+| Recorded directions | Batch-API overnight lane (50% cost, wave-structured author→check→correct→critic batches) later; PDF reading converges on ONE pass — promote the existing GPT PDF-to-ACSD path over external Mathpix MMD conversion (kills the expiring-CDN-URL class too). Critic-effort tiering and a per-stage usage/wall-clock breakdown in the run report offered, awaiting the owner's word |
+| Also fixed | The Q15 dedup live purposes named `purpose="assessment"`, which `reasoning_effort_for` rejects — first live duplicate verdict would have crashed; now `concept_mapping`/`concept_validation`, with a repo-wide pin that every `purpose="…"` literal is a known purpose |
+
 ## Q17 round (2026-08-21: picture-bank questions ship one stitched figure)
 
 | Item | Disposition |
