@@ -1335,6 +1335,67 @@ def test_the_release_contract_stages_the_sibling_from_the_run_snapshots(
     assert job.result_ids == []
 
 
+def test_master_siblings_build_concurrently_on_their_own_sessions(
+    db, monkeypatch,
+):
+    """The two Master lanes run in parallel (owner "Go", 2026-08-21),
+    each on its OWN database session — one SQLAlchemy session is not
+    thread-safe — and both results land keyed by lane."""
+
+    from app.services import build_concepts_release_contract as contract
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter, questions=2)
+    seen: dict[str, object] = {}
+
+    class _Stub:
+        def __init__(self, lane):
+            self.id = f"REL-{lane}"
+
+    def _fake_rebuild(lane_db, job_id, lane, *, owner_sub=None):
+        seen[lane] = lane_db
+        return _Stub(lane)
+
+    monkeypatch.setattr(contract, "rebuild_lane_master", _fake_rebuild)
+    built = contract._build_master_siblings(
+        db, job.id, chapter.id, owner_sub=OWNER,
+    )
+    assert built == {
+        release.LANE_PRE: {"release_id": "REL-pre"},
+        release.LANE_POST: {"release_id": "REL-post"},
+    }
+    assert set(seen) == {release.LANE_PRE, release.LANE_POST}
+    assert seen[release.LANE_PRE] is not db
+    assert seen[release.LANE_POST] is not db
+    assert seen[release.LANE_PRE] is not seen[release.LANE_POST]
+
+
+def test_one_master_lane_fault_does_not_cost_the_sibling(db, monkeypatch):
+    """A Pre-lane fault never skips or costs the Post build (and vice
+    versa) — the Q13 guarantee, preserved across the concurrent lanes."""
+
+    from app.services import build_concepts_release_contract as contract
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter, questions=2)
+
+    class _Stub:
+        def __init__(self, lane):
+            self.id = f"REL-{lane}"
+
+    def _fake_rebuild(lane_db, job_id, lane, *, owner_sub=None):
+        if lane == release.LANE_PRE:
+            raise RuntimeError("boom")
+        return _Stub(lane)
+
+    monkeypatch.setattr(contract, "rebuild_lane_master", _fake_rebuild)
+    built = contract._build_master_siblings(
+        db, job.id, chapter.id, owner_sub=OWNER,
+    )
+    assert built[release.LANE_PRE] is None
+    assert built[release.LANE_POST] == {"release_id": "REL-post"}
+
+
 def test_the_pre_lane_joined_the_refiner_seam(db, tmp_path, monkeypatch):
     """§8.3's designed hook, used rather than left as a docstring promise.
 

@@ -39,6 +39,7 @@ from . import assessment_blueprint
 from . import assessment_cells as cell_decisions
 from . import assessment_dedup
 from . import assessment_grouping as grouping
+from . import assessment_prelearning_claim as prelearning_claim
 from . import assessment_marking as marking
 from . import assessment_materialization as materialization
 from . import assessment_quality as quality
@@ -1580,6 +1581,14 @@ def run_release_for_job(
         envelope_sha256=envelope_sha256,
         decision_store=decision_store,
     )
+    if snapshot_directory is not None:
+        # Each Master lane keeps its OWN durable audit snapshots. The two
+        # lanes share one artifact directory and one filename family
+        # (source.phase3-assessment-*.json), so unscoped writes meant the
+        # second lane's snapshots silently overwrote the first's — a
+        # recording loss even when the builds ran sequentially, and the
+        # lanes now run concurrently (owner "Go", 2026-08-21).
+        snapshot_directory = snapshot_directory / f"assessment-{staged_lane}"
 
     meta = dict(bridge["metadata"])
     source_release_sha = str(
@@ -1592,6 +1601,7 @@ def run_release_for_job(
 
     pre_blocked_generated: list[dict] = []
     duplicates_removed: list[dict] = []
+    pre_learning_claimed: list[dict] = []
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
         # is built and none is classified: both of those stages hard-assume
@@ -1780,6 +1790,49 @@ def run_release_for_job(
             source_document_hash=str(bridge["source_document_hash"]),
         )
         atoms = built["atoms"]
+
+        if blueprint_cells is None and atoms:
+            # Q18 (owner ruling b, 2026-08-21) — one recorded per-chapter
+            # claim verdict BEFORE any cell verdict is paid for: source
+            # questions that belong to prerequisite-recap material are
+            # pre-learning's territory and leave this Post Master as a
+            # recorded, reviewable disposition (``pre_learning_claimed``
+            # on the payload; Ready-with-flags). Position is never
+            # evidence (the Sorrieu rule); an empty claim is legitimate.
+            # The 17-Aug steer stands: a claimed question never enters
+            # any Pre artefact — Output 04's leak barrier still refuses
+            # every source qid. The explicit ``blueprint_cells`` path
+            # stays zero-spend with its 1:1 bind intact.
+            claim_provider, claim_critic = _authority_pair(
+                authorities, "pre_claim"
+            )
+            atoms, pre_learning_claimed = (
+                prelearning_claim.decide_pre_learning_claims(
+                    atoms,
+                    meta=meta,
+                    envelope_sha256=envelope_sha,
+                    provider=claim_provider,
+                    critic=claim_critic,
+                    store=store,
+                    fixer=fixer,
+                )
+            )
+            if pre_learning_claimed:
+                for record in pre_learning_claimed:
+                    progress.log(
+                        "Master file: source question "
+                        f"{record.get('source_qid')!r} is claimed by "
+                        "pre-learning (Q18) and leaves this Post Master, "
+                        "recorded for review: "
+                        + str(record.get("reason") or ""),
+                        level="warning",
+                    )
+                progress.log(
+                    f"Assessment release: {len(pre_learning_claimed)} "
+                    "recap question(s) claimed by pre-learning; "
+                    f"{len(atoms)} chapter-teaching question(s) continue.",
+                    level="warning",
+                )
 
         # Stage 3 — explicit cells are a mechanically validated zero-spend
         # path; otherwise each source atom receives one cached kernel verdict.
@@ -2524,6 +2577,10 @@ def run_release_for_job(
         # the survivor asks the same question — and it names the release
         # Ready-with-flags so every removal is reviewable.
         "duplicates_removed": duplicates_removed,
+        # Q18: source questions the pre-learning claim removed from this
+        # Post Master — prerequisite-recap material, each with its reason.
+        # A recorded disposition, not loss, and reviewable the same way.
+        "pre_learning_claimed": pre_learning_claimed,
     }
     if staged_lane == build_concepts_release.LANE_PRE:
         # Which lane this Master belongs to, stated rather than inferred —

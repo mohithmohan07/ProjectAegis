@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import inspect
+import threading
 from contextvars import ContextVar
 from functools import wraps
 from typing import Any, Callable, Mapping
@@ -19,6 +20,13 @@ from . import build_concepts_release as release
 from . import progress
 from . import build_concepts_release_files as release_files
 from . import release_refiner
+from .phase3 import kernel
+
+# The two Master lanes build concurrently (owner "Go", 2026-08-21), each
+# on its own database session. Their failure recorders read-modify-write
+# the SAME job issue ledger; this lock serializes that write so two lanes
+# failing at once cannot lose one lane's recorded reason (R4).
+_LANE_ISSUE_LOCK = threading.Lock()
 
 
 _CONTRACT_VERSION = 4
@@ -332,15 +340,20 @@ def rebuild_lane_master(
         return runner(db, job_id, owner_sub=owner_sub)
     except Exception as exc:
         try:
-            db.rollback()
-            job = uploads.get_job(
-                db,
-                job_id,
-                owner_sub=owner_sub,
-                module="build_concepts",
-            )
-            release.record_assessment_lane_unavailable(
-                db, job, lane=lane, error=exc)
+            # Serialized across the concurrent lanes: the recorder is a
+            # read-modify-write of the shared job issue ledger, and the
+            # rollback + fresh read happen INSIDE the lock so each lane
+            # records onto the other's committed state, never over it.
+            with _LANE_ISSUE_LOCK:
+                db.rollback()
+                job = uploads.get_job(
+                    db,
+                    job_id,
+                    owner_sub=owner_sub,
+                    module="build_concepts",
+                )
+                release.record_assessment_lane_unavailable(
+                    db, job, lane=lane, error=exc)
         except Exception:
             # The recorder is already defensive; this is the second
             # ring, so that a database that cannot even be read back
@@ -392,41 +405,84 @@ def _build_master_siblings(
     open — only that lane's Master manifest entry goes ``disabled``,
     carrying the recorded issue as its reason.
 
-    In the owner's numbering: Output 02 (Pre) then Output 04 (Post).
-    Neither lane's outcome is an input to the other's, so a Pre failure
-    never skips the Post build.
+    In the owner's numbering: Output 02 (Pre) and Output 04 (Post) — and
+    since the owner's "Go" (2026-08-21) they build CONCURRENTLY: neither
+    lane's outcome is an input to the other's, each lane runs on its own
+    database session (one SQLAlchemy session is not thread-safe), their
+    durable audit snapshots live in per-lane subdirectories, and the
+    failure recorder is lock-serialized. A Pre failure still never skips
+    the Post build, and vice versa.
     """
 
     built: dict[str, dict[str, Any] | None] = {}
+    lanes: list[str] = []
     for lane in (release.LANE_PRE, release.LANE_POST):
-        progress.set_progress(
-            0.965 if lane == release.LANE_PRE else 0.985,
-            label=(
+        if not _lane_has_staged_concept_release(
+            db, job_id, lane, owner_sub=owner_sub,
+        ):
+            # No slot, so nothing to build a Master from and nowhere
+            # to record a failure onto. Skipping is the honest
+            # answer: the alternative is a doomed run whose reason is
+            # thrown away. The lane's Master entry is still PRESENT
+            # and disabled with the "not built for this run" reason,
+            # so nothing about it is silent.
+            built[lane] = None
+            continue
+        lanes.append(lane)
+    if not lanes:
+        return built
+
+    progress.set_progress(
+        0.965,
+        label=(
+            "Building both Master files (Outputs 02 and 04) in parallel…"
+            if len(lanes) == 2
+            else (
                 "Building the Pre-Learning Master (Output 02)…"
-                if lane == release.LANE_PRE
+                if lanes[0] == release.LANE_PRE
                 else "Building the Post Master (Output 04)…"
-            ),
-        )
+            )
+        ),
+    )
+
+    def _build_lane(lane: str) -> dict[str, Any] | None:
+        from ..db import SessionLocal
+
+        lane_db = SessionLocal()
         try:
-            if not _lane_has_staged_concept_release(
-                db, job_id, lane, owner_sub=owner_sub,
-            ):
-                # No slot, so nothing to build a Master from and nowhere
-                # to record a failure onto. Skipping is the honest
-                # answer: the alternative is a doomed run whose reason is
-                # thrown away. The lane's Master entry is still PRESENT
-                # and disabled with the "not built for this run" reason,
-                # so nothing about it is silent.
-                built[lane] = None
-                continue
-            built[lane] = {"release_id": rebuild_lane_master(
-                db, job_id, lane, owner_sub=owner_sub).id}
+            result = {"release_id": rebuild_lane_master(
+                lane_db, job_id, lane, owner_sub=owner_sub).id}
+            lane_db.commit()
+            return result
         except Exception:  # noqa: BLE001 — see the docstring
             # ``rebuild_lane_master`` already recorded the failure as the
-            # lane's ``assessment_lane_unavailable`` issue; here the
-            # re-raise is swallowed so one Master-lane fault cannot cost
-            # the finished concept outputs.
-            built[lane] = None
+            # lane's ``assessment_lane_unavailable`` issue (and committed
+            # it on this same session); here the re-raise is swallowed so
+            # one Master-lane fault cannot cost the finished concept
+            # outputs or the sibling Master.
+            try:
+                lane_db.rollback()
+            except Exception:
+                pass
+            return None
+        finally:
+            lane_db.close()
+
+    results = kernel.parallel_map_in_order(
+        lanes,
+        _build_lane,
+        max_workers=len(lanes),
+        labels=[
+            "Master · Output 02 (Pre)" if lane == release.LANE_PRE
+            else "Master · Output 04 (Post)"
+            for lane in lanes
+        ],
+        announce="Master files",
+    )
+    built.update(dict(zip(lanes, results)))
+    # The lanes committed on their own sessions; drop this session's
+    # cached state so the caller reads their results, not stale rows.
+    db.expire_all()
     return built
 
 

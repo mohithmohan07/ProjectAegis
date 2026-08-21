@@ -63,7 +63,7 @@ def _live_dedup(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         GENERATED_DEDUP_SYSTEM, prompts.render(payload),
-        purpose="assessment",
+        purpose="concept_mapping",
     )
 
 
@@ -73,7 +73,7 @@ def _live_dedup_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         GENERATED_DEDUP_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="assessment",
+        purpose="concept_validation",
     )
 
 

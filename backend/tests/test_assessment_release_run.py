@@ -308,11 +308,20 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "rationale": "Polishes final prose without revisiting identity.",
         }
 
+    def pre_claim_author(payload):
+        record("pre_claim", payload)
+        return {
+            "claimed": [],
+            "confidence": 1.0,
+            "rationale": "every question teaches this chapter's content",
+        }
+
     def verified_critic(payload):
         record("critic", payload)
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
     return {
+        "pre_claim": (pre_claim_author, verified_critic),
         "cells": (cell_author, verified_critic),
         "materialize": (materialize_author, verified_critic),
         "answer_restriction": (
@@ -892,6 +901,7 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         **_decision_context(kernel.DecisionStore(store_directory)),
     )
     expected_counts = {
+        "pre_claim": 1,
         "cells": 2,
         "materialize": 2,
         "answer_restriction": 2,
@@ -902,7 +912,7 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         "describe": 2,
         "qa": 2,
         "refiner": 4,
-        "critic": 21,
+        "critic": 22,
     }
     assert {key: len(calls.get(key, [])) for key in expected_counts} == (
         expected_counts
@@ -919,8 +929,10 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         )
         for candidate in first.payload["candidates"]
     }
+    # Snapshots are lane-scoped since the Masters build concurrently:
+    # each lane owns assessment-<lane>/ under the artifact directory.
     snapshot_paths = [
-        tmp_path / filename
+        tmp_path / "assessment-post" / filename
         for filename in (
             "source.phase3-assessment-cells.json",
             "source.phase3-assessment-materializations.json",
