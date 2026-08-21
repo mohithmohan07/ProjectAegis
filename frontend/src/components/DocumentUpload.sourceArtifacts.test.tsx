@@ -353,3 +353,53 @@ test.each([
     confirmSpy.mockRestore();
   },
 );
+
+// --------------------------------------------------------------------------- #
+// Owner report 2026-08-21: both Pre files downloaded EMPTY with the recorded
+// reason nowhere on the page. An enabled output that will be empty now carries
+// the run's own recorded reason (note) beside its live Download link.
+// --------------------------------------------------------------------------- #
+
+test("an enabled-but-empty Pre output shows the recorded reason and still downloads", () => {
+  const job = convertedJob();
+  job.status = "released";
+  if (!job.source_artifacts) throw new Error("fixture missing artifacts");
+  job.source_artifacts.files = [
+    {
+      kind: "pre_release_bulk_import",
+      label: "Download the Pre-Learning Concept File",
+      filename: "ch_pre_bulk_import.xlsx",
+      media_type: "application/vnd.openxmlformats-officedocument"
+        + ".spreadsheetml.sheet",
+      size_bytes: 0,
+      download_url: "/build-concepts/uploads/81/release-bulk-import.xlsx?lane=pre",
+      action: "download",
+      note: "This run REFUSED the Pre-Learning map, so the Pre files carry "
+        + "no concepts. Recorded reason: a Pre row carried the identity of "
+        + "source question QID-3.",
+    },
+  ];
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  // The reason leads with its first sentence and folds the rest (the
+  // sentence appears in the fold's summary and again in its body).
+  expect(
+    screen.getAllByText(/This run REFUSED the Pre-Learning map/).length,
+  ).toBeGreaterThan(0);
+  // Rule E: the download link is still live next to the reason.
+  expect(
+    screen.getByRole("link", {
+      name: "Download the Pre-Learning Concept File",
+    }),
+  ).toBeDefined();
+});

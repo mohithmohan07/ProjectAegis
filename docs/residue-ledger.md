@@ -58,6 +58,14 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Step-12 interrupted-path injections (spec residue) | RESOLVED: `test_fault_injection_interrupted.py` pins both contracts — staging is atomic-at-the-end (a crash in the last assembly helper leaves the slot byte-untouched; retry re-mints cleanly), publication is one transaction with full rollback (zero partial rows, latch not set; retry publishes idempotently, no duplicate rows). No real defect found |
 | Step 9 — review/edit surface | BUILT: `release_review.py` (view projection, verbatim manual edits, one bounded instruction pass), `models.ConceptReleaseVersion` (append-only §7 version rows incl. recorded failed rounds), three routes under `/build-concepts/uploads/{id}/release-review`, frontend page at `/build-concepts/review/:jobId` with house rich-text rendering. Recorded step-9 residues: R-S9a/b/c below |
 
+## Empty Pre files report (2026-08-21)
+
+| Item | Disposition |
+|---|---|
+| Owner report: Pre-Learning Outputs 01 + 02 download empty | Both project from ONE staged Pre snapshot, so an empty pair means the run staged a Pre release with zero concept rows. That is always a RECORDED state, never silent loss: (a) `premap.build` REFUSED the map (the fail-closed no-extraction barrier — `payload["refused"]`, an error issue, and the run log's "Pre-Learning map REFUSED and not shipped" line), or (b) the prerequisite capture was empty and the run spent one verdict on it (`pre_lane_verdict`: `assumes_nothing` = a genuinely empty chapter; anything else = Diagnostic). Ruled out mechanically: the projection (`transient_release_hierarchy`) is unchanged since S10 and test-pinned; the deploy-time syllabus refresh never deletes chapters carrying authored content; a content-addressed re-run replays the same premap rows |
+| The reason was nowhere the reviewer looks | It lived in the release JSON, the Issues sheet, and the run log — not on the outputs card serving the files. BUILT: `pre_lane_empty_reason` transcribes the recorded refusal/verdict onto the Output 01 entry and the Pre Master entry in BOTH manifest twins (`note`, downloads stay enabled per Rule E); the output card renders the note folded (first sentence + details) beside the live Download link. Pinned in test_pre_release_lane_wiring (both twins) and the DocumentUpload artifact test |
+| Root cause of THIS run | Cannot be named from the repo — it is in the run's own record on the deployment. Owner sends the "Pre-Learning release JSON" download (fields `refused` / `pre_lane_verdict`) or the console's error line; the trigger gets fixed from there |
+
 ## Store apps round (2026-08-20 night, round 5) — PWA + Play TWA + iOS Capacitor + native sign-in
 
 | Item | Disposition |

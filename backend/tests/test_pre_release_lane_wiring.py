@@ -475,6 +475,54 @@ def test_neither_manifest_offers_the_pre_entries_without_a_pre_release(db):
         assert not _PRE_ENTRY_KINDS & {row["kind"] for row in entries}
 
 
+def _output_01(entries):
+    return next(
+        row for row in entries if row["kind"] == "pre_release_bulk_import"
+    )
+
+
+def test_an_empty_pre_pair_says_why_on_the_manifest(db):
+    """Owner report (2026-08-21): both Pre files downloaded empty with the
+    recorded reason nowhere the reviewer looks. The zero-row reason — the
+    run's OWN refusal or verdict, never a fresh judgment — now rides the
+    Output 01 entry in BOTH manifest twins. The download stays enabled:
+    Rule E is untouched, the card just says what is inside."""
+
+    chapter = _chapter_with_concepts(db)
+
+    # A refused map: the fail-closed no-extraction barrier fired.
+    refused_job = _both_lanes_job(
+        db, chapter, pre_rows=False,
+        refused="a Pre row carried the identity of source question QID-3",
+    )
+    for entries in (
+        release_files.eager_release_artifact_entries(refused_job),
+        release_manifest.release_artifact_entries(refused_job),
+    ):
+        note = _output_01(entries)["note"]
+        assert "REFUSED" in note
+        assert "source question QID-3" in note
+        assert not _output_01(entries).get("disabled")
+
+    # An empty capture the run positively decided: assumes_nothing.
+    reason = release_files.pre_lane_empty_reason(
+        release.release_payload(
+            _both_lanes_job(db, _chapter_with_concepts(db), pre_rows=False),
+            lane=release.LANE_PRE,
+        ),
+    )
+    assert "assumes no prior knowledge" in reason
+    assert "assumes_nothing" in reason
+
+    # A Pre release WITH rows carries no note at all.
+    full_job = _both_lanes_job(db, _chapter_with_concepts(db))
+    for entries in (
+        release_files.eager_release_artifact_entries(full_job),
+        release_manifest.release_artifact_entries(full_job),
+    ):
+        assert "note" not in _output_01(entries)
+
+
 # --------------------------------------------------------------------------- #
 # 3. BOTH snapshot writers
 # --------------------------------------------------------------------------- #

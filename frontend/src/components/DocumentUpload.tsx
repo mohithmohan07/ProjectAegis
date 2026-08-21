@@ -17,8 +17,24 @@ type ActionableArtifact = {
   action?: "download" | "post" | string;
   disabled?: boolean;
   disabled_reason?: string;
+  // Why an ENABLED output will be empty (e.g. the run recorded a
+  // Pre-lane refusal or an assumes-nothing verdict). The download stays
+  // open; the card explains what's inside before it is opened.
+  note?: string;
   requires_confirmation?: boolean;
 };
+
+// A recorded reason can run to several sentences; lead with the first
+// and fold the rest, exactly like the disabled reasons.
+function foldedReason(reason: string) {
+  const brief = reason.split(/(?<=\.)\s+/)[0];
+  return brief.length < reason.length ? (
+    <details>
+      <summary>{brief}</summary>
+      <div className="mt-8">{reason}</div>
+    </details>
+  ) : reason;
+}
 
 const DRIVE_BACKUP_FOLDER_URL =
   import.meta.env.VITE_CHECKPOINT_DRIVE_FOLDER_URL?.trim() || "";
@@ -785,20 +801,18 @@ function SourceArtifactsCard({
                   <div className="output-name">{meta.name}</div>
                   {artifact.disabled ? (
                     <div className="output-reason">
-                      {(() => {
-                        const reason = artifact.disabled_reason
-                          || "Not available for this run.";
-                        const brief = reason.split(/(?<=\.)\s+/)[0];
-                        return brief.length < reason.length ? (
-                          <details>
-                            <summary>{brief}</summary>
-                            <div className="mt-8">{reason}</div>
-                          </details>
-                        ) : reason;
-                      })()}
+                      {foldedReason(
+                        artifact.disabled_reason
+                          || "Not available for this run.",
+                      )}
                     </div>
                   ) : (
                     <>
+                      {artifact.note && (
+                        <div className="output-reason" role="note">
+                          {foldedReason(artifact.note)}
+                        </div>
+                      )}
                       {artifact.size_bytes > 0 && (
                         <div className="output-meta">
                           {formatBytes(artifact.size_bytes)}

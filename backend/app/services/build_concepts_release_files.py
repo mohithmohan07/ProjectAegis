@@ -21,6 +21,8 @@ from . import uploads
 from .build_concepts_release import (
     LANE_POST,
     LANE_PRE,
+    PRE_LANE_ASSUMES_NOTHING,
+    PRE_LANE_VERDICT_FIELD,
     PRE_ROW_RELATED_CONCEPTS_FIELD,
     assessment_lane_issue,
     RELEASE_ROW_BLOCKS_FIELD,
@@ -43,6 +45,60 @@ from .build_concepts_release import (
 RELEASE_TARGET_CHAPTER_MISSING = "release_target_chapter_missing"
 RELEASE_DIRECTORY_METADATA_MISSING = "release_directory_metadata_missing"
 STAGED_RECORDS_NOT_AN_ARRAY = "staged_records_not_an_array"
+
+
+def pre_lane_empty_reason(payload: Mapping[str, Any] | None) -> str:
+    """WHY a staged Pre release carries zero concept rows, or ``""``.
+
+    An empty Pre pair still downloads (Rule E / D8.4: a defect blocks the
+    database write, never a download) — but [owner report, 2026-08-21] a
+    reviewer handed two empty files with the reason living only in the run
+    log, the release JSON and the Issues sheet read it as silent loss,
+    which is exactly the confusion R4 exists to prevent. This transcribes
+    the run's own recorded decision — the fail-closed refusal, or the
+    empty-capture verdict — onto the manifest entries the reviewer is
+    actually looking at. Nothing is decided here: no record means the
+    generic sentence, never a guess at one.
+    """
+
+    if payload is None or payload.get("records"):
+        return ""
+    refused = str(payload.get("refused") or "").strip()
+    if refused:
+        return (
+            "This run REFUSED the Pre-Learning map, so the Pre files "
+            "carry no concepts. Recorded reason: " + refused
+            + " Fix the named leak and re-run generation to rebuild the "
+            "Pre lane; the Post outputs are unaffected."
+        )
+    verdict_row = payload.get(PRE_LANE_VERDICT_FIELD)
+    verdict = (
+        str(verdict_row.get("verdict") or "").strip().lower()
+        if isinstance(verdict_row, Mapping) else ""
+    )
+    rationale = (
+        str(verdict_row.get("rationale") or "").strip()
+        if isinstance(verdict_row, Mapping) else ""
+    )
+    if verdict == PRE_LANE_ASSUMES_NOTHING:
+        return (
+            "The run decided this chapter assumes no prior knowledge, so "
+            "the Pre files are genuinely empty (recorded verdict "
+            f"'{PRE_LANE_ASSUMES_NOTHING}'). "
+            + (f"Rationale: {rationale}" if rationale else "")
+        ).strip()
+    if verdict:
+        return (
+            "The prerequisite capture was empty and the run decided "
+            f"'{verdict}', so the Pre files carry no concepts. "
+            + (f"Rationale: {rationale} " if rationale else "")
+            + "Re-run generation once the capture issue is resolved."
+        ).strip()
+    return (
+        "The staged Pre-Learning release contains no concept rows. The "
+        "release JSON and the diagnostics export carry everything the "
+        "run recorded about this lane."
+    )
 
 
 # ---------------------------------------------------------------------- #
@@ -158,7 +214,16 @@ def master_entry(
     # the "no row at all" branch, which meant the realistic partial
     # failure — ``create_release`` commits, then ``publish_release``
     # raises — showed the generic reason and threw the recorded one away.
-    recorded = assessment_lane_issue(release_payload(job, lane=resolved))
+    lane_payload = release_payload(job, lane=resolved)
+    recorded = assessment_lane_issue(lane_payload)
+    # The Pre pair's zero-row reason (owner report: two empty files with
+    # the recorded decision nowhere in sight). Stamped on the ENABLED
+    # entry too — the empty Master still downloads (Rule E), it just says
+    # why it is empty. Pre lane only: the refused/verdict record it
+    # transcribes exists only on Pre payloads.
+    empty_note = (
+        pre_lane_empty_reason(lane_payload) if resolved == LANE_PRE else ""
+    )
     release = None
     superseded = None
     try:
@@ -198,6 +263,8 @@ def master_entry(
         f"/build-assessments/releases/{release.id}/master.xlsx"
     )
     entry["release_state"] = release_core.release_state(release)
+    if empty_note:
+        entry["note"] = empty_note
     return entry
 
 
@@ -1317,6 +1384,7 @@ def _pre_release_entries(
     stem = _safe_filename(job.filename, "concepts")
     query = f"?lane={LANE_PRE}"
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
+    empty_note = pre_lane_empty_reason(payload)
     return in_owner_order([
         {
             # Output 01 · Pre-Learning Concept File.
@@ -1335,6 +1403,10 @@ def _pre_release_entries(
                 f"/release-bulk-import.xlsx{query}"
             ),
             "action": "download",
+            # The zero-row reason (the run's own recorded refusal or
+            # verdict). The download stays enabled — Rule E — but a
+            # reviewer sees WHY the file has no rows before opening it.
+            **({"note": empty_note} if empty_note else {}),
         },
         # Output 02 · Pre-Learning Master File. Present and, when the lane
         # has no servable Master, disabled with a stated reason — never

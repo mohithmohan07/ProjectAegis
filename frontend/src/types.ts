@@ -303,6 +303,12 @@ export interface SourceArtifactFile {
    */
   action?: "download" | "post" | string;
   disabled?: boolean;
+  /**
+   * Why an ENABLED output will be empty when opened — the run's own
+   * recorded Pre-lane refusal or verdict, transcribed by the manifest.
+   * The download stays live (Rule E); the card explains the contents.
+   */
+  note?: string;
   requires_confirmation?: boolean;
 }
 

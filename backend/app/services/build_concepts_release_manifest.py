@@ -145,6 +145,7 @@ def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
         return []
     query = f"?lane={LANE_PRE}"
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
+    empty_note = release_files.pre_lane_empty_reason(payload)
     return in_owner_order([
         {
             # Output 01 · Pre-Learning Concept File.
@@ -158,6 +159,10 @@ def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
                 f"/release-bulk-import.xlsx{query}"
             ),
             "action": "download",
+            # The zero-row reason (the run's own recorded refusal or
+            # verdict) — same helper as the eager twin, so the two
+            # manifests cannot disagree on it.
+            **({"note": empty_note} if empty_note else {}),
         },
         # Output 02 · Pre-Learning Master File — the shared builder.
         master_entry(job, lane=LANE_PRE),
