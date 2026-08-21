@@ -195,21 +195,30 @@ def _rows_for_chapter(parsed, sheet: str, chapter_title: str) -> list[dict]:
 
 
 def _expected_question_text(sheet: str, gold: dict) -> str:
-    """The owner's 2026-08-21 ruling: an Objective ``question_text`` is the
-    stem PLUS the lettered options (the renderer composes them from the
-    option blocks). The reference workbooks predate the ruling and carry
-    the bare stem, so the expectation is composed here the same way."""
+    """The SOP fill guide (§5.1) and the owner's 2026-08-21 ruling:
+    ``question_text`` is the whole question — the stem PLUS the lettered
+    options (Objective) or the sub-questions (Descriptive), which the
+    renderer composes from the decided blocks. The reference workbooks
+    predate the ruling, so the expectation is composed here the same
+    way."""
     text = str(gold.get("question_text") or "")
-    if sheet != "Objective":
+    if sheet == "Objective":
+        options = []
+        for n in range(1, aw.MAX_OBJECTIVE_OPTIONS + 1):
+            content = str(gold.get(f"answer_content_{n}") or "").strip()
+            if content:
+                options.append(f"{chr(ord('A') + len(options))}) {content}")
+        if not options:
+            return text
+        return (text.rstrip() + "\n" + "\n".join(options)).strip()
+    subs = []
+    for n in range(1, aw.MAX_SUBQUESTIONS + 1):
+        sub = str(gold.get(f"sub_question_{n}") or "").strip()
+        if sub:
+            subs.append(sub)
+    if not subs:
         return text
-    options = []
-    for n in range(1, aw.MAX_OBJECTIVE_OPTIONS + 1):
-        content = str(gold.get(f"answer_content_{n}") or "").strip()
-        if content:
-            options.append(f"{chr(ord('A') + len(options))}) {content}")
-    if not options:
-        return text
-    return (text.rstrip() + "\n" + "\n".join(options)).strip()
+    return (text.rstrip() + "\n" + "\n".join(subs)).strip()
 
 
 def _diff_rows(sheet: str, gold: dict, rendered: dict) -> list[str]:

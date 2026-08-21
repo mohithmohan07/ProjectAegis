@@ -20,36 +20,28 @@ When autonomous resolution is exhausted, the newest durable output is released
 with its unresolved decision, evidence and errors attached. The job never parks
 in an `awaiting_decision` state for Build Concepts.
 
-## Rule B - Type identity does not force one topic
+## Rule B - one concept owns each Type (amended 21 Aug 2026, register Q14)
 
-A reusable Type is a method taxonomy, not a single-topic container. The same
-Type identity may be rendered under more than one concept or topic when its
-Cases require different teaching owners.
+**Amended by the owner's 21 Aug 2026 ruling (register Q14), which supersedes
+this rule's earlier multi-concept rendering.** A Type identity renders under
+exactly ONE concept. Each Case's teaching owner is still judged at Case/QID
+granularity — that judgment is evidence — but when those verdicts land one
+Type's Cases on different concepts, a dedicated ownership verdict (model
+decision with advisory critic and Fixer, one per split Type) chooses THE
+owning concept from among the Cases' certified hosts, and every Case and
+QID of the Type renders there. For a Type's member QIDs, Type ownership
+outranks per-question routing; Rule C's exactly-once accounting is
+re-checked after the move.
 
-For example:
+What survives from the original rule: a Type must still not be forced
+wholesale into the topic of its first Case, its most common Case, or the
+place where it was first mined — the owner is a decided verdict over the
+Cases' evidence, never positional arithmetic.
 
-```text
-Type 01: <reusable method definition>
-
-Topic A / Concept A
-  Type 01
-    Case 01: <case definition owned by Topic A>
-      Example: QINV-0004 ...
-
-Topic B / Concept B
-  Type 01
-    Case 02: <case definition owned by Topic B>
-      Example: QINV-0011 ...
-```
-
-`Type 01` remains the same reusable Type. Case 01 and Case 02 have independent
-semantic ownership. Each Case belongs to the latest topic whose knowledge,
-method or framework is genuinely necessary to attempt its QID, subject to the
-retrospective-reference exception in Rule 4 of the main placement rules.
-
-Ownership is therefore certified at Case/QID granularity. A Type must not be
-forced wholesale into the topic of its first Case, its most common Case, or the
-place where the Type was first mined.
+Explicitly per the same ruling: **not every concept needs a Type.** Choosing
+one owner may leave other concepts with no Types at all; that is a
+legitimate outcome, the ownership verdict must never spread Types to cover
+concepts, and no gate may demand a minimum Type count per concept.
 
 ## Rule C - closed QID allocation
 

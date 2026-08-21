@@ -557,6 +557,19 @@ def _question_record(
     else:  # Descriptive
         record["math_keyboard"] = candidate.get("math_keyboard", "")
         record["display_answer"] = candidate.get("display_answer", "")
+        # SOP (docs/SOP_Bulk_Import_Fill_Guide.docx §5.1): ``question`` is
+        # the stem only; ``question_text`` is the whole question — for a
+        # Descriptive item that includes its sub-questions, one per line.
+        sub_texts = [
+            str(s.get("text") or "").strip()
+            for s in candidate.get("sub_questions") or []
+            if isinstance(s, Mapping) and str(s.get("text") or "").strip()
+        ]
+        if sub_texts:
+            record["question_text"] = (
+                str(record.get("question_text") or "").rstrip()
+                + "\n" + "\n".join(sub_texts)
+            ).strip()
         for n, answer in enumerate(
             _cap("answers", answers, MAX_DESCRIPTIVE_ANSWERS), start=1
         ):

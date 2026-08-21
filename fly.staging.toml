@@ -33,9 +33,15 @@ primary_region = 'ams'
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = false
+  # Cost guard (owner report, 2026-08-21: surprise Fly spend): staging
+  # idles at zero machines and wakes on request. The old pin
+  # (auto_stop = false, min_machines_running = 1) kept a machine burning
+  # 24/7 between acceptance runs. During a staging acceptance run, flip
+  # min_machines_running to 1 temporarily — a machine stopping mid-run
+  # kills the run's worker thread, same as production before 351d203.
+  auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
   [http_service.concurrency]
     type = 'requests'
