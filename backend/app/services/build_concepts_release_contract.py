@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping
 from .. import models
 from . import build_concepts, uploads
 from . import build_concepts_release as release
+from . import concept_example_ownership
 from . import progress
 from . import build_concepts_release_files as release_files
 from . import release_refiner
@@ -231,6 +232,25 @@ def _release_after_result(
                 "uploaded to the database."
             ),
             refinements=refinements,
+        )
+        # Q13/R4: public Examples whose wording has no exact inventory
+        # owner get one recorded, reviewer-visible verdict on the staged
+        # release. The recorder never raises; the staged rows above are
+        # already durable whatever happens here.
+        chapter = db.get(models.Chapter, int(target_chapter_id or 0))
+        concept_example_ownership.adjudicate_and_record(
+            db,
+            job,
+            lane=release.LANE_POST,
+            records=refined_records,
+            inventory=captured.get("inventory") or {},
+            meta={
+                "board": chapter.board if chapter else "",
+                "grade": chapter.grade if chapter else "",
+                "subject": chapter.subject if chapter else "",
+                "chapter_title": chapter.chapter_title if chapter else "",
+                "pre_post_learning": "Post",
+            },
         )
         # Outputs 03/04 (§5, spec T3): the SIBLING slot on this same job.
         # One run produces all four outputs (Q3), so the Pre release is

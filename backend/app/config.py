@@ -222,6 +222,14 @@ OPENAI_SLOT_WAIT_LOG_SECONDS = max(
     1.0,
     float(os.environ.get("AEGIS_OPENAI_SLOT_WAIT_LOG_SECONDS", "20")),
 )
+# At full concurrency a slot handoff routinely takes under a second; logging
+# every one buried a live run's console in busy/acquired pairs. A wait only
+# becomes console-worthy after this quiet grace. Log mechanics only — the
+# gate's behavior is unchanged.
+OPENAI_SLOT_WAIT_QUIET_SECONDS = max(
+    0.0,
+    float(os.environ.get("AEGIS_OPENAI_SLOT_WAIT_QUIET_SECONDS", "5")),
+)
 
 
 def phase3_decision_workers() -> int:

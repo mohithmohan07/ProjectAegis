@@ -4701,16 +4701,39 @@ def generate_post_learning(
     job.deposit_scope_ids = [target_chapter_id]
     job.result_ids = created_ids
     job.generation_checkpoint = {}
-    job.detail = (
-        f"created {len(created_ids)} post-learning concepts, "
-        f"merged sources into {len(merged_ids)} existing"
+    # Release-first runs divert the deposit: the rows are captured for the
+    # staged release and NOTHING enters the database or the shared workbook
+    # here (the interceptor's ``written`` says so). Reporting "created 0"
+    # for such a run reads as total loss — say what actually happened.
+    staged_release_only = (
+        written.get("publication_status") == "staged_release_only"
     )
+    if staged_release_only:
+        job.detail = (
+            f"staged {written.get('written', 0)} concept row(s) into the "
+            "release for review; database publication happens from the "
+            "review page"
+        )
+    else:
+        job.detail = (
+            f"created {len(created_ids)} post-learning concepts, "
+            f"merged sources into {len(merged_ids)} existing"
+        )
     db.commit()
     progress.set_progress(1.0, label="Done")
-    progress.log(
-        f"Created {len(created_ids)} post-learning concepts "
-        f"({len(merged_ids)} merged).", level="success")
-    progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
+    if staged_release_only:
+        progress.log(
+            f"Staged {written.get('written', 0)} concept row(s) into the "
+            "release for review; nothing enters the database until the "
+            "release is published.", level="success")
+    else:
+        progress.log(
+            f"Created {len(created_ids)} post-learning concepts "
+            f"({len(merged_ids)} merged).", level="success")
+    if not staged_release_only:
+        # In release-first mode no shared workbook was written here — the
+        # released workbook renders from the staged rows on download.
+        progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
     for issue in written.get("issues") or []:
         # Recorded, flagged, and visible to the reviewer — never a halt (Q13).
         progress.log(

@@ -110,6 +110,9 @@ def unexpected_rendered_type_examples(
                 continue
             unexpected.append({
                 "example": generation._diagnostic_snippet(candidate),
+                # The full wording rides beside the snippet so the release
+                # adjudication can judge the Example, not a truncation.
+                "example_text": candidate,
                 "reason": reason,
             })
     return unexpected
@@ -138,10 +141,15 @@ def install(generation: ModuleType) -> None:
         repaired = original_repair(records, inventory, mined_types)
         unowned = unexpected(repaired, inventory)
         if unowned:
+            # Truthful, and only a heads-up: nothing blocks here. The
+            # release stage re-scans the rows that actually ship and
+            # adjudicates each unowned Example with a recorded verdict
+            # (concept_example_ownership) — the finding never evaporates.
             generation.progress.log(
-                "Rendered inventory repair still contains "
-                f"{len(unowned)} unexpected Example(s); closed-world "
-                "validation remains blocked.",
+                "Rendered inventory repair leaves "
+                f"{len(unowned)} public Example(s) without an exact "
+                "inventory owner; the release stage adjudicates and "
+                "records each on the release.",
                 level="warning",
             )
         return repaired
