@@ -64,6 +64,20 @@ interface RunConsoleApi {
     usagePresentation?: RunUsagePresentation,
     reattach?: RunReattach<T>,
   ) => Promise<T>;
+  /**
+   * Attach to an ALREADY-RUNNING job without starting or resuming
+   * anything: tail its durable run journal into the console from the
+   * beginning (the replay rebuilds the stage cards with their real
+   * times and costs) and keep following while the worker runs. Makes
+   * no POST, spends nothing, and never resumes a stopped run — if the
+   * worker died mid-run it says so and stops. Resolves with the run's
+   * result when it finishes (via recoverResult when provided), or null
+   * when there is nothing to return.
+   */
+  watch: <T = unknown>(
+    title: string,
+    reattach: RunReattach<T>,
+  ) => Promise<T | null>;
 }
 
 /* The console is the run's full record: keep enough lines that even a long
@@ -94,6 +108,24 @@ const INITIAL: RunState = {
 };
 
 const RunConsoleContext = createContext<RunConsoleApi | null>(null);
+
+/* Waits ms — but resolves EARLY the moment the tab becomes visible again,
+   so the first poll after a tab switch is immediate instead of stuck
+   behind a background-throttled timer. */
+function visibilitySleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const finish = () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      resolve();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") finish();
+    };
+    const timer = window.setTimeout(finish, ms);
+    document.addEventListener("visibilitychange", onVisible);
+  });
+}
 
 export function RunConsoleProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<RunState>(INITIAL);
@@ -190,22 +222,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
         progressLabel: message,
       }));
     };
-    // Waits ms — but returns EARLY the moment the tab becomes visible
-    // again, so the first poll after a tab switch is immediate instead
-    // of stuck behind a background-throttled timer.
-    const sleep = (ms: number) =>
-      new Promise<void>((resolve) => {
-        const finish = () => {
-          window.clearTimeout(timer);
-          document.removeEventListener("visibilitychange", onVisible);
-          resolve();
-        };
-        const onVisible = () => {
-          if (document.visibilityState === "visible") finish();
-        };
-        const timer = window.setTimeout(finish, ms);
-        document.addEventListener("visibilitychange", onVisible);
-      });
+    const sleep = visibilitySleep;
 
     const withReattach = async (): Promise<T> => {
       // Bounded: a run that keeps dying for non-network reasons must surface,
@@ -364,6 +381,154 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       });
   }, [apply]);
 
+  const watch = useCallback(<T,>(
+    title: string,
+    reattach: RunReattach<T>,
+  ): Promise<T | null> => {
+    const runId = ++runIdRef.current;
+    setState({
+      ...INITIAL,
+      active: true,
+      open: true,
+      title,
+      progressLabel: "Attaching to the running job…",
+      status: "running",
+    });
+    openRef.current = true;
+
+    let lastSeq = 0;
+    let startedAtSet = false;
+    const applyOnce = (event: StreamEvent) => {
+      const seq = (event as { seq?: number }).seq;
+      if (typeof seq === "number") {
+        if (seq <= lastSeq) return;
+        lastSeq = seq;
+      }
+      if (!startedAtSet && typeof event.ts === "number") {
+        // The replay carries the run's REAL timestamps: the header clock
+        // and the stage cards show when things actually happened, not
+        // when this viewer attached.
+        startedAtSet = true;
+        const startedAt = event.ts;
+        setState((s) => ({ ...s, startedAt }));
+      }
+      apply(event);
+    };
+    const note = (message: string, level = "warning") => {
+      if (runIdRef.current !== runId) return;
+      setState((s) => ({
+        ...s,
+        lines: [...s.lines, { level, message, ts: Date.now() / 1000 }],
+        progressLabel: message,
+      }));
+    };
+
+    type Outcome =
+      | { kind: "result"; data: T | null }
+      | { kind: "stopped" }
+      | { kind: "detached" };
+
+    const tail = async (): Promise<Outcome> => {
+      let delay = 250;
+      for (;;) {
+        if (runIdRef.current !== runId) return { kind: "detached" };
+        let batch;
+        try {
+          batch = await httpApi.getRunEvents(
+            reattach.module, reattach.jobId, lastSeq,
+          );
+        } catch (pollErr) {
+          if (isNonTransientStatus(pollErr)) {
+            note(
+              "Watching stopped: "
+              + String((pollErr as Error).message ?? pollErr),
+              "error",
+            );
+            throw pollErr;
+          }
+          delay = Math.min(Math.max(delay * 2, 1000), 15000);
+          await visibilitySleep(delay);
+          continue;
+        }
+        delay = 2000;
+        for (const event of batch.events) {
+          if (runIdRef.current !== runId) return { kind: "detached" };
+          applyOnce(event);
+          if (event.type === "result") {
+            return { kind: "result", data: event.data as T };
+          }
+          if (event.type === "error") throw new Error(event.message);
+        }
+        if (batch.running) {
+          await visibilitySleep(delay);
+          continue;
+        }
+        // Journal exhausted, worker not streaming, no terminal event yet.
+        let job;
+        try {
+          job = await httpApi.getUploadJob(reattach.module, reattach.jobId);
+        } catch (jobErr) {
+          if (isNonTransientStatus(jobErr)) {
+            note(
+              "Watching stopped: "
+              + String((jobErr as Error).message ?? jobErr),
+              "error",
+            );
+            throw jobErr;
+          }
+          await visibilitySleep(delay);
+          continue;
+        }
+        if (job.generation_running) {
+          await visibilitySleep(delay);
+          continue;
+        }
+        if (job.status === "generated") {
+          note("The run finished.", "info");
+          if (reattach.recoverResult) {
+            return { kind: "result", data: await reattach.recoverResult() };
+          }
+          return { kind: "result", data: null };
+        }
+        // Watch-only NEVER resumes: a worker that stopped mid-run is
+        // reported, and the resume stays an explicit human act.
+        note(
+          "The worker is not running. Open the saved run to resume it "
+          + "from the checkpoint — watching never restarts a run.",
+        );
+        return { kind: "stopped" };
+      }
+    };
+
+    return tail()
+      .then((outcome) => {
+        if (runIdRef.current === runId) {
+          if (outcome.kind === "result") {
+            setState((s) => ({
+              ...s, active: false, status: "done",
+              progress: 1, progressLabel: "Done",
+            }));
+          } else if (outcome.kind === "stopped") {
+            setState((s) => ({ ...s, active: false, status: "paused" }));
+          }
+        }
+        return outcome.kind === "result" ? outcome.data : null;
+      })
+      .catch((err) => {
+        if (runIdRef.current === runId) {
+          setState((s) => ({
+            ...s, active: false, status: "error",
+            lines: [...s.lines, {
+              level: "error",
+              message: String((err as Error)?.message ?? err),
+              ts: Date.now() / 1000,
+            }],
+          }));
+        }
+        throw err;
+      });
+  }, [apply]);
+
   const setOpen = useCallback((open: boolean) => {
     openRef.current = open;
     setState((s) => ({ ...s, open }));
@@ -376,8 +541,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
     }));
   }, []);
 
-  const api = useMemo<RunConsoleApi>(() => ({ state, setOpen, clear, run }),
-    [state, setOpen, clear, run]);
+  const api = useMemo<RunConsoleApi>(
+    () => ({ state, setOpen, clear, run, watch }),
+    [state, setOpen, clear, run, watch],
+  );
 
   return <RunConsoleContext.Provider value={api}>{children}</RunConsoleContext.Provider>;
 }

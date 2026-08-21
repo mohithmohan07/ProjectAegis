@@ -48,9 +48,16 @@ function usage(totalTokens: number): OpenAIUsage {
 }
 
 function Probe() {
-  const { run, state } = useRunConsole();
+  const { run, watch, state } = useRunConsole();
   return (
     <>
+      <button
+        onClick={() => void watch("Watch", { module: "concepts", jobId: 7 })
+          .catch(() => undefined)}
+      >
+        Watch
+      </button>
+      <output data-testid="line-count">{state.lines.length}</output>
       <button onClick={() => void run("First", "/first")}>First</button>
       <button onClick={() => void run("Second", "/second")}>Second</button>
       <button
@@ -147,6 +154,69 @@ test("a stream heartbeat makes a long final step visibly active", () => {
 
   expect(screen.getByTestId("progress-label").textContent).toBe(
     "Post Learning — generating concepts (still working...)",
+  );
+});
+
+test("watch tails the journal to the result without POSTing anything", async () => {
+  pending.length = 0;
+  getRunEventsMock.mockReset();
+  getRunEventsMock.mockResolvedValueOnce({
+    events: [
+      { type: "step", label: "Concept extraction", ts: 100, seq: 1 },
+      { type: "log", level: "info", message: "working", ts: 101, seq: 2 },
+      { type: "usage", data: usage(300), ts: 102, seq: 3 },
+      { type: "result", data: { ok: true }, ts: 103, seq: 4 },
+    ],
+    next: 4,
+    running: false,
+  });
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  await act(async () => {
+    fireEvent.click(screen.getByText("Watch"));
+  });
+
+  // Attach-only: the journal was tailed, the stream POST was never made.
+  expect(pending.length).toBe(0);
+  expect(getRunEventsMock).toHaveBeenCalledWith("concepts", 7, 0);
+  expect(screen.getByTestId("status").textContent).toBe("done");
+  expect(screen.getByTestId("usage").textContent).toBe("300");
+  expect(Number(screen.getByTestId("line-count").textContent)).toBe(2);
+});
+
+test("watch reports a stopped worker and never resumes it", async () => {
+  pending.length = 0;
+  getRunEventsMock.mockReset();
+  getUploadJobMock.mockReset();
+  getRunEventsMock.mockResolvedValueOnce({
+    events: [
+      { type: "step", label: "Concept extraction", ts: 100, seq: 1 },
+    ],
+    next: 1,
+    running: false,
+  });
+  getUploadJobMock.mockResolvedValueOnce({
+    generation_running: false,
+    status: "converted",
+  });
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  await act(async () => {
+    fireEvent.click(screen.getByText("Watch"));
+  });
+
+  expect(pending.length).toBe(0);
+  expect(screen.getByTestId("status").textContent).toBe("paused");
+  expect(screen.getByTestId("progress-label").textContent).toContain(
+    "watching never restarts a run",
   );
 });
 
