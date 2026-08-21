@@ -70,6 +70,14 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Boundaries the ruling keeps | Source questions untouched (Rule C's exactly-once accounting); a generated question duplicating a SOURCE question stays the generation critic's flag-only territory; removal has no quota (an empty `duplicate_sets` is a legitimate verdict). The same review's oral-activity complaint stays flag-only — the owner selected duplicate removal alone |
 | Recorded, not built (owner answers, 2026-08-21) | No spend cap (owner: "No cap"); cost design stays as-is (owner: "Keep current design"); the image-combining question returned "not understood" — re-explained, re-asked, and RULED later the same day (see the Q17 round) |
 
+## Tracks round (2026-08-21 night: Track A built; Track 3 corrected)
+
+| Item | Disposition |
+|---|---|
+| Track A — BUILT | The inventory extraction forks beside the skeleton/description passes (`_EarlyInventoryTrack`): the extraction function split at its `records` seam into a pre-join half (sections-only: chunks, completeness verdicts, anchors, figures, qids) and a finish half (topic assignment then adjudication, exact sequential order) whose composition is byte-identical. Join at the `question_inventory` checkpoint; no sidecar checkpoint needed — a pre-join crash/pause loses only wall-clock, exactly as before, and resume semantics are unchanged. Halt-both: any raise between fork and join stops the track before its next chunk (in-flight calls finish). Workers=1 restores strict sequential. Pinned in `test_early_inventory_track.py` (fork ≡ sequential, abort seam, failure surfacing); two flow tests that stub the whole extraction pin workers=1 |
+| Track 3 — corrected, NOT built | The "fork the Pre chain after Settle/Host" sketch was WRONG against the code and is withdrawn in the register: the prerequisite merge needs Place's and Analyse's captures (decided only when those lanes finish) and premap's links read the assembled, polished Post rows — tail position is load-bearing recorded-evidence design, and the chain is already internally parallel. No idle time to reclaim without weakening evidence |
+| Expected effect | With the concurrency env bump, Track A overlaps the ~0.58–0.70 extraction stretch (and its retries) with the 0.27–0.58 concept passes; combined with concurrent Masters, a first run should land well under half of today's 2 hours. Remaining sequential seams: outline, merge, premap chain tail, granularity pause |
+
 ## Performance round 3 — owner rulings on cost/time (2026-08-21 evening)
 
 | Item | Disposition |
