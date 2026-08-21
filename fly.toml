@@ -18,9 +18,13 @@ primary_region = 'ams'
   # The rewritten Phase 3 is the only post-81% pipeline; the old
   # AEGIS_PHASE3_REWRITE migration flag is retired (legacy lane deleted).
   # Multi-creator sizing: concurrent runs x decision workers <= the shared
-  # OpenAI concurrency gate.
-  AEGIS_OPENAI_MAX_CONCURRENCY = '9'
-  AEGIS_PHASE3_DECISION_WORKERS = '3'
+  # OpenAI concurrency gate. Sized 2026-08-21 for 3 concurrent creators
+  # against the account's provider limits (180M TPM / 30k RPM — the
+  # pipeline cannot come near them): 3 x 16 <= 48. The [[vm]] below is
+  # sized up with it; workers=1 anywhere restores strict sequential.
+  AEGIS_OPENAI_MAX_CONCURRENCY = '48'
+  AEGIS_PHASE3_DECISION_WORKERS = '16'
+  AEGIS_SOURCE_CHUNK_WORKERS = '10'
   AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES = '3'
   PORT = '8000'
 
@@ -56,5 +60,9 @@ primary_region = 'ams'
 
 [[vm]]
   cpu_kind = 'shared'
-  cpus = 1
-  memory_mb = 1024
+  # 48 in-flight provider calls are 48 worker threads holding response
+  # payloads; one shared core and 1GB was sized for a gate of 9. Applies
+  # to machines a deploy creates — an existing machine is resized once,
+  # out of band: fly scale vm shared-cpu-2x --memory 2048 -a projectaegis
+  cpus = 2
+  memory_mb = 2048

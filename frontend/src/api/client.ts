@@ -98,7 +98,7 @@ export type ModelProviderInfo = {
    live stream and the run-events catch-up reads, so a client that saw an
    event once can recognise (and skip) it arriving again. */
 export type StreamEvent =
-  | { type: "log"; level?: string; message: string; ts?: number; seq?: number }
+  | { type: "log"; level?: string; message: string; lane?: string; ts?: number; seq?: number }
   | { type: "step"; label: string; ts?: number; seq?: number }
   | { type: "progress"; value: number; label?: string; ts?: number; seq?: number }
   | { type: "usage"; data: OpenAIUsage; ts?: number; seq?: number }

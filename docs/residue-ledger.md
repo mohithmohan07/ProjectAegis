@@ -70,6 +70,15 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Boundaries the ruling keeps | Source questions untouched (Rule C's exactly-once accounting); a generated question duplicating a SOURCE question stays the generation critic's flag-only territory; removal has no quota (an empty `duplicate_sets` is a legitimate verdict). The same review's oral-activity complaint stays flag-only — the owner selected duplicate removal alone |
 | Recorded, not built (owner answers, 2026-08-21) | No spend cap (owner: "No cap"); cost design stays as-is (owner: "Keep current design"); the image-combining question returned "not understood" — re-explained, re-asked, and RULED later the same day (see the Q17 round) |
 
+## Console v2 round (2026-08-21 night: stage cards with time, cost, and lanes)
+
+| Item | Disposition |
+|---|---|
+| Per-stage usage attribution | `openai_usage` accumulators gain a run-scoped per-(stage, lane) table: every recorded call attributes to the last `progress.step` its context saw (worker pools inherit the stage that spawned — and paid for — them) and the composed `label_scope` lane. Rows carry requests, tokens, reasoning tokens, incremental cost (None the moment any contributing call is unpriced — a partial number is never shown as a total), and first/last timestamps; `summary()["stages"]` rides every usage event and survives baseline merges by re-attachment. Stage boundaries also refresh the usage event so the table stays live |
+| Lane as a structured field | `progress.log` events carry `lane` beside the `[label]`-prefixed text, so the console renders parallel tracks (the early inventory track, Phase-3 lanes, the two Masters) as separate rails while the raw view and persisted logs are unchanged |
+| Stage-card console | The run console gains a Stages view (default; Raw + its filters remain): one card per pipeline stage with status icon, live-ticking elapsed, token and cost chips, and a parallel-tracks count; finished stages fold (native `<details>`), the running or failed stage stays open; each lane renders under a colour-stable rail with its own token/cost line. Block-level, wrap-friendly markup so the phone bottom sheet renders the same cards single-column; reduced-motion honoured on the spinner |
+| Pinned | Backend: `test_run_console_stages.py` (attribution per stage/lane, boundary usage refresh, structured lane field). Frontend: `runStages.test.ts` (grouping, lane order, cost summation, partial-price refusal); tsc + 83 vitest green; production build verified |
+
 ## Tracks round (2026-08-21 night: Track A built; Track 3 corrected)
 
 | Item | Disposition |

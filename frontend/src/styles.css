@@ -1092,6 +1092,68 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .console-jump:hover { background: var(--console-hover); }
 
+/* ---- Stage view: one card per pipeline stage, with time/cost chips and
+   parallel tracks rendered as colour-railed lanes. Block-level and
+   wrap-friendly by construction so the same markup works in the phone
+   bottom sheet. ---- */
+.console-filter-split {
+  display: inline-flex; gap: inherit; margin-left: 10px; padding-left: 10px;
+  border-left: 1px solid var(--console-border);
+}
+.stage-card {
+  border: 1px solid var(--console-border);
+  border-radius: 10px;
+  background: var(--console-panel);
+  margin: 6px 4px;
+  overflow: hidden;
+}
+.stage-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px; cursor: pointer; list-style: none;
+  font-family: var(--font-sans); font-size: 12.5px; font-weight: 600;
+  color: var(--console-text);
+}
+.stage-head::-webkit-details-marker { display: none; }
+.stage-head:hover { background: var(--console-hover); }
+.stage-title { flex: 1 1 12ch; min-width: 12ch; overflow-wrap: anywhere; }
+.stage-icon { width: 1.4em; text-align: center; flex: none; }
+.stage-icon-done { color: var(--console-success); }
+.stage-icon-error { color: #d3382f; }
+.stage-icon-warn { color: #b97a08; }
+.stage-icon-running { color: var(--console-step); animation: stage-spin 1.6s linear infinite; display: inline-block; }
+@keyframes stage-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .stage-icon-running { animation: none; }
+}
+.stage-chips { display: inline-flex; gap: 6px; flex-wrap: wrap; margin-left: auto; }
+.stage-chip {
+  border: 1px solid var(--console-border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 10.5px; font-weight: 600;
+  color: var(--console-muted);
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+}
+.stage-body { padding: 2px 8px 8px; border-top: 1px solid var(--console-border); }
+.stage-lane {
+  border-left: 3px solid var(--console-border);
+  margin: 6px 0 6px 2px;
+  padding-left: 8px;
+}
+.stage-lane-name {
+  font-family: var(--font-sans);
+  font-size: 11px; font-weight: 700;
+  margin: 2px 0;
+  overflow-wrap: anywhere;
+}
+.stage-lane-cost { color: var(--console-muted); font-weight: 600; }
+@media (max-width: 700px) {
+  .stage-head { padding: 10px 10px; font-size: 13px; }
+  .stage-chips { margin-left: 0; width: 100%; }
+  .stage-chip { font-size: 11px; padding: 2px 9px; }
+}
+
 .status-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 .dot-idle { background: var(--console-muted); }
 .dot-running { background: #4a95f5; animation: pulse 1.2s infinite; }

@@ -11,6 +11,8 @@ export interface RunLine {
   level: string;
   message: string;
   ts: number;
+  /** The parallel track (label scope) that emitted this line, if any. */
+  lane?: string;
 }
 
 export interface RunState {
@@ -115,7 +117,12 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
         next.progressLabel = evt.label;
         next.lines = [...s.lines, { level: "step", message: evt.label, ts: evt.ts ?? Date.now() / 1000 }];
       } else if (evt.type === "log") {
-        next.lines = [...s.lines, { level: evt.level ?? "info", message: evt.message, ts: evt.ts ?? Date.now() / 1000 }];
+        next.lines = [...s.lines, {
+          level: evt.level ?? "info",
+          message: evt.message,
+          ts: evt.ts ?? Date.now() / 1000,
+          ...(evt.lane ? { lane: evt.lane } : {}),
+        }];
       } else if (evt.type === "usage") {
         next.usage = presentedUsage(s, evt.data);
       } else if (evt.type === "result") {
@@ -404,6 +411,12 @@ function presentedUsage(
     // A file-scoped cumulative display must never visually reset to a smaller
     // fresh-attempt subtotal while a checkpoint retry is starting.
     return state.usage;
+  }
+  if (!incoming.stages && state.usage?.stages) {
+    // Only live usage events carry the per-stage table (persisted-shape
+    // summaries on result/error events never do); keep the last table so
+    // the stage cards hold their cost chips through "Done".
+    return { ...incoming, stages: state.usage.stages };
   }
   return incoming;
 }

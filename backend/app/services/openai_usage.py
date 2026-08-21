@@ -10,6 +10,7 @@ import copy
 import contextvars
 import os
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -134,8 +135,35 @@ class ModelUsage:
 
 
 @dataclass
+class StageUsage:
+    """Per-(stage, lane) usage for the run console's time/cost table.
+
+    ``stage`` is the last ``progress.step`` label seen by the context that
+    made the call (worker pools inherit the stage that spawned them —
+    the stage that paid for them); ``lane`` is the composed worker-label
+    scope, which is how the parallel tracks (the early inventory track,
+    the Phase-3 lanes, the two Masters) show up as separate rails.
+    Run-scoped by design: baselines merged from persisted history carry
+    no stage attribution, so the table always describes THIS run.
+    """
+
+    stage: str
+    lane: str
+    request_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    total_tokens: int = 0
+    estimated_cost_usd: Decimal = Decimal("0")
+    pricing_complete: bool = True
+    first_ts: float = 0.0
+    last_ts: float = 0.0
+
+
+@dataclass
 class UsageAccumulator:
     models: dict[str, ModelUsage] = field(default_factory=dict)
+    stages: dict[tuple[str, str], StageUsage] = field(default_factory=dict)
     # One immutable durable baseline per persisted artifact. Recomputing
     # ``baseline + current run`` at every checkpoint makes repeated saves
     # idempotent while still including newly billed responses.
@@ -157,6 +185,8 @@ class UsageAccumulator:
         reasoning_tokens: int = 0,
         total_tokens: int | None = None,
         estimated_cost_usd: Decimal | float | str | None | object = _COST_UNSET,
+        stage: str = "",
+        lane: str = "",
     ) -> None:
         model = (model or "unknown").strip() or "unknown"
         input_tokens = max(0, int(input_tokens))
@@ -198,6 +228,45 @@ class UsageAccumulator:
             total_tokens=total,
             estimated_cost_usd=request_cost,
             )
+            row = self.stages.setdefault(
+                (str(stage), str(lane)),
+                StageUsage(stage=str(stage), lane=str(lane)),
+            )
+            row.request_count += max(0, int(request_count))
+            row.input_tokens += input_tokens
+            row.output_tokens += output_tokens
+            row.reasoning_tokens += reasoning_tokens
+            row.total_tokens += total
+            if request_cost is None:
+                row.pricing_complete = False
+            elif row.pricing_complete:
+                row.estimated_cost_usd += request_cost
+            now = time.time()
+            if not row.first_ts:
+                row.first_ts = now
+            row.last_ts = now
+
+    def stage_rows(self) -> list[dict[str, Any]]:
+        """JSON-safe per-(stage, lane) rows, in first-seen order."""
+        return [
+            {
+                "stage": row.stage,
+                "lane": row.lane,
+                "request_count": row.request_count,
+                "input_tokens": row.input_tokens,
+                "output_tokens": row.output_tokens,
+                "reasoning_tokens": row.reasoning_tokens,
+                "total_tokens": row.total_tokens,
+                "estimated_cost_usd": (
+                    round(float(row.estimated_cost_usd), 6)
+                    if row.pricing_complete else None
+                ),
+                "pricing_complete": row.pricing_complete,
+                "first_ts": row.first_ts,
+                "last_ts": row.last_ts,
+            }
+            for row in self.stages.values()
+        ]
 
     def summary(self) -> dict[str, Any]:
         model_rows = [_model_summary(item) for item in self.models.values()]
@@ -332,6 +401,24 @@ def visible_summary() -> dict[str, Any]:
     return accumulator.summary()
 
 
+def console_summary() -> dict[str, Any]:
+    """``visible_summary`` plus the run-scoped per-(stage, lane) table.
+
+    The console's LIVE usage events are the only carrier of the stage
+    table, deliberately: persisted summaries (checkpoint bundles,
+    ``job.openai_usage``, pending-decision ``cumulative_usage``) keep
+    their exact historical shape — a strict checkpoint schema refuses
+    unknown fields, and a free repeated request must not change the
+    durable record. Run-scoped attribution describes THIS run's console
+    view and nothing else.
+    """
+    summary = visible_summary()
+    accumulator = _active.get()
+    if accumulator is not None:
+        summary["stages"] = accumulator.stage_rows()
+    return summary
+
+
 def record_response(response: Any, *, requested_model: str = "") -> dict[str, Any]:
     """Record one billable Chat Completions response, if tracking is active.
 
@@ -359,6 +446,12 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     raw_total = _get(usage, "total_tokens")
     total_tokens = None if raw_total is None else _int(raw_total)
     model = str(_get(response, "model") or requested_model or "unknown")
+    try:
+        from . import progress
+
+        stage, lane = progress.current_stage(), progress.current_lane()
+    except Exception:  # pragma: no cover - attribution must never break billing
+        stage, lane = "", ""
     accumulator.add(
         model=model,
         input_tokens=input_tokens,
@@ -367,15 +460,18 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         output_tokens=output_tokens,
         reasoning_tokens=reasoning_tokens,
         total_tokens=total_tokens,
+        stage=stage,
+        lane=lane,
     )
     summary = accumulator.summary()
 
     # Local import avoids a module cycle. Outside streamed requests this is a
-    # cheap no-op, while the web UI receives updated aggregate usage live.
+    # cheap no-op, while the web UI receives updated aggregate usage live —
+    # console_summary so the stage/lane table rides the live event only.
     try:
         from . import progress
 
-        progress.usage(visible_summary())
+        progress.usage(console_summary())
     except Exception:  # pragma: no cover - accounting must never break generation
         pass
     return summary
