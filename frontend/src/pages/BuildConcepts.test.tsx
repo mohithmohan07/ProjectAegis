@@ -32,6 +32,7 @@ const apiMock = vi.hoisted(() => ({
   resumableConceptCheckpoints: vi.fn(),
   clearConceptCheckpoint: vi.fn(),
   getUploadJob: vi.fn(),
+  getRunEvents: vi.fn(),
   submitConceptDecision: vi.fn(),
   conceptReleaseUrl: vi.fn((id: number) => `/release/${id}.xlsx`),
   conceptReleaseBulkImportUrl: vi.fn(
@@ -405,6 +406,76 @@ test("polls an active run instead of offering a duplicate Resume action", async 
   });
   expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 42);
   expect(screen.getByRole("button", { name: "Resume" })).toBeDefined();
+});
+
+test("Watch live lands on the download-and-review page when the run completes", async () => {
+  apiMock.resumableConceptCheckpoints.mockResolvedValue({
+    items: [savedSummary({ generation_running: true })],
+    total: 1,
+  });
+  // The journal replays straight through to the run's terminal result...
+  apiMock.getRunEvents.mockResolvedValue({
+    events: [
+      { type: "step", label: "Type assignment", ts: 100, seq: 1 },
+      { type: "result", data: { job_id: 42, released: true }, ts: 200, seq: 2 },
+    ],
+    next: 2,
+    running: false,
+  });
+  // ...and the finished job is the page the owner lands on.
+  apiMock.getUploadJob.mockImplementation(
+    async (_module: string, id: number) => savedJob({ id, status: "generated" }),
+  );
+  renderPage();
+
+  const dialog = await screen.findByRole("dialog");
+  expect(dialog.textContent).toContain("Generation is already running");
+  fireEvent.click(screen.getByRole("button", { name: "Watch live" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+  // The download-and-review page came up on its own: the saved upload is
+  // restored and the review panel is present, exactly as after a run
+  // started from this tab.
+  expect(await screen.findByText("Loaded electricity.pdf")).toBeDefined();
+  expect(
+    await screen.findByText("Review and correct the output"),
+  ).toBeDefined();
+  expect(apiMock.getRunEvents).toHaveBeenCalledWith("concepts", 42, 0);
+  expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 42);
+  // Watching is attach-only: nothing was POSTed, nothing resumed.
+  expect(streamMock).not.toHaveBeenCalled();
+});
+
+test("Watch live stays put when the worker stopped mid-run", async () => {
+  apiMock.resumableConceptCheckpoints.mockResolvedValue({
+    items: [savedSummary({ generation_running: true })],
+    total: 1,
+  });
+  // Journal exhausted with no terminal event, worker gone, job still at
+  // its checkpoint: the console reports it, and the page does NOT
+  // pretend there is a finished output to review.
+  apiMock.getRunEvents.mockResolvedValue({
+    events: [
+      { type: "step", label: "Type assignment", ts: 100, seq: 1 },
+    ],
+    next: 1,
+    running: false,
+  });
+  renderPage();
+
+  await screen.findByRole("dialog");
+  fireEvent.click(screen.getByRole("button", { name: "Watch live" }));
+  // Two job fetches: the watch loop's stopped-worker check, then the
+  // completion handler's look at the final status. Flush both.
+  await waitFor(() => {
+    expect(apiMock.getUploadJob).toHaveBeenCalledTimes(2);
+  });
+  await act(async () => {});
+
+  // Default getUploadJob answers status "converted" — no landing.
+  expect(screen.queryByText("Review and correct the output")).toBeNull();
+  expect(screen.queryByText("Loaded electricity.pdf")).toBeNull();
+  expect(streamMock).not.toHaveBeenCalled();
 });
 
 test("checkpoint recovery presents usage as one resumed cumulative file total", async () => {

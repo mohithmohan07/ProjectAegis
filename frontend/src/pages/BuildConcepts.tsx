@@ -133,9 +133,24 @@ export default function BuildConcepts() {
     void watchRun(`Watching: ${job.filename}`, {
       module: "concepts",
       jobId: job.id,
-    }).catch(() => {
-      /* the console already carries the failure line */
-    });
+    })
+      .then(async () => {
+        // The watched run finished: land on the download-and-review
+        // page exactly as a run started from this tab would. A stopped
+        // worker leaves the console's note and stays put — the job
+        // status decides, not the watcher.
+        const fullJob = await api.getUploadJob("concepts", job.id);
+        if (
+          fullJob.status === "generated"
+          || fullJob.status === "released"
+        ) {
+          setResumeJob(fullJob);
+          setPath("post");
+        }
+      })
+      .catch(() => {
+        /* the console already carries the failure line */
+      });
   }
 
   async function resumeCheckpoint(job: ResumableCheckpoint) {
