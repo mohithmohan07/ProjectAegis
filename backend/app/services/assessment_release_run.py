@@ -51,6 +51,7 @@ from . import assessment_profile
 from . import build_concepts_release
 from . import identity
 from . import progress, uploads
+from . import question_image_grid
 from . import release_core
 from . import release_refiner
 from .phase3 import envelope as phase3_envelope
@@ -70,6 +71,7 @@ _QUALITY_AUDIT_FIELD = "_aegis_assessment_group_quality"
 _MASTER_REFINEMENT_AUDIT_FIELD = (
     "_aegis_assessment_master_refinement"
 )
+_IMAGE_GRID_AUDIT_FIELD = "_aegis_image_consolidation"
 
 _CELL_WARNING = "assessment_cell_review"
 _MATERIALIZATION_WARNING = "assessment_materialization_review"
@@ -81,6 +83,7 @@ _CLUSTER_WARNING = "assessment_variant_cluster_review"
 _DESCRIPTION_WARNING = "assessment_group_description_review"
 _QUALITY_WARNING = "assessment_group_quality_review"
 _MASTER_REFINEMENT_WARNING = "assessment_master_refiner_review"
+_IMAGE_GRID_WARNING = "assessment_image_grid_review"
 
 _CELLS_SNAPSHOT = "source.phase3-assessment-cells.json"
 _MATERIALIZATIONS_SNAPSHOT = "source.phase3-assessment-materializations.json"
@@ -1392,6 +1395,7 @@ def run_release_for_job(
     envelope_sha256: str | None = None,
     decision_store: kernel.DecisionStore | None = None,
     supersedes: models.AssessmentRelease | None = None,
+    image_downloader: question_image_grid.Downloader | None = None,
 ) -> models.AssessmentRelease:
     """Run the complete assessment pipeline for one generated job.
 
@@ -1971,6 +1975,54 @@ def run_release_for_job(
         envelope_sha256=envelope_sha,
         candidates=candidates,
     )
+
+    # Owner ruling (2026-08-21, "Build it"): a picture-bank question — two
+    # or more canonical image tags in its body, on a non-Objective sheet —
+    # ships ONE stitched, labelled grid figure instead of a link per
+    # picture. Objective items are exempt: each option must render its own
+    # image. Mechanics keyed on the recorded sheet_kind and the tag count,
+    # never on what any picture shows; a stitch that cannot complete (a
+    # download fails, no public base URL) leaves the text untouched and
+    # rides the candidate as a named review flag — never a blocked Master.
+    # It runs HERE, before the learner-text freeze, so every later stage
+    # and both invariance guards see the final single-figure body.
+    image_grid_cache: dict = {}
+    stitched_count = 0
+    for candidate in candidates:
+        if str(candidate.get("sheet_kind") or "") == "objective":
+            continue
+        if (
+            str(candidate.get("assessment_eligibility") or "")
+            == materialization.BLOCKED_ELIGIBILITY
+        ):
+            continue
+        grid_audits: list[dict] = []
+        for field in ("question", "question_text"):
+            new_text, grid_record = (
+                question_image_grid.consolidate_images(
+                    str(candidate.get(field) or ""),
+                    job_id=job.id,
+                    downloader=image_downloader,
+                    cache=image_grid_cache,
+                )
+            )
+            if grid_record is None:
+                continue
+            grid_audits.append({"field": field, **grid_record})
+            if "error" in grid_record:
+                _append_warning(candidate, _IMAGE_GRID_WARNING)
+            else:
+                candidate[field] = new_text
+        if grid_audits:
+            candidate[_IMAGE_GRID_AUDIT_FIELD] = grid_audits
+            if any("error" not in audit for audit in grid_audits):
+                stitched_count += 1
+    if stitched_count:
+        progress.log(
+            f"Assessment release: {stitched_count} picture-bank "
+            "question(s) now carry one stitched labelled figure each "
+            "(Objective options keep their own images)."
+        )
 
     learner_text_before = _learner_text_snapshot(candidates)
 

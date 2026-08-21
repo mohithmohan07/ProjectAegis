@@ -1008,6 +1008,42 @@ One composer owns the format: `identity.compose_group_key` (with the
 delegates to. Q12's second half (level calls and variant clustering as
 model verdicts, Q10 dissent flags, flagged singletons) stands untouched.
 
+### Q17 · Decided — a picture-bank question ships ONE stitched labelled figure; MCQ options keep their own images
+
+Owner ruling, 21 Aug 2026 ("Build it", after the difference was explained
+on the job-61 example: a classification question rendering eight separate
+`[img]` links — Drum, Table surface, Reed pipe, Carrom board, Harmonium,
+Road, Playground, Spinning Top). A question whose body carries two or
+more canonical image tags ships ONE deterministically stitched, labelled
+grid image — tile order = tag order, tile label = each tag's own alt
+text, near-square layout, content-addressed JPEG pinned to the durable
+source-asset store and served from the app's signed `/source-assets`
+route. Objective/MCQ items are exempt: each option must render its own
+image, and the exemption is keyed on RECORDED kind (`sheet_kind` in the
+assessment lane; the inventory item's recorded `options` upstream),
+never on what any picture shows (Rule 1: this pass is pure mechanics).
+
+Failure semantics: a stitch that cannot complete (a download fails, the
+public base URL is unconfigured) leaves the text EXACTLY as it was and
+rides the candidate as `assessment_image_grid_review` with the error
+named in the `_aegis_image_consolidation` audit — never a blocked
+Master, never a half-stitched bank.
+
+Build stages. Stage 1 (built): `question_image_grid` + the assessment
+lane — both Masters stitch at the run, after materialization and before
+the learner-text freeze, so every later stage sees the final
+single-figure body. Stage 2 (designed, next): the concept workbook's
+Example lines — the ruling's original surface — must stitch at the
+INVENTORY item (a `_combined_image_url` stamp consumed by
+`_inventory_task_text`, the one composer every coverage key, boundary,
+and Example flows through), with the coverage ledger's figure accounting
+taught that a source URL inside a consolidation record whose combined
+URL is placed counts as placed, and a staleness guard so an inventory
+refresh that changes `image_urls` silently retires the stamp. Stitching
+any later than the inventory breaks exact-coverage identity; any
+earlier, the refresh passes undo it — which is why stage 2 is its own
+careful change rather than a rider on stage 1.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the
