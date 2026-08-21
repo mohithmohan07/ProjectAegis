@@ -955,6 +955,34 @@ is single. Q2's register row stands for everything except the sentence
 "the Type identity may render under several concepts", which this entry
 supersedes.
 
+### Q15 · Decided — duplicate GENERATED questions are removed by a recorded verdict
+
+Owner ruling, 21 Aug 2026 (job-65 Master review: T01_C01 Q02 and Q03 were
+the same question re-worded): when the model judges two GENERATED
+pre-learning questions to be the same question — a paraphrase, a number or
+a name swapped, the same ask with a different opener — one survivor ships
+and the others are REMOVED from the Master. The removal is a model verdict
+(one per pre-learning concept group, critic-advised, Fixer-backed,
+content-addressed), never string similarity; the mechanical checker only
+refuses impossible citations (an id outside the group, a survivor also
+removed, a question ruled twice, a removal without a reason). It runs
+BEFORE the per-question cell verdicts, so a removed question costs nothing
+downstream.
+
+This amends the flag-only doctrine (Q10) for exactly this case and nothing
+else: removal is allowed because the survivor IS the removed question —
+the learner loses no ask. Every removal rides the release payload under
+``duplicates_removed`` with the full removed question, its survivor, and
+the reason; the release shows *Ready with flags* so it is reviewable,
+never silent (R4 stands: recorded exclusion, not loss). Source questions
+are untouched — their exactly-once accounting is Rule C's, and a generated
+question that duplicates a SOURCE question remains the generation critic's
+flag-only territory. Removal has no quota and is never a goal: a group
+with no duplicates removes nothing.
+
+The same review's oral-activity complaint (T01_C08 Q01) stays flag-only —
+the owner selected duplicate removal alone.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

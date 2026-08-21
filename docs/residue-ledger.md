@@ -50,6 +50,14 @@ sprint continues past all of them.
 
 Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns were overstated — superseded by the F3/F6/F2 rows above. R-QX8's consequence note is superseded by F7's fix. R-S11b is CLOSED (Output-02/04 identity composition verified repaired at main). R-S12d is CLOSED (merge order completed).
 
+## Q15 round (2026-08-21: duplicate generated questions removed by recorded verdict)
+
+| Item | Disposition |
+|---|---|
+| Q15 implemented | Owner ruling from the job-65 Master review (T01_C01 Q02/Q03 were the same ask re-worded), selected explicitly over flag-only: `assessment_dedup.decide_generated_duplicates` — one recorded model verdict per pre-learning concept group (critic-advised, Fixer-backed, decide-once, `assessment-generated-dedup-1`) — runs in the generated lane AFTER the orphan partition and BEFORE the cell verdicts, so a removed duplicate costs nothing downstream. The survivor ships; every removal rides `payload["duplicates_removed"]` with the full removed question, its survivor, and the reason, logs at warning level, and names the release Ready-with-flags. The checker is mechanics only (cited ids exist, a survivor is never also removed, no question ruled twice, reasons required); sameness is never string similarity. Register entry Q15 added. Pinned in `test_assessment_dedup.py` (order-preserving removal, group-of-one zero cost, critic dissent on the record, checker refusals, run-level no-cell-spend + Ready-with-flags, empty-verdict clean release) |
+| Boundaries the ruling keeps | Source questions untouched (Rule C's exactly-once accounting); a generated question duplicating a SOURCE question stays the generation critic's flag-only territory; removal has no quota (an empty `duplicate_sets` is a legitimate verdict). The same review's oral-activity complaint stays flag-only — the owner selected duplicate removal alone |
+| Recorded, not built (owner answers, 2026-08-21) | No spend cap (owner: "No cap"); cost design stays as-is (owner: "Keep current design"); the image-combining question returned "not understood" — re-explained and re-asked in chat |
+
 ## Background-runner round (2026-08-21: owner report — "something running continuously" since the mobile rounds)
 
 | Item | Disposition |
