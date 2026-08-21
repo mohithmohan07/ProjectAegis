@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping
 from .. import models
 from . import build_concepts, uploads
 from . import build_concepts_release as release
+from . import progress
 from . import build_concepts_release_files as release_files
 from . import release_refiner
 
@@ -398,6 +399,14 @@ def _build_master_siblings(
 
     built: dict[str, dict[str, Any] | None] = {}
     for lane in (release.LANE_PRE, release.LANE_POST):
+        progress.set_progress(
+            0.965 if lane == release.LANE_PRE else 0.985,
+            label=(
+                "Building the Pre-Learning Master (Output 02)…"
+                if lane == release.LANE_PRE
+                else "Building the Post Master (Output 04)…"
+            ),
+        )
         try:
             if not _lane_has_staged_concept_release(
                 db, job_id, lane, owner_sub=owner_sub,
@@ -455,8 +464,23 @@ def _run_generation_release(
 
     staged = _stage_generation_release(
         original, db, job_id, target_chapter_id, *args, **kwargs)
+    # HONEST PROGRESS (owner report, 2026-08-21: "after 100% it is still
+    # running" — and paying). The deposit's own "Done" fires when the
+    # CONCEPT outputs land, but the two Master lanes each run a full
+    # per-question decision pipeline AFTER it — comparable model spend to
+    # the concept run itself. The bar therefore steps back below 100%
+    # with a label naming what is still being paid for, and only the true
+    # end of all four outputs says Done.
+    progress.set_progress(
+        0.96,
+        label=(
+            "Outputs 01/03 staged — building the Master files "
+            "(Outputs 02/04; this stage makes model calls)…"
+        ),
+    )
     _build_master_siblings(
         db, job_id, target_chapter_id, owner_sub=kwargs.get("owner_sub"))
+    progress.set_progress(1.0, label="Done — all four outputs ready")
     return staged
 
 
