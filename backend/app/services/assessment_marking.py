@@ -28,7 +28,7 @@ from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MARKING_POLICY_VERSION = "assessment-marking-3"
+MARKING_POLICY_VERSION = "assessment-marking-4"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
 
 MARKING_SYSTEM = (
@@ -43,7 +43,8 @@ MARKING_SYSTEM = (
     "semantic answer, option, correct marker, rubric block, subquestion, and "
     "keyword field and preserve their order and cardinality. You may change "
     "only answer_weightage, subquestion marks, and keyword weightage. Author "
-    "a finite positive question_duration and the response-appropriate "
+    "a finite positive question_duration IN MINUTES — the wire contract's "
+    "unit; never seconds — and the response-appropriate "
     "math_keyboard value without a local default: Objective requires the "
     "authored empty string; Descriptive requires exactly Yes or No.\n"
     "For Objective, exactly one correct option receives the cell's total "

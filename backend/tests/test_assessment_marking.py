@@ -289,7 +289,7 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
         ),
     }
     authority = verdict["authority"]
-    assert authority["policy_version"] == "assessment-marking-3"
+    assert authority["policy_version"] == "assessment-marking-4"
     assert "created_at" not in authority and "provider" not in authority
     stored = store.get(authority["decision_key"])
     assert stored is not None
@@ -326,7 +326,7 @@ def test_marking_replays_without_author_critic_or_fixer(monkeypatch) -> None:
 
 def test_stale_v2_marking_record_redecides_under_v3_policy(monkeypatch) -> None:
     monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
-    assert marking.MARKING_POLICY_VERSION == "assessment-marking-3"
+    assert marking.MARKING_POLICY_VERSION == "assessment-marking-4"
     pair = (_candidate(), _cell())
     store = kernel.DecisionStore()
     calls = 0
@@ -344,7 +344,7 @@ def test_stale_v2_marking_record_redecides_under_v3_policy(monkeypatch) -> None:
         provider=author, store=store,
     )[0]
     monkeypatch.setattr(
-        marking, "MARKING_POLICY_VERSION", "assessment-marking-3"
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-4"
     )
     current = marking.decide_markings(
         [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
@@ -353,7 +353,7 @@ def test_stale_v2_marking_record_redecides_under_v3_policy(monkeypatch) -> None:
 
     assert calls == 2
     assert stale["authority"]["policy_version"] == "assessment-marking-2"
-    assert current["authority"]["policy_version"] == "assessment-marking-3"
+    assert current["authority"]["policy_version"] == "assessment-marking-4"
     assert stale["authority"]["decision_key"] != (
         current["authority"]["decision_key"]
     )
@@ -825,7 +825,7 @@ def test_fixer_is_revalidated_by_the_same_semantic_and_arithmetic_checker(
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.marking",
         "unit_id": "CAND-DESC",
-        "policy_version": "assessment-marking-3",
+        "policy_version": "assessment-marking-4",
     }
 
 

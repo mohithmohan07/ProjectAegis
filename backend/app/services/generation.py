@@ -8490,7 +8490,22 @@ def _inventory_task_text(item: dict) -> str:
     context = kr.canonicalize_rich_text(
         str(item.get("shared_context") or "")).strip()
     if context and item.get("requires_context") and context not in task:
-        task = f"{context} {task}".strip()
+        # A raw substring test misses the case where the context IS the
+        # task's own table, flattened slightly differently (a label
+        # prefix, whitespace, cell separators) — the owner's CH01 review
+        # showed the classification table rendered twice in one Example.
+        # Normalized containment is dedupe mechanics: nothing is judged,
+        # only an already-present body is not prepended a second time.
+        context_body = re.sub(
+            r"(?i)^use the following source table\(s\):\s*", "", context
+        )
+        normalized_task = bi.normalize_question_text(task)
+        normalized_context = bi.normalize_question_text(context_body)
+        if not (
+            normalized_context
+            and normalized_context in normalized_task
+        ):
+            task = f"{context} {task}".strip()
     task = re.sub(r"\s+", " ", task)
     image_urls = list(item.get("image_urls") or [])
     for url in visual_captions:

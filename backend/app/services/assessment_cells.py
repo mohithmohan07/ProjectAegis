@@ -20,7 +20,7 @@ from . import assessment_profile
 from .phase3 import kernel
 
 
-CELL_POLICY_VERSION = "assessment-cell-1"
+CELL_POLICY_VERSION = "assessment-cell-2"
 
 CELL_SYSTEM = (
     "You are the Aegis assessment-cell author. For ONE source-owned question "
@@ -34,7 +34,14 @@ CELL_SYSTEM = (
     "invariant applies; give your evidence-bound verdict rather than applying "
     "a default.\n"
     "sheet_kind is objective, subjective, or descriptive as allowed by the "
-    "active assessment profile. cognitive_skill is Remember, Understand, "
+    "active assessment profile. question_category must be the CMS's exact "
+    "name for the category, from the sheet kind's own list — objective: "
+    "Multiple Choice Question, Assertion & Reasons, True/False, Fill in "
+    "the Blanks; subjective: Fill in the Blanks, Very Short Answer, Short "
+    "Answer, Sentence Transformation, Error Correction; descriptive: Long "
+    "Answer, Case Based Questions, Passage Based Questions, Extract Based "
+    "Questions, Composition Writing — never an abbreviation or paraphrase. "
+    "cognitive_skill is Remember, Understand, "
     "Apply, Analyse, Evaluate, or Create. difficulty is Less, Moderate, or "
     "High; Bloom and difficulty are independent. marks is a realistic "
     "positive number for the task, grade, and response contract.\n"
@@ -44,7 +51,7 @@ CELL_SYSTEM = (
     '"rationale":"evidence-bound reason"}'
 )
 
-GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-1"
+GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-2"
 
 GENERATED_CELL_SYSTEM = (
     "You are the Aegis assessment-cell author for ONE GENERATED "
@@ -60,7 +67,14 @@ GENERATED_CELL_SYSTEM = (
     "invariant applies; give your evidence-bound verdict rather than "
     "applying a default.\n"
     "sheet_kind is objective, subjective, or descriptive as allowed by the "
-    "active assessment profile. cognitive_skill is Remember, Understand, "
+    "active assessment profile. question_category must be the CMS's exact "
+    "name for the category, from the sheet kind's own list — objective: "
+    "Multiple Choice Question, Assertion & Reasons, True/False, Fill in "
+    "the Blanks; subjective: Fill in the Blanks, Very Short Answer, Short "
+    "Answer, Sentence Transformation, Error Correction; descriptive: Long "
+    "Answer, Case Based Questions, Passage Based Questions, Extract Based "
+    "Questions, Composition Writing — never an abbreviation or paraphrase. "
+    "cognitive_skill is Remember, Understand, "
     "Apply, Analyse, Evaluate, or Create. difficulty is Less, Moderate, or "
     "High; Bloom and difficulty are independent. marks is a realistic "
     "positive number for the task, grade, and response contract.\n"
@@ -179,10 +193,23 @@ def _verdict_checker(
                 "sheet_kind must be one of "
                 f"{allowed_sheet_kinds} (got {response.get('sheet_kind')!r})"
             )
-        if not isinstance(response.get("question_category"), str) or not str(
-            response.get("question_category") or ""
-        ).strip():
+        category = response.get("question_category")
+        allowed_categories = bi.QUESTION_CATEGORIES.get(
+            str(response.get("sheet_kind") or ""), []
+        )
+        if not isinstance(category, str) or not str(category or "").strip():
             defects.append("question_category must be a non-empty string")
+        elif allowed_categories and category not in allowed_categories:
+            # The CMS's own per-sheet vocabulary (the owner's review found
+            # "MCQ" / "Multiple Choice" / "Multiple Choice Question" on
+            # sibling rows). An enum-membership gate is schema mechanics,
+            # the same shape as the cognitive-skill and difficulty gates
+            # beside it; naming the list lets corrections converge.
+            defects.append(
+                "question_category must be one of "
+                f"{tuple(allowed_categories)} for sheet_kind "
+                f"{response.get('sheet_kind')!r} (got {category!r})"
+            )
         if response.get("cognitive_skill") not in bi.COGNITIVE_SKILLS:
             defects.append(
                 "cognitive_skill must be one of "

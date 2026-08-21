@@ -1,5 +1,5 @@
 {
- "_comment": "Recorded Slice-3 assessment cell, materialization, and route verdicts for QINV-0009 and QINV-0016.5. The source atoms come from the sealed RNE envelope; the learner-facing materializations preserve the two candidates already recorded in rne_assessment_groups.json. These responses are replay evidence, never executable defaults.",
+ "_comment": "Recorded Slice-3 assessment cell, materialization, and route verdicts for QINV-0009 and QINV-0016.5. The source atoms come from the sealed RNE envelope; the learner-facing materializations preserve the two candidates already recorded in rne_assessment_groups.json. These responses are replay evidence, never executable defaults. | 2026-08-21: cell/candidate ids re-derived through the real pipeline after the assessment-cell-2 / assessment-materialize-4 policy bumps re-keyed the decisions (category vocabulary gate + answer_type contract); content untouched.",
  "envelope_fixture": "rne_envelope.json",
  "source_concept_release_sha256": "d4e896c302bfe2487c882845eabc36d8ad00120baab21cb95ef5580d093d5ee1",
  "metadata": {
@@ -85,12 +85,12 @@
   }
  ],
  "expected_cell_ids": {
-  "QINV-0009": "CELL-624890985404daf2",
-  "QINV-0016.5": "CELL-64bd50ee6375142c"
+  "QINV-0009": "CELL-b2a48c453d839af5",
+  "QINV-0016.5": "CELL-5d95fb2ba144e2da"
  },
  "materialization_responses": [
   {
-   "candidate_id": "CAND-8a9f3e1ada5028d8",
+   "candidate_id": "CAND-59ca91b2f28a1c70",
    "question": "Compare the positions on the question of women's rights voiced by the three writers cited in the accompanying material. What do they reveal about liberal ideology?",
    "answer_restriction": "Open",
    "restriction_reason": "A complete comparison can be organised and expressed in more than one valid way.",
@@ -108,7 +108,7 @@
    "rationale": "The recorded item preserves the comparative source task and its ideological inference."
   },
   {
-   "candidate_id": "CAND-4b6e934aa66db824",
+   "candidate_id": "CAND-b6146cb49ed2fb3e",
    "question": "Write a note on the role of women in nationalist struggles.",
    "answer_restriction": "Open",
    "restriction_reason": "Several historically sound explanations can satisfy the note-form task.",
@@ -128,13 +128,13 @@
  ],
  "route_responses": [
   {
-   "candidate_id": "CAND-8a9f3e1ada5028d8",
+   "candidate_id": "CAND-59ca91b2f28a1c70",
    "concept_key": "rne:gendered-limits-of-liberal-political-rights",
    "evidence": "The released concept explicitly teaches the gendered restriction inside liberal claims of political equality.",
    "rationale": "The comparison asks what the writers reveal about that precise ideological limit."
   },
   {
-   "candidate_id": "CAND-4b6e934aa66db824",
+   "candidate_id": "CAND-b6146cb49ed2fb3e",
    "concept_key": "rne:gendered-limits-of-liberal-political-rights",
    "evidence": "The released concept teaches women's participation alongside exclusion from equal formal political rights.",
    "rationale": "The note assesses that participation-and-exclusion relationship rather than national allegory."

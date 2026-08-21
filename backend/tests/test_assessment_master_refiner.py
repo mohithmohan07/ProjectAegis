@@ -469,9 +469,13 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     objective = rows[f"{MACHINE_ID} Q01"]
     descriptive = rows[f"{MACHINE_ID} Q02"]
     assert objective["question"] == original["candidates"][0]["question"]
-    assert objective["question_text"] == original["candidates"][0][
-        "question_text"
-    ]
+    # The rendered Objective question_text is the stem plus the lettered
+    # options (owner ruling, 2026-08-21); the refiner still may not touch
+    # the underlying stem, which the ``question`` equality above pins.
+    assert objective["question_text"].startswith(
+        original["candidates"][0]["question_text"]
+    )
+    assert "A) A cube" in objective["question_text"]
     assert objective["answer_content_1"] == "A cube"
     assert objective["answer_explanation"] == refined["candidates"][0][
         "answer_explanation"

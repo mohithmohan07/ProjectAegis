@@ -15,6 +15,7 @@ from typing import Any, Mapping
 from .. import models
 from . import assessment_release as rel
 from . import build_concepts_release_files
+from . import directory
 from . import identity
 
 
@@ -312,12 +313,35 @@ def build(
             "concepts": rows_by_topic_object[marker],
         })
 
+    # The chapter band's book token, the writer's own derivation: the
+    # first concept source that names a publication, anywhere in the
+    # chapter.
+    chapter_book = ""
+    for chapter_topic in chapter.topics:
+        for sibling in chapter_topic.concepts:
+            chapter_book = directory.primary_book_source(sibling.sources)
+            if chapter_book:
+                break
+        if chapter_book:
+            break
+
     snapshot = {
         "source_concept_release_sha256": release_sha,
         "target_chapter_id": int(release.get("target_chapter_id") or 0),
         "concept_provenance": provenance,
         "chapter": {
-            "chapter_title": str(chapter.chapter_title or ""),
+            # The tagged "Name (machine id)" form, mirroring the concept
+            # workbook writer's chapter band — the owner's review found
+            # the Master's chapter cell was the one untagged identity in
+            # the file. Composed with the same authority the writer uses;
+            # the reader's ``strip_title_tag`` round-trips it.
+            "chapter_title": directory.chapter_titled_cell(
+                str(chapter.chapter_title or ""),
+                str(chapter.board or ""),
+                str(chapter.grade or ""),
+                str(chapter.subject or ""),
+                book=chapter_book,
+            ),
             "chapter_display_name": str(
                 chapter.chapter_display_name or chapter.chapter_title or ""
             ),

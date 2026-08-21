@@ -60,7 +60,10 @@ def _cell_verdict_author(payload):
     return {
         "pre_question_id": generated["pre_question_id"],
         "sheet_kind": "descriptive",
-        "question_category": "Short Answer",
+        # A member of the CMS's descriptive vocabulary — the cell checker
+        # now gates question_category per sheet kind (owner review: "MCQ"
+        # / "Multiple Choice" / "Multiple Choice Question" on siblings).
+        "question_category": "Long Answer",
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 2,
