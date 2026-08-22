@@ -1399,13 +1399,17 @@ def _stable_checkpoint_value(value) -> str:
 
 
 def _generation_target_identity(chapter: models.Chapter) -> dict[str, str]:
-    """Stable chapter identity that survives DB rebuilds and preview deploys."""
+    """Stable chapter identity that survives DB rebuilds and preview deploys.
+
+    The vocabulary is models.CHECKPOINT_TARGET_IDENTITY_FIELDS — the one
+    shared tuple — so the writer and every projection of what it wrote
+    move together. The v3 fingerprint below deliberately does NOT share
+    it: its field order is a frozen serialization, and growing the
+    vocabulary must not silently re-fingerprint existing checkpoints.
+    """
     return {
         field: _stable_checkpoint_value(getattr(chapter, field, ""))
-        for field in (
-            "board", "grade", "subject", "unit",
-            "chapter_title", "chapter_code",
-        )
+        for field in models.CHECKPOINT_TARGET_IDENTITY_FIELDS
     }
 
 

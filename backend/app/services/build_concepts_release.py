@@ -2252,14 +2252,20 @@ def stage_release(
     # inside a new payload).
     inventory_value = copy.deepcopy(
         dict(inventory)
-        if isinstance(inventory, Mapping)
+        if isinstance(inventory, Mapping) and inventory
         else checkpoint_inventory
         if isinstance(checkpoint_inventory, Mapping) and checkpoint_inventory
         else _job_inventory_fallback(job)
     )
+    # Strip the lane release slots from WHATEVER source supplied the
+    # inventory, not just the job fallback: the capture fallback can hand
+    # in job.question_inventory verbatim, and a prior staged release must
+    # never nest inside the new payload's inventory.
+    inventory_value.pop(RELEASE_KEY, None)
+    inventory_value.pop(PRE_RELEASE_KEY, None)
     types_value = copy.deepcopy(
         dict(mined_types)
-        if isinstance(mined_types, Mapping)
+        if isinstance(mined_types, Mapping) and mined_types
         else checkpoint_types
         if isinstance(checkpoint_types, Mapping) and checkpoint_types
         else {"types": inventory_value.get("mined_types") or []}

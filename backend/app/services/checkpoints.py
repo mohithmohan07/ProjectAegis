@@ -45,6 +45,12 @@ MAX_REQUEST_COUNT = 10**9
 MAX_ESTIMATED_COST_USD = 10**9
 MAX_RESUMABLE_JOBS = 20
 
+# FROZEN serialization order: this tuple feeds the checkpoint
+# fingerprint mirror and the exact-keys schema, so it changes only with
+# a fingerprint version bump — never casually. It must stay equal to
+# models.CHECKPOINT_TARGET_IDENTITY_FIELDS (the live vocabulary the
+# writer and the decision-key projections share); a regression pins the
+# equality so divergence is a conscious, versioned act.
 _TARGET_FIELDS = (
     "board",
     "grade",
