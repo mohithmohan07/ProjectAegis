@@ -33,7 +33,7 @@ from . import canonical_source_phase34_structured_output_contract as phase34
 from . import generation
 from . import progress
 
-_CONTRACT_VERSION = 4
+_CONTRACT_VERSION = 5
 
 
 def _active() -> bool:
@@ -110,6 +110,8 @@ def install() -> None:
         *,
         purpose="source_extraction",
         single_attempt: bool = False,
+        prompt_cache_prefix: str = "",
+        prompt_cache_key: str = "",
     ) -> dict:
         _log_policy_once()
         effective = _bounded_completion(max_tokens) if _active() else max_tokens
@@ -122,6 +124,13 @@ def install() -> None:
             # Preserve compatibility with older injected callables while
             # forwarding the bounded-call contract whenever it is active.
             kwargs["single_attempt"] = True
+        if prompt_cache_prefix or prompt_cache_key:
+            # Master-pass cache controls are transport arguments, independent
+            # of Phase 3.5's completion-ceiling policy.  Forward them only
+            # when requested so legacy injected callables retain their old
+            # two-string shape everywhere else.
+            kwargs["prompt_cache_prefix"] = prompt_cache_prefix
+            kwargs["prompt_cache_key"] = prompt_cache_key
         return generation._PHASE35_ORIGINAL_OPENAI_JSON(
             system,
             user,

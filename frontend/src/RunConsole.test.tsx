@@ -47,6 +47,25 @@ function usage(totalTokens: number): OpenAIUsage {
   };
 }
 
+function usageWithStage(totalTokens: number, stage: string): OpenAIUsage {
+  return {
+    ...usage(totalTokens),
+    stages: [{
+      stage,
+      lane: "",
+      request_count: 1,
+      input_tokens: totalTokens - 10,
+      output_tokens: 10,
+      reasoning_tokens: 0,
+      total_tokens: totalTokens,
+      estimated_cost_usd: 0.001,
+      pricing_complete: true,
+      first_ts: 1,
+      last_ts: 2,
+    }],
+  };
+}
+
 function Probe() {
   const { run, watch, state } = useRunConsole();
   return (
@@ -69,13 +88,16 @@ function Probe() {
             cumulative: true,
             resumed: true,
             filename: "chapter.pdf",
-            initialUsage: usage(500),
+            initialUsage: usageWithStage(500, "Previous attempt"),
           },
         )}
       >
         Retry
       </button>
       <output data-testid="usage">{state.usage?.total_tokens ?? "none"}</output>
+      <output data-testid="usage-stages">
+        {state.usage?.stages?.map((row) => row.stage).join(" | ") ?? ""}
+      </output>
       <output data-testid="usage-context">
         {state.usagePresentation?.cumulative ? "cumulative" : "run"}
         {state.usagePresentation?.resumed ? " resumed" : ""}
@@ -124,6 +146,7 @@ test("a checkpoint retry starts from and preserves the cumulative file total", (
 
   fireEvent.click(screen.getByText("Retry"));
   expect(screen.getByTestId("usage").textContent).toBe("500");
+  expect(screen.getByTestId("usage-stages").textContent).toBe("");
   expect(screen.getByTestId("usage-context").textContent).toBe(
     "cumulative resumed",
   );
@@ -435,6 +458,9 @@ test("a checkpoint re-POST resets the seq cursor so the resumed run's events app
           <output data-testid="lines">
             {state.lines.map((line) => line.message).join(" | ")}
           </output>
+          <output data-testid="usage-stages">
+            {state.usage?.stages?.map((row) => row.stage).join(" | ") ?? ""}
+          </output>
           <output data-testid="status">{state.status}</output>
         </>
       );
@@ -450,6 +476,9 @@ test("a checkpoint re-POST resets the seq cursor so the resumed run's events app
     await act(async () => {
       // The dead run got as far as seq 3 before the worker died.
       pending[first].onEvent({
+        type: "usage", data: usageWithStage(300, "Dead attempt"), seq: 2,
+      });
+      pending[first].onEvent({
         type: "log", level: "info", message: "before the crash", seq: 3,
       });
       pending[first].reject(transportError("network connection lost"));
@@ -461,6 +490,7 @@ test("a checkpoint re-POST resets the seq cursor so the resumed run's events app
     expect(screen.getByTestId("lines").textContent).toContain(
       "Resuming the run from its saved checkpoint",
     );
+    expect(screen.getByTestId("usage-stages").textContent).toBe("");
 
     // The re-POSTed stream is a NEW journal: seq restarts at 1. Before
     // the cursor reset, every resumed event was <= the dead run's
@@ -471,14 +501,20 @@ test("a checkpoint re-POST resets the seq cursor so the resumed run's events app
       pending[first + 1].onEvent({
         type: "log", level: "info", message: "resumed and visible", seq: 1,
       });
+      pending[first + 1].onEvent({
+        type: "usage", data: usageWithStage(320, "Resumed attempt"), seq: 2,
+      });
       pending[first + 1].onEvent(
-        { type: "result", data: { status: "generated" }, seq: 2 } as never,
+        { type: "result", data: { status: "generated" }, seq: 3 } as never,
       );
       pending[first + 1].resolve({ status: "generated" });
       await Promise.resolve();
     });
     expect(screen.getByTestId("lines").textContent).toContain(
       "resumed and visible",
+    );
+    expect(screen.getByTestId("usage-stages").textContent).toBe(
+      "Resumed attempt",
     );
     expect(screen.getByTestId("status").textContent).toBe("done");
   } finally {

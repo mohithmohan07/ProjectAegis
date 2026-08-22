@@ -95,11 +95,34 @@ The reconstruction names its own three, **flagged for owner confirmation**:
 ## What the audit reports but does not own
 
 * The T9 identity codes (`duplicate_qid_assignment`,
-  `unknown_type_case_qid`, `case_uniqueness_duplicate_case_identity`,
+  `unknown_type_case_qid`, `type_case_route_set_empty`,
+  `unrendered_type_case_qid`,
+  `case_uniqueness_duplicate_case_identity`,
   `case_uniqueness_duplicate_qid_route`, `type_catalog_unreadable`) are
-  produced once by `audit_type_cases` / `_case_uniqueness_issues` and
+  produced once by `audit_type_cases` / `_case_uniqueness_issues` /
+  `_rendered_type_case_route_issues` and
   block through `structural_defects`' closed-set read — one
   implementation, one vocabulary; the audit does not recompute them.
+  `type_case_route_set_empty` closes the aggregate escape: when source QIDs
+  and publishable concept rows exist but the staged catalog exposes zero exact
+  Example routes, or retained catalog/manifest metadata has no mechanically
+  visible normal Case containing an Example (and no Activity/Info Hub for an
+  activity route), the Concept release is Diagnostic. It is not a per-concept
+  minimum; a description-only concept and a wholly questionless Concept File
+  remain valid.
+  `unrendered_type_case_qid` closes the distinct release gap against the
+  exact expected tuple `(example_qid, type_id, case_id, is_activity)`, not
+  merely any QID and any route on the same row. A normal Example needs a
+  non-empty `// Types:` body plus either its exact final-host manifest
+  `type_case_example` placement or its exact QID and Type/Case route; a
+  fresh `split-of:ORIGINAL-CASE` marker aliases that original Case, while
+  an older untagged route dictionary is accepted only for the exact pair.
+  An Activity Example instead needs a non-empty Activity/Info Hub body plus
+  its exact manifest `activity_info_hub` placement or its QID in
+  `_activity_hub_qids` / `_aegis_hub_placements`. Staging retains only
+  catalog routes proven by raw/manifest evidence, tags them with
+  `example_qid`, and never synthesizes the catalog cross-product. A concept
+  with no assigned Type remains valid.
 * T7.5's seven assessment-lane codes (`unresolved_question_home`,
   `sheet_kind_not_renderable`, `group_home_disagreement`,
   `group_concept_home_unknown`, `group_home_unnamed`,

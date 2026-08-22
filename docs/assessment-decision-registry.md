@@ -9,16 +9,16 @@ module's kernel contract and the adopted architecture/handoff.
 
 | Kind | Current policy | Semantic owner | Stable row audit |
 |---|---|---|---|
-| `assessment.cell` | `assessment-cell-1` | Source-atom blueprint axes and marks | `_aegis_assessment_cell_verdict` |
-| `assessment.materialize` | `assessment-materialize-2` | Question and complete unweighted semantic answer/rubric content | `_aegis_assessment_materialization` |
-| `assessment.answer_restriction` | `assessment-answer-restriction-2` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
-| `assessment.marking` | `assessment-marking-3` | Model-authored weight decomposition, duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
-| `assessment.route` | `assessment-route-1` | One released concept home | `_aegis_assessment_route` |
+| `assessment.cell` | `assessment-cell-2` | Source-atom blueprint axes and marks | `_aegis_assessment_cell_verdict` |
+| `assessment.materialize` | `assessment-materialize-7` | Question and complete unweighted semantic answer/rubric content; Q21 whole-cell medium and four-mark shape | `_aegis_assessment_materialization` |
+| `assessment.answer_restriction` | `assessment-answer-restriction-3` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
+| `assessment.marking` | `assessment-marking-6` | Model-authored weight decomposition, duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
+| `assessment.route` | `assessment-route-2` | One released concept home | `_aegis_assessment_route` |
 | `assessment.level` | `assessment-level-1` | Basic/Intermediate/Advanced verdict | `_aegis_assessment_level_verdict` |
 | `assessment.variant_cluster` | `assessment-variant-cluster-1` | Same-tier variant families | `_aegis_assessment_variant_cluster` |
 | `assessment.group_description` | `assessment-group-description-1` | Visible semantic group description | `_aegis_assessment_group_description` |
 | `assessment.group_quality` | `assessment-group-quality-1` | Advisory touched-group QA | `_aegis_assessment_group_quality` |
-| `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-1` | Rendered answer, explanation, and rubric prose inside an immutable assessment identity | `_aegis_assessment_master_refinement` |
+| `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-2` | Rendered answer, explanation, and rubric prose inside an immutable assessment identity; Q21 medium purity remains fail-closed | `_aegis_assessment_master_refinement` |
 | `assessment.master_refiner.group` | `assessment-master-refiner-group-1` | Rendered semantic group-description prose inside an immutable group identity | `_aegis_assessment_master_refinement` |
 | `assessment.legacy_cell_contract` | `assessment-legacy-cell-contract-2` | Legacy session marks, duration, and keyboard contract | Legacy decision store only |
 
@@ -87,6 +87,12 @@ Every decision key binds kind, unit identity, sealed envelope, complete payload
 hash, and policy version. A changed registry or policy produces a new key and
 recorded re-decision; immutable prior records are not edited. Batch APIs refuse
 duplicate identities and enforce exact ordered coverage.
+
+The materialization/marking numbers above are intentionally sequenced after
+the cache-prefix change: that change owns `materialize-6`, `marking-5`,
+answer-restriction `-3`, and route `-2`; Q21 owns only the next materialize and
+marking decisions. This prevents a later rebase from reusing one policy
+identity for two different prompt/checker contracts.
 
 The stable audits above carry decision key, policy version, review flags and
 Fixer presence without provider names or timestamps. They live in

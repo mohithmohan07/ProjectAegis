@@ -188,6 +188,35 @@ def test_answer_restriction_is_never_silently_defaulted():
     )
 
 
+def test_release_refuses_mixed_answer_media_and_one_four_mark_rubric():
+    candidate = {
+        "candidate_id": "C4", "source_atom_ids": ["QINV-0004"],
+        "blueprint_cell_id": "CELL-04", "question": "Calculate the value.",
+        "question_text": (
+            "| Name of peak | Altitude |\n|---|---:|\n| K-2 | 8611 |"
+        ),
+        "sheet_kind": "descriptive", "question_category": "Long Answer",
+        "cognitive_skill": "Apply", "difficulty": "Moderate", "marks": 4,
+        "question_duration": 5, "math_keyboard": "Yes",
+        "answer_restriction": "Specific",
+        "restriction_reason": "The result is bounded.",
+        "display_answer": "[Katex] x=2 [/Katex]",
+        "answer_explanation": "[Katex] x=2 [/Katex]",
+        "answers": [{
+            "answer_type": "Equation",
+            "answer_content": "Result: [Katex]x=2[/Katex]",
+            "answer_weightage": 4,
+        }],
+        "sub_questions": [],
+    }
+
+    errors = rel.validate_candidate(candidate)
+
+    assert any("equation_katex_wrapper" in error for error in errors)
+    assert any("requires at least two rubric blocks" in error for error in errors)
+    assert "question_text rich-text: unsupported_table" in errors
+
+
 def test_release_model_persists_with_hashes(db):
     payload = {"source_atoms": [], "blueprint_cells": [], "candidates": [],
                "groups": [], "placements": []}

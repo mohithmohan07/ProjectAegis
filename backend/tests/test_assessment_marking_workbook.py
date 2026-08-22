@@ -163,6 +163,35 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
             id="objective-wrong-sum",
         ),
         pytest.param(
+            "Objective",
+            lambda row: row.__setitem__(
+                "question_text",
+                str(row.get("question_text") or "").replace(
+                    "\na) ", "\nA) ", 1,
+                ),
+            ),
+            "question_text uses uppercase objective option label(s) A)",
+            id="objective-uppercase-option-label-readback",
+        ),
+        pytest.param(
+            "Objective",
+            lambda row: row.__setitem__(
+                "question_text",
+                "| Name of peak | Altitude |\n|---|---:|\n| K-2 | 8611 |",
+            ),
+            "question_text rich-text: unsupported_table",
+            id="objective-markdown-table-readback",
+        ),
+        pytest.param(
+            "Objective",
+            lambda row: (
+                row.__setitem__("answer_type_1", "Equation"),
+                row.__setitem__("answer_content_1", "[Katex]x=2[/Katex]"),
+            ),
+            "option 1 violates declared medium: equation_katex_wrapper",
+            id="objective-equation-wrapper-readback",
+        ),
+        pytest.param(
             "Descriptive",
             lambda row: row.__setitem__("marks", float("nan")),
             "marks must be finite and positive",
@@ -277,6 +306,17 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
             _clear_descriptive_answers,
             "descriptive has no answer/rubric blocks",
             id="missing-descriptive-rubric",
+        ),
+        pytest.param(
+            "Descriptive",
+            lambda row: (
+                row.__setitem__("answer_weightage_1", 4),
+                row.__setitem__("answer_type_2", ""),
+                row.__setitem__("answer_content_2", ""),
+                row.__setitem__("answer_weightage_2", ""),
+            ),
+            "4-mark descriptive requires at least two answer/rubric blocks",
+            id="four-mark-single-rubric",
         ),
     ],
 )

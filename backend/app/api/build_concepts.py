@@ -361,6 +361,15 @@ def release_latest_output(
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
         if release_svc.release_available(job):
+            release_svc.backfill_missing_pre_release(
+                db,
+                job,
+                reason=(
+                    "The existing Post-Learning release was retained while "
+                    "its missing historical Pre-Learning sibling was "
+                    "recovered from durable Phase 03 authority."
+                ),
+            )
             return job
         return release_svc.force_release(
             db, job_id, owner_sub=user.sub

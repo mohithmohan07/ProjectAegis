@@ -672,11 +672,13 @@ DIAGNOSTIC_RELEASE = "diagnostic_release"
 
 STAGED_ROW_DEFECTS_FIELD = "staged_row_defects"
 STAGED_ROW_UNUSABLE = "staged_row_unusable"
+TYPE_CASE_ROUTE_SET_EMPTY = "type_case_route_set_empty"
 
 # T9-1's closed concept-lane identity set (S11): issue codes that name an
-# IDENTITY corruption and therefore block the database write. Enumerated,
-# never derived — extending it is a deliberate spec change, not a one-line
-# edit. T9-2's stays-flags list (``unassigned_inventory_qid``,
+# IDENTITY corruption and therefore block the database write. This includes
+# a Type/Case Example identity that never reaches a visibly rendered owner.
+# Enumerated, never derived — extending it is a deliberate spec change,
+# not a one-line edit. T9-2's stays-flags list (``unassigned_inventory_qid``,
 # ``case_uniqueness_qid_render_count_mismatch``,
 # ``case_uniqueness_example_less_case_shell``) is deliberately absent.
 # T9-1's machine-id pair (a duplicate persisted id, a row still blank
@@ -687,6 +689,8 @@ STAGED_ROW_UNUSABLE = "staged_row_unusable"
 T9_IDENTITY_DEFECT_CODES = frozenset({
     "duplicate_qid_assignment",
     "unknown_type_case_qid",
+    TYPE_CASE_ROUTE_SET_EMPTY,
+    "unrendered_type_case_qid",
     "case_uniqueness_duplicate_case_identity",
     "case_uniqueness_duplicate_qid_route",
     "type_catalog_unreadable",
@@ -974,8 +978,9 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
             )
     # T9-1 (S11): the concept lane's CLOSED identity set. A recorded issue
     # whose code names an identity corruption — the same QID placed twice,
-    # a rendered QID the inventory never owned, a duplicate rendered Case
-    # identity or QID route, a Type catalog that would not parse — blocks
+    # a rendered QID the inventory never owned, an assigned Example QID
+    # with no visible routed owner, a duplicate rendered Case identity or
+    # QID route, a Type catalog that would not parse — blocks
     # the DATABASE WRITE, never a download. [measured] before this,
     # ``duplicate_qid_assignment`` was an ordinary (error-severity) issue
     # that this gate simply never read, so a duplicate QID published
@@ -1075,9 +1080,10 @@ def _recomputed_identity_issues(
 ) -> list[dict[str, Any]]:
     """The T9 identity issues, recomputed from the payload's own material.
 
-    Pure, like the row-defect recompute above: ``audit_type_cases`` and
-    ``_case_uniqueness_issues`` are functions of the payload's
-    ``mined_types`` and inventory. Round 10 (audit finding 9a) runs this
+    Pure, like the row-defect recompute above: ``audit_type_cases``,
+    ``_rendered_type_case_route_issues`` and ``_case_uniqueness_issues``
+    are functions of the payload's records, ``mined_types`` and inventory.
+    Round 10 (audit finding 9a) runs this
     UNCONDITIONALLY and unions it with the recorded ``issues`` — a payload
     stripped of the key, or one whose present list went stale or was
     emptied in place, cannot pass the identity gate on what it records.
@@ -1085,8 +1091,9 @@ def _recomputed_identity_issues(
 
     mined = payload.get("mined_types")
     inventory = payload.get("question_task_inventory")
+    type_case_rows: list[dict[str, Any]] = []
     try:
-        _rows, issues, _routes = audit_type_cases(
+        type_case_rows, issues, _routes = audit_type_cases(
             dict(mined) if isinstance(mined, Mapping) else {},
             dict(inventory) if isinstance(inventory, Mapping) else {},
         )
@@ -1102,9 +1109,19 @@ def _recomputed_identity_issues(
             phase="type_case_release",
         )]
     issues = list(issues)
+    materialized_records = [
+        row for row in (records if isinstance(records, list) else [])
+        if isinstance(row, Mapping)
+    ]
+    issues.extend(_rendered_type_case_route_issues(
+        materialized_records,
+        type_case_rows,
+        inventory=(
+            dict(inventory) if isinstance(inventory, Mapping) else {}
+        ),
+    ))
     issues.extend(_case_uniqueness_issues(
-        [row for row in (records if isinstance(records, list) else [])
-         if isinstance(row, Mapping)],
+        materialized_records,
         mined,
     ))
     return issues
@@ -1428,12 +1445,148 @@ def _qid_manifest(record: Mapping[str, Any]) -> dict[str, Any]:
     return copy.deepcopy(dict(raw)) if isinstance(raw, Mapping) else {}
 
 
+def _manifest_placements(
+    record: Mapping[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Exact QID-keyed placements from a row's final host manifest.
+
+    A mismatched inner ``qid`` is not repaired from the outer key. The
+    grounding-certificate owner validates certified manifests upstream; this
+    release gate consumes only entries whose two recorded identities agree.
+    """
+
+    raw = _qid_manifest(record).get("placements")
+    if not isinstance(raw, Mapping):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for raw_qid, raw_entry in raw.items():
+        qid = _normal(raw_qid)
+        if not qid or not isinstance(raw_entry, Mapping):
+            continue
+        entry = copy.deepcopy(dict(raw_entry))
+        if _normal(entry.get("qid")) != qid:
+            continue
+        out[qid] = entry
+    return out
+
+
+def _route_marker_values(record: Mapping[str, Any]) -> list[object]:
+    raw = record.get(RELEASE_ROW_ROUTES_FIELD)
+    if isinstance(raw, Mapping):
+        return [raw]
+    if isinstance(raw, Iterable) and not isinstance(raw, (str, bytes)):
+        return list(raw)
+    return [raw] if raw not in (None, "") else []
+
+
+def _route_marker_evidence(
+    record: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Normalize fresh strings and staged route dictionaries losslessly."""
+
+    evidence: list[dict[str, str]] = []
+    for raw in _route_marker_values(record):
+        if isinstance(raw, Mapping):
+            type_id = _normal(raw.get("type_id"))
+            case_id = _normal(raw.get("case_id"))
+            if not type_id or not case_id:
+                continue
+            evidence.append({
+                "kind": "mapping",
+                "type_id": type_id,
+                "case_id": case_id,
+                "example_qid": _normal(raw.get("example_qid")),
+                "rendered_case_id": _normal(
+                    raw.get("rendered_case_id")
+                ) or case_id,
+                "split_of_case_id": _normal(
+                    raw.get("split_of_case_id")
+                    or raw.get("original_case_id")
+                ),
+                "host_disposition": _normal(raw.get("host_disposition")),
+            })
+            continue
+        parts = str(raw or "").split("::")
+        type_id = _normal(parts[0]) if parts else ""
+        case_id = _normal(parts[1]) if len(parts) > 1 else ""
+        if not type_id or not case_id:
+            continue
+        split_of = ""
+        for part in parts[2:]:
+            if str(part).startswith("split-of:"):
+                split_of = _normal(str(part).split(":", 1)[1])
+                break
+        evidence.append({
+            "kind": "string",
+            "type_id": type_id,
+            "case_id": case_id,
+            "example_qid": "",
+            "rendered_case_id": case_id,
+            "split_of_case_id": split_of,
+            "host_disposition": "",
+        })
+    return evidence
+
+
+def _explicit_record_qids(record: Mapping[str, Any]) -> set[str]:
+    return set(_list_strings(record.get(RELEASE_ROW_QIDS_FIELD) or []))
+
+
 def _record_qids(record: Mapping[str, Any]) -> list[str]:
-    manifest = _qid_manifest(record)
-    placements = manifest.get("placements")
-    qids = list(placements) if isinstance(placements, Mapping) else []
+    qids = list(_manifest_placements(record))
     qids.extend(_list_strings(record.get(RELEASE_ROW_QIDS_FIELD) or []))
+    qids.extend(
+        route["example_qid"]
+        for route in _route_marker_evidence(record)
+        if route["example_qid"]
+    )
     return list(dict.fromkeys(str(value) for value in qids if str(value)))
+
+
+def _manifest_entry_matches(
+    entry: Mapping[str, Any] | None,
+    *,
+    qid: str,
+    type_id: str,
+    case_id: str,
+    disposition: str,
+) -> bool:
+    return bool(
+        isinstance(entry, Mapping)
+        and _normal(entry.get("qid")) == qid
+        and _normal(entry.get("type_id")) == type_id
+        and _normal(entry.get("case_id")) == case_id
+        and _normal(entry.get("host_disposition")) == disposition
+    )
+
+
+def _route_evidence_matches(
+    evidence: Mapping[str, str],
+    *,
+    qid: str,
+    type_id: str,
+    case_id: str,
+) -> bool:
+    if _normal(evidence.get("type_id")) != type_id:
+        return False
+    tagged_qid = _normal(evidence.get("example_qid"))
+    evidence_case = _normal(evidence.get("case_id"))
+    if tagged_qid:
+        if tagged_qid != qid:
+            return False
+        return bool(
+            evidence_case == case_id
+            or _normal(evidence.get("split_of_case_id")) == case_id
+        )
+    if _normal(evidence.get("kind")) == "mapping":
+        # Backward compatibility for release payloads staged before routes
+        # were QID-tagged: only the exact catalog pair can stand in. A split
+        # alias without its QID tag is deliberately insufficient.
+        return evidence_case == case_id
+    return bool(
+        evidence_case == case_id
+        or _normal(evidence.get("split_of_case_id")) == case_id
+    )
 
 
 def _record_blocks(record: Mapping[str, Any]) -> list[str]:
@@ -1481,6 +1634,7 @@ def audit_type_cases(
 
     for type_index, type_row in enumerate(_type_rows(mined_types), start=1):
         type_id = _normal(type_row.get("type_id")) or f"TYPE-{type_index:04d}"
+        type_is_activity = bool(type_row.get("is_activity"))
         type_title = _definition(
             type_row, "type_title", "title", "name"
         )
@@ -1507,6 +1661,7 @@ def audit_type_cases(
             "qids": _list_strings(type_row.get("source_question_ids") or []),
             "example_qid": "",
             "example_prompt": "",
+            "is_activity": type_is_activity,
             "audit_status": "ready",
             "error": "",
         })
@@ -1540,6 +1695,11 @@ def audit_type_cases(
             case_id = _normal(case.get("case_id")) or (
                 f"{type_id}:CASE-{case_index:04d}"
             )
+            case_is_activity = (
+                bool(case.get("is_activity"))
+                if "is_activity" in case
+                else type_is_activity
+            )
             case_definition = _definition(
                 case,
                 "case_definition",
@@ -1566,6 +1726,7 @@ def audit_type_cases(
                 "qids": qids,
                 "example_qid": "",
                 "example_prompt": "",
+                "is_activity": case_is_activity,
                 "audit_status": "ready",
                 "error": "",
             }
@@ -1611,6 +1772,7 @@ def audit_type_cases(
                     "example_qid": qid,
                     "example_prompt": prompt,
                     "example_number": example_index,
+                    "is_activity": case_is_activity,
                     "audit_status": "ready",
                     "error": "",
                 })
@@ -1628,6 +1790,7 @@ def audit_type_cases(
                         "case_definition": case_definition,
                         "owner_topic_ids": case_owner_topics,
                         "example_prompt": prompt,
+                        "is_activity": case_is_activity,
                     }
                     routes.setdefault(qid, []).append(copy.deepcopy(route))
                     qid_locations.setdefault(qid, []).append(copy.deepcopy(route))
@@ -1806,6 +1969,248 @@ def _case_uniqueness_issues(
     ]
 
 
+def _rendered_type_case_route_issues(
+    records: Sequence[Mapping[str, Any]],
+    type_case_rows: Sequence[Mapping[str, Any]],
+    *,
+    inventory: Mapping[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Block catalog Example identities that have no exact visible host.
+
+    The closed set is ``(example_qid, type_id, case_id, is_activity)`` from
+    ``type_case_rows``. A normal Example needs a non-empty visible Types
+    body plus either its exact final-host manifest placement or the same QID
+    beside its exact raw/staged route pair. Fresh split strings may alias the
+    original catalog Case with ``split-of:``; old untagged dictionaries are
+    accepted only on an exact pair. Activity Examples never borrow that
+    proof: they need a non-empty Activity/Info Hub body and either an exact
+    manifest hub disposition or their exact recorded hub QID marker.
+
+    This is identity accounting only. A concept with no assigned Type stays
+    valid, and missing ownership is never synthesized from a checkpoint. A
+    chapter-wide route-set gate applies only when publishable concept rows and
+    source QIDs both exist but the catalog exposes no exact Example identity
+    at all; it never imposes a per-concept Type minimum.
+    """
+
+    from .phase3 import assemble as p3_assemble
+    from . import concept_refiner as cr
+
+    inventory_qids = sorted({
+        _normal(item.get("qid"))
+        for item in _inventory_items(inventory)
+        if _normal(item.get("qid"))
+    })
+    has_publishable_records = any(
+        _publishable_record(record) for record in records
+    )
+    expected = {
+        (
+            qid,
+            _normal(row.get("type_id")),
+            _normal(row.get("case_id")),
+            bool(row.get("is_activity")),
+        )
+        for row in type_case_rows
+        if isinstance(row, Mapping)
+        and (qid := _normal(row.get("example_qid")))
+        and _normal(row.get("type_id"))
+        and _normal(row.get("case_id"))
+    }
+    if not expected:
+        if inventory_qids and has_publishable_records:
+            return [_issue(
+                code=TYPE_CASE_ROUTE_SET_EMPTY,
+                message=(
+                    f"The source inventory contains {len(inventory_qids)} "
+                    "QID(s), but the staged Type/Case catalog exposes no "
+                    "exact Example identity route for any Concept File row."
+                ),
+                severity="error",
+                phase="type_case_release",
+                qids=inventory_qids,
+                details={
+                    "inventory_qids": inventory_qids,
+                    "expected_routes": [],
+                },
+            )]
+        return []
+
+    # Catalog and manifest metadata are not visible learner content. A
+    # manual edit can retain those exact audit fields while reducing Types
+    # to a heading or placeholder. At the whole-file boundary, require the
+    # mechanical rendering shape for each route class in the catalog: a
+    # Case containing an Example for normal routes, and a non-empty
+    # Activity/Info Hub body for activity routes. This does not impose a
+    # Type on every individual concept (Q14).
+    visible_normal = False
+    visible_activity = False
+
+    def has_visible_example(types_body: str) -> bool:
+        for match in p3_assemble._RENDERED_CASE_SEGMENT_RE.finditer(
+            types_body
+        ):
+            segment = str(match.group("body") or "")
+            marker = p3_assemble._RENDERED_EXAMPLE_MARKER_RE.search(segment)
+            if marker and segment[marker.end():].strip():
+                return True
+        return False
+
+    for record in records:
+        if not isinstance(record, Mapping) or not _publishable_record(record):
+            continue
+        details = str(record.get("concept_details") or "")
+        types_body = p3_assemble._types_body_of(details)
+        if types_body and has_visible_example(types_body):
+            visible_normal = True
+        if cr.activity_hub_body(details):
+            visible_activity = True
+
+    needs_normal = any(not identity[3] for identity in expected)
+    needs_activity = any(identity[3] for identity in expected)
+    if inventory_qids and has_publishable_records and (
+        (needs_normal and not visible_normal)
+        or (needs_activity and not visible_activity)
+    ):
+        affected = sorted(
+            identity for identity in expected
+            if (
+                (not identity[3] and not visible_normal)
+                or (identity[3] and not visible_activity)
+            )
+        )
+        missing_shapes: list[str] = []
+        if needs_normal and not visible_normal:
+            missing_shapes.append("a Case section containing an Example")
+        if needs_activity and not visible_activity:
+            missing_shapes.append("an Activity/Info Hub body")
+        return [_issue(
+            code=TYPE_CASE_ROUTE_SET_EMPTY,
+            message=(
+                "The staged Type/Case catalog carries source-question "
+                "routes, but the Concept File renders no "
+                + " or ".join(missing_shapes)
+                + " for the corresponding route class."
+            ),
+            severity="error",
+            phase="type_case_release",
+            qids=sorted({identity[0] for identity in affected}),
+            details={
+                "inventory_qids": inventory_qids,
+                "expected_routes": [
+                    {
+                        "example_qid": qid,
+                        "type_id": type_id,
+                        "case_id": case_id,
+                        "is_activity": is_activity,
+                    }
+                    for qid, type_id, case_id, is_activity in affected
+                ],
+                "missing_visible_shapes": missing_shapes,
+            },
+        )]
+
+    rendered: set[tuple[str, str, str, bool]] = set()
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        manifest = _manifest_placements(record)
+        route_evidence = _route_marker_evidence(record)
+        explicit_qids = _explicit_record_qids(record)
+        details = str(record.get("concept_details") or "")
+        has_types = bool(
+            "// Types:" in details
+            and p3_assemble._types_body_of(details)
+        )
+        has_hub = bool(cr.activity_hub_body(details))
+        hub_qids = {
+            *_list_strings(record.get("_activity_hub_qids") or []),
+            *_list_strings(record.get("_aegis_hub_placements") or []),
+        }
+        for identity in expected:
+            qid, type_id, case_id, is_activity = identity
+            placement = manifest.get(qid)
+            if is_activity:
+                if not has_hub:
+                    continue
+                if (
+                    _manifest_entry_matches(
+                        placement,
+                        qid=qid,
+                        type_id=type_id,
+                        case_id=case_id,
+                        disposition="activity_info_hub",
+                    )
+                    or qid in hub_qids
+                ):
+                    rendered.add(identity)
+                continue
+            if not has_types:
+                continue
+            if _manifest_entry_matches(
+                placement,
+                qid=qid,
+                type_id=type_id,
+                case_id=case_id,
+                disposition="type_case_example",
+            ):
+                rendered.add(identity)
+                continue
+            for evidence in route_evidence:
+                tagged = bool(_normal(evidence.get("example_qid")))
+                if not tagged and qid not in explicit_qids:
+                    continue
+                if _route_evidence_matches(
+                    evidence,
+                    qid=qid,
+                    type_id=type_id,
+                    case_id=case_id,
+                ):
+                    rendered.add(identity)
+                    break
+
+    missing = sorted(expected - rendered)
+    if not missing:
+        return []
+    missing_qids = sorted({qid for qid, _type, _case, _activity in missing})
+    labels = [
+        f"{qid} ({type_id}::{case_id}"
+        + (", Activity/Info Hub" if is_activity else "")
+        + ")"
+        for qid, type_id, case_id, is_activity in missing
+    ]
+    return [_issue(
+        code="unrendered_type_case_qid",
+        message=(
+            f"{len(missing)} Type/Case Example identity route(s) have no "
+            "exact visible concept destination: " + ", ".join(labels)
+        ),
+        severity="error",
+        phase="type_case_release",
+        qids=missing_qids,
+        details={
+            "expected_routes": [
+                {
+                    "example_qid": qid,
+                    "type_id": type_id,
+                    "case_id": case_id,
+                    "is_activity": is_activity,
+                }
+                for qid, type_id, case_id, is_activity in sorted(expected)
+            ],
+            "rendered_routes": [
+                {
+                    "example_qid": qid,
+                    "type_id": type_id,
+                    "case_id": case_id,
+                    "is_activity": is_activity,
+                }
+                for qid, type_id, case_id, is_activity in sorted(rendered)
+            ],
+        },
+    )]
+
+
 def _issue_matches_record(issue: Mapping[str, Any], record: Mapping[str, Any]) -> bool:
     unit_id = _normal(issue.get("unit_id"))
     origin_ids = {
@@ -1824,6 +2229,88 @@ def _issue_matches_record(issue: Mapping[str, Any], record: Mapping[str, Any]) -
     return False
 
 
+def _catalog_route_proof(
+    record: Mapping[str, Any],
+    *,
+    qid: str,
+    route: Mapping[str, Any],
+) -> dict[str, str] | None:
+    """Evidence that this row owns this exact catalog QID/Type/Case route."""
+
+    type_id = _normal(route.get("type_id"))
+    case_id = _normal(route.get("case_id"))
+    if not qid or not type_id or not case_id:
+        return None
+    is_activity = bool(route.get("is_activity"))
+    disposition = (
+        "activity_info_hub" if is_activity else "type_case_example"
+    )
+    placement = _manifest_placements(record).get(qid)
+    if _manifest_entry_matches(
+        placement,
+        qid=qid,
+        type_id=type_id,
+        case_id=case_id,
+        disposition=disposition,
+    ):
+        return {
+            "evidence": "manifest",
+            "host_disposition": disposition,
+            "rendered_case_id": case_id,
+            "split_of_case_id": "",
+        }
+
+    explicit_qids = _explicit_record_qids(record)
+    for evidence in _route_marker_evidence(record):
+        tagged = bool(_normal(evidence.get("example_qid")))
+        if not tagged and qid not in explicit_qids:
+            continue
+        if not _route_evidence_matches(
+            evidence,
+            qid=qid,
+            type_id=type_id,
+            case_id=case_id,
+        ):
+            continue
+        return {
+            "evidence": "route_marker",
+            "host_disposition": _normal(
+                evidence.get("host_disposition")
+            ),
+            "rendered_case_id": _normal(
+                evidence.get("rendered_case_id")
+            ) or case_id,
+            "split_of_case_id": _normal(
+                evidence.get("split_of_case_id")
+            ),
+        }
+    return None
+
+
+def _proved_catalog_route(
+    route: Mapping[str, Any],
+    *,
+    qid: str,
+    proof: Mapping[str, str],
+) -> dict[str, Any]:
+    """The catalog route persisted with its exact Example identity."""
+
+    persisted = copy.deepcopy(dict(route))
+    persisted["example_qid"] = qid
+    persisted["is_activity"] = bool(route.get("is_activity"))
+    persisted["route_evidence"] = _normal(proof.get("evidence"))
+    disposition = _normal(proof.get("host_disposition"))
+    if disposition:
+        persisted["host_disposition"] = disposition
+    rendered_case_id = _normal(proof.get("rendered_case_id"))
+    split_of_case_id = _normal(proof.get("split_of_case_id"))
+    if rendered_case_id and rendered_case_id != _normal(route.get("case_id")):
+        persisted["rendered_case_id"] = rendered_case_id
+    if split_of_case_id:
+        persisted["split_of_case_id"] = split_of_case_id
+    return persisted
+
+
 def _annotate_records(
     records: Sequence[Mapping[str, Any]],
     issues: Sequence[Mapping[str, Any]],
@@ -1837,11 +2324,28 @@ def _annotate_records(
         matched = [
             issue for issue in issues if _issue_matches_record(issue, record)
         ]
-        route_rows = [
-            copy.deepcopy(route)
-            for qid in qids
-            for route in routes.get(qid, [])
-        ]
+        route_rows: list[dict[str, Any]] = []
+        seen_routes: set[tuple[str, str, str]] = set()
+        for qid in qids:
+            for route in routes.get(qid, []):
+                if not isinstance(route, Mapping):
+                    continue
+                proof = _catalog_route_proof(
+                    record, qid=qid, route=route
+                )
+                if proof is None:
+                    continue
+                key = (
+                    qid,
+                    _normal(route.get("type_id")),
+                    _normal(route.get("case_id")),
+                )
+                if key in seen_routes:
+                    continue
+                seen_routes.add(key)
+                route_rows.append(_proved_catalog_route(
+                    route, qid=qid, proof=proof
+                ))
         record[RELEASE_ROW_STATUS_FIELD] = (
             "released_with_errors" if matched else "ready"
         )
@@ -2285,6 +2789,11 @@ def stage_release(
         types_value, inventory_value
     )
     issues.extend(type_case_issues)
+    issues.extend(_rendered_type_case_route_issues(
+        record_rows,
+        type_case_rows,
+        inventory=inventory_value,
+    ))
     issues.extend(_case_uniqueness_issues(record_rows, types_value))
     if not record_rows:
         issues.append(_issue(
@@ -2651,34 +3160,111 @@ def stage_pre_release_from_run(
     *,
     target_chapter_id: int | None = None,
     inventory: Mapping[str, Any] | None = None,
+    phase3_pre_release: Mapping[str, Any] | None = None,
+    terminal_checkpoint_proof: Mapping[str, Any] | None = None,
     reason: str = "",
+    run_refiner: bool = True,
 ) -> dict[str, Any] | None:
-    """Stage Outputs 01/02 from this run's recorded Phase 03 snapshots.
+    """Stage Outputs 01/02 from this run's Phase 03 Pre authority.
 
     Never raises: the Pre lane must not be able to take down a finished
     Post release ("finished work always ships"). A failure is logged and
     leaves the sibling slot empty, which every reader already treats as
     "this run built no Pre lane".
 
-    Returns ``None`` for exactly one reason — the map snapshot is ABSENT,
-    i.e. this run built no Pre lane. A snapshot that is on disk and
-    unreadable is NOT that: it stages a Pre release carrying the recorded
-    defect, so the reviewer sees a corrupt artefact as a corrupt artefact
-    instead of as a chapter that needed nothing (R4). Which of the two
-    happened is decided by the filesystem, never by anything read out of
-    the file.
+    Authority is selected in lossless priority order: direct in-memory
+    transport, newest valid checkpoint bundle, then the legacy sidecars. A
+    malformed higher-priority value is recorded before falling through. The
+    function returns ``None`` only when no Phase 3-complete checkpoint exists
+    and no map was ever recorded; terminal proof without authority stages a
+    diagnostic release instead of masquerading as "no Pre lane" (R4).
+
+    ``run_refiner=False`` is reserved for interactive recovery routes. Those
+    routes may restore already-paid Phase 03 authority into its missing
+    sibling slot, but must not start fresh model work while answering an HTTP
+    request. Normal generation keeps the default and therefore keeps the
+    existing refinement contract unchanged.
     """
 
     from . import progress
 
-    pre_map, map_defect = _run_snapshot(job, PRE_MAP_SNAPSHOT)
-    if pre_map is None and not map_defect:
-        return None
-    pre_questions, questions_defect = _run_snapshot(
-        job, PRE_QUESTIONS_SNAPSHOT
-    )
+    authority: Mapping[str, Any] | None = None
+    authority_defects: list[str] = []
+    if phase3_pre_release is not None:
+        if generation.valid_phase3_pre_release_bundle(phase3_pre_release):
+            authority = phase3_pre_release
+        else:
+            authority_defects.append(
+                "the in-memory Phase 03 Pre release authority is malformed"
+            )
+    if authority is None:
+        for checkpoint in reversed(
+            generation._concept_checkpoint_entries(job.generation_checkpoint)
+        ):
+            candidate = checkpoint.get(generation.PHASE3_PRE_RELEASE_FIELD)
+            if generation.valid_phase3_pre_release_bundle(candidate):
+                authority = candidate
+                break
+
+    snapshot_write_warnings: list[str] = []
+    if authority is not None:
+        pre_map = copy.deepcopy(dict(authority.get("pre_map") or {}))
+        pre_questions = copy.deepcopy(
+            dict(authority.get("pre_questions") or {})
+        )
+        for status in (authority.get("snapshot_writes") or {}).values():
+            if not isinstance(status, Mapping):
+                continue
+            if _normal(status.get("state")) != "failed":
+                continue
+            snapshot_write_warnings.append(
+                f"{_normal(status.get('filename')) or 'Phase 03 snapshot'} "
+                f"could not be written: "
+                f"{_normal(status.get('error')) or 'unknown write failure'}"
+            )
+    else:
+        pre_map, map_defect = _run_snapshot(job, PRE_MAP_SNAPSHOT)
+        if pre_map is None and not map_defect and not authority_defects:
+            checkpoint_envelope = job.generation_checkpoint or {}
+            terminal = any(
+                str(checkpoint.get("stage") or "") in {
+                    "post_type_assignment", "final_content_ready",
+                }
+                for checkpoint in generation._concept_checkpoint_entries(
+                    checkpoint_envelope
+                )
+            ) or _normal(
+                (terminal_checkpoint_proof or {}).get("stage")
+            ) in {
+                "post_type_assignment", "final_content_ready",
+            }
+            if not terminal:
+                return None
+            map_defect = (
+                "a terminal concept checkpoint proves Phase 03 completed, "
+                f"but neither {generation.PHASE3_PRE_RELEASE_FIELD} nor "
+                f"{PRE_MAP_SNAPSHOT} is available"
+            )
+        pre_questions, questions_defect = _run_snapshot(
+            job, PRE_QUESTIONS_SNAPSHOT
+        )
+        if (
+            pre_map is not None
+            and pre_questions is None
+            and not questions_defect
+        ):
+            # Authored-zero is an on-disk empty questions object. Once a map
+            # exists, an absent questions sidecar is missing authority, not a
+            # semantic answer of zero, and must block publication visibly.
+            questions_defect = (
+                f"{PRE_QUESTIONS_SNAPSHOT} is absent even though "
+                f"{PRE_MAP_SNAPSHOT} is present"
+            )
+        authority_defects.extend(
+            defect for defect in (map_defect, questions_defect) if defect
+        )
     snapshot_defects = [
-        defect for defect in (map_defect, questions_defect) if defect
+        defect for defect in authority_defects if defect
     ]
     for defect in snapshot_defects:
         progress.log(
@@ -2690,11 +3276,11 @@ def stage_pre_release_from_run(
             level="error",
         )
     try:
-        refined, refinements = _refine_pre_records(
-            db, job, pre_map or {"rows": []}
-        )
         pre_map = copy.deepcopy(dict(pre_map or {}))
-        pre_map["rows"] = refined
+        refinements: Mapping[str, Any] | None = None
+        if run_refiner:
+            refined, refinements = _refine_pre_records(db, job, pre_map)
+            pre_map["rows"] = refined
         return stage_pre_release(
             db,
             job,
@@ -2705,6 +3291,7 @@ def stage_pre_release_from_run(
             reason=reason,
             refinements=refinements,
             snapshot_defects=snapshot_defects,
+            snapshot_write_warnings=snapshot_write_warnings,
         )
     except Exception as exc:  # noqa: BLE001 - the Pre lane never blocks Post
         db.rollback()
@@ -2724,6 +3311,7 @@ def _pre_release_issues(
     pre_questions: Mapping[str, Any],
     records: Sequence[Mapping[str, Any]],
     snapshot_defects: Sequence[str] = (),
+    snapshot_write_warnings: Sequence[str] = (),
     row_defects: Sequence[Mapping[str, Any]] = (),
 ) -> list[dict[str, Any]]:
     """Everything the Pre lane recorded, as release issues.
@@ -2751,6 +3339,20 @@ def _pre_release_issues(
                 "what it held is missing from this release rather than "
                 "absent from the chapter: " + _normal(defect)
             ),
+            phase="phase03",
+        ))
+    for warning in snapshot_write_warnings:
+        # The complete authority is already in memory/the database-backed
+        # checkpoint, so failure to write its redundant JSON sidecar is an
+        # operational warning, not structural corruption of the release.
+        issues.append(_issue(
+            code="pre_learning_snapshot_write_failed",
+            message=(
+                "The complete Phase 03 Pre-Learning release was preserved, "
+                "but a duplicate diagnostic snapshot could not be written: "
+                + _normal(warning)
+            ),
+            severity="warning",
             phase="phase03",
         ))
     for finding in row_defects:
@@ -3090,6 +3692,7 @@ def stage_pre_release(
     reason: str = "",
     refinements: Mapping[str, Any] | None = None,
     snapshot_defects: Sequence[str] = (),
+    snapshot_write_warnings: Sequence[str] = (),
 ) -> dict[str, Any] | None:
     """Stage Outputs 01/02 into the sibling slot on THIS job.
 
@@ -3186,6 +3789,7 @@ def stage_pre_release(
     ]
     issues = _pre_release_issues(
         source, questions_source, raw_rows, snapshot_defects,
+        snapshot_write_warnings=snapshot_write_warnings,
         row_defects=row_defects,
     )
     issues.extend(qc_issues)
@@ -3258,6 +3862,11 @@ def stage_pre_release(
         "snapshot_defects": _json_safe(
             [_normal(defect) for defect in snapshot_defects if _normal(defect)]
         ),
+        "snapshot_write_warnings": _json_safe([
+            _normal(warning)
+            for warning in snapshot_write_warnings
+            if _normal(warning)
+        ]),
         # Round 9 — the QC audit's blocking findings, on their own key
         # (see ``QC_BLOCKING_FIELD``'s note).
         QC_BLOCKING_FIELD: _json_safe(qc_blocking_defects),
@@ -3373,6 +3982,83 @@ def release_result(
     }
 
 
+def backfill_missing_pre_release(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    reason: str = "",
+) -> bool:
+    """Restore a missing historical Pre sibling without new model spend.
+
+    A previously staged Post payload is the recovery boundary: it supplies
+    the chapter target, source inventory, and (when present) terminal-stage
+    proof. ``stage_pre_release_from_run`` still owns the authority priority
+    and fail-closed diagnostic behavior; this helper merely makes the old
+    interactive short-circuit pass through that existing recovery path.
+
+    Returns true only when a Pre payload was newly staged. An existing Pre
+    sibling is immutable here, and absence of both authority and terminal
+    proof remains absence rather than an invented empty release.
+    """
+
+    # Fast-path only. A stale caller that still sees no sibling must claim
+    # the same per-job mutation lock as generation, refresh, and re-check
+    # before it can mint a release version.
+    if pre_release_available(job):
+        return False
+    with uploads.exclusive_job_operation(int(job.id)):
+        db.refresh(job)
+        return _backfill_missing_pre_release_locked(
+            db, job, reason=reason,
+        )
+
+
+def _backfill_missing_pre_release_locked(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    reason: str = "",
+) -> bool:
+    """Backfill while ``uploads.exclusive_job_operation`` is held."""
+
+    if pre_release_available(job):
+        return False
+    post_payload = release_payload(job, lane=LANE_POST)
+    if post_payload is None:
+        return False
+
+    target = int(
+        post_payload.get("target_chapter_id")
+        or (job.deposit_scope_ids or [0])[0]
+        or 0
+    )
+    inventory = post_payload.get("question_task_inventory")
+    checkpoint_stage = _normal(post_payload.get("checkpoint_stage"))
+    terminal_proof = (
+        {"stage": checkpoint_stage}
+        if checkpoint_stage in {
+            "post_type_assignment", "final_content_ready",
+        }
+        else None
+    )
+    staged = stage_pre_release_from_run(
+        db,
+        job,
+        target_chapter_id=target,
+        inventory=(
+            dict(inventory) if isinstance(inventory, Mapping) else None
+        ),
+        terminal_checkpoint_proof=terminal_proof,
+        reason=(
+            _normal(reason)
+            or "The missing historical Pre-Learning sibling was recovered "
+            "from this run's durable Phase 03 authority."
+        ),
+        run_refiner=False,
+    )
+    return staged is not None
+
+
 def force_release(
     db: Session,
     job_id: int,
@@ -3385,27 +4071,34 @@ def force_release(
         owner_sub=owner_sub,
         module="build_concepts",
     )
-    if job.status == "generated":
-        raise ValueError("this upload has already been published to the database")
-    if uploads.is_job_running(job_id):
-        raise uploads.JobAlreadyRunningError(
-            "generation is still running; release it after the active request finishes"
+    with uploads.exclusive_job_operation(int(job.id)):
+        db.refresh(job)
+        if job.status == "generated":
+            raise ValueError(
+                "this upload has already been published to the database"
+            )
+        # MINTS a new staged version rather than overwriting the slot
+        # (spec-step8 T2/S6). The lock spans both siblings, so a concurrent
+        # generation/release request cannot interleave between their mints.
+        stage_release(
+            db,
+            job,
+            reason=(
+                "The user explicitly released the newest durable checkpoint."
+            ),
+            # This is a plain interactive HTTP route: record any unowned
+            # rendered Examples without blocking on the live judge.
+            live_example_adjudication=False,
         )
-    # MINTS a new staged version rather than overwriting the slot
-    # (spec-step8 T2/S6). This is the route that made the hazard concrete:
-    # it refuses only when ``job.status == "generated"``, so a reviewer
-    # could re-stage after the Master File had already been frozen against
-    # the previous draft, and nothing on either side recorded that the
-    # source had moved. ``stage_release`` mints the version; the frozen
-    # row carries it.
-    stage_release(
-        db,
-        job,
-        reason="The user explicitly released the newest durable checkpoint.",
-        # This is a plain interactive HTTP route: record any unowned
-        # rendered Examples without blocking on the live judge.
-        live_example_adjudication=False,
-    )
+        _backfill_missing_pre_release_locked(
+            db,
+            job,
+            reason=(
+                "The user explicitly released the newest durable checkpoint; "
+                "its missing Pre-Learning sibling was recovered from durable "
+                "Phase 03 authority."
+            ),
+        )
     return job
 
 

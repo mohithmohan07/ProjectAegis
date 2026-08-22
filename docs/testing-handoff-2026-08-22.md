@@ -1,12 +1,13 @@
 # Aegis Testing Handoff — 2026-08-22
 
-Build under test: **PR #240** (4 commits, branch `claude/project-aegis-review-6a2357`)
-on top of `main`, which already carries **PR #239** (Watch live + auto-landing)
-and the Console v2 / parallel-tracks / Q14–Q18 rounds.
+Current build under test: local integration branch
+**`assistant/e2e-owner-feedback`**, which includes the historical PR #240
+plan below plus cache ordering/telemetry, Q21 workbook contracts, durable
+Pre-Learning recovery, and the Concept visible-route gate. It is not yet
+pushed, merged, deployed, or live-tested.
 
-Verification already done on this build: full backend suite **2,791 passed**,
-frontend suite 87 passed + `tsc` + production build, and two adversarial
-review rounds (9 findings then 4; every substantive one fixed in-branch).
+The **2,791 passed** figure below belongs to historical PR #240. Use the newest
+final-gate row in `docs/residue-ledger.md` for the current branch.
 What automated checks CANNOT exercise is live behavior — real provider
 latency, a real textbook, the phone console — which is exactly what this
 plan covers. Anything marked **FAIL-IF** is a bug: report it with the run
@@ -17,24 +18,20 @@ log and I will fix it.
 ## 0. Deploy sequencing — decide once, then follow in order
 
 You have a killed run parked at the Masters stage (CH02 Measurement /
-"The School Bell Rings Again..."). Two valid orders:
+"The School Bell Rings Again..."). The old Option A/B replay-free advice is
+superseded. Follow one order only:
 
-**Option A — safest for the wallet:** Resume the parked run on the CURRENT
-deployed build, let it finish (~$5–9, ~30–60 min), THEN merge #240 and deploy.
-The parked chapter will NOT carry the new Example-ownership record (old code
-staged it); everything else tests on your next chapter.
+1. Confirm no worker is active.
+2. Merge the current integration branch, then deploy between chapters.
+3. Run a **fresh same-PDF acceptance** for matched-scope cost evidence.
+4. Resume the parked job only if its remaining spend is still useful.
 
-**Option B — best for testing (recommended):** Merge #240 → deploy → resume
-the parked run on the NEW build. Everything already decided replays free from
-the durable decide-once store; staging re-runs with the new code, so even the
-parked poem chapter gets the Example-ownership verdict (it is the chapter
-known to produce 7 findings — the perfect test case). Bounded risk: if the
-final checkpoint is rejected at deposit and the run falls back to an earlier
-stage, the Q20 prompt change re-keys the pre-learning plan and re-authors the
-pre questions at the new ~5 calibration (extra spend, different Pre outputs).
-That fallback is rare; if it happens, let it finish — it is still a valid run.
+The checkpoint remains durable, but changed materialize/restriction/marking/
+routing policy versions intentionally re-key those Master decisions. Unchanged
+decisions replay; changed ones may re-author. Never describe the resume as
+free, and never deploy while the worker is active.
 
-Deploy commands (after "merge it" on #240):
+Deploy commands (only after the owner approves and merges the current branch):
 
 ```
 git checkout main && git pull
@@ -84,14 +81,22 @@ with a disabled button; completion leaves you stranded on the dialog.
 
 **Expect**
 - One card per stage with live elapsed time, token and cost chips.
+- The real `Building Master files (Outputs 02/04)` stage shows both `cached`
+  and `cache write` chips at aggregate and lane level when those counters are
+  non-zero; Master usage must not appear under concept extraction.
 - Parallel lanes (Inventory early track, Place ∥ Analyse ∥ Polish, the two
   Masters) render as separate colored rails with their own totals.
+- After an automatic retry, the headline remains cumulative but stage/lane
+  rows belong only to the newest server attempt; repeated same-title cards do
+  not each claim the newest attempt's cost.
 - **No** "capacity is busy / slot acquired after 0s" pairs during the
   Masters stage — at most an occasional wait longer than ~5s, reported once
   with its true duration.
 
 **FAIL-IF** 0-second slot messages still flood the log; a stage card's cost
-column stays empty while tokens climb (pricing gap); lanes collapse into one.
+column stays empty while tokens climb (pricing gap); lanes collapse into one;
+Master cache tokens are charged to the preceding concept stage; or an older
+same-title retry card duplicates the current attempt's cost.
 
 ### T3 — Q20 volume calibration (needs your NEXT fresh chapter, or the
 parked run only if it fell back and re-planned)
@@ -104,7 +109,9 @@ parked run only if it fell back and re-planned)
   produced 69 at the old ~10 anchor; expect roughly 30–45 now). NOT a hard
   number: a genuinely rich prerequisite may exceed it, a thin one may plan 2
   or 0 — each with an authored rationale in the plan.
-- The Pre Master stage card's cost is roughly **half** the poem run's.
+- Record the Pre Master cost separately. The lower Q20 volume should reduce
+  its candidate-driven work, but no percentage reduction is an acceptance
+  fact until a matched live run measures it.
 
 **FAIL-IF** every concept plans exactly 5 (that is quota behaviour, the
 opposite of the ruling); or totals stay ~10/concept with rationales that
@@ -176,24 +183,60 @@ rounds; use the poem or your next chapter)
   moves are flagged for review, not silent.
 
 ### T8 — Cost & time acceptance (the numbers to send back)
-After your next full chapter on this build, send me:
+Run the **same PDF** as the $4.9718 screenshot, then send:
 1. The stage table (screenshot is fine) — per-stage time/tokens/cost.
 2. Total run wall-clock and total cost.
-3. The pre-learning plan numbers (N concepts, M questions).
+3. Pre-learning plan numbers (N concepts, M questions).
+4. Per-lane cache reads, cache writes, ordinary input, output tokens, request
+   count, and source-question count.
 
-Baselines to beat: the poem run was ~66 min to the kill with the Post
-Master lane at $1.47 / 5.2M tokens through routing, heading to an estimated
-$10–12 total. With Q20 alone, expect the Pre Master lane near half; the
-remaining big levers (payload cache-ordering, async critics, parallel
-grouping tails) are queued for after your numbers confirm where the spend
-sits now.
+The $4.9718 screenshot is **not** a four-output baseline: Pre Concept and Pre
+Master were absent. Report the new four-output total separately. Compare the
+new Post Master with the old Post lane where its journal/stage evidence is
+available; otherwise report normalized Post cost per source question and the
+cache-read/write ratios. Treat **$3.48** only as an aspirational absolute
+affordability target, not as proof of a causal 30% saving. Cache ordering is
+accepted only when repeated shared input moves materially from cache writes to
+reads; no offline estimate is a pass.
+
+### T9 — Owner workbook-format acceptance
+
+Download both Master workbooks and verify representative rows plus a whole-file
+search:
+
+- typed `Equation` answer/rubric cells contain full raw LaTeX and no `[Katex]`;
+- typed `Phrases` cells contain wholly plain text; each rubric block may choose
+  its own medium, but no block mixes media;
+- objective options in `question_text` are `a)`, `b)`, `c)`, `d)`;
+- no `tabular`, `array`, or Markdown pipe-table syntax remains; mechanical
+  fallback text names every row/column cell unless the source table image is
+  used;
+- every four-mark Descriptive row has at least two rubric blocks.
+
+**FAIL-IF** any forbidden syntax survives, or manually changing one of these
+back to the invalid shape passes Master read-back/import instead of refusing
+before database mutation.
+
+### T10 — Concepts, Pre output, and source-question accounting
+
+- All four downloads (01–04) are present, or a missing paid authority appears
+  as a downloadable Diagnostic sibling with the reason recorded.
+- Every source QID finishes placed or explicitly flagged; blocked/unaccounted
+  source questions must be zero for owner acceptance.
+- The Concept File contains visible Types with Case/Example question detail
+  somewhere when the source has questions. Individual description-only
+  concepts remain valid, matching the two standards workbooks; a whole-file
+  descriptions-only escape must be Diagnostic and refuse database publication.
+- Clicking release on an existing Post-only historical job restores durable
+  Pre authority without model/refiner spend, is idempotent, and returns 409 if
+  the job is active.
 
 ---
 
 ## 3. Known limitations — so nothing here surprises you
 
-- The parked run resumed under **Option A** finishes on old staging code:
-  its release will NOT carry the Example-ownership issue. Option B does.
+- Old parked-run decisions whose policy identity changed may re-author; durable
+  does not mean replay-compatible after an intentional policy bump.
 - Journals from runs started on builds before Console v2 have no per-stage
   usage events — their stage cards show structure but not cost.
 - The Example-ownership verdict records and flags; it does not rewrite or
@@ -203,10 +246,9 @@ sits now.
   "British-style spellings" one) is model prose already flagged by its
   critic — recorded, advisory, queued for a prompt-side improvement, not a
   code bug.
-- The register's queued next rounds: payload cache-ordering (30–50% off
-  Master input cost; deploys only between chapters, policy bump), critics
-  off the latency path, parallel grouping/QA tails, author effort tiering,
-  Batch API overnight lane.
+- Payload cache-ordering is built but live-unproven. Remaining cost/time levers
+  are critics off the latency path, parallel grouping/QA tails, author effort
+  tiering, and the later Batch API lane.
 
 ## 4. If something fails
 

@@ -1159,6 +1159,42 @@ comparison, with the norm-location regressions re-pinned to the new
 wording. The plan critic's ANCHORING dimension keeps watching that plans
 stay evidence-led rather than drifting to the stated figure.
 
+### Q21 · Decided — answer cells use one declared medium; options are lowercase; KaTeX tables are retired
+
+Owner ruling, 22 Aug 2026, from the generated Master review. A typed answer
+or rubric cell is rendered by the CMS from its declared `answer_type`, so the
+whole cell uses exactly one medium:
+
+- `Equation` carries full raw LaTeX with **no** `[Katex]` wrapper. Any words
+  needed inside that equation are LaTeX text atoms such as `\text{...}`;
+  loose prose plus a wrapped/raw fragment is invalid.
+- `Phrases` carries wholly plain text with no LaTeX, `[Katex]`, math
+  delimiter, image tag, or link markup. A rubric may choose Equation or
+  Phrases block by block, but one block never mixes the two.
+- A four-mark Descriptive answer has at least two rubric blocks. One rubric
+  block carrying all four marks is invalid.
+
+Objective options render in the question paper as lowercase `a)`, `b)`,
+`c)`, `d)` (continuing alphabetically when the recorded answer list is
+longer). Option order and correct-answer identity remain unchanged.
+
+KaTeX `tabular`/`array` environments and Markdown pipe tables are unsupported
+and must not ship.
+When the source already associates an image with that table, the semantic
+author preserves that source image. Otherwise the fallback is a mechanical,
+lossless row/column transcription (`Table row N, column N: value`) preserving
+every cell in order. Local code may label those coordinates and unwrap
+literal table-cell text, but it never infers headings, fills a missing cell,
+or reconstructs meaning.
+
+This ruling supersedes only the conflicting formatting examples in the older
+accepted-workbook fixtures and SOP-derived rich-body interpretation. It does
+not change the rich-text contract for untyped `question`, `display_answer`,
+or `answer_explanation`, which continue to use `[Katex]...[/Katex]` around
+math. It is a serialization/shape contract: medium choice and rubric content
+remain model-authored; code enforces only declared type, lexical format,
+cardinality, and exact marks mechanically.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

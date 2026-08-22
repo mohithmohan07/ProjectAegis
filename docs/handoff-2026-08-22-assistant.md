@@ -6,6 +6,16 @@ no prior context. Everything here was true at `main` commit `5abb703`
 often works from a phone, rules by short messages ("merge it", "b) it
 is"), and expects you to bring him decisions, not options-essays.
 
+**Continuation update, later 2026-08-22.** The working branch
+`assistant/e2e-owner-feedback` now integrates four post-snapshot rounds:
+Master prompt-cache ordering/telemetry, Q21 workbook formatting, durable
+Pre-Learning release recovery, and the Concept Type/Case visible-route gate.
+It is an offline release candidate only: it has not been pushed, merged,
+deployed, or live-tested. This update supersedes the stale cost/roadmap and
+resume claims below where explicitly noted; `docs/residue-ledger.md` carries
+the detailed evidence and `docs/testing-handoff-2026-08-22.md` carries the
+current live acceptance addendum.
+
 ---
 
 ## 1. What this project is
@@ -38,9 +48,10 @@ Model provider: OpenAI **gpt-5.6-luna** via JSON-mode chat
    silently.** Only the pre-spend pauses (source review, source-topic
    recovery, Type granularity) and genuine impossibility may stop a run.
 2. **`docs/aegis-restructure.md`** — the design "soul" plus the **owner
-   decision register §12 (Q1–Q20)**. Every owner ruling gets a register
-   entry. Q20 (newest): pre-learning coverage calibrates to ~5 questions
-   per concept under a diagnostic posture.
+   decision register §12 (Q1–Q21)**. Every owner ruling gets a register
+   entry. Q20 calibrates pre-learning coverage to ~5 questions per concept;
+   Q21 defines raw Equation cells, plain Phrases cells, lowercase options,
+   multi-block four-mark rubrics, and the table fallback contract.
 3. **`docs/residue-ledger.md`** — the chronological round-by-round state
    ledger. Its real convention: each round of work is a
    `## <round name> (<date>: …)` SECTION holding an
@@ -83,17 +94,27 @@ replaced with the draft-PR + "merge it" flow described in §4.
 - #242 review round 5 (R4-safe degradation of every pre-branch step,
   lane-key stripping at the source, frozen-tuple pins).
 
-**NOT yet done (owner-side):** `fly deploy` of this build, and resuming
+**Integrated locally, not yet merged:** stable-prefix explicit caching for
+all eight high-volume Master author/critic paths; cache read/write tokens in
+the real Master stage and lane cards; Q21 generation/read-back/import guards;
+Pre sibling recovery from durable authority (including historical Post-only
+jobs, without interactive model spend); and a publication gate that refuses a
+whole source-question Concept File with no visible Type/Case question route
+while preserving Q14's legitimate description-only individual concepts.
+
+**NOT yet done (owner-side):** merge/deploy of the current integration branch,
+one same-PDF live acceptance, and any resumption of
 the **parked run**: chapter "The School Bell Rings Again..." (Grade 6
 English poem, MSBSHSE) was killed mid-Masters on 2026-08-21 (~$1.47
 spent in the Post Master lane; the Pre lane had just started
-materializing 67 candidates). Its 98% checkpoint and every decided unit
-are durable in the job's decide-once store — **resume replays paid work
-free**. Plan of record: deploy first, then resume (testing-handoff §0,
-Option B), then work through tests T1–T8.
+materializing 67 candidates). Its checkpoint and old decisions remain
+durable, but the new materialize/restriction/marking/routing policy versions
+intentionally re-key those changed passes. Do **not** promise a free resume:
+unchanged decisions replay, changed Master decisions may re-author. Follow the
+testing handoff's current addendum and never deploy while a worker is active.
 
-**Backend suite: 2,801 passed (+7 xfailed). Frontend: 87 passed + tsc
-+ build.**
+The old snapshot gate was **2,801 passed (+7 xfailed)**; it is historical.
+Use the newest final-gate row in `docs/residue-ledger.md` for this branch.
 
 ## 3b. Running it — local dev, modes, and where state lives
 
@@ -192,9 +213,11 @@ authors run `concept_mapping` (max effort), critics
 ON by default.
 
 **Concurrency:** global gate `AEGIS_OPENAI_MAX_CONCURRENCY` (fly.toml
-sets 48), per-run workers `AEGIS_PHASE3_DECISION_WORKERS` (16),
+sets 48), per-lane workers `AEGIS_PHASE3_DECISION_WORKERS` (16),
 `AEGIS_SOURCE_CHUNK_WORKERS` (10). Slot waits under
-`AEGIS_OPENAI_SLOT_WAIT_QUIET_SECONDS` (5) are silent.
+`AEGIS_OPENAI_SLOT_WAIT_QUIET_SECONDS` (5) are silent. The two Master lanes
+can expose 32 contenders for one run; additional creators enter bounded
+queues behind the 48-slot ceiling and can still hit the 900-second timeout.
 
 **Newest module — `concept_example_ownership.py`:** at staging,
 rendered public Examples whose wording has no exact owner in the source
@@ -209,8 +232,9 @@ read its docstrings before touching it.
 
 **Console/observability:** `progress.py` (contextvars stage/lane,
 NDJSON stream + durable run journal) + `openai_usage.py` (per-model and
-per-(stage,lane) usage; **the `stages` table rides ONLY the live
-console summary — persisted summaries must stay byte-stable**). Frontend
+per-(stage,lane) usage, including cache reads and cache writes; **the `stages`
+table rides ONLY `console_summary()` — persisted summaries must stay
+byte-stable**). Frontend
 `RunConsole.tsx` (`run`, `watch`), `RunConsolePanel` stage cards,
 `BuildConcepts.tsx` resume/watch/landing.
 
@@ -219,16 +243,16 @@ console summary — persisted summaries must stay byte-stable**). Frontend
 Killed poem run: ~66 min to the Masters; Post Master lane 5.2M tokens /
 $1.47 through routing (~200 calls, ~24–26k tok/call, blended $0.283/M —
 input-mass dominated). Full-chapter Master estimate ≈1,100–1,400 calls.
-Root causes, in order:
+Original root causes, in order:
 1. ~7 recorded decisions per question × (author max + critic high).
-2. **Cache-hostile payload ordering**: materialization puts varying
-   `candidate_id` as the 3rd JSON key and ships the FULL released
-   hierarchy LAST in every request
-   (`assessment_materialization.py::_decision_payload`), defeating
-   OpenAI prefix caching ($0.20/M vs $0.02/M). Marking and routing have
-   the same defect; answer-restriction ships a 13.5k-token registry per
-   call (cache-ordered correctly, still heavy).
-3. Pre-question volume (was 69; Q20 should roughly halve it).
+2. **Cache-hostile payload ordering — fixed offline, live effect unproven.**
+   Materialization, answer restriction, marking and routing now put their
+   complete stable evidence first, candidate evidence last, and use explicit
+   deterministic four-shard cache keys on author and critic calls. The console
+   now exposes stage/lane cache reads and writes. Only a same-PDF live run can
+   prove savings.
+3. Pre-question volume (was 69; Q20 should reduce candidate-driven work, but
+   the size of the saving is a live-test hypothesis, not a proved percentage).
 4. Serial author→critic inside each decide; stage barriers; the
    grouping/QA/master-refiner tail is sequential per candidate.
 Pricing table: `backend/app/services/openai_usage.py` (~line 42).
@@ -237,13 +261,15 @@ note the two files live in DIFFERENT packages.
 
 ## 7. Roadmap — queued and owner-acknowledged, in order
 
-1. **[owner, now] Deploy + resume the parked run + testing handoff
-   T1–T8.** The resulting stage table chooses the next lever.
-2. **Lever 2 — payload cache-ordering** (no ruling needed, owner aware):
-   reorder Master pass payloads stable-prefix-first / candidate-last
-   (materialization, marking, routing), consider `prompt_cache_key`.
-   Est. 30–50% off Master input cost. Identity-changing: bump the
-   policy_version of each touched pass, deploy between chapters.
+1. **[owner, next] Review/merge/deploy the integrated branch between
+   chapters, then run the same-PDF acceptance addendum.** Do not resume an
+   active/parked job under a replay-free assumption: the four changed Master
+   pass identities intentionally re-key. The live run must prove all four
+   outputs, exact source-question accounting, and cache-read/write behavior.
+2. **Lever 2 — payload cache-ordering: BUILT offline, acceptance pending.**
+   Do not claim the estimated 30–50% saving until matched-scope live telemetry
+   confirms it. Report the four-output total separately from normalized Post
+   Master cost because the $4.9718 screenshot omitted the Pre outputs.
 3. **Lever 3 — critics off the latency path**: Q10 critics never gate,
    so the critic call need not serialize inside `kernel.decide`; design
    an async attach (record updated when the critic returns).
@@ -277,8 +303,10 @@ note the two files live in DIFFERENT packages.
   fingerprints, `checkpoints._TARGET_FIELDS` (pinned equal to
   `models.CHECKPOINT_TARGET_IDENTITY_FIELDS`), the sealed envelope, gold
   reference workbooks. Changing them breaks resume/acceptance.
-- KaTeX: raw answers ONLY in `sqN_keyword` cells; `answer_content`
-  stays wrapped (gold workbooks are the schema of record — Q5).
+- Q21 typed cells: `Equation` `answer_content` and `sqN_keyword` values are
+  full raw LaTeX with no `[Katex]`; `Phrases` values are wholly plain text.
+  Untyped rich fields such as `question`, `display_answer`, and
+  `answer_explanation` retain the ordinary `[Katex]...[/Katex]` contract.
 - Recorder helpers (`record_assessment_lane_unavailable`,
   `adjudication_issue`) must NEVER raise, and every internal step must
   degrade toward "record the finding" — R4. Round 5 exists because a

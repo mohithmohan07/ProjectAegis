@@ -461,28 +461,28 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ] == "assessment-cell-2"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-5"
+        ] == "assessment-materialize-7"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
         assert restriction_authority["policy_version"].startswith(
-            "assessment-answer-restriction-2;"
+            "assessment-answer-restriction-3;"
         )
         assert candidate["_aegis_assessment_answer_restriction"][
             "registry"
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-4"
+        ] == "assessment-marking-6"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
         ]["decomposition_authority"] == "api_per_item_verdict"
         assert candidate["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-candidate-1"
+        ] == "assessment-master-refiner-candidate-2"
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
-        ] == "assessment-route-1"
+        ] == "assessment-route-2"
     for group in occupied:
         assert group["_aegis_assessment_variant_cluster"]["authority"][
             "policy_version"] == "assessment-variant-cluster-1"
@@ -1032,7 +1032,7 @@ def test_master_refiner_delegate_failure_stages_unrefined_rows_with_warning(
         svc.RELEASED_WITH_WARNINGS
     )
     assert release.payload["refinements"]["policy_version"] == (
-        "assessment-master-refiner-1"
+        "assessment-master-refiner-2"
     )
     assert release.payload["refinements"]["changes"] == []
     for record in [

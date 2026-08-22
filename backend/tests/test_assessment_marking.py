@@ -289,7 +289,7 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
         ),
     }
     authority = verdict["authority"]
-    assert authority["policy_version"] == "assessment-marking-4"
+    assert authority["policy_version"] == "assessment-marking-6"
     assert "created_at" not in authority and "provider" not in authority
     stored = store.get(authority["decision_key"])
     assert stored is not None
@@ -324,9 +324,9 @@ def test_marking_replays_without_author_critic_or_fixer(monkeypatch) -> None:
     assert len(store.keys()) == 1
 
 
-def test_stale_v2_marking_record_redecides_under_v3_policy(monkeypatch) -> None:
+def test_stale_v2_marking_record_redecides_under_current_policy(monkeypatch) -> None:
     monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
-    assert marking.MARKING_POLICY_VERSION == "assessment-marking-4"
+    assert marking.MARKING_POLICY_VERSION == "assessment-marking-6"
     pair = (_candidate(), _cell())
     store = kernel.DecisionStore()
     calls = 0
@@ -344,7 +344,7 @@ def test_stale_v2_marking_record_redecides_under_v3_policy(monkeypatch) -> None:
         provider=author, store=store,
     )[0]
     monkeypatch.setattr(
-        marking, "MARKING_POLICY_VERSION", "assessment-marking-4"
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-6"
     )
     current = marking.decide_markings(
         [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
@@ -353,7 +353,7 @@ def test_stale_v2_marking_record_redecides_under_v3_policy(monkeypatch) -> None:
 
     assert calls == 2
     assert stale["authority"]["policy_version"] == "assessment-marking-2"
-    assert current["authority"]["policy_version"] == "assessment-marking-4"
+    assert current["authority"]["policy_version"] == "assessment-marking-6"
     assert stale["authority"]["decision_key"] != (
         current["authority"]["decision_key"]
     )
@@ -825,7 +825,7 @@ def test_fixer_is_revalidated_by_the_same_semantic_and_arithmetic_checker(
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.marking",
         "unit_id": "CAND-DESC",
-        "policy_version": "assessment-marking-4",
+        "policy_version": "assessment-marking-6",
     }
 
 
@@ -928,6 +928,28 @@ def test_missing_adopted_contract_or_cell_owned_marks_fails_before_spend() -> No
         marking.decide_markings(
             [(_candidate(marks=float("nan")), _cell(marks=float("nan")))],
             meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=_forbidden("the author"),
+        )
+
+
+def test_invalid_answer_medium_or_single_four_mark_rubric_fails_before_spend():
+    mixed = _candidate()
+    mixed["answers"][0]["answer_content"] = (
+        "A square is [Katex]2[/Katex]-dimensional."
+    )
+    with pytest.raises(marking.MarkingError, match="declared medium"):
+        marking.decide_markings(
+            [(mixed, _cell())], meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=_forbidden("the author"),
+        )
+
+    single = _candidate()
+    single["answers"] = [single["answers"][0]]
+    with pytest.raises(marking.MarkingError, match="at least two"):
+        marking.decide_markings(
+            [(single, _cell())], meta=META,
             envelope_sha256=ENVELOPE_SHA256,
             provider=_forbidden("the author"),
         )

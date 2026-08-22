@@ -547,7 +547,16 @@ def _validate_checkpoint_entry(entry: Any, path: str) -> None:
             and stage == generation._CONCEPT_CHECKPOINT_STAGE
         )
     )
-    if known and not generation._compatible_concept_checkpoint_entry(entry):
+    if known and not generation._compatible_concept_checkpoint_entry(
+        entry,
+        # Portable v6 post-Type / v7 terminal entries remain valid migration
+        # candidates.  Accepting them here does not make them ordinary resume
+        # authority: the production compatibility mirror and
+        # ``concepts_from_mmd`` retain them only through the explicit legacy
+        # Pre-sidecar migration path. Current v7/v8 entries still require the
+        # complete in-checkpoint Pre bundle.
+        allow_legacy_pre_release=True,
+    ):
         raise ValueError(f"{path} is not a compatible checkpoint stage")
 
 
@@ -1305,7 +1314,10 @@ def _validate_checkpoint(
         )
     if control_only:
         return
-    if not generation._valid_concept_checkpoint(value):
+    if generation._newest_compatible_concept_checkpoint(
+        value,
+        allow_legacy_pre_release=True,
+    ) is None:
         raise ValueError(
             f"{path} does not contain a compatible completed stage")
 

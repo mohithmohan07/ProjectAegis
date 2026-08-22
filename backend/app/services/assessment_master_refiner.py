@@ -24,14 +24,15 @@ from typing import Any, Mapping, Sequence
 
 from ..bulk_import import assessment_workbook
 from . import assessment_profile
+from . import katex_rules
 from . import assessment_release as rel
 from . import assessment_release_service as release_service
 from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-1"
-CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-1"
+MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-2"
+CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-2"
 GROUP_POLICY_VERSION = "assessment-master-refiner-group-1"
 CANDIDATE_KIND = "assessment.master_refiner.candidate"
 GROUP_KIND = "assessment.master_refiner.group"
@@ -102,7 +103,12 @@ CANDIDATE_SYSTEM = (
     "marks, all weightages, subquestion text/decomposition, duration, keyboard "
     "mode, QIDs, URLs, image/KaTeX tokens, assets, provenance, routing, tier, "
     "labels, audits, flags, and every other field byte-for-byte and type-for-"
-    "type. If no polish is warranted, echo the record unchanged. Return only "
+    "type. Preserve each typed answer_content/keyword medium exactly: "
+    "Equation is one full raw-LaTeX cell without [Katex] and with any words "
+    "inside \\text{...}; Phrases is wholly plain text without TeX. Never "
+    "introduce tabular/array "
+    "markup or collapse a 4-mark Descriptive rubric to one block. If no "
+    "polish is warranted, echo the record unchanged. Return only "
     "strict JSON with record_kind='candidate', the exact row_ref, the complete "
     "record, and a non-empty rationale."
 )
@@ -135,6 +141,16 @@ class MasterRefinerError(ValueError):
 
 def _normal(value: Any) -> str:
     return " ".join(str(value or "").split())
+
+
+def _is_four_marks(value: Any) -> bool:
+    if isinstance(value, bool) or value is None:
+        return False
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number == 4
 
 
 def _has_visible_text(value: Any) -> bool:
@@ -347,6 +363,57 @@ def _response_checker(
                 "ordered QID/URL/image/KaTeX identity tokens must remain "
                 "exactly unchanged at each editable field path"
             )
+        if unit_kind == "candidate":
+            for answer_index, answer in enumerate(
+                record.get("answers") or [], start=1
+            ):
+                if not isinstance(answer, Mapping):
+                    continue
+                for issue in katex_rules.answer_cell_issues(
+                    str(answer.get("answer_type") or ""),
+                    str(answer.get("answer_content") or ""),
+                ):
+                    defects.append(
+                        f"answer {answer_index} violates declared medium: "
+                        f"{issue}"
+                    )
+            for sub_index, subquestion in enumerate(
+                record.get("sub_questions") or [], start=1
+            ):
+                if not isinstance(subquestion, Mapping):
+                    continue
+                for keyword_index, keyword in enumerate(
+                    subquestion.get("keywords") or [], start=1
+                ):
+                    if not isinstance(keyword, Mapping):
+                        continue
+                    for issue in katex_rules.answer_cell_issues(
+                        str(keyword.get("answer_type") or ""),
+                        str(keyword.get("keyword") or ""),
+                    ):
+                        defects.append(
+                            f"subquestion {sub_index} keyword "
+                            f"{keyword_index} violates declared medium: "
+                            f"{issue}"
+                        )
+            if (
+                str(record.get("sheet_kind") or "") == "descriptive"
+                and _is_four_marks(record.get("marks"))
+                and len(record.get("answers") or []) < 2
+            ):
+                defects.append(
+                    "4-mark descriptive candidate requires at least two "
+                    "rubric blocks"
+                )
+            for field in ("answer_explanation", "display_answer"):
+                if field == "display_answer" and str(
+                    record.get("sheet_kind") or ""
+                ) != "descriptive":
+                    continue
+                for issue in katex_rules.rich_text_issues(
+                    str(record.get(field) or "")
+                ):
+                    defects.append(f"{field} rich-text: {issue}")
         if not _has_visible_text(response.get("rationale")):
             defects.append("rationale must be a non-empty string")
         return defects

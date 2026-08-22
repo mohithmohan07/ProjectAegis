@@ -16,20 +16,31 @@ same-checker Fixer guarantee.
 from __future__ import annotations
 
 import copy
-import json
 import math
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
 
+from .. import bulk_import as bi
 from .. import config
 from . import assessment_profile
+from . import katex_rules
 from . import assessment_release as rel
 from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MARKING_POLICY_VERSION = "assessment-marking-4"
+# ``-5`` moved stable rules/metadata ahead of the candidate suffix and added
+# the explicit GPT-5.6 cache breakpoint.  ``-6`` layers the owner-format
+# contract on top so replay cannot collide with either provider input shape.
+MARKING_POLICY_VERSION = "assessment-marking-6"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
+
+_PROMPT_CACHE_STABLE_KEYS = (
+    "stage",
+    "rules",
+    "critic_rules",
+    "metadata",
+)
 
 MARKING_SYSTEM = (
     "You are the Aegis assessment marking author. Author the marking for ONE "
@@ -50,6 +61,10 @@ MARKING_SYSTEM = (
     "For Objective, exactly one correct option receives the cell's total "
     "marks and every wrong option receives exact zero. For Descriptive, every "
     "answer/rubric weight is positive and their exact sum is the cell total. "
+    "A 4-mark Descriptive answer has at least two rubric blocks; never assign "
+    "all four marks to one block. Preserve each answer/rubric and keyword "
+    "cell's declared medium: Equation is full raw LaTeX without [Katex], "
+    "while Phrases is wholly plain text without TeX. "
     "When subquestions exist, their positive marks sum exactly to the cell "
     "total; when a subquestion has keyword rows, their positive weightages "
     "sum exactly to that subquestion's marks. Do not use negative values, "
@@ -190,7 +205,10 @@ def _content_evidence(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
-def _validate_answer_space(candidate: Mapping[str, Any], candidate_id: str) -> None:
+def _validate_answer_space(
+    candidate: Mapping[str, Any], candidate_id: str, *, kind: str,
+    total_marks: Decimal,
+) -> None:
     answers = candidate.get("answers")
     if not isinstance(answers, list) or not answers:
         raise MarkingError(
@@ -208,6 +226,26 @@ def _validate_answer_space(candidate: Mapping[str, Any], candidate_id: str) -> N
                 f"marking candidate {candidate_id!r} answer/rubric block "
                 f"{position} has no content"
             )
+        answer_type = answer.get("answer_type")
+        if answer_type not in bi.ANSWER_TYPES:
+            raise MarkingError(
+                f"marking candidate {candidate_id!r} answer/rubric block "
+                f"{position} has invalid answer_type {answer_type!r}"
+            )
+        format_issues = katex_rules.answer_cell_issues(
+            str(answer_type or ""), str(answer.get("answer_content") or "")
+        )
+        if format_issues:
+            raise MarkingError(
+                f"marking candidate {candidate_id!r} answer/rubric block "
+                f"{position} violates its declared medium: "
+                + ", ".join(format_issues)
+            )
+    if kind == "descriptive" and total_marks == Decimal(4) and len(answers) < 2:
+        raise MarkingError(
+            f"marking candidate {candidate_id!r} is a 4-mark descriptive "
+            "item and requires at least two answer/rubric blocks"
+        )
 
     subquestions = candidate.get("sub_questions")
     if not isinstance(subquestions, list):
@@ -241,6 +279,22 @@ def _validate_answer_space(candidate: Mapping[str, Any], candidate_id: str) -> N
                 raise MarkingError(
                     f"marking candidate {candidate_id!r} subquestion "
                     f"{position} keyword {keyword_position} has no text"
+                )
+            keyword_type = keyword.get("answer_type")
+            if keyword_type not in bi.ANSWER_TYPES:
+                raise MarkingError(
+                    f"marking candidate {candidate_id!r} subquestion "
+                    f"{position} keyword {keyword_position} has invalid "
+                    f"answer_type {keyword_type!r}"
+                )
+            keyword_issues = katex_rules.answer_cell_issues(
+                str(keyword_type or ""), str(keyword.get("keyword") or "")
+            )
+            if keyword_issues:
+                raise MarkingError(
+                    f"marking candidate {candidate_id!r} subquestion "
+                    f"{position} keyword {keyword_position} violates its "
+                    "declared medium: " + ", ".join(keyword_issues)
                 )
 
 
@@ -362,7 +416,9 @@ def _prepare_pair(
             f"marking candidate {candidate_id!r} question_text must equal "
             "question before marking"
         )
-    _validate_answer_space(candidate, candidate_id)
+    _validate_answer_space(
+        candidate, candidate_id, kind=str(kind), total_marks=total_marks,
+    )
     if kind == "objective":
         if candidate.get("sub_questions"):
             raise MarkingError(
@@ -475,6 +531,11 @@ def _weight_defects(
         if isinstance(subquestions, list) and subquestions:
             defects.append("objective marking must not contain subquestions")
     else:
+        if total_marks == Decimal(4) and len(answers) < 2:
+            defects.append(
+                "a 4-mark descriptive item requires at least two "
+                "answer/rubric blocks"
+            )
         for position, answer in enumerate(answers, start=1):
             if not isinstance(answer, Mapping):
                 continue
@@ -629,20 +690,50 @@ def _checker(
 def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
+    candidate = payload.get("candidate")
+    candidate_id = (
+        str(candidate.get("candidate_id") or "")
+        if isinstance(candidate, Mapping) else ""
+    )
     return generation._openai_json(
         MARKING_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_mapping",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "marking-author-v5",
+            prefix,
+            shard_seed=candidate_id,
+        ),
     )
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
+    candidate = payload.get("candidate")
+    candidate_id = (
+        str(candidate.get("candidate_id") or "")
+        if isinstance(candidate, Mapping) else ""
+    )
     return generation._openai_json(
         MARKING_CRITIC_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_validation",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "marking-critic-v5",
+            prefix,
+            shard_seed=candidate_id,
+        ),
     )
 
 

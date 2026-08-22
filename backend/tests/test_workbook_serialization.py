@@ -67,6 +67,11 @@ def test_append_questions_serializes_the_complete_mutation(
     monkeypatch.setattr(writer, "_questions", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(writer, "_new_workbook", object)
     monkeypatch.setattr(
+        writer,
+        "_migrate_existing_question_cells",
+        lambda _workbook: 0,
+    )
+    monkeypatch.setattr(
         workbook_sync,
         "atomic_save_workbook",
         lambda *_args, **_kwargs: None,

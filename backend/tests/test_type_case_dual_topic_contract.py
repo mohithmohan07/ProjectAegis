@@ -10,6 +10,13 @@ from app.services import generation as g
 from app.services import placement_policy
 
 
+def _empty_pre_bundle() -> dict:
+    return g.phase3_pre_release_bundle(
+        {"rows": [], "topics": []},
+        {"plans": {}, "questions": {}, "blocked": {}},
+    )
+
+
 def _contract(
     qid: str,
     *,
@@ -192,9 +199,10 @@ def test_current_post_type_checkpoint_with_matching_v2_ledger_resumes():
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
 
-    assert checkpoint["stage_schema_version"] == 6
+    assert checkpoint["stage_schema_version"] == 7
     assert g._compatible_concept_checkpoint_entry(checkpoint)
     assert g._newest_compatible_concept_checkpoint(checkpoint) == checkpoint
 
@@ -252,6 +260,7 @@ def test_current_post_type_checkpoint_allows_certified_pure_activity_qid():
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
 
     assert g._compatible_concept_checkpoint_entry(checkpoint)
@@ -264,6 +273,7 @@ def test_empty_inventory_post_type_checkpoint_remains_portable_without_ledger():
         question_task_inventory={"items": [], "stats": {}},
         mined_types={"types": []},
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
 
     assert g._compatible_concept_checkpoint_entry(checkpoint)

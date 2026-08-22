@@ -6,6 +6,7 @@ import json
 import zipfile
 
 from openpyxl import load_workbook
+import pytest
 
 from app import models
 from app.services import build_concepts
@@ -62,6 +63,71 @@ def _records():
     }]
 
 
+def _rendered_records():
+    """One complete Type owner; other concepts may legitimately own none."""
+    rows = _records()
+    rows[0]["concept_details"] = (
+        "Description: Supported core with one disputed clause."
+        " // Types: Type 01: Evidence-based explanation "
+        "Case 01: Explain the foundational relationship. "
+        "Example 01: Explain the first method. "
+        "Case 02: Apply the reusable method later. "
+        "Example 02: Apply the later method."
+    )
+    rows[0][release.RELEASE_ROW_QIDS_FIELD] = [
+        "QINV-0001", "QINV-0002",
+    ]
+    rows[0][release.RELEASE_ROW_ROUTES_FIELD] = [
+        "TYPE-0001::CASE-0001",
+        "TYPE-0001::CASE-0002",
+    ]
+    return rows
+
+
+def _host_manifest(*placements):
+    return {
+        "placements": {
+            qid: {
+                "qid": qid,
+                "type_id": type_id,
+                "case_id": case_id,
+                "host_disposition": disposition,
+            }
+            for qid, type_id, case_id, disposition in placements
+        },
+    }
+
+
+def _manifest_only_records():
+    records = _rendered_records()
+    records[0].pop(release.RELEASE_ROW_QIDS_FIELD)
+    records[0].pop(release.RELEASE_ROW_ROUTES_FIELD)
+    records[0]["_type_case_qid_host_placement_manifest"] = _host_manifest(
+        (
+            "QINV-0001", "TYPE-0001", "CASE-0001",
+            "type_case_example",
+        ),
+        (
+            "QINV-0002", "TYPE-0001", "CASE-0002",
+            "type_case_example",
+        ),
+    )
+    return records
+
+
+def _concept_without_types():
+    return {
+        "topic": "Topic A",
+        "parent_concept": "Parent A",
+        "concept_title": "Released Concept Without A Type",
+        "concept_details": "Description: A valid concept with no assigned Type.",
+        "keywords": "untyped",
+        "_semantic_topic_id": "TOPIC-A",
+        "_phase32_origin_concept_id": "TOPOLOGY-CONCEPT-0002",
+        "_source_block_ids": ["BLK-0008"],
+    }
+
+
 def _inventory():
     return {
         "items": [
@@ -110,6 +176,12 @@ def _mined_types(*, duplicate=False):
             ],
         }],
     }
+
+
+def _activity_mined_types():
+    mined = _mined_types()
+    mined["types"][0]["case_prompts"][1]["is_activity"] = True
+    return mined
 
 
 def _pending():
@@ -166,6 +238,419 @@ def test_duplicate_qid_is_released_as_an_audit_error():
     codes = [issue["code"] for issue in issues]
     assert "duplicate_qid_assignment" in codes
     assert "unassigned_inventory_qid" in codes
+
+
+@pytest.mark.parametrize("missing_piece", ["route_marker", "types_section"])
+def test_rendered_example_identity_requires_route_marker_and_visible_types(
+    missing_piece,
+):
+    records = _rendered_records()
+    if missing_piece == "route_marker":
+        records[0].pop(release.RELEASE_ROW_ROUTES_FIELD)
+    else:
+        records[0]["concept_details"] = "Description: The Types body is absent."
+    type_case_rows, _issues, _routes = release.audit_type_cases(
+        _mined_types(), _inventory()
+    )
+
+    issues = release._rendered_type_case_route_issues(
+        records, type_case_rows
+    )
+
+    assert len(issues) == 1
+    assert issues[0]["code"] == "unrendered_type_case_qid"
+    assert issues[0]["qids"] == ["QINV-0001", "QINV-0002"]
+
+
+def test_partial_or_mismatched_routes_never_satisfy_another_qid():
+    records = _rendered_records()
+    records[0][release.RELEASE_ROW_ROUTES_FIELD] = [
+        {"type_id": "TYPE-0001", "case_id": "CASE-0001"},
+        {"type_id": "TYPE-9999", "case_id": "CASE-0002"},
+    ]
+    type_case_rows, _issues, routes = release.audit_type_cases(
+        _mined_types(), _inventory()
+    )
+
+    issues = release._rendered_type_case_route_issues(
+        records, type_case_rows
+    )
+    annotated = release._annotate_records(records, issues, routes)
+
+    assert len(issues) == 1
+    assert issues[0]["qids"] == ["QINV-0002"]
+    assert issues[0]["details"]["rendered_routes"] == [{
+        "example_qid": "QINV-0001",
+        "type_id": "TYPE-0001",
+        "case_id": "CASE-0001",
+        "is_activity": False,
+    }]
+    assert [
+        route["example_qid"]
+        for route in annotated[0][release.RELEASE_ROW_ROUTES_FIELD]
+    ] == ["QINV-0001"]
+
+
+def test_split_route_alias_preserves_the_exact_original_case_identity():
+    records = _rendered_records()
+    records[0][release.RELEASE_ROW_ROUTES_FIELD] = [
+        "TYPE-0001::CASE-0001",
+        "TYPE-0001::CASE-0099::split-of:CASE-0002",
+    ]
+    type_case_rows, _issues, routes = release.audit_type_cases(
+        _mined_types(), _inventory()
+    )
+
+    assert release._rendered_type_case_route_issues(
+        records, type_case_rows
+    ) == []
+    annotated = release._annotate_records(records, [], routes)
+    second = next(
+        route
+        for route in annotated[0][release.RELEASE_ROW_ROUTES_FIELD]
+        if route["example_qid"] == "QINV-0002"
+    )
+    assert second["case_id"] == "CASE-0002"
+    assert second["rendered_case_id"] == "CASE-0099"
+    assert second["split_of_case_id"] == "CASE-0002"
+
+
+@pytest.mark.parametrize(
+    "proof_field",
+    ["_activity_hub_qids", "_aegis_hub_placements", "manifest"],
+)
+def test_activity_examples_require_exact_hub_evidence_and_a_nonempty_body(
+    proof_field,
+):
+    records = _rendered_records()
+    record = records[0]
+    record["concept_details"] = (
+        "Description: Supported core. // Activity/Info Hub: "
+        "Apply the later method. // Types: Type 01: Evidence-based "
+        "explanation Case 01: Explain the foundational relationship. "
+        "Example 01: Explain the first method."
+    )
+    record[release.RELEASE_ROW_QIDS_FIELD] = ["QINV-0001"]
+    record[release.RELEASE_ROW_ROUTES_FIELD] = [
+        "TYPE-0001::CASE-0001"
+    ]
+    if proof_field == "manifest":
+        record["_type_case_qid_host_placement_manifest"] = _host_manifest(
+            (
+                "QINV-0002", "TYPE-0001", "CASE-0002",
+                "activity_info_hub",
+            ),
+        )
+    else:
+        record[proof_field] = ["QINV-0002"]
+    type_case_rows, _issues, routes = release.audit_type_cases(
+        _activity_mined_types(), _inventory()
+    )
+    activity_row = next(
+        row for row in type_case_rows
+        if row.get("example_qid") == "QINV-0002"
+    )
+
+    assert activity_row["is_activity"] is True
+    assert release._rendered_type_case_route_issues(
+        records, type_case_rows
+    ) == []
+    annotated = release._annotate_records(records, [], routes)
+    annotated_qids = {
+        route["example_qid"]
+        for route in annotated[0][release.RELEASE_ROW_ROUTES_FIELD]
+    }
+    assert "QINV-0001" in annotated_qids
+    assert ("QINV-0002" in annotated_qids) is (proof_field == "manifest")
+
+    no_body = copy.deepcopy(records)
+    no_body[0]["concept_details"] = (
+        "Description: Supported core. // Types: Type 01: Evidence-based "
+        "explanation Case 01: Explain the foundational relationship. "
+        "Example 01: Explain the first method."
+    )
+    missing = release._rendered_type_case_route_issues(
+        no_body, type_case_rows
+    )
+    assert len(missing) == 1
+    assert missing[0]["qids"] == ["QINV-0002"]
+
+
+def test_a_mismatched_activity_manifest_never_claims_the_hub_qid():
+    records = _rendered_records()
+    record = records[0]
+    record["concept_details"] = (
+        "Description: Supported core. // Activity/Info Hub: "
+        "Apply the later method. // Types: Type 01: Evidence-based "
+        "explanation Case 01: Explain the foundational relationship. "
+        "Example 01: Explain the first method."
+    )
+    record[release.RELEASE_ROW_QIDS_FIELD] = ["QINV-0001"]
+    record[release.RELEASE_ROW_ROUTES_FIELD] = [
+        "TYPE-0001::CASE-0001"
+    ]
+    record["_type_case_qid_host_placement_manifest"] = _host_manifest(
+        (
+            "QINV-0002", "TYPE-0001", "CASE-WRONG",
+            "activity_info_hub",
+        ),
+    )
+    type_case_rows, _issues, _routes = release.audit_type_cases(
+        _activity_mined_types(), _inventory()
+    )
+
+    missing = release._rendered_type_case_route_issues(
+        records, type_case_rows
+    )
+
+    assert len(missing) == 1
+    assert missing[0]["qids"] == ["QINV-0002"]
+
+
+def test_description_only_rows_with_mined_types_are_diagnostic_but_downloadable(
+    db,
+):
+    """A durable pre-Type checkpoint may ship, but can never publish as done."""
+    job, chapter = _job(db)
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+        error=RuntimeError("host pass failed after the durable checkpoint"),
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    missing = [
+        issue for issue in payload["issues"]
+        if issue["code"] == release.TYPE_CASE_ROUTE_SET_EMPTY
+    ]
+    assert len(missing) == 1
+    assert missing[0]["qids"] == ["QINV-0001", "QINV-0002"]
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+
+    # The publication gate recomputes the identity defect from the staged
+    # material, so clearing the display ledger cannot open the write.
+    payload_without_issues = copy.deepcopy(payload)
+    payload_without_issues["issues"] = []
+    assert any(
+        release.TYPE_CASE_ROUTE_SET_EMPTY in defect
+        for defect in release.structural_defects(payload_without_issues)
+    )
+    with pytest.raises(ValueError, match=release.TYPE_CASE_ROUTE_SET_EMPTY):
+        publication.upload_release_to_database(db, job.id)
+
+    # Rule E: Diagnostic blocks only the DB act; every evidence download
+    # remains buildable for review and recovery.
+    assert release_files.build_release_workbook(job)
+    assert release_files.build_release_bulk_import_workbook(db, job)
+    assert release_files.build_diagnostics_zip(job)
+
+
+def test_a_whole_concept_file_with_no_type_question_routes_is_diagnostic(
+    db,
+):
+    """Source QIDs plus concept rows need at least one exact route set."""
+
+    job, chapter = _job(db)
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=_inventory(),
+        mined_types={"types": []},
+        reason="durable description-only checkpoint",
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    route_set_issues = [
+        issue for issue in payload["issues"]
+        if issue["code"] == release.TYPE_CASE_ROUTE_SET_EMPTY
+    ]
+    assert len(route_set_issues) == 1
+    assert route_set_issues[0]["qids"] == ["QINV-0001", "QINV-0002"]
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+
+    # Publication recomputes from the staged material. Deleting the display
+    # issue therefore cannot turn the same description-only file publishable.
+    payload_without_issues = copy.deepcopy(payload)
+    payload_without_issues["issues"] = []
+    assert any(
+        release.TYPE_CASE_ROUTE_SET_EMPTY in defect
+        for defect in release.structural_defects(payload_without_issues)
+    )
+    with pytest.raises(ValueError, match=release.TYPE_CASE_ROUTE_SET_EMPTY):
+        publication.upload_release_to_database(db, job.id)
+
+    # Diagnostic is a publication verdict, never a download embargo.
+    assert release_files.build_release_workbook(job)
+    assert release_files.build_release_bulk_import_workbook(db, job)
+    assert release_files.build_diagnostics_zip(job)
+
+
+def test_questionless_concept_file_does_not_require_a_type_route(db):
+    """Q14 stays intact: the gate is chapter-wide, not per concept."""
+
+    job, chapter = _job(db)
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory={"items": [], "stats": {"items": 0}},
+        mined_types={"types": []},
+        reason="questionless concept file",
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    assert all(
+        issue["code"] != release.TYPE_CASE_ROUTE_SET_EMPTY
+        for issue in payload["issues"]
+    )
+    assert all(
+        release.TYPE_CASE_ROUTE_SET_EMPTY not in defect
+        for defect in release.structural_defects(payload)
+    )
+
+
+def test_manifest_metadata_cannot_replace_visible_cases_and_questions(db):
+    """Exact audit fields do not make a placeholder Types body visible."""
+
+    job, chapter = _job(db)
+    records = _manifest_only_records()
+    records[0]["concept_details"] = (
+        "Description: Supported core. // Types: Type 01: Placeholder only. "
+        "Case 01: Placeholder only. Example 01:"
+    )
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=records,
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+        reason="manual edit retained audit metadata only",
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    issues = [
+        issue for issue in payload["issues"]
+        if issue["code"] == release.TYPE_CASE_ROUTE_SET_EMPTY
+    ]
+    assert len(issues) == 1
+    assert issues[0]["qids"] == ["QINV-0001", "QINV-0002"]
+    assert issues[0]["details"]["missing_visible_shapes"] == [
+        "a Case section containing an Example"
+    ]
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+
+    payload_without_issues = copy.deepcopy(payload)
+    payload_without_issues["issues"] = []
+    assert any(
+        release.TYPE_CASE_ROUTE_SET_EMPTY in defect
+        for defect in release.structural_defects(payload_without_issues)
+    )
+    with pytest.raises(ValueError, match=release.TYPE_CASE_ROUTE_SET_EMPTY):
+        publication.upload_release_to_database(db, job.id)
+
+
+def test_manifest_only_routes_keep_staging_and_publication_in_parity(
+    db, monkeypatch,
+):
+    job, chapter = _job(db)
+    records = _manifest_only_records()
+    type_case_rows, _issues, _routes = release.audit_type_cases(
+        _mined_types(), _inventory()
+    )
+    assert release._rendered_type_case_route_issues(
+        records, type_case_rows
+    ) == []
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=records,
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    staged_routes = payload["records"][0][release.RELEASE_ROW_ROUTES_FIELD]
+    assert [route["example_qid"] for route in staged_routes] == [
+        "QINV-0001", "QINV-0002",
+    ]
+    assert all(route["route_evidence"] == "manifest" for route in staged_routes)
+    assert release._rendered_type_case_route_issues(
+        payload["records"], payload["type_case_rows"]
+    ) == []
+    assert release.structural_defects(payload) == []
+    assert release.release_state(payload) == release.READY
+
+    def commit_only(database, _path, ids):
+        database.commit()
+        return {
+            "written": len(ids),
+            "sources_updated": 0,
+            "publication_status": "published",
+        }
+
+    monkeypatch.setattr(
+        build_concepts,
+        "_commit_and_publish_concept_workbook",
+        commit_only,
+    )
+    published = publication.upload_release_to_database(db, job.id)
+    assert published["database_uploaded"] is True
+    created_ids = published["created_concept_ids"]
+    assert created_ids
+    db.query(models.Concept).filter(
+        models.Concept.id.in_(created_ids)
+    ).delete(synchronize_session=False)
+    db.commit()
+
+
+def test_a_concept_without_types_is_valid_when_all_examples_render_on_the_owner(
+    db,
+):
+    """Q14 does not impose a per-concept Type minimum."""
+    job, chapter = _job(db)
+    records = [*_rendered_records(), _concept_without_types()]
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=records,
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    assert not [
+        issue for issue in payload["issues"]
+        if issue["code"] == "unrendered_type_case_qid"
+    ]
+    assert not any(
+        "unrendered_type_case_qid" in defect
+        for defect in release.structural_defects(payload)
+    )
+    untyped = next(
+        row for row in payload["records"]
+        if row["concept_title"] == "Released Concept Without A Type"
+    )
+    assert "// Types:" not in untyped["concept_details"]
 
 
 def test_stage_release_clears_manual_pause_and_highlights_the_affected_row(db):
@@ -336,7 +821,7 @@ def test_release_workbook_orders_type_case_example_and_marks_errors(db):
         db,
         job,
         target_chapter_id=chapter.id,
-        records=_records(),
+        records=_rendered_records(),
         inventory=_inventory(),
         mined_types=_mined_types(),
         pending_decision=_pending(),
@@ -792,7 +1277,7 @@ def test_explicit_upload_publishes_flagged_rows_and_is_idempotent(db, monkeypatc
         db,
         job,
         target_chapter_id=chapter.id,
-        records=_records(),
+        records=_rendered_records(),
         inventory=_inventory(),
         mined_types=_mined_types(),
         pending_decision=_pending(),

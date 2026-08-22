@@ -13,8 +13,13 @@ the caller's failure release ships them.
 """
 from __future__ import annotations
 
+import contextlib
 import contextvars
 import copy
+import hashlib
+import json
+import os
+import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Mapping
@@ -121,10 +126,67 @@ def _snapshot_analysis(
         pass  # snapshotting is best-effort; the store already has decisions
 
 
+def _atomic_pre_snapshot(
+    payload: Mapping[str, Any],
+    store_dir: str | Path | None,
+    filename: str,
+) -> dict[str, Any]:
+    """Write one Pre-lane sidecar atomically and report what happened.
+
+    The in-memory Phase 3 result is the primary hand-off to release staging.
+    These files are its durable replay/diagnostic copies.  A failed duplicate
+    write must therefore remain visible without erasing the completed map or
+    generated questions.  Returning the outcome lets the caller carry it into
+    the database-backed terminal checkpoint and release payload.
+    """
+
+    if not store_dir:
+        return {
+            "filename": filename,
+            "state": "not_configured",
+        }
+    target = Path(store_dir).parent / filename
+    encoded = json.dumps(
+        dict(payload), ensure_ascii=False, indent=1,
+    ).encode("utf-8")
+    outcome: dict[str, Any] = {
+        "filename": filename,
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+    }
+    fd: int | None = None
+    temporary = ""
+    try:
+        fd, temporary = tempfile.mkstemp(
+            dir=str(target.parent),
+            prefix=f".{filename}.",
+            suffix=".tmp",
+        )
+        with os.fdopen(fd, "wb") as handle:
+            fd = None
+            handle.write(encoded)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, target)
+        temporary = ""
+        return {**outcome, "state": "written"}
+    except OSError as exc:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if temporary:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary)
+        return {
+            **outcome,
+            "state": "failed",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+
+
 def _snapshot_prelearn(
     prerequisites: Mapping[str, Any],
     store_dir: str | Path | None,
-) -> None:
+) -> dict[str, Any]:
     """Persist the Phase 03 running pre-requisite capture (doc §4, Q3).
 
     Written beside the decision store so the per-stage captures and the
@@ -132,24 +194,17 @@ def _snapshot_prelearn(
     (R4) — survive the run for the Pre lane and the diagnostics export.
     """
 
-    if not store_dir:
-        return
-    import json
-
-    try:
-        path = Path(store_dir).parent / "source.phase3-prelearn-capture.json"
-        path.write_text(
-            json.dumps(dict(prerequisites), ensure_ascii=False, indent=1),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass  # snapshotting is best-effort; the store already has decisions
+    return _atomic_pre_snapshot(
+        prerequisites,
+        store_dir,
+        "source.phase3-prelearn-capture.json",
+    )
 
 
 def _snapshot_premap(
     pre_map: Mapping[str, Any],
     store_dir: str | Path | None,
-) -> None:
+) -> dict[str, Any]:
     """Persist the Phase 03 Pre-Learning concept map (doc §4, Q3).
 
     Written beside the decision store so the built Pre rows, their
@@ -157,24 +212,17 @@ def _snapshot_premap(
     later deposit/release slice and the diagnostics export.
     """
 
-    if not store_dir:
-        return
-    import json
-
-    try:
-        path = Path(store_dir).parent / "source.phase3-prelearn-map.json"
-        path.write_text(
-            json.dumps(dict(pre_map), ensure_ascii=False, indent=1),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass  # snapshotting is best-effort; the store already has decisions
+    return _atomic_pre_snapshot(
+        pre_map,
+        store_dir,
+        "source.phase3-prelearn-map.json",
+    )
 
 
 def _snapshot_prequestions(
     pre_questions: Mapping[str, Any],
     store_dir: str | Path | None,
-) -> None:
+) -> dict[str, Any]:
     """Persist the Phase 03 coverage plan and its generated questions (Q4).
 
     Written beside the decision store so each pre-concept's authored
@@ -183,18 +231,11 @@ def _snapshot_prequestions(
     assessment-lane slice and the diagnostics export.
     """
 
-    if not store_dir:
-        return
-    import json
-
-    try:
-        path = Path(store_dir).parent / "source.phase3-prelearn-questions.json"
-        path.write_text(
-            json.dumps(dict(pre_questions), ensure_ascii=False, indent=1),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass  # snapshotting is best-effort; the store already has decisions
+    return _atomic_pre_snapshot(
+        pre_questions,
+        store_dir,
+        "source.phase3-prelearn-questions.json",
+    )
 
 
 def run(
@@ -422,7 +463,9 @@ def run(
         store=store,
         fixer=injected.get("fixer"),
     )
-    _snapshot_prelearn(prerequisites, store_dir)
+    pre_snapshot_writes = {
+        "capture": _snapshot_prelearn(prerequisites, store_dir),
+    }
     progress.step(
         "Phase 3 — Assemble: embedding Types and routing QIDs "
         "(deterministic)",
@@ -505,7 +548,7 @@ def run(
             "corrected.",
             level="error",
         )
-    _snapshot_premap(pre_map, store_dir)
+    pre_snapshot_writes["map"] = _snapshot_premap(pre_map, store_dir)
     # Phase 03 (doc §4, Q4 per D3): the adaptive coverage plan and the
     # GENERATED questions authored to it. Its own try, deliberately not
     # the map's: a leak in the questions must not discard a finished Pre
@@ -545,7 +588,21 @@ def run(
             "once the leak is corrected.",
             level="error",
         )
-    _snapshot_prequestions(pre_questions, store_dir)
+    pre_snapshot_writes["questions"] = _snapshot_prequestions(
+        pre_questions, store_dir,
+    )
+    failed_snapshots = [
+        status for status in pre_snapshot_writes.values()
+        if status.get("state") == "failed"
+    ]
+    for status in failed_snapshots:
+        progress.log(
+            "Phase 03 completed in memory, but its duplicate snapshot "
+            f"{status.get('filename')} could not be written "
+            f"({status.get('error')}). The completed Pre payload continues "
+            "to release staging and the write failure is recorded with it.",
+            level="warning",
+        )
     flagged = sum(1 for row in rows if row.get("review_flags"))
     return {
         "records": rows,
@@ -556,6 +613,7 @@ def run(
         "prerequisites": prerequisites,
         "pre_map": pre_map,
         "pre_questions": pre_questions,
+        "pre_snapshot_writes": pre_snapshot_writes,
         "coverage": assembled["coverage"],
         "summary": {
             "row_count": len(rows),

@@ -163,7 +163,7 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-5"
+        "assessment-materialize-7"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
@@ -475,6 +475,39 @@ def test_nested_rich_text_is_mechanical_but_marking_arithmetic_is_later():
 
     assert not any("subquestion marks sum" in row for row in defects)
     assert any(row.startswith("rich-text:") for row in defects)
+
+
+def test_answer_medium_and_four_mark_rubric_shape_are_mechanical():
+    cell = _cell(
+        sheet_kind="descriptive", question_category="Long Answer", marks=4.0,
+    )
+    candidate_id = am._candidate_id(_atom(), cell)
+    response = _descriptive_response(
+        {"candidate_id": candidate_id},
+        answers=[{
+            "answer_type": "Equation",
+            "answer_content": "Result: [Katex]x=2[/Katex]",
+        }],
+    )
+
+    defects = am._proposal_defects(response, cell, candidate_id)
+
+    assert any("equation_katex_wrapper" in defect for defect in defects)
+    assert any("at least two answer/rubric blocks" in defect for defect in defects)
+
+
+def test_materialization_refuses_katex_table_markup():
+    cell = _cell()
+    candidate_id = am._candidate_id(_atom(), cell)
+    response = _objective_response({"candidate_id": candidate_id})
+    response["question"] = (
+        r"Study [Katex] \begin{array}{cc}A&B\\1&2\end{array} [/Katex]."
+    )
+
+    assert any(
+        defect == "rich-text: unsupported_table"
+        for defect in am._proposal_defects(response, cell, candidate_id)
+    )
 
 
 def test_malformed_nested_collections_report_defects_without_crashing():

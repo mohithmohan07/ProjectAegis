@@ -527,10 +527,12 @@ def _question_record(
         capped_answers = _cap("answers", answers, MAX_OBJECTIVE_OPTIONS)
         for n, answer in enumerate(capped_answers, start=1):
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
-            # ``answer_content`` is BODY text (SOP §4.3's wrapped list; the
-            # accepted gold workbooks wrap Equation-typed content here) —
-            # only keyword cells are raw, below.
-            record[f"answer_content_{n}"] = answer.get("answer_content", "")
+            # The declared medium controls the whole CMS cell.  Equation is
+            # raw LaTeX with no [Katex] wrapper; Phrases stays plain text.
+            record[f"answer_content_{n}"] = katex_rules.raw_answer_cell(
+                answer.get("answer_type", ""),
+                answer.get("answer_content", ""),
+            )
             # The CMS import (and the reference workbooks) mark the
             # correct option "Yes" / wrong options "No"; the pipeline's
             # internal wire uses "1"/"0". Normalize at the render seam
@@ -549,7 +551,11 @@ def _question_record(
         # upstream stay untouched — this is a render-time composition of
         # already-decided content, options lettered in answer order.
         option_lines = [
-            f"{chr(ord('A') + index)}) {str(a.get('answer_content') or '')}"
+            f"{chr(ord('a') + index)}) "
+            + katex_rules.rich_answer_display(
+                a.get("answer_type", ""),
+                str(a.get("answer_content") or ""),
+            )
             for index, a in enumerate(capped_answers)
             if str(a.get("answer_content") or "").strip()
         ]
@@ -580,8 +586,10 @@ def _question_record(
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
-            # BODY text, wrapped — see the Objective note above.
-            record[f"answer_content_{n}"] = answer.get("answer_content", "")
+            record[f"answer_content_{n}"] = katex_rules.raw_answer_cell(
+                answer.get("answer_type", ""),
+                answer.get("answer_content", ""),
+            )
         sub_questions = [
             s for s in candidate.get("sub_questions") or []
             if isinstance(s, Mapping)
@@ -607,6 +615,24 @@ def _question_record(
                     keyword.get("answer_type", ""),
                     keyword.get("keyword", ""),
                 )
+    # Release freeze refuses unsupported table dialects for fresh decisions.
+    # Keep the renderer itself total for accepted legacy/direct callers too:
+    # mechanically project every untyped rich-text table to ordered
+    # row/column labels.  This is the last serializer seam, not a semantic
+    # reconstruction; already-authored source images remain untouched.
+    for field in (
+        "question", "question_text", "display_answer", "answer_explanation",
+    ):
+        if field in record:
+            record[field] = katex_rules.replace_unsupported_tables(
+                str(record.get(field) or "")
+            )
+    for n in range(1, MAX_SUBQUESTIONS + 1):
+        field = f"sub_question_{n}"
+        if field in record:
+            record[field] = katex_rules.replace_unsupported_tables(
+                str(record.get(field) or "")
+            )
     return record
 
 
@@ -999,8 +1025,16 @@ def _objective_marking_errors(
         if not any(_populated(row.get(field)) for field in fields):
             continue
         populated_options += 1
-        if not str(row.get(f"answer_content_{n}") or "").strip():
+        answer_type = str(row.get(f"answer_type_{n}") or "")
+        answer_content = str(row.get(f"answer_content_{n}") or "")
+        if not answer_content.strip():
             errors.append(f"{label}: option {n} has no answer content")
+        for issue in katex_rules.answer_cell_issues(
+            answer_type, answer_content,
+        ):
+            errors.append(
+                f"{label}: option {n} violates declared medium: {issue}"
+            )
         is_correct = rel.is_correct_option(row.get(f"correct_answer_{n}"))
         if is_correct:
             correct_count += 1
@@ -1026,6 +1060,14 @@ def _objective_marking_errors(
             )
     if populated_options == 0:
         errors.append(f"{label}: objective has no option/rubric blocks")
+    uppercase_labels = katex_rules.uppercase_objective_option_labels(
+        str(row.get("question_text") or ""), populated_options,
+    )
+    if uppercase_labels:
+        errors.append(
+            f"{label}: question_text uses uppercase objective option "
+            f"label(s) {', '.join(uppercase_labels)}; use lowercase labels"
+        )
     if correct_count != 1:
         errors.append(f"{label}: {correct_count} correct options")
     if (
@@ -1054,9 +1096,18 @@ def _descriptive_marking_errors(
         if not any(_populated(row.get(field)) for field in fields):
             continue
         populated_answers += 1
-        if not str(row.get(f"answer_content_{n}") or "").strip():
+        answer_type = str(row.get(f"answer_type_{n}") or "")
+        answer_content = str(row.get(f"answer_content_{n}") or "")
+        if not answer_content.strip():
             errors.append(
                 f"{label}: answer/rubric block {n} has no content"
+            )
+        for issue in katex_rules.answer_cell_issues(
+            answer_type, answer_content,
+        ):
+            errors.append(
+                f"{label}: answer/rubric block {n} violates declared "
+                f"medium: {issue}"
             )
         weight = _readback_decimal(row.get(f"answer_weightage_{n}"))
         if weight is None or weight <= 0:
@@ -1067,6 +1118,11 @@ def _descriptive_marking_errors(
         answer_weights.append(weight)
     if populated_answers == 0:
         errors.append(f"{label}: descriptive has no answer/rubric blocks")
+    if marks == Decimal(4) and populated_answers < 2:
+        errors.append(
+            f"{label}: 4-mark descriptive requires at least two "
+            "answer/rubric blocks"
+        )
     if (
         marks is not None
         and len(answer_weights) == populated_answers
@@ -1115,9 +1171,18 @@ def _descriptive_marking_errors(
             if not any(_populated(row.get(field)) for field in fields):
                 continue
             populated_keywords += 1
-            if not str(row.get(f"sq{n}_keyword_{m}") or "").strip():
+            keyword_type = str(row.get(f"sq{n}_answer_type_{m}") or "")
+            keyword_content = str(row.get(f"sq{n}_keyword_{m}") or "")
+            if not keyword_content.strip():
                 errors.append(
                     f"{label}: subquestion {n} keyword {m} has no text"
+                )
+            for issue in katex_rules.answer_cell_issues(
+                keyword_type, keyword_content,
+            ):
+                errors.append(
+                    f"{label}: subquestion {n} keyword {m} violates "
+                    f"declared medium: {issue}"
                 )
             weight = _readback_decimal(row.get(f"sq{n}_weightage_{m}"))
             if weight is None or weight <= 0:
@@ -1435,6 +1500,29 @@ def validate_master_file(
             marks = _readback_decimal(row.get("marks"))
             if marks is None or marks <= 0:
                 errors.append(f"{label}: marks must be finite and positive")
+            for field in (
+                "question", "question_text", "display_answer",
+                "answer_explanation",
+            ):
+                for issue in katex_rules.rich_text_issues(
+                    str(row.get(field) or "")
+                ):
+                    # Full rich-text validation happens before freeze.  The
+                    # workbook renderer may add mechanical truncation notes
+                    # whose field-like underscores are not authored LaTeX;
+                    # read-back owns only Q21's table-dialect refusal here.
+                    if issue == "unsupported_table":
+                        errors.append(
+                            f"{label}: {field} rich-text: {issue}"
+                        )
+            for n in range(1, MAX_SUBQUESTIONS + 1):
+                for issue in katex_rules.rich_text_issues(
+                    str(row.get(f"sub_question_{n}") or "")
+                ):
+                    if issue == "unsupported_table":
+                        errors.append(
+                            f"{label}: sub_question_{n} rich-text: {issue}"
+                        )
             if name == "Objective":
                 errors.extend(_objective_marking_errors(
                     row, label=label, marks=marks,
