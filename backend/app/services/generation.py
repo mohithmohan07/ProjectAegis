@@ -2693,6 +2693,25 @@ def _acquire_openai_slot(
     quiet = min(config.OPENAI_SLOT_WAIT_QUIET_SECONDS, timeout)
     if quiet > 0 and gate.acquire(timeout=quiet):
         return
+    if (
+        quiet >= timeout
+        or timeout - (time.monotonic() - started) <= 0
+    ):
+        # The grace consumed the whole configured budget (quiet >=
+        # timeout, decided deterministically rather than by a clock
+        # race): say what actually happened instead of promising a
+        # wait that cannot follow.
+        progress.log(
+            f"{_provider_label()} capacity is busy; timed out after "
+            f"{time.monotonic() - started:.0f}s waiting for a free "
+            f"{purpose_label} slot.",
+            level="warning",
+        )
+        raise OpenAIQueueTimeoutError(
+            "Timed out waiting for an available OpenAI generation slot. "
+            "If this run has a saved checkpoint, resume it after another "
+            "generation finishes."
+        )
     progress.log(
         f"{_provider_label()} capacity is busy; waiting for a free "
         f"{purpose_label} slot.",

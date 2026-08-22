@@ -2325,10 +2325,19 @@ def stage_release(
     # finding without spending.
     from . import concept_example_ownership
 
+    # The judge's chapter context comes from the checkpoint THIS staging
+    # resolved: on the clean exit generate_post_learning has already
+    # cleared job.generation_checkpoint (so the live property is empty),
+    # while the wrapper hands the captured checkpoint in — and the module
+    # normalizes both to the same projection so the decide-once key is
+    # stable across every exit.
+    ownership_meta = checkpoint_value.get("target_identity")
+    if not isinstance(ownership_meta, Mapping):
+        ownership_meta = job.checkpoint_target_identity or {}
     ownership_issue = concept_example_ownership.adjudication_issue(
         record_rows,
         inventory_value,
-        meta=dict(job.checkpoint_target_identity or {}),
+        meta=dict(ownership_meta),
         job_id=int(job.id),
         allow_live=live_example_adjudication,
     )

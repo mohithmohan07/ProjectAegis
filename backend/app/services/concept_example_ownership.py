@@ -177,15 +177,64 @@ def decide_example_ownership(
     if not rows:
         return [], []
 
+    tasks = _candidate_tasks(inventory)
+    qids = {task["qid"] for task in tasks}
+
+    if provider is None:
+        provider = _live_ownership
+        critic = critic if critic is not None else _live_ownership_critic
+    store = store or kernel.DecisionStore()
+
+    decision = kernel.decide(
+        kind="concepts.example_ownership",
+        unit_id="chapter",
+        envelope_sha256=envelope_sha256,
+        payload=_decision_payload(rows, tasks, meta),
+        provider=provider,
+        checker=_ownership_checker(len(rows), qids),
+        critic=critic,
+        store=store,
+        policy_version=EXAMPLE_OWNERSHIP_POLICY_VERSION,
+        fixer=fixer,
+    )
+    return (
+        _verdicts_from_response(decision["response"], rows),
+        list(decision.get("review_flags") or []),
+    )
+
+
+_TARGET_IDENTITY_FIELDS = (
+    "board", "grade", "subject", "unit", "chapter_title", "chapter_code",
+)
+
+
+def _normalized_meta(meta: Mapping[str, Any] | None) -> dict[str, str]:
+    """The judge's chapter context, normalized for decision-key stability.
+
+    Every staging exit sources the identity a little differently (the
+    captured checkpoint, the live job property, an empty dict); this
+    projection makes them all produce byte-identical payload metadata so
+    the decide-once replay actually hits across exits.
+    """
+
+    return {
+        field: str((meta or {}).get(field) or "")
+        for field in _TARGET_IDENTITY_FIELDS
+    }
+
+
+def _candidate_tasks(
+    inventory: Mapping[str, Any] | None,
+) -> list[dict[str, str]]:
     from . import generation
 
     # Hub-kind items (Activities / Info Hubs) are excluded from the
     # candidate owners exactly as the scanner excludes them from the
     # expected owner keys: the closed-world contract says a hub item can
     # never own a public Example, so the judge must not be offered one —
-    # and the checker's qid set below rejects a hub qid outright.
+    # and the checker's qid set rejects a hub qid outright.
     hub_kinds = getattr(generation, "_HUB_INVENTORY_KINDS", frozenset())
-    tasks = [
+    return [
         {
             "qid": str(item.get("qid") or ""),
             "task_text": generation._inventory_task_text(item),
@@ -195,17 +244,20 @@ def decide_example_ownership(
         and str(item.get("source_kind") or "").strip().lower()
         not in hub_kinds
     ]
-    qids = {task["qid"] for task in tasks}
 
-    if provider is None:
-        provider = _live_ownership
-        critic = critic if critic is not None else _live_ownership_critic
-    store = store or kernel.DecisionStore()
 
-    payload = {
+def _decision_payload(
+    rows: list[Mapping[str, Any]],
+    tasks: list[dict[str, str]],
+    meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    # The payload is the decision's identity: the live decide and the
+    # interactive store replay MUST build it through this one function
+    # or the replay silently misses and re-pays.
+    return {
         "stage": "concepts.example_ownership",
         "rules": EXAMPLE_OWNERSHIP_SYSTEM,
-        "metadata": copy.deepcopy(dict(meta)),
+        "metadata": _normalized_meta(meta),
         "unowned_examples": [
             {
                 "example_index": index,
@@ -218,21 +270,12 @@ def decide_example_ownership(
         ],
         "inventory_tasks": tasks,
     }
-    decision = kernel.decide(
-        kind="concepts.example_ownership",
-        unit_id="chapter",
-        envelope_sha256=envelope_sha256,
-        payload=payload,
-        provider=provider,
-        checker=_ownership_checker(len(rows), qids),
-        critic=critic,
-        store=store,
-        policy_version=EXAMPLE_OWNERSHIP_POLICY_VERSION,
-        fixer=fixer,
-    )
-    response = decision["response"]
-    flags = list(decision.get("review_flags") or [])
 
+
+def _verdicts_from_response(
+    response: Mapping[str, Any],
+    rows: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
     by_index = {
         int(entry.get("example_index")): entry
         for entry in response.get("verdicts") or []
@@ -252,7 +295,47 @@ def decide_example_ownership(
             "owner_qid": str(entry.get("owner_qid") or "").strip(),
             "reason": str(entry.get("reason") or ""),
         })
-    return verdicts, flags
+    return verdicts
+
+
+def replay_example_ownership(
+    findings: list[Mapping[str, Any]],
+    *,
+    inventory: Mapping[str, Any] | None,
+    meta: Mapping[str, Any] | None,
+    envelope_sha256: str,
+    store: kernel.DecisionStore | None,
+) -> tuple[list[dict[str, Any]], list[str]] | None:
+    """A pure store probe: the recorded verdict, or None — never a call.
+
+    Lets the interactive release route (``allow_live=False``) surface an
+    already-paid adjudication instead of downgrading the newest staged
+    release to an empty unadjudicated record.
+    """
+
+    if store is None:
+        return None
+    rows = [f for f in findings if isinstance(f, Mapping)]
+    if not rows:
+        return None
+    tasks = _candidate_tasks(inventory)
+    key = kernel.decision_key(
+        kind="concepts.example_ownership",
+        unit_id="chapter",
+        envelope_sha256=envelope_sha256,
+        payload=_decision_payload(rows, tasks, meta),
+        policy_version=EXAMPLE_OWNERSHIP_POLICY_VERSION,
+    )
+    decision = store.get(key)
+    if not isinstance(decision, Mapping):
+        return None
+    response = decision.get("response")
+    if not isinstance(response, Mapping):
+        return None
+    return (
+        _verdicts_from_response(response, rows),
+        list(decision.get("review_flags") or []),
+    )
 
 
 def build_issue(
@@ -260,6 +343,7 @@ def build_issue(
     review_flags: list[str],
     *,
     adjudicated: bool,
+    durable_store: bool = True,
 ) -> dict[str, Any]:
     """The release ``issues`` entry carrying the recorded verdicts."""
 
@@ -297,6 +381,10 @@ def build_issue(
         message=message,
         details={
             "adjudicated": adjudicated,
+            # False when the job's artifact directory was unavailable, so
+            # the verdict lived only in memory: a re-stage will re-decide
+            # (re-spend) instead of replaying — recorded, never silent.
+            "durable_store": durable_store,
             "policy_version": EXAMPLE_OWNERSHIP_POLICY_VERSION,
             "verdicts": [copy.deepcopy(dict(v)) for v in verdicts],
             "owner_qids": sorted({
@@ -362,36 +450,64 @@ def adjudication_issue(
                 for index, row in enumerate(findings)
             ]
 
+        envelope_sha = next(
+            (
+                str(row.get(gc.SOURCE_CONTRACT_FIELD) or "").strip()
+                for row in records
+                if isinstance(row, Mapping) and str(
+                    row.get(gc.SOURCE_CONTRACT_FIELD) or ""
+                ).strip()
+            ),
+            "",
+        )
+        store = release_refiner.decision_store_for_job(int(job_id))
+        durable = store is not None
+        if not durable:
+            progress.log(
+                "Example ownership: the job's artifact directory is "
+                "unavailable, so this verdict cannot be stored durably — "
+                "a re-stage will decide (and spend) again.",
+                level="warning",
+            )
+
         verdicts: list[dict[str, Any]]
         flags: list[str] = []
         adjudicated = False
-        if not allow_live:
+
+        # A re-stage of the same rows replays the recorded verdict from
+        # the decide-once store at zero cost — on EVERY route, the
+        # interactive one included, so force_release can never downgrade
+        # an already-adjudicated record to an empty unadjudicated one.
+        replayed = replay_example_ownership(
+            findings,
+            inventory=dict(inventory or {}),
+            meta=meta,
+            envelope_sha256=envelope_sha,
+            store=store,
+        )
+        if replayed is not None:
+            verdicts, flags = replayed
+            adjudicated = True
+        elif not allow_live:
             verdicts = _unadjudicated(
                 "recorded without live adjudication (interactive "
                 "release route)"
             )
         elif phase3_core.semantic_api_enabled():
             try:
-                envelope_sha = next(
-                    (
-                        str(
-                            row.get(gc.SOURCE_CONTRACT_FIELD) or ""
-                        ).strip()
-                        for row in records
-                        if isinstance(row, Mapping) and str(
-                            row.get(gc.SOURCE_CONTRACT_FIELD) or ""
-                        ).strip()
-                    ),
-                    "",
+                # Spoken BEFORE the calls: the run's progress bar may
+                # already read Done, and this is where the wait is.
+                progress.log(
+                    f"Example ownership: adjudicating {len(findings)} "
+                    "public Example(s) without an exact inventory owner "
+                    "before the release is staged…",
                 )
                 verdicts, flags = decide_example_ownership(
                     findings,
                     inventory=dict(inventory or {}),
                     meta=meta,
                     envelope_sha256=envelope_sha,
-                    store=release_refiner.decision_store_for_job(
-                        int(job_id)
-                    ),
+                    store=store,
                     fixer=p3_fixer.default_provider(),
                 )
                 adjudicated = True
@@ -408,7 +524,9 @@ def adjudication_issue(
                 "live adjudication unavailable on this run"
             )
 
-        issue = build_issue(verdicts, flags, adjudicated=adjudicated)
+        issue = build_issue(
+            verdicts, flags, adjudicated=adjudicated, durable_store=durable,
+        )
         unowned = sum(
             1 for v in verdicts if str(v.get("verdict") or "") == "unowned"
         )
