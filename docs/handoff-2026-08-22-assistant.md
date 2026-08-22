@@ -42,13 +42,29 @@ Model provider: OpenAI **gpt-5.6-luna** via JSON-mode chat
    entry. Q20 (newest): pre-learning coverage calibrates to ~5 questions
    per concept under a diagnostic posture.
 3. **`docs/residue-ledger.md`** — the chronological round-by-round state
-   ledger. Newest rounds near the top. **Append a row for every round of
-   work you do.** This is how continuity survives session changes.
+   ledger. Its real convention: each round of work is a
+   `## <round name> (<date>: …)` SECTION holding an
+   `| Item | Disposition |` table, inserted near the TOP (after the
+   leading residue table and the E2E-audit section) so the file reads
+   newest-first; follow-up rounds within the same effort are added as
+   ROWS inside that effort's existing section (the "Master cost round"
+   section holds five review rounds). **Record every round of work you
+   do this way** — it is how continuity survives session changes.
 4. **`docs/testing-handoff-2026-08-22.md`** — the owner's live test plan
    for the current build (objectives, steps, FAIL-IF criteria).
 5. `docs/concept-release-and-type-case-routing-rules.md`, the SOP
-   Bulk-Import guide and Open/Specific registry
-   (`docs/open-specific-registry-v2.md`) — the output contracts.
+   Bulk-Import guide (`docs/SOP_Bulk_Import_Fill_Guide.docx` — a binary
+   .docx; the machine-readable column orders live in
+   `backend/app/bulk_import/__init__.py`) and the Open/Specific registry
+   (`docs/open-specific-registry-v2.md`) — the output contracts. The
+   gold reference workbooks (frozen acceptance fixtures) are under
+   `backend/data/Testing/reference_bulk_import/`.
+
+**Supersession:** this document supersedes
+`docs/handoff-2026-08-21.md` wherever they disagree — above all its
+"push directly to main, no pull requests" directive, which the owner
+replaced with the draft-PR + "merge it" flow described in §4.
+`docs/restructure-handoff.md` is historical design context, not process.
 
 ## 3. Exact current state
 
@@ -76,7 +92,42 @@ are durable in the job's decide-once store — **resume replays paid work
 free**. Plan of record: deploy first, then resume (testing-handoff §0,
 Option B), then work through tests T1–T8.
 
-**Backend suite: 2,801 passed. Frontend: 87 passed + tsc + build.**
+**Backend suite: 2,801 passed (+7 xfailed). Frontend: 87 passed + tsc
++ build.**
+
+## 3b. Running it — local dev, modes, and where state lives
+
+Start from **`README.md`** ("Run locally", "Dry vs live mode",
+"Hosted access for UpSchool") and **`.env.example`**; the essentials:
+
+- Backend: `pip install -r requirements.txt` then
+  `uvicorn app.main:app --reload --port 8000` from `backend/`.
+  Frontend: `npm run dev` from `frontend/` (port 5173; vite proxies API
+  calls to 127.0.0.1:8000). `docker compose up --build` is the
+  one-command alternative.
+- **Dry vs live:** live model calls are ON whenever `OPENAI_API_KEY` is
+  set. `AEGIS_USE_LIVE=0` forces dry; dry/stub generation also needs
+  `AEGIS_ALLOW_DRY=1` (disabled in production). The test suite sets
+  both (`backend/tests/conftest.py`) — **a key in your local env plus a
+  careless manual run = real paid calls.** `AEGIS_OPENAI_MODEL` is the
+  single source of truth for the model slug.
+- **State locations:** local DB defaults to `backend/aegis.db`
+  (`AEGIS_DB_URL`); the data dir defaults to `backend/data`
+  (`AEGIS_DATA_DIR`; `/data` on Fly). Per-job durable state lives under
+  `<data>/uploads/<job_id>/`: the run journal is `run-events.ndjson`,
+  and the canonical source + decide-once decision stores live under
+  `source-shadow/`. When this document says "the job's artifact
+  directory", that is the place.
+- **Identity & auth:** jobs are `UploadJob` rows keyed by integer id
+  and scoped by `owner_sub` (Google `sub` when hosted; `local:default`
+  offline) — ledger references like "job 65" are these ids. The hosted
+  app is Google-sign-in locked to @up.school (`AEGIS_AUTH_MODE=google`
+  in fly.toml; `local` for dev); an admin password gates prompt editing
+  and destructive actions. **Any new API route must scope by
+  `owner_sub`** or it is a cross-user data leak.
+- `fly.staging.toml` (app `projectaegis-staging`) exists but is stale —
+  it still sets a retired flag (`AEGIS_PHASE3_REWRITE`). Ask the owner
+  before treating staging as live.
 
 ## 4. How the owner works — process rules that are non-negotiable
 
@@ -130,11 +181,15 @@ shared identity/probe. **Changing any payload/prompt re-keys decisions**
 — deploy such changes between chapters and bump the pass's
 policy_version.
 
-**Purposes/efforts** (`aegis_pipeline/openai_policy.py`): every model
-call declares a `purpose=` from the 14-value Literal (a repo-wide test
-pins that every literal is valid). Master authors run
-`concept_mapping` (max effort), critics `concept_validation` (high).
-Provider-max completion headroom (128k) is ON by default.
+**Purposes/efforts** (`backend/aegis_pipeline/openai_policy.py`): every
+model call declares a `purpose=` from the 14-value Literal. Enforcement
+is a runtime `ValueError` from `reasoning_effort_for` plus module-scoped
+static sweeps (`test_openai_policy.py` covers generation/gpt_writer;
+`test_concept_example_ownership.py` covers its own module) — there is
+NO single repo-wide sweep, so never invent a purpose string. Master
+authors run `concept_mapping` (max effort), critics
+`concept_validation` (high). Provider-max completion headroom (128k) is
+ON by default.
 
 **Concurrency:** global gate `AEGIS_OPENAI_MAX_CONCURRENCY` (fly.toml
 sets 48), per-run workers `AEGIS_PHASE3_DECISION_WORKERS` (16),
@@ -176,8 +231,9 @@ Root causes, in order:
 3. Pre-question volume (was 69; Q20 should roughly halve it).
 4. Serial author→critic inside each decide; stage barriers; the
    grouping/QA/master-refiner tail is sequential per candidate.
-Pricing table: `openai_usage.py` (~line 42). Effort map:
-`openai_policy.py` (~line 84).
+Pricing table: `backend/app/services/openai_usage.py` (~line 42).
+Effort map: `backend/aegis_pipeline/openai_policy.py` (~line 84) —
+note the two files live in DIFFERENT packages.
 
 ## 7. Roadmap — queued and owner-acknowledged, in order
 
@@ -209,7 +265,8 @@ Pricing table: `openai_usage.py` (~line 42). Effort map:
 ## 8. Traps a fresh assistant will hit (all learned the hard way)
 
 - `purpose="assessment"` and similar guesses **crash live** — only the
-  14 declared purposes exist; a repo-wide pin test enforces it.
+  14 declared purposes exist (runtime ValueError; static sweeps are
+  module-scoped, not repo-wide, so the compiler will not save you).
 - Never put new keys into **persisted** usage summaries or checkpoint
   bundles — strict schemas refuse unknown fields and idempotence tests
   will fail. Live-console-only data rides `console_summary()`.
@@ -249,6 +306,12 @@ Pricing table: `openai_usage.py` (~line 42). Effort map:
   round, then the module docstring (they cross-reference each other).
 - Add an owner ruling → new Q-entry in §12 + prompt/code + pins +
   ledger row, one PR.
+- Run/serve the app locally, dry vs live, where state lives → §3b and
+  `README.md`.
 - See what the owner saw → the run console (Stages view) and the
-  release page; the run journal and `release.json`/diagnostics zip are
-  the durable records.
+  release page; the durable records are the run journal
+  (`<data>/uploads/<job_id>/run-events.ndjson`) and the release
+  artifacts served by the API
+  (`/build-concepts/uploads/{job_id}/release.json`,
+  `…/release.xlsx`, `…/diagnostics.zip` — routes in
+  `backend/app/api/build_concepts.py`).
