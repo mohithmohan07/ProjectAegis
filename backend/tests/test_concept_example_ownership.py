@@ -376,6 +376,31 @@ def test_a_missing_durable_store_is_recorded_not_silent(monkeypatch):
     assert issue["details"]["durable_store"] is False
 
 
+def test_an_empty_candidate_set_records_without_spending(monkeypatch):
+    # An inventory with no task items makes adjudication a foregone
+    # conclusion — the empty inventory IS the anomaly. Record it, spend
+    # nothing, even with the live judge available.
+    from app.services import canonical_source_phase3 as phase3_core
+
+    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        ownership, "decide_example_ownership",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("an empty candidate set must not call the judge")
+        ),
+    )
+
+    issue = ownership.adjudication_issue(
+        _unowned_records(), {"items": []}, meta={}, job_id=16,
+    )
+
+    assert issue is not None
+    assert issue["details"]["adjudicated"] is False
+    assert "no candidate owners" in (
+        issue["details"]["verdicts"][0]["reason"]
+    )
+
+
 def test_a_clean_scan_stages_nothing():
     prompt = "The one real source task."
     records = [{

@@ -352,6 +352,22 @@ def _inventory_items(inventory: object) -> list[dict[str, Any]]:
     ]
 
 
+def _job_inventory_fallback(job: models.UploadJob) -> dict[str, Any]:
+    """The job's stored inventory, with the lane release slots removed.
+
+    The fallback source when neither the caller nor the resolved
+    checkpoint supplies an inventory. A release-first job keeps its
+    staged releases INSIDE ``question_inventory`` under the lane keys;
+    copying those into a new payload's inventory would nest releases
+    within releases, so they are stripped here — mechanics only.
+    """
+
+    value = dict(job.question_inventory or {})
+    value.pop(RELEASE_KEY, None)
+    value.pop(PRE_RELEASE_KEY, None)
+    return value
+
+
 def _newest_checkpoint_material(
     checkpoint: object,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, Any]]:
@@ -2226,18 +2242,26 @@ def stage_release(
         if validated is not None:
             record_rows = validated
             upgraded_from_cache = True
+    # _newest_checkpoint_material returns {} (a Mapping) when the
+    # checkpoint carries no inventory/types, so a bare isinstance test
+    # made both job-level fallbacks unreachable: a checkpoint-resolved
+    # staging ran the whole issues ledger — the ownership scan included —
+    # against an EMPTY inventory and flagged every rendered Example as
+    # unowned. An empty snapshot now falls through to the job's stored
+    # inventory (minus the lane release slots, which must never nest
+    # inside a new payload).
     inventory_value = copy.deepcopy(
         dict(inventory)
         if isinstance(inventory, Mapping)
         else checkpoint_inventory
-        if isinstance(checkpoint_inventory, Mapping)
-        else dict(job.question_inventory or {})
+        if isinstance(checkpoint_inventory, Mapping) and checkpoint_inventory
+        else _job_inventory_fallback(job)
     )
     types_value = copy.deepcopy(
         dict(mined_types)
         if isinstance(mined_types, Mapping)
         else checkpoint_types
-        if isinstance(checkpoint_types, Mapping)
+        if isinstance(checkpoint_types, Mapping) and checkpoint_types
         else {"types": inventory_value.get("mined_types") or []}
     )
 

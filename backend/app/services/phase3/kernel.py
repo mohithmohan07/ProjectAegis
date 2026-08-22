@@ -70,6 +70,36 @@ def decision_key(
     ).hexdigest()
 
 
+def peek(
+    *,
+    kind: str,
+    unit_id: str,
+    envelope_sha256: str,
+    payload: Mapping[str, Any],
+    store: "DecisionStore | None",
+    policy_version: str = "",
+) -> dict[str, Any] | None:
+    """The stored decision for this exact identity, or None — never a call.
+
+    The probe half of ``decide``, exposed as one function so replay
+    callers (an interactive re-stage surfacing an already-paid verdict)
+    share decide's identity computation byte for byte: if decide's key
+    ever changes, every probe changes with it instead of silently
+    missing forever. ``decide`` itself uses this for its decide-once
+    short-circuit.
+    """
+
+    if store is None:
+        return None
+    return store.get(decision_key(
+        kind=kind,
+        unit_id=unit_id,
+        envelope_sha256=envelope_sha256,
+        payload=payload,
+        policy_version=policy_version,
+    ))
+
+
 class DecisionStore:
     """Content-addressed, immutable, append-only decision storage.
 
@@ -332,7 +362,14 @@ def decide(
         payload=payload,
         policy_version=policy_version,
     )
-    cached = store.get(key)
+    cached = peek(
+        kind=kind,
+        unit_id=unit_id,
+        envelope_sha256=envelope_sha256,
+        payload=payload,
+        store=store,
+        policy_version=policy_version,
+    )
     if cached is not None:
         return cached
 

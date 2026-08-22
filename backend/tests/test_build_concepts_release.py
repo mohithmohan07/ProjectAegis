@@ -240,6 +240,29 @@ def test_stage_release_records_unowned_examples_on_its_own_ledger(db):
     assert recorded[0]["qids"] == []
 
 
+def test_inventory_fallback_reaches_the_job_and_strips_release_slots(db):
+    # _newest_checkpoint_material returns {} when the checkpoint carries
+    # no inventory, which used to satisfy the isinstance test and leave
+    # the job.question_inventory fallback unreachable — the ownership
+    # scan then ran against an EMPTY inventory and flagged every rendered
+    # Example as unowned. The empty snapshot now falls through to the
+    # job's stored inventory, minus the lane release slots (a prior
+    # staged release must never nest inside a new payload's inventory).
+    job, _chapter = _job(db)
+    job.question_inventory = {
+        "items": [{"qid": "QINV-0001", "raw_task": "A real task."}],
+        "stats": {"items": 1},
+        release.RELEASE_KEY: {"records": [], "issues": []},
+        release.PRE_RELEASE_KEY: {"records": [], "issues": []},
+    }
+
+    fallback = release._job_inventory_fallback(job)
+
+    assert fallback["items"][0]["qid"] == "QINV-0001"
+    assert release.RELEASE_KEY not in fallback
+    assert release.PRE_RELEASE_KEY not in fallback
+
+
 def test_stage_release_hands_the_judge_the_captured_checkpoint_identity(
     db, monkeypatch,
 ):

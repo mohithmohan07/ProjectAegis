@@ -203,23 +203,21 @@ def decide_example_ownership(
     )
 
 
-_TARGET_IDENTITY_FIELDS = (
-    "board", "grade", "subject", "unit", "chapter_title", "chapter_code",
-)
-
-
 def _normalized_meta(meta: Mapping[str, Any] | None) -> dict[str, str]:
     """The judge's chapter context, normalized for decision-key stability.
 
     Every staging exit sources the identity a little differently (the
     captured checkpoint, the live job property, an empty dict); this
     projection makes them all produce byte-identical payload metadata so
-    the decide-once replay actually hits across exits.
+    the decide-once replay actually hits across exits. The field
+    vocabulary is the models property's own — one tuple, no drift.
     """
+
+    from .. import models
 
     return {
         field: str((meta or {}).get(field) or "")
-        for field in _TARGET_IDENTITY_FIELDS
+        for field in models.CHECKPOINT_TARGET_IDENTITY_FIELDS
     }
 
 
@@ -319,14 +317,14 @@ def replay_example_ownership(
     if not rows:
         return None
     tasks = _candidate_tasks(inventory)
-    key = kernel.decision_key(
+    decision = kernel.peek(
         kind="concepts.example_ownership",
         unit_id="chapter",
         envelope_sha256=envelope_sha256,
         payload=_decision_payload(rows, tasks, meta),
+        store=store,
         policy_version=EXAMPLE_OWNERSHIP_POLICY_VERSION,
     )
-    decision = store.get(key)
     if not isinstance(decision, Mapping):
         return None
     response = decision.get("response")
@@ -462,22 +460,17 @@ def adjudication_issue(
         )
         store = release_refiner.decision_store_for_job(int(job_id))
         durable = store is not None
-        if not durable:
-            progress.log(
-                "Example ownership: the job's artifact directory is "
-                "unavailable, so this verdict cannot be stored durably — "
-                "a re-stage will decide (and spend) again.",
-                level="warning",
-            )
 
         verdicts: list[dict[str, Any]]
         flags: list[str] = []
         adjudicated = False
 
-        # A re-stage of the same rows replays the recorded verdict from
-        # the decide-once store at zero cost — on EVERY route, the
-        # interactive one included, so force_release can never downgrade
-        # an already-adjudicated record to an empty unadjudicated one.
+        # A re-stage of the SAME rows and inventory replays the recorded
+        # verdict from the decide-once store at zero cost — on every
+        # route, the interactive one included. Inputs that drifted since
+        # the verdict (a newer checkpoint's inventory snapshot, an edited
+        # row) legitimately re-key: the probe misses and the route falls
+        # through to its own recording below.
         replayed = replay_example_ownership(
             findings,
             inventory=dict(inventory or {}),
@@ -488,6 +481,15 @@ def adjudication_issue(
         if replayed is not None:
             verdicts, flags = replayed
             adjudicated = True
+        elif not _candidate_tasks(inventory):
+            # No candidate owners at all: adjudicating against an empty
+            # task list is a foregone conclusion and the empty inventory
+            # itself is the anomaly worth reading — record without
+            # spending a call.
+            verdicts = _unadjudicated(
+                "no candidate owners: the resolved inventory holds no "
+                "task items"
+            )
         elif not allow_live:
             verdicts = _unadjudicated(
                 "recorded without live adjudication (interactive "
@@ -495,6 +497,14 @@ def adjudication_issue(
             )
         elif phase3_core.semantic_api_enabled():
             try:
+                if not durable:
+                    progress.log(
+                        "Example ownership: the job's artifact directory "
+                        "is unavailable, so this verdict cannot be stored "
+                        "durably — a later re-stage will decide (and "
+                        "spend) again.",
+                        level="warning",
+                    )
                 # Spoken BEFORE the calls: the run's progress bar may
                 # already read Done, and this is where the wait is.
                 progress.log(
