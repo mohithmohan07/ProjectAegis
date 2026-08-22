@@ -229,7 +229,7 @@ def test_complete_registry_and_candidate_are_passed_whole_and_content_hashed():
     authority = verdict["authority"]
     assert authority["decision_key"]
     assert authority["policy_version"].startswith(
-        "assessment-answer-restriction-2;"
+        "assessment-answer-restriction-3;"
     )
     assert registry["markdown_sha256"] in authority["policy_version"]
     assert registry["workbook_sha256"] in authority["policy_version"]
@@ -374,7 +374,7 @@ def test_tightened_response_contract_cannot_replay_a_v1_decision(monkeypatch):
     )
     stale = _decide(provider=provider, critic=None, store=store)[0]
     monkeypatch.setattr(
-        ar, "POLICY_BASE_VERSION", "assessment-answer-restriction-2"
+        ar, "POLICY_BASE_VERSION", "assessment-answer-restriction-3"
     )
     current = _decide(provider=provider, critic=None, store=store)[0]
 
@@ -387,7 +387,7 @@ def test_tightened_response_contract_cannot_replay_a_v1_decision(monkeypatch):
         "assessment-answer-restriction-1;"
     )
     assert current["authority"]["policy_version"].startswith(
-        "assessment-answer-restriction-2;"
+        "assessment-answer-restriction-3;"
     )
 
 

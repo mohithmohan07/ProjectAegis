@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,10 @@ import pytest
 
 from aegis_pipeline import openai_policy
 from app import config
+from app.services import assessment_answer_restriction
+from app.services import assessment_marking
+from app.services import assessment_materialization
+from app.services import assessment_routing
 from app.services import generation, workbooks
 
 
@@ -113,6 +118,304 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     assert call["response_format"] == {"type": "json_object"}
     assert call["max_completion_tokens"] == 321
     generation._openai_gate = None
+
+
+def test_json_prompt_cache_parts_reorders_without_losing_payload():
+    payload = {
+        "stage": "assessment.materialize",
+        "candidate_id": "CAND-2",
+        "rules": "shared rules",
+        "metadata": {"grade": "6"},
+        "candidate": {"question": "2 + 2?"},
+        "attempt": 1,
+    }
+
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=("stage", "rules", "metadata"),
+    )
+
+    assert list(json.loads(prefix + suffix)) == [
+        "stage",
+        "rules",
+        "metadata",
+        "candidate_id",
+        "candidate",
+        "attempt",
+    ]
+    assert json.loads(prefix + suffix) == payload
+
+
+def test_generation_uses_explicit_only_cache_for_gpt56_prefix(monkeypatch):
+    import openai
+    from app.services import model_provider
+
+    _CapturingClient.completions = _CapturingCompletions()
+    monkeypatch.setattr(openai, "OpenAI", _CapturingClient)
+    monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-5.6-luna")
+    monkeypatch.setattr(model_provider, "active_provider", lambda: "openai")
+    generation._openai_gate = None
+
+    result = generation._openai_json(
+        "stable system",
+        '"candidate":"CAND-2"}',
+        max_tokens=321,
+        purpose="concept_validation",
+        prompt_cache_prefix='{"stage":"assessment.materialize",',
+        prompt_cache_key="aegis-assessment-materialize-critic-v6",
+    )
+
+    assert result == {"ok": True}
+    call = _CapturingClient.completions.calls[-1]
+    assert call["prompt_cache_key"] == (
+        "aegis-assessment-materialize-critic-v6"
+    )
+    assert call["prompt_cache_options"] == {"mode": "explicit"}
+    stable_block, variable_block = call["messages"][1]["content"]
+    assert call["messages"][0] == {
+        "role": "system",
+        "content": "stable system",
+    }
+    assert stable_block["prompt_cache_breakpoint"] == {"mode": "explicit"}
+    assert stable_block["text"] + variable_block["text"] == (
+        '{"stage":"assessment.materialize","candidate":"CAND-2"}'
+    )
+    generation._openai_gate = None
+
+
+def test_explicit_cache_request_falls_back_for_non_openai_provider():
+    messages, cache_args = generation._explicit_prompt_cache_request(
+        system="system",
+        user='"candidate":2}',
+        prompt_cache_prefix='{"stage":"route",',
+        prompt_cache_key="aegis-route",
+        model="gemini-3.6-flash",
+        provider="gemini",
+    )
+
+    assert messages == [
+        {"role": "system", "content": "system"},
+        {
+            "role": "user",
+            "content": '{"stage":"route","candidate":2}',
+        },
+    ]
+    assert cache_args == {}
+
+
+@pytest.mark.parametrize(
+    ("live_call", "payload", "varying_key", "cache_namespace"),
+    [
+        (
+            assessment_materialization._live_materialize,
+            {
+                "stage": "assessment.materialize",
+                "rules": "rules",
+                "metadata": {"grade": "6"},
+                "curricular_evidence": {"chapter": "shared"},
+                "candidate_id": "CAND-1",
+                "source_atom": {"source_qid": "Q-1"},
+                "blueprint_cell": {"cell_id": "CELL-1"},
+            },
+            "candidate_id",
+            "materialize-author-v6",
+        ),
+        (
+            assessment_marking._live_author,
+            {
+                "stage": "assessment.marking",
+                "rules": "rules",
+                "critic_rules": "critic rules",
+                "metadata": {"grade": "6"},
+                "candidate": {"candidate_id": "CAND-1"},
+                "adopted_answer_contract": {"answer_restriction": "Open"},
+                "blueprint_evidence": {"explicit_blueprint_cell": {}},
+            },
+            "candidate",
+            "marking-author-v5",
+        ),
+        (
+            assessment_routing._live_route,
+            {
+                "stage": "assessment.route",
+                "rules": "rules",
+                "critic_rules": "critic rules",
+                "metadata": {"grade": "6"},
+                "source_concept_release_sha256": "s" * 64,
+                "candidate_concepts": [{"concept_key": "release:1"}],
+                "candidate": {"candidate_id": "CAND-1"},
+            },
+            "candidate",
+            "route-author-v2",
+        ),
+        (
+            assessment_answer_restriction._live_author,
+            {
+                "stage": "assessment.answer_restriction",
+                "rules": "rules",
+                "critic_rules": "critic rules",
+                "metadata": {"grade": "6"},
+                "policy_registry": {"markdown_text": "shared registry"},
+                "candidate": {"candidate_id": "CAND-1"},
+            },
+            "candidate",
+            "answer-restriction-author-v3",
+        ),
+    ],
+)
+def test_master_live_calls_put_varying_evidence_after_cache_prefix(
+    monkeypatch,
+    live_call,
+    payload,
+    varying_key,
+    cache_namespace,
+):
+    captured = {}
+
+    def fake_openai(system, user, **kwargs):
+        captured.update({"system": system, "user": user, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(generation, "_openai_json", fake_openai)
+
+    assert live_call(payload) == {"ok": True}
+    prefix = captured["prompt_cache_prefix"]
+    assert varying_key not in json.loads(prefix + "\"_end\":null}")
+    assert json.loads(prefix + captured["user"]) == payload
+    assert captured["prompt_cache_key"] == generation._prompt_cache_key(
+        cache_namespace,
+        prefix,
+        shard_seed="CAND-1",
+    )
+
+
+@pytest.mark.parametrize(
+    ("live_call", "payload", "varying_key", "cache_namespace"),
+    [
+        (
+            assessment_materialization._live_critic,
+            {
+                "stage": "assessment.materialize",
+                "rules": "rules",
+                "metadata": {"grade": "6"},
+                "curricular_evidence": {"chapter": "shared"},
+                "candidate_id": "CAND-1",
+                "source_atom": {"source_qid": "Q-1"},
+                "blueprint_cell": {"cell_id": "CELL-1"},
+                "proposal": {"candidate_id": "CAND-1"},
+            },
+            "candidate_id",
+            "materialize-critic-v6",
+        ),
+        (
+            assessment_answer_restriction._live_critic,
+            {
+                "stage": "assessment.answer_restriction",
+                "rules": "rules",
+                "critic_rules": "critic rules",
+                "metadata": {"grade": "6"},
+                "policy_registry": {"markdown_text": "shared registry"},
+                "candidate": {"candidate_id": "CAND-1"},
+                "proposal": {"answer_restriction": "Open"},
+            },
+            "candidate",
+            "answer-restriction-critic-v3",
+        ),
+        (
+            assessment_marking._live_critic,
+            {
+                "stage": "assessment.marking",
+                "rules": "rules",
+                "critic_rules": "critic rules",
+                "metadata": {"grade": "6"},
+                "candidate": {"candidate_id": "CAND-1"},
+                "adopted_answer_contract": {"answer_restriction": "Open"},
+                "blueprint_evidence": {"explicit_blueprint_cell": {}},
+                "proposal": {"total_marks": 1},
+            },
+            "candidate",
+            "marking-critic-v5",
+        ),
+        (
+            assessment_routing._live_route_critic,
+            {
+                "stage": "assessment.route",
+                "rules": "rules",
+                "critic_rules": "critic rules",
+                "metadata": {"grade": "6"},
+                "source_concept_release_sha256": "s" * 64,
+                "candidate_concepts": [{"concept_key": "release:1"}],
+                "candidate": {"candidate_id": "CAND-1"},
+                "proposal": {"concept_key": "release:1"},
+            },
+            "candidate",
+            "route-critic-v2",
+        ),
+    ],
+)
+def test_master_critic_calls_put_varying_evidence_after_cache_prefix(
+    monkeypatch,
+    live_call,
+    payload,
+    varying_key,
+    cache_namespace,
+):
+    captured = {}
+
+    def fake_openai(system, user, **kwargs):
+        captured.update({"system": system, "user": user, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(generation, "_openai_json", fake_openai)
+
+    assert live_call(payload) == {"ok": True}
+    prefix = captured["prompt_cache_prefix"]
+    assert varying_key not in json.loads(prefix + '"_end":null}')
+    assert json.loads(prefix + captured["user"]) == payload
+    assert captured["prompt_cache_key"] == generation._prompt_cache_key(
+        cache_namespace,
+        prefix,
+        shard_seed="CAND-1",
+    )
+
+
+def test_prompt_cache_key_is_bounded_stable_and_candidate_sharded():
+    namespace = "answer-restriction-critic-v3"
+    prefix = '{"stage":"assessment.answer_restriction","rules":"shared",'
+
+    first = generation._prompt_cache_key(
+        namespace,
+        prefix,
+        shard_seed="CAND-17",
+    )
+    assert first == generation._prompt_cache_key(
+        namespace,
+        prefix,
+        shard_seed="CAND-17",
+    )
+    assert len(first) <= 64
+
+    keys = {
+        generation._prompt_cache_key(
+            namespace,
+            prefix,
+            shard_seed=f"CAND-{index}",
+        )
+        for index in range(64)
+    }
+    routing_prefixes = {key.rsplit(":", 1)[0] for key in keys}
+    shards = {int(key.rsplit(":", 1)[1]) for key in keys}
+    assert len(routing_prefixes) == 1
+    assert shards == {0, 1, 2, 3}
+    assert all(len(key) <= 64 for key in keys)
+
+    changed_prefix = generation._prompt_cache_key(
+        namespace,
+        prefix + '"metadata":{},',
+        shard_seed="CAND-17",
+    )
+    assert changed_prefix.rsplit(":", 1)[0] != first.rsplit(":", 1)[0]
+    assert changed_prefix.rsplit(":", 1)[1] == first.rsplit(":", 1)[1]
 
 
 def test_workbook_call_uses_same_policy_and_preserves_json_mode():

@@ -23,12 +23,13 @@ from sqlalchemy.orm import Session
 from . import (
     CHAPTER_FIELDS, TOPIC_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SECTION_BANDS, GROUP_FIELDS_BY_KIND,
-    merge_sources, normalize_question_text, strip_title_tag, strip_topic_title,
+    merge_sources, normalize_answer_type, normalize_question_text,
+    strip_title_tag, strip_topic_title,
 )
 from . import layouts
 from . import workbook_sync
 from .. import models
-from ..services import directory, identity
+from ..services import directory, identity, katex_rules
 
 _BAND_FILL = {
     "Chapter": "FCE4D6", "Topic": "FFF2CC", "Concept": "D9EAD3",
@@ -904,28 +905,233 @@ def _question_band_values(
         "display_answer": q.display_answer,
         "answer_explanation": q.answer_explanation,
     }
+    for field in (
+        "question", "question_text", "display_answer",
+        "answer_explanation",
+    ):
+        values[field] = katex_rules.replace_unsupported_tables(
+            str(values.get(field) or "")
+        )
+    if sheet_layout.kind == "objective":
+        option_capacity = len(sheet_layout.answer_block_numbers)
+        for field in ("question", "question_text"):
+            values[field] = katex_rules.lowercase_objective_option_labels(
+                str(values.get(field) or ""), option_capacity,
+            )
     answers = q.answers or []
     for n in sheet_layout.answer_block_numbers:
         answer = answers[n - 1] if n - 1 < len(answers) else {}
+        exported_answer = dict(answer or {})
+        content_field = (
+            "answer_content"
+            if "answer_content" in exported_answer
+            else "answer" if "answer" in exported_answer else ""
+        )
+        exported_type = normalize_answer_type(
+            str(exported_answer.get("answer_type") or "")
+        )
+        if content_field:
+            exported_type, exported_content = (
+                katex_rules.legacy_export_answer_cell(
+                    exported_type,
+                    str(exported_answer.get(content_field) or ""),
+                )
+            )
+            exported_answer[content_field] = exported_content
+        if "answer_display" in exported_answer:
+            exported_answer["answer_display"] = (
+                katex_rules.replace_unsupported_tables(
+                    str(exported_answer.get("answer_display") or "")
+                )
+            )
+        if "answer_type" in exported_answer:
+            exported_answer["answer_type"] = exported_type
         # The answer dict's keys ARE the column prefixes on every sheet
         # (objective answer_content_N, subjective answer_N, descriptive
         # answer_weightage_N), so no per-kind translation table is needed.
-        for key, value in (answer or {}).items():
+        for key, value in exported_answer.items():
             values[f"{key}_{n}"] = value
     sub_questions = q.sub_questions or []
     for n in sheet_layout.sub_question_numbers:
         sub = sub_questions[n - 1] if n - 1 < len(sub_questions) else {}
         sub = sub or {}
-        values[f"sub_question_{n}"] = sub.get("text", "")
+        values[f"sub_question_{n}"] = (
+            katex_rules.replace_unsupported_tables(
+                str(sub.get("text") or "")
+            )
+        )
         values[f"sub_question_marks_{n}"] = sub.get("marks", "")
         keywords = sub.get("keywords") or []
         for m in sheet_layout.sub_question_keyword_numbers(n):
             keyword = keywords[m - 1] if m - 1 < len(keywords) else {}
             keyword = keyword or {}
-            values[f"sq{n}_answer_type_{m}"] = keyword.get("answer_type", "")
+            keyword_type = normalize_answer_type(
+                str(keyword.get("answer_type") or "")
+            )
+            keyword_type, keyword_content = (
+                katex_rules.legacy_export_answer_cell(
+                    keyword_type, str(keyword.get("keyword") or ""),
+                )
+            )
+            values[f"sq{n}_answer_type_{m}"] = keyword_type
             values[f"sq{n}_weightage_{m}"] = keyword.get("weightage", "")
-            values[f"sq{n}_keyword_{m}"] = keyword.get("keyword", "")
+            values[f"sq{n}_keyword_{m}"] = keyword_content
     return values
+
+
+def _migrate_existing_question_cells(workbook) -> int:
+    """Make historical rows strict-importable on this workbook copy only.
+
+    ``append_concepts`` is the Build Concepts publication seam and starts from
+    a staged sibling of the durable output workbook.  Re-serializing only the
+    newly appended concept rows left older question/rubric cells in their
+    pre-Q21 wire format, so the public strict importer could reject the exact
+    workbook publication had just produced.  This pass addresses cells only
+    through an identified layout and performs lexical export migrations:
+    typed answer/keyword cells use ``legacy_export_answer_cell``; unsupported
+    tables in rich fields become coordinate-labelled text; Objective option
+    labels use the same line-anchored, capacity-bounded rule as import.
+
+    ORM dictionaries are never read or mutated here.  An unidentifiable sheet
+    is left untouched rather than guessing its geometry; the writer's existing
+    layout-mismatch record remains the authority for that artifact.
+    """
+
+    changed = 0
+
+    def text(value) -> str:
+        return "" if value is None else str(value)
+
+    def update(cell, rendered: str) -> None:
+        nonlocal changed
+        if rendered == text(cell.value):
+            return
+        _set_cell_value(cell, rendered)
+        changed += 1
+
+    for sheet_name in workbook.sheetnames:
+        worksheet = workbook[sheet_name]
+        header = next(
+            worksheet.iter_rows(min_row=2, max_row=2, values_only=True),
+            (),
+        )
+        found = _identify(sheet_name, header)
+        if found is None:
+            continue
+        sheet_layout = found.sheet
+        option_capacity = len(sheet_layout.answer_block_numbers)
+
+        for row_number in range(3, worksheet.max_row + 1):
+            for field in (
+                "question", "question_text", "display_answer",
+                "answer_explanation",
+            ):
+                column = sheet_layout.column("question", field)
+                if column is None:
+                    continue
+                cell = worksheet.cell(row=row_number, column=column + 1)
+                rendered = katex_rules.replace_unsupported_tables(
+                    text(cell.value)
+                )
+                if (
+                    sheet_layout.kind == "objective"
+                    and field in {"question", "question_text"}
+                ):
+                    rendered = (
+                        katex_rules.lowercase_objective_option_labels(
+                            rendered, option_capacity,
+                        )
+                    )
+                update(cell, rendered)
+
+            content_field = (
+                "answer" if sheet_layout.kind == "subjective"
+                else "answer_content"
+            )
+            for number in sheet_layout.answer_block_numbers:
+                type_column = sheet_layout.column(
+                    "question", f"answer_type_{number}",
+                )
+                content_column = sheet_layout.column(
+                    "question", f"{content_field}_{number}",
+                )
+                if type_column is not None and content_column is not None:
+                    type_cell = worksheet.cell(
+                        row=row_number, column=type_column + 1,
+                    )
+                    content_cell = worksheet.cell(
+                        row=row_number, column=content_column + 1,
+                    )
+                    answer_type = normalize_answer_type(
+                        text(type_cell.value)
+                    )
+                    answer_type, answer_content = (
+                        katex_rules.legacy_export_answer_cell(
+                            answer_type, text(content_cell.value),
+                        )
+                    )
+                    update(type_cell, answer_type)
+                    update(content_cell, answer_content)
+
+                display_column = sheet_layout.column(
+                    "question", f"answer_display_{number}",
+                )
+                if display_column is not None:
+                    display_cell = worksheet.cell(
+                        row=row_number, column=display_column + 1,
+                    )
+                    update(
+                        display_cell,
+                        katex_rules.replace_unsupported_tables(
+                            text(display_cell.value)
+                        ),
+                    )
+
+            for sub_number in sheet_layout.sub_question_numbers:
+                sub_column = sheet_layout.column(
+                    "question", f"sub_question_{sub_number}",
+                )
+                if sub_column is not None:
+                    sub_cell = worksheet.cell(
+                        row=row_number, column=sub_column + 1,
+                    )
+                    update(
+                        sub_cell,
+                        katex_rules.replace_unsupported_tables(
+                            text(sub_cell.value)
+                        ),
+                    )
+                for keyword_number in (
+                    sheet_layout.sub_question_keyword_numbers(sub_number)
+                ):
+                    type_column = sheet_layout.column(
+                        "question",
+                        f"sq{sub_number}_answer_type_{keyword_number}",
+                    )
+                    keyword_column = sheet_layout.column(
+                        "question",
+                        f"sq{sub_number}_keyword_{keyword_number}",
+                    )
+                    if type_column is None or keyword_column is None:
+                        continue
+                    type_cell = worksheet.cell(
+                        row=row_number, column=type_column + 1,
+                    )
+                    keyword_cell = worksheet.cell(
+                        row=row_number, column=keyword_column + 1,
+                    )
+                    answer_type = normalize_answer_type(
+                        text(type_cell.value)
+                    )
+                    answer_type, keyword = (
+                        katex_rules.legacy_export_answer_cell(
+                            answer_type, text(keyword_cell.value),
+                        )
+                    )
+                    update(type_cell, answer_type)
+                    update(keyword_cell, keyword)
+
+    return changed
 
 
 def _band_cells(
@@ -1276,6 +1482,7 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int],
         sibling_for=sibling_for)
     index = scan_workbook(path)
     wb = openpyxl.load_workbook(path) if path.exists() else _new_workbook()
+    migrated_cells = _migrate_existing_question_cells(wb)
     sheet_name = _sheet_name_for(wb, index, "objective")
     ws = wb[sheet_name]
     header = next(ws.iter_rows(min_row=2, max_row=2, values_only=True), ())
@@ -1295,6 +1502,8 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int],
         "written": 0,
         "sources_updated": 0,
     }
+    if migrated_cells:
+        result["legacy_cells_normalized"] = migrated_cells
     if receipt is not None:
         result["layout_migration"] = receipt.as_dict()
         for entry in receipt.unmappable:
@@ -1652,9 +1861,12 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
         wb = openpyxl.load_workbook(path)
     else:
         wb = _new_workbook()
+    migrated_cells = _migrate_existing_question_cells(wb)
 
     appended: dict = {"objective": 0, "subjective": 0, "descriptive": 0,
                       "tagged": 0, "skipped": 0, "sources_updated": 0}
+    if migrated_cells:
+        appended["legacy_cells_normalized"] = migrated_cells
     decisions: list[dict] = []
     for q in _questions(db, question_ids):
         for n, group in enumerate(_question_placements(q)):

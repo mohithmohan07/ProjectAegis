@@ -190,7 +190,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       lines: [],
       progress: 0,
       startedAt: Date.now() / 1000,
-      usage: initialUsage,
+      // Per-stage rows describe one live server attempt only. A manually
+      // resumed run may start with durable cumulative totals, but it must not
+      // present the previous attempt's stage table as current.
+      usage: withoutStageRows(initialUsage),
       usagePresentation: usagePresentation ? presentation : null,
       progressLabel: "Starting…", status: "running",
     });
@@ -338,6 +341,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             // forever, and the terminal event could never finish the
             // run — the client kept polling and re-POSTing instead.
             lastSeq = 0;
+            // The new stream is also a new usage-attribution attempt. Keep
+            // the durable cumulative headline, but remove the old run-scoped
+            // stage table before any events from the resumed stream arrive.
+            setState((s) => ({ ...s, usage: withoutStageRows(s.usage) }));
             note("Resuming the run from its saved checkpoint…", "info");
             break;
           }
@@ -586,6 +593,12 @@ function presentedUsage(
     return { ...incoming, stages: state.usage.stages };
   }
   return incoming;
+}
+
+function withoutStageRows(usage: OpenAIUsage | null): OpenAIUsage | null {
+  if (!usage?.stages) return usage;
+  const { stages: _previousAttemptStages, ...durableTotals } = usage;
+  return durableTotals;
 }
 
 function numericUsage(value: number | null | undefined): number {

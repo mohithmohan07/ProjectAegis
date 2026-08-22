@@ -36,6 +36,8 @@ def _normalize_literal_linebreaks(value: str) -> str:
 
 
 PRELEARN_SNAPSHOT = "source.phase3-prelearn-capture.json"
+PREMAP_SNAPSHOT = "source.phase3-prelearn-map.json"
+PREQUESTIONS_SNAPSHOT = "source.phase3-prelearn-questions.json"
 
 
 def restored_prerequisites() -> dict[str, Any] | None:
@@ -70,6 +72,137 @@ def restored_prerequisites() -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def restored_pre_release() -> tuple[dict[str, Any] | None, list[str]]:
+    """Read the recorded Pre map/questions for a terminal-checkpoint resume.
+
+    A legacy ``final_content_ready`` entry has no in-checkpoint Pre authority,
+    so its two sidecars are the only faithful shortcut around replaying Phase
+    3.  Presence is mechanical: an authored empty mapping is valid, while a
+    missing or unreadable file is not interpreted as "the chapter needs no
+    Pre-Learning".
+    """
+
+    import json
+    from pathlib import Path
+
+    from . import canonical_source_phase3 as phase3_core
+
+    session = phase3_core.active_session() or {}
+    artifact_dir = session.get("artifact_dir") if isinstance(
+        session, dict
+    ) else None
+    if not artifact_dir:
+        return None, []
+
+    loaded: dict[str, dict[str, Any]] = {}
+    defects: list[str] = []
+    for field, filename in (
+        ("pre_map", PREMAP_SNAPSHOT),
+        ("pre_questions", PREQUESTIONS_SNAPSHOT),
+    ):
+        path = Path(artifact_dir) / filename
+        try:
+            if not path.is_file():
+                defects.append(f"{filename} is absent")
+                continue
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            defects.append(
+                f"{filename} could not be read "
+                f"({type(exc).__name__}: {exc})"
+            )
+            continue
+        if not isinstance(value, dict):
+            defects.append(
+                f"{filename} contains {type(value).__name__}, not an object"
+            )
+            continue
+        loaded[field] = value
+
+    if "pre_map" in loaded and "pre_questions" not in loaded:
+        # Only Q4 is missing. Re-enter that exact pass over the recorded map
+        # and sealed envelope instead of replaying all of Phase 3. The kernel
+        # recomputes the original decision keys, so a healthy store returns
+        # the already-paid decisions; when the store is absent, the ordinary
+        # model-backed pass authors the missing questions. Nothing here
+        # derives questions from Post content.
+        try:
+            from .phase3 import envelope as envelope_mod
+            from .phase3 import kernel
+            from .phase3 import prequestions
+            from .phase3 import runner
+
+            wrapper = json.loads(
+                (Path(artifact_dir) / "source.phase3-envelope.json")
+                .read_text(encoding="utf-8")
+            )
+            env = envelope_mod.validate(
+                wrapper.get("envelope")
+                if isinstance(wrapper, dict) and "envelope" in wrapper
+                else wrapper
+            )
+            decision_store = kernel.DecisionStore(
+                Path(artifact_dir) / "phase3-decisions"
+            )
+
+            class _ReplayCacheMiss(RuntimeError):
+                pass
+
+            def cache_miss(_request):
+                raise _ReplayCacheMiss()
+
+            try:
+                # Supplying a provider avoids the live-credential preflight;
+                # it is never called when every exact decide-once key exists.
+                recovered = prequestions.build(
+                    env,
+                    loaded["pre_map"],
+                    provider=cache_miss,
+                    author_provider=cache_miss,
+                    critic=None,
+                    store=decision_store,
+                )
+            except _ReplayCacheMiss:
+                # At least one paid decision is genuinely absent. Re-enter the
+                # ordinary live pass so the model, not recovery code, authors
+                # only that missing semantic output.
+                recovered = prequestions.build(
+                    env,
+                    loaded["pre_map"],
+                    store=decision_store,
+                )
+            write_status = runner._atomic_pre_snapshot(
+                recovered,
+                Path(artifact_dir) / "phase3-decisions",
+                PREQUESTIONS_SNAPSHOT,
+            )
+            loaded["pre_questions"] = recovered
+            defects = [
+                defect for defect in defects
+                if not defect.startswith(PREQUESTIONS_SNAPSHOT)
+            ]
+        except Exception as exc:  # noqa: BLE001 - caller performs full replay
+            defects.append(
+                "selective Pre-question replay failed "
+                f"({type(exc).__name__}: {exc})"
+            )
+            write_status = None
+    else:
+        write_status = None
+
+    if defects or set(loaded) != {"pre_map", "pre_questions"}:
+        return None, defects
+    return {
+        **loaded,
+        "snapshot_writes": {
+            "map": {"filename": PREMAP_SNAPSHOT, "state": "legacy_read"},
+            "questions": write_status or {
+                "filename": PREQUESTIONS_SNAPSHOT, "state": "legacy_read",
+            },
+        },
+    }, []
 
 
 def _run_rewritten_phase3(

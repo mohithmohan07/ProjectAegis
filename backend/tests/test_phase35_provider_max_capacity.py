@@ -5,6 +5,7 @@ from app import config
 from app.services import canonical_source_phase22 as phase22
 from app.services import canonical_source_phase3 as phase3
 from app.services import canonical_source_phase34_structured_output_contract as phase34
+from app.services import canonical_source_phase35_provider_max_contract as phase35
 from app.services import generation, workbooks
 from aegis_pipeline import openai_policy
 
@@ -82,6 +83,34 @@ def test_live_json_calls_receive_provider_max_allowance(monkeypatch):
     assert first == second == defaulted == {"ok": True}
     assert [row["max_tokens"] for row in captured] == [128_000] * 3
     assert all(row["purpose"] == "concept_validation" for row in captured)
+
+
+def test_v5_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
+    _activate(monkeypatch)
+    captured: dict = {}
+
+    def original(system, user, **kwargs):
+        captured.update({"system": system, "user": user, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(generation, "_PHASE35_ORIGINAL_OPENAI_JSON", original)
+
+    result = generation._openai_json(
+        "system",
+        '"candidate":1}',
+        purpose="concept_mapping",
+        prompt_cache_prefix='{"stage":"assessment.marking",',
+        prompt_cache_key="aegis:marking-author-v5:0123456789abcdef:2",
+    )
+
+    assert phase35._CONTRACT_VERSION == 5
+    assert result == {"ok": True}
+    assert captured["prompt_cache_prefix"] == (
+        '{"stage":"assessment.marking",'
+    )
+    assert captured["prompt_cache_key"] == (
+        "aegis:marking-author-v5:0123456789abcdef:2"
+    )
 
 
 def test_live_strict_schema_budget_and_retry_cap_use_provider_ceiling(monkeypatch):

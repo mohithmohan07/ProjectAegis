@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { fmtStageElapsed, groupStages, stageCost } from "./runStages";
+import {
+  fmtStageElapsed,
+  groupStages,
+  latestStageOccurrenceIndexes,
+  stageCost,
+} from "./runStages";
 import type { RunLine } from "../RunConsole";
 import type { StageUsageRow } from "../types";
 
@@ -38,13 +43,31 @@ describe("groupStages", () => {
     expect(groups[0].lanes).toEqual(["Inventory · early track", "Place"]);
     expect(groups[0].lines).toHaveLength(4);
   });
+
+  it("assigns a same-title attempt total only to the newest card", () => {
+    const groups = groupStages([
+      line("step", "Parsing", 1),
+      line("info", "first attempt", 2),
+      line("step", "Assemble", 3),
+      line("step", "Parsing", 4),
+      line("info", "resumed attempt", 5),
+      line("step", "Assemble", 6),
+    ]);
+
+    expect([...latestStageOccurrenceIndexes(groups)].sort()).toEqual([2, 3]);
+    expect(groups.map((group) => group.title)).toEqual([
+      "Parsing", "Assemble", "Parsing", "Assemble",
+    ]);
+  });
 });
 
 describe("stageCost", () => {
   const row = (
     stage: string, lane: string, cost: number | null, tokens = 100,
+    cached = 0, cacheWrite = 0,
   ): StageUsageRow => ({
     stage, lane, request_count: 2, input_tokens: 60, output_tokens: 40,
+    cached_input_tokens: cached, cache_write_tokens: cacheWrite,
     reasoning_tokens: 10, total_tokens: tokens,
     estimated_cost_usd: cost, pricing_complete: cost != null,
     first_ts: 1, last_ts: 2,
@@ -52,12 +75,16 @@ describe("stageCost", () => {
 
   it("sums a stage's rows across lanes", () => {
     const cost = stageCost(
-      [row("A", "", 0.5), row("A", "Place", 0.25), row("B", "", 1)],
+      [row("A", "", 0.5, 100, 20, 10),
+       row("A", "Place", 0.25, 100, 15, 5),
+       row("B", "", 1)],
       "A",
     );
     expect(cost).not.toBeNull();
     expect(cost!.requestCount).toBe(4);
     expect(cost!.totalTokens).toBe(200);
+    expect(cost!.cachedInputTokens).toBe(35);
+    expect(cost!.cacheWriteTokens).toBe(15);
     expect(cost!.cost).toBeCloseTo(0.75);
     expect(cost!.lanes.map((r) => r.lane)).toEqual(["Place"]);
   });

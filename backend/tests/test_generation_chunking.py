@@ -6,6 +6,17 @@ import pytest
 from app.services import generation as g
 
 
+def _pass_completed_phase3(records, **kwargs):
+    kwargs["phase3_carry"].update({
+        "pre_map": {"rows": [], "topics": []},
+        "pre_questions": {
+            "plans": {}, "questions": {}, "blocked": {},
+        },
+        "pre_snapshot_writes": {},
+    })
+    return records
+
+
 def _big_doc(sections: int, body_words: int = 60) -> str:
     out = []
     for i in range(sections):
@@ -973,8 +984,7 @@ def test_concepts_live_processes_every_chunk(monkeypatch):
     # Everything after the 81% boundary runs through the rewritten Phase 3;
     # this test is about chunked extraction, so pass its output through.
     monkeypatch.setattr(
-        g, "_prepare_final_concept_content",
-        lambda records, **kw: records)
+        g, "_prepare_final_concept_content", _pass_completed_phase3)
     monkeypatch.setattr(
         g, "_build_culminations_via_api",
         lambda records, **kw: records)

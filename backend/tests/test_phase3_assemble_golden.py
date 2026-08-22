@@ -207,6 +207,65 @@ def test_assemble_is_deterministic(assembled, golden_envelope):
     assert again == result
 
 
+def test_assemble_records_zero_model_usage(
+    assembled, golden_envelope, monkeypatch,
+):
+    """The stage labelled deterministic must stay a zero-provider boundary."""
+    from app.services import generation, openai_usage, progress
+
+    result, golden_hosts, settled, analysis = assembled
+    hosts = host_mod.host(
+        golden_envelope,
+        settled,
+        provider=host_golden._replay_provider(golden_hosts, settled),
+        critic=host_golden._verified_critic,
+        store=kernel.DecisionStore(),
+    )
+    original_mastery = generation._ensure_mastery_lines_via_api
+    original_coverage = generation._enforce_rendered_inventory_coverage
+
+    def deterministic_mastery(records, *, meta, use_api=True):
+        assert use_api is False
+        return original_mastery(records, meta=meta, use_api=use_api)
+
+    def deterministic_coverage(
+        records, inventory, mined_types=None, *, fixer=None, fixer_store=None,
+    ):
+        assert fixer is None
+        assert fixer_store is None
+        return original_coverage(
+            records,
+            inventory,
+            mined_types,
+            fixer=fixer,
+            fixer_store=fixer_store,
+        )
+
+    monkeypatch.setattr(
+        generation, "_ensure_mastery_lines_via_api", deterministic_mastery,
+    )
+    monkeypatch.setattr(
+        generation,
+        "_enforce_rendered_inventory_coverage",
+        deterministic_coverage,
+    )
+
+    with openai_usage.track():
+        progress.step(
+            "Phase 3 — Assemble: embedding Types and routing QIDs "
+            "(deterministic)"
+        )
+        again = assemble_mod.assemble(
+            golden_envelope, settled, hosts, None, analysis
+        )
+        usage = openai_usage.console_summary()
+
+    assert again == result
+    assert usage["request_count"] == 0
+    assert usage["total_tokens"] == 0
+    assert usage["stages"] == []
+
+
 def test_a_host_entry_for_a_missing_row_is_a_hard_error(
     assembled, golden_envelope,
 ):

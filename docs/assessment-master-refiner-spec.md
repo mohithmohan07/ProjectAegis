@@ -45,7 +45,7 @@ descriptions have different response contracts:
 
 | Unit | Decision kind | Policy | Unit ID |
 |---|---|---|---|
-| Candidate | `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-1` | `candidate_id` |
+| Candidate | `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-2` | `candidate_id` |
 | Group | `assessment.master_refiner.group` | `assessment-master-refiner-group-1` | `group_key` |
 
 Each unit receives:
@@ -86,6 +86,13 @@ Only this group prose leaf is editable:
 Keyword wording is treated as rubric prose. Its row identity, order,
 `answer_type`, and `weightage` remain immutable. No sub-question stem, mark,
 cardinality, ordering, or other decomposition field is editable.
+
+Q21 narrows the editable answer leaf by its already-declared medium. An
+`Equation` proposal remains one full raw-LaTeX cell without `[Katex]` and any
+prose stays inside a TeX text atom; a `Phrases` proposal remains wholly plain
+text. The checker also rejects tabular/array/Markdown-table syntax. These are
+lexical mechanics only; the Refiner's model remains responsible for semantic
+prose preservation.
 
 Everything outside the whitelist is immutable and type-stable, including:
 
@@ -167,7 +174,7 @@ with warnings. The Refiner never blocks publication.
 
 The immutable assessment payload carries `refinements`, shaped as:
 
-- umbrella policy `assessment-master-refiner-1`;
+- umbrella policy `assessment-master-refiner-2`;
 - `output_kind="assessment_master"`;
 - the two decision-kind/policy identities;
 - ordered changes with `unit_kind`, `unit_id`, precise `field_path`, `before`,

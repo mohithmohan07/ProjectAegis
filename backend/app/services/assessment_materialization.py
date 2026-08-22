@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 import math
 from typing import Any, Mapping
 
@@ -25,13 +24,18 @@ from . import assessment_release as rel
 from . import katex_rules
 from .phase3 import kernel
 
-# -3: the response template now NAMES the answers[]/sub_questions[] object
-# fields (answer_content, correct_answer, text, keywords[].keyword). The
-# checker always required them, but the template showed bare arrays — a
-# provider that never guessed the field names failed every bounded
-# correction AND the Fixer with "exactly one correct option required
-# (got 0)", killing a whole Master file over a shape it was never told.
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-5"
+# ``-6`` places the stable rules, metadata, and curricular evidence before
+# the candidate suffix and marks the explicit GPT-5.6 cache breakpoint.
+# ``-7`` layers the owner-format answer/rubric contract on that transport
+# shape so replay cannot collide with either decision identity.
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-7"
+
+_PROMPT_CACHE_STABLE_KEYS = (
+    "stage",
+    "rules",
+    "metadata",
+    "curricular_evidence",
+)
 
 # A candidate whose obligation exhausted the bounded corrections AND The
 # Fixer. It answers for its obligation in the zero-loss accounting but is
@@ -69,14 +73,15 @@ MATERIALIZE_SYSTEM = (
     "and \"0\" on every other, and whose answer_type names the option's "
     "medium — exactly Phrases, Equation, or Image. The question stem must "
     "not enumerate the options: options ride only answers[]; a stem that "
-    "restates \"A) ... B) ...\" is a defect. For Descriptive cells, "
+    "restates \"a) ... b) ...\" is a defect. For Descriptive cells, "
     "return a complete "
     "display answer, complete semantic answer/rubric blocks (each "
     "answers[] entry an object whose answer_content carries the block "
     "text and whose answer_type is Phrases, Equation, or Image), and "
     "every source-owned subquestion with its complete keyword "
     "evidence (each sub_questions[] entry an object with its text and its "
-    "keywords array of {\"keyword\":\"...\"} objects). Author no "
+    "keywords array of {\"answer_type\":\"Phrases|Equation|Image\","
+    "\"keyword\":\"...\"} objects). Author no "
     "subquestion the source item does not itself carry: a single-part "
     "question ships with an empty sub_questions[] — never wrapped in an "
     "invented part restating the stem. Each sub_questions[] text begins "
@@ -85,7 +90,7 @@ MATERIALIZE_SYSTEM = (
     "each part maps to its marking cleanly.\n"
     "answer_explanation must open by naming the correct answer — for an "
     "Objective item, the correct option by its letter and text (e.g. "
-    "\"B) Get ready — ...\") — and then explain why it is correct. For "
+    "\"b) Get ready — ...\") — and then explain why it is correct. For "
     "Descriptive cells, display_answer and answer_explanation carry the "
     "SAME model answer (SOP §5.4 keeps them the same): the explanation "
     "restates the display answer's content, adding at most brief marking "
@@ -94,14 +99,25 @@ MATERIALIZE_SYSTEM = (
     "marks, keyword weights, duration, or keyboard mode. Dedicated later "
     "decisions own answer restriction and marking; any such extra values in "
     "your response are ignored.\n"
-    "Use [Katex]...[/Katex] for rich mathematics and meaningful, neutral alt "
-    "text for every image. Do not leak an answer in the question, options, or "
-    "alt text.\n"
+    "Use [Katex]...[/Katex] for rich mathematics in the question, display "
+    "answer, and explanation. A type-declared answer_content uses exactly "
+    "one whole-cell medium: Equation means full raw LaTeX with NO [Katex] "
+    "wrapper and with any words inside \\text{...}; Phrases means wholly "
+    "plain text with no TeX or [Katex]. Never mix the two. A 4-mark "
+    "Descriptive item must have at least two distinct rubric blocks; one "
+    "4-mark block is invalid. KaTeX tabular/array markup and Markdown pipe "
+    "tables are unsupported. If "
+    "the supplied source atom already associates an image with a table, "
+    "preserve that source image; otherwise preserve every cell as explicitly "
+    "labelled plain text (Table row N, column N), without semantic "
+    "reconstruction. Use meaningful, neutral alt text for every image. Do "
+    "not leak an answer in the question, options, or alt text.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","question":"","display_answer":"",'
     '"answers":[{"answer_content":"","correct_answer":"1",'
     '"answer_type":"Phrases"}],'
-    '"sub_questions":[{"text":"","keywords":[{"keyword":""}]}],'
+    '"sub_questions":[{"text":"","keywords":['
+    '{"answer_type":"Phrases","keyword":""}]}],'
     '"answer_explanation":"",'
     '"requires_visual":false,"rationale":"evidence-bound reason"}'
 )
@@ -117,10 +133,11 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "the source item does not itself carry), explanation/answer "
     "consistency (the explanation must name the correct answer — the "
     "correct option's letter and text on an Objective item — and agree "
-    "with the display answer), and literary over-quoting (a whole poem "
-    "or passage quoted where only the asked-about lines belong). "
-    "Do not classify Open/Specific "
-    "or audit "
+    "with the display answer), literary over-quoting (a whole poem "
+    "or passage quoted where only the asked-about lines belong), "
+    "declared answer-cell medium purity, unsupported KaTeX/Markdown tables, "
+    "and the minimum two rubric blocks on a 4-mark Descriptive item. Do not "
+    "classify Open/Specific or audit "
     "mark allocation here. Do not "
     "rewrite, retry, or gate the proposal. Your dissent ships for review and "
     "the authored decision stands. State your honest confidence. There is no "
@@ -198,10 +215,8 @@ def _learner_rich_text(proposal: Mapping) -> list[str]:
         proposal.get("display_answer"),
         proposal.get("answer_explanation"),
     ]
-    raw_answers = proposal.get("answers")
-    for answer in raw_answers if isinstance(raw_answers, list) else []:
-        if isinstance(answer, Mapping):
-            values.extend((answer.get("answer_content"), answer.get("answer")))
+    # ``answers[].answer_content`` is type-declared, not general rich text;
+    # its Equation/Phrases contract is checked separately below.
     raw_subquestions = proposal.get("sub_questions")
     for subquestion in (
         raw_subquestions if isinstance(raw_subquestions, list) else []
@@ -209,10 +224,7 @@ def _learner_rich_text(proposal: Mapping) -> list[str]:
         if not isinstance(subquestion, Mapping):
             continue
         values.append(subquestion.get("text"))
-        raw_keywords = subquestion.get("keywords")
-        for keyword in raw_keywords if isinstance(raw_keywords, list) else []:
-            if isinstance(keyword, Mapping):
-                values.append(keyword.get("keyword"))
+        # Keyword values are also type-declared and checked below.
     return [str(value or "") for value in values]
 
 
@@ -284,6 +296,13 @@ def _proposal_defects(
                     f"{tuple(bi.ANSWER_TYPES)} "
                     f"(got {answer.get('answer_type')!r})"
                 )
+            for issue in katex_rules.answer_cell_issues(
+                str(answer.get("answer_type") or ""),
+                str(answer.get("answer_content") or ""),
+            ):
+                defects.append(
+                    f"answer {position} medium-format: {issue}"
+                )
     if kind == "objective":
         if not 1 <= len(answers) <= MAX_OBJECTIVE_OPTIONS:
             defects.append(
@@ -323,6 +342,12 @@ def _proposal_defects(
             defects.append(
                 f"more than {MAX_DESCRIPTIVE_ANSWERS} answer blocks"
             )
+        marks = _to_float(cell.get("marks"))
+        if marks == 4 and len(answers) < 2:
+            defects.append(
+                "a 4-mark descriptive item requires at least two "
+                "answer/rubric blocks"
+            )
         for position, answer in enumerate(answers, start=1):
             if not str(answer.get("answer_content") or "").strip():
                 defects.append(
@@ -356,6 +381,20 @@ def _proposal_defects(
                         f"subquestion {position} keyword {keyword_position} "
                         "has no keyword text"
                     )
+                keyword_type = keyword.get("answer_type")
+                if keyword_type not in bi.ANSWER_TYPES:
+                    defects.append(
+                        f"subquestion {position} keyword {keyword_position} "
+                        f"answer_type must be one of {tuple(bi.ANSWER_TYPES)}"
+                    )
+                for issue in katex_rules.answer_cell_issues(
+                    str(keyword_type or ""),
+                    str(keyword.get("keyword") or ""),
+                ):
+                    defects.append(
+                        f"subquestion {position} keyword {keyword_position} "
+                        f"medium-format: {issue}"
+                    )
     defects.extend(_rich_text_defects(proposal))
     return defects
 
@@ -370,20 +409,40 @@ def _checker(cell: Mapping, candidate_id: str) -> kernel.Checker:
 def _live_materialize(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
     return generation._openai_json(
         MATERIALIZE_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_mapping",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "materialize-author-v6",
+            prefix,
+            shard_seed=str(payload.get("candidate_id") or ""),
+        ),
     )
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
     return generation._openai_json(
         MATERIALIZE_CRITIC_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_validation",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "materialize-critic-v6",
+            prefix,
+            shard_seed=str(payload.get("candidate_id") or ""),
+        ),
     )
 
 

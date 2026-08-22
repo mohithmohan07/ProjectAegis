@@ -21,7 +21,7 @@ import unicodedata
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from aegis_pipeline.openai_policy import (
     OpenAIPurpose,
@@ -2741,6 +2741,134 @@ def _acquire_openai_slot(
         )
 
 
+def _json_prompt_cache_parts(
+    payload: Mapping[str, Any],
+    *,
+    stable_keys: tuple[str, ...],
+) -> tuple[str, str]:
+    """Serialize one JSON payload as a stable prefix plus varying suffix.
+
+    The two strings concatenate to one valid JSON object.  ``stable_keys``
+    controls only the provider-facing insertion order; the Phase-3 decision
+    key continues to canonicalize the original payload with sorted keys.
+    Keeping this helper mechanical is important: it moves already-recorded
+    evidence without judging, summarizing, or dropping any content.
+    """
+
+    stable = {
+        key: copy.deepcopy(payload[key])
+        for key in stable_keys
+        if key in payload
+    }
+    varying = {
+        str(key): copy.deepcopy(value)
+        for key, value in payload.items()
+        if key not in stable
+    }
+    if not stable:
+        return "", json.dumps(varying, ensure_ascii=False)
+    stable_json = json.dumps(stable, ensure_ascii=False)
+    if not varying:
+        return stable_json, ""
+    varying_json = json.dumps(varying, ensure_ascii=False)
+    return stable_json[:-1] + ",", varying_json[1:]
+
+
+def _prompt_cache_key(
+    namespace: str,
+    prompt_cache_prefix: str,
+    *,
+    shard_seed: str,
+    shard_count: int = 4,
+) -> str:
+    """Return a stable, bounded GPT-5.6 cache-routing key.
+
+    OpenAI recommends roughly 15 requests/minute per key.  Master lanes fan
+    out concurrently, so a single stage-wide key would become a routing hot
+    spot across Pre/Post and simultaneous runs.  The prefix digest partitions
+    distinct chapters/lanes, while the candidate-stable shard preserves retry
+    locality and spreads one busy lane across a small fixed set of keys.
+    """
+
+    name = str(namespace or "").strip()
+    if not name or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789-"
+        for character in name
+    ):
+        raise ValueError(
+            "prompt cache namespace must use lowercase letters, digits, "
+            "and hyphens"
+        )
+    shards = int(shard_count)
+    if shards < 1 or shards > 16:
+        raise ValueError("prompt cache shard_count must be between 1 and 16")
+    prefix_digest = hashlib.sha256(
+        str(prompt_cache_prefix).encode("utf-8")
+    ).hexdigest()[:16]
+    shard_digest = hashlib.sha256(str(shard_seed).encode("utf-8")).digest()
+    shard = int.from_bytes(shard_digest[:4], "big") % shards
+    key = f"aegis:{name}:{prefix_digest}:{shard}"
+    if len(key) > 64:
+        raise ValueError("derived prompt_cache_key exceeds 64 characters")
+    return key
+
+
+def _explicit_prompt_cache_request(
+    *,
+    system: str,
+    user: str,
+    prompt_cache_prefix: str,
+    prompt_cache_key: str,
+    model: str,
+    provider: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build GPT-5.6 explicit-only cache arguments when requested.
+
+    GPT-5.6's implicit breakpoint sits after the latest user message.  Aegis
+    Master requests end with candidate-specific evidence, so implicit mode
+    repeatedly writes that unique suffix.  Mark the shared JSON block
+    explicitly (the breakpoint includes the preceding system message) and
+    disable the implicit suffix write.  Other models, providers, and ordinary
+    call sites retain their byte-for-byte message shape and receive no
+    OpenAI-specific cache fields.
+    """
+
+    enabled = (
+        provider == "openai"
+        and str(model).lower().startswith("gpt-5.6")
+        and bool(prompt_cache_prefix)
+        and bool(prompt_cache_key)
+    )
+    if not enabled:
+        return [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": f"{prompt_cache_prefix}{user}",
+            },
+        ], {}
+
+    key = str(prompt_cache_key).strip()
+    if not key or len(key) > 64:
+        raise ValueError("prompt_cache_key must contain 1 to 64 characters")
+    user_content: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": prompt_cache_prefix,
+            "prompt_cache_breakpoint": {"mode": "explicit"},
+        }
+    ]
+    if user:
+        user_content.append({"type": "text", "text": user})
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_content},
+    ], {
+        "prompt_cache_key": key,
+        "prompt_cache_options": {"mode": "explicit"},
+    }
+
+
 def _openai_json(
     system: str,
     user: str,
@@ -2749,6 +2877,8 @@ def _openai_json(
     *,
     purpose: OpenAIPurpose = "source_extraction",
     single_attempt: bool = False,
+    prompt_cache_prefix: str = "",
+    prompt_cache_key: str = "",
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
@@ -2761,6 +2891,12 @@ def _openai_json(
     ``single_attempt`` is reserved for explicitly human-authorized bounded
     calls.  It guarantees at most one physical provider request by disabling
     both this function's parse/transient retry loops and the SDK retry layer.
+
+    ``prompt_cache_prefix`` and ``prompt_cache_key`` opt one high-volume
+    GPT-5.6/OpenAI call family into explicit-only prompt caching.  The prefix
+    is placed immediately before ``user``; callers are responsible for
+    splitting without loss.  Unsupported providers/models use the original
+    two-string message shape with the pieces concatenated.
     """
     import json
     import time
@@ -2785,6 +2921,14 @@ def _openai_json(
         max_retries=0,
         **model_provider.client_kwargs(),
     )
+    messages, prompt_cache_args = _explicit_prompt_cache_request(
+        system=system,
+        user=user,
+        prompt_cache_prefix=prompt_cache_prefix,
+        prompt_cache_key=prompt_cache_key,
+        model=str(request_policy["model"]),
+        provider=model_provider.active_provider(),
+    )
     gate = _get_openai_gate()
     last_err: Exception | None = None
     attempt = 0  # hard failures (bad JSON, truncation, 4xx)
@@ -2799,8 +2943,8 @@ def _openai_json(
             try:
                 resp = client.chat.completions.create(
                     **request_policy,
-                    messages=[{"role": "system", "content": system},
-                              {"role": "user", "content": user}],
+                    **prompt_cache_args,
+                    messages=messages,
                     response_format={"type": "json_object"},
                     max_completion_tokens=limit,
                 )
@@ -19115,6 +19259,8 @@ _CONCEPT_CHECKPOINT_SCHEMA = 3
 _CONCEPT_CHECKPOINT_FORMAT = "aegis-concept-stage-history"
 _TYPE_TAXONOMY_CHECKPOINT_STAGE = "type_taxonomy_ready"
 _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
+PHASE3_PRE_RELEASE_FIELD = "phase3_pre_release"
+PHASE3_PRE_RELEASE_SCHEMA = 1
 
 # Stage versions describe the serialized artifact contract, not the git
 # revision that produced it.  A later deployment may therefore reuse an older
@@ -19182,13 +19328,13 @@ _CONCEPT_CHECKPOINT_STAGES = {
     },
     "post_type_assignment": {
         "order": 70,
-        "version": 6,
+        "version": 7,
         "progress": 0.91,
         "label": "Type assignment and activity hubs complete",
     },
     "final_content_ready": {
         "order": 80,
-        "version": 7,
+        "version": 8,
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
@@ -19204,6 +19350,10 @@ _POST_CONCEPT_CHECKPOINT_STAGES = {
     _CONCEPT_CHECKPOINT_STAGE,
     "post_type_assignment",
     "final_content_ready",
+}
+_LEGACY_PRE_RELEASE_STAGE_VERSIONS = {
+    "post_type_assignment": 6,
+    "final_content_ready": 7,
 }
 
 
@@ -19252,6 +19402,34 @@ def _concept_checkpoint_entries(checkpoint: dict | None) -> list[dict]:
 
 def _checkpoint_has_fields(checkpoint: dict, *requirements: tuple[str, type]) -> bool:
     return all(isinstance(checkpoint.get(field), expected) for field, expected in requirements)
+
+
+def phase3_pre_release_bundle(
+    pre_map: Mapping[str, Any],
+    pre_questions: Mapping[str, Any],
+    *,
+    snapshot_writes: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The exact Phase 3 Pre output carried through checkpoint and release."""
+
+    return {
+        "schema_version": PHASE3_PRE_RELEASE_SCHEMA,
+        "pre_map": copy.deepcopy(dict(pre_map)),
+        "pre_questions": copy.deepcopy(dict(pre_questions)),
+        "snapshot_writes": copy.deepcopy(dict(snapshot_writes or {})),
+    }
+
+
+def valid_phase3_pre_release_bundle(value: object) -> bool:
+    """Mechanical shape gate; an authored empty map/questions is valid."""
+
+    return bool(
+        isinstance(value, Mapping)
+        and value.get("schema_version") == PHASE3_PRE_RELEASE_SCHEMA
+        and isinstance(value.get("pre_map"), Mapping)
+        and isinstance(value.get("pre_questions"), Mapping)
+        and isinstance(value.get("snapshot_writes", {}), Mapping)
+    )
 
 
 def _valid_completed_skeleton_chunks(value) -> bool:
@@ -19408,6 +19586,7 @@ def _compatible_concept_checkpoint_entry(
     checkpoint: dict | None,
     *,
     require_final_grounding: bool = False,
+    allow_legacy_pre_release: bool = False,
 ) -> bool:
     """Whether this deployment can safely consume one serialized stage."""
     if not isinstance(checkpoint, dict):
@@ -19423,7 +19602,26 @@ def _compatible_concept_checkpoint_entry(
     spec = _CONCEPT_CHECKPOINT_STAGES.get(stage)
     if schema != _CONCEPT_CHECKPOINT_SCHEMA or spec is None:
         return False
-    if checkpoint.get("stage_schema_version", 1) != spec["version"]:
+    stage_version = checkpoint.get("stage_schema_version", 1)
+    if stage_version != spec["version"]:
+        if not (
+            allow_legacy_pre_release
+            and stage_version == _LEGACY_PRE_RELEASE_STAGE_VERSIONS.get(stage)
+        ):
+            return False
+    if (
+        stage in _LEGACY_PRE_RELEASE_STAGE_VERSIONS
+        and stage_version == spec["version"]
+        and not valid_phase3_pre_release_bundle(
+            checkpoint.get(PHASE3_PRE_RELEASE_FIELD)
+        )
+    ):
+        # The bumped versions mean exactly one thing: this checkpoint was
+        # written after the complete Pre authority became part of the stage
+        # contract. Accepting a current-version entry without it would let a
+        # malformed terminal shortcut reproduce the original zero-output bug.
+        # Old v6/v7 entries remain readable only through the explicit legacy
+        # migration flag above, where sidecar recovery is mandatory.
         return False
     if stage == "skeleton_chunks":
         return _valid_completed_skeleton_chunks(
@@ -19604,6 +19802,7 @@ def _newest_compatible_concept_checkpoint(
     checkpoint: dict | None,
     *, allowed_stages: set[str] | None = None,
     require_final_grounding: bool = False,
+    allow_legacy_pre_release: bool = False,
 ) -> dict | None:
     """Select the furthest compatible completed stage, ignoring newer unknowns."""
     candidates: list[tuple[int, int, dict]] = []
@@ -19611,6 +19810,7 @@ def _newest_compatible_concept_checkpoint(
         if not _compatible_concept_checkpoint_entry(
             entry,
             require_final_grounding=require_final_grounding,
+            allow_legacy_pre_release=allow_legacy_pre_release,
         ):
             continue
         stage = str(entry.get("stage") or "")
@@ -20106,6 +20306,7 @@ def _run_live_concept_pre_final_stages(
     resume_checkpoint: dict | None,
     checkpoint_callback,
     allow_final_checkpoint: bool = True,
+    allow_legacy_pre_release: bool = False,
 ) -> tuple[list[dict], dict, dict, dict[tuple[str, str], dict]]:
     """Run through Type/activity assignment from the newest compatible stage."""
     resumable_stages = set(_POST_CONCEPT_CHECKPOINT_STAGES)
@@ -20114,6 +20315,7 @@ def _run_live_concept_pre_final_stages(
     saved = _newest_compatible_concept_checkpoint(
         resume_checkpoint,
         allowed_stages=resumable_stages,
+        allow_legacy_pre_release=allow_legacy_pre_release,
     )
     saved_stage = str(saved.get("stage") or "") if saved else ""
     saved_order = _checkpoint_order(saved_stage)
@@ -21570,17 +21772,64 @@ def concepts_from_mmd(
         structural_final = _newest_compatible_concept_checkpoint(
             resume_checkpoint,
             allowed_stages={"final_content_ready"},
+            allow_legacy_pre_release=True,
         )
+        legacy_pre_release_checkpoint = bool(
+            structural_final
+            and structural_final.get("stage_schema_version")
+            == _LEGACY_PRE_RELEASE_STAGE_VERSIONS["final_content_ready"]
+        )
+        phase3_pre_release_authority: dict[str, Any] | None = None
+        legacy_pre_release_restored = False
+        if structural_final and valid_phase3_pre_release_bundle(
+            structural_final.get(PHASE3_PRE_RELEASE_FIELD)
+        ):
+            phase3_pre_release_authority = copy.deepcopy(
+                structural_final[PHASE3_PRE_RELEASE_FIELD]
+            )
         saved_final = _newest_compatible_concept_checkpoint(
             resume_checkpoint,
             allowed_stages={"final_content_ready"},
             require_final_grounding=production_grounding_required,
+            allow_legacy_pre_release=True,
         )
         final_checkpoint_refresh_reasons = _final_checkpoint_refresh_reasons(
             structural_final,
             sections=sections,
             source_topic_excerpts=source_topic_excerpts,
         )
+        active_artifact_dir = str(
+            (phase3.active_session() or {}).get("artifact_dir") or ""
+        )
+        if (
+            structural_final
+            and phase3_pre_release_authority is None
+            and (legacy_pre_release_checkpoint or active_artifact_dir)
+        ):
+            # Terminal checkpoints written before the Pre authority travelled
+            # in the checkpoint can still resume for free when both recorded
+            # sidecars exist.  Copy them verbatim; never derive a Pre map from
+            # the Post rows.  If either sidecar is absent/corrupt, invalidate
+            # only the terminal shortcut.  Rewritten Phase 3 then recomputes
+            # the original decision keys and replays the decide-once store.
+            from . import concept_topology_contract as _topology
+
+            restored_pre, pre_defects = _topology.restored_pre_release()
+            if isinstance(restored_pre, Mapping):
+                phase3_pre_release_authority = phase3_pre_release_bundle(
+                    restored_pre.get("pre_map") or {},
+                    restored_pre.get("pre_questions") or {},
+                    snapshot_writes=restored_pre.get("snapshot_writes") or {},
+                )
+                legacy_pre_release_restored = True
+            else:
+                detail = "; ".join(pre_defects) or (
+                    "the Phase 03 Pre map/questions authority is absent"
+                )
+                final_checkpoint_refresh_reasons.append(
+                    "terminal checkpoint has no complete Pre-Learning "
+                    "release authority: " + detail
+                )
         if final_checkpoint_refresh_reasons:
             progress.log(
                 "Final checkpoint is structurally incomplete; resuming from "
@@ -21589,6 +21838,19 @@ def concepts_from_mmd(
                 level="warning",
             )
             saved_final = None
+        saved_phase3 = None
+        if saved_final is None:
+            candidate_phase3 = _newest_compatible_concept_checkpoint(
+                resume_checkpoint,
+                allowed_stages={"post_type_assignment"},
+            )
+            if candidate_phase3 and valid_phase3_pre_release_bundle(
+                candidate_phase3.get(PHASE3_PRE_RELEASE_FIELD)
+            ):
+                saved_phase3 = candidate_phase3
+                phase3_pre_release_authority = copy.deepcopy(
+                    candidate_phase3[PHASE3_PRE_RELEASE_FIELD]
+                )
         allow_chapter_title_topic = _chapter_title_is_main_topic(
             sections, chapter_title)
         progress.log("Concept generation metadata received:\n" + _metadata_block(meta))
@@ -21617,6 +21879,10 @@ def concepts_from_mmd(
             resume_checkpoint=resume_checkpoint,
             checkpoint_callback=checkpoint_callback,
             allow_final_checkpoint=not final_checkpoint_refresh_reasons,
+            allow_legacy_pre_release=(
+                legacy_pre_release_checkpoint
+                and phase3_pre_release_authority is not None
+            ),
         )
         inventory_figure_metadata_refreshed = False
         if saved_final:
@@ -21639,7 +21905,9 @@ def concepts_from_mmd(
                 artifacts["question_task_inventory"] = copy.deepcopy(
                     question_task_inventory)
         final_checkpoint_changed = (
-            not bool(saved_final) or inventory_figure_metadata_refreshed
+            not bool(saved_final)
+            or inventory_figure_metadata_refreshed
+            or legacy_pre_release_restored
         )
         if saved_final:
             progress.log(
@@ -21658,6 +21926,10 @@ def concepts_from_mmd(
             if artifacts is not None:
                 from . import concept_topology_contract as _topology
 
+                if phase3_pre_release_authority is not None:
+                    artifacts[PHASE3_PRE_RELEASE_FIELD] = copy.deepcopy(
+                        phase3_pre_release_authority
+                    )
                 restored_prerequisites = _topology.restored_prerequisites()
                 if restored_prerequisites is not None:
                     artifacts["phase3_prerequisites"] = restored_prerequisites
@@ -21674,6 +21946,28 @@ def concepts_from_mmd(
                         "rather than reported as an empty prerequisite set.",
                         level="warning",
                     )
+        elif saved_phase3:
+            # The new post-Type checkpoint is the exact output of rewritten
+            # Phase 3 plus its Pre authority. Continue at terminal validation;
+            # re-entering Phase 3 here would feed already-assembled rows back
+            # into Settle and mint different decision payloads.
+            if artifacts is not None:
+                artifacts[PHASE3_PRE_RELEASE_FIELD] = copy.deepcopy(
+                    phase3_pre_release_authority
+                )
+                from . import concept_topology_contract as _topology
+
+                restored_prerequisites = _topology.restored_prerequisites()
+                if restored_prerequisites is not None:
+                    artifacts["phase3_prerequisites"] = (
+                        restored_prerequisites
+                    )
+            progress.log(
+                "Restored the completed rewritten Phase 3 checkpoint and "
+                "its Pre-Learning authority; continuing at terminal "
+                "validation without replaying semantic passes.",
+                level="success",
+            )
         else:
             # Phase 03 (doc §4, Q3): the run's pre-requisite capture leaves
             # the sealed boundary through this dict. The rows returned by
@@ -21697,6 +21991,46 @@ def concepts_from_mmd(
                 refresh_chapter_wide_assignments=bool(
                     final_checkpoint_refresh_reasons),
             )
+            pre_map = phase3_carry.get("pre_map")
+            pre_questions = phase3_carry.get("pre_questions")
+            if isinstance(pre_map, Mapping) and isinstance(
+                pre_questions, Mapping
+            ):
+                phase3_pre_release_authority = phase3_pre_release_bundle(
+                    pre_map,
+                    pre_questions,
+                    snapshot_writes=(
+                        phase3_carry.get("pre_snapshot_writes") or {}
+                    ),
+                )
+                if artifacts is not None:
+                    artifacts[PHASE3_PRE_RELEASE_FIELD] = copy.deepcopy(
+                        phase3_pre_release_authority
+                    )
+                # This is the first durable checkpoint after the rewritten
+                # Phase 3 boundary. Persist the exact Pre authority before
+                # any later terminal validation can fail, so the release
+                # wrapper can still ship completed Pre work beside Post.
+                _emit_concept_checkpoint(
+                    checkpoint_callback,
+                    "post_type_assignment",
+                    records=out,
+                    question_task_inventory=question_task_inventory,
+                    mined_types=mined_types,
+                    method_row_snapshot=_serialize_method_row_snapshot(
+                        method_row_snapshot
+                    ),
+                    **{
+                        PHASE3_PRE_RELEASE_FIELD: copy.deepcopy(
+                            phase3_pre_release_authority
+                        )
+                    },
+                )
+            else:
+                raise RuntimeError(
+                    "rewritten Phase 3 returned no complete pre_map / "
+                    "pre_questions authority"
+                )
             prerequisites = phase3_carry.get("prerequisites")
             if artifacts is not None:
                 if isinstance(prerequisites, dict):
@@ -21977,6 +22311,15 @@ def concepts_from_mmd(
                     final_grounding_certificate,
                     "grounding_certificate_required": (
                         grounding_certificate_required
+                    ),
+                    **(
+                        {
+                            PHASE3_PRE_RELEASE_FIELD: copy.deepcopy(
+                                phase3_pre_release_authority
+                            )
+                        }
+                        if phase3_pre_release_authority is not None
+                        else {}
                     ),
                 },
             )

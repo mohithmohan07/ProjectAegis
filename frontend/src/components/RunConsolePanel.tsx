@@ -3,6 +3,7 @@ import { useRunConsole, type RunLine } from "../RunConsole";
 import {
   fmtStageElapsed,
   groupStages,
+  latestStageOccurrenceIndexes,
   stageCost,
   type StageGroup,
 } from "../lib/runStages";
@@ -101,6 +102,10 @@ export default function RunConsolePanel() {
   );
 
   const stages = useMemo(() => groupStages(state.lines), [state.lines]);
+  const newestStageOccurrences = useMemo(
+    () => latestStageOccurrenceIndexes(stages),
+    [stages],
+  );
 
   if (!state.open) {
     return (
@@ -249,7 +254,11 @@ export default function RunConsolePanel() {
               key={`${group.title}-${index}`}
               group={group}
               running={state.active && index === stages.length - 1}
-              usageRows={state.usage?.stages}
+              usageRows={
+                newestStageOccurrences.has(index)
+                  ? state.usage?.stages
+                  : undefined
+              }
             />
           ))}
           {view === "raw" && state.lines.length > 0 && visible.length === 0 && (
@@ -324,6 +333,16 @@ function StageCard({
               {formatEstimatedCost(cost.cost)}
             </span>
           )}
+          {cost && cost.cachedInputTokens > 0 && (
+            <span className="stage-chip" title="Input tokens served from cache">
+              ↺ {formatTokenCount(cost.cachedInputTokens)} cached
+            </span>
+          )}
+          {cost && cost.cacheWriteTokens > 0 && (
+            <span className="stage-chip" title="Input tokens written to cache">
+              ⇧ {formatTokenCount(cost.cacheWriteTokens)} cache write
+            </span>
+          )}
           {group.lanes.length > 1 && (
             <span className="stage-chip" title="Parallel tracks in this stage">
               ⫘ {group.lanes.length} tracks
@@ -349,6 +368,12 @@ function StageCard({
                     {" · "}{formatTokenCount(row.total_tokens)} tok
                     {row.estimated_cost_usd != null && (
                       <> · {formatEstimatedCost(row.estimated_cost_usd)}</>
+                    )}
+                    {(row.cached_input_tokens ?? 0) > 0 && (
+                      <> · {formatTokenCount(row.cached_input_tokens ?? 0)} cached</>
+                    )}
+                    {(row.cache_write_tokens ?? 0) > 0 && (
+                      <> · {formatTokenCount(row.cache_write_tokens ?? 0)} cache write</>
                     )}
                   </span>
                 );

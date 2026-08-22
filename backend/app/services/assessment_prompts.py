@@ -273,6 +273,11 @@ RUBRIC PLACEMENT (existing supported columns ONLY):
 - answer_content blocks: ONE rubric/marking point per block, mark-wise
   ("1 mark: identifies the correct principle." or "Student explains that
   ..."). Never a single vague paragraph; never the model answer alone.
+- A 4-mark Descriptive answer has at least TWO rubric blocks; one block with
+  weightage 4 is invalid.
+- Each typed block uses exactly one whole-cell medium. Equation is full raw
+  LaTeX with no [Katex] wrapper (words, when needed, stay inside \\text{...}).
+  Phrases is wholly plain text with no TeX or [Katex]. Never mix media.
 - answer_weightage per block: marks for that point. The SUM of weightages
   MUST equal the question marks — never exceed, never invent extra marks.
 - answer_explanation: explains/matches the display answer.
@@ -335,7 +340,9 @@ correctness; rubric completeness and mark-wise structure; rubric weightage
 sum == marks; question_text populated with all needed context; standard
 values only (Remember/Understand/Apply/Analyse/Evaluate/Create;
 Less/Moderate/High; Phrases/Equation/Image); no hallucinated facts;
-grade-appropriate; fresh non-repetitive framing (no repeated stems across
+declared answer-cell medium purity; at least two rubric blocks for a 4-mark
+Descriptive item; no tabular/array KaTeX; grade-appropriate; fresh
+non-repetitive framing (no repeated stems across
 the batch).
 Return ONLY JSON: {"results": [{"index": 0, "pass": true, "problems": [""],
 "fixed_question": null}]} — when pass=false and the issue is repairable,
@@ -496,10 +503,18 @@ def review_question(rec: dict) -> list[str]:
                 problems.append(f"rubric weightage sum {total:g} != marks {marks:g}")
         except (TypeError, ValueError):
             problems.append("non-numeric rubric weightage")
+    if kind == "descriptive" and marks == 4 and len(answers) < 2:
+        problems.append(
+            "4-mark descriptive requires at least two rubric blocks"
+        )
     for a in answers:
         at = a.get("answer_type", "")
         if at and at not in bi.ANSWER_TYPES:
             problems.append(f"non-standard answer_type {at!r}")
+        for issue in kr.answer_cell_issues(
+            str(at or ""), str(a.get("answer_content") or "")
+        ):
+            problems.append(f"answer medium-format {issue}")
     return problems
 
 

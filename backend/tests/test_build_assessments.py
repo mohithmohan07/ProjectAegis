@@ -91,7 +91,7 @@ def test_upload_path_extract_and_deposit(client, db, first_chapter):
     } for question in questions)
     assert all(
         question.route_audit["authority"]["policy_version"]
-        == "assessment-route-1"
+        == "assessment-route-2"
         for question in questions
     )
 

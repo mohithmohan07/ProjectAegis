@@ -11,7 +11,11 @@ Allowed in rich-text columns
   Image        - [img src="https://..." alt="..."]
   Link         - [Display Text](https://...)
 
-Keyword columns are NOT rich text; they hold direct KaTeX (no wrappers).
+Declared ``Equation`` answer/keyword cells are NOT rich text: the CMS uses
+their ``answer_type`` to render the whole cell, so they hold raw LaTeX with no
+``[Katex]`` wrapper.  Declared ``Phrases`` cells are wholly plain text.  These
+typed-cell rules deliberately live beside the general rich-text rules so the
+author checker, renderer, release freeze, read-back, and importer cannot drift.
 """
 from __future__ import annotations
 
@@ -22,11 +26,12 @@ from urllib.parse import urlsplit
 
 # Canonical Bulk Import field names that accept rich text.
 RICH_TEXT_FIELDS = frozenset({
-    "question", "answer_content", "answer", "display_answer", "answer_explanation",
+    "question", "answer", "display_answer", "answer_explanation",
     "concept_details",
 })
-# Sub-question keyword field; raw KaTeX, no [Katex] wrapper.
-RAW_KATEX_FIELDS = frozenset({"keyword"})
+# Type-declared answer and sub-question keyword fields; Equation values are
+# raw LaTeX with no [Katex] wrapper.
+RAW_KATEX_FIELDS = frozenset({"answer_content", "keyword"})
 
 # Tokens whose presence switches KaTeX to block (display) mode.
 _BLOCK_TRIGGERS = (r"\begin", r"\array", r"\frac", r"\sum", r"\int", r"\prod", r"\oint")
@@ -74,33 +79,85 @@ def link(text: str, url: str) -> str:
     return f"[{text}]({url})"
 
 
-def raw_answer_cell(answer_type: str, content: str) -> str:
-    """SOP §4.3: an Equation/Image KEYWORD cell is RAW.
+def _tex_text(value: str) -> str:
+    """Encode one already-plain segment as a lossless TeX text atom."""
 
-    The declared ``answer_type`` already names the value's medium, so the
-    cell carries the bare value — bare LaTeX with no [Katex]...[/Katex]
-    wrapper, a bare URL with no [img ...] tag. Mechanics only, keyed on
-    the declared type: an Equation cell loses its Katex tokens; an Image
-    cell that IS one canonical image tag reduces to its src URL. Any
-    other type, and any content the reduction does not cleanly apply to,
-    passes through verbatim.
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "{": r"\{",
+        "}": r"\}",
+        "#": r"\#",
+        "$": r"\$",
+        "%": r"\%",
+        "&": r"\&",
+        "_": r"\_",
+        "^": r"\^{}",
+        "~": r"\~{}",
+    }
+    escaped = "".join(replacements.get(character, character) for character in value)
+    return rf"\text{{{escaped}}}" if escaped else ""
 
-    Scope (decided against the accepted gold workbooks, 2026-08-21):
-    this applies to the KEYWORD-style cells the ``RAW_KATEX_FIELDS``
-    contract already names — sub-question ``sqN_keyword`` cells (and the
-    Subjective sheet's answer cells if that sheet is ever rendered).
-    ``answer_content`` is BODY text and keeps its wrappers: SOP §4.3's
-    own wrapped list includes it, and the gold Descriptive sheets carry
-    Equation-typed ``answer_content`` wrapped.
+
+def raw_equation_cell(content: str) -> str:
+    """Return one type-declared Equation cell as full raw LaTeX.
+
+    New author output is already raw and passes through byte-for-byte.  The
+    only rewrite is a lossless compatibility repair for historic body-style
+    cells that mixed prose with one or more ``[Katex]`` spans.  Each outside
+    segment becomes an explicit ``\text{...}`` atom and each span contributes
+    its exact LaTeX body.  This is serialization only: it neither interprets
+    the equation nor chooses a different answer medium.
     """
-    text = str(content or "")
+
+    value = str(content or "")
+    matches = list(_KATEX_TAG_RE.finditer(value))
+    if not matches:
+        if (
+            not _KATEX_TOKEN_RE.search(value)
+            and not _KATEX_LIKE_TAG_RE.search(value)
+            and _equation_has_loose_prose(value)
+        ):
+            return _tex_text(value).strip()
+        return value.strip()
+    # Do not guess through malformed wrapper-shaped text.  Its checker/read-
+    # back defect remains visible and blocks publication.
+    if len(matches) * 2 != len(list(_KATEX_TOKEN_RE.finditer(value))):
+        return value
+    parts: list[str] = []
+    cursor = 0
+    for match in matches:
+        parts.append(_tex_text(value[cursor:match.start()]))
+        parts.append(str(match.group("body") or "").strip())
+        cursor = match.end()
+    parts.append(_tex_text(value[cursor:]))
+    return "".join(part for part in parts if part).strip()
+
+
+def raw_answer_cell(answer_type: str, content: str) -> str:
+    """Render a type-declared answer/keyword cell on the CMS wire.
+
+    The declared type is the only switch.  Equation cells become one full raw
+    LaTeX expression with no ``[Katex]`` token; Image cells that consist of one
+    canonical image tag reduce to its source URL; Phrases and unknown values
+    pass through verbatim.  No content meaning is inferred.
+    """
+    text = replace_unsupported_tables(str(content or ""))
     kind = str(answer_type or "").strip().lower()
     if kind == "equation":
-        return _KATEX_TOKEN_RE.sub("", text).strip()
+        return raw_equation_cell(text)
     if kind == "image":
         match = _CANONICAL_IMAGE_TAG_RE.search(text)
         if match and not _CANONICAL_IMAGE_TAG_RE.sub("", text).strip():
             return match.group("src")
+    return text
+
+
+def rich_answer_display(answer_type: str, content: str) -> str:
+    """Project one typed cell when embedded in an untyped rich-text field."""
+
+    text = replace_unsupported_tables(str(content or ""))
+    if str(answer_type or "").strip().lower() == "equation":
+        return katex(raw_equation_cell(text))
     return text
 
 
@@ -119,13 +176,37 @@ _INCLUDEGRAPHICS_RE = re.compile(
     re.IGNORECASE,
 )
 _TABULAR_RE = re.compile(
-    r"\\begin\{tabular\}\{(?P<columns>[^}]*)\}"
-    r"(?P<body>.*?)\\end\{tabular\}",
+    r"\\begin\s*\{\s*tabular\s*\}\s*"
+    r"(?:\[[^\]]*\]\s*)?\{(?P<columns>[^}]*)\}"
+    r"(?P<body>.*?)\\end\s*\{\s*tabular\s*\}",
+    re.IGNORECASE | re.DOTALL,
+)
+_UNTERMINATED_TABULAR_RE = re.compile(
+    r"\\begin\s*\{\s*tabular\s*\}\s*"
+    r"(?:\[[^\]]*\]\s*)?\{(?P<columns>[^}]*)\}"
+    r"(?P<body>.*)\Z",
     re.IGNORECASE | re.DOTALL,
 )
 _ARRAY_ENV_RE = re.compile(
-    r"\\begin\{array\}\{[^}]*\}.*?\\end\{array\}",
+    r"\\begin\s*\{\s*array\s*\}\s*"
+    r"(?:\[[^\]]*\]\s*)?\{[^}]*\}"
+    r"(?P<body>.*?)\\end\s*\{\s*array\s*\}",
     re.IGNORECASE | re.DOTALL,
+)
+_UNTERMINATED_ARRAY_RE = re.compile(
+    r"\\begin\s*\{\s*array\s*\}\s*"
+    r"(?:\[[^\]]*\]\s*)?\{[^}]*\}(?P<body>.*)\Z",
+    re.IGNORECASE | re.DOTALL,
+)
+_UNSUPPORTED_TABLE_BEGIN_RE = re.compile(
+    r"\\begin\s*\{\s*(?:tabular|array)\s*\}", re.IGNORECASE,
+)
+_TABLE_ROW_RE = re.compile(r"(?<!\\)\\\\(?:\[[^\]]*\])?")
+_TABLE_COLUMN_RE = re.compile(r"(?<!\\)&")
+_TABLE_RULE_RE = re.compile(
+    r"\\(?:hline|toprule|midrule|bottomrule)\b"
+    r"|\\cline\{[^}]*\}",
+    re.IGNORECASE,
 )
 _FOOTNOTE_RE = re.compile(
     r"\\footnotetext\{(?P<body>[^{}]*(?:\{[^{}]*\}[^{}]*)*)\}",
@@ -142,12 +223,74 @@ _SINGLE_DOLLAR_MATH_RE = re.compile(
 _RAW_MATH_PATTERNS = (*_RAW_BLOCK_MATH_PATTERNS, _SINGLE_DOLLAR_MATH_RE)
 _KATEX_TOKEN_RE = re.compile(r"\[(?P<close>/)?katex\]", re.IGNORECASE)
 _KATEX_LIKE_TAG_RE = re.compile(r"\[/?katex\b[^\]]*\]", re.IGNORECASE)
+_UPPERCASE_OBJECTIVE_OPTION_RE = re.compile(
+    r"(?m)^[ \t]*(?P<label>[A-Z])\)"
+)
+
+
+def uppercase_objective_option_labels(
+    text: str, option_count: int,
+) -> tuple[str, ...]:
+    """Return expected objective option labels authored in uppercase.
+
+    Only labels at the start of a line are option syntax.  The populated
+    answer-block count bounds the expected alphabet, so prose such as
+    ``"Answer A) is discussed"`` and unrelated section labels do not become
+    semantic guesses.
+    """
+
+    count = max(0, min(int(option_count or 0), 26))
+    expected = {
+        chr(ord("A") + index) for index in range(count)
+    }
+    found: list[str] = []
+    for match in _UPPERCASE_OBJECTIVE_OPTION_RE.finditer(str(text or "")):
+        label = str(match.group("label") or "")
+        rendered = f"{label})"
+        if label in expected and rendered not in found:
+            found.append(rendered)
+    return tuple(found)
+
+
+def lowercase_objective_option_labels(
+    text: str, option_count: int,
+) -> str:
+    """Lowercase only line-leading labels in the declared option range.
+
+    This is the export-side companion to
+    :func:`uppercase_objective_option_labels`.  It uses the same anchored
+    syntax and option-capacity bound, so prose such as ``"Answer A)"`` and a
+    later section label outside the workbook's option range stay byte-exact.
+    """
+
+    value = str(text or "")
+    count = max(0, min(int(option_count or 0), 26))
+    expected = {
+        chr(ord("A") + index) for index in range(count)
+    }
+
+    def replace(match: re.Match) -> str:
+        label = str(match.group("label") or "")
+        if label not in expected:
+            return match.group(0)
+        rendered = match.group(0)
+        offset = match.start("label") - match.start()
+        return rendered[:offset] + label.lower() + rendered[offset + 1:]
+
+    return _UPPERCASE_OBJECTIVE_OPTION_RE.sub(replace, value)
+
+
 _IMAGE_TAG_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
 _CANONICAL_IMAGE_TAG_RE = re.compile(
     r'\[img src="(?P<src>https://[^"]+)" alt="(?P<alt>[^"]+)"\]'
 )
 _MARKDOWN_LINK_RE = re.compile(
     r"\[[^\]]+\]\(https?://(?:[^()\s]|(?:\([^()]*\)))+\)",
+    re.IGNORECASE,
+)
+_MARKDOWN_LINK_CAPTURE_RE = re.compile(
+    r"\[(?P<text>[^\]]+)\]\("
+    r"(?P<url>https?://(?:[^()\s]|(?:\([^()]*\)))+)\)",
     re.IGNORECASE,
 )
 _CURRENCY_TOKEN_RE = re.compile(
@@ -175,6 +318,125 @@ _RAW_SCRIPT_TAIL_RE = re.compile(
     r"(?<![\w])[_^]\s*"
     r"(?:\{[^}]*\}|\([^)]*\)|\[[^\]]*\]|[A-Za-z0-9])",
 )
+
+
+def _legacy_markup_as_text(content: str) -> str:
+    """Flatten non-math rich markup while retaining any KaTeX spans."""
+
+    value = str(content or "")
+    value = _MARKDOWN_IMAGE_RE.sub(
+        lambda match: (
+            f"(Image: {(match.group('alt') or '').strip() or 'Source visual'})"
+        ),
+        value,
+    )
+    value = _CANONICAL_IMAGE_TAG_RE.sub(
+        lambda match: (
+            f"(Image: {(match.group('alt') or '').strip() or 'Source visual'})"
+        ),
+        value,
+    )
+    value = _IMAGE_TAG_RE.sub("(Image)", value)
+    value = _MARKDOWN_LINK_CAPTURE_RE.sub(
+        lambda match: str(match.group("text") or "").strip(), value,
+    )
+    value = _BARE_URL_RE.sub("(source link)", value)
+    return value
+
+
+def _strip_unmatched_katex_tokens(content: str) -> str:
+    """Remove wrapper tokens that cannot belong to a balanced KaTeX span.
+
+    Historical prose occasionally inherited a concept keyword consisting of
+    the literal token ``[katex]``.  Treating that orphan as mathematics would
+    turn an otherwise plain Phrases answer into an invalid Equation cell.
+    Pair openings and closings with a stack, preserve every token belonging to
+    a balanced span byte-for-byte, and remove only the unmatched tokens.
+    """
+
+    value = str(content or "")
+    tokens = list(_KATEX_TOKEN_RE.finditer(value))
+    if not tokens:
+        return value
+
+    opening_stack: list[int] = []
+    paired: set[int] = set()
+    for index, token in enumerate(tokens):
+        if token.group("close"):
+            if opening_stack:
+                opening = opening_stack.pop()
+                paired.update((opening, index))
+        else:
+            opening_stack.append(index)
+
+    unmatched = [
+        token for index, token in enumerate(tokens) if index not in paired
+    ]
+    if not unmatched:
+        return value
+
+    parts: list[str] = []
+    cursor = 0
+    for token in unmatched:
+        parts.append(value[cursor:token.start()])
+        cursor = token.end()
+    parts.append(value[cursor:])
+    # Removing an inline token can leave two horizontal separators between
+    # the surrounding words.  Coalesce only that word-internal gap; retain
+    # every newline (and indentation beside it) unchanged.
+    return re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", "".join(parts))
+
+
+def legacy_export_answer_cell(
+    answer_type: str, content: str,
+) -> tuple[str, str]:
+    """Serialize one stored legacy cell into a Q21-compliant workbook copy.
+
+    Stored rows are immutable historical input. Most cells already conform
+    and follow ``raw_answer_cell`` unchanged. A historic Phrases cell may,
+    however, contain rich math or link/image markup from the pre-Q21 writer.
+    At this export-only migration seam, non-math markup becomes readable text;
+    a cell carrying math syntax becomes one full Equation value, with prose
+    encoded by ``raw_equation_cell``. The conversion is lexical and never
+    changes the stored dictionary or interprets its subject matter.
+    """
+
+    declared = str(answer_type or "").strip()
+    rendered = raw_answer_cell(declared, str(content or ""))
+    issues = answer_cell_issues(declared, rendered)
+    if not issues or declared.casefold() != "phrases":
+        return declared, rendered
+
+    plain_markup = _legacy_markup_as_text(str(content or ""))
+    without_orphan_wrappers = _strip_unmatched_katex_tokens(plain_markup)
+    if without_orphan_wrappers != plain_markup:
+        phrase = raw_answer_cell("Phrases", without_orphan_wrappers)
+        if not answer_cell_issues("Phrases", phrase):
+            return "Phrases", phrase
+        plain_markup = without_orphan_wrappers
+    math_issues = {
+        "phrases_katex", "phrases_latex", "phrases_math_delimiter",
+    }
+    if math_issues.intersection(issues):
+        equation_source = canonicalize_rich_text(plain_markup)
+        equation = raw_answer_cell("Equation", equation_source)
+        if not answer_cell_issues("Equation", equation):
+            return "Equation", equation
+        # Historic formulae sometimes use multi-letter variable names such
+        # as ``PT`` inside an otherwise valid KaTeX span.  The strict lexical
+        # checker cannot distinguish those from loose prose.  Preserve the
+        # entire authored value as an explicit TeX text atom rather than
+        # guessing a variable split or letting the invalid legacy cell ship.
+        literal_equation = _tex_text(unwrap_katex(plain_markup).strip())
+        if not answer_cell_issues("Equation", literal_equation):
+            return "Equation", literal_equation
+
+    phrase = raw_answer_cell("Phrases", plain_markup)
+    if not answer_cell_issues("Phrases", phrase):
+        return "Phrases", phrase
+    return declared, rendered
+
+
 _TEX_COMMAND_GROUPS = {
     "frac": 2,
     "dfrac": 2,
@@ -361,6 +623,173 @@ _TEX_OPERATOR_COMMANDS = frozenset({
 _MATH_OPERATOR_CHARS = frozenset("+-*/=<>(),[]\u00d7\u00f7")
 
 
+def _plain_table_cell(value: str) -> str:
+    """Expose one table cell without interpreting its subject matter."""
+
+    cell = _TABLE_RULE_RE.sub("", str(value or "")).strip()
+    cell = re.sub(r"\\displaystyle\b", "", cell).strip()
+    # ``\text{...}`` and the related style groups carry literal cell labels.
+    # Peel only balanced, innermost groups; every character inside survives.
+    group = re.compile(
+        r"\\(?:text|textrm|textsf|texttt|mathrm|mathbf|mathit)\{([^{}]*)\}"
+    )
+    while True:
+        unwrapped = group.sub(lambda match: match.group(1), cell)
+        if unwrapped == cell:
+            break
+        cell = unwrapped
+    for pattern in _RAW_MATH_PATTERNS:
+        cell = pattern.sub(lambda match: str(match.group("body") or ""), cell)
+    cell = cell.replace("~", " ")
+    cell = re.sub(r"\s+", " ", cell).strip()
+    return cell or "(blank)"
+
+
+def _labeled_table(body: str) -> str:
+    """Project table structure to explicit row/column-labelled plain text."""
+
+    raw_rows = _TABLE_ROW_RE.split(str(body or ""))
+    # Some source converters emit a tabular declaration followed by newline
+    # rows and literal pipes instead of TeX ``\\``/``&`` separators.  The
+    # declaration still proves the structure; retain those rows mechanically.
+    if len(raw_rows) == 1 and "\n" in raw_rows[0]:
+        raw_rows = raw_rows[0].splitlines()
+    if raw_rows and not _TABLE_RULE_RE.sub("", raw_rows[-1]).strip():
+        raw_rows.pop()
+    rows: list[str] = []
+    row_number = 0
+    for raw_row in raw_rows:
+        cleaned_row = _TABLE_RULE_RE.sub("", raw_row).strip()
+        # A rule-only fragment is layout, not an authored data row.
+        if not cleaned_row and "&" not in raw_row:
+            continue
+        row_number += 1
+        cells = _TABLE_COLUMN_RE.split(cleaned_row)
+        if len(cells) == 1 and re.search(r"(?<!\\)\|", cleaned_row):
+            cells = re.split(r"(?<!\\)\|", cleaned_row)
+        rows.append("; ".join(
+            f"Table row {row_number}, column {column_number}: "
+            f"{_plain_table_cell(cell)}"
+            for column_number, cell in enumerate(cells, start=1)
+        ))
+    return "\n".join(rows) or "Table row 1, column 1: (blank)"
+
+
+def _markdown_table_cells(line: str) -> list[str]:
+    """Split one pipe row while retaining escaped literal pipes."""
+
+    cells = re.split(r"(?<!\\)\|", str(line or ""))
+    if cells and not cells[0].strip():
+        cells.pop(0)
+    if cells and not cells[-1].strip():
+        cells.pop()
+    return [cell.replace(r"\|", "|") for cell in cells]
+
+
+def _markdown_separator(line: str) -> bool:
+    cells = _markdown_table_cells(line)
+    return len(cells) >= 2 and all(
+        re.fullmatch(r"\s*:?-{3,}:?\s*", cell) is not None
+        for cell in cells
+    )
+
+
+def _markdown_table_start(lines: list[str], index: int) -> bool:
+    if index + 1 >= len(lines):
+        return False
+    return (
+        len(_markdown_table_cells(lines[index])) >= 2
+        and _markdown_separator(lines[index + 1])
+    )
+
+
+def _replace_markdown_tables(value: str) -> str:
+    lines = str(value or "").splitlines()
+    if not any(
+        _markdown_table_start(lines, index) for index in range(len(lines))
+    ):
+        return str(value or "")
+    output: list[str] = []
+    index = 0
+    while index < len(lines):
+        if not _markdown_table_start(lines, index):
+            output.append(lines[index])
+            index += 1
+            continue
+        table_rows = [lines[index]]
+        index += 2  # separator syntax is layout, never a data cell
+        while index < len(lines) and len(
+            _markdown_table_cells(lines[index])
+        ) >= 2:
+            table_rows.append(lines[index])
+            index += 1
+        for row_number, row in enumerate(table_rows, start=1):
+            output.append("; ".join(
+                f"Table row {row_number}, column {column_number}: "
+                f"{_plain_table_cell(cell)}"
+                for column_number, cell in enumerate(
+                    _markdown_table_cells(row), start=1
+                )
+            ))
+    return "\n".join(output)
+
+
+def _has_markdown_table(value: str) -> bool:
+    lines = str(value or "").splitlines()
+    return any(_markdown_table_start(lines, index) for index in range(len(lines)))
+
+
+def replace_unsupported_tables(text: str) -> str:
+    """Replace unsupported tabular/array markup without dropping a cell.
+
+    A source-associated image is a semantic choice and therefore belongs to
+    the model pass.  This fallback handles only the mechanical case in which
+    table markup reaches a serializer: it retains ordered cells and labels
+    their coordinates, with no inferred headings or reconstructed meaning.
+    """
+
+    value = str(text or "")
+
+    def table(match: re.Match) -> str:
+        return _labeled_table(str(match.group("body") or ""))
+
+    def array(match: re.Match) -> str:
+        return _labeled_table(str(match.group("body") or ""))
+
+    def unterminated_array(match: re.Match) -> str:
+        return _labeled_table(str(match.group("body") or ""))
+
+    def replace_dialects(body: str) -> str:
+        replaced = _TABULAR_RE.sub(table, body)
+        replaced = _ARRAY_ENV_RE.sub(array, replaced)
+        # Closed environments were consumed above.  A remaining declaration
+        # is a malformed source-converter tail; label everything after it so
+        # no cell or following text disappears and no unsupported dialect
+        # reaches the CMS.
+        replaced = _UNTERMINATED_TABULAR_RE.sub(table, replaced)
+        replaced = _UNTERMINATED_ARRAY_RE.sub(
+            unterminated_array, replaced,
+        )
+        return replaced
+
+    def wrapped(match: re.Match) -> str:
+        body = str(match.group("body") or "")
+        replaced = replace_dialects(body)
+        return replaced if replaced != body else match.group(0)
+
+    # A table inside a KaTeX wrapper must lose the wrapper as well: the CMS
+    # does not render either table dialect through KaTeX.
+    value = _KATEX_TAG_RE.sub(wrapped, value)
+    # The same is true for raw display-math wrappers.  Removing only the
+    # array would otherwise let canonicalization re-wrap coordinate labels as
+    # ``[Katex] Table row ... [/Katex]``.
+    for pattern in _RAW_BLOCK_MATH_PATTERNS:
+        value = pattern.sub(wrapped, value)
+    value = replace_dialects(value)
+    value = _replace_markdown_tables(value)
+    return value
+
+
 def _looks_like_currency_pair(match: re.Match) -> bool:
     """Avoid interpreting ``$5 to $10`` as one inline equation."""
     body = (match.group("body") or "").strip()
@@ -421,6 +850,102 @@ def _balanced_group_end(
                 return index + 1
         index += 1
     return None
+
+
+_TEX_TEXT_COMMAND_RE = re.compile(
+    r"\\(?:text|textrm|textsf|texttt|mathrm|mathbf|mathit|operatorname)\s*\{",
+    re.IGNORECASE,
+)
+
+
+def _mask_tex_text_groups(value: str) -> str:
+    """Mask balanced TeX groups whose contents are explicitly text-like."""
+
+    masked = list(value)
+    cursor = 0
+    while True:
+        match = _TEX_TEXT_COMMAND_RE.search(value, cursor)
+        if match is None:
+            break
+        opening = value.find("{", match.start(), match.end())
+        end = _balanced_group_end(value, opening, "{", "}")
+        if end is None:
+            cursor = match.end()
+            continue
+        masked[match.start():end] = " " * (end - match.start())
+        cursor = end
+    return "".join(masked)
+
+
+def _equation_has_loose_prose(value: str) -> bool:
+    lexical = _mask_tex_text_groups(value)
+    lexical = re.sub(
+        r"\\(?:begin|end)\{[^}]*\}", " ", lexical,
+        flags=re.IGNORECASE,
+    )
+    lexical = re.sub(r"\\[A-Za-z]+", " ", lexical)
+    lexical = re.sub(r"\\.", " ", lexical)
+    return re.search(r"[A-Za-z]{2,}", lexical) is not None
+
+
+def answer_cell_issues(answer_type: str, content: str) -> list[str]:
+    """Validate a type-declared answer cell by syntax, never by meaning."""
+
+    kind = str(answer_type or "").strip().lower()
+    value = str(content or "")
+    issues: list[str] = []
+    if (
+        _UNSUPPORTED_TABLE_BEGIN_RE.search(value)
+        or _has_markdown_table(value)
+    ):
+        issues.append("unsupported_table")
+
+    if kind == "equation":
+        if _KATEX_TOKEN_RE.search(value) or _KATEX_LIKE_TAG_RE.search(value):
+            issues.append("equation_katex_wrapper")
+        if (
+            _has_raw_math(value)
+            or re.search(r"(?<!\\)\$", value)
+            or re.search(r"\\[\[\]()]", value)
+        ):
+            issues.append("equation_math_delimiter")
+        if (
+            _IMAGE_TAG_RE.search(value)
+            or _MARKDOWN_IMAGE_RE.search(value)
+            or _MARKDOWN_LINK_RE.search(value)
+            or _BARE_URL_RE.search(value)
+        ):
+            issues.append("equation_non_latex_markup")
+        # Whole-cell Equation rendering means prose must be explicit TeX
+        # text, not English left loose between math spans.  This lexical gate
+        # masks balanced text/style atoms and command/environment names, then
+        # rejects any remaining multi-letter ASCII run.  It does not decide
+        # what the words or equation mean.
+        if _equation_has_loose_prose(value):
+            issues.append("equation_plain_text")
+    elif kind == "phrases":
+        if _KATEX_TOKEN_RE.search(value) or _KATEX_LIKE_TAG_RE.search(value):
+            issues.append("phrases_katex")
+        if (
+            _RAW_LATEX_RE.search(value)
+            or _RAW_SCRIPT_TAIL_RE.search(value)
+            or re.search(r"\\[A-Za-z]+", value)
+        ):
+            issues.append("phrases_latex")
+        if (
+            _has_raw_math(value)
+            or re.search(r"(?<!\\)\$", value)
+            or re.search(r"\\[\[\]()]", value)
+        ):
+            issues.append("phrases_math_delimiter")
+        if (
+            _IMAGE_TAG_RE.search(value)
+            or _MARKDOWN_IMAGE_RE.search(value)
+            or _MARKDOWN_LINK_RE.search(value)
+            or _BARE_URL_RE.search(value)
+        ):
+            issues.append("phrases_markup")
+    return list(dict.fromkeys(issues))
 
 
 _GROUP_MATH_CHARS_RE = re.compile(
@@ -735,7 +1260,7 @@ def repair_unwrapped_math(text: str) -> str:
     links, images, and code remain byte-for-byte protected. Malformed TeX
     arguments are left untouched for the guarded model-repair fallback.
     """
-    value = str(text or "")
+    value = replace_unsupported_tables(str(text or ""))
     protected: list[str] = []
 
     def stash(match: re.Match | str) -> str:
@@ -754,13 +1279,6 @@ def repair_unwrapped_math(text: str) -> str:
         _BARE_URL_RE,
     ):
         value = pattern.sub(stash, value)
-
-    # A bare ``\begin{array}…\end{array}`` is wrapped WHOLE. The atom
-    # scanner below does not know ``\begin``/``\end``/``\hline``, so
-    # left to it the environment's inner fragments (a ``\text{…}``) get
-    # wrapped one by one and the table is mangled rather than repaired.
-    value = _ARRAY_ENV_RE.sub(
-        lambda match: stash(katex(match.group(0))), value)
 
     ranges = _raw_math_ranges(value)
     if not ranges:
@@ -791,9 +1309,9 @@ def canonicalize_rich_text(text: str) -> str:
     Existing lower-case tags remain accepted as input, but output always uses
     ``[Katex]``. Common MMD math delimiters and Markdown/LaTeX image syntax are
     converted before concept rows are persisted. The helper deliberately does
-    not touch raw keyword columns, whose workbook contract is direct KaTeX.
+    not touch typed keyword columns, whose Equation contract is raw LaTeX.
     """
-    value = str(text or "")
+    value = replace_unsupported_tables(str(text or ""))
     protected: list[str] = []
 
     def stash(rendered: str) -> str:
@@ -817,23 +1335,6 @@ def canonicalize_rich_text(text: str) -> str:
         value,
     )
 
-    # KaTeX supports array rather than LaTeX's text-mode tabular environment.
-    def tabular(match: re.Match) -> str:
-        columns = re.sub(r"[^clr|]", "", match.group("columns") or "") or "c"
-        body = re.sub(r"\\hline\b", "", match.group("body") or "").strip()
-        return stash(katex(
-            rf"\begin{{array}}{{{columns}}}{body}\end{{array}}"
-        ))
-
-    value = _TABULAR_RE.sub(tabular, value)
-
-    # A bare ``\begin{array}…\end{array}`` (the model quoting a source
-    # table) is already math in KaTeX's own dialect; wrap it so it renders
-    # as a table instead of shipping as literal backslash text. An array
-    # inside an existing ``[Katex]`` span was stashed above, so this never
-    # double-wraps and the pass stays idempotent.
-    value = _ARRAY_ENV_RE.sub(
-        lambda match: stash(katex(match.group(0))), value)
     value = _FOOTNOTE_RE.sub(lambda match: match.group("body").strip(), value)
     # Models occasionally emit a literal trailing ``\n`` escape in prose.
     # Convert only delimiter-shaped escapes; a TeX command such as ``\nu``
@@ -871,6 +1372,11 @@ def rich_text_issues(
     """
     value = str(text or "")
     issues: list[str] = []
+    if (
+        _UNSUPPORTED_TABLE_BEGIN_RE.search(value)
+        or _has_markdown_table(value)
+    ):
+        issues.append("unsupported_table")
     tokens = list(_KATEX_TOKEN_RE.finditer(value))
     depth = 0
     malformed_order = False
@@ -965,8 +1471,8 @@ def rich_text_issues(
 from . import prompts as _prompts  # noqa: E402
 
 _PROMPT_PREAMBLE_DEFAULT = """\
-Rich-text rules for the question, answer_content, display_answer, and
-answer_explanation columns:
+Rich-text rules for the question, display_answer, and answer_explanation
+columns:
   - Plain text is typed directly.
   - Equations MUST be wrapped: [Katex] LaTeX [/Katex]. Never use raw $, $$,
     \\(...\\), or \\[...\\] delimiters.
@@ -978,11 +1484,24 @@ answer_explanation columns:
   - Links: [Display Text](https://full-url). Wrap raw URLs; never emit a
     bare URL on its own.
 
-Keyword columns hold direct KaTeX (no [Katex] wrappers, no markdown).
+Type-declared answer_content and keyword cells use exactly ONE medium:
+  - Equation: the WHOLE cell is raw LaTeX. Never include [Katex] wrappers,
+    math delimiters, an image/link, or plain prose outside a TeX text atom.
+  - Phrases: the WHOLE cell is plain text. Never include LaTeX, [Katex], math
+    delimiters, or image/link markup.
+  - Never mix prose and wrapped/raw maths in one answer/rubric block. If an
+    Equation cell needs words, encode them inside \\text{...} so the complete
+    cell remains valid raw LaTeX.
+
+KaTeX tables/arrays and Markdown pipe tables are unsupported. When the source
+already supplies the table as an associated image, preserve that source
+image. Otherwise retain every cell as mechanically labelled plain text (for
+example, "Table row 1, column 2: 8611"); never emit tabular or array markup
+and never reconstruct missing meaning.
 
 Forbidden: raw math delimiters, nested [Katex], single-quoted img attrs,
 empty [Katex] tags, raw LaTeX outside a [Katex] tag, Markdown images,
-raw tabular/footnote commands, and [0.4cm]-style spacing.
+raw tabular/array/footnote commands, and [0.4cm]-style spacing.
 """
 
 _prompts.register(

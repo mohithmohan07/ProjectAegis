@@ -1663,6 +1663,14 @@ def test_saved_final_reground_decision_is_not_swallowed_or_redispatched(
         method_row_snapshot=[],
         final_grounding_certificate=final,
         grounding_certificate_required=True,
+        **{
+            generation.PHASE3_PRE_RELEASE_FIELD: (
+                generation.phase3_pre_release_bundle(
+                    {"rows": [], "topics": []},
+                    {"plans": {}, "questions": {}, "blocked": {}},
+                )
+            )
+        },
     )
     monkeypatch.setattr(phase3, "active_graph", lambda: active_graph)
     monkeypatch.setattr(

@@ -89,6 +89,10 @@ _ACTIVE_AGENT_RESOLUTION_IDS: ContextVar[frozenset[str]] = ContextVar(
     "aegis_active_agent_resolution_ids",
     default=frozenset(),
 )
+_PRE_RELEASE_TERMINAL_PROOF: ContextVar[dict | None] = ContextVar(
+    "aegis_pre_release_terminal_proof",
+    default=None,
+)
 
 
 def _normalize_pending_human_decision(
@@ -1666,6 +1670,58 @@ def _merge_generation_checkpoint_history(
     return _consume_applied_human_decisions(merged, checkpoint)
 
 
+def _pre_release_terminal_proof(stored: Mapping | None) -> dict:
+    """The fact that a late checkpoint completed without Pre authority.
+
+    This proof is transported only through a run-scoped ContextVar to the
+    release wrapper.  It is never written into checkpoint history: an invalid
+    terminal cannot become resume authority, and an empty marker-only envelope
+    would violate the portable checkpoint schema.
+    """
+
+    if not isinstance(stored, Mapping):
+        return {}
+    proofs: list[dict] = []
+    for entry in generation._concept_checkpoint_entries(dict(stored)):
+        if not isinstance(entry, Mapping):
+            continue
+        stage = str(entry.get("stage") or "")
+        if stage not in generation._LEGACY_PRE_RELEASE_STAGE_VERSIONS:
+            continue
+        spec = generation._CONCEPT_CHECKPOINT_STAGES.get(stage) or {}
+        accepted_versions = {
+            spec.get("version"),
+            generation._LEGACY_PRE_RELEASE_STAGE_VERSIONS.get(stage),
+        }
+        if (
+            entry.get("schema_version")
+            != generation._CONCEPT_CHECKPOINT_SCHEMA
+            or entry.get("stage_schema_version") not in accepted_versions
+            or generation.valid_phase3_pre_release_bundle(
+                entry.get(generation.PHASE3_PRE_RELEASE_FIELD)
+            )
+        ):
+            continue
+        proofs.append({
+            "stage": stage,
+            "stage_order": generation._checkpoint_order(stage),
+            "stage_schema_version": entry.get("stage_schema_version"),
+            "saved_at": entry.get("saved_at", ""),
+            "defect": (
+                "completed Phase 3 checkpoint has no complete Pre-Learning "
+                "release authority"
+            ),
+        })
+    return copy.deepcopy(max(
+        (proof for proof in proofs if proof),
+        key=lambda proof: (
+            int(proof.get("stage_order") or -1),
+            str(proof.get("saved_at") or ""),
+        ),
+        default={},
+    ))
+
+
 def _compatible_generation_checkpoint_envelope(
     stored: dict | None,
     *,
@@ -1673,6 +1729,7 @@ def _compatible_generation_checkpoint_envelope(
     target_identity: dict[str, str],
     target_chapter_id: int,
     instruction_set_sha256: str | None = None,
+    allow_legacy_pre_release_migration: bool = False,
 ) -> dict:
     """Prune unusable history and mirror the stage this deployment will use."""
     history = [
@@ -1684,16 +1741,22 @@ def _compatible_generation_checkpoint_envelope(
             # semantic transformer. An uncertified terminal row is never the
             # durable stage mirrored for Resume in a live run.
             require_final_grounding=config.use_live_generation(),
+            allow_legacy_pre_release=allow_legacy_pre_release_migration,
         )
     ]
     if not history:
         return {}
-    candidate = {
-        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
-        "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
-        "checkpoints": history,
-    }
-    newest = generation._newest_compatible_concept_checkpoint(candidate)
+    newest = None
+    if history:
+        candidate = {
+            "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
+            "checkpoint_format": generation._CONCEPT_CHECKPOINT_FORMAT,
+            "checkpoints": history,
+        }
+        newest = generation._newest_compatible_concept_checkpoint(
+            candidate,
+            allow_legacy_pre_release=allow_legacy_pre_release_migration,
+        )
     if newest is None:
         return {}
     stage = str(newest.get("stage") or "")
@@ -1729,15 +1792,29 @@ def _persist_compatible_generation_checkpoint_mirror(
     target_identity: dict[str, str],
     target_chapter_id: int,
     instruction_set_sha256: str | None = None,
+    allow_legacy_pre_release_migration: bool = False,
 ) -> tuple[dict | None, dict]:
     """Persist the actual fallback stage before a resumed run can fail."""
     stored = copy.deepcopy(job.generation_checkpoint or {})
+    terminal_proof = _pre_release_terminal_proof(stored)
+    _PRE_RELEASE_TERMINAL_PROOF.set(
+        copy.deepcopy(terminal_proof) if terminal_proof else None
+    )
+    if terminal_proof:
+        # The release wrapper shares this call context.  If normalization
+        # safely removes the unusable checkpoint and generation then fails
+        # before Phase 3, the wrapper can still stage a diagnostic Pre sibling
+        # from this fact.  Nothing schema-invalid is committed to the job.
+        _PRE_RELEASE_TERMINAL_PROOF.set(terminal_proof)
     normalized = _compatible_generation_checkpoint_envelope(
         stored,
         fingerprint=fingerprint,
         target_identity=target_identity,
         target_chapter_id=target_chapter_id,
         instruction_set_sha256=instruction_set_sha256,
+        allow_legacy_pre_release_migration=(
+            allow_legacy_pre_release_migration
+        ),
     )
     if not normalized and _source_replacement_required(stored):
         # A user's explicit source-authority decision remains terminal even if
@@ -1745,7 +1822,9 @@ def _persist_compatible_generation_checkpoint_mirror(
         # not erase that stop merely to represent an empty compatible history.
         return stored, {}
     resumed = generation._newest_compatible_concept_checkpoint(
-        normalized) or {}
+        normalized,
+        allow_legacy_pre_release=allow_legacy_pre_release_migration,
+    ) or {}
     if normalized != stored:
         original_count = len(
             generation._concept_checkpoint_entries(stored))
@@ -1952,8 +2031,13 @@ def _deposit_and_publish_concepts(
     source_text: str = "",
     final_grounding_certificate: dict | None = None,
     grounding_audit_job: models.UploadJob | None = None,
+    phase3_pre_release: dict | None = None,
 ) -> tuple[list[int], list[int], dict]:
-    """Serialize final dedupe, DB commit, and shared workbook publication."""
+    """Serialize final dedupe, DB commit, and shared workbook publication.
+
+    ``phase3_pre_release`` is transport for release-mode interception only;
+    the ordinary Post database deposit neither reads nor publishes it.
+    """
     # Phase 2.2 may have verified source-visible text that Mathpix omitted.
     # Deposit validation sees the same derived semantic source as concept
     # extraction, while UploadJob.mmd_text remains the immutable audit copy.
@@ -4481,6 +4565,11 @@ def generate_post_learning(
                 target_identity=target_identity,
                 target_chapter_id=target_chapter_id,
                 instruction_set_sha256=instruction_hash,
+                # Legacy post-Type v6 / terminal v7 entries are not normal
+                # resume authority.  They are retained only long enough for
+                # ``concepts_from_mmd`` to migrate their Pre sidecars through
+                # the explicit decide-once recovery path.
+                allow_legacy_pre_release_migration=True,
             )
         )
     initial_agent_resolution_ids: set[str] = set()
@@ -4647,6 +4736,9 @@ def generate_post_learning(
                 source_text=job.mmd_text,
                 final_grounding_certificate=final_grounding,
                 grounding_audit_job=job,
+                phase3_pre_release=artifacts.get(
+                    generation.PHASE3_PRE_RELEASE_FIELD
+                ),
             )
         except DepositValidationError:
             db.rollback()

@@ -25,7 +25,12 @@ from app.services import build_concepts_release_publication as publication
 from app.services import generation as g
 from app.services import release_qc
 
-from tests.test_build_concepts_release import _inventory, _job, _mined_types
+from tests.test_build_concepts_release import (
+    _inventory,
+    _job,
+    _mined_types,
+    _rendered_records,
+)
 
 OWNER = "local:default"
 
@@ -308,7 +313,7 @@ def test_an_unassigned_inventory_qid_ships_flagged_and_publishes(db):
         {"qid": "QINV-0009", "raw_task": "An unplaced extra question?"})
     release.stage_release(
         db, job, target_chapter_id=chapter.id,
-        records=_sound_records(),
+        records=_rendered_records(),
         inventory=inventory,
         mined_types=_mined_types(),
     )
@@ -780,7 +785,7 @@ def test_the_uploaded_latch_revalidates_before_repeating_its_receipt(db):
     job, chapter = _job(db)
     release.stage_release(
         db, job, target_chapter_id=chapter.id,
-        records=_sound_records(),
+        records=_rendered_records(),
         inventory=_inventory(),
         mined_types=_mined_types(),
     )

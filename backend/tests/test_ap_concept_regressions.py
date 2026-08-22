@@ -6,6 +6,17 @@ import pytest
 from app.services import generation as g
 
 
+def _pass_completed_phase3(records, **kwargs):
+    kwargs["phase3_carry"].update({
+        "pre_map": {"rows": [], "topics": []},
+        "pre_questions": {
+            "plans": {}, "questions": {}, "blocked": {},
+        },
+        "pre_snapshot_writes": {},
+    })
+    return records
+
+
 def _examples(first: int, last: int, skill: str) -> str:
     return "\n".join(
         f"Example {number} : {skill} in numerical task {number}.\n"
@@ -1076,8 +1087,7 @@ def test_pipeline_restores_skeleton_method_rows_before_content_passes(
     # The post-81% step is the rewritten Phase 3; this test covers only the
     # pre-boundary restoration, so hand the boundary rows straight through.
     monkeypatch.setattr(
-        g, "_prepare_final_concept_content",
-        lambda out, **kwargs: out)
+        g, "_prepare_final_concept_content", _pass_completed_phase3)
 
     out = g.concepts_from_mmd(
         _ap_mmd(),
@@ -1530,8 +1540,7 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
         g, "_repair_records_via_api",
         lambda records, **kwargs: records)
     monkeypatch.setattr(
-        g, "_prepare_final_concept_content",
-        lambda out, **kwargs: out)
+        g, "_prepare_final_concept_content", _pass_completed_phase3)
     monkeypatch.setattr(
         g, "_validate_final_or_raise",
         lambda records, **kwargs: {"ok": True})

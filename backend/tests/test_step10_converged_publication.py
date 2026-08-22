@@ -34,7 +34,7 @@ from app.services import build_concepts_release_publication as publication
 from app.services import concept_cleanup
 
 from tests.test_assessment_release_run import OWNER
-from tests.test_step9_rule_e_deraising import _job_with_records, _SOUND_ROW
+from tests.test_step9_rule_e_deraising import _INVENTORY, _SOUND_ROW
 from tests.test_pre_release_lane_wiring import _both_lanes_job
 
 
@@ -49,6 +49,145 @@ def _chapter(db, code, *, title=None, grade="06"):
     db.commit()
     db.refresh(chapter)
     return chapter
+
+
+def _synthetic_route_inputs(records, inventory):
+    """Add one mechanically complete route to publication-only fixtures.
+
+    These tests exercise publication mechanics rather than concept generation,
+    but their source inventories contain real synthetic QIDs. The production
+    gate therefore correctly requires the fixture Concept File to expose a
+    visible Type/Case/Example route. One deterministic carrier owns every
+    fixture QID; no Type is imposed on the remaining concepts.
+    """
+
+    rows = [copy.deepcopy(dict(row)) for row in records]
+    items = [
+        copy.deepcopy(dict(item))
+        for item in (inventory or {}).get("items") or []
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    ]
+    carriers = [
+        row for row in rows
+        if str(row.get("topic") or "").strip()
+        and str(
+            row.get("concept_title") or row.get("concept") or ""
+        ).strip()
+    ]
+    if not items or not carriers:
+        return rows, {"types": []}
+
+    # The first publishable row is the route carrier, matching the release's
+    # source order. Tests that deliberately damage a later row therefore keep
+    # exercising that row's own publication defect rather than accidentally
+    # deleting the fixture's only valid route at the same time.
+    carrier = carriers[0]
+    type_id = "TYPE-SYNTHETIC-PUBLICATION"
+    case_id = "CASE-SYNTHETIC-PUBLICATION"
+    examples = []
+    rendered_examples = []
+    placements = {}
+    for index, item in enumerate(items, start=1):
+        qid = str(item["qid"]).strip()
+        prompt = str(
+            item.get("raw_task")
+            or item.get("normalized_task")
+            or f"Synthetic publication question {index}."
+        ).strip()
+        examples.append({
+            "source_question_id": qid,
+            "prompt": prompt,
+        })
+        rendered_examples.append(f"Example {index:02d}: {prompt}")
+        placements[qid] = {
+            "qid": qid,
+            "type_id": type_id,
+            "case_id": case_id,
+            "host_disposition": "type_case_example",
+        }
+
+    base_details = str(carrier.get("concept_details") or "").rstrip()
+    carrier["concept_details"] = (
+        base_details
+        + " // Types: Type 01: Synthetic publication route. "
+        + "Case 01: Exercise the fixture's publication route. "
+        + " ".join(rendered_examples)
+    ).strip()
+    carrier["_type_case_qid_host_placement_manifest"] = {
+        "placements": placements,
+    }
+    mined_types = {
+        "types": [{
+            "type_id": type_id,
+            "type_title": "Synthetic publication route",
+            "type_definition": (
+                "A deterministic route used only by publication fixtures."
+            ),
+            "owner_topic_ids": [],
+            "case_prompts": [{
+                "case_id": case_id,
+                "case_definition": (
+                    "Exercise the fixture's publication route."
+                ),
+                "owner_topic_ids": [],
+                "source_question_ids": [
+                    str(item["qid"]).strip() for item in items
+                ],
+                "examples": examples,
+            }],
+        }],
+    }
+    return rows, mined_types
+
+
+def _stage_synthetic_release(
+    db,
+    job,
+    *,
+    target_chapter_id,
+    records,
+    inventory,
+    **kwargs,
+):
+    routed, mined_types = _synthetic_route_inputs(records, inventory)
+    return release.stage_release(
+        db,
+        job,
+        target_chapter_id=target_chapter_id,
+        records=routed,
+        inventory=copy.deepcopy(dict(inventory or {})),
+        mined_types=mined_types,
+        **kwargs,
+    )
+
+
+def _job_with_records(db, chapter, records):
+    """Publication fixture carrying real route evidence for its QIDs."""
+
+    job = models.UploadJob(
+        owner_sub=OWNER,
+        module="build_concepts",
+        upload_type="textbook",
+        filename="ch.mmd",
+        mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
+        status="generated",
+        deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id],
+        question_inventory=copy.deepcopy(_INVENTORY),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    _stage_synthetic_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=records,
+        inventory=_INVENTORY,
+        reason="S10 publication fixture",
+    )
+    db.refresh(job)
+    return job
 
 
 def _edit_staged_payload_in_place(db, job, lane, mutate):
@@ -194,6 +333,10 @@ def test_publication_never_rewrites_a_reviewer_edited_title(db):
         "concept_details": details,
         "keywords": "pH, scale",
     }])
+    staged_details = release.release_payload(job)["records"][0][
+        "concept_details"
+    ]
+    assert staged_details.startswith(details)
 
     result = publication.upload_release_to_database(
         db, job.id, owner_sub=OWNER, lane="post")
@@ -202,7 +345,7 @@ def test_publication_never_rewrites_a_reviewer_edited_title(db):
     row = db.get(models.Concept, result["created_concept_ids"][0])
     assert row.concept_title == title
     assert row.concept_display_name == title
-    assert row.concept_details == details
+    assert row.concept_details == staged_details
 
     payload = release.release_payload(job)
     flags = payload["summary"].get("identity_review_flags") or []
@@ -227,11 +370,14 @@ def test_two_same_titled_concepts_under_two_topics_publish_as_two_rows(db):
         "concept_details": "Alpha details.",
         "keywords": "alpha",
     }])
+    first_details = release.release_payload(job)["records"][0][
+        "concept_details"
+    ]
     first = publication.upload_release_to_database(
         db, job.id, owner_sub=OWNER, lane="post")
     [first_id] = first["created_concept_ids"]
 
-    release.stage_release(
+    _stage_synthetic_release(
         db,
         job,
         target_chapter_id=chapter.id,
@@ -245,6 +391,9 @@ def test_two_same_titled_concepts_under_two_topics_publish_as_two_rows(db):
         reason="S10 second publication",
     )
     db.refresh(job)
+    second_details = release.release_payload(job)["records"][0][
+        "concept_details"
+    ]
     second = publication.upload_release_to_database(
         db, job.id, owner_sub=OWNER, lane="post")
 
@@ -256,9 +405,9 @@ def test_two_same_titled_concepts_under_two_topics_publish_as_two_rows(db):
     first_row = db.get(models.Concept, first_id)
     second_row = db.get(models.Concept, second_id)
     assert first_row.topic.topic_title == "Topic Alpha"
-    assert first_row.concept_details == "Alpha details."
+    assert first_row.concept_details == first_details
     assert second_row.topic.topic_title == "Topic Gamma"
-    assert second_row.concept_details == "Gamma details."
+    assert second_row.concept_details == second_details
     assert first_row.machine_id and second_row.machine_id
     assert first_row.machine_id != second_row.machine_id
 
@@ -593,7 +742,7 @@ def test_a_shrinking_republication_never_overwrites_the_removed_rows_neighbour(
     b_machine_id = db.get(models.Concept, by_title["Concept B"]).machine_id
     c_machine_id = db.get(models.Concept, by_title["Concept C"]).machine_id
 
-    release.stage_release(
+    _stage_synthetic_release(
         db, job, target_chapter_id=chapter.id,
         records=[copy.deepcopy(rows[0]), copy.deepcopy(rows[2])],
         inventory=copy.deepcopy(dict(job.question_inventory or {})),
@@ -639,21 +788,29 @@ def test_a_reordered_republication_keeps_each_id_with_its_row(db):
     x_id = by_title["Concept X"].machine_id
     y_id = by_title["Concept Y"].machine_id
 
-    release.stage_release(
+    _stage_synthetic_release(
         db, job, target_chapter_id=chapter.id,
         records=[copy.deepcopy(rows[1]), copy.deepcopy(rows[0])],
         inventory=copy.deepcopy(dict(job.question_inventory or {})),
         reason="reordered",
     )
     db.refresh(job)
+    staged_by_title = {
+        row["concept_title"]: row["concept_details"]
+        for row in release.release_payload(job)["records"]
+    }
     second = publication.upload_release_to_database(
         db, job.id, owner_sub=OWNER, lane="post")
     assert second["created_concept_ids"] == []
     db.expire_all()
     x_row = by_title["Concept X"]
     y_row = by_title["Concept Y"]
-    assert (x_row.concept_details, x_row.machine_id) == ("X details.", x_id)
-    assert (y_row.concept_details, y_row.machine_id) == ("Y details.", y_id)
+    assert (x_row.concept_details, x_row.machine_id) == (
+        staged_by_title["Concept X"], x_id,
+    )
+    assert (y_row.concept_details, y_row.machine_id) == (
+        staged_by_title["Concept Y"], y_id,
+    )
     assert (y_row.source_order, x_row.source_order) == (1, 2)
 
 
@@ -675,6 +832,9 @@ def test_a_legacy_blank_id_row_is_adopted_not_duplicated(db):
         "concept_details": "The staged replacement.", "keywords": "staged",
     }]
     job = _job_with_records(db, chapter, rows)
+    staged_details = release.release_payload(job)["records"][0][
+        "concept_details"
+    ]
 
     _c, staged, _r, _d = release_files.transient_release_hierarchy(
         db, job, payload=release.release_payload(job))
@@ -688,9 +848,9 @@ def test_a_legacy_blank_id_row_is_adopted_not_duplicated(db):
     db.expire_all()
     adopted = db.get(models.Concept, legacy.id)
     assert adopted.machine_id == staged_id
-    assert adopted.concept_details == "The staged replacement."
+    assert adopted.concept_details == staged_details
 
-    release.stage_release(
+    _stage_synthetic_release(
         db, job, target_chapter_id=chapter.id,
         records=copy.deepcopy(rows),
         inventory=copy.deepcopy(dict(job.question_inventory or {})),
@@ -721,7 +881,7 @@ def test_a_prepended_topic_still_homes_master_questions(db):
     publication.upload_release_to_database(
         db, job.id, owner_sub=OWNER, lane="post")
 
-    release.stage_release(
+    _stage_synthetic_release(
         db, job, target_chapter_id=chapter.id,
         records=[
             {"topic": "Brand New Topic", "concept_title": "Concept X",
@@ -836,7 +996,8 @@ def test_publication_refuses_a_tampered_artifact_for_every_one_of_the_four_outpu
 
     def edit_first_record(slot):
         slot["records"][0]["concept_details"] = (
-            "Edited in place after the freeze."
+            "Edited in place after the freeze. "
+            + str(slot["records"][0].get("concept_details") or "")
         )
 
     _edit_staged_payload_in_place(db, job, release.LANE_POST, edit_first_record)
@@ -861,7 +1022,7 @@ def test_publication_refuses_a_tampered_artifact_for_every_one_of_the_four_outpu
 
     # A legitimate re-stage mints a NEW lineage and publishes: the gate
     # accuses nobody who recorded their change.
-    release.stage_release(
+    _stage_synthetic_release(
         db, job, target_chapter_id=chapter.id,
         records=[dict(_SOUND_ROW)],
         inventory=copy.deepcopy(dict(job.question_inventory or {})),

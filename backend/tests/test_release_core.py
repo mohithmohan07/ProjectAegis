@@ -27,6 +27,7 @@ and then the two safety properties:
 from __future__ import annotations
 
 import copy
+import threading
 import uuid
 
 import pytest
@@ -42,6 +43,7 @@ from app.services import build_concepts_release as release
 from app.services import build_concepts_release_contract as release_contract
 from app.services import build_concepts_release_files as release_files
 from app.services import build_concepts_release_manifest as release_manifest
+from app.services import progress
 from app.services import release_core
 from app.services.phase3 import premap
 
@@ -542,8 +544,13 @@ def test_one_build_concepts_run_produces_all_four_outputs(db, monkeypatch):
     def original(_db, _job_id, _chapter_id, **_kwargs):
         return {"status": "ok"}
 
-    release_contract._run_generation_release(
-        original, db, job.id, chapter.id, owner_sub=OWNER)
+    events: list[dict] = []
+    sink_token = progress._sink.set(events.append)
+    try:
+        release_contract._run_generation_release(
+            original, db, job.id, chapter.id, owner_sub=OWNER)
+    finally:
+        progress._sink.reset(sink_token)
 
     assert [name for name, _job, _mode in seen] == ["pre", "post"], (
         "both Master lanes are built, in the owner's numbering"
@@ -553,9 +560,65 @@ def test_one_build_concepts_run_produces_all_four_outputs(db, monkeypatch):
         "the assessment lane runs OUTSIDE _RELEASE_MODE, so the deposit "
         "interceptor cannot see it"
     )
+    master_steps = [
+        event.get("label") for event in events
+        if event.get("type") == "step"
+        and event.get("label") == "Building Master files (Outputs 02/04)"
+    ]
+    assert master_steps == ["Building Master files (Outputs 02/04)"], (
+        "the Master fan-out needs one real stage boundary so its usage and "
+        "cache evidence do not land on the preceding concept stage"
+    )
     # The two concept outputs are staged and durable.
     assert release.release_payload(job) is not None
     assert release.release_payload(job, lane=release.LANE_PRE) is not None
+
+
+def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
+    """The two-worker Master fan-out is real concurrency, not just wiring."""
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+    barrier = threading.Barrier(2)
+    lock = threading.Lock()
+    sessions: dict[str, object] = {}
+    active = 0
+    max_active = 0
+
+    class _Stub:
+        def __init__(self, lane):
+            self.id = f"REL-{lane}"
+
+    def rebuild(lane_db, job_id, lane, *, owner_sub=None):
+        nonlocal active, max_active
+        assert job_id == job.id
+        assert owner_sub == OWNER
+        with lock:
+            sessions[lane] = lane_db
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            barrier.wait(timeout=5)
+            return _Stub(lane)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(release_contract, "rebuild_lane_master", rebuild)
+
+    built = release_contract._build_master_siblings(
+        db, job.id, chapter.id, owner_sub=OWNER,
+    )
+
+    assert max_active == 2
+    assert built == {
+        release.LANE_PRE: {"release_id": "REL-pre"},
+        release.LANE_POST: {"release_id": "REL-post"},
+    }
+    assert set(sessions) == {release.LANE_PRE, release.LANE_POST}
+    assert sessions[release.LANE_PRE] is not db
+    assert sessions[release.LANE_POST] is not db
+    assert sessions[release.LANE_PRE] is not sessions[release.LANE_POST]
 
 
 def _stub_release(db, chapter, lane):

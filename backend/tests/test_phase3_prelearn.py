@@ -1115,6 +1115,15 @@ def test_the_production_entry_point_stores_the_capture(monkeypatch, tmp_path):
         carry = kwargs.get("phase3_carry")
         assert isinstance(carry, dict), "the carry must reach the seam"
         carry["prerequisites"] = copy.deepcopy(carried)
+        carry["pre_map"] = {
+            "rows": [], "topics": [], "needed_for": {},
+            "review_flags": {}, "decision_flags": {}, "validation": [],
+        }
+        carry["pre_questions"] = {
+            "plans": {}, "questions": {}, "blocked": {},
+            "review_flags": {}, "decision_flags": {},
+        }
+        carry["pre_snapshot_writes"] = {}
         return out
 
     monkeypatch.setattr(g, "_prepare_final_concept_content", fake_prepare)
@@ -1122,12 +1131,28 @@ def test_the_production_entry_point_stores_the_capture(monkeypatch, tmp_path):
     # A run that captured prerequisites stores them.
     carried = CAPTURE
     artifacts: dict = {}
+    emitted: list[dict] = []
     g.concepts_from_mmd(
         source, subject="Mathematics", live=True,
         resume_checkpoint={"stages": []}, artifacts=artifacts,
+        checkpoint_callback=emitted.append,
     )
     assert artifacts["phase3_prerequisites"] == CAPTURE
     assert "phase3_prerequisites_absent" not in artifacts
+    assert g.valid_phase3_pre_release_bundle(
+        artifacts[g.PHASE3_PRE_RELEASE_FIELD]
+    )
+    assert [
+        row["stage"] for row in emitted
+        if row["stage"] in {"post_type_assignment", "final_content_ready"}
+    ] == ["post_type_assignment", "final_content_ready"]
+    assert all(
+        g.valid_phase3_pre_release_bundle(
+            row[g.PHASE3_PRE_RELEASE_FIELD]
+        )
+        for row in emitted
+        if row["stage"] in {"post_type_assignment", "final_content_ready"}
+    )
 
     # A run whose chapter genuinely assumes nothing stores the EMPTY
     # capture — an empty set is an answer, not a missing key.
@@ -1142,6 +1167,138 @@ def test_the_production_entry_point_stores_the_capture(monkeypatch, tmp_path):
     assert checkpoint["stage"] == "final_content_ready"
 
 
+def test_fresh_phase3_without_pre_authority_fails_loud(monkeypatch):
+    """A fresh runner cannot turn missing keys into an empty Pre lane."""
+
+    from app.services import generation as g
+
+    checkpoint = _final_content_checkpoint(g)
+
+    monkeypatch.setattr(
+        g,
+        "_run_live_concept_pre_final_stages",
+        lambda *_a, **_kw: (
+            copy.deepcopy(checkpoint["records"]),
+            copy.deepcopy(checkpoint["question_task_inventory"]),
+            copy.deepcopy(checkpoint["mined_types"]),
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        g,
+        "_prepare_final_concept_content",
+        lambda out, **_kwargs: out,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"no complete pre_map / pre_questions authority",
+    ):
+        g.concepts_from_mmd(
+            "# T\nA source-grounded discussion of fractions.",
+            subject="Mathematics",
+            live=True,
+            resume_checkpoint={"stages": []},
+        )
+
+
+def test_post_type_pre_authority_resumes_without_reentering_phase3(
+    monkeypatch,
+):
+    """The first post-Phase3 checkpoint is a true semantic resume point."""
+
+    from app.services import generation as g
+
+    final = _final_content_checkpoint(g)
+    bundle = g.phase3_pre_release_bundle(
+        {"rows": [], "topics": []},
+        {"plans": {}, "questions": {}, "blocked": {}},
+    )
+    checkpoint = g._make_concept_checkpoint(
+        "post_type_assignment",
+        records=final["records"],
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: bundle},
+    )
+    monkeypatch.setattr(
+        g,
+        "_prepare_final_concept_content",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("completed Phase 3 must not replay")
+        ),
+    )
+    monkeypatch.setattr(
+        g,
+        "_repair_final_rich_text_via_api",
+        lambda current, **_kwargs: (current, False),
+    )
+    monkeypatch.setattr(
+        g,
+        "_validate_final_or_raise",
+        lambda *_args, **_kwargs: {
+            "ok": True, "errors": [], "summary": {},
+        },
+    )
+    artifacts: dict = {}
+    emitted: list[dict] = []
+
+    out = g.concepts_from_mmd(
+        "# T\nA source-grounded discussion of fractions.",
+        subject="Mathematics",
+        live=True,
+        resume_checkpoint=checkpoint,
+        artifacts=artifacts,
+        checkpoint_callback=emitted.append,
+    )
+
+    assert out
+    assert artifacts[g.PHASE3_PRE_RELEASE_FIELD] == bundle
+    assert [row["stage"] for row in emitted] == ["final_content_ready"]
+    assert emitted[0][g.PHASE3_PRE_RELEASE_FIELD] == bundle
+
+
+@pytest.mark.parametrize(
+    ("stage", "legacy_version"),
+    [("post_type_assignment", 6), ("final_content_ready", 7)],
+)
+def test_current_completed_phase3_checkpoints_require_pre_authority(
+    stage, legacy_version,
+):
+    """The version bump is a mechanical promise that the bundle exists."""
+
+    from app.services import generation as g
+
+    final = _final_content_checkpoint(g)
+    payload = {
+        "records": final["records"],
+        "question_task_inventory": {"items": [], "stats": {}},
+        "mined_types": {"types": []},
+        "method_row_snapshot": [],
+    }
+    missing = g._make_concept_checkpoint(stage, **payload)
+    assert not g._compatible_concept_checkpoint_entry(missing)
+
+    bundle = g.phase3_pre_release_bundle(
+        {"rows": [], "topics": []},
+        {"plans": {}, "questions": {}, "blocked": {}},
+    )
+    current = g._make_concept_checkpoint(
+        stage,
+        **payload,
+        **{g.PHASE3_PRE_RELEASE_FIELD: bundle},
+    )
+    assert g._compatible_concept_checkpoint_entry(current)
+
+    legacy = copy.deepcopy(missing)
+    legacy["stage_schema_version"] = legacy_version
+    assert not g._compatible_concept_checkpoint_entry(legacy)
+    assert g._compatible_concept_checkpoint_entry(
+        legacy, allow_legacy_pre_release=True,
+    )
+
+
 def test_a_restored_checkpoint_reads_the_capture_back_or_records_its_absence(
     monkeypatch, tmp_path,
 ):
@@ -1154,6 +1311,7 @@ def test_a_restored_checkpoint_reads_the_capture_back_or_records_its_absence(
     from app.services import generation as g
 
     checkpoint = _final_content_checkpoint(g)
+    checkpoint["stage_schema_version"] = 7
     source = "# T\nA short source-grounded discussion of fractions."
     monkeypatch.setattr(
         phase3_core, "active_session", lambda: {"artifact_dir": str(tmp_path)}
@@ -1173,7 +1331,18 @@ def test_a_restored_checkpoint_reads_the_capture_back_or_records_its_absence(
         ),
     )
 
-    # No snapshot: the absence is recorded and flagged, never silent.
+    # Legacy map/questions sidecars are copied verbatim into the new
+    # checkpoint authority, so semantic Phase 3 remains skipped.
+    (tmp_path / "source.phase3-prelearn-map.json").write_text(
+        json.dumps({"rows": [], "topics": []}), encoding="utf-8",
+    )
+    (tmp_path / "source.phase3-prelearn-questions.json").write_text(
+        json.dumps({"plans": {}, "questions": {}, "blocked": {}}),
+        encoding="utf-8",
+    )
+
+    # No prerequisite-capture snapshot: that evidence absence remains
+    # recorded, independently of the complete Pre release authority.
     artifacts: dict = {}
     g.concepts_from_mmd(
         source, subject="Mathematics", live=True,
@@ -1183,6 +1352,9 @@ def test_a_restored_checkpoint_reads_the_capture_back_or_records_its_absence(
     assert "source.phase3-prelearn-capture.json" in artifacts[
         "phase3_prerequisites_absent"
     ]
+    assert g.valid_phase3_pre_release_bundle(
+        artifacts[g.PHASE3_PRE_RELEASE_FIELD]
+    )
 
     # The snapshot the first run left beside its decision store.
     (tmp_path / "source.phase3-prelearn-capture.json").write_text(
@@ -1195,6 +1367,59 @@ def test_a_restored_checkpoint_reads_the_capture_back_or_records_its_absence(
     )
     assert restored["phase3_prerequisites"] == CAPTURE
     assert "phase3_prerequisites_absent" not in restored
+
+
+def test_legacy_terminal_without_pre_map_replays_phase3_not_post_semantics(
+    monkeypatch, tmp_path,
+):
+    """Missing legacy authority invalidates only the terminal shortcut."""
+
+    from app.services import canonical_source_phase3 as phase3_core
+    from app.services import generation as g
+
+    checkpoint = _final_content_checkpoint(g)
+    checkpoint["stage_schema_version"] = 7
+    source = "# T\nA short source-grounded discussion of fractions."
+    monkeypatch.setattr(
+        phase3_core, "active_session", lambda: {"artifact_dir": str(tmp_path)}
+    )
+
+    def fake_pre_final(_mmd, **_kwargs):
+        assert _kwargs["allow_final_checkpoint"] is False
+        return (
+            copy.deepcopy(checkpoint["records"]),
+            copy.deepcopy(checkpoint["question_task_inventory"]),
+            copy.deepcopy(checkpoint["mined_types"]),
+            {},
+        )
+
+    replayed = []
+
+    def fake_prepare(out, **kwargs):
+        replayed.append(True)
+        carry = kwargs["phase3_carry"]
+        carry.update({
+            "prerequisites": {},
+            "pre_map": {"rows": [], "topics": []},
+            "pre_questions": {
+                "plans": {}, "questions": {}, "blocked": {},
+            },
+            "pre_snapshot_writes": {},
+        })
+        return out
+
+    monkeypatch.setattr(g, "_run_live_concept_pre_final_stages", fake_pre_final)
+    monkeypatch.setattr(g, "_prepare_final_concept_content", fake_prepare)
+    artifacts: dict = {}
+    g.concepts_from_mmd(
+        source, subject="Mathematics", live=True,
+        resume_checkpoint=checkpoint, artifacts=artifacts,
+    )
+
+    assert replayed == [True]
+    assert g.valid_phase3_pre_release_bundle(
+        artifacts[g.PHASE3_PRE_RELEASE_FIELD]
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -229,6 +229,12 @@ def test_source_topic_review_invalidates_stale_downstream_checkpoints():
         question_task_inventory={"items": [], "stats": {}},
         mined_types={"types": []},
         method_row_snapshot=[],
+        **{
+            g.PHASE3_PRE_RELEASE_FIELD: g.phase3_pre_release_bundle(
+                {"rows": [], "topics": []},
+                {"plans": {}, "questions": {}, "blocked": {}},
+            )
+        },
     )
     review = g._make_concept_checkpoint(
         "source_topic_review",
@@ -528,6 +534,12 @@ def test_stale_post_type_checkpoint_rewinds_to_human_topic_gate_before_api(
         question_task_inventory={"items": [], "stats": {}},
         mined_types={"types": []},
         method_row_snapshot=[],
+        **{
+            g.PHASE3_PRE_RELEASE_FIELD: g.phase3_pre_release_bundle(
+                {"rows": [], "topics": []},
+                {"plans": {}, "questions": {}, "blocked": {}},
+            )
+        },
     )
 
     def forbidden(*_args, **_kwargs):

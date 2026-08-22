@@ -12,14 +12,14 @@ from app.services import openai_usage, progress
 
 class _Response:
     def __init__(self, model="test-model", prompt=100, completion=40,
-                 reasoning=25):
+                 reasoning=25, cached=0, cache_write=0):
         self.model = model
         self.usage = type("U", (), {
             "prompt_tokens": prompt,
             "completion_tokens": completion,
             "total_tokens": prompt + completion,
             "prompt_tokens_details": type("D", (), {
-                "cached_tokens": 0, "cache_write_tokens": 0,
+                "cached_tokens": cached, "cache_write_tokens": cache_write,
             })(),
             "completion_tokens_details": type("D", (), {
                 "reasoning_tokens": reasoning,
@@ -30,7 +30,7 @@ class _Response:
 def test_calls_attribute_to_the_active_stage_and_lane():
     with openai_usage.track():
         progress.step("Stage One")
-        openai_usage.record_response(_Response())
+        openai_usage.record_response(_Response(cached=30, cache_write=20))
         with progress.label_scope("Inventory · early track"):
             openai_usage.record_response(_Response(prompt=10, completion=5,
                                                    reasoning=1))
@@ -53,11 +53,15 @@ def test_calls_attribute_to_the_active_stage_and_lane():
     plain = rows[("Stage One", "")]
     assert plain["request_count"] == 1
     assert plain["input_tokens"] == 100
+    assert plain["cached_input_tokens"] == 30
+    assert plain["cache_write_tokens"] == 20
     assert plain["output_tokens"] == 40
     assert plain["reasoning_tokens"] == 25
     assert plain["first_ts"] > 0 and plain["last_ts"] >= plain["first_ts"]
     lane_row = rows[("Stage One", "Inventory · early track")]
     assert lane_row["total_tokens"] == 15
+    assert lane_row["cached_input_tokens"] == 0
+    assert lane_row["cache_write_tokens"] == 0
     # Order is first-seen — the console renders stages as they happened.
     assert [row["stage"] for row in summary["stages"]] == [
         "Stage One", "Stage One", "Stage Two"]

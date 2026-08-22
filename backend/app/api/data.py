@@ -64,12 +64,18 @@ async def import_workbook(file: UploadFile = File(...), db: Session = Depends(ge
         tmp.write(raw_bytes)
         tmp_path = Path(tmp.name)
     try:
-        counts = reader.import_workbook(db, tmp_path)
+        counts = reader.import_workbook(
+            db, tmp_path, strict_content=True,
+        )
     except layouts.WorkbookLayoutError as exc:
         # The workbook's column geometry could not be established, so nothing
         # was read and nothing was written. Refusing the upload loses nothing
         # and is instantly actionable; reading it wrongly would silently
         # corrupt every identity on every row (spec-step8 T6).
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except reader.WorkbookContentError as exc:
+        # Current Q21 medium/rubric/option/table defects are refused by a
+        # read-only preflight before the importer can create a chapter row.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         tmp_path.unlink(missing_ok=True)

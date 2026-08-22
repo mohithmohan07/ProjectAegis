@@ -31,6 +31,10 @@ from .. import models
 from ..services import directory, identity, katex_rules
 
 
+class WorkbookContentError(ValueError):
+    """A recognized workbook contains content unsafe to persist."""
+
+
 def _parse_answers(
     qd: dict, kind: str, sheet_layout: layouts.SheetLayout,
 ) -> tuple[list[dict], list[dict]]:
@@ -149,6 +153,10 @@ def _format_issues(label: str, *texts: str) -> list[str]:
         "raw_math_expression": (
             "raw equation found — use [Katex]...[/Katex]"),
         "raw_latex": "raw LaTeX found outside a [Katex] tag",
+        "unsupported_table": (
+            "KaTeX tabular/array markup is unsupported; use a source image "
+            "or row/column-labelled plain text"
+        ),
         "unbalanced_image": "unclosed [img] tag",
         "invalid_image_src": "[img] without a full HTTPS src URL",
         "missing_image_alt": "[img] missing alt text",
@@ -163,6 +171,65 @@ def _format_issues(label: str, *texts: str) -> list[str]:
         message = messages.get(code)
         if message:
             issues.append(f"{label}: {message}")
+    return issues
+
+
+def _answer_format_issues(
+    label: str, answers: list[dict], sub_questions: list[dict],
+) -> list[str]:
+    """Validate typed answer_content cells independently of rich text."""
+
+    messages = {
+        "unsupported_table": "contains unsupported tabular/array markup",
+        "equation_katex_wrapper": (
+            "Equation content must be raw LaTeX without [Katex]"
+        ),
+        "equation_math_delimiter": (
+            "Equation content must not include math delimiters"
+        ),
+        "equation_non_latex_markup": (
+            "Equation content must not include image/link markup"
+        ),
+        "equation_plain_text": (
+            "Equation prose must be encoded inside a TeX text atom"
+        ),
+        "phrases_katex": "Phrases content must not include [Katex]",
+        "phrases_latex": "Phrases content must not include LaTeX",
+        "phrases_math_delimiter": (
+            "Phrases content must not include math delimiters"
+        ),
+        "phrases_markup": (
+            "Phrases content must not include image/link markup"
+        ),
+    }
+    issues: list[str] = []
+    for position, answer in enumerate(answers, start=1):
+        content = (
+            answer.get("answer_content")
+            if "answer_content" in answer
+            else answer.get("answer")
+        )
+        if content is None:
+            continue
+        for code in katex_rules.answer_cell_issues(
+            str(answer.get("answer_type") or ""), str(content or "")
+        ):
+            issues.append(
+                f"{label}: answer/rubric block {position}: "
+                f"{messages.get(code, code)}"
+            )
+    for sub_position, subquestion in enumerate(sub_questions, start=1):
+        for keyword_position, keyword in enumerate(
+            subquestion.get("keywords") or [], start=1
+        ):
+            for code in katex_rules.answer_cell_issues(
+                str(keyword.get("answer_type") or ""),
+                str(keyword.get("keyword") or ""),
+            ):
+                issues.append(
+                    f"{label}: subquestion {sub_position} keyword "
+                    f"{keyword_position}: {messages.get(code, code)}"
+                )
     return issues
 
 
@@ -192,12 +259,170 @@ def _sheet_headers(wb) -> dict[str, tuple]:
     return headers
 
 
-def import_workbook(db: Session, path: Path) -> dict:
+def _blocking_content_issues(wb, identified) -> list[str]:
+    """Find mechanical content defects before the import mutates the DB."""
+
+    issues: list[str] = []
+
+    def flag(message: str) -> None:
+        if len(issues) < _MAX_ISSUES:
+            issues.append(message)
+
+    for found in identified.sheets:
+        kind = found.kind
+        sheet_name = found.sheet_name
+        sheet_layout = found.sheet
+        worksheet = wb[sheet_name]
+        for row_number, row in enumerate(
+            worksheet.iter_rows(min_row=3, values_only=True), start=3,
+        ):
+            if row is None or not any(row):
+                continue
+            question = sheet_layout.block_values(row, "question")
+            label = str(question.get("question_label") or "").strip()
+            row_label = label or f"{sheet_name!r} row {row_number}"
+            answers, sub_questions = _parse_answers(
+                question, kind, sheet_layout,
+            )
+            normalized_answers = [dict(answer) for answer in answers]
+            normalized_sub_questions = [
+                {
+                    **dict(subquestion),
+                    "keywords": [
+                        dict(keyword)
+                        for keyword in subquestion.get("keywords") or []
+                    ],
+                }
+                for subquestion in sub_questions
+            ]
+            for position, answer in enumerate(normalized_answers, start=1):
+                answer["answer_type"] = normalize_answer_type(
+                    str(answer.get("answer_type") or "")
+                )
+                if answer["answer_type"] not in ANSWER_TYPES:
+                    flag(
+                        f"{row_label}: answer/rubric block {position} has "
+                        f"unsupported or blank answer_type "
+                        f"{answer['answer_type']!r}"
+                    )
+                content_field = (
+                    "answer_content"
+                    if "answer_content" in answer
+                    else "answer" if "answer" in answer else ""
+                )
+                if content_field:
+                    answer[content_field] = katex_rules.raw_answer_cell(
+                        str(answer.get("answer_type") or ""),
+                        str(answer.get(content_field) or ""),
+                    )
+            for subquestion in normalized_sub_questions:
+                for keyword_position, keyword in enumerate(
+                    subquestion.get("keywords") or [], start=1,
+                ):
+                    keyword["answer_type"] = normalize_answer_type(
+                        str(keyword.get("answer_type") or "")
+                    )
+                    if keyword["answer_type"] not in ANSWER_TYPES:
+                        flag(
+                            f"{row_label}: keyword block {keyword_position} "
+                            "has unsupported or blank answer_type "
+                            f"{keyword['answer_type']!r}"
+                        )
+                    keyword["keyword"] = katex_rules.raw_answer_cell(
+                        str(keyword.get("answer_type") or ""),
+                        str(keyword.get("keyword") or ""),
+                    )
+            for field in (
+                "question", "question_text", "display_answer",
+                "answer_explanation",
+            ):
+                if "unsupported_table" in katex_rules.rich_text_issues(
+                    str(question.get(field) or ""),
+                    require_canonical_case=False,
+                ):
+                    flag(
+                        f"{row_label}: {field} contains unsupported table "
+                        "markup (unsupported_table)"
+                    )
+            for position, subquestion in enumerate(
+                sub_questions, start=1,
+            ):
+                if "unsupported_table" in katex_rules.rich_text_issues(
+                    str(subquestion.get("text") or ""),
+                    require_canonical_case=False,
+                ):
+                    flag(
+                        f"{row_label}: sub_question_{position} contains "
+                        "unsupported table markup (unsupported_table)"
+                    )
+            for position, answer in enumerate(answers, start=1):
+                for field in ("answer_display",):
+                    if "unsupported_table" in katex_rules.rich_text_issues(
+                        str(answer.get(field) or ""),
+                        require_canonical_case=False,
+                    ):
+                        flag(
+                            f"{row_label}: {field}_{position} contains "
+                            "unsupported table markup (unsupported_table)"
+                        )
+            for issue in _answer_format_issues(
+                row_label,
+                normalized_answers,
+                normalized_sub_questions,
+            ):
+                flag(issue)
+            if kind == "descriptive":
+                try:
+                    marks = float(question.get("marks") or 0)
+                except (TypeError, ValueError):
+                    marks = 0.0
+                populated_rubrics = sum(
+                    bool(str(answer.get("answer_content") or "").strip())
+                    for answer in normalized_answers
+                )
+                if marks == 4 and populated_rubrics < 2:
+                    flag(
+                        f"{row_label}: 4-mark descriptive requires at "
+                        "least two answer/rubric blocks"
+                    )
+            if kind == "objective":
+                option_text = str(
+                    question.get("question_text")
+                    or question.get("question")
+                    or ""
+                )
+                uppercase_labels = (
+                    katex_rules.uppercase_objective_option_labels(
+                        option_text,
+                        len(sheet_layout.answer_block_numbers),
+                    )
+                )
+                if uppercase_labels:
+                    flag(
+                        f"{row_label}: question_text uses uppercase "
+                        "objective option label(s) "
+                        f"{', '.join(uppercase_labels)}; use lowercase "
+                        "labels (uppercase_objective_option_label)"
+                    )
+    return issues
+
+
+def import_workbook(
+    db: Session,
+    path: Path,
+    *,
+    strict_content: bool = False,
+) -> dict:
     """Import every content sheet; returns counts of created nodes + issues.
 
     Raises ``WorkbookLayoutError`` (mapped to 422 by ``api/data.py``) when the
     workbook matches no registered layout. The refusal happens before any
     ``db.add``, so an unidentified file imports nothing at all.
+
+    ``strict_content=True`` is the public-upload contract: current mechanical
+    Q21 defects raise ``WorkbookContentError`` before any query/mutation.
+    Bootstrap and explicit migration callers keep the default so frozen
+    legacy workbooks import with their existing review flags.
     """
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
     try:
@@ -205,6 +430,21 @@ def import_workbook(db: Session, path: Path) -> dict:
     except WorkbookLayoutError:
         wb.close()
         raise
+    # Public uploads use the current owner contract and fail closed before a
+    # write. Internal bootstrap/migration callers deliberately keep the
+    # historic flag-and-import mode so the frozen legacy database workbook
+    # can be loaded and reviewed rather than making application startup
+    # impossible. The API is the only untrusted persistence boundary.
+    blocking_issues = (
+        _blocking_content_issues(wb, identified)
+        if strict_content else []
+    )
+    if blocking_issues:
+        wb.close()
+        raise WorkbookContentError(
+            "workbook content validation failed before import: "
+            + "; ".join(blocking_issues)
+        )
     counts: dict = {"chapters": 0, "topics": 0, "concepts": 0, "groups": 0,
                     "questions": 0, "question_tags": 0, "issues": [],
                     "layout_id": identified.layout_id}
@@ -697,17 +937,56 @@ def import_workbook(db: Session, path: Path) -> dict:
                 a["answer_type"] = normalize_answer_type(a.get("answer_type", ""))
                 if a["answer_type"] and a["answer_type"] not in ANSWER_TYPES:
                     _flag(f"{label}: unknown answer_type {a['answer_type']!r}")
+                content_field = (
+                    "answer_content"
+                    if "answer_content" in a
+                    else "answer" if "answer" in a else ""
+                )
+                if content_field:
+                    a[content_field] = katex_rules.raw_answer_cell(
+                        a.get("answer_type", ""),
+                        a.get(content_field, ""),
+                    )
+            for subquestion in sub_questions:
+                for keyword in subquestion.get("keywords") or []:
+                    keyword["answer_type"] = normalize_answer_type(
+                        keyword.get("answer_type", "")
+                    )
+                    if (
+                        keyword["answer_type"]
+                        and keyword["answer_type"] not in ANSWER_TYPES
+                    ):
+                        _flag(
+                            f"{label}: unknown keyword answer_type "
+                            f"{keyword['answer_type']!r}"
+                        )
+                    keyword["keyword"] = katex_rules.raw_answer_cell(
+                        keyword.get("answer_type", ""),
+                        keyword.get("keyword", ""),
+                    )
 
             # ---- Validation: weightage sum vs marks; content formats ----
             if kind in {"subjective", "descriptive"} and marks:
                 total = _weightage_sum(answers, kind)
                 if total is not None and abs(total - marks) > 0.01:
                     _flag(f"{label}: answer weightage sum {total:g} != marks {marks:g}")
+            if kind == "descriptive" and marks == 4 and len(answers) < 2:
+                _flag(
+                    f"{label}: 4-mark descriptive requires at least two "
+                    "answer/rubric blocks"
+                )
             for issue in _format_issues(
-                label or f"row {row_i}", qd.get("question", ""),
+                label or f"row {row_i}",
+                qd.get("question", ""),
+                qd.get("question_text", ""),
+                qd.get("display_answer", ""),
                 qd.get("answer_explanation", ""),
-                *(str(a.get("answer_content", "")) + str(a.get("answer", ""))
-                  for a in answers),
+                *(str(subquestion.get("text") or "")
+                  for subquestion in sub_questions),
+            ):
+                _flag(issue)
+            for issue in _answer_format_issues(
+                label or f"row {row_i}", answers, sub_questions,
             ):
                 _flag(issue)
 

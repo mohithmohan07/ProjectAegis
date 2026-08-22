@@ -16,6 +16,13 @@ from app.services import (
 from app.services import directory, generation as g
 
 
+def _empty_pre_bundle() -> dict:
+    return g.phase3_pre_release_bundle(
+        {"rows": [], "topics": []},
+        {"plans": {}, "questions": {}, "blocked": {}},
+    )
+
+
 def _tracked_source_sections(filename):
     source = (Path(__file__).parents[1] / "data" / "Testing" / filename).read_text(
         encoding="utf-8")
@@ -4594,7 +4601,7 @@ def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
     inventory = {"items": [], "stats": {}}
     mined_types = {"types": []}
     prior_stage = g._make_concept_checkpoint(
-        "post_type_assignment",
+        "pre_type_assignment",
         records=all_records,
         question_task_inventory=inventory,
         mined_types=mined_types,
@@ -4606,6 +4613,7 @@ def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
     checkpoint_history = {
         "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
@@ -4616,6 +4624,13 @@ def test_final_checkpoint_missing_source_topic_resumes_from_prior_stage(
 
     def finalize(records, **kwargs):
         finalizer_calls.append((records, kwargs["source_topic_excerpts"]))
+        kwargs["phase3_carry"].update({
+            "pre_map": {"rows": [], "topics": []},
+            "pre_questions": {
+                "plans": {}, "questions": {}, "blocked": {},
+            },
+            "pre_snapshot_writes": {},
+        })
         return records
 
     monkeypatch.setattr(g, "_prepare_final_concept_content", finalize)
@@ -4852,6 +4867,7 @@ def test_saved_final_checkpoint_reconciles_wrong_figure_tag_without_api(
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
     emitted = []
 
@@ -4946,6 +4962,7 @@ def test_saved_final_checkpoint_restores_missing_inventory_example_without_api(
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
     emitted = []
 

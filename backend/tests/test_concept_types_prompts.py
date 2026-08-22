@@ -6,6 +6,16 @@ import pytest
 from app.services import generation as g
 
 
+def _complete_empty_pre_authority(kwargs: dict) -> None:
+    kwargs["phase3_carry"].update({
+        "pre_map": {"rows": [], "topics": []},
+        "pre_questions": {
+            "plans": {}, "questions": {}, "blocked": {},
+        },
+        "pre_snapshot_writes": {},
+    })
+
+
 def test_concepts_system_requires_numeric_types_guidance():
     system = g._concepts_system("Mathematics")
     assert "Extract ONLY a clean teachable concept skeleton" in system
@@ -1006,6 +1016,7 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
         # output. (This topic teaches one concept, so that output carries no
         # culmination row — a culmination consolidates several concepts.)
         assert [r["concept_title"] for r in records] == culmination_output
+        _complete_empty_pre_authority(kw)
         return records
 
     monkeypatch.setattr(g, "_build_culminations_via_api", fake_culminations)
@@ -1030,8 +1041,9 @@ def test_pipeline_builds_culminations_before_types(monkeypatch):
         "question_inventory",
         "type_taxonomy_ready",
         "pre_type_assignment",
-        # The former 91% checkpoint claimed allocation before topology was
-        # final. The next durable artifact is now the validated 98% map.
+        # Rewritten Phase 3 now has a durable boundary carrying the exact Pre
+        # map/questions before terminal validation.
+        "post_type_assignment",
         "final_content_ready",
     ]
     pre_type_checkpoint = next(
@@ -1066,6 +1078,7 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
         # The rewritten Phase 3 owns everything after the 81% boundary; the
         # resume must reach it without replaying any pre-81% GPT stage.
         assigned.append([dict(row) for row in records])
+        _complete_empty_pre_authority(kw)
         return records
 
     monkeypatch.setattr(g, "_prepare_final_concept_content", fake_final_content)
@@ -1115,6 +1128,7 @@ def test_pipeline_resume_checkpoint_skips_expensive_gpt_stages(monkeypatch):
     assert assigned
     assert out
     assert [checkpoint["stage"] for checkpoint in callbacks] == [
+        "post_type_assignment",
         "final_content_ready",
     ]
 
@@ -1182,7 +1196,7 @@ def test_skeleton_chunk_checkpoint_resumes_after_completed_chunks(monkeypatch):
     assert len(checkpoints[-1]["completed_chunks"]) == 3
 
 
-def test_post_type_checkpoint_reallocates_on_final_topology(
+def test_pre_type_checkpoint_reallocates_on_final_topology(
     monkeypatch,
 ):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
@@ -1196,6 +1210,7 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
         allocations.append([
             record["concept_title"] for record in records
         ])
+        _complete_empty_pre_authority(_kwargs)
         return records
 
     monkeypatch.setattr(
@@ -1217,9 +1232,9 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
     checkpoint = {
         "schema_version": g._CONCEPT_CHECKPOINT_SCHEMA,
         "stage_schema_version": (
-            g._CONCEPT_CHECKPOINT_STAGES["post_type_assignment"]["version"]
+            g._CONCEPT_CHECKPOINT_STAGES["pre_type_assignment"]["version"]
         ),
-        "stage": "post_type_assignment",
+        "stage": "pre_type_assignment",
         "records": [
             {
                 "topic": "T",
@@ -1257,15 +1272,16 @@ def test_post_type_checkpoint_reallocates_on_final_topology(
 
     assert records
     # A resumed 91% artifact cannot skip reallocation: the Phase 3 finalizer
-    # runs exactly once over the saved topology (only a final_content_ready
-    # checkpoint bypasses it), and the next durable artifact is the 98% map.
+    # runs exactly once over the saved topology.  Its direct Pre authority is
+    # checkpointed before the final content boundary.
     assert allocations == [["C", "Culmination - C"]]
     assert [item["stage"] for item in callbacks] == [
+        "post_type_assignment",
         "final_content_ready",
     ]
 
 
-def test_post_type_checkpoint_reassigns_when_anchor_refresh_adds_uncertified_qid(
+def test_pre_type_checkpoint_reassigns_when_anchor_refresh_adds_uncertified_qid(
     monkeypatch,
 ):
     records = [{
@@ -1280,7 +1296,7 @@ def test_post_type_checkpoint_reassigns_when_anchor_refresh_adds_uncertified_qid
         "keywords": "",
     }]
     checkpoint = g._make_concept_checkpoint(
-        "post_type_assignment",
+        "pre_type_assignment",
         records=records,
         question_task_inventory={"items": [], "stats": {}},
         mined_types={"types": []},
@@ -1406,6 +1422,12 @@ def test_final_content_checkpoint_skips_semantic_api_repair(monkeypatch):
         question_task_inventory={"items": [], "stats": {}},
         mined_types={"types": []},
         method_row_snapshot=[],
+        **{
+            g.PHASE3_PRE_RELEASE_FIELD: g.phase3_pre_release_bundle(
+                {"rows": [], "topics": []},
+                {"plans": {}, "questions": {}, "blocked": {}},
+            )
+        },
     )
     callbacks = []
 

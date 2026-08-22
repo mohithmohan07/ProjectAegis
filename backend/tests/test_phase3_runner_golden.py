@@ -583,6 +583,67 @@ def test_settled_rows_snapshot_lands_beside_the_store(
     assert len(capture["prerequisites"]) == 16
 
 
+def test_pre_snapshot_replace_is_atomic_and_reports_failure(
+    tmp_path, monkeypatch,
+):
+    """A failed duplicate write cannot truncate the last durable snapshot."""
+
+    target = tmp_path / "source.phase3-prelearn-map.json"
+    target.write_text('{"rows":[{"old":true}]}', encoding="utf-8")
+
+    def fail_replace(_source, _target):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(runner.os, "replace", fail_replace)
+    status = runner._atomic_pre_snapshot(
+        {"rows": [{"new": True}]},
+        tmp_path / "phase3-decisions",
+        target.name,
+    )
+
+    assert status["state"] == "failed"
+    assert "simulated replace failure" in status["error"]
+    assert target.read_text(encoding="utf-8") == '{"rows":[{"old":true}]}'
+    assert not list(tmp_path.glob(f".{target.name}.*.tmp"))
+
+
+def test_missing_question_sidecar_replays_only_paid_prequestion_decisions(
+    golden_envelope, replay_providers, tmp_path, monkeypatch,
+):
+    """A legacy map can recover Q4 from exact decide-once keys, API-free."""
+
+    from app.services import canonical_source_phase3 as phase3_core
+    from app.services import concept_topology_contract as topology
+    from app.services.phase3 import prequestions
+
+    store_dir = tmp_path / "phase3-decisions"
+    original = runner.run(
+        golden_envelope, store_dir=store_dir, providers=replay_providers,
+    )
+    (tmp_path / "source.phase3-envelope.json").write_text(
+        json.dumps({"envelope": golden_envelope}), encoding="utf-8",
+    )
+    questions_path = tmp_path / topology.PREQUESTIONS_SNAPSHOT
+    questions_path.unlink()
+    monkeypatch.setattr(
+        phase3_core, "active_session",
+        lambda: {"artifact_dir": str(tmp_path)},
+    )
+
+    def no_api(_request):
+        raise AssertionError("paid Pre-question decisions must replay")
+
+    monkeypatch.setattr(prequestions, "_live_plan", no_api)
+    monkeypatch.setattr(prequestions, "_live_author", no_api)
+
+    restored, defects = topology.restored_pre_release()
+
+    assert defects == []
+    assert restored["pre_questions"] == original["pre_questions"]
+    assert restored["snapshot_writes"]["questions"]["state"] == "written"
+    assert questions_path.is_file()
+
+
 def test_the_migration_flag_is_retired():
     # PR 4: the rewritten Phase 3 is the only post-81% path; the
     # AEGIS_PHASE3_REWRITE flag no longer exists anywhere.
