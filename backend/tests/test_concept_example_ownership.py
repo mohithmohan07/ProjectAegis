@@ -292,6 +292,115 @@ def test_an_interactive_route_records_without_spending(monkeypatch):
     )
 
 
+def test_meta_normalizes_identically_from_every_staging_source():
+    # The staging exits source the chapter identity differently (captured
+    # checkpoint, live job property, empty dict); the payload projection
+    # must be byte-identical or the decide-once replay silently misses.
+    from_checkpoint = ownership._normalized_meta({
+        "board": "cbse", "grade": "6", "subject": "english",
+        "unit": "poem", "chapter_title": "t", "chapter_code": "c",
+        "extra_key_the_property_never_carries": "x",
+    })
+    from_property = ownership._normalized_meta({
+        "board": "cbse", "grade": "6", "subject": "english",
+        "unit": "poem", "chapter_title": "t", "chapter_code": "c",
+    })
+    assert from_checkpoint == from_property
+    assert ownership._normalized_meta(None) == ownership._normalized_meta({})
+
+
+def test_the_interactive_route_replays_a_recorded_verdict_for_free(
+    monkeypatch,
+):
+    # force_release must surface an already-paid adjudication from the
+    # decide-once store instead of downgrading the newest staged release
+    # to an empty unadjudicated record.
+    from app.services import release_refiner
+
+    records = _unowned_records()
+    inventory = _inventory("A completely different source task.")
+    findings = g._unexpected_rendered_type_examples(records, inventory)
+    store = kernel.DecisionStore()
+    seeded, _flags = ownership.decide_example_ownership(
+        findings,
+        inventory=inventory,
+        meta={},
+        envelope_sha256="",
+        provider=lambda _p: {"verdicts": [
+            {"example_index": 0, "verdict": "unowned", "owner_qid": "",
+             "reason": "matches nothing"},
+        ], "confidence": 0.9, "rationale": "r"},
+        critic=lambda _p: {"verdict": "concur", "confidence": 0.9,
+                           "issues": []},
+        store=store,
+    )
+    assert seeded[0]["verdict"] == "unowned"
+
+    monkeypatch.setattr(
+        release_refiner, "decision_store_for_job", lambda _job_id: store,
+    )
+    monkeypatch.setattr(
+        ownership, "decide_example_ownership",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("the replay path must not decide again")
+        ),
+    )
+
+    issue = ownership.adjudication_issue(
+        records, inventory, meta={}, job_id=14, allow_live=False,
+    )
+
+    assert issue is not None
+    assert issue["details"]["adjudicated"] is True
+    assert issue["details"]["durable_store"] is True
+    assert issue["details"]["verdicts"][0]["verdict"] == "unowned"
+
+
+def test_a_missing_durable_store_is_recorded_not_silent(monkeypatch):
+    from app.services import canonical_source_phase3 as phase3_core
+    from app.services import release_refiner
+
+    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: False)
+    monkeypatch.setattr(
+        release_refiner, "decision_store_for_job", lambda _job_id: None,
+    )
+
+    issue = ownership.adjudication_issue(
+        _unowned_records(),
+        _inventory("A completely different source task."),
+        meta={},
+        job_id=15,
+    )
+
+    assert issue is not None
+    assert issue["details"]["durable_store"] is False
+
+
+def test_an_empty_candidate_set_records_without_spending(monkeypatch):
+    # An inventory with no task items makes adjudication a foregone
+    # conclusion — the empty inventory IS the anomaly. Record it, spend
+    # nothing, even with the live judge available.
+    from app.services import canonical_source_phase3 as phase3_core
+
+    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        ownership, "decide_example_ownership",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("an empty candidate set must not call the judge")
+        ),
+    )
+
+    issue = ownership.adjudication_issue(
+        _unowned_records(), {"items": []}, meta={}, job_id=16,
+    )
+
+    assert issue is not None
+    assert issue["details"]["adjudicated"] is False
+    assert "no candidate owners" in (
+        issue["details"]["verdicts"][0]["reason"]
+    )
+
+
 def test_a_clean_scan_stages_nothing():
     prompt = "The one real source task."
     records = [{

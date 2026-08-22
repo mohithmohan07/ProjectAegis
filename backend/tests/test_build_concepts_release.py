@@ -240,6 +240,68 @@ def test_stage_release_records_unowned_examples_on_its_own_ledger(db):
     assert recorded[0]["qids"] == []
 
 
+def test_inventory_fallback_reaches_the_job_and_strips_release_slots(db):
+    # _newest_checkpoint_material returns {} when the checkpoint carries
+    # no inventory, which used to satisfy the isinstance test and leave
+    # the job.question_inventory fallback unreachable — the ownership
+    # scan then ran against an EMPTY inventory and flagged every rendered
+    # Example as unowned. The empty snapshot now falls through to the
+    # job's stored inventory, minus the lane release slots (a prior
+    # staged release must never nest inside a new payload's inventory).
+    job, _chapter = _job(db)
+    job.question_inventory = {
+        "items": [{"qid": "QINV-0001", "raw_task": "A real task."}],
+        "stats": {"items": 1},
+        release.RELEASE_KEY: {"records": [], "issues": []},
+        release.PRE_RELEASE_KEY: {"records": [], "issues": []},
+    }
+
+    fallback = release._job_inventory_fallback(job)
+
+    assert fallback["items"][0]["qid"] == "QINV-0001"
+    assert release.RELEASE_KEY not in fallback
+    assert release.PRE_RELEASE_KEY not in fallback
+
+
+def test_stage_release_hands_the_judge_the_captured_checkpoint_identity(
+    db, monkeypatch,
+):
+    # On the clean exit generate_post_learning has already cleared
+    # job.generation_checkpoint, so the live checkpoint_target_identity
+    # property is {} — the judge's chapter context must come from the
+    # checkpoint THIS staging resolved (the wrapper hands the captured
+    # one in), or the recorded decision loses its metadata on exactly
+    # the most common path.
+    from app.services import concept_example_ownership as ownership
+
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        ownership, "adjudication_issue",
+        lambda _records, _inventory, *, meta, job_id, allow_live=True: (
+            seen.append(dict(meta)) or None
+        ),
+    )
+    job, chapter = _job(db)
+    assert job.checkpoint_target_identity == {}
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+        checkpoint={"target_identity": {
+            "board": "cbse", "grade": "6", "subject": "english",
+            "unit": "poem", "chapter_title": "the school bell",
+            "chapter_code": "ch-2",
+        }},
+    )
+
+    assert seen and seen[0]["board"] == "cbse"
+    assert seen[0]["chapter_title"] == "the school bell"
+
+
 def test_release_workbook_orders_type_case_example_and_marks_errors(db):
     job, chapter = _job(db)
     release.stage_release(

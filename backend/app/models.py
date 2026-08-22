@@ -280,6 +280,15 @@ class AssessmentSession(Base):
     batches = relationship("BlueprintBatch", back_populates="session", cascade="all, delete-orphan")
 
 
+# The stable curriculum-destination vocabulary a resumable checkpoint
+# carries. One tuple: the checkpoint_target_identity property and every
+# consumer that projects an identity for a decision key read THIS, so
+# adding a field cannot silently diverge the two.
+CHECKPOINT_TARGET_IDENTITY_FIELDS = (
+    "board", "grade", "subject", "unit", "chapter_title", "chapter_code",
+)
+
+
 class UploadJob(Base):
     """An upload-based job: a document converted to MMD, then deposited/generated."""
 
@@ -381,13 +390,9 @@ class UploadJob(Base):
         identity = self.generation_checkpoint.get("target_identity")
         if not isinstance(identity, dict):
             return {}
-        fields = (
-            "board", "grade", "subject", "unit",
-            "chapter_title", "chapter_code",
-        )
         return {
             field: str(identity.get(field) or "")
-            for field in fields
+            for field in CHECKPOINT_TARGET_IDENTITY_FIELDS
         }
 
     @property

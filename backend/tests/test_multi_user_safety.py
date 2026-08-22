@@ -224,6 +224,34 @@ def test_a_wait_beyond_the_quiet_grace_is_spoken(monkeypatch):
     assert any("slot acquired after" in m for m in logs)
 
 
+def test_a_grace_that_consumes_the_whole_budget_reports_a_timeout(
+    monkeypatch,
+):
+    # With OPENAI_SLOT_WAIT_QUIET_SECONDS >= the timeout budget, the
+    # quiet acquire absorbs everything: the console must then say the
+    # wait TIMED OUT, not promise a wait that cannot follow.
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_QUIET_SECONDS", 5.0)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        g.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+    try:
+        with pytest.raises(g.OpenAIQueueTimeoutError):
+            g._acquire_openai_slot(gate, purpose="concept_mapping")
+    finally:
+        gate.release()
+
+    assert any("timed out after" in m for m in logs)
+    # The plain "about to start waiting" promise must not appear — the
+    # timed-out line (which also names the slot) replaces it.
+    assert not any("busy; waiting for a free" in m for m in logs)
+
+
 def test_persistent_rate_limit_eventually_fails_clearly(fake_openai, monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda s: None)
     monkeypatch.setattr(config, "OPENAI_TRANSIENT_RETRIES", 3)
