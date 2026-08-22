@@ -4701,16 +4701,41 @@ def generate_post_learning(
     job.deposit_scope_ids = [target_chapter_id]
     job.result_ids = created_ids
     job.generation_checkpoint = {}
-    job.detail = (
-        f"created {len(created_ids)} post-learning concepts, "
-        f"merged sources into {len(merged_ids)} existing"
+    # Release-first runs divert the deposit: the rows are captured for the
+    # staged release and NOTHING enters the database or the shared workbook
+    # here (the interceptor's ``written`` says so). Reporting "created 0"
+    # for such a run reads as total loss — say what actually happened.
+    staged_release_only = (
+        written.get("publication_status") == "staged_release_only"
     )
+    if staged_release_only:
+        # "Captured", not "staged": staging itself runs a moment later in
+        # the release wrapper, and this line must stay true even if that
+        # staging step fails and records its own error.
+        job.detail = (
+            f"captured {written.get('written', 0)} concept row(s) for the "
+            "staged release; database publication happens from the review "
+            "page"
+        )
+    else:
+        job.detail = (
+            f"created {len(created_ids)} post-learning concepts, "
+            f"merged sources into {len(merged_ids)} existing"
+        )
     db.commit()
     progress.set_progress(1.0, label="Done")
-    progress.log(
-        f"Created {len(created_ids)} post-learning concepts "
-        f"({len(merged_ids)} merged).", level="success")
-    progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
+    if staged_release_only:
+        progress.log(
+            f"Captured {written.get('written', 0)} concept row(s) for the "
+            "staged release; nothing enters the database until the release "
+            "is published from the review page.", level="success")
+    else:
+        progress.log(
+            f"Created {len(created_ids)} post-learning concepts "
+            f"({len(merged_ids)} merged).", level="success")
+        # Release-first runs skip this line: no shared workbook was
+        # written — the released workbook renders from the staged rows.
+        progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
     for issue in written.get("issues") or []:
         # Recorded, flagged, and visible to the reviewer — never a halt (Q13).
         progress.log(
@@ -4734,7 +4759,15 @@ def generate_post_learning(
         "concept_ids": created_ids + merged_ids,
         "rows_appended": written["written"],
         "sources_updated": written["sources_updated"],
-        "output_workbook": str(config.BULK_IMPORT_OUTPUT),
+        # The release wrapper replaces this dict with the staged result,
+        # but the payload must be truthful for any caller that reads it:
+        # a staged-only run wrote no shared workbook, so no path is
+        # claimed, and the publication status says which mode ran.
+        "publication_status": written.get(
+            "publication_status", "published"),
+        "output_workbook": (
+            "" if staged_release_only else str(config.BULK_IMPORT_OUTPUT)
+        ),
         "inventory_items": len((job.question_inventory or {}).get("items", [])),
         "output_certificate_sha256": str(
             (deposited_grounding or {}).get("certificate_sha256") or ""

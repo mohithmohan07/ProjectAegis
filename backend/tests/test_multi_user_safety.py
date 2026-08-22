@@ -175,6 +175,55 @@ def test_busy_openai_slot_fails_after_the_configured_wait(
     assert fake_openai.plan == []
 
 
+def test_a_slot_freed_within_the_quiet_grace_logs_nothing(monkeypatch):
+    # At full concurrency a handoff routinely takes well under a second;
+    # a live run's console was buried in busy/acquired pairs for 0-second
+    # waits. Within the quiet grace the wait is silent.
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_QUIET_SECONDS", 5.0)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        g.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+    releaser = threading.Timer(0.05, gate.release)
+    releaser.start()
+    try:
+        g._acquire_openai_slot(gate, purpose="concept_mapping")
+    finally:
+        releaser.cancel()
+        gate.release()
+
+    assert logs == []
+
+
+def test_a_wait_beyond_the_quiet_grace_is_spoken(monkeypatch):
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 30.0)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_QUIET_SECONDS", 0.05)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_LOG_SECONDS", 5.0)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        g.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+    releaser = threading.Timer(0.3, gate.release)
+    releaser.start()
+    try:
+        g._acquire_openai_slot(gate, purpose="concept_mapping")
+    finally:
+        releaser.cancel()
+        gate.release()
+
+    assert any("waiting for a free concept mapping slot" in m for m in logs)
+    assert any("slot acquired after" in m for m in logs)
+
+
 def test_persistent_rate_limit_eventually_fails_clearly(fake_openai, monkeypatch):
     monkeypatch.setattr(time, "sleep", lambda s: None)
     monkeypatch.setattr(config, "OPENAI_TRANSIENT_RETRIES", 3)

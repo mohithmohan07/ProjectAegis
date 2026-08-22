@@ -2672,12 +2672,12 @@ def _acquire_openai_slot(
 
     timeout = config.OPENAI_SLOT_WAIT_TIMEOUT_SECONDS
     purpose_label = str(purpose).replace("_", " ")
-    progress.log(
-        f"{_provider_label()} capacity is busy; waiting for a free "
-        f"{purpose_label} slot.",
-        level="warning",
-    )
     if timeout <= 0:
+        progress.log(
+            f"{_provider_label()} capacity is busy; waiting for a free "
+            f"{purpose_label} slot.",
+            level="warning",
+        )
         raise OpenAIQueueTimeoutError(
             f"{_provider_label()} capacity is busy and no queue wait is configured. "
             "Try again after another generation finishes."
@@ -2686,6 +2686,18 @@ def _acquire_openai_slot(
     import time
 
     started = time.monotonic()
+    # Quiet grace: at full concurrency a slot ordinarily frees within a
+    # few seconds, and logging every handoff buried live consoles in
+    # busy/acquired pairs. Only a wait that outlives the grace is spoken;
+    # the acquired line then reports the TOTAL wait including the grace.
+    quiet = min(config.OPENAI_SLOT_WAIT_QUIET_SECONDS, timeout)
+    if quiet > 0 and gate.acquire(timeout=quiet):
+        return
+    progress.log(
+        f"{_provider_label()} capacity is busy; waiting for a free "
+        f"{purpose_label} slot.",
+        level="warning",
+    )
     while True:
         elapsed = time.monotonic() - started
         remaining = timeout - elapsed
@@ -13531,6 +13543,7 @@ def _unexpected_rendered_type_examples(
         return [
             {
                 "example": _diagnostic_snippet(example),
+                "example_text": example,
                 "reason": "no_inventory_owner",
             }
             for example in _rendered_type_examples(records)
@@ -13553,6 +13566,7 @@ def _unexpected_rendered_type_examples(
             continue
         unexpected.append({
             "example": _diagnostic_snippet(example),
+            "example_text": example,
             "reason": "not_in_inventory",
         })
     return unexpected

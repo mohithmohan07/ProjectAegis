@@ -198,6 +198,48 @@ def test_stage_release_clears_manual_pause_and_highlights_the_affected_row(db):
     assert payload["issues"][0]["block_ids"] == ["BLK-0007"]
 
 
+def test_stage_release_records_unowned_examples_on_its_own_ledger(db):
+    # Q13/R4: a public Example with no exact inventory owner is recorded
+    # at STAGING, beside the QC audit, so every exit that stages rows
+    # carries the record — the log-only "closed-world validation remains
+    # blocked" defect class cannot recur. Dry mode records the finding
+    # unadjudicated rather than dropping it because the judge is off.
+    from app.services import concept_example_ownership as ownership
+
+    job, chapter = _job(db)
+    records = _records()
+    records[0]["concept_details"] += (
+        " // Types: Type 01: Alpha Case 01: c "
+        "Example 01: An invented Example no inventory item owns."
+    )
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=records,
+        inventory=_inventory(),
+        mined_types=_mined_types(),
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    recorded = [
+        issue for issue in payload["issues"]
+        if issue["code"] == ownership.UNOWNED_EXAMPLES_ISSUE_CODE
+    ]
+    assert len(recorded) == 1
+    assert recorded[0]["severity"] == "warning"
+    assert recorded[0]["details"]["adjudicated"] is False
+    assert recorded[0]["details"]["verdicts"][0]["example_text"].startswith(
+        "an invented example"
+    )
+    # Chapter-level record: no qid anchor, so the row-annotation pass
+    # cannot stamp released_with_errors onto rows whose Examples were
+    # ruled legitimate while the unowned ones (naming no qid) go unmarked.
+    assert recorded[0]["qids"] == []
+
+
 def test_release_workbook_orders_type_case_example_and_marks_errors(db):
     job, chapter = _job(db)
     release.stage_release(
