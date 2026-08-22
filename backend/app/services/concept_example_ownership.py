@@ -283,20 +283,27 @@ def build_issue(
             "adjudicated on this run. Review each against the source "
             "before accepting the chapter."
         )
+    # Deliberately NO ``qids`` anchor: the release annotates rows as
+    # errored by qid intersection, and the only qids a verdict can name
+    # belong to Examples ruled LEGITIMATE (source_variant /
+    # parser_fragment) — anchoring on them would stamp exactly the wrong
+    # rows while the genuinely unowned Examples, which name no qid, mark
+    # nothing. This is a chapter-level record; the verdicts in the
+    # details say which Example is which, owner qids included.
     return release._issue(
         code=UNOWNED_EXAMPLES_ISSUE_CODE,
         severity="warning",
         phase="concepts_release",
         message=message,
-        qids=sorted({
-            str(v.get("owner_qid") or "")
-            for v in verdicts
-            if str(v.get("owner_qid") or "")
-        }),
         details={
             "adjudicated": adjudicated,
             "policy_version": EXAMPLE_OWNERSHIP_POLICY_VERSION,
             "verdicts": [copy.deepcopy(dict(v)) for v in verdicts],
+            "owner_qids": sorted({
+                str(v.get("owner_qid") or "")
+                for v in verdicts
+                if str(v.get("owner_qid") or "")
+            }),
             "review_flags": list(review_flags),
         },
     )
@@ -308,6 +315,7 @@ def adjudication_issue(
     *,
     meta: Mapping[str, Any],
     job_id: int,
+    allow_live: bool = True,
 ) -> dict[str, Any] | None:
     """Scan the staging rows and return the issue to stage — never raise.
 
@@ -319,6 +327,11 @@ def adjudication_issue(
     ``adjudicated: false`` with the failure named: the finding never
     evaporates because the judge did (R4). The decision is decide-once in
     the job's durable store, so a re-stage replays the verdict for free.
+
+    ``allow_live=False`` records the finding WITHOUT any model call —
+    for interactive staging routes (``force_release``) that answer a
+    plain HTTP request and must not block on provider latency. The
+    deterministic record still ships; only the adjudication is skipped.
     """
 
     try:
@@ -352,7 +365,12 @@ def adjudication_issue(
         verdicts: list[dict[str, Any]]
         flags: list[str] = []
         adjudicated = False
-        if phase3_core.semantic_api_enabled():
+        if not allow_live:
+            verdicts = _unadjudicated(
+                "recorded without live adjudication (interactive "
+                "release route)"
+            )
+        elif phase3_core.semantic_api_enabled():
             try:
                 envelope_sha = next(
                     (

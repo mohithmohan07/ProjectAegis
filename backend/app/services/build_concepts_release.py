@@ -2185,6 +2185,7 @@ def stage_release(
     reason: str = "",
     refinements: Mapping[str, Any] | None = None,
     snapshot_defects: Sequence[str] = (),
+    live_example_adjudication: bool = True,
 ) -> dict[str, Any]:
     """Persist one release payload and clear every manual decision gate.
 
@@ -2315,9 +2316,13 @@ def stage_release(
     # Q13/R4: public Examples whose wording has no exact owner in the
     # source inventory are adjudicated by one recorded decision and ride
     # this same ledger. Decided HERE, beside the QC audit, so every exit
-    # that stages rows — clean, captured-failure, and both checkpoint
-    # exits — carries the record; the helper never raises, and a failed
-    # or unavailable judge still leaves the deterministic finding behind.
+    # that stages rows — the generation wrapper's four exits and the
+    # interactive force_release route — carries the record; the helper
+    # never raises, and a failed or unavailable judge still leaves the
+    # deterministic finding behind. Interactive callers pass
+    # ``live_example_adjudication=False``: they answer a plain HTTP
+    # request and must not block on provider latency, so they record the
+    # finding without spending.
     from . import concept_example_ownership
 
     ownership_issue = concept_example_ownership.adjudication_issue(
@@ -2325,6 +2330,7 @@ def stage_release(
         inventory_value,
         meta=dict(job.checkpoint_target_identity or {}),
         job_id=int(job.id),
+        allow_live=live_example_adjudication,
     )
     if ownership_issue is not None:
         issues.append(ownership_issue)
@@ -3357,6 +3363,9 @@ def force_release(
         db,
         job,
         reason="The user explicitly released the newest durable checkpoint.",
+        # This is a plain interactive HTTP route: record any unowned
+        # rendered Examples without blocking on the live judge.
+        live_example_adjudication=False,
     )
     return job
 

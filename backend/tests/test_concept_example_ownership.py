@@ -185,7 +185,12 @@ def test_the_issue_carries_every_verdict_and_stays_a_warning():
     )
     assert issue["code"] == ownership.UNOWNED_EXAMPLES_ISSUE_CODE
     assert issue["severity"] == "warning"
-    assert issue["qids"] == ["QINV-0001"]
+    # NO qids anchor: the release stamps rows as errored by qid
+    # intersection, and the only qids a verdict can name belong to
+    # Examples ruled LEGITIMATE — anchoring on them would mark exactly
+    # the wrong rows. Chapter-level record; owner qids ride the details.
+    assert issue["qids"] == []
+    assert issue["details"]["owner_qids"] == ["QINV-0001"]
     assert issue["details"]["adjudicated"] is True
     assert len(issue["details"]["verdicts"]) == 2
     assert "1 ruled genuinely unowned" in issue["message"]
@@ -256,6 +261,35 @@ def test_a_failing_live_judge_still_leaves_the_recorded_finding(
         issue["details"]["verdicts"][0]["reason"]
     )
     assert "quota" in issue["details"]["verdicts"][0]["reason"]
+
+
+def test_an_interactive_route_records_without_spending(monkeypatch):
+    # force_release answers a plain HTTP request: even with the live
+    # judge available, allow_live=False must record the finding without
+    # a single model call — the record ships, the latency does not.
+    from app.services import canonical_source_phase3 as phase3_core
+
+    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        ownership, "decide_example_ownership",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("interactive staging must not call the judge")
+        ),
+    )
+
+    issue = ownership.adjudication_issue(
+        _unowned_records(),
+        _inventory("A completely different source task."),
+        meta={},
+        job_id=13,
+        allow_live=False,
+    )
+
+    assert issue is not None
+    assert issue["details"]["adjudicated"] is False
+    assert "interactive release route" in (
+        issue["details"]["verdicts"][0]["reason"]
+    )
 
 
 def test_a_clean_scan_stages_nothing():

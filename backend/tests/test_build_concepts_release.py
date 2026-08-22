@@ -234,6 +234,10 @@ def test_stage_release_records_unowned_examples_on_its_own_ledger(db):
     assert recorded[0]["details"]["verdicts"][0]["example_text"].startswith(
         "an invented example"
     )
+    # Chapter-level record: no qid anchor, so the row-annotation pass
+    # cannot stamp released_with_errors onto rows whose Examples were
+    # ruled legitimate while the unowned ones (naming no qid) go unmarked.
+    assert recorded[0]["qids"] == []
 
 
 def test_release_workbook_orders_type_case_example_and_marks_errors(db):

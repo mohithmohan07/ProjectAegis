@@ -4733,9 +4733,8 @@ def generate_post_learning(
         progress.log(
             f"Created {len(created_ids)} post-learning concepts "
             f"({len(merged_ids)} merged).", level="success")
-    if not staged_release_only:
-        # In release-first mode no shared workbook was written here — the
-        # released workbook renders from the staged rows on download.
+        # Release-first runs skip this line: no shared workbook was
+        # written — the released workbook renders from the staged rows.
         progress.log(f"Output workbook path: {config.BULK_IMPORT_OUTPUT}")
     for issue in written.get("issues") or []:
         # Recorded, flagged, and visible to the reviewer — never a halt (Q13).
@@ -4760,7 +4759,15 @@ def generate_post_learning(
         "concept_ids": created_ids + merged_ids,
         "rows_appended": written["written"],
         "sources_updated": written["sources_updated"],
-        "output_workbook": str(config.BULK_IMPORT_OUTPUT),
+        # The release wrapper replaces this dict with the staged result,
+        # but the payload must be truthful for any caller that reads it:
+        # a staged-only run wrote no shared workbook, so no path is
+        # claimed, and the publication status says which mode ran.
+        "publication_status": written.get(
+            "publication_status", "published"),
+        "output_workbook": (
+            "" if staged_release_only else str(config.BULK_IMPORT_OUTPUT)
+        ),
         "inventory_items": len((job.question_inventory or {}).get("items", [])),
         "output_certificate_sha256": str(
             (deposited_grounding or {}).get("certificate_sha256") or ""
