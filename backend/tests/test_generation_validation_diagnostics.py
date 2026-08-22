@@ -5,6 +5,23 @@ import pytest
 from app.services import generation as g
 
 
+def _complete_empty_pre_authority(kwargs: dict) -> None:
+    kwargs["phase3_carry"].update({
+        "pre_map": {"rows": [], "topics": []},
+        "pre_questions": {
+            "plans": {}, "questions": {}, "blocked": {},
+        },
+        "pre_snapshot_writes": {},
+    })
+
+
+def _empty_pre_bundle() -> dict:
+    return g.phase3_pre_release_bundle(
+        {"rows": [], "topics": []},
+        {"plans": {}, "questions": {}, "blocked": {}},
+    )
+
+
 def _row(
     title: str,
     details: str,
@@ -1294,6 +1311,7 @@ def test_saved_final_checkpoint_repairs_rich_text_once_and_persists(
         question_task_inventory=checkpoint_inventory,
         mined_types=checkpoint_mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
     repaired_records = [
         _row(
@@ -1398,17 +1416,17 @@ def test_final_checkpoint_is_emitted_only_after_validation(monkeypatch):
         _culmination(topic="T"),
     ]
     checkpoint = g._make_concept_checkpoint(
-        "post_type_assignment",
+        "pre_type_assignment",
         records=records,
         question_task_inventory={"items": [], "stats": {}},
         mined_types={"types": []},
         method_row_snapshot=[],
     )
-    monkeypatch.setattr(
-        g,
-        "_prepare_final_concept_content",
-        lambda current, **_kwargs: current,
-    )
+    def finalize(current, **kwargs):
+        _complete_empty_pre_authority(kwargs)
+        return current
+
+    monkeypatch.setattr(g, "_prepare_final_concept_content", finalize)
     monkeypatch.setattr(
         g,
         "_validate_final_or_raise",
@@ -1465,7 +1483,7 @@ def test_invalid_inventory_checkpoint_rewinds_before_question_inventory():
     assert restored["stage"] == "description_method_snapshot"
 
 
-def test_legacy_81_percent_checkpoint_and_v6_without_owner_ledger_are_rejected():
+def test_legacy_81_percent_checkpoint_and_v7_without_owner_ledger_are_rejected():
     question = (
         "Apply the supplied procedure and report the requested numerical "
         "value."
@@ -1560,18 +1578,19 @@ def test_legacy_81_percent_checkpoint_and_v6_without_owner_ledger_are_rejected()
         records[0],
         basis="type_host_review",
     )
-    current_v6_without_owner_ledger = g._make_concept_checkpoint(
+    current_v7_without_owner_ledger = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
         question_task_inventory=inventory,
         mined_types=certified_mined,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
-    history["checkpoints"].append(current_v6_without_owner_ledger)
+    history["checkpoints"].append(current_v7_without_owner_ledger)
 
-    assert current_v6_without_owner_ledger["stage_schema_version"] == 6
+    assert current_v7_without_owner_ledger["stage_schema_version"] == 7
     assert not g._compatible_concept_checkpoint_entry(
-        current_v6_without_owner_ledger
+        current_v7_without_owner_ledger
     )
     assert g._newest_compatible_concept_checkpoint(history) is None
 
@@ -1813,7 +1832,7 @@ def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
     inventory = {"items": [], "stats": {}}
     mined_types = {"types": []}
     prior = g._make_concept_checkpoint(
-        "post_type_assignment",
+        "pre_type_assignment",
         records=prior_records,
         question_task_inventory=inventory,
         mined_types=mined_types,
@@ -1825,6 +1844,7 @@ def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
     history = {
         "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
@@ -1834,8 +1854,9 @@ def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
     }
     finalized: list[list[str]] = []
 
-    def finalize(current, **_kwargs):
+    def finalize(current, **kwargs):
         finalized.append([row["concept_title"] for row in current])
+        _complete_empty_pre_authority(kwargs)
         return current
 
     validations: list[list[str]] = []
@@ -1877,8 +1898,12 @@ def test_rejected_saved_final_falls_back_to_preceding_checkpoint(monkeypatch):
         "stage": "final_content_ready",
         "reason": "strict terminal validation failed",
     }
-    assert emitted[1]["stage"] == "final_content_ready"
-    assert emitted[1]["records"] == out
+    assert emitted[1]["stage"] == "post_type_assignment"
+    assert g.valid_phase3_pre_release_bundle(
+        emitted[1][g.PHASE3_PRE_RELEASE_FIELD]
+    )
+    assert emitted[2]["stage"] == "final_content_ready"
+    assert emitted[2]["records"] == out
 
 
 def test_saved_final_hub_normalization_failure_discards_only_98_percent(
@@ -1902,7 +1927,7 @@ def test_saved_final_hub_normalization_failure_discards_only_98_percent(
     inventory = {"items": [], "stats": {}}
     mined_types = {"types": []}
     prior = g._make_concept_checkpoint(
-        "post_type_assignment",
+        "pre_type_assignment",
         records=prior_records,
         question_task_inventory=inventory,
         mined_types=mined_types,
@@ -1914,6 +1939,7 @@ def test_saved_final_hub_normalization_failure_discards_only_98_percent(
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
     history = {
         "checkpoint_format": g._CONCEPT_CHECKPOINT_FORMAT,
@@ -1929,11 +1955,11 @@ def test_saved_final_hub_normalization_failure_discards_only_98_percent(
             RuntimeError("saved hub certification no longer resolves")
         ),
     )
-    monkeypatch.setattr(
-        g,
-        "_prepare_final_concept_content",
-        lambda current, **_kwargs: current,
-    )
+    def finalize(current, **kwargs):
+        _complete_empty_pre_authority(kwargs)
+        return current
+
+    monkeypatch.setattr(g, "_prepare_final_concept_content", finalize)
     monkeypatch.setattr(
         g,
         "_repair_final_rich_text_via_api",
@@ -1971,8 +1997,12 @@ def test_saved_final_hub_normalization_failure_discards_only_98_percent(
         "stage": "final_content_ready",
         "reason": "strict terminal validation failed",
     }
-    assert emitted[1]["stage"] == "final_content_ready"
-    assert emitted[1]["records"] == out
+    assert emitted[1]["stage"] == "post_type_assignment"
+    assert g.valid_phase3_pre_release_bundle(
+        emitted[1][g.PHASE3_PRE_RELEASE_FIELD]
+    )
+    assert emitted[2]["stage"] == "final_content_ready"
+    assert emitted[2]["records"] == out
 
 
 def test_final_checkpoint_with_partial_mined_metadata_remains_api_free(
@@ -2043,6 +2073,7 @@ def test_final_checkpoint_with_partial_mined_metadata_remains_api_free(
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
     monkeypatch.setattr(
         g,

@@ -49,9 +49,12 @@ from tests.test_step9_rule_e_deraising import (
     _INVENTORY,
     _SOUND_ROW,
     _SOUND_SECOND_ROW,
-    _job_with_records,
 )
-from tests.test_step10_converged_publication import _chapter
+from tests.test_step10_converged_publication import (
+    _chapter,
+    _job_with_records,
+    _stage_synthetic_release,
+)
 
 
 _STAGING_CRASH = (
@@ -136,7 +139,7 @@ def test_a_crash_during_the_first_staging_leaves_the_slot_absent_and_retry_compl
     state = _arm_staging_crash(monkeypatch)
 
     with pytest.raises(RuntimeError, match="injected staging crash"):
-        release.stage_release(
+        _stage_synthetic_release(
             db,
             job,
             target_chapter_id=chapter.id,
@@ -160,7 +163,7 @@ def test_a_crash_during_the_first_staging_leaves_the_slot_absent_and_retry_compl
     # seal fields present (the minted draft version and the lineage uid
     # ``_refuse_a_moved_seal`` keys on).
     state["armed"] = False
-    release.stage_release(
+    _stage_synthetic_release(
         db,
         crashed,
         target_chapter_id=chapter.id,
@@ -203,7 +206,7 @@ def test_a_crash_during_a_restage_keeps_the_previous_payload_byte_identical(
 
     state = _arm_staging_crash(monkeypatch)
     with pytest.raises(RuntimeError, match="injected staging crash"):
-        release.stage_release(
+        _stage_synthetic_release(
             db,
             job,
             target_chapter_id=chapter.id,
@@ -228,7 +231,7 @@ def test_a_crash_during_a_restage_keeps_the_previous_payload_byte_identical(
     # Retry: the re-stage completes, v2 replaces v1 whole, with a freshly
     # minted lineage uid (a legitimate re-stage, never a tamper).
     state["armed"] = False
-    release.stage_release(
+    _stage_synthetic_release(
         db,
         crashed,
         target_chapter_id=chapter.id,

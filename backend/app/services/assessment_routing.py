@@ -13,14 +13,24 @@ answer as topical evidence and never carries distractors.
 from __future__ import annotations
 
 import copy
-import json
 from typing import Any, Mapping
 
 from .. import config
 from . import assessment_release as rel
 from .phase3 import kernel
 
-ROUTE_POLICY_VERSION = "assessment-route-1"
+# -2: released candidate concepts and rules are now the explicit GPT-5.6
+# cache prefix; the routed candidate is the complete varying suffix.
+ROUTE_POLICY_VERSION = "assessment-route-2"
+
+_PROMPT_CACHE_STABLE_KEYS = (
+    "stage",
+    "rules",
+    "critic_rules",
+    "metadata",
+    "source_concept_release_sha256",
+    "candidate_concepts",
+)
 
 ROUTER_SYSTEM = (
     "You are the Aegis assessment router. Choose the ONE released concept "
@@ -356,20 +366,50 @@ def _route_checker(candidate_id: str, route_keys: list[str]) -> kernel.Checker:
 def _live_route(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
+    candidate = payload.get("candidate")
+    candidate_id = (
+        str(candidate.get("candidate_id") or "")
+        if isinstance(candidate, Mapping) else ""
+    )
     return generation._openai_json(
         ROUTER_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_mapping",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "route-author-v2",
+            prefix,
+            shard_seed=candidate_id,
+        ),
     )
 
 
 def _live_route_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
+    candidate = payload.get("candidate")
+    candidate_id = (
+        str(candidate.get("candidate_id") or "")
+        if isinstance(candidate, Mapping) else ""
+    )
     return generation._openai_json(
         ROUTE_CRITIC_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_validation",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "route-critic-v2",
+            prefix,
+            shard_seed=candidate_id,
+        ),
     )
 
 

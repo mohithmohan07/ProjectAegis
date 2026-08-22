@@ -233,20 +233,20 @@ OPENAI_SLOT_WAIT_QUIET_SECONDS = max(
 
 
 def phase3_decision_workers() -> int:
-    """Per-run parallel decision workers for Settle topics / Host batches.
+    """Per-lane parallel workers for Phase 3 and Master decision batches.
 
-    Multi-tenant sizing rule: every concurrent generation run contributes up
-    to this many contenders for the shared OPENAI_MAX_CONCURRENCY slots, so
-    a deployment with N simultaneous creators should keep
+    Most stages expose one such fan-out per run. The Post and Pre Master
+    lanes overlap, so their peak is two fan-outs per run. For queue-free
+    latency a deployment should therefore keep
 
-        N x AEGIS_PHASE3_DECISION_WORKERS <= AEGIS_OPENAI_MAX_CONCURRENCY
+        runs x overlapping lanes x workers <= OPENAI_MAX_CONCURRENCY
 
-    or slot queue waits grow toward AEGIS_OPENAI_SLOT_WAIT_TIMEOUT_SECONDS
-    and can fail runs. The DEFAULT is 6 against the default gate of 8 —
-    sized for the single-creator deployment this ships to, where a chapter
-    run was latency-bound on sequential calls. Multi-creator deployments
-    set both knobs together per the rule above (e.g. 3 creators: gate 9,
-    workers 3). Set to 1 to restore strictly sequential decisions.
+    Exceeding that inequality is intentional bounded queueing, not excess
+    provider concurrency: the shared gate still caps in-flight requests.
+    Sustained waits can approach OPENAI_SLOT_WAIT_TIMEOUT_SECONDS, so size
+    from measured overlap when queue-free latency matters. The DEFAULT is 6
+    against the default gate of 8, for the single-creator default. Set to 1
+    to restore strictly sequential decisions.
     """
     raw = os.environ.get("AEGIS_PHASE3_DECISION_WORKERS", "").strip()
     if raw:

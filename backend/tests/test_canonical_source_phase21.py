@@ -223,8 +223,8 @@ def test_all_inventory_bearing_checkpoint_stages_reject_previous_versions():
         "question_inventory": 3,
         generation._TYPE_TAXONOMY_CHECKPOINT_STAGE: 3,
         generation._CONCEPT_CHECKPOINT_STAGE: 3,
-        "post_type_assignment": 6,
-        "final_content_ready": 7,
+        "post_type_assignment": 7,
+        "final_content_ready": 8,
     }
 
     assert {

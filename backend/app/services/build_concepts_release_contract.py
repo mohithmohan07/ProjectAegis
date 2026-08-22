@@ -74,6 +74,11 @@ def _capture_deposit(original, args, kwargs) -> tuple[list[int], list[int], dict
         if isinstance(job, models.UploadJob)
         else {}
     )
+    phase3_pre_release = copy.deepcopy(
+        values.get("phase3_pre_release")
+        if isinstance(values.get("phase3_pre_release"), Mapping)
+        else None
+    )
     _RELEASE_CAPTURE.set({
         "records": records,
         "inventory": inventory,
@@ -83,6 +88,7 @@ def _capture_deposit(original, args, kwargs) -> tuple[list[int], list[int], dict
         "target_chapter_id": int(values.get("chapter_id") or 0),
         "pre_post": str(values.get("pre_post") or ""),
         "source_book": str(values.get("source_book") or ""),
+        "phase3_pre_release": phase3_pre_release,
     })
     # The legacy generation function reads this object after its deposit call.
     # It is deliberately truthful: no DB row and no shared workbook has been
@@ -156,21 +162,18 @@ def _stage_pre_sibling(
     target_chapter_id: int,
     *,
     inventory: Mapping[str, Any] | None,
+    phase3_pre_release: Mapping[str, Any] | None = None,
     reason: str,
 ) -> None:
-    """Stage Outputs 03/04 beside whatever the Post lane just released.
+    """Stage Pre Outputs 01/02 beside whatever the Post lane just released.
 
     Called after EVERY ``stage_release`` on this path, not only after a
-    clean capture. That is the point: this function's inputs are the
-    Phase 03 snapshots already on disk (``phase3.runner`` writes them as
-    phase 3 finishes), not the captured rows — so a run that completed
-    Phase 03 and then failed after the deposit boundary, or reached an
-    unresolved semantic boundary and released a checkpoint instead, HAS a
-    Pre map available and its Outputs 03/04 should ship beside the Post
-    release rather than vanish. Staged from only one of the four exits,
-    their absence on the other three is indistinguishable from a chapter
-    with no Pre lane at all — the same R4 confusion ``_run_snapshot``'s
-    three states exist to prevent, one level up.
+    clean capture. A clean path hands the exact in-memory authority through
+    the deposit interceptor; checkpoint exits recover the same bundle, with
+    legacy sidecars as the final compatibility source. Thus a run that
+    completed Phase 03 and failed later still ships its Pre sibling rather
+    than looking like a chapter with no Pre lane — the R4 distinction the
+    three-state legacy reader exists to preserve.
 
     Never raises, and always runs AFTER the Post release is staged:
     ``stage_pre_release_from_run`` logs and returns ``None`` on any
@@ -183,6 +186,10 @@ def _stage_pre_sibling(
         job,
         target_chapter_id=target_chapter_id,
         inventory=inventory or {},
+        phase3_pre_release=phase3_pre_release,
+        terminal_checkpoint_proof=copy.deepcopy(
+            build_concepts._PRE_RELEASE_TERMINAL_PROOF.get()
+        ),
         reason=reason,
     )
 
@@ -242,6 +249,7 @@ def _release_after_result(
             job,
             target_chapter_id,
             inventory=captured.get("inventory") or {},
+            phase3_pre_release=captured.get("phase3_pre_release"),
             reason=(
                 "Generation completed. The Phase 03 Pre-Learning outputs "
                 "were staged and were not uploaded to the database."
@@ -432,17 +440,14 @@ def _build_master_siblings(
     if not lanes:
         return built
 
-    progress.set_progress(
-        0.965,
-        label=(
-            "Building both Master files (Outputs 02 and 04) in parallel…"
-            if len(lanes) == 2
-            else (
-                "Building the Pre-Learning Master (Output 02)…"
-                if lanes[0] == release.LANE_PRE
-                else "Building the Post Master (Output 04)…"
-            )
-        ),
+    # This must be a real stage boundary, not only a progress-label change:
+    # usage attribution reads the last ``progress.step`` and the frontend
+    # creates stage cards from step events.  Without it every Master token —
+    # including cache reads/writes — is charged to concept extraction even
+    # though the lane labels themselves survive the worker fan-out.
+    progress.step(
+        "Building Master files (Outputs 02/04)",
+        value=0.965,
     )
 
     def _build_lane(lane: str) -> dict[str, Any] | None:
@@ -521,19 +526,9 @@ def _run_generation_release(
     staged = _stage_generation_release(
         original, db, job_id, target_chapter_id, *args, **kwargs)
     # HONEST PROGRESS (owner report, 2026-08-21: "after 100% it is still
-    # running" — and paying). The deposit's own "Done" fires when the
-    # CONCEPT outputs land, but the two Master lanes each run a full
-    # per-question decision pipeline AFTER it — comparable model spend to
-    # the concept run itself. The bar therefore steps back below 100%
-    # with a label naming what is still being paid for, and only the true
-    # end of all four outputs says Done.
-    progress.set_progress(
-        0.96,
-        label=(
-            "Outputs 01/03 staged — building the Master files "
-            "(Outputs 02/04; this stage makes model calls)…"
-        ),
-    )
+    # running" — and paying). ``_build_master_siblings`` opens the real
+    # stage boundary after it confirms at least one lane exists; only the
+    # true end of all four outputs says Done.
     _build_master_siblings(
         db, job_id, target_chapter_id, owner_sub=kwargs.get("owner_sub"))
     progress.set_progress(1.0, label="Done — all four outputs ready")
@@ -551,6 +546,7 @@ def _stage_generation_release(
     owner_sub = kwargs.get("owner_sub")
     mode_token = _RELEASE_MODE.set(True)
     capture_token = _RELEASE_CAPTURE.set(None)
+    proof_token = build_concepts._PRE_RELEASE_TERMINAL_PROOF.set(None)
     try:
         try:
             result = original(
@@ -600,6 +596,7 @@ def _stage_generation_release(
                     job,
                     target_chapter_id,
                     inventory=captured.get("inventory") or {},
+                    phase3_pre_release=captured.get("phase3_pre_release"),
                     reason=(
                         "Generation failed after its final rows were "
                         "materialized. The Phase 03 Pre-Learning outputs "
@@ -641,6 +638,7 @@ def _stage_generation_release(
             captured=captured,
         )
     finally:
+        build_concepts._PRE_RELEASE_TERMINAL_PROOF.reset(proof_token)
         _RELEASE_CAPTURE.reset(capture_token)
         _RELEASE_MODE.reset(mode_token)
 

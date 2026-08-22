@@ -555,12 +555,20 @@ def test_every_type_checkpoint_stage_rejects_tampered_human_result(
         )
     )
     mined_types["_granularity_review"] = copy.deepcopy(review)
+    current_terminal_contract = (
+        {
+            g.PHASE3_PRE_RELEASE_FIELD: g.phase3_pre_release_bundle({}, {}),
+        }
+        if stage in {"post_type_assignment", "final_content_ready"}
+        else {}
+    )
     checkpoint = g._make_concept_checkpoint(
         stage,
         records=[{"concept_title": "Example"}],
         question_task_inventory=inventory,
         mined_types=mined_types,
         method_row_snapshot=[],
+        **current_terminal_contract,
     )
     monkeypatch.setattr(
         g,

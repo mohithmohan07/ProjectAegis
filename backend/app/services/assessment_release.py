@@ -22,6 +22,7 @@ from typing import Any, Iterable, Mapping
 from . import assessment_profile
 # Aliased: three functions in this module use ``identity`` as a local.
 from . import identity as identity_mod
+from . import katex_rules
 
 # --------------------------------------------------------------------------- #
 # Release state machine (spec §5.6)
@@ -186,6 +187,10 @@ def validate_blueprint_cell(
 def validate_candidate(
     candidate: Mapping, profile: Mapping | str | None = None,
 ) -> list[str]:
+    # Imported at call time to avoid the bulk-import package's workbook ->
+    # release import cycle while still sharing its declared wire enum.
+    from .. import bulk_import as bi
+
     errors = [f"missing {f}" for f in _missing(candidate, _CANDIDATE_REQUIRED)]
     # Explicit, deliberate, and independent of ``_missing``'s string
     # coercion (see ``_CANDIDATE_REQUIRED``).  Identity accounting only:
@@ -264,6 +269,19 @@ def validate_candidate(
                 errors.append(f"answer {position} is not an object")
             else:
                 answers.append(answer)
+    for position, answer in enumerate(answers, start=1):
+        answer_type = answer.get("answer_type")
+        if answer_type not in bi.ANSWER_TYPES:
+            errors.append(
+                f"answer {position} answer_type must be one of "
+                f"{tuple(bi.ANSWER_TYPES)} (got {answer_type!r})"
+            )
+        for issue in katex_rules.answer_cell_issues(
+            str(answer_type or ""), str(answer.get("answer_content") or "")
+        ):
+            errors.append(
+                f"answer {position} violates declared medium: {issue}"
+            )
     raw_subquestions = candidate.get("sub_questions")
     if not isinstance(raw_subquestions, list):
         errors.append("sub_questions must be an array")
@@ -277,6 +295,13 @@ def validate_candidate(
                 subquestions.append(subquestion)
 
     keyboard = candidate.get("math_keyboard")
+    for field in (
+        "question", "question_text", "display_answer", "answer_explanation",
+    ):
+        for issue in katex_rules.rich_text_issues(
+            str(candidate.get(field) or "")
+        ):
+            errors.append(f"{field} rich-text: {issue}")
     if kind == "objective":
         if keyboard != "":
             errors.append("objective math_keyboard must be exactly blank")
@@ -309,6 +334,11 @@ def validate_candidate(
             errors.append("descriptive math_keyboard must be exactly Yes or No")
         if not answers:
             errors.append("descriptive candidate has no rubric blocks")
+        if marks == Decimal(4) and len(answers) < 2:
+            errors.append(
+                "4-mark descriptive candidate requires at least two "
+                "rubric blocks"
+            )
         weights: list[Decimal] = []
         for position, answer in enumerate(answers, start=1):
             weight = finite(answer.get("answer_weightage"))
@@ -328,6 +358,12 @@ def validate_candidate(
         if subquestions:
             sub_marks: list[Decimal] = []
             for position, subquestion in enumerate(subquestions, start=1):
+                for issue in katex_rules.rich_text_issues(
+                    str(subquestion.get("text") or "")
+                ):
+                    errors.append(
+                        f"subquestion {position} text rich-text: {issue}"
+                    )
                 sub_mark = finite(subquestion.get("marks"))
                 if sub_mark is None or sub_mark <= 0:
                     errors.append(
@@ -357,6 +393,22 @@ def validate_candidate(
                             f"{keyword_position} is not an object"
                         )
                         continue
+                    keyword_type = keyword.get("answer_type")
+                    if keyword_type not in bi.ANSWER_TYPES:
+                        errors.append(
+                            f"subquestion {position} keyword "
+                            f"{keyword_position} answer_type must be one of "
+                            f"{tuple(bi.ANSWER_TYPES)}"
+                        )
+                    for issue in katex_rules.answer_cell_issues(
+                        str(keyword_type or ""),
+                        str(keyword.get("keyword") or ""),
+                    ):
+                        errors.append(
+                            f"subquestion {position} keyword "
+                            f"{keyword_position} violates declared medium: "
+                            f"{issue}"
+                        )
                     weight = finite(keyword.get("weightage"))
                     if weight is None or weight <= 0:
                         errors.append(

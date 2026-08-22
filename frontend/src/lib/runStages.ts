@@ -18,6 +18,8 @@ export interface StageGroup {
 export interface StageCost {
   requestCount: number;
   totalTokens: number;
+  cachedInputTokens: number;
+  cacheWriteTokens: number;
   cost: number | null;
   costComplete: boolean;
   lanes: StageUsageRow[];
@@ -60,6 +62,22 @@ export function groupStages(lines: RunLine[]): StageGroup[] {
 }
 
 /**
+ * Stage-usage rows are scoped to the current server attempt, while the
+ * console deliberately keeps log cards from an attempt that was resumed.
+ * The accumulator groups rows by stage title, so it cannot truthfully split
+ * one title's total across two same-title cards.  Attach it only to the
+ * newest occurrence; older cards remain useful history without claiming the
+ * current attempt's tokens or cost.
+ */
+export function latestStageOccurrenceIndexes(
+  groups: readonly StageGroup[],
+): Set<number> {
+  const newestByTitle = new Map<string, number>();
+  groups.forEach((group, index) => newestByTitle.set(group.title, index));
+  return new Set(newestByTitle.values());
+}
+
+/**
  * Sum the per-(stage, lane) usage rows for one stage title. Cost is null
  * (with costComplete=false) as soon as any contributing row is unpriced,
  * so a partial number is never shown as a total.
@@ -74,9 +92,13 @@ export function stageCost(
   let costComplete = true;
   let requestCount = 0;
   let totalTokens = 0;
+  let cachedInputTokens = 0;
+  let cacheWriteTokens = 0;
   for (const row of mine) {
     requestCount += row.request_count;
     totalTokens += row.total_tokens;
+    cachedInputTokens += row.cached_input_tokens ?? 0;
+    cacheWriteTokens += row.cache_write_tokens ?? 0;
     if (!row.pricing_complete || row.estimated_cost_usd == null) {
       costComplete = false;
     } else {
@@ -86,6 +108,8 @@ export function stageCost(
   return {
     requestCount,
     totalTokens,
+    cachedInputTokens,
+    cacheWriteTokens,
     cost: costComplete ? cost : null,
     costComplete,
     lanes: mine.filter((row) => row.lane !== ""),

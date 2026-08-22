@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import json
 import math
 from pathlib import Path
 from typing import Any, Mapping
@@ -33,9 +32,20 @@ from .phase3 import kernel
 
 
 REGISTRY_ID = "registry-v2.0"
-POLICY_BASE_VERSION = "assessment-answer-restriction-2"
+# -3: the complete registry/rules/metadata prefix is now an explicit-only
+# GPT-5.6 cache prefix; the candidate remains complete in the varying suffix.
+# This changes provider-input identity without changing semantic ownership.
+POLICY_BASE_VERSION = "assessment-answer-restriction-3"
 REGISTRY_MARKDOWN_FILENAME = "open-specific-registry-v2.md"
 REGISTRY_WORKBOOK_FILENAME = "open-specific-registry-v2.xlsx"
+
+_PROMPT_CACHE_STABLE_KEYS = (
+    "stage",
+    "rules",
+    "critic_rules",
+    "metadata",
+    "policy_registry",
+)
 
 # In a source checkout ``config.ROOT`` is ``<repo>/backend``; both Docker
 # runtimes copy the same repo-root files to ``/app/docs`` where ``config.ROOT``
@@ -323,20 +333,50 @@ def _checker(candidate_id: str) -> kernel.Checker:
 def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
+    candidate = payload.get("candidate")
+    candidate_id = (
+        str(candidate.get("candidate_id") or "")
+        if isinstance(candidate, Mapping) else ""
+    )
     return generation._openai_json(
         ANSWER_RESTRICTION_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_mapping",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "answer-restriction-author-v3",
+            prefix,
+            shard_seed=candidate_id,
+        ),
     )
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload,
+        stable_keys=_PROMPT_CACHE_STABLE_KEYS,
+    )
+    candidate = payload.get("candidate")
+    candidate_id = (
+        str(candidate.get("candidate_id") or "")
+        if isinstance(candidate, Mapping) else ""
+    )
     return generation._openai_json(
         ANSWER_RESTRICTION_CRITIC_SYSTEM,
-        json.dumps(payload, ensure_ascii=False),
+        suffix,
         purpose="concept_validation",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "answer-restriction-critic-v3",
+            prefix,
+            shard_seed=candidate_id,
+        ),
     )
 
 

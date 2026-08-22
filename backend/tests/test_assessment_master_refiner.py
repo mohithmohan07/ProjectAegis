@@ -475,7 +475,7 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert objective["question_text"].startswith(
         original["candidates"][0]["question_text"]
     )
-    assert "A) A cube" in objective["question_text"]
+    assert "a) A cube" in objective["question_text"]
     assert objective["answer_content_1"] == "A cube"
     assert objective["answer_explanation"] == refined["candidates"][0][
         "answer_explanation"
@@ -985,3 +985,23 @@ def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved():
         assert refiner.WARNING in unit["flags"]
         assert unit[refiner.AUDIT_FIELD]["status"] == "rolled_back"
     assert flags
+
+
+def test_candidate_refiner_checker_keeps_declared_answer_medium_pure():
+    original = _payload()["candidates"][0]
+    proposal = copy.deepcopy(original)
+    proposal["answers"][0]["answer_content"] = "[Katex] Cube [/Katex]"
+    checker = refiner._response_checker(
+        unit_kind="candidate",
+        unit_id=OBJECTIVE_ID,
+        original=original,
+    )
+
+    defects = checker({
+        "record_kind": "candidate",
+        "row_ref": OBJECTIVE_ID,
+        "record": proposal,
+        "rationale": "Polish attempted.",
+    })
+
+    assert any("phrases_katex" in defect for defect in defects)

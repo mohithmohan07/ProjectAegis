@@ -345,10 +345,8 @@ def test_master_provenance_distinguishes_shared_friendly_group_names():
     assert result["valid"], result["manifest"]["read_back"]
 
 
-def test_equation_keyword_cells_are_raw_and_answer_content_stays_wrapped():
-    """SOP §4.3 as the accepted gold workbooks apply it: keyword cells
-    with a declared Equation/Image type carry the RAW value; Equation
-    ``answer_content`` is body text and keeps its [Katex] wrapper."""
+def test_equation_answer_and_keyword_cells_are_raw():
+    """Q21 supersedes the older wrapped answer_content interpretation."""
     snapshot = copy.deepcopy(_snapshot())
     descriptive = snapshot["candidates"][1]
     descriptive["answers"][0] = {
@@ -361,8 +359,52 @@ def test_equation_keyword_cells_are_raw_and_answer_content_stays_wrapped():
     }
     master, _ = mp.render_master_file(snapshot)
     row = mp.parse_workbook(master)["sheets"]["Descriptive"]["rows"][0]
-    assert row["answer_content_1"] == "1 mark: States [Katex] 3n=12 [/Katex]."
+    assert row["answer_content_1"] == (
+        r"\text{1 mark: States }3n=12\text{.}"
+    )
     assert row["sq1_keyword_1"] == "3n=3\\times4=12"
+
+
+def test_equation_option_is_raw_in_cell_but_wrapped_in_lowercase_question_text():
+    snapshot = copy.deepcopy(_snapshot())
+    objective = snapshot["candidates"][0]
+    objective["answers"][0].update({
+        "answer_type": "Equation",
+        "answer_content": "[Katex]x=2[/Katex]",
+    })
+
+    master, _ = mp.render_master_file(snapshot)
+    row = mp.parse_workbook(master)["sheets"]["Objective"]["rows"][0]
+
+    assert row["answer_content_1"] == "x=2"
+    assert "a) [Katex] x=2 [/Katex]" in row["question_text"]
+    assert "b) Sphere" in row["question_text"]
+
+
+def test_master_renderer_projects_screenshot_shaped_markdown_table_cells():
+    snapshot = copy.deepcopy(_snapshot())
+    objective = snapshot["candidates"][0]
+    source = "\n".join([
+        "Study the following table:",
+        "| Name of peak | Altitude (in metres) |",
+        "|:---|---:|",
+        "| K-2 | 8611 |",
+        "| Lao Tse | 8516 |",
+        "| Mount Everest (Sagarmatha) | 8849 |",
+        "| Makalu | 8485 |",
+        "| Kanchanjunga | 8586 |",
+    ])
+    objective["question"] = source
+    objective["question_text"] = source
+
+    master, _ = mp.render_master_file(snapshot)
+    row = mp.parse_workbook(master)["sheets"]["Objective"]["rows"][0]
+
+    for field in ("question", "question_text"):
+        assert "Table row 1, column 1: Name of peak" in row[field]
+        assert "Table row 6, column 2: 8586" in row[field]
+        assert "|:---|---:|" not in row[field]
+    assert "a) Circle" in row["question_text"]
 
 
 def test_master_records_a_duplicate_group_key_instead_of_raising():

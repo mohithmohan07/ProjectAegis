@@ -32,6 +32,7 @@ from app.services import build_concepts_release
 from app.services import build_concepts_release_files as release_files
 from app.services import build_concepts_release_publication as publication
 from app.services import directory, generation, identity
+from tests.test_step10_converged_publication import _stage_synthetic_release
 
 OWNER = "local:default"
 
@@ -88,7 +89,7 @@ def _job(db, chapter, records) -> models.UploadJob:
     db.add(job)
     db.commit()
     db.refresh(job)
-    build_concepts_release.stage_release(
+    _stage_synthetic_release(
         db, job, target_chapter_id=chapter.id, records=list(records),
         inventory=inventory, reason="S4 identity fixture",
     )
@@ -160,7 +161,7 @@ def test_release_hash_no_longer_reaches_identity(db):
 
     edited = copy.deepcopy(records)
     edited[0]["concept_details"] = "Solid shapes occupy spacE."
-    build_concepts_release.stage_release(
+    _stage_synthetic_release(
         db, job, target_chapter_id=chapter.id, records=edited,
         inventory=job.question_inventory, reason="one character",
     )

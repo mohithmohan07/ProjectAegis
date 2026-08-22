@@ -17,11 +17,14 @@ primary_region = 'ams'
   AEGIS_PUBLIC_BASE_URL = 'https://projectaegis.fly.dev'
   # The rewritten Phase 3 is the only post-81% pipeline; the old
   # AEGIS_PHASE3_REWRITE migration flag is retired (legacy lane deleted).
-  # Multi-creator sizing: concurrent runs x decision workers <= the shared
-  # OpenAI concurrency gate. Sized 2026-08-21 for 3 concurrent creators
-  # against the account's provider limits (180M TPM / 30k RPM — the
-  # pipeline cannot come near them): 3 x 16 <= 48. The [[vm]] below is
-  # sized up with it; workers=1 anywhere restores strict sequential.
+  # The shared OpenAI gate is a safety ceiling, not a no-queue promise.
+  # Most stages contribute one 16-worker fan-out per run, while the two
+  # concurrent Master lanes can briefly contribute 2 x 16 = 32 contenders.
+  # A second/third creator therefore enters bounded queues behind the 48
+  # slots, subject to AEGIS_OPENAI_SLOT_WAIT_TIMEOUT_SECONDS; sustained
+  # queueing can still fail a run. Size with runs x overlapping lanes x
+  # workers <= gate when queue-free latency is required. The [[vm]] below is
+  # sized for the 48-slot ceiling; workers=1 restores strict sequential work.
   AEGIS_OPENAI_MAX_CONCURRENCY = '48'
   AEGIS_PHASE3_DECISION_WORKERS = '16'
   AEGIS_SOURCE_CHUNK_WORKERS = '10'

@@ -76,6 +76,23 @@ def test_rich_text_emits_uppercase_katex_and_canonical_images():
     assert not kr.rich_text_issues(rendered)
 
 
+def test_uppercase_objective_option_labels_are_line_anchored_and_bounded():
+    assert kr.uppercase_objective_option_labels(
+        "Choose one.\na) Alpha\nb) Beta", 2,
+    ) == ()
+    assert kr.uppercase_objective_option_labels(
+        "Answer A) is discussed in the explanation.", 2,
+    ) == ()
+    assert kr.uppercase_objective_option_labels(
+        "Choose one.\nA) Alpha\nB) Beta\nC) Extra section", 2,
+    ) == ("A)", "B)")
+    assert kr.lowercase_objective_option_labels(
+        "Answer A) stays prose.\n  A) Alpha\nB) Beta\nC) Extra section", 2,
+    ) == (
+        "Answer A) stays prose.\n  a) Alpha\nb) Beta\nC) Extra section"
+    )
+
+
 def test_rich_text_rejects_malformed_tags_without_treating_currency_as_math():
     currency = "The price rose from $5 to $10 in one week."
     assert kr.canonicalize_rich_text(currency) == currency
@@ -102,6 +119,200 @@ def test_rich_text_rejects_malformed_tags_without_treating_currency_as_math():
         kr.image("http://images.example/x.png", "x")
     with pytest.raises(ValueError):
         kr.image("https://images.example/x.png", "x", width="200")
+
+
+def test_type_declared_answer_cells_use_one_whole_cell_medium():
+    legacy = "1 mark: Gives [Katex]90^\\circ[/Katex]."
+    rendered = kr.raw_answer_cell("Equation", legacy)
+
+    assert rendered == r"\text{1 mark: Gives }90^\circ\text{.}"
+    assert "[Katex]" not in rendered
+    assert kr.rich_answer_display("Equation", legacy) == (
+        r"[Katex] \text{1 mark: Gives }90^\circ\text{.} [/Katex]"
+    )
+    assert kr.answer_cell_issues("Equation", rendered) == []
+    assert "equation_katex_wrapper" in kr.answer_cell_issues(
+        "Equation", "[Katex]x=2[/Katex]"
+    )
+    assert "equation_plain_text" in kr.answer_cell_issues(
+        "Equation", "the answer is x=2"
+    )
+    assert kr.answer_cell_issues("Phrases", "Six crore: Yes") == []
+    assert kr.answer_cell_issues("Phrases", "The value is x = 2.") == []
+    assert "phrases_katex" in kr.answer_cell_issues(
+        "Phrases", "Six crore: [Katex]6[/Katex]"
+    )
+    assert "phrases_latex" in kr.answer_cell_issues(
+        "Phrases", r"The result is \frac{1}{2}."
+    )
+
+
+def test_legacy_export_cells_migrate_to_one_medium_without_input_mutation():
+    source = (
+        "A worked example uses [Katex] x^2 [/Katex]. "
+        "Reference: [Quadratics](https://example.com/quadratics)."
+    )
+
+    answer_type, content = kr.legacy_export_answer_cell("Phrases", source)
+
+    assert answer_type == "Equation"
+    assert "[Katex]" not in content
+    assert "https://" not in content
+    assert "Quadratics" in content
+    assert kr.answer_cell_issues(answer_type, content) == []
+    assert source.endswith("https://example.com/quadratics).")
+
+    phrase_type, phrase = kr.legacy_export_answer_cell(
+        "Phrases", "See [the source](https://example.com/source).",
+    )
+    assert (phrase_type, phrase) == ("Phrases", "See the source.")
+
+    variable_type, variable = kr.legacy_export_answer_cell(
+        "Phrases", r"Use [Katex] \overline{OP}=\overline{PT} [/Katex].",
+    )
+    assert variable_type == "Equation"
+    assert kr.answer_cell_issues(variable_type, variable) == []
+
+
+def test_legacy_export_strips_only_orphan_katex_tokens_from_phrases():
+    source = "The converse of the [katex] relationship (common student error)"
+
+    answer_type, content = kr.legacy_export_answer_cell("Phrases", source)
+
+    assert answer_type == "Phrases"
+    assert content == "The converse of the relationship (common student error)"
+    assert kr.answer_cell_issues(answer_type, content) == []
+
+    paired = "Use [Katex] x+1 [/Katex] with a stray [/katex] marker."
+    paired_type, paired_content = kr.legacy_export_answer_cell(
+        "Phrases", paired,
+    )
+    assert paired_type == "Equation"
+    assert "[Katex]" not in paired_content
+    assert kr.answer_cell_issues(paired_type, paired_content) == []
+
+
+def test_unsupported_katex_tables_become_lossless_coordinate_labels():
+    source = (
+        r"[Katex] \begin{array}{cc}"
+        r"\text{Name of peak} & \text{Altitude (in metres)} \\ "
+        r"K-2 & 8611 \\ "
+        r"Makalu & 8485"
+        r"\end{array} [/Katex]"
+    )
+
+    rendered = kr.canonicalize_rich_text(source)
+
+    assert rendered.splitlines() == [
+        "Table row 1, column 1: Name of peak; "
+        "Table row 1, column 2: Altitude (in metres)",
+        "Table row 2, column 1: K-2; Table row 2, column 2: 8611",
+        "Table row 3, column 1: Makalu; Table row 3, column 2: 8485",
+    ]
+    assert kr.rich_text_issues(rendered) == []
+    assert "unsupported_table" in kr.rich_text_issues(source)
+
+
+@pytest.mark.parametrize(
+    ("opening", "closing"), [(r"\[", r"\]"), ("$$", "$$")],
+)
+def test_raw_display_array_drops_math_delimiters_around_plain_labels(
+    opening, closing,
+):
+    source = (
+        opening
+        + r"\begin{array}{cc}\text{Name} & \text{Height} \\ "
+        + r"K-2 & 8611\end{array}"
+        + closing
+    )
+
+    rendered = kr.canonicalize_rich_text(source)
+
+    assert rendered.splitlines() == [
+        "Table row 1, column 1: Name; Table row 1, column 2: Height",
+        "Table row 2, column 1: K-2; Table row 2, column 2: 8611",
+    ]
+    assert "[Katex]" not in rendered
+    assert kr.rich_text_issues(rendered) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            r"\begin {array} {cc} A&B\\1&2\end {array}",
+            id="spaced-array-environment",
+        ),
+        pytest.param(
+            r"\begin{array}[t]{cc}A&B\\1&2\end{array}",
+            id="positioned-array-environment",
+        ),
+        pytest.param(
+            r"\begin {array} [t] {cc} A&B\\1&2",
+            id="spaced-positioned-unterminated-array",
+        ),
+    ],
+)
+def test_source_converter_array_variants_all_use_the_same_fallback(source):
+    assert "unsupported_table" in kr.rich_text_issues(source)
+
+    rendered = kr.canonicalize_rich_text(source)
+
+    assert rendered.splitlines() == [
+        "Table row 1, column 1: A; Table row 1, column 2: B",
+        "Table row 2, column 1: 1; Table row 2, column 2: 2",
+    ]
+    assert kr.rich_text_issues(rendered) == []
+
+
+def test_positioned_unterminated_tabular_tail_preserves_pipe_cells():
+    source = "\n".join([
+        r"\begin{tabular}[t]{|l|l|} Attribute | Significance",
+        "Broken chains | Being freed",
+        "Olive branch | Willingness to make peace",
+    ])
+
+    rendered = kr.canonicalize_rich_text(source)
+
+    assert rendered.splitlines() == [
+        "Table row 1, column 1: Attribute; "
+        "Table row 1, column 2: Significance",
+        "Table row 2, column 1: Broken chains; "
+        "Table row 2, column 2: Being freed",
+        "Table row 3, column 1: Olive branch; "
+        "Table row 3, column 2: Willingness to make peace",
+    ]
+    assert "unsupported_table" in kr.rich_text_issues(source)
+    assert kr.rich_text_issues(rendered) == []
+
+
+def test_screenshot_shaped_markdown_table_preserves_header_and_every_cell():
+    source = "\n".join([
+        "| Name of peak | Altitude (in metres) |",
+        "|:---|---:|",
+        "| K-2 | 8611 |",
+        "| Lao Tse | 8516 |",
+        "| Mount Everest (Sagarmatha) | 8849 |",
+        "| Makalu | 8485 |",
+        "| Kanchanjunga | 8586 |",
+    ])
+
+    rendered = kr.canonicalize_rich_text(source)
+
+    assert rendered.splitlines() == [
+        "Table row 1, column 1: Name of peak; "
+        "Table row 1, column 2: Altitude (in metres)",
+        "Table row 2, column 1: K-2; Table row 2, column 2: 8611",
+        "Table row 3, column 1: Lao Tse; Table row 3, column 2: 8516",
+        "Table row 4, column 1: Mount Everest (Sagarmatha); "
+        "Table row 4, column 2: 8849",
+        "Table row 5, column 1: Makalu; Table row 5, column 2: 8485",
+        "Table row 6, column 1: Kanchanjunga; "
+        "Table row 6, column 2: 8586",
+    ]
+    assert "---" not in rendered
+    assert "unsupported_table" in kr.rich_text_issues(source)
+    assert kr.rich_text_issues(rendered) == []
 
 
 def test_markdown_images_handle_titles_parentheses_and_reject_relative_urls():
@@ -323,6 +534,8 @@ def test_key_value_and_inline_code_are_not_misclassified_as_equations():
 
 def test_rich_text_registry_uses_student_facing_display_answer():
     assert "display_answer" in kr.RICH_TEXT_FIELDS
+    assert "answer_content" not in kr.RICH_TEXT_FIELDS
+    assert "answer_content" in kr.RAW_KATEX_FIELDS
     assert "answer_display" not in kr.RICH_TEXT_FIELDS
 
 

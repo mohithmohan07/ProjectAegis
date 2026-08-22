@@ -1550,8 +1550,27 @@ Rule G's concept upload and Rule G's Master upload — and each item names the o
 enforced at, because the previous round conflated their transports (T7.5, D8.5b):**
 
 * **B1 IDENTITY** — duplicate `question_label` (T5-1); `duplicate_qid_assignment`
-  (`build_concepts_release.py:917`); `unknown_type_case_qid` (`:942`); duplicate
-  `group_key`; **a question with no home concept/group** — code
+  (`build_concepts_release.py:917`); `unknown_type_case_qid` (`:942`);
+  `type_case_route_set_empty` when source QIDs and publishable Concept rows
+  exist but the staged Type/Case catalog exposes no exact Example route at
+  all, or when retained route metadata has no mechanically visible normal
+  Case containing an Example (and no Activity/Info Hub body for an activity
+  route). This is an aggregate chapter guard, not a per-concept Type minimum;
+  `unrendered_type_case_qid` when an expected
+  `(example_qid, type_id, case_id, is_activity)` identity from the staged
+  Type/Case rows has no exact visible host. A normal Example is placed only
+  when the row has a non-empty `// Types:` body and either (a) its exact
+  QID/Type/Case final-host manifest placement with disposition
+  `type_case_example`, or (b) its exact QID marker plus exact Type/Case route;
+  a fresh `split-of:ORIGINAL-CASE` marker is an alias for that original Case,
+  while an older untagged route dictionary is accepted only on an exact
+  Type/Case-pair fallback. An Activity Example is placed only when the row
+  has a non-empty Activity/Info Hub body and either its exact manifest
+  `activity_info_hub` disposition or its QID in `_activity_hub_qids` /
+  `_aegis_hub_placements`. Staging persists only catalog routes proven by
+  those raw/manifest identities, tags each persisted route with
+  `example_qid`, and never manufactures every catalog route for every QID on
+  a row; duplicate `group_key`; **a question with no home concept/group** — code
   `unresolved_question_home`; **a sheet kind the profile allows that THIS STEP's renderer
   cannot write** — code `sheet_kind_not_renderable` (T7.5/B3; it replaces the
   `sheet_kind_not_emittable` earlier drafts named, which could never fire); **a candidate
@@ -1598,7 +1617,11 @@ twice:
 * `unassigned_inventory_qid` (`build_concepts_release.py:935`) stays a **flag**. It is
   literally `inventory_qids - assigned_qids` — a coverage verdict — and R4 says every
   question ends Placed **or Flagged**. Cluster C got this right and it is the best call in
-  that submission.
+  that submission. This does not void the distinct aggregate
+  `type_case_route_set_empty` gate: an individual unassigned QID remains reviewable, but
+  an entire source-question chapter with no exact Type/Case Example route cannot publish
+  as a healthy descriptions-only Concept File. A questionless chapter remains outside
+  that gate.
 * **`qid_render_count_mismatch` and `example_less_case_shell` leave the blocking set.**
   Cluster C promoted "`case_uniqueness_*` findings" wholesale. [verified] two of the four
   codes that phrase reaches are text-derived: `qid_render_count_mismatch`
@@ -4932,10 +4955,13 @@ fatal-family code structurally — measured, that residue is closed.
   recorded `_aegis_analysis_allotments` marker count, else the artifact's own recorded
   completeness. T9-3: the swallowed `_type_catalog` exception becomes a named defect.
 * **S11-d (T9's concept-lane identity set feeds `structural_defects`).**
-  `duplicate_qid_assignment`, `unknown_type_case_qid`, `duplicate_case_identity`,
+  `duplicate_qid_assignment`, `unknown_type_case_qid`,
+  `type_case_route_set_empty`, `unrendered_type_case_qid`, `duplicate_case_identity`,
   `duplicate_qid_route`, a duplicate persisted `machine_id`, and a staged row still
   blank after the mint — all become structural defects (block the DB write, never a
-  download; `release_state` reads DIAGNOSTIC_RELEASE). T9-2's stays-flags list
+  download; `release_state` reads DIAGNOSTIC_RELEASE). The rendered-route member uses
+  the exact QID/Type/Case and normal-vs-Activity proof rules recorded in canonical
+  T9-1 B1 above; no prose comparison or ownership synthesis enters that set. T9-2's stays-flags list
   (`unassigned_inventory_qid`, `qid_render_count_mismatch`, `example_less_case_shell`)
   is pinned by the named negative-control regressions. The assessment-lane B1 codes
   keep their D8.5b transport and are NOT routed through `structural_defects`.

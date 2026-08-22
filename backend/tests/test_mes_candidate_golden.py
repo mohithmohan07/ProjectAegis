@@ -27,6 +27,38 @@ def _load_recorded() -> tuple[dict, dict]:
     return recorded, envelope
 
 
+def _q21_conforming_rows(recorded: dict) -> dict:
+    """Filter only the mechanically superseded one-block four-mark row."""
+
+    copied = copy.deepcopy(recorded)
+    keep = [
+        index
+        for index, (cell, response) in enumerate(zip(
+            copied["cell_responses"], copied["materialization_responses"]
+        ))
+        if not (
+            cell.get("sheet_kind") == "descriptive"
+            and float(cell.get("marks") or 0) == 4
+            and len(response.get("answers") or []) < 2
+        )
+    ]
+    for field in (
+        "atoms", "cell_responses", "materialization_responses",
+        "route_responses",
+    ):
+        copied[field] = [copied[field][index] for index in keep]
+    kept_qids = {
+        str(response.get("source_qid") or "")
+        for response in copied["cell_responses"]
+    }
+    copied["expected_cell_ids"] = {
+        qid: cell_id
+        for qid, cell_id in copied["expected_cell_ids"].items()
+        if qid in kept_qids
+    }
+    return copied
+
+
 def _provider(recorded: dict, calls: list[str]) -> kernel.Provider:
     cell_rows = {
         row["source_qid"]: row for row in recorded["cell_responses"]
@@ -127,6 +159,7 @@ def _run(
 
 def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
     recorded, envelope = _load_recorded()
+    recorded = _q21_conforming_rows(recorded)
     store = kernel.DecisionStore()
     provider_calls: list[str] = []
     critic_calls: list[str] = []
@@ -187,7 +220,7 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
         audit = candidate["_aegis_assessment_materialization"]
         assert audit["rationale"] == response["rationale"]
         assert audit["authority"]["policy_version"] == (
-            "assessment-materialize-5"
+            "assessment-materialize-7"
         )
 
     for placement, response in zip(
@@ -197,19 +230,19 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
             key: placement[key] for key in response
         } == response
         assert placement["authority"]["policy_version"] == (
-            "assessment-route-1"
+            "assessment-route-2"
         )
-    assert candidates[1]["shared_context"] == "Write a note on:"
-    assert candidates[1]["source_context"]["parent_qid"] == "QINV-0016"
+    assert candidates[0]["shared_context"] == "Write a note on:"
+    assert candidates[0]["source_context"]["parent_qid"] == "QINV-0016"
 
     expected_calls = Counter({
-        "assessment.cell": 2,
-        "assessment.materialize": 2,
-        "assessment.route": 2,
+        "assessment.cell": 1,
+        "assessment.materialize": 1,
+        "assessment.route": 1,
     })
     assert Counter(provider_calls) == expected_calls
     assert Counter(critic_calls) == expected_calls
-    assert len(store.keys()) == 6
+    assert len(store.keys()) == 3
 
     second = _run(
         recorded,
@@ -223,4 +256,16 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
     assert second == first
     assert Counter(provider_calls) == expected_calls
     assert Counter(critic_calls) == expected_calls
-    assert len(store.keys()) == 6
+    assert len(store.keys()) == 3
+
+
+def test_q21_supersedes_the_recorded_one_block_four_mark_response() -> None:
+    recorded, _envelope = _load_recorded()
+    cell = recorded["cell_responses"][0]
+    response = recorded["materialization_responses"][0]
+
+    defects = materialization._proposal_defects(
+        response, cell, str(response["candidate_id"]),
+    )
+
+    assert any("at least two answer/rubric blocks" in defect for defect in defects)

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from app.bulk_import import assessment_workbook as aw
+from app.services import katex_rules
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / (
     "data/Testing/reference_bulk_import")
@@ -207,7 +208,11 @@ def _expected_question_text(sheet: str, gold: dict) -> str:
         for n in range(1, aw.MAX_OBJECTIVE_OPTIONS + 1):
             content = str(gold.get(f"answer_content_{n}") or "").strip()
             if content:
-                options.append(f"{chr(ord('A') + len(options))}) {content}")
+                answer_type = str(gold.get(f"answer_type_{n}") or "")
+                options.append(
+                    f"{chr(ord('a') + len(options))}) "
+                    f"{katex_rules.rich_answer_display(answer_type, content)}"
+                )
         if not options:
             return text
         return (text.rstrip() + "\n" + "\n".join(options)).strip()
@@ -227,6 +232,18 @@ def _diff_rows(sheet: str, gold: dict, rendered: dict) -> list[str]:
         got = _norm(rendered.get(field))
         if field == "question_text":
             want = _norm(_expected_question_text(sheet, gold))
+        elif field.startswith("answer_content_"):
+            number = field.removeprefix("answer_content_")
+            want = _norm(katex_rules.raw_answer_cell(
+                str(gold.get(f"answer_type_{number}") or ""),
+                str(gold.get(field) or ""),
+            ))
+        elif field.startswith("sq") and "_keyword_" in field:
+            prefix, number = field.split("_keyword_", 1)
+            want = _norm(katex_rules.raw_answer_cell(
+                str(gold.get(f"{prefix}_answer_type_{number}") or ""),
+                str(gold.get(field) or ""),
+            ))
         else:
             want = _norm(gold.get(field))
         if got != want:

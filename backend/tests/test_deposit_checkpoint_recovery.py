@@ -3,7 +3,12 @@ import copy
 import pytest
 
 from app import models
-from app.services import build_concepts, grounding_certificate, openai_usage
+from app.services import (
+    build_concepts,
+    checkpoints,
+    grounding_certificate,
+    openai_usage,
+)
 
 
 def _concept_records(title: str) -> list[dict]:
@@ -63,6 +68,12 @@ def _job_with_terminal_history(
         "question_task_inventory": {"items": [], "stats": {}},
         "mined_types": {"types": []},
         "method_row_snapshot": [],
+        build_concepts.generation.PHASE3_PRE_RELEASE_FIELD: (
+            build_concepts.generation.phase3_pre_release_bundle(
+                {"rows": [], "topics": []},
+                {"plans": {}, "questions": {}, "blocked": {}},
+            )
+        ),
     }
     prior = build_concepts.generation._make_concept_checkpoint(
         "post_type_assignment",
@@ -260,6 +271,117 @@ def test_generic_deposit_io_failure_preserves_final_checkpoint(
         expected_usage["total_tokens"])
     assert preserved.openai_usage["estimated_cost_usd"] == (
         expected_usage["estimated_cost_usd"])
+
+
+def test_production_entry_retains_legacy_terminal_for_pre_migration(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """The outer compatibility mirror must not prune v6/v7 before migration."""
+
+    job_id, chapter_id, _expected_usage = _job_with_terminal_history(
+        db,
+        first_chapter,
+        filename="legacy-pre-release-migration.mmd",
+    )
+    job = db.get(models.UploadJob, job_id)
+    assert job is not None
+    legacy_versions = {
+        "post_type_assignment": 6,
+        "final_content_ready": 7,
+    }
+    legacy_checkpoint = copy.deepcopy(job.generation_checkpoint)
+    for entry in legacy_checkpoint["checkpoints"]:
+        entry["stage_schema_version"] = legacy_versions[entry["stage"]]
+        entry.pop(
+            build_concepts.generation.PHASE3_PRE_RELEASE_FIELD, None,
+        )
+    legacy_checkpoint["stage_schema_version"] = 7
+    job.generation_checkpoint = legacy_checkpoint
+    db.commit()
+
+    # Drive backup and public portability validate the same envelope before
+    # migration. The two legacy versions are valid migration candidates, not
+    # ordinary current checkpoints, and must survive this round trip.
+    _filename, portable = checkpoints.export_bundle(db, job_id)
+    restored = checkpoints.import_bundle(db, portable)
+    assert [
+        entry["stage_schema_version"]
+        for entry in restored.generation_checkpoint["checkpoints"]
+    ] == [6, 7]
+
+    seen: list[tuple[str, int]] = []
+    migrated_bundle = build_concepts.generation.phase3_pre_release_bundle(
+        {"rows": [], "topics": []},
+        {"plans": {}, "questions": {}, "blocked": {}},
+    )
+
+    def migrate(*_args, artifacts=None, resume_checkpoint=None, **_kwargs):
+        entries = build_concepts.generation._concept_checkpoint_entries(
+            resume_checkpoint
+        )
+        seen.extend(
+            (str(entry.get("stage")), int(entry.get("stage_schema_version")))
+            for entry in entries
+        )
+        saved = (
+            build_concepts.generation
+            ._newest_compatible_concept_checkpoint(
+                resume_checkpoint,
+                allow_legacy_pre_release=True,
+            )
+        )
+        assert saved is not None
+        assert saved["stage"] == "final_content_ready"
+        if artifacts is not None:
+            artifacts["question_task_inventory"] = copy.deepcopy(
+                saved["question_task_inventory"]
+            )
+            artifacts["mined_types"] = copy.deepcopy(saved["mined_types"])
+            artifacts[
+                build_concepts.generation.PHASE3_PRE_RELEASE_FIELD
+            ] = copy.deepcopy(migrated_bundle)
+            artifacts[grounding_certificate.FINAL_CERTIFICATE_FIELD] = (
+                grounding_certificate.build_final_certificate(
+                    saved["records"]
+                )
+            )
+        return copy.deepcopy(saved["records"])
+
+    captured: dict = {}
+
+    def deposit(*_args, **kwargs):
+        captured["pre"] = copy.deepcopy(kwargs.get("phase3_pre_release"))
+        return _successful_deposit(*_args, **kwargs)
+
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd", migrate,
+    )
+    monkeypatch.setattr(
+        build_concepts.generation, "_openai_json", _forbid_openai,
+    )
+    monkeypatch.setattr(
+        build_concepts, "_deposit_and_publish_concepts", deposit,
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = build_concepts.generate_post_learning(
+        db, job_id, chapter_id,
+    )
+
+    assert result["job_id"] == job_id
+    assert seen == [
+        ("post_type_assignment", 6),
+        ("final_content_ready", 7),
+    ]
+    assert build_concepts.generation.valid_phase3_pre_release_bundle(
+        captured["pre"]
+    )
 
 
 def test_deposit_fatal_validator_errors_use_typed_exception(

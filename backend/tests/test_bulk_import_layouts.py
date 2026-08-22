@@ -444,6 +444,433 @@ def test_canonical_current_and_legacy_workbooks_still_import(db, tmp_path):
 # The gate refuses, whole
 # --------------------------------------------------------------------------- #
 
+def test_uppercase_objective_option_labels_refuse_the_whole_import(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_Uppercase_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Uppercase Option Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Uppercase Options",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Uppercase options",
+        ("concept", "concept_display_name"): "Uppercase options",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Choose the first letter.",
+        ("question", "question_text"):
+            "Choose the first letter.\nA) Alpha\nB) Beta",
+        ("question", "marks"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "Alpha",
+        ("question", "answer_type_2"): "Phrases",
+        ("question", "answer_content_2"): "Beta",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"objective": [cells]}),
+        tmp_path, "uppercase_objective_options.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "uppercase objective option label(s) A), B)" in detail
+    assert "uppercase_objective_option_label" in detail
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+def test_uppercase_options_in_question_fallback_refuse_the_whole_import(
+    client, db, tmp_path,
+):
+    """Blank question_text cannot bypass the label gate via backfill."""
+
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_UpperFallback_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Uppercase Fallback Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Uppercase Fallback",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Uppercase fallback",
+        ("concept", "concept_display_name"): "Uppercase fallback",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Choose.\nA) Alpha\nB) Beta",
+        ("question", "question_text"): "",
+        ("question", "marks"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "Alpha",
+        ("question", "answer_type_2"): "Phrases",
+        ("question", "answer_content_2"): "Beta",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"objective": [cells]}),
+        tmp_path,
+        "uppercase_question_fallback.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    assert "uppercase objective option label(s) A), B)" in (
+        response.json()["detail"]
+    )
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+@pytest.mark.parametrize("populated_answers", [0, 1])
+def test_uppercase_option_scan_uses_layout_capacity_not_populated_blocks(
+    client, db, tmp_path, populated_answers,
+):
+    layout = layouts.layout("canonical-current")
+    label = f"09CBPH_UpperCapacity{populated_answers}_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Uppercase Capacity Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Uppercase Capacity",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Uppercase capacity",
+        ("concept", "concept_display_name"): "Uppercase capacity",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Choose.",
+        ("question", "question_text"): "Choose.\nA) Alpha\nB) Beta",
+        ("question", "marks"): "1",
+    }
+    if populated_answers:
+        cells[("question", "answer_type_1")] = "Phrases"
+        cells[("question", "answer_content_1")] = "Alpha"
+    path = _save(
+        _new_workbook_for(layout, {"objective": [cells]}),
+        tmp_path,
+        f"uppercase_capacity_{populated_answers}.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    assert "uppercase objective option label(s) A), B)" in (
+        response.json()["detail"]
+    )
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+@pytest.mark.parametrize(
+    ("dialect", "table_text"),
+    [
+        pytest.param(
+            "markdown",
+            "Study the table.\n| Name | Value |\n|---|---:|\n| A | 1 |",
+            id="markdown-table",
+        ),
+        pytest.param(
+            "katex-array",
+            (
+                r"Study [Katex] \begin{array}{cc}"
+                r"A&B\\1&2\end{array} [/Katex]."
+            ),
+            id="katex-array-table",
+        ),
+    ],
+)
+def test_unsupported_rich_question_tables_refuse_the_whole_import(
+    client, db, tmp_path, dialect, table_text,
+):
+    layout = layouts.layout("canonical-current")
+    marker = dialect.replace("-", "_")
+    label = f"09CBPH_Table_{marker}_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            f"Unsupported Table {marker} (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): f"Topic 01: Table {marker}",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): f"Table {marker}",
+        ("concept", "concept_display_name"): f"Table {marker}",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Read the supplied table.",
+        ("question", "question_text"): table_text,
+        ("question", "marks"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "One",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"objective": [cells]}),
+        tmp_path, f"unsupported_{marker}.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "question_text contains unsupported table markup" in detail
+    assert "unsupported_table" in detail
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+def test_subjective_answer_table_is_transcribed_before_persistence(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_SubjectiveTable_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Subjective Table Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Subjective Table",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Subjective table",
+        ("concept", "concept_display_name"): "Subjective table",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "State the values.",
+        ("question", "question_text"): "State the values.",
+        ("question", "marks"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_1"):
+            "| Name | Value |\n|---|---:|\n| Alpha | 1 |",
+        ("question", "weightage_1"): "1",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"subjective": [cells]}),
+        tmp_path,
+        "subjective_answer_table.xlsx",
+    )
+
+    response = _post(client, path)
+
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    question = db.query(models.Question).filter_by(
+        question_label=label,
+    ).one()
+    persisted = question.answers[0]["answer"]
+    assert "|---|" not in persisted
+    assert persisted.splitlines() == [
+        "Table row 1, column 1: Name; Table row 1, column 2: Value",
+        "Table row 2, column 1: Alpha; Table row 2, column 2: 1",
+    ]
+
+
+def test_four_mark_single_rubric_refuses_before_database_mutation(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_FourMarkRubric_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Four Mark Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Four Mark",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Four mark rubric",
+        ("concept", "concept_display_name"): "Four mark rubric",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Explain the method.",
+        ("question", "question_text"): "Explain the method.",
+        ("question", "marks"): "4",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "One combined rubric.",
+        ("question", "answer_weightage_1"): "4",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        "four_mark_single_rubric.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    assert "4-mark descriptive requires at least two" in (
+        response.json()["detail"]
+    )
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+def test_mixed_phrases_rubric_refuses_before_database_mutation(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_MixedPhrases_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Mixed Phrases Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Mixed Phrases",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Mixed phrases",
+        ("concept", "concept_display_name"): "Mixed phrases",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Give the value.",
+        ("question", "question_text"): "Give the value.",
+        ("question", "marks"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): r"The value is \frac{1}{2}.",
+        ("question", "answer_weightage_1"): "1",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        "mixed_phrases_rubric.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    assert "Phrases content must not include LaTeX" in (
+        response.json()["detail"]
+    )
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+@pytest.mark.parametrize(
+    ("answer_type", "content", "expected"),
+    [
+        pytest.param(
+            "Words",
+            r"The value is \frac{1}{2}.",
+            "Phrases content must not include LaTeX",
+            id="legacy-words-normalizes-before-medium-check",
+        ),
+        pytest.param(
+            "",
+            "Plain answer without a declared medium.",
+            "unsupported or blank answer_type ''",
+            id="blank-type",
+        ),
+        pytest.param(
+            "Mystery",
+            "Plain answer with an unknown medium.",
+            "unsupported or blank answer_type 'Mystery'",
+            id="unknown-type",
+        ),
+    ],
+)
+def test_answer_type_is_normalized_and_validated_before_database_mutation(
+    client, db, tmp_path, answer_type, content, expected,
+):
+    layout = layouts.layout("canonical-current")
+    suffix = answer_type or "Blank"
+    label = f"09CBPH_Type{suffix}_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Answer Type Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Answer Type",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Answer type",
+        ("concept", "concept_display_name"): "Answer type",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Give the answer.",
+        ("question", "question_text"): "Give the answer.",
+        ("question", "marks"): "1",
+        ("question", "answer_type_1"): answer_type,
+        ("question", "answer_content_1"): content,
+        ("question", "answer_weightage_1"): "1",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        f"answer_type_{suffix}.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    assert expected in response.json()["detail"]
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+def test_type_only_second_block_does_not_satisfy_four_mark_rubric_shape(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_BlankSecondRubric_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Blank Rubric Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Blank Rubric",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Blank second rubric",
+        ("concept", "concept_display_name"): "Blank second rubric",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Explain the method.",
+        ("question", "question_text"): "Explain the method.",
+        ("question", "marks"): "4",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "First rubric point.",
+        ("question", "answer_weightage_1"): "2",
+        ("question", "answer_type_2"): "Phrases",
+        ("question", "answer_content_2"): "",
+        ("question", "answer_weightage_2"): "2",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        "blank_second_rubric.xlsx",
+    )
+
+    before = db.query(models.Chapter).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422
+    assert "4-mark descriptive requires at least two" in (
+        response.json()["detail"]
+    )
+    db.expire_all()
+    assert db.query(models.Chapter).count() == before
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
 def test_an_unrecognised_header_refuses_the_whole_import(client, db, tmp_path):
     layout = layouts.layout("canonical-current")
     cells = {

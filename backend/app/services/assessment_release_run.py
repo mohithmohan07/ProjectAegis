@@ -41,6 +41,7 @@ from . import assessment_dedup
 from . import assessment_grouping as grouping
 from . import assessment_prelearning_claim as prelearning_claim
 from . import assessment_marking as marking
+from . import assessment_master_refiner as master_refiner
 from . import assessment_materialization as materialization
 from . import assessment_quality as quality
 from . import assessment_release as rel
@@ -2634,7 +2635,7 @@ def run_release_for_job(
             if record.get("member_candidate_ids"):
                 _append_warning(record, _MASTER_REFINEMENT_WARNING)
         refinement_diff = {
-            "policy_version": "assessment-master-refiner-1",
+            "policy_version": master_refiner.MASTER_REFINER_POLICY_VERSION,
             "decision_policies": {},
             "output_kind": "assessment_master",
             "changes": [],
@@ -2662,13 +2663,13 @@ def run_release_for_job(
                 "candidate",
                 "candidates",
                 "candidate_id",
-                "assessment-master-refiner-candidate-1",
+                master_refiner.CANDIDATE_POLICY_VERSION,
             ),
             (
                 "group",
                 "groups",
                 "group_key",
-                "assessment-master-refiner-group-1",
+                master_refiner.GROUP_POLICY_VERSION,
             ),
         ):
             for record in payload.get(collection) or []:
@@ -2705,13 +2706,13 @@ def run_release_for_job(
                 "status": "unavailable",
             }
         refinement_diff = {
-            "policy_version": "assessment-master-refiner-1",
+            "policy_version": master_refiner.MASTER_REFINER_POLICY_VERSION,
             "decision_policies": {
                 "assessment.master_refiner.candidate": (
-                    "assessment-master-refiner-candidate-1"
+                    master_refiner.CANDIDATE_POLICY_VERSION
                 ),
                 "assessment.master_refiner.group": (
-                    "assessment-master-refiner-group-1"
+                    master_refiner.GROUP_POLICY_VERSION
                 ),
             },
             "output_kind": "assessment_master",

@@ -28,6 +28,7 @@ import json
 import zipfile
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app import models
 from app.services import assessment_release_run as run
@@ -37,6 +38,7 @@ from app.services import build_concepts_release_files as release_files
 from app.services import build_concepts_release_manifest as release_manifest
 from app.services import build_concepts_release_publication as publication
 from app.services import coverage_ledger
+from app.services import uploads
 
 from tests.test_assessment_release_run import (
     OWNER,
@@ -69,6 +71,71 @@ def _post_records():
             "keywords": "solid, shape",
         },
     ]
+
+
+def _routed_post_records():
+    """A mechanically complete Post fixture for publication-path tests."""
+
+    rows = _post_records()
+    rows[0]["concept_details"] = (
+        "Description: A solid keeps its own shape.\n"
+        "Achieving Mastery: name three solids and say why."
+        " // Types: Type 01: Recognising solids "
+        "Case 01: Identify a solid from the options. "
+        "Example 01: Which of these is a solid? "
+        "Case 02: Explain why an object is a solid. "
+        "Example 02: Explain why a cube is a solid."
+    )
+    rows[0]["_type_case_qid_host_placement_manifest"] = {
+        "placements": {
+            "QINV-0001": {
+                "qid": "QINV-0001",
+                "type_id": "TYPE-SOLID",
+                "case_id": "CASE-IDENTIFY",
+                "host_disposition": "type_case_example",
+            },
+            "QINV-0002": {
+                "qid": "QINV-0002",
+                "type_id": "TYPE-SOLID",
+                "case_id": "CASE-EXPLAIN",
+                "host_disposition": "type_case_example",
+            },
+        },
+    }
+    return rows
+
+
+def _post_mined_types():
+    return {
+        "types": [{
+            "type_id": "TYPE-SOLID",
+            "type_title": "Recognising solids",
+            "type_definition": "Identify and justify three-dimensional solids.",
+            "owner_topic_ids": [],
+            "case_prompts": [
+                {
+                    "case_id": "CASE-IDENTIFY",
+                    "case_definition": "Identify a solid from the options.",
+                    "owner_topic_ids": [],
+                    "source_question_ids": ["QINV-0001"],
+                    "examples": [{
+                        "source_question_id": "QINV-0001",
+                        "prompt": "Which of these is a solid?",
+                    }],
+                },
+                {
+                    "case_id": "CASE-EXPLAIN",
+                    "case_definition": "Explain why an object is a solid.",
+                    "owner_topic_ids": [],
+                    "source_question_ids": ["QINV-0002"],
+                    "examples": [{
+                        "source_question_id": "QINV-0002",
+                        "prompt": "Explain why a cube is a solid.",
+                    }],
+                },
+            ],
+        }],
+    }
 
 
 def _pre_map(*, rows=True, refused="", topic="Counting",
@@ -197,8 +264,9 @@ def _both_lanes_job(
         db,
         job,
         target_chapter_id=chapter.id,
-        records=_post_records(),
+        records=_routed_post_records(),
         inventory=copy.deepcopy(SOURCE_INVENTORY),
+        mined_types=_post_mined_types(),
         reason="recorded Output-01 fixture",
     )
     release.stage_pre_release(
@@ -1335,6 +1403,141 @@ def test_the_release_contract_stages_the_sibling_from_the_run_snapshots(
     assert job.result_ids == []
 
 
+def test_release_contract_prefers_captured_in_memory_pre_authority(db):
+    """The deposit interceptor carries Pre directly; no sidecar is needed."""
+
+    from app.services import build_concepts_release_contract as contract
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = models.UploadJob(
+        owner_sub=None, module="build_concepts", upload_type="textbook",
+        filename="memory.mmd", mmd_text="# Chapter", status="converted",
+        learning_kind="post", deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    bundle = generation.phase3_pre_release_bundle(
+        _pre_map(topic="Memory staged", concept="Memory staged"),
+        _pre_questions(2),
+    )
+
+    def _original(_db, _job_id, _chapter_id, **_kwargs):
+        contract._capture_deposit(
+            lambda records=None, chapter_id=None,
+            phase3_pre_release=None, **_k: None,
+            (),
+            {
+                "records": _post_records(),
+                "chapter_id": chapter.id,
+                "phase3_pre_release": bundle,
+            },
+        )
+        return {}
+
+    contract._run_generation_release(
+        _original, db, job.id, chapter.id, owner_sub=None,
+    )
+    db.refresh(job)
+    pre = release.release_payload(job, lane="pre")
+
+    assert pre is not None
+    assert pre["records"][0]["concept_title"] == "Memory staged"
+    assert len(pre["generated_questions"]) == 2
+
+
+def test_release_contract_keeps_pruned_terminal_proof_out_of_checkpoint_schema(
+    db, tmp_path, monkeypatch,
+):
+    """A pruned current terminal stages a diagnostic through call context.
+
+    The persisted fallback remains the schema-valid empty checkpoint.  The
+    completion fact travels only to this invocation's release wrapper, so it
+    cannot become resume authority or an invalid marker-only envelope.
+    """
+
+    from app.services import build_concepts
+    from app.services import build_concepts_release_contract as contract
+    from app.services import checkpoints
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = models.UploadJob(
+        owner_sub=None, module="build_concepts", upload_type="textbook",
+        filename="pruned-terminal.mmd", mmd_text="# Chapter",
+        status="converted", learning_kind="post",
+        deposit_scope_type="chapter", deposit_scope_ids=[chapter.id],
+        question_inventory={"items": []},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    terminal = generation._make_concept_checkpoint(
+        "final_content_ready",
+        records=_post_records(),
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    fingerprint = build_concepts._generation_checkpoint_fingerprint(
+        job, chapter,
+    )
+    target_identity = build_concepts._generation_target_identity(chapter)
+    job.generation_checkpoint = (
+        build_concepts._merge_generation_checkpoint_history(
+            {}, terminal,
+            fingerprint=fingerprint,
+            target_identity=target_identity,
+            target_chapter_id=chapter.id,
+        )
+    )
+    db.commit()
+    _point_at(monkeypatch, tmp_path)
+
+    def _fails_after_normalization(_db, _job_id, _chapter_id, **_kwargs):
+        current = _db.get(models.UploadJob, _job_id)
+        normalized, resumed = (
+            build_concepts._persist_compatible_generation_checkpoint_mirror(
+                _db,
+                current,
+                fingerprint=fingerprint,
+                target_identity=target_identity,
+                target_chapter_id=chapter.id,
+                allow_legacy_pre_release_migration=True,
+            )
+        )
+        assert normalized is None
+        assert resumed == {}
+        assert current.generation_checkpoint == {}
+        checkpoints._validate_checkpoint(
+            current.generation_checkpoint,
+            learning_kind="post",
+            mmd_text=current.mmd_text,
+            path="generation_checkpoint",
+        )
+        raise RuntimeError("failed before rewritten Phase 3")
+
+    contract._stage_generation_release(
+        _fails_after_normalization,
+        db,
+        job.id,
+        chapter.id,
+        owner_sub=None,
+    )
+    db.refresh(job)
+    pre = release.release_payload(job, lane="pre")
+
+    assert pre is not None
+    assert release.release_state(pre) == release.DIAGNOSTIC_RELEASE
+    assert any(
+        "terminal concept checkpoint proves Phase 03 completed" in defect
+        for defect in pre["snapshot_defects"]
+    )
+    assert job.generation_checkpoint == {}
+
+
 def test_master_siblings_build_concurrently_on_their_own_sessions(
     db, monkeypatch,
 ):
@@ -1599,8 +1802,10 @@ def _snapshot_job(db, chapter, *, filename="ch.mmd"):
     db.commit()
     db.refresh(job)
     release.stage_release(
-        db, job, target_chapter_id=chapter.id, records=_post_records(),
-        inventory=copy.deepcopy(SOURCE_INVENTORY), reason="post",
+        db, job, target_chapter_id=chapter.id,
+        records=_routed_post_records(),
+        inventory=copy.deepcopy(SOURCE_INVENTORY),
+        mined_types=_post_mined_types(), reason="post",
     )
     db.refresh(job)
     return job
@@ -1613,6 +1818,83 @@ def _point_at(monkeypatch, tmp_path):
         uploads, "source_artifact_directory", lambda _job_id: tmp_path,
         raising=False,
     )
+
+
+def test_in_memory_pre_authority_stages_without_sidecars_and_warns(db):
+    """Fresh runs stage memory; a failed duplicate file never erases Pre."""
+
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    bundle = generation.phase3_pre_release_bundle(
+        _pre_map(),
+        _pre_questions(2),
+        snapshot_writes={
+            "map": {
+                "filename": release.PRE_MAP_SNAPSHOT,
+                "state": "failed",
+                "error": "OSError: disk full",
+            },
+        },
+    )
+
+    staged = release.stage_pre_release_from_run(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        phase3_pre_release=bundle,
+        reason="in-memory authority",
+    )
+    assert staged is not None
+    db.refresh(job)
+    payload = release.release_payload(job, lane="pre")
+
+    assert payload["records"]
+    assert len(payload["generated_questions"]) == 2
+    assert payload["snapshot_defects"] == []
+    assert "disk full" in payload["snapshot_write_warnings"][0]
+    assert any(
+        issue["code"] == "pre_learning_snapshot_write_failed"
+        and issue["severity"] == "warning"
+        for issue in payload["issues"]
+    )
+    assert release.structural_defects(payload) == []
+
+
+def test_malformed_memory_falls_back_to_checkpoint_authority(db):
+    """Priority fallback preserves paid output while recording bad transport."""
+
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    bundle = generation.phase3_pre_release_bundle(
+        _pre_map(topic="Checkpoint map"), _pre_questions(1),
+    )
+    job.generation_checkpoint = generation._make_concept_checkpoint(
+        "post_type_assignment",
+        records=_post_records(),
+        question_task_inventory={"items": []},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+        **{generation.PHASE3_PRE_RELEASE_FIELD: bundle},
+    )
+    db.commit()
+    db.refresh(job)
+
+    release.stage_pre_release_from_run(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        phase3_pre_release={"schema_version": 1, "pre_map": "broken"},
+    )
+    db.refresh(job)
+    payload = release.release_payload(job, lane="pre")
+
+    assert payload["records"][0]["topic"] == "Checkpoint map"
+    assert len(payload["generated_questions"]) == 1
+    assert any("in-memory" in row for row in payload["snapshot_defects"])
 
 
 def test_an_unreadable_questions_snapshot_is_never_an_empty_pre_lane(
@@ -1669,6 +1951,34 @@ def test_an_unreadable_questions_snapshot_is_never_an_empty_pre_lane(
         publication.upload_release_to_database(
             db, job.id, owner_sub=OWNER, lane="pre",
         )
+
+
+def test_an_absent_questions_snapshot_is_not_authored_zero(
+    db, tmp_path, monkeypatch,
+):
+    """A recorded map makes its missing questions authority a hard defect."""
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    (tmp_path / release.PRE_MAP_SNAPSHOT).write_text(
+        json.dumps(_pre_map()), encoding="utf-8",
+    )
+    _point_at(monkeypatch, tmp_path)
+
+    assert release.stage_pre_release_from_run(
+        db, job, target_chapter_id=chapter.id,
+        reason="questions authority absent",
+    ) is not None
+    db.refresh(job)
+    payload = release.release_payload(job, lane="pre")
+
+    assert payload["records"]
+    assert payload["generated_questions"] == []
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+    assert any(
+        release.PRE_QUESTIONS_SNAPSHOT in defect and "absent" in defect
+        for defect in payload["snapshot_defects"]
+    )
 
 
 def test_a_lane_that_authored_no_question_stays_distinguishable_from_that(
@@ -1761,6 +2071,297 @@ def test_no_pre_lane_at_all_still_stages_no_sibling(
     ) is None
     db.refresh(job)
     assert release.release_payload(job, lane="pre") is None
+
+
+def test_existing_post_release_route_backfills_pre_from_checkpoint_without_spend(
+    db, client, monkeypatch,
+):
+    """The historical Post short-circuit repairs Pre, but runs no model."""
+
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    bundle = generation.phase3_pre_release_bundle(
+        _pre_map(topic="Recovered checkpoint map"),
+        _pre_questions(2),
+    )
+    job.generation_checkpoint = generation._make_concept_checkpoint(
+        "post_type_assignment",
+        records=_post_records(),
+        question_task_inventory=copy.deepcopy(SOURCE_INVENTORY),
+        mined_types={"types": []},
+        method_row_snapshot=[],
+        **{generation.PHASE3_PRE_RELEASE_FIELD: bundle},
+    )
+    db.commit()
+    db.refresh(job)
+    post_before = copy.deepcopy(release.release_payload(job))
+
+    def no_refiner(*_args, **_kwargs):
+        raise AssertionError("interactive Pre repair must not call a model")
+
+    monkeypatch.setattr(release, "_refine_pre_records", no_refiner)
+    response = client.post(f"/build-concepts/uploads/{job.id}/release")
+    assert response.status_code == 200, response.text
+
+    db.refresh(job)
+    assert release.release_payload(job) == post_before
+    pre = release.release_payload(job, lane="pre")
+    assert pre is not None
+    assert pre["records"][0]["topic"] == "Recovered checkpoint map"
+    assert len(pre["generated_questions"]) == 2
+    assert db.query(models.AssessmentRelease).filter(
+        models.AssessmentRelease.job_id == job.id
+    ).count() == 0
+
+
+def test_existing_pre_sibling_is_idempotent_on_release_short_circuit(
+    db, client, monkeypatch,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+    pre_before = copy.deepcopy(release.release_payload(job, lane="pre"))
+    post_before = copy.deepcopy(release.release_payload(job))
+
+    def no_refiner(*_args, **_kwargs):
+        raise AssertionError("an existing Pre sibling must not be restaged")
+
+    monkeypatch.setattr(release, "_refine_pre_records", no_refiner)
+    response = client.post(f"/build-concepts/uploads/{job.id}/release")
+    assert response.status_code == 200, response.text
+
+    db.refresh(job)
+    assert release.release_payload(job, lane="pre") == pre_before
+    assert release.release_payload(job) == post_before
+
+
+def test_stale_sessions_cannot_mint_two_pre_siblings(db):
+    """The lock + refresh turns a stale second recovery into a no-op."""
+
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    job.generation_checkpoint = generation._make_concept_checkpoint(
+        "post_type_assignment",
+        records=_post_records(),
+        question_task_inventory=copy.deepcopy(SOURCE_INVENTORY),
+        mined_types={"types": []},
+        method_row_snapshot=[],
+        **{
+            generation.PHASE3_PRE_RELEASE_FIELD:
+                generation.phase3_pre_release_bundle(
+                    _pre_map(topic="Locked recovery"),
+                    _pre_questions(1),
+                ),
+        },
+    )
+    db.commit()
+
+    first = Session(bind=db.get_bind())
+    stale = Session(bind=db.get_bind())
+    try:
+        first_job = first.get(models.UploadJob, job.id)
+        stale_job = stale.get(models.UploadJob, job.id)
+        assert first_job is not None and stale_job is not None
+        assert release.backfill_missing_pre_release(first, first_job)
+        first_payload = copy.deepcopy(
+            release.release_payload(first_job, lane="pre")
+        )
+        assert first_payload is not None
+
+        assert not release.backfill_missing_pre_release(stale, stale_job)
+        stale.refresh(stale_job)
+        assert release.release_payload(stale_job, lane="pre") == first_payload
+    finally:
+        first.close()
+        stale.close()
+
+
+def test_existing_post_release_route_returns_409_while_job_lock_is_held(
+    db, client,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+
+    with uploads.exclusive_job_operation(job.id):
+        response = client.post(f"/build-concepts/uploads/{job.id}/release")
+
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+    db.refresh(job)
+    assert release.release_payload(job, lane="pre") is None
+
+
+def test_existing_post_release_does_not_invent_pre_without_authority(
+    db, client, tmp_path, monkeypatch,
+):
+    """No Phase 03 authority and no terminal proof still means no sibling."""
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    _point_at(monkeypatch, tmp_path)
+
+    response = client.post(f"/build-concepts/uploads/{job.id}/release")
+    assert response.status_code == 200, response.text
+    db.refresh(job)
+    assert release.release_payload(job, lane="pre") is None
+
+
+def test_existing_post_terminal_proof_repairs_a_diagnostic_pre_sibling(
+    db, client, tmp_path, monkeypatch,
+):
+    """Lost paid authority is visible as Diagnostic, never authored-zero."""
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    durable = copy.deepcopy(job.question_inventory)
+    durable[release.RELEASE_KEY]["checkpoint_stage"] = "final_content_ready"
+    job.question_inventory = durable
+    job.generation_checkpoint = {}
+    db.commit()
+    db.refresh(job)
+    _point_at(monkeypatch, tmp_path)
+
+    response = client.post(f"/build-concepts/uploads/{job.id}/release")
+    assert response.status_code == 200, response.text
+    db.refresh(job)
+    pre = release.release_payload(job, lane="pre")
+    assert pre is not None
+    assert release.release_state(pre) == release.DIAGNOSTIC_RELEASE
+    assert any(
+        "terminal concept checkpoint proves Phase 03 completed" in defect
+        for defect in pre["snapshot_defects"]
+    )
+    assert release_files.build_release_workbook(job, lane="pre")
+    assert release_files.build_release_bulk_import_workbook(db, job, lane="pre")
+    assert release_files.build_diagnostics_zip(job, lane="pre")
+
+
+def test_force_release_backfills_pre_from_checkpoint_without_spend(
+    db, monkeypatch,
+):
+    """The non-short-circuit interactive route repairs the same sibling."""
+
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = models.UploadJob(
+        owner_sub=OWNER,
+        module="build_concepts",
+        upload_type="textbook",
+        filename="force-release.mmd",
+        mmd_text="# Chapter",
+        status="converted",
+        learning_kind="post",
+        deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id],
+        question_inventory=copy.deepcopy(SOURCE_INVENTORY),
+        generation_checkpoint=generation._make_concept_checkpoint(
+            "post_type_assignment",
+            records=_post_records(),
+            question_task_inventory=copy.deepcopy(SOURCE_INVENTORY),
+            mined_types={"types": []},
+            method_row_snapshot=[],
+            **{
+                generation.PHASE3_PRE_RELEASE_FIELD:
+                    generation.phase3_pre_release_bundle(
+                        _pre_map(topic="Force-recovered map"),
+                        _pre_questions(1),
+                    ),
+            },
+        ),
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    def no_refiner(*_args, **_kwargs):
+        raise AssertionError("force release repair must not call a model")
+
+    monkeypatch.setattr(release, "_refine_pre_records", no_refiner)
+    release.force_release(db, job.id, owner_sub=OWNER)
+
+    db.refresh(job)
+    assert release.release_payload(job) is not None
+    pre = release.release_payload(job, lane="pre")
+    assert pre is not None
+    assert pre["records"][0]["topic"] == "Force-recovered map"
+    assert len(pre["generated_questions"]) == 1
+    assert db.query(models.AssessmentRelease).filter(
+        models.AssessmentRelease.job_id == job.id
+    ).count() == 0
+
+
+def test_terminal_checkpoint_without_pre_authority_stages_a_diagnostic(
+    db, tmp_path, monkeypatch,
+):
+    """Completed Phase 3 without its payload is a defect, not no lane."""
+
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    job.generation_checkpoint = generation._make_concept_checkpoint(
+        "post_type_assignment",
+        records=_post_records(),
+        question_task_inventory={"items": [], "stats": {}},
+        mined_types={"types": []},
+        method_row_snapshot=[],
+    )
+    db.commit()
+    db.refresh(job)
+    _point_at(monkeypatch, tmp_path)
+
+    assert release.stage_pre_release_from_run(
+        db, job, target_chapter_id=chapter.id,
+        reason="terminal authority missing",
+    ) is not None
+    db.refresh(job)
+    payload = release.release_payload(job, lane="pre")
+
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+    assert any(
+        "terminal concept checkpoint proves Phase 03 completed" in defect
+        for defect in payload["snapshot_defects"]
+    )
+
+
+def test_pruned_terminal_proof_still_stages_a_diagnostic_pre_sibling(
+    db, tmp_path, monkeypatch,
+):
+    """Compatibility may prune the row payload, never the R4 completion fact."""
+
+    from app.services import generation
+
+    chapter = _chapter_with_concepts(db)
+    job = _snapshot_job(db, chapter)
+    _point_at(monkeypatch, tmp_path)
+
+    assert release.stage_pre_release_from_run(
+        db, job, target_chapter_id=chapter.id,
+        terminal_checkpoint_proof={
+            "stage": "final_content_ready",
+            "stage_order": generation._checkpoint_order(
+                "final_content_ready"
+            ),
+            "stage_schema_version": 8,
+            "defect": (
+                "completed Phase 3 checkpoint has no complete Pre-Learning "
+                "release authority"
+            ),
+        },
+        reason="terminal proof survived compatibility fallback",
+    ) is not None
+    db.refresh(job)
+    payload = release.release_payload(job, lane="pre")
+
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+    assert any(
+        "terminal concept checkpoint proves Phase 03 completed" in defect
+        for defect in payload["snapshot_defects"]
+    )
 
 
 # --------------------------------------------------------------------------- #

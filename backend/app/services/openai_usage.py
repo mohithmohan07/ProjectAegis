@@ -151,6 +151,8 @@ class StageUsage:
     lane: str
     request_count: int = 0
     input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
     total_tokens: int = 0
@@ -234,6 +236,8 @@ class UsageAccumulator:
             )
             row.request_count += max(0, int(request_count))
             row.input_tokens += input_tokens
+            row.cached_input_tokens += cached_input_tokens
+            row.cache_write_tokens += cache_write_tokens
             row.output_tokens += output_tokens
             row.reasoning_tokens += reasoning_tokens
             row.total_tokens += total
@@ -254,6 +258,8 @@ class UsageAccumulator:
                 "lane": row.lane,
                 "request_count": row.request_count,
                 "input_tokens": row.input_tokens,
+                "cached_input_tokens": row.cached_input_tokens,
+                "cache_write_tokens": row.cache_write_tokens,
                 "output_tokens": row.output_tokens,
                 "reasoning_tokens": row.reasoning_tokens,
                 "total_tokens": row.total_tokens,
