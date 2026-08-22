@@ -165,6 +165,7 @@ def decide_example_ownership(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
+    candidate_tasks: list[dict[str, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """One recorded chapter-wide verdict over the unowned Examples.
 
@@ -177,7 +178,11 @@ def decide_example_ownership(
     if not rows:
         return [], []
 
-    tasks = _candidate_tasks(inventory)
+    tasks = (
+        list(candidate_tasks)
+        if candidate_tasks is not None
+        else _candidate_tasks(inventory)
+    )
     qids = {task["qid"] for task in tasks}
 
     if provider is None:
@@ -303,6 +308,7 @@ def replay_example_ownership(
     meta: Mapping[str, Any] | None,
     envelope_sha256: str,
     store: kernel.DecisionStore | None,
+    candidate_tasks: list[dict[str, str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]] | None:
     """A pure store probe: the recorded verdict, or None — never a call.
 
@@ -316,7 +322,11 @@ def replay_example_ownership(
     rows = [f for f in findings if isinstance(f, Mapping)]
     if not rows:
         return None
-    tasks = _candidate_tasks(inventory)
+    tasks = (
+        list(candidate_tasks)
+        if candidate_tasks is not None
+        else _candidate_tasks(inventory)
+    )
     decision = kernel.peek(
         kind="concepts.example_ownership",
         unit_id="chapter",
@@ -458,8 +468,23 @@ def adjudication_issue(
             ),
             "",
         )
-        store = release_refiner.decision_store_for_job(int(job_id))
+        # Everything between the scan and the verdict branches degrades,
+        # never raises: a store whose directory cannot be created, a
+        # probe that trips — each falls back toward "record the finding
+        # unadjudicated", because losing the record to a helper's
+        # exception is exactly the R4 silent-loss this module exists to
+        # prevent.
+        try:
+            store = release_refiner.decision_store_for_job(int(job_id))
+        except Exception:  # noqa: BLE001
+            store = None
         durable = store is not None
+        try:
+            tasks = _candidate_tasks(inventory)
+        except Exception:  # noqa: BLE001
+            # Unknown candidate set: skip the empty-set shortcut and let
+            # the decide path's own guard record any failure.
+            tasks = None
 
         verdicts: list[dict[str, Any]]
         flags: list[str] = []
@@ -471,17 +496,21 @@ def adjudication_issue(
         # the verdict (a newer checkpoint's inventory snapshot, an edited
         # row) legitimately re-key: the probe misses and the route falls
         # through to its own recording below.
-        replayed = replay_example_ownership(
-            findings,
-            inventory=dict(inventory or {}),
-            meta=meta,
-            envelope_sha256=envelope_sha,
-            store=store,
-        )
+        try:
+            replayed = replay_example_ownership(
+                findings,
+                inventory=dict(inventory or {}),
+                meta=meta,
+                envelope_sha256=envelope_sha,
+                store=store,
+                candidate_tasks=tasks,
+            )
+        except Exception:  # noqa: BLE001
+            replayed = None
         if replayed is not None:
             verdicts, flags = replayed
             adjudicated = True
-        elif not _candidate_tasks(inventory):
+        elif tasks is not None and not tasks:
             # No candidate owners at all: adjudicating against an empty
             # task list is a foregone conclusion and the empty inventory
             # itself is the anomaly worth reading — record without
@@ -519,6 +548,7 @@ def adjudication_issue(
                     envelope_sha256=envelope_sha,
                     store=store,
                     fixer=p3_fixer.default_provider(),
+                    candidate_tasks=tasks,
                 )
                 adjudicated = True
             except Exception as exc:  # noqa: BLE001

@@ -356,6 +356,45 @@ def test_the_interactive_route_replays_a_recorded_verdict_for_free(
     assert issue["details"]["verdicts"][0]["verdict"] == "unowned"
 
 
+def test_a_raising_store_constructor_still_records_the_finding(monkeypatch):
+    # R4: the store living OUTSIDE the record-unadjudicated safety net
+    # once made a raising DecisionStore (read-only artifact dir, full
+    # disk) drop the finding entirely. It must degrade to an
+    # unadjudicated record instead.
+    from app.services import canonical_source_phase3 as phase3_core
+    from app.services import release_refiner
+
+    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: False)
+    monkeypatch.setattr(
+        release_refiner, "decision_store_for_job",
+        lambda _job_id: (_ for _ in ()).throw(PermissionError("read-only")),
+    )
+
+    issue = ownership.adjudication_issue(
+        _unowned_records(),
+        _inventory("A completely different source task."),
+        meta={},
+        job_id=17,
+    )
+
+    assert issue is not None
+    assert issue["details"]["adjudicated"] is False
+    assert issue["details"]["durable_store"] is False
+
+
+def test_the_checkpoint_identity_vocabulary_is_one_tuple():
+    # The writer and the decision-key projections share the models tuple;
+    # the checkpoint schema/fingerprint tuple is a FROZEN serialization
+    # that may only change with a version bump — this pin makes any
+    # divergence a conscious act, never drift.
+    from app import models
+    from app.services import checkpoints
+
+    assert checkpoints._TARGET_FIELDS == (
+        models.CHECKPOINT_TARGET_IDENTITY_FIELDS
+    )
+
+
 def test_a_missing_durable_store_is_recorded_not_silent(monkeypatch):
     from app.services import canonical_source_phase3 as phase3_core
     from app.services import release_refiner

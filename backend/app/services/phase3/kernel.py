@@ -355,6 +355,11 @@ def decide(
     fixer-less run does.
     """
 
+    # The read and the write below use THIS key, computed once; ``peek``
+    # is the same decision_key + store.get for external probes, so the
+    # shared identity function is what keeps the two from drifting —
+    # re-deriving the key through peek here would hash the full payload
+    # twice per decision for no additional guarantee.
     key = decision_key(
         kind=kind,
         unit_id=unit_id,
@@ -362,14 +367,7 @@ def decide(
         payload=payload,
         policy_version=policy_version,
     )
-    cached = peek(
-        kind=kind,
-        unit_id=unit_id,
-        envelope_sha256=envelope_sha256,
-        payload=payload,
-        store=store,
-        policy_version=policy_version,
-    )
+    cached = store.get(key)
     if cached is not None:
         return cached
 

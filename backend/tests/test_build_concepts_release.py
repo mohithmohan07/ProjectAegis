@@ -263,6 +263,34 @@ def test_inventory_fallback_reaches_the_job_and_strips_release_slots(db):
     assert release.PRE_RELEASE_KEY not in fallback
 
 
+def test_lane_slots_are_stripped_from_any_inventory_source(db):
+    # The capture fallback can hand job.question_inventory in VERBATIM as
+    # the explicit inventory= argument; the lane release slots must be
+    # stripped from the resolved value whatever branch supplied it, or a
+    # prior staged release nests inside the new payload and the durable
+    # row grows every staging cycle.
+    job, chapter = _job(db)
+    tainted = _inventory()
+    tainted[release.RELEASE_KEY] = {"records": [], "issues": []}
+    tainted[release.PRE_RELEASE_KEY] = {"records": [], "issues": []}
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory=tainted,
+        mined_types=_mined_types(),
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    staged_inventory = payload["question_task_inventory"]
+    assert release.RELEASE_KEY not in staged_inventory
+    assert release.PRE_RELEASE_KEY not in staged_inventory
+    assert staged_inventory["items"]
+
+
 def test_stage_release_hands_the_judge_the_captured_checkpoint_identity(
     db, monkeypatch,
 ):
