@@ -4709,10 +4709,13 @@ def generate_post_learning(
         written.get("publication_status") == "staged_release_only"
     )
     if staged_release_only:
+        # "Captured", not "staged": staging itself runs a moment later in
+        # the release wrapper, and this line must stay true even if that
+        # staging step fails and records its own error.
         job.detail = (
-            f"staged {written.get('written', 0)} concept row(s) into the "
-            "release for review; database publication happens from the "
-            "review page"
+            f"captured {written.get('written', 0)} concept row(s) for the "
+            "staged release; database publication happens from the review "
+            "page"
         )
     else:
         job.detail = (
@@ -4723,9 +4726,9 @@ def generate_post_learning(
     progress.set_progress(1.0, label="Done")
     if staged_release_only:
         progress.log(
-            f"Staged {written.get('written', 0)} concept row(s) into the "
-            "release for review; nothing enters the database until the "
-            "release is published.", level="success")
+            f"Captured {written.get('written', 0)} concept row(s) for the "
+            "staged release; nothing enters the database until the release "
+            "is published from the review page.", level="success")
     else:
         progress.log(
             f"Created {len(created_ids)} post-learning concepts "

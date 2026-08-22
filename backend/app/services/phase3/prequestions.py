@@ -92,10 +92,12 @@ does hold. Stated plainly so it is not mistaken for a stronger guarantee
 than it is.
 
 **The tier/difficulty axis is not conflated, and the level verdict is not
-pre-empted.** Q4's "20 Basic and 20 Intermediate" names the GROUP TIER
-(``assessment_grouping.TIER_CODES``), which is decided per question by an
-independent level verdict in the assessment lane that is explicitly told
-no other label has authority over it. The workbook's
+pre-empted.** Q4's original "20 Basic and 20 Intermediate" — and every
+later calibration of it, Q20's ~5-with-the-split-left-to-the-model
+included — names the GROUP TIER (``assessment_grouping.TIER_CODES``),
+which is decided per question by an independent level verdict in the
+assessment lane that is explicitly told no other label has authority
+over it. The workbook's
 ``level_of_difficulty`` (``bulk_import.DIFFICULTY_LEVELS`` —
 Less/Moderate/High) is a different vocabulary entirely. So: the plan's
 split is an authored statement of the COVERAGE it intends, read in the

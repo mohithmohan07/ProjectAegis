@@ -2312,6 +2312,22 @@ def stage_release(
         "learning_kind": job.learning_kind,
     })
     issues.extend(qc_issues)
+    # Q13/R4: public Examples whose wording has no exact owner in the
+    # source inventory are adjudicated by one recorded decision and ride
+    # this same ledger. Decided HERE, beside the QC audit, so every exit
+    # that stages rows — clean, captured-failure, and both checkpoint
+    # exits — carries the record; the helper never raises, and a failed
+    # or unavailable judge still leaves the deterministic finding behind.
+    from . import concept_example_ownership
+
+    ownership_issue = concept_example_ownership.adjudication_issue(
+        record_rows,
+        inventory_value,
+        meta=dict(job.checkpoint_target_identity or {}),
+        job_id=int(job.id),
+    )
+    if ownership_issue is not None:
+        issues.append(ownership_issue)
     staged_snapshot_defects = [
         _normal(defect) for defect in snapshot_defects if _normal(defect)
     ]

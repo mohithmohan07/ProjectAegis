@@ -17,9 +17,13 @@ model's judgment (Rule 1); the scan that found it and the checker that
 audits the verdict's shape are mechanics. Nothing is dropped or
 rewritten here: the reviewer acts through the ordinary revision loop.
 
-The recorder half follows ``record_assessment_lane_unavailable``: it
-appends to the lane slot's seal-safe ``issues`` ledger and never raises
-— a recorder that can raise is the same defect one level up.
+The record rides the release's own ``issues`` ledger: ``stage_release``
+calls ``adjudication_issue`` while assembling that ledger, exactly like
+the staging-time QC audit — so every exit that stages rows (clean,
+captured-failure, and both checkpoint exits) carries the record, and a
+judge that fails still leaves the deterministic finding behind, marked
+unadjudicated with the failure named. The helper never raises — a
+recorder that can raise is the same defect one level up.
 """
 from __future__ import annotations
 
@@ -175,6 +179,12 @@ def decide_example_ownership(
 
     from . import generation
 
+    # Hub-kind items (Activities / Info Hubs) are excluded from the
+    # candidate owners exactly as the scanner excludes them from the
+    # expected owner keys: the closed-world contract says a hub item can
+    # never own a public Example, so the judge must not be offered one —
+    # and the checker's qid set below rejects a hub qid outright.
+    hub_kinds = getattr(generation, "_HUB_INVENTORY_KINDS", frozenset())
     tasks = [
         {
             "qid": str(item.get("qid") or ""),
@@ -182,6 +192,8 @@ def decide_example_ownership(
         }
         for item in (inventory or {}).get("items") or []
         if isinstance(item, Mapping) and str(item.get("qid") or "")
+        and str(item.get("source_kind") or "").strip().lower()
+        not in hub_kinds
     ]
     qids = {task["qid"] for task in tasks}
 
@@ -290,48 +302,30 @@ def build_issue(
     )
 
 
-def _append_release_issue(db, job, lane: str, issue: Mapping[str, Any]) -> bool:
-    """Seal-safe append onto the lane slot's ``issues`` ledger."""
-
-    from . import build_concepts_release as release
-
-    key = release.release_key_for_lane(release.normalize_lane(lane))
-    durable = copy.deepcopy(dict(job.question_inventory or {}))
-    slot = durable.get(key)
-    if not isinstance(slot, Mapping):
-        return False
-    slot = copy.deepcopy(dict(slot))
-    slot["issues"] = list(slot.get("issues") or []) + [dict(issue)]
-    durable[key] = slot
-    job.question_inventory = durable
-    db.commit()
-    db.refresh(job)
-    return True
-
-
-def adjudicate_and_record(
-    db,
-    job,
-    *,
-    lane: str,
+def adjudication_issue(
     records: list[Mapping[str, Any]],
     inventory: Mapping[str, Any] | None,
+    *,
     meta: Mapping[str, Any],
+    job_id: int,
 ) -> dict[str, Any] | None:
-    """Scan the staged rows, adjudicate, and record — never raise.
+    """Scan the staging rows and return the issue to stage — never raise.
 
-    Runs after ``stage_release`` staged the lane. An empty scan spends
-    nothing and records nothing. When the live semantic API is off the
-    deterministic finding is still recorded (``adjudicated: false``) —
-    the finding never evaporates just because the judge is unavailable.
+    Called by ``stage_release`` while it assembles the release's own
+    ``issues`` ledger (exactly like the staging-time QC audit), so every
+    exit that stages rows carries the record. An empty scan spends
+    nothing and returns None. A judge that FAILS — provider error, quota,
+    contract exhaustion — still returns the deterministic finding, marked
+    ``adjudicated: false`` with the failure named: the finding never
+    evaporates because the judge did (R4). The decision is decide-once in
+    the job's durable store, so a re-stage replays the verdict for free.
     """
 
     try:
         from . import canonical_source_phase3 as phase3_core
-        from . import generation, release_refiner
+        from . import generation, progress, release_refiner
         from . import grounding_certificate as gc
         from .phase3 import fixer as p3_fixer
-        from . import progress
 
         findings = generation._unexpected_rendered_type_examples(
             [dict(r) for r in records if isinstance(r, Mapping)],
@@ -340,29 +334,8 @@ def adjudicate_and_record(
         if not findings:
             return None
 
-        verdicts: list[dict[str, Any]]
-        flags: list[str] = []
-        adjudicated = bool(phase3_core.semantic_api_enabled())
-        if adjudicated:
-            envelope_sha = next(
-                (
-                    str(row.get(gc.SOURCE_CONTRACT_FIELD) or "").strip()
-                    for row in records
-                    if isinstance(row, Mapping)
-                    and str(row.get(gc.SOURCE_CONTRACT_FIELD) or "").strip()
-                ),
-                "",
-            )
-            verdicts, flags = decide_example_ownership(
-                findings,
-                inventory=dict(inventory or {}),
-                meta=meta,
-                envelope_sha256=envelope_sha,
-                store=release_refiner.decision_store_for_job(int(job.id)),
-                fixer=p3_fixer.default_provider(),
-            )
-        else:
-            verdicts = [
+        def _unadjudicated(note: str) -> list[dict[str, Any]]:
+            return [
                 {
                     "example_index": index,
                     "example_text": str(
@@ -371,14 +344,53 @@ def adjudicate_and_record(
                     "detected_reason": str(row.get("reason") or ""),
                     "verdict": "",
                     "owner_qid": "",
-                    "reason": "live adjudication unavailable on this run",
+                    "reason": note,
                 }
                 for index, row in enumerate(findings)
             ]
 
+        verdicts: list[dict[str, Any]]
+        flags: list[str] = []
+        adjudicated = False
+        if phase3_core.semantic_api_enabled():
+            try:
+                envelope_sha = next(
+                    (
+                        str(
+                            row.get(gc.SOURCE_CONTRACT_FIELD) or ""
+                        ).strip()
+                        for row in records
+                        if isinstance(row, Mapping) and str(
+                            row.get(gc.SOURCE_CONTRACT_FIELD) or ""
+                        ).strip()
+                    ),
+                    "",
+                )
+                verdicts, flags = decide_example_ownership(
+                    findings,
+                    inventory=dict(inventory or {}),
+                    meta=meta,
+                    envelope_sha256=envelope_sha,
+                    store=release_refiner.decision_store_for_job(
+                        int(job_id)
+                    ),
+                    fixer=p3_fixer.default_provider(),
+                )
+                adjudicated = True
+            except Exception as exc:  # noqa: BLE001
+                # The judge failing is never a reason to lose the
+                # finding: record it unadjudicated, failure named.
+                verdicts = _unadjudicated(
+                    "live adjudication failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+                flags = []
+        else:
+            verdicts = _unadjudicated(
+                "live adjudication unavailable on this run"
+            )
+
         issue = build_issue(verdicts, flags, adjudicated=adjudicated)
-        if not _append_release_issue(db, job, lane, issue):
-            return None
         unowned = sum(
             1 for v in verdicts if str(v.get("verdict") or "") == "unowned"
         )
@@ -389,13 +401,19 @@ def adjudicate_and_record(
             if adjudicated else
             f"Example ownership: {len(verdicts)} public Example(s) without "
             "an exact inventory owner were recorded on the release for "
-            "review (live adjudication unavailable).",
+            "review (not adjudicated on this run).",
             level="warning",
         )
         return issue
-    except Exception:  # pragma: no cover - the recorder must never raise
+    except Exception as exc:  # pragma: no cover - must never block staging
         try:
-            db.rollback()
+            from . import progress
+
+            progress.log(
+                "Example ownership scan failed and recorded nothing: "
+                f"{type(exc).__name__}: {exc}",
+                level="warning",
+            )
         except Exception:
             pass
         return None

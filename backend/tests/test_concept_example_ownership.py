@@ -12,11 +12,6 @@ through the ordinary revision loop.
 """
 from __future__ import annotations
 
-from types import SimpleNamespace
-
-import pytest
-
-from app.services import build_concepts_release as release
 from app.services import concept_example_ownership as ownership
 from app.services import generation as g
 from app.services.phase3 import kernel
@@ -196,40 +191,8 @@ def test_the_issue_carries_every_verdict_and_stays_a_warning():
     assert "1 ruled genuinely unowned" in issue["message"]
 
 
-class _StubDb:
-    def commit(self):
-        pass
-
-    def refresh(self, _obj):
-        pass
-
-    def rollback(self):
-        pass
-
-
-def test_the_recorder_appends_to_the_lane_slot_and_reports_absence():
-    key = release.release_key_for_lane(release.LANE_POST)
-    job = SimpleNamespace(id=7, question_inventory={key: {"issues": []}})
-    issue = {"code": "unowned_rendered_examples", "message": "m"}
-
-    assert ownership._append_release_issue(_StubDb(), job, "post", issue)
-    assert job.question_inventory[key]["issues"][-1]["message"] == "m"
-
-    bare = SimpleNamespace(id=8, question_inventory={})
-    assert not ownership._append_release_issue(_StubDb(), bare, "post", issue)
-
-
-def test_adjudicate_records_the_finding_even_without_a_live_judge(
-    monkeypatch,
-):
-    # Dry mode: the deterministic finding must still land on the release —
-    # an unavailable judge never makes a finding evaporate (R4).
-    from app.services import canonical_source_phase3 as phase3_core
-
-    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: False)
-    key = release.release_key_for_lane(release.LANE_POST)
-    job = SimpleNamespace(id=9, question_inventory={key: {"issues": []}})
-    records = [{
+def _unowned_records() -> list[dict]:
+    return [{
         "topic": "T", "parent_concept": "P", "concept_title": "C",
         "concept_details": (
             "Description: d. // Types: Type 01: T Case 01: c "
@@ -238,29 +201,64 @@ def test_adjudicate_records_the_finding_even_without_a_live_judge(
         "keywords": "",
     }]
 
-    issue = ownership.adjudicate_and_record(
-        _StubDb(), job,
-        lane="post",
-        records=records,
-        inventory=_inventory("A completely different source task."),
+
+def test_the_issue_records_the_finding_even_without_a_live_judge(
+    monkeypatch,
+):
+    # Dry mode: the deterministic finding must still ride the release —
+    # an unavailable judge never makes a finding evaporate (R4).
+    from app.services import canonical_source_phase3 as phase3_core
+
+    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: False)
+
+    issue = ownership.adjudication_issue(
+        _unowned_records(),
+        _inventory("A completely different source task."),
         meta={},
+        job_id=9,
     )
 
     assert issue is not None
-    recorded = job.question_inventory[key]["issues"][-1]
-    assert recorded["code"] == ownership.UNOWNED_EXAMPLES_ISSUE_CODE
-    assert recorded["details"]["adjudicated"] is False
+    assert issue["code"] == ownership.UNOWNED_EXAMPLES_ISSUE_CODE
+    assert issue["details"]["adjudicated"] is False
     # The live scanner reads the canonically normalized body, so the
     # carried wording is the normalized (lower-cased) form — complete,
     # which is what the judge and the reviewer need.
-    assert recorded["details"]["verdicts"][0]["example_text"].startswith(
+    assert issue["details"]["verdicts"][0]["example_text"].startswith(
         "an example nobody"
     )
 
 
-def test_a_clean_scan_records_nothing():
-    key = release.release_key_for_lane(release.LANE_POST)
-    job = SimpleNamespace(id=10, question_inventory={key: {"issues": []}})
+def test_a_failing_live_judge_still_leaves_the_recorded_finding(
+    monkeypatch,
+):
+    # The live judge erroring (quota, outage, contract exhaustion) is
+    # never a reason to lose the finding: the issue ships unadjudicated
+    # with the failure named.
+    from app.services import canonical_source_phase3 as phase3_core
+
+    monkeypatch.setattr(phase3_core, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        ownership, "decide_example_ownership",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("quota")),
+    )
+
+    issue = ownership.adjudication_issue(
+        _unowned_records(),
+        _inventory("A completely different source task."),
+        meta={},
+        job_id=12,
+    )
+
+    assert issue is not None
+    assert issue["details"]["adjudicated"] is False
+    assert "live adjudication failed" in (
+        issue["details"]["verdicts"][0]["reason"]
+    )
+    assert "quota" in issue["details"]["verdicts"][0]["reason"]
+
+
+def test_a_clean_scan_stages_nothing():
     prompt = "The one real source task."
     records = [{
         "topic": "T", "parent_concept": "P", "concept_title": "C",
@@ -271,22 +269,70 @@ def test_a_clean_scan_records_nothing():
         "keywords": "",
     }]
 
-    assert ownership.adjudicate_and_record(
-        _StubDb(), job,
-        lane="post", records=records, inventory=_inventory(prompt), meta={},
+    assert ownership.adjudication_issue(
+        records, _inventory(prompt), meta={}, job_id=10,
     ) is None
-    assert job.question_inventory[key]["issues"] == []
 
 
-def test_the_recorder_never_raises(monkeypatch):
+def test_the_helper_never_raises(monkeypatch):
     monkeypatch.setattr(
         g, "_unexpected_rendered_type_examples",
         lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    assert ownership.adjudicate_and_record(
-        _StubDb(), SimpleNamespace(id=11, question_inventory={}),
-        lane="post", records=[], inventory={}, meta={},
+    assert ownership.adjudication_issue(
+        [], {}, meta={}, job_id=11,
     ) is None
+
+
+def test_hub_items_are_never_offered_as_candidate_owners():
+    # The scanner excludes Activity/Info-Hub items from the owner keys,
+    # so the judge must not be offered one either — otherwise a hub item
+    # could bless as source_variant the very Example the contract says
+    # it can never own.
+    inventory = _inventory("A real exercise task.")
+    inventory["items"].append({
+        "qid": "QINV-9998",
+        "source_kind": "activity",
+        "source_label": "QINV-9998",
+        "raw_task": "A hub activity whose wording matches the Example.",
+        "normalized_task": "A hub activity whose wording matches the Example.",
+    })
+    seen: list[dict] = []
+
+    def provider(payload):
+        seen.append(payload)
+        return {
+            "verdicts": [
+                {"example_index": 0, "verdict": "unowned", "owner_qid": "",
+                 "reason": "matches no offered task"},
+            ],
+            "confidence": 0.9,
+            "rationale": "r",
+        }
+
+    ownership.decide_example_ownership(
+        [_finding("A hub activity whose wording matches the Example.")],
+        inventory=inventory,
+        meta={},
+        envelope_sha256="abc",
+        provider=provider,
+        critic=lambda _p: {"verdict": "concur", "confidence": 0.9,
+                           "issues": []},
+        store=kernel.DecisionStore(),
+    )
+
+    offered = {task["qid"] for task in seen[0]["inventory_tasks"]}
+    assert "QINV-9998" not in offered
+    assert "QINV-0001" in offered
+    # ...and the checker refuses a hub qid as an owner outright.
+    check = ownership._ownership_checker(1, offered)
+    assert any(
+        "must name an inventory qid" in d
+        for d in check({"verdicts": [
+            {"example_index": 0, "verdict": "source_variant",
+             "owner_qid": "QINV-9998", "reason": "hub wording"},
+        ]})
+    )
 
 
 # ---------------------------------------------------------------------------
