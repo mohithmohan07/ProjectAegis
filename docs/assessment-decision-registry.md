@@ -10,7 +10,7 @@ module's kernel contract and the adopted architecture/handoff.
 | Kind | Current policy | Semantic owner | Stable row audit |
 |---|---|---|---|
 | `assessment.cell` | `assessment-cell-2` | Source-atom blueprint axes and marks | `_aegis_assessment_cell_verdict` |
-| `assessment.materialize` | `assessment-materialize-8` | Question and complete unweighted semantic answer/rubric content; Q21 whole-cell medium and four-mark shape; lowercase paper-option labels | `_aegis_assessment_materialization` |
+| `assessment.materialize` | `assessment-materialize-9` | Question and complete unweighted semantic answer/rubric content; Q21 whole-cell medium and four-mark shape; lowercase paper-option labels with an explicit uppercase prohibition | `_aegis_assessment_materialization` |
 | `assessment.answer_restriction` | `assessment-answer-restriction-3` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
 | `assessment.marking` | `assessment-marking-6` | Model-authored weight decomposition, duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
 | `assessment.route` | `assessment-route-2` | One released concept home | `_aegis_assessment_route` |

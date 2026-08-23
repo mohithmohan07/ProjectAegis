@@ -28,8 +28,9 @@ from .phase3 import kernel
 # the candidate suffix and marks the explicit GPT-5.6 cache breakpoint.
 # ``-7`` layers the owner-format answer/rubric contract on that transport
 # shape. ``-8`` makes lowercase paper-option labels part of the authored
-# contract, so earlier candidates cannot replay under the clarified prompt.
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-8"
+# contract. ``-9`` makes the uppercase prohibition explicit, so candidates
+# authored before this final clarification cannot replay under the new prompt.
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-9"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -73,8 +74,8 @@ MATERIALIZE_SYSTEM = (
     "duplicate), whose correct_answer is \"1\" on exactly one option "
     "and \"0\" on every other, and whose answer_type names the option's "
     "medium — exactly Phrases, Equation, or Image. The answers array is the "
-    "paper display order and maps to lowercase a), b), c), d), e), f); never "
-    "write uppercase option labels. Do not include a label inside "
+    "paper display order and maps to lowercase a), b), c), d), e), f); option "
+    "labels are never uppercase. Do not include a label inside "
     "answer_content because the workbook adds it. The question stem must "
     "not enumerate the options: options ride only answers[]; a stem that "
     "restates \"a) ... b) ...\" is a defect. For Descriptive cells, "

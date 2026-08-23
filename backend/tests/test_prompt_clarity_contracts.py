@@ -22,10 +22,10 @@ def test_assessment_author_prompt_has_an_explicit_evidence_boundary():
 
 
 def test_objective_prompts_require_lowercase_paper_labels_without_duplication():
-    generation = assessment_prompts.TYPE_BLOCKS["objective"]
+    generation_prompt = assessment_prompts.TYPE_BLOCKS["objective"]
     materialization = assessment_materialization.MATERIALIZE_SYSTEM
 
-    for prompt in (generation, materialization):
+    for prompt in (generation_prompt, materialization):
         assert "lowercase" in prompt
         assert "a), b), c), d)" in prompt
         assert "answer_content" in prompt

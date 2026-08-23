@@ -51,7 +51,7 @@ Every executable prompt was assessed against these requirements:
 | Source reading and canonicalization | `chapter_reading.py`, `canonical_source_phase212.py`, `canonical_source_phase3.py`, Phase 3.4 structured-output contracts, `language_topology.py` | Existing prompts already bind complete source evidence, exact block/section accounting, separate author/correction/Fixer/critic roles, and strict provider schemas. Kept lean; no duplicated JSON schema added where transport already enforces it. |
 | Concept topology and content | `generation.py`, `instruction_architect.py`, `phase3/prompts.py`, `concept_example_ownership.py`, `placement_policy.py`, `question_polishing.py` | Stage ownership was already strong. The common Phase-3 boundary now explicitly forbids imported patterns and requires schema/exact-coverage verification. The content author now states that Types/Cases/Examples and routed questions arrive in later passes, preventing the intermediate description-only response from being mistaken for the final assembled row. |
 | Pre-Learning | `phase3/prelearn.py`, `phase3/premap.py`, `phase3/preanalyse.py`, `phase3/prequestions.py`, their prompt constants | Existing prompts distinguish assumed prior knowledge from chapter teaching, permit evidence-supported empty captures, require complete answers and genuine—not number/name-only—question variety, and carry the ~5-per-concept calibration as a target rather than a quota. The audit did not duplicate those already-clear rules in the system prefix. |
-| Assessment generation and extraction | `assessment_prompts.py`, `generation.py`, `assessment_materialization.py`, `assessment_cells.py` | Added an explicit evidence boundary, a valid comment-free JSON example, and the lowercase paper-option contract at both authoring seams. Materialization advances to `assessment-materialize-8`. |
+| Assessment generation and extraction | `assessment_prompts.py`, `generation.py`, `assessment_materialization.py`, `assessment_cells.py` | Added an explicit evidence boundary, a valid comment-free JSON example, and the lowercase paper-option contract at both authoring seams. Materialization advances to `assessment-materialize-9`. |
 | Assessment routing, answer restriction, marking, grouping, deduplication, QA | `assessment_routing.py`, `assessment_answer_restriction.py`, `assessment_marking.py`, `assessment_grouping.py`, `assessment_dedup.py`, `assessment_quality.py` | Existing prompts already carry complete semantic evidence, forbid quota/default shortcuts, separate axes, and give critics advisory-only scope. The Q21 rules remain explicit: four-mark Descriptive items need at least two rubric blocks and every typed block is medium-pure. No wording was added where it would merely duplicate a checked contract. |
 | Assessment Master Refiner | `assessment_master_refiner.py` | Replaced a Python-style critic example with strict JSON and advanced candidate/umbrella identities to `assessment-master-refiner-candidate-3` / `assessment-master-refiner-3`. The field whitelist and medium-purity contract remain unchanged. |
 | Concept release review and Refiner | `release_review.py`, `release_refiner.py`, Phase-3 Refiner prompt | Existing response schemas and mechanical whitelists already define the output boundary. No redundant schema prose added. |
@@ -89,7 +89,7 @@ changes no run and adds no model call.
 ## Identity and replay impact
 
 - `assessment.materialize`: `assessment-materialize-7` →
-  `assessment-materialize-8`.
+  `assessment-materialize-9`.
 - `assessment.master_refiner.candidate`:
   `assessment-master-refiner-candidate-2` →
   `assessment-master-refiner-candidate-3`.
@@ -131,3 +131,13 @@ remain in their owning pass. This keeps the stable shared prefix cacheable and
 avoids paying repeatedly for duplicated prose. Cost reduction remains subject
 to the same release-quality gates; fewer tokens are not accepted as a win if
 coverage, grounding, or workbook integrity regresses.
+
+## Verification
+
+- Focused prompt/materialization/release gate: 57 passed.
+- Complete backend gate: 2,900 passed, 7 expected xfails, zero failures.
+- Frontend gate: TypeScript clean, 88 tests passed, production build green.
+- Changed Python modules compile; `git diff --check` is clean.
+- Provider credentials were removed and live generation was disabled for the
+  test runs. No paid model call, database publication, deployment, or merge was
+  performed.

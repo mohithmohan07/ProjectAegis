@@ -461,7 +461,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ] == "assessment-cell-2"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-8"
+        ] == "assessment-materialize-9"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
