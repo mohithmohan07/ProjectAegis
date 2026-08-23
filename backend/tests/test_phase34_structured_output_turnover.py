@@ -98,7 +98,7 @@ def test_unsupported_reasoning_effort_downgrades_immediately(monkeypatch):
 def test_structured_call_reuses_a_ceiling_discovered_elsewhere(monkeypatch):
     """A ceiling learned on another call path costs this one nothing.
 
-    Without this, asking every purpose for `max` would mean each structured
+    Without this, asking every purpose for `xhigh` would mean each structured
     request paid its own rejected round-trip.
     """
 
@@ -115,7 +115,7 @@ def test_structured_call_reuses_a_ceiling_discovered_elsewhere(monkeypatch):
 
         def create(self, **kwargs):
             calls.append(kwargs)
-            if kwargs.get("reasoning_effort") == "max":
+            if kwargs.get("reasoning_effort") == "xhigh":
                 raise AssertionError(
                     "re-probed an effort already known to be rejected"
                 )
@@ -133,7 +133,7 @@ def test_structured_call_reuses_a_ceiling_discovered_elsewhere(monkeypatch):
     generation._openai_gate = None
 
     # Some earlier call, on any path, already learned the ceiling.
-    openai_policy.note_unsupported_reasoning_effort("gpt-5.6-luna", "max")
+    openai_policy.note_unsupported_reasoning_effort("gpt-5.6-luna", "xhigh")
 
     result = phase34._resilient_openai_multimodal_json(
         system="Return strict JSON.",
@@ -146,7 +146,7 @@ def test_structured_call_reuses_a_ceiling_discovered_elsewhere(monkeypatch):
     )
 
     assert result == {"ok": True}
-    assert [call["reasoning_effort"] for call in calls] == ["xhigh"]
+    assert [call["reasoning_effort"] for call in calls] == ["high"]
     generation._openai_gate = None
 
 
@@ -442,9 +442,9 @@ def test_completion_limit_escalates_budget_and_finishes(monkeypatch):
     assert len(calls) == 2
     assert calls[0]["max_completion_tokens"] == 1200
     assert calls[1]["max_completion_tokens"] == 5200
-    # Truncation recovery steps the effort down one rung from the requested max.
-    assert calls[0]["reasoning_effort"] == "max"
-    assert calls[1]["reasoning_effort"] == "xhigh"
+    # Truncation recovery steps effort down from the preferred xhigh request.
+    assert calls[0]["reasoning_effort"] == "xhigh"
+    assert calls[1]["reasoning_effort"] == "high"
     assert "STRUCTURED OUTPUT RECOVERY" in calls[1]["messages"][0]["content"]
     generation._openai_gate = None
 

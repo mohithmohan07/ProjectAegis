@@ -244,8 +244,8 @@ def _log_effort_negotiation_once(
     """Emit requested-vs-used reasoning effort when negotiation changed it.
 
     Capability negotiation is otherwise invisible in the live log, which made
-    the reasoning_effort=max 400 incident impossible to observe after the
-    retry succeeded. One line per (purpose, model, requested, used) is enough.
+    an unsupported-effort 400 impossible to observe after the retry succeeded.
+    One line per (purpose, model, requested, used) is enough.
     """
 
     if requested == used:

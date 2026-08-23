@@ -50,6 +50,16 @@ sprint continues past all of them.
 
 Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns were overstated — superseded by the F3/F6/F2 rows above. R-QX8's consequence note is superseded by F7's fix. R-S11b is CLOSED (Output-02/04 identity composition verified repaired at main). R-S12d is CLOSED (merge order completed).
 
+## Uniform Luna effort and E2E round (2026-08-23: Q22)
+
+| Item | Disposition |
+|---|---|
+| Owner ruling | BUILT. All 14 registered `OpenAIPurpose` values now request `xhigh` from GPT-5.6 Luna. Purpose labels remain mandatory for routing, audit, transport coverage and future policy changes; they no longer select effort tiers. Web JSON, strict-schema multimodal, workbook Chat Completions, offline Chat Completions and offline Responses API paths are pinned to the central policy |
+| Capability and truncation fallback | PRESERVED. Normal Luna calls request `xhigh`. An endpoint that rejects the value may negotiate `xhigh` → `high` → `medium` → `low` → `none` → omitted, with the discovered ceiling shared process-wide. A truncated structured response may retry with more output room and one rung less effort. The Responses API's `reasoning.effort` error parameter is now recognized alongside Chat Completions' `reasoning_effort` |
+| Replay and identity | NO RE-KEY. Reasoning effort is transport policy rather than prompt/schema/payload/decision identity. Existing decide-once records replay under their current keys; only fresh calls and true misses request `xhigh`. The generic `max` fallback rungs remain tested mechanics but are no longer selected by a registered production purpose |
+| Cost evidence | LIVE-UNPROVEN. Q22 lowers purposes formerly at `max` by one rung and raises purposes formerly at `high`, `medium`, or `low`; it therefore makes no defensible saving or quality claim by itself. The same-PDF live acceptance must report the four-output total and normalized Post Master/cache telemetry before any production claim |
+| Verification | GREEN with provider keys removed and dry mode forced. Focused effort/transport/recovery gate: 166 passed. Complete backend gate: 2,894 passed / 7 expected xfails / zero failures. Frontend: TypeScript clean, 88 tests passed, production build green. Changed Python modules compile and `git diff --check` is clean. No paid model call, database publication, deployment, or merge was performed |
+
 ## Master cache-prefix round (2026-08-22: production cost telemetry + Lever 2)
 
 | Item | Disposition |
@@ -119,7 +129,7 @@ Ledger corrections per the audit: R-QX2/R-QX4/R-S11a "downstream safe" columns w
 | Owner "check again" — second review round | A fresh pass over the fixed branch surfaced 3 more real ones, all fixed: (1) the ownership issue's `qids` anchor was INVERTED — the release stamps rows errored by qid intersection, and the only qids a verdict can name belong to Examples ruled LEGITIMATE, so blessed rows (every poem trim) got `released_with_errors` while genuinely unowned ones shipped `ready`; the issue is now chapter-level with no qid anchor and owner qids in details. (2) `force_release` is a FIFTH staging exit on a plain interactive HTTP route — it now passes `live_example_adjudication=False`, recording the deterministic finding without a model call so the endpoint never blocks on provider latency. (3) The legacy result dict still claimed `output_workbook` and `concepts_created: 0` in staged mode — it now carries `publication_status` and no workbook path when staged (the release wrapper replaces it, but any reader gets the truth). Plus the triple `staged_release_only` branch folded to two |
 | Slot-wait log spam — FIXED | Dozens of "capacity is busy" warnings for 0-second handoffs buried the live console at full concurrency. `_acquire_openai_slot` gains a quiet grace (`AEGIS_OPENAI_SLOT_WAIT_QUIET_SECONDS`, default 5s): a slot that frees within it is silent; a real wait still logs the busy warning and the acquired line reports the total wait. Gate behavior unchanged; timeout-0 path still speaks before raising |
 | Architect conventions line (garbled) | "British-style spellings such as 'recite' and 'learnt' is not evidenced" is model-authored slot prose the critic flagged (Q10 advisory, correctly recorded); no code seam assembles that sentence. Any improvement is prompt wording / critic dimensions — queued, not a code defect |
-| Queued next (owner: "one by one") | HISTORICAL: cache-ordering was queued here and is now built in the Master cache-prefix round above (live effect still unproven). Remaining: critics off the latency path (async advisory); parallelize the sequential grouping/QA tails; author effort tiering (owner call); Batch-API overnight lane |
+| Queued next (owner: "one by one") | HISTORICAL: cache-ordering was queued here and is now built in the Master cache-prefix round above (live effect still unproven). Author effort tiering is superseded by Q22's uniform `xhigh` ruling. Remaining: critics off the latency path (async advisory); parallelize the sequential grouping/QA tails; Batch-API overnight lane |
 
 ## SOP round (2026-08-21: owner answers + "go through the SOP in detail")
 

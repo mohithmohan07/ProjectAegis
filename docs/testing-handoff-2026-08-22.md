@@ -1,10 +1,10 @@
 # Aegis Testing Handoff — 2026-08-22
 
 Current build under test: local integration branch
-**`assistant/e2e-owner-feedback`**, which includes the historical PR #240
-plan below plus cache ordering/telemetry, Q21 workbook contracts, durable
-Pre-Learning recovery, and the Concept visible-route gate. It is not yet
-pushed, merged, deployed, or live-tested.
+**`assistant/all-xhigh`**, based on the integrated owner-feedback mainline and
+adding Q22's uniform Luna `xhigh` policy. It includes cache ordering/telemetry,
+Q21 workbook contracts, durable Pre-Learning recovery, and the Concept
+visible-route gate. Q22 is not deployed or live-tested.
 
 The **2,791 passed** figure below belongs to historical PR #240. Use the newest
 final-gate row in `docs/residue-ledger.md` for the current branch.
@@ -54,6 +54,7 @@ and the resume dialog for the parked run appears with **Resume** enabled
 | 4 | **Quiet slot handoffs** | Sub-5-second waits for an OpenAI slot are silent; only real waits log. Your console stops drowning in busy/acquired pairs at full concurrency. |
 | 5 | **Watch live + auto-landing** (merged, #239) | Any device can attach read-only to a running job and, when it completes, lands automatically on the download-and-review page. Watching never restarts a run. |
 | 6 | **Console v2** (merged earlier) | Stage cards with per-stage time, tokens, and cost; parallel lanes as separate rails; mobile-friendly. |
+| 7 | **Q22 uniform Luna effort** | Every one of the 14 registered purposes requests `xhigh` on a normal Luna call. Purpose labels remain mandatory. Only provider rejection or structured-output truncation recovery may lower a retry; durable decisions retain their existing identity. |
 
 ---
 
@@ -189,6 +190,10 @@ Run the **same PDF** as the $4.9718 screenshot, then send:
 3. Pre-learning plan numbers (N concepts, M questions).
 4. Per-lane cache reads, cache writes, ordinary input, output tokens, request
    count, and source-question count.
+5. Confirmation that the selected provider/model is OpenAI GPT-5.6 Luna, plus
+   every `reasoning effort negotiated` log line if one appears. A lower effort
+   is valid only when the accompanying logs tie it to provider rejection or
+   truncation recovery.
 
 The $4.9718 screenshot is **not** a four-output baseline: Pre Concept and Pre
 Master were absent. Report the new four-output total separately. Compare the
@@ -246,9 +251,11 @@ before database mutation.
   "British-style spellings" one) is model prose already flagged by its
   critic — recorded, advisory, queued for a prompt-side improvement, not a
   code bug.
-- Payload cache-ordering is built but live-unproven. Remaining cost/time levers
-  are critics off the latency path, parallel grouping/QA tails, author effort
-  tiering, and the later Batch API lane.
+- Payload cache-ordering and Q22's uniform `xhigh` policy are built but
+  live-unproven. Remaining cost/time levers are critics off the latency path,
+  parallel grouping/QA tails, and the later Batch API lane. Because Q22 raises
+  formerly low/medium/high purposes while lowering formerly `max` purposes,
+  only the same-PDF run can establish the net cost and quality effect.
 
 ## 4. If something fails
 

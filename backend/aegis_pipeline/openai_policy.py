@@ -68,41 +68,32 @@ OpenAIPurpose = Literal[
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
-# Reasoning effort is matched to what each purpose actually exercises.
-# Judgment-heavy purposes (semantic adjudication, concept mapping/detailing,
-# placement) ask for the deepest deliberation the configured model will give.
-# Fidelity-heavy purposes (page transcription, mechanical extraction,
-# rewording) are copy-and-structure work verified by independent passes:
-# deep reasoning adds minutes per call there without adding accuracy, which
-# is what made GPT-to-ACSD conversion the slowest stage of a fresh run.
+# Q22 makes ``xhigh`` the uniform preferred effort for every registered Luna
+# purpose. Purpose labels remain mandatory because they are the routing and
+# audit contract even though they no longer select different effort tiers.
 #
-# ``max`` is a *request*, not an assumption. Some deployments expose a lower
-# ceiling and reject the value outright (this is what produced the historical
-# reasoning_effort=max 400 incident). Capability negotiation below discovers the
-# real ceiling once per model, per process, and every later request is built at
-# that ceiling — so an unsupported value costs one probe, not one 400 per call.
+# ``xhigh`` is a *request*, not an assumption. A compatible endpoint may expose
+# a lower ceiling and reject the value outright. Capability negotiation below
+# discovers the real ceiling once per model, per process, and every later
+# request is built at that ceiling — so an unsupported value costs one probe,
+# not one 400 per call. Structured-output recovery may also lower effort after
+# truncation; neither recovery path weakens the normal Luna request policy.
+UNIFORM_REASONING_EFFORT: Final[ReasoningEffort] = "xhigh"
 REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
-    "assessment_generation": "max",
-    # Skeletons/inventory/polishing: structure recognition against supplied
-    # text; the terminal gates re-verify the products downstream.
-    "source_extraction": "high",
-    "source_adjudication": "max",
-    # Faithful page transcription with an independent verification pass;
-    # accuracy comes from the verify/correct loop, not from deliberation.
-    "page_transcription": "medium",
-    # Deciding a chapter's topic structure and which subparts are independent
-    # questions is pure judgment over the whole chapter at once — the same
-    # class of work as semantic adjudication, and it runs once per source.
-    "chapter_outline": "max",
-    "concept_mapping": "max",
-    "concept_detailing": "max",
-    "concept_validation": "high",
-    "semantic_resolution": "max",
-    "pre_learning": "max",
-    "workbook_planning": "max",
-    "workbook_authoring": "max",
-    "revision_editing": "medium",
-    "metadata": "low",
+    "assessment_generation": UNIFORM_REASONING_EFFORT,
+    "source_extraction": UNIFORM_REASONING_EFFORT,
+    "source_adjudication": UNIFORM_REASONING_EFFORT,
+    "page_transcription": UNIFORM_REASONING_EFFORT,
+    "chapter_outline": UNIFORM_REASONING_EFFORT,
+    "concept_mapping": UNIFORM_REASONING_EFFORT,
+    "concept_detailing": UNIFORM_REASONING_EFFORT,
+    "concept_validation": UNIFORM_REASONING_EFFORT,
+    "semantic_resolution": UNIFORM_REASONING_EFFORT,
+    "pre_learning": UNIFORM_REASONING_EFFORT,
+    "workbook_planning": UNIFORM_REASONING_EFFORT,
+    "workbook_authoring": UNIFORM_REASONING_EFFORT,
+    "revision_editing": UNIFORM_REASONING_EFFORT,
+    "metadata": UNIFORM_REASONING_EFFORT,
 }
 
 # Ranked weakest to strongest. ``none`` is a real provider value; ``""`` means
@@ -233,8 +224,11 @@ def is_unsupported_reasoning_effort_error(exc: Exception) -> bool:
     ).casefold()
     unsupported = code == "unsupported_value" or "unsupported" in message
     if param:
-        return param == "reasoning_effort" and unsupported
-    return "reasoning_effort" in message and unsupported
+        normalized_param = param.replace(".", "_").replace("/", "_")
+        return normalized_param == "reasoning_effort" and unsupported
+    return (
+        "reasoning_effort" in message or "reasoning.effort" in message
+    ) and unsupported
 
 
 def _positive_int_env(name: str) -> int | None:
