@@ -6,8 +6,8 @@ The final generation prompt is ASSEMBLED per question batch from blocks:
     + subject creativity + assessment purpose + rubric placement + variety
 
 so different difficulty x cognitive-skill combinations receive different
-guidance (never one generic prompt). A review prompt validates generated
-questions before they are written to the sheet.
+guidance (never one generic prompt). The live path then applies the shared
+record-contract checks before a question is written to the sheet.
 
 Rubric placement follows the REAL assessment workbooks (inspected from the
 six production sheets):
@@ -33,6 +33,15 @@ BASE_BLOCK = """\
 You are an expert school-assessment author for Indian boards (ICSE/CBSE).
 You write exam-grade questions that are concept-aligned, grade-appropriate,
 unambiguous, and evaluable by an AI evaluator using mark-wise rubrics.
+
+EVIDENCE AND DECISION BOUNDARY:
+- Treat the supplied concept, source material, blueprint cell, board, grade,
+  and requested assessment axes as authoritative. Do not import facts,
+  assumptions, or a familiar textbook question that the evidence does not
+  support.
+- Resolve ordinary ambiguity by choosing the least-distorting, evidence-bound
+  wording. Never return a placeholder, "needs review", or an explanation in
+  place of the requested question object.
 
 STANDARD VALUES (use EXACTLY these):
 - cognitive_skills: Remember | Understand | Apply | Analyse | Evaluate | Create
@@ -66,9 +75,13 @@ MCQ rules: clear stem; exactly ONE correct option; distractors plausible and
 from the same conceptual family (typical student errors make the best
 distractors); options similar in length and grammatical fit; no overlapping
 or vague options; avoid "all/none of the above"; negative stems only when
-necessary and visually flagged ("... is NOT ..."). Correct option weightage =
-1 (or the marks), wrong options = 0. answer_explanation explains why the
-correct option is right and briefly why key distractors are wrong.
+necessary and visually flagged ("... is NOT ..."). The answers array is the
+display order and maps to lowercase paper labels a), b), c), d), e), f) —
+never uppercase A), B), C), D). Do not put those labels inside answer_content;
+the workbook adds them. Correct option weightage = 1 (or the marks), wrong
+options = 0. answer_explanation names the correct option with its lowercase
+label and text, then explains why it is right and briefly why key distractors
+are wrong.
 FIB rules: the blank tests a meaningful term/value; the sentence stays
 grammatically clear; list accepted alternatives comma-separated only when
 several answers are genuinely valid.""",
@@ -306,49 +319,29 @@ never make evaluation harder, the question vague, or the content
 off-syllabus."""
 
 # --------------------------------------------------------------------------- #
-# 9 · Output + review prompts
+# 9 · Output contract
 # --------------------------------------------------------------------------- #
 
 OUTPUT_BLOCK = """\
-OUTPUT (STRICT JSON ONLY): {"questions": [{
-  "question": "",            // student-facing, rich-text formats allowed
-  "question_text": "",       // plain text + any evaluation context; never empty
-  "question_category": "",
-  "cognitive_skills": "",    // exactly the requested skill
-  "level_of_difficulty": "", // exactly the requested difficulty
-  "marks": 0,
-  "display_answer": "",      // clean model answer
-  "answer_explanation": "",
-  "answers": [               // objective: options; subj/desc: rubric points
-    {"answer_type": "Phrases", "answer_content": "", "correct_answer": "Yes|No",
-     "answer_weightage": "1"}
-  ],
-  "sub_questions": [         // descriptive subparts only, else []
-    {"text": "(a) ...", "marks": "2",
-     "keywords": [{"answer_type": "Phrases", "weightage": "2", "keyword": ""}]}
-  ]
-}]}
-For subjective rubric points use {"answer_type", "answer", "answer_display",
-"weightage", "placeholder"} blocks instead. Weightages always sum to marks."""
+OUTPUT CONTRACT — return one valid JSON object and no prose or code fence.
+Every question object uses these complete top-level fields (empty arrays, not
+omitted fields, where a section does not apply). This example shows the
+Objective/Descriptive answer-block shape:
+{"questions":[{"question":"","question_text":"","question_category":"","cognitive_skills":"","level_of_difficulty":"","marks":1,"display_answer":"","answer_explanation":"","answers":[{"answer_type":"Phrases","answer_content":"","correct_answer":"Yes","answer_weightage":"1"}],"sub_questions":[{"text":"a) ...","marks":"1","keywords":[{"answer_type":"Phrases","weightage":"1","keyword":""}]}]}]}
 
-REVIEW_PROMPT = """\
-You are a strict assessment-quality reviewer. For EACH question, check:
-concept match; difficulty match; cognitive-skill match; marks-scope fit;
-clear unambiguous language; single defensible answer (MCQ: one correct,
-plausible same-family distractors, no length/grammar give-aways); answer
-correctness; rubric completeness and mark-wise structure; rubric weightage
-sum == marks; question_text populated with all needed context; standard
-values only (Remember/Understand/Apply/Analyse/Evaluate/Create;
-Less/Moderate/High; Phrases/Equation/Image); no hallucinated facts;
-declared answer-cell medium purity; at least two rubric blocks for a 4-mark
-Descriptive item; no tabular/array KaTeX; grade-appropriate; fresh
-non-repetitive framing (no repeated stems across
-the batch).
-Return ONLY JSON: {"results": [{"index": 0, "pass": true, "problems": [""],
-"fixed_question": null}]} — when pass=false and the issue is repairable,
-put the corrected full question object in fixed_question (same schema as
-generation output); otherwise leave it null."""
-
+Field rules:
+- question is student-facing rich text; question_text is a complete plain-text
+  evaluator copy including all necessary context and is never empty.
+- cognitive_skills and level_of_difficulty exactly echo the requested values.
+- Objective answers are options in a,b,c,d display order with exactly one
+  correct_answer="Yes"; all others are "No". Labels are not part of content.
+- Descriptive answers are rubric blocks using answer_content. Subjective
+  answers instead use the supported keys answer_type, answer, answer_display,
+  weightage, and placeholder.
+- sub_questions contains only genuine printed parts and otherwise is []. Use
+  lowercase a), b), c), d) labels (or the source's lowercase roman scheme).
+- Every answer, rubric, subquestion, and keyword weightage sums exactly to the
+  question marks under the applicable contract."""
 
 # --------------------------------------------------------------------------- #
 # Registration — every block above becomes an editable prompt in the Admin tab.

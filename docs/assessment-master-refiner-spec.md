@@ -45,7 +45,7 @@ descriptions have different response contracts:
 
 | Unit | Decision kind | Policy | Unit ID |
 |---|---|---|---|
-| Candidate | `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-2` | `candidate_id` |
+| Candidate | `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-3` | `candidate_id` |
 | Group | `assessment.master_refiner.group` | `assessment-master-refiner-group-1` | `group_key` |
 
 Each unit receives:
@@ -174,7 +174,7 @@ with warnings. The Refiner never blocks publication.
 
 The immutable assessment payload carries `refinements`, shaped as:
 
-- umbrella policy `assessment-master-refiner-2`;
+- umbrella policy `assessment-master-refiner-3`;
 - `output_kind="assessment_master"`;
 - the two decision-kind/policy identities;
 - ordered changes with `unit_kind`, `unit_id`, precise `field_path`, `before`,

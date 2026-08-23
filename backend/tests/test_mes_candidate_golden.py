@@ -220,7 +220,7 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
         audit = candidate["_aegis_assessment_materialization"]
         assert audit["rationale"] == response["rationale"]
         assert audit["authority"]["policy_version"] == (
-            "assessment-materialize-7"
+            "assessment-materialize-9"
         )
 
     for placement, response in zip(

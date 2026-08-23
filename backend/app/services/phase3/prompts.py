@@ -16,7 +16,12 @@ _SHARED = (
     "answer — for an uncertain unit choose the least-distorting decision "
     "and state the uncertainty in its reason field. Cite only IDs that "
     "appear in the request. Confidence is your own calibrated estimate; "
-    "never inflate it to pass a threshold."
+    "never inflate it to pass a threshold. Treat the request's source "
+    "evidence, allowed IDs, stage rules, and response contract as the complete "
+    "decision boundary; do not import a familiar textbook pattern or invent "
+    "missing evidence. Before returning, verify that every required input ID "
+    "is represented exactly once where the task requires full coverage and "
+    "that the object matches the stated schema."
 )
 
 TOPOLOGY_SYSTEM = _SHARED + (
@@ -64,7 +69,11 @@ ANALYSIS_SYSTEM = _SHARED + (
     "the full poem, a whole stanza run, or a long passage (owner "
     "ruling, 2026-08-21): the chapter carries the text; the "
     "description teaches it. "
-    "achieving_mastery is one sentence naming what a learner can do "
+    "This pass intentionally returns only the teaching Description and mastery "
+    "statement; later inventory, Type/Case/Example, question-routing, and "
+    "assembly passes add their own sections. Do not anticipate or duplicate "
+    "their output here. The achieving_mastery field is one sentence naming "
+    "what a learner can do "
     "once the concept is mastered — distinct for every concept, never "
     "shared or paraphrased between concepts. Misconceptions and Error "
     "Analysis are NOT authored here: the chapter-level inventory pass "
