@@ -10,7 +10,7 @@ module's kernel contract and the adopted architecture/handoff.
 | Kind | Current policy | Semantic owner | Stable row audit |
 |---|---|---|---|
 | `assessment.cell` | `assessment-cell-2` | Source-atom blueprint axes and marks | `_aegis_assessment_cell_verdict` |
-| `assessment.materialize` | `assessment-materialize-7` | Question and complete unweighted semantic answer/rubric content; Q21 whole-cell medium and four-mark shape | `_aegis_assessment_materialization` |
+| `assessment.materialize` | `assessment-materialize-8` | Question and complete unweighted semantic answer/rubric content; Q21 whole-cell medium and four-mark shape; lowercase paper-option labels | `_aegis_assessment_materialization` |
 | `assessment.answer_restriction` | `assessment-answer-restriction-3` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
 | `assessment.marking` | `assessment-marking-6` | Model-authored weight decomposition, duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
 | `assessment.route` | `assessment-route-2` | One released concept home | `_aegis_assessment_route` |
@@ -18,7 +18,7 @@ module's kernel contract and the adopted architecture/handoff.
 | `assessment.variant_cluster` | `assessment-variant-cluster-1` | Same-tier variant families | `_aegis_assessment_variant_cluster` |
 | `assessment.group_description` | `assessment-group-description-1` | Visible semantic group description | `_aegis_assessment_group_description` |
 | `assessment.group_quality` | `assessment-group-quality-1` | Advisory touched-group QA | `_aegis_assessment_group_quality` |
-| `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-2` | Rendered answer, explanation, and rubric prose inside an immutable assessment identity; Q21 medium purity remains fail-closed | `_aegis_assessment_master_refinement` |
+| `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-3` | Rendered answer, explanation, and rubric prose inside an immutable assessment identity; Q21 medium purity remains fail-closed | `_aegis_assessment_master_refinement` |
 | `assessment.master_refiner.group` | `assessment-master-refiner-group-1` | Rendered semantic group-description prose inside an immutable group identity | `_aegis_assessment_master_refinement` |
 | `assessment.legacy_cell_contract` | `assessment-legacy-cell-contract-2` | Legacy session marks, duration, and keyboard contract | Legacy decision store only |
 

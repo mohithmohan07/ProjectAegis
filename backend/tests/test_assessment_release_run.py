@@ -461,7 +461,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ] == "assessment-cell-2"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-7"
+        ] == "assessment-materialize-8"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
@@ -479,7 +479,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ]["decomposition_authority"] == "api_per_item_verdict"
         assert candidate["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-candidate-2"
+        ] == "assessment-master-refiner-candidate-3"
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
         ] == "assessment-route-2"
@@ -1032,7 +1032,7 @@ def test_master_refiner_delegate_failure_stages_unrefined_rows_with_warning(
         svc.RELEASED_WITH_WARNINGS
     )
     assert release.payload["refinements"]["policy_version"] == (
-        "assessment-master-refiner-2"
+        "assessment-master-refiner-3"
     )
     assert release.payload["refinements"]["changes"] == []
     for record in [

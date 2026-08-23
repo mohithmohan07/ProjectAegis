@@ -163,7 +163,7 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-7"
+        "assessment-materialize-8"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
