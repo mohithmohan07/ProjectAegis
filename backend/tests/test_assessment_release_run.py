@@ -199,28 +199,26 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
         record("marking", payload)
         candidate = payload["candidate"]
         cell = payload["blueprint_evidence"]["explicit_blueprint_cell"]
-        answers = copy.deepcopy(candidate["answers"])
-        sub_questions = copy.deepcopy(candidate["sub_questions"])
         if cell["sheet_kind"] == "objective":
-            for answer in answers:
-                answer["answer_weightage"] = (
+            answer_weightages = [
+                (
                     cell["marks"]
                     if rel.is_correct_option(answer.get("correct_answer"))
                     else 0
                 )
+                for answer in candidate["answers"]
+            ]
             duration = 2
             keyboard = ""
         else:
-            assert len(answers) == 1
-            answers[0]["answer_weightage"] = cell["marks"]
+            assert len(candidate["answers"]) == 1
+            answer_weightages = [cell["marks"]]
             duration = 5
             keyboard = "No"
         return {
             "candidate_id": candidate["candidate_id"],
-            "question": candidate["question"],
-            "question_text": candidate["question_text"],
-            "answers": answers,
-            "sub_questions": sub_questions,
+            "answer_weightages": answer_weightages,
+            "subquestion_markings": [],
             "question_duration": duration,
             "math_keyboard": keyboard,
             "rationale": "The explicit cell owns the complete decomposition.",
@@ -473,7 +471,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-6"
+        ] == "assessment-marking-7"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
         ]["decomposition_authority"] == "api_per_item_verdict"

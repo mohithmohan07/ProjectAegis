@@ -191,14 +191,10 @@ def _generated_authorities(*, calls=None, critic=None, materialize=None):
     def marking_author(payload):
         record("marking", payload)
         candidate = payload["candidate"]
-        answers = copy.deepcopy(candidate["answers"])
-        answers[0]["answer_weightage"] = 2
         return {
             "candidate_id": candidate["candidate_id"],
-            "question": candidate["question"],
-            "question_text": candidate["question_text"],
-            "answers": answers,
-            "sub_questions": [],
+            "answer_weightages": [2],
+            "subquestion_markings": [],
             "question_duration": 3,
             "math_keyboard": "No",
             "rationale": "The generated cell owns the decomposition.",

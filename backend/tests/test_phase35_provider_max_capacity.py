@@ -100,7 +100,7 @@ def test_v5_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
         '"candidate":1}',
         purpose="concept_mapping",
         prompt_cache_prefix='{"stage":"assessment.marking",',
-        prompt_cache_key="aegis:marking-author-v5:0123456789abcdef:2",
+        prompt_cache_key="aegis:marking-author-v6:0123456789abcdef:2",
     )
 
     assert phase35._CONTRACT_VERSION == 5
@@ -109,7 +109,7 @@ def test_v5_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
         '{"stage":"assessment.marking",'
     )
     assert captured["prompt_cache_key"] == (
-        "aegis:marking-author-v5:0123456789abcdef:2"
+        "aegis:marking-author-v6:0123456789abcdef:2"
     )
 
 

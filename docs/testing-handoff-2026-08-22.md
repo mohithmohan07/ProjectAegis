@@ -1,11 +1,12 @@
 # Aegis Testing Handoff — 2026-08-22
 
 Current build under test: local integration branch
-**`assistant/master-storage-recovery`**, based on the integrated `xhigh` and
-owner-feedback mainline. It includes cache ordering/telemetry, Q21 workbook
-contracts, durable Pre-Learning recovery, the Concept visible-route gate, and
-the narrow ENOSPC/Master-only recovery round. Neither the storage change nor
-Q22 is deployed or live-tested.
+**`assistant/marking-response-projection`**, based on merged storage recovery
+and the integrated `xhigh`/owner-feedback mainline. It includes cache
+ordering/telemetry, Q21 workbook contracts, durable Pre-Learning recovery, the
+Concept visible-route gate, ENOSPC/Master-only recovery, and the narrow v7
+marking-response recovery. Storage recovery is deployed and live capacity is
+healthy; the v7 marking change is not yet deployed or live-tested.
 
 The **2,791 passed** figure below belongs to historical PR #240. Use the newest
 final-gate row in `docs/residue-ledger.md` for the current branch.
@@ -57,6 +58,7 @@ and the resume dialog for the parked run appears with **Resume** enabled
 | 6 | **Console v2** (merged earlier) | Stage cards with per-stage time, tokens, and cost; parallel lanes as separate rails; mobile-friendly. |
 | 7 | **Q22 uniform Luna effort** | Every one of the 14 registered purposes requests `xhigh` on a normal Luna call. Purpose labels remain mandatory. Only provider rejection or structured-output truncation recovery may lower a retry; durable decisions retain their existing identity. |
 | 8 | **Master storage recovery** | Refuse a Master batch before provider spend when server bytes/inodes are insufficient, expose retryable storage evidence, and rebuild only a missing Pre or Post Master from its surviving Concept release after capacity is restored. |
+| 9 | **Marking response projection** | Let Luna author only ordered weights, duration, keyboard mode and rationale; mechanically bind them to unchanged staged question/answer/rubric content. Revalidate and replay exact paid v6 hits so only true misses use v7. |
 
 ---
 
@@ -305,12 +307,62 @@ a lost response leaves a successfully published Master shown as unavailable
 after refresh; storage exhaustion returns an opaque 500; a partial Master is
 served; or retry requires a full-file generation run.
 
+### T12 — Marking-contract recovery on the failed Pre Master
+
+**Preconditions**
+
+1. Deploy a build containing `assessment-marking-7`; do not click the failed
+   card again while production still runs v6.
+2. Keep the already-downloaded Pre Concept File as the before-copy. Record the
+   failed candidate id (`CAND-555ece0b830446a1`) and the marking-stage request,
+   input/output token, cache-read/cache-write, and cost totals shown before the
+   retry.
+
+**Steps**
+
+1. Hard refresh, reopen the same saved job, and click the Pre **Rebuild Master
+   File** button once.
+2. Confirm the activity log enters Master assessment stages directly and does
+   not enter PDF conversion, Concept extraction, Phase 3 Concept authoring, or
+   Concept staging.
+3. Download the rebuilt Pre Master and the still-available Pre Concept File.
+   Compare the Concept file's parsed Chapter/Topic/Concept projection with the
+   before-copy. Inspect candidate `CAND-555ece0b830446a1` in the diagnostic
+   snapshot: all question, option/correct-marker, rubric, subquestion, keyword,
+   Phrases/Equation, Unicode, URL, and asset fields must come from the staged
+   candidate unchanged; only weights/marks, duration, and keyboard mode may be
+   overlaid.
+4. Record marking-stage provider calls. Existing valid policy-v6 markings
+   should replay; the failed candidate was never stored and is expected to be
+   a policy-v7 call. Repeat the rebuild only after the first Master is already
+   durable; the marking stage should then replay without author, critic, or
+   Fixer calls.
+
+**Expect**
+
+- The Master downloads successfully and the Pre Concept File/content seal is
+  unchanged.
+- The previous full-echo defect cannot recur because v7 responses contain no
+  question, answer, rubric, subquestion, or keyword prose.
+- Luna still owns every semantic allocation, duration, and keyboard decision;
+  local code performs only ordered binding and exact arithmetic validation.
+- Paid, exact v6 decisions remain v6 in their audit and are not rewritten.
+  True misses record v7. The retry cost is therefore limited to genuine misses
+  plus their advisory critic/Fixer path, not every earlier marking unit.
+
+**FAIL-IF** all marking candidates re-author; Concepts change or regenerate;
+the same protected-content error appears; any incorrect cardinality, negative,
+non-finite, or wrong-sum allocation ships; or a repeated rebuild spends again
+on the now-valid v7 decision.
+
 ---
 
 ## 3. Known limitations — so nothing here surprises you
 
-- Old parked-run decisions whose policy identity changed may re-author; durable
-  does not mean replay-compatible after an intentional policy bump.
+- Old parked-run decisions whose policy identity changed may re-author; the
+  v7 marking rollout is the explicit exception for exact valid v6 marking
+  hits, which are reconstructed, revalidated, and replayed without provider
+  calls.
 - Journals from runs started on builds before Console v2 have no per-stage
   usage events — their stage cards show structure but not cost.
 - The Example-ownership verdict records and flags; it does not rewrite or

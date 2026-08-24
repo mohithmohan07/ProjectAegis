@@ -24,6 +24,21 @@ recovery may lower a retry. This transport-policy change does not re-key
 durable decisions. Cost and semantic effect remain live-unproven until the
 same-PDF acceptance in the testing handoff.
 
+**Continuation update, 2026-08-24.** Storage recovery is live and `/health`
+reports both one-lane retry and two-lane batch capacity ready. The first
+explicit Pre Master rebuild then exposed a separate `assessment.marking`
+protocol failure: policy v6 required Luna and the generic Fixer to repeat the
+entire immutable question/answer/rubric tree byte-for-byte while adding marks.
+Branch `assistant/marking-response-projection` changes only that transport.
+Policy v7 asks Luna for ordered weights, duration, keyboard mode and rationale;
+the server mechanically binds those decisions onto the untouched staged
+candidate. Exact valid v6 decisions are reconstructed by their original key,
+revalidated, and replayed for free, so only true misses use v7. Concepts and
+their staged content seal are not regenerated or modified. Live acceptance
+still requires deploying the branch and clicking the affected Master rebuild
+once; do not repeatedly retry on the v6 deployment because failed responses
+are not stored and therefore spend again.
+
 ---
 
 ## 1. What this project is

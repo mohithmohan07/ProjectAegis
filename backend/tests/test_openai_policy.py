@@ -222,7 +222,7 @@ def test_explicit_cache_request_falls_back_for_non_openai_provider():
                 "blueprint_evidence": {"explicit_blueprint_cell": {}},
             },
             "candidate",
-            "marking-author-v5",
+            "marking-author-v6",
         ),
         (
             assessment_routing._live_route,
@@ -324,7 +324,7 @@ def test_master_live_calls_put_varying_evidence_after_cache_prefix(
                 "proposal": {"total_marks": 1},
             },
             "candidate",
-            "marking-critic-v5",
+            "marking-critic-v6",
         ),
         (
             assessment_routing._live_route_critic,
