@@ -1,6 +1,7 @@
 """Focused regressions for Master ENOSPC containment and recovery."""
 from __future__ import annotations
 
+import copy
 import errno
 import json
 import threading
@@ -10,12 +11,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import config, models
+from app import bulk_import, config, models
 from app.bulk_import import assessment_workbook
+from app.services import assessment_release_snapshot
 from app.services import assessment_release_service as release_service
 from app.services import build_concepts_release as release
 from app.services import build_concepts_release_contract as release_contract
-from app.services import storage_capacity, uploads
+from app.services import build_concepts_release_files as release_files
+from app.services import identity, storage_capacity, uploads
 from tests.test_mes_release_lifecycle import _fresh_release
 from tests.test_release_core import _both_lanes_job, _chapter_with_concepts
 
@@ -37,6 +40,79 @@ def _small_thresholds(monkeypatch) -> None:
     monkeypatch.setenv("AEGIS_MASTER_PUBLICATION_MARGIN_BYTES", "5")
     monkeypatch.setenv("AEGIS_MASTER_STORAGE_RESERVATION_INODES", "5")
     monkeypatch.setenv("AEGIS_STORAGE_LEDGER_HEADROOM_INODES", "1")
+
+
+_SHARED_CONCEPT_AUTHORITY_FIELDS = (
+    "chapter_title",
+    "chapter_display_name",
+    "pre_topics",
+    "post_topics",
+    "chapter_description",
+    "topic_title",
+    "topic_display_name",
+    "pre_post_learning",
+    "topic_concept_labels",
+    "related_topics",
+    "topic_description",
+    "concept_title",
+    "concept_display_name",
+    "concept_details",
+    "keywords",
+    "digicards",
+    "related_concepts",
+)
+
+
+def _concept_authority(row: dict) -> dict[str, str]:
+    """Authored front-band values shared by Concept and Master formats.
+
+    The reference Master deliberately formats ``topic_title`` without the
+    Concept File's ``Topic NN:`` prefix, so the one reader-owned normalizer
+    compares their common identity. ``chapter_duration`` is profile-blanked
+    in the reference Master; group aggregates and concept-question labels are
+    assessment linkage, not preserved Concept authority.
+    """
+
+    projected = {
+        field: str(row.get(field) or "")
+        for field in _SHARED_CONCEPT_AUTHORITY_FIELDS
+    }
+    projected["topic_title"] = bulk_import.strip_topic_title(
+        projected["topic_title"]
+    )
+    return projected
+
+
+def _concept_authority_by_identity(workbook: bytes) -> dict[str, dict]:
+    parsed = assessment_workbook.parse_workbook(workbook)
+    authority: dict[str, dict] = {}
+    for sheet in assessment_workbook.SHEET_ORDER:
+        for row in parsed["sheets"][sheet]["rows"]:
+            projected = _concept_authority(row)
+            if not projected["concept_title"]:
+                continue
+            key = identity.title_tag(projected["concept_title"])
+            assert key, (
+                f"{sheet} concept title has no stable machine identity: "
+                f"{projected['concept_title']!r}"
+            )
+            # ``concept_source`` is authored Concept authority, but the
+            # Descriptive reference layout has no such column. Compare it on
+            # every sheet that can carry it and do not invent it on a sheet
+            # whose positional contract cannot.
+            if "concept_source" in row:
+                projected["concept_source"] = str(
+                    row.get("concept_source") or ""
+                )
+            previous = authority.setdefault(key, projected)
+            for field, value in projected.items():
+                if field in previous:
+                    assert value == previous[field], (
+                        f"{sheet} carries two {field!r} values for {key!r}"
+                    )
+                else:
+                    previous[field] = value
+    return authority
 
 
 def test_per_lane_reservations_cannot_approve_the_same_free_bytes(monkeypatch):
@@ -288,6 +364,150 @@ def test_explicit_rebuild_claims_job_lock_but_in_run_sibling_does_not(
         )
 
     assert calls == [job_id]
+
+
+@pytest.mark.parametrize("lane", [release.LANE_PRE, release.LANE_POST])
+def test_explicit_rebuild_preserves_the_lane_concept_authority_and_master_bands(
+    db, monkeypatch, lane,
+):
+    """A retry is Output 01→02 or 03→04, never a new Concept run.
+
+    Capture the same downloadable Concept projection and staged content seal
+    that survived ENOSPC, execute the explicit lane-rebuild contract, then
+    prove both are unchanged. The rebuilt Master projection must carry every
+    shared authored Chapter/Topic/Concept value from that preserved lane.
+    The format's deliberate presentation/linkage differences are excluded by
+    ``_concept_authority`` above; concept teaching content is not.
+    """
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+    staged_initial = copy.deepcopy(release.release_payload(job, lane=lane))
+    assert staged_initial is not None
+    seal_initial = assessment_release_snapshot.source_release_sha256(
+        staged_initial
+    )
+    concept_before = release_files.build_release_bulk_import_workbook(
+        db, job, lane=lane,
+    )
+    concept_authority = _concept_authority_by_identity(concept_before)
+    assert concept_authority
+
+    capacity_failure = storage_capacity.StorageCapacityError(
+        "insufficient storage for the first attempt",
+        phase="master_preflight",
+    )
+    monkeypatch.setattr(
+        storage_capacity,
+        "reserve_master_capacity",
+        lambda **_kwargs: (_ for _ in ()).throw(capacity_failure),
+    )
+    with pytest.raises(storage_capacity.StorageCapacityError):
+        release_contract.rebuild_lane_master(
+            db,
+            job.id,
+            lane,
+            owner_sub=job.owner_sub,
+            claim_job_lock=True,
+        )
+
+    db.expire_all()
+    job = uploads.get_job(
+        db,
+        job.id,
+        owner_sub=job.owner_sub,
+        module="build_concepts",
+    )
+    staged_before = copy.deepcopy(release.release_payload(job, lane=lane))
+    assert staged_before is not None
+    # The durable failure note may change; the Concept-authority seal may not.
+    seal_before = assessment_release_snapshot.source_release_sha256(
+        staged_before
+    )
+    assert seal_before == seal_initial
+    assert release.assessment_lane_issue(staged_before) is not None
+    assert _concept_authority_by_identity(
+        release_files.build_release_bulk_import_workbook(db, job, lane=lane)
+    ) == concept_authority
+
+    from app.services import assessment_release_run
+    from app.services import build_concepts
+
+    monkeypatch.setattr(
+        build_concepts,
+        "generate_post_learning",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Master recovery reran Concept generation"
+        ),
+    )
+    monkeypatch.setattr(
+        release,
+        "stage_release",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Master recovery restaged the Concept lane"
+        ),
+    )
+
+    runner_calls: list[tuple[int, str]] = []
+
+    def preserved_runner(_db, job_id, *, owner_sub=None):
+        current_job = uploads.get_job(
+            _db,
+            job_id,
+            owner_sub=owner_sub,
+            module="build_concepts",
+        )
+        current = release.release_payload(current_job, lane=lane)
+        assert current == staged_before
+        assert assessment_release_snapshot.source_release_sha256(
+            current
+        ) == seal_before
+        runner_calls.append((job_id, lane))
+        return SimpleNamespace(id=71 if lane == release.LANE_PRE else 72)
+
+    runner_name = (
+        "run_pre_release_for_job"
+        if lane == release.LANE_PRE
+        else "run_release_for_job"
+    )
+    monkeypatch.setattr(assessment_release_run, runner_name, preserved_runner)
+    capacity = storage_capacity.CapacitySnapshot(
+        path=str(config.DATA_DIR),
+        available_bytes=10_000_000,
+        available_inodes=10_000,
+    )
+    monkeypatch.setattr(
+        storage_capacity,
+        "reserve_master_capacity",
+        lambda **_kwargs: nullcontext(capacity),
+    )
+
+    release_contract.rebuild_lane_master(
+        db,
+        job.id,
+        lane,
+        owner_sub=job.owner_sub,
+        claim_job_lock=True,
+    )
+
+    db.refresh(job)
+    staged_after = release.release_payload(job, lane=lane)
+    assert staged_after == staged_before
+    assert assessment_release_snapshot.source_release_sha256(
+        staged_after
+    ) == seal_before
+    assert runner_calls == [(job.id, lane)]
+    assert _concept_authority_by_identity(
+        release_files.build_release_bulk_import_workbook(db, job, lane=lane)
+    ) == concept_authority
+
+    bridge = assessment_release_snapshot.build(db, job, staged_after)
+    master_snapshot = copy.deepcopy(bridge["snapshot"])
+    master_snapshot["groups"] = []
+    master_snapshot["candidates"] = []
+    master, issues = assessment_workbook.render_master_file(master_snapshot)
+    assert issues["unplaced"] == []
+    assert _concept_authority_by_identity(master) == concept_authority
 
 
 @pytest.mark.parametrize(

@@ -52,6 +52,11 @@ function readableError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function errorStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
 function formatMasterRebuildError(
   error: unknown,
   lane: MasterLane,
@@ -149,6 +154,10 @@ export default function DocumentUpload({
   const [job, setJob] = useState<UploadJob | null>(null);
   const [busy, setBusy] = useState(false);
   const [restoringSavedJob, setRestoringSavedJob] = useState(false);
+  const [savedJobRestoreAttempt, setSavedJobRestoreAttempt] = useState(0);
+  const [savedJobRestoreError, setSavedJobRestoreError] = useState<string | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const controlsDisabled = busy || disabled;
   const inputRef = useRef<HTMLInputElement>(null);
@@ -184,6 +193,7 @@ export default function DocumentUpload({
   function invalidateSavedJobRestore() {
     savedJobRequestGenerationRef.current += 1;
     setRestoringSavedJob(false);
+    setSavedJobRestoreError(null);
   }
 
   function emit(j: UploadJob | null) {
@@ -204,7 +214,10 @@ export default function DocumentUpload({
 
   useEffect(() => {
     const raw = safeStorageGetItem(storageKey);
-    if (!raw) return;
+    if (!raw) {
+      setSavedJobRestoreError(null);
+      return;
+    }
     let parsedMarker: unknown;
     try {
       parsedMarker = JSON.parse(raw);
@@ -220,6 +233,7 @@ export default function DocumentUpload({
     const requestGeneration = savedJobRequestGenerationRef.current + 1;
     savedJobRequestGenerationRef.current = requestGeneration;
     let active = true;
+    setSavedJobRestoreError(null);
     setRestoringSavedJob(true);
     api.getUploadJob(module, marker.id)
       .then((saved) => {
@@ -236,14 +250,32 @@ export default function DocumentUpload({
           safeStorageRemoveItem(storageKey);
           return;
         }
+        setSavedJobRestoreError(null);
         setJob(saved);
         onJobRef.current(saved);
       })
-      .catch(() => {
+      .catch((restoreError: unknown) => {
         if (
-          active
-          && savedJobRequestGenerationRef.current === requestGeneration
-        ) safeStorageRemoveItem(storageKey);
+          !active
+          || savedJobRequestGenerationRef.current !== requestGeneration
+        ) return;
+        const status = errorStatus(restoreError);
+        // A hard refresh during a deployment, a transient 5xx, an expired
+        // session, or a network interruption must not destroy the browser's
+        // only pointer to an otherwise durable paid run. Only an authoritative
+        // "gone" response proves that this exact saved job cannot be reopened.
+        if (status === 404 || status === 410) {
+          safeStorageRemoveItem(storageKey);
+          setSavedJobRestoreError(
+            "This saved run no longer exists on the server.",
+          );
+          return;
+        }
+        setSavedJobRestoreError(
+          "Could not reopen the saved run: " + readableError(restoreError)
+            + ". The saved pointer is still safe; retry after the server or "
+            + "sign-in session is available.",
+        );
       })
       .finally(() => {
         if (
@@ -257,7 +289,47 @@ export default function DocumentUpload({
         savedJobRequestGenerationRef.current += 1;
       }
     };
-  }, [module, storageKey]);
+  }, [module, savedJobRestoreAttempt, storageKey]);
+
+  useEffect(() => {
+    if (module !== "concepts" || !job?.generation_running) return;
+    let active = true;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      try {
+        const fresh = await api.getUploadJob(module, job.id);
+        if (!active) return;
+        setJob(fresh);
+        onJobRef.current(fresh);
+        safeStorageSetItem(storageKey, JSON.stringify({
+          id: fresh.id,
+          module: fresh.module,
+          learning_kind: fresh.learning_kind,
+          filename: fresh.filename,
+          created_at: fresh.created_at,
+        }));
+        if (fresh.generation_running) {
+          timer = window.setTimeout(poll, 3000);
+        }
+      } catch (pollError) {
+        if (!active) return;
+        const status = errorStatus(pollError);
+        // Keep trying only for transport/server failures. Authentication
+        // failures are surfaced by AuthProvider, while a deleted job cannot
+        // become available through polling.
+        if (status === undefined || status >= 500) {
+          timer = window.setTimeout(poll, 3000);
+        }
+      }
+    };
+
+    timer = window.setTimeout(poll, 3000);
+    return () => {
+      active = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [job?.generation_running, job?.id, module, storageKey]);
 
   useEffect(() => {
     if (!externalJob) return;
@@ -442,6 +514,20 @@ export default function DocumentUpload({
         {restoringSavedJob && (
           <div className="muted mt-8" role="status">
             <span className="spinner" aria-hidden="true" /> Checking for a saved run…
+          </div>
+        )}
+        {savedJobRestoreError && (
+          <div className="error-box mt-8" role="alert">
+            <div>{savedJobRestoreError}</div>
+            {safeStorageGetItem(storageKey) && (
+              <button
+                className="ghost mt-8"
+                disabled={restoringSavedJob}
+                onClick={() => setSavedJobRestoreAttempt((value) => value + 1)}
+              >
+                Retry saved run
+              </button>
+            )}
           </div>
         )}
         {module === "concepts" && (
@@ -960,24 +1046,30 @@ function SourceArtifactsCard({
                         )}
                       </div>
                       {canRebuild && lane && (
-                        <button
-                          aria-label={`Rebuild ${meta.lane} Master File`}
-                          className="ghost output-rebuild"
-                          disabled={
-                            actionsDisabled
-                            || actionBusy
-                            || jobRunning
-                            || anyMasterRebuilding
-                          }
-                          onClick={() => void rebuildMasterLane(lane)}
-                          title={jobRunning
-                            ? "Wait for the active generation run to finish."
-                            : `Rebuild only the ${meta.lane} Master File from its preserved Concept File.`}
-                        >
-                          {laneBusy
-                            ? <><span className="spinner" aria-hidden="true" /> Rebuilding…</>
-                            : "Rebuild Master"}
-                        </button>
+                        <>
+                          <div className="muted mt-8" role="note">
+                            Uses the already-generated {meta.lane} Concept File.
+                            It does not regenerate or modify Concepts.
+                          </div>
+                          <button
+                            aria-label={`Rebuild ${meta.lane} Master File`}
+                            className="ghost output-rebuild"
+                            disabled={
+                              actionsDisabled
+                              || actionBusy
+                              || jobRunning
+                              || anyMasterRebuilding
+                            }
+                            onClick={() => void rebuildMasterLane(lane)}
+                            title={jobRunning
+                              ? "Wait for the active generation run to finish."
+                              : `Rebuild only the ${meta.lane} Master File from its preserved Concept File.`}
+                          >
+                            {laneBusy
+                              ? <><span className="spinner" aria-hidden="true" /> Rebuilding…</>
+                              : "Rebuild Master"}
+                          </button>
+                        </>
                       )}
                     </>
                   ) : (

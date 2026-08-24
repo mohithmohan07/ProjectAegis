@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
 import type { UploadJob } from "../types";
 import DocumentUpload from "./DocumentUpload";
@@ -108,6 +108,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
   apiMock.getUploadJob.mockRejectedValue(new Error("no saved job"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 test("shows the Phase 2 source-critical cutover without overstating semantic use", () => {
@@ -355,6 +359,150 @@ test.each([
     confirmSpy.mockRestore();
   },
 );
+
+test("a hard refresh restores the missing Masters and rebuilds only the chosen lane", async () => {
+  const failed = failedMastersJob();
+  window.localStorage.setItem(
+    "aegis-upload-job:concepts:post",
+    JSON.stringify({
+      id: failed.id,
+      module: failed.module,
+      learning_kind: failed.learning_kind,
+      filename: failed.filename,
+      created_at: failed.created_at,
+    }),
+  );
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob
+    .mockResolvedValueOnce(failed)
+    .mockResolvedValue(rebuiltMasterJob("pre"));
+  apiMock.rebuildMasterFromConceptJob.mockResolvedValue({ id: 21 });
+
+  const firstPage = render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(await screen.findByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getAllByText(/does not regenerate or modify Concepts/i))
+    .toHaveLength(2);
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  }));
+
+  expect(await screen.findByRole("link", {
+    name: "Download the Pre-Learning Master File",
+  })).toBeDefined();
+  expect(apiMock.rebuildMasterFromConceptJob).toHaveBeenCalledWith(81, "pre");
+  expect(apiMock.rebuildMasterFromConceptJob).toHaveBeenCalledTimes(1);
+
+  // A second mount is the browser-level contract of a hard refresh: the
+  // server reconstructs the four cards from the durable job and the browser
+  // retains the exact job pointer, including the still-missing sibling lane.
+  firstPage.unmount();
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(await screen.findByRole("link", {
+    name: "Download the Pre-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  })).toBeDefined();
+});
+
+test("a transient restore failure keeps the paid run pointer and can retry", async () => {
+  const failed = failedMastersJob();
+  const storageKey = "aegis-upload-job:concepts:post";
+  const marker = JSON.stringify({
+    id: failed.id,
+    module: failed.module,
+    learning_kind: failed.learning_kind,
+    filename: failed.filename,
+    created_at: failed.created_at,
+  });
+  window.localStorage.setItem(storageKey, marker);
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob
+    .mockRejectedValueOnce(Object.assign(new Error("deploy restarting"), {
+      status: 503,
+    }))
+    .mockResolvedValue(failed);
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "saved pointer is still safe",
+  );
+  expect(window.localStorage.getItem(storageKey)).toBe(marker);
+  fireEvent.click(screen.getByRole("button", { name: "Retry saved run" }));
+
+  expect(await screen.findByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  })).toBeDefined();
+  expect(window.localStorage.getItem(storageKey)).toBe(marker);
+});
+
+test("a restored running rebuild refreshes itself and unlocks the finished lane", async () => {
+  vi.useFakeTimers();
+  const running = failedMastersJob();
+  running.generation_running = true;
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob.mockResolvedValue(rebuiltMasterJob("post"));
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={running}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  }).hasAttribute("disabled")).toBe(true);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+
+  expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 81);
+  expect(screen.getByRole("link", {
+    name: "Download the Post-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  }).hasAttribute("disabled")).toBe(false);
+});
 
 // --------------------------------------------------------------------------- #
 // Owner report 2026-08-21: both Pre files downloaded EMPTY with the recorded

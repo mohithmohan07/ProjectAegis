@@ -251,26 +251,41 @@ before database mutation.
    requirements before retrying.
 3. Open the failed job whose Pre and Post Concept Files are downloadable and
    whose Master cards are unavailable. Download both Concept files and record
-   their filenames and SHA-256 hashes before any rebuild.
+   their filenames and parsed Chapter/Topic/Concept cell projections before
+   any rebuild. A raw XLSX SHA-256 is not the content comparison: XLSX package
+   metadata contains openpyxl wall-clock timestamps even when every data cell
+   is unchanged.
 
 **Browser steps**
 
-1. On one unavailable Master card, click **Rebuild Master File** once. Confirm
+1. A hard refresh must automatically reopen the same saved job and reconstruct
+   all four output cards. If that lookup meets a temporary deploy/network
+   failure, confirm the browser keeps the saved-run pointer and offers
+   **Retry saved run** instead of discarding the paid run.
+2. On one unavailable Master card, click **Rebuild Master File** once. Confirm
    its button becomes busy and the sibling rebuild/upload actions remain
    disabled until the request finishes. Do not upload the PDF or press Resume.
-2. Refresh or reopen the job. Confirm that lane's Master now downloads and its
+3. Refresh or reopen the job. Confirm that lane's Master now downloads and its
    same-lane Concept download is still enabled. Download the Concept again and
-   compare its SHA-256 with the pre-rebuild copy.
-3. If the other Master is also unavailable, repeat the same one-lane action
+   compare its parsed Chapter/Topic/Concept projection with the pre-rebuild
+   copy. If another tab owns the rebuild, this card must poll until the durable
+   result appears and the remaining action unlocks.
+4. If the other Master is also unavailable, repeat the same one-lane action
    only after the first finishes. Refresh again and download all four outputs.
 
 **Expect**
 
 - The Pre button uses `POST /build-assessments/releases/from-job/{job_id}/pre`;
   the Post button uses `POST /build-assessments/releases/from-job/{job_id}`.
-- Both before/after Concept hashes match. The existing frozen job, staged
-  Concept release, source inventory and durable decisions remain the authority;
-  only the requested Master lane is rebuilt.
+- The before/after Concept projections and staged
+  `source_concept_release_sha256` match. Every rebuilt Master row carries the
+  same shared authored Chapter/Topic/Concept values as its same-lane Concept
+  projection. Presentation/linkage fields that the format deliberately owns
+  separately are not content drift: the Concept topic-title prefix, a
+  profile-forced blank such as `chapter_duration`, populated Master-only group
+  and question label aggregates, and a column absent from a target sheet.
+  The existing frozen job, staged Concept release, source inventory and durable
+  decisions remain the authority; only the requested Master lane is rebuilt.
 - The run/activity log contains Master preflight/rebuild/publication work only:
   no PDF conversion, canonical-source reconstruction, concept extraction,
   Phase 3 Concept authoring, or new full-run start appears. Record any Master
@@ -283,7 +298,8 @@ before database mutation.
 - After success, all four outputs download and no `vN.staging` debris remains
   under the affected assessment release.
 
-**FAIL-IF** either Concept artifact changes or disappears; clicking Rebuild
+**FAIL-IF** either Concept artifact disappears or any shared authored
+Chapter/Topic/Concept value changes; clicking Rebuild
 starts source conversion or the Concept pipeline; both lane rebuilds overlap;
 a lost response leaves a successfully published Master shown as unavailable
 after refresh; storage exhaustion returns an opaque 500; a partial Master is
