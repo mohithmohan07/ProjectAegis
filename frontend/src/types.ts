@@ -322,6 +322,9 @@ export interface SourceArtifactFile {
    */
   action?: "download" | "post" | string;
   disabled?: boolean;
+  /** Why an output is unavailable. Master cards use this durable reason to
+   * explain a failed lane and to retain the evidence after a retry. */
+  disabled_reason?: string;
   /**
    * Why an ENABLED output will be empty when opened — the run's own
    * recorded Pre-lane refusal or verdict, transcribed by the manifest.

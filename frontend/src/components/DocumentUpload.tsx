@@ -6,6 +6,7 @@ import type { UploadJob } from "../types";
 import SourceBookInput from "./SourceBookInput";
 
 type Module = "assessments" | "concepts";
+type MasterLane = "post" | "pre";
 
 type ActionableArtifact = {
   kind: string;
@@ -23,6 +24,52 @@ type ActionableArtifact = {
   note?: string;
   requires_confirmation?: boolean;
 };
+
+const MASTER_KIND: Record<MasterLane, string> = {
+  pre: "pre_release_master",
+  post: "release_master",
+};
+
+const CONCEPT_KIND: Record<MasterLane, string> = {
+  pre: "pre_release_bulk_import",
+  post: "release_bulk_import",
+};
+
+function masterLane(kind: string): MasterLane | null {
+  if (kind === MASTER_KIND.pre) return "pre";
+  if (kind === MASTER_KIND.post) return "post";
+  return null;
+}
+
+function masterIsAvailable(job: UploadJob, lane: MasterLane): boolean {
+  const artifact = job.source_artifacts?.files.find(
+    (candidate) => candidate.kind === MASTER_KIND[lane],
+  );
+  return Boolean(artifact && !artifact.disabled && artifact.download_url);
+}
+
+function readableError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function formatMasterRebuildError(
+  error: unknown,
+  lane: MasterLane,
+  durableReason = "",
+): string {
+  const status = (error as { status?: unknown } | null)?.status;
+  const combined = `${readableError(error)} ${durableReason}`;
+  const storageFull = status === 507
+    || /(?:errno\s*28|enospc|no space left|insufficient storage)/i.test(combined);
+  const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
+  if (storageFull) {
+    return "Server storage is full. No " + laneLabel
+      + " Master File was published. Ask an operator to restore capacity on "
+      + "the server filesystem, then press this Rebuild button again. The "
+      + "Concept File is safe; do not rerun concept generation.";
+  }
+  return `${laneLabel} Master rebuild failed: ${readableError(error)}`;
+}
 
 // A recorded reason can run to several sentences; lead with the first
 // and fold the rest, exactly like the disabled reasons.
@@ -513,8 +560,10 @@ export default function DocumentUpload({
       )}
       {converted && (
         <SourceArtifactsCard
+          actionsDisabled={controlsDisabled}
           manifest={job.source_artifacts}
           jobId={job.id}
+          jobRunning={Boolean(job.generation_running)}
           onPublished={(freshJob) => emit(freshJob)}
         />
       )}
@@ -600,17 +649,31 @@ export default function DocumentUpload({
 }
 
 function SourceArtifactsCard({
+  actionsDisabled,
   manifest,
   jobId,
+  jobRunning,
   onPublished,
 }: {
+  actionsDisabled: boolean;
   manifest?: UploadJob["source_artifacts"];
   jobId: number;
+  jobRunning: boolean;
   onPublished: (job: UploadJob) => void;
 }) {
   const [actionBusy, setActionBusy] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [rebuildingMaster, setRebuildingMaster] = useState<
+    Record<MasterLane, boolean>
+  >({ pre: false, post: false });
+  const [masterErrors, setMasterErrors] = useState<
+    Partial<Record<MasterLane, string>>
+  >({});
+  const [masterNotices, setMasterNotices] = useState<
+    Partial<Record<MasterLane, string>>
+  >({});
   if (!manifest?.available) return null;
+  const anyMasterRebuilding = rebuildingMaster.pre || rebuildingMaster.post;
   const summary = manifest.summary ?? {};
   const phase2 = manifest.generation_usage?.mode === "source-critical";
   const adjudication = manifest.source_adjudication;
@@ -711,7 +774,9 @@ function SourceArtifactsCard({
   async function uploadEditedWorkbook(
     artifact: ActionableArtifact, file: File,
   ) {
-    if (actionBusy || artifact.disabled) return;
+    if (
+      actionsDisabled || actionBusy || anyMasterRebuilding || artifact.disabled
+    ) return;
     const lane = artifactLane(artifact);
     const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
     if (
@@ -751,6 +816,86 @@ function SourceArtifactsCard({
     (f) => !(f.kind in OUTPUT_META) && f.action !== "post",
   );
 
+  function sameLaneConceptIsAvailable(lane: MasterLane): boolean {
+    const concept = outputs.find(
+      (artifact) => artifact.kind === CONCEPT_KIND[lane],
+    );
+    return Boolean(concept && !concept.disabled && concept.download_url);
+  }
+
+  async function rebuildMasterLane(lane: MasterLane) {
+    // The backend serializes explicit Master rebuilds for one job. Keep the
+    // sibling control visible but disabled so a second lane cannot predictably
+    // collide with the active rebuild and return 409.
+    if (
+      actionsDisabled || actionBusy || jobRunning || anyMasterRebuilding
+    ) return;
+    const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
+    setRebuildingMaster((current) => ({ ...current, [lane]: true }));
+    setMasterErrors((current) => ({ ...current, [lane]: undefined }));
+    setMasterNotices((current) => ({ ...current, [lane]: undefined }));
+
+    let requestError: unknown = null;
+    let refreshError: unknown = null;
+    let fresh: UploadJob | null = null;
+    try {
+      try {
+        await api.rebuildMasterFromConceptJob(jobId, lane);
+      } catch (error) {
+        requestError = error;
+      }
+
+      // Refresh after both success and failure. A response can be lost after
+      // the server committed the release, while a failed request may have
+      // recorded a more precise durable reason on the job manifest.
+      try {
+        fresh = await api.getUploadJob("concepts", jobId);
+        onPublished(fresh);
+      } catch (error) {
+        refreshError = error;
+      }
+
+      if (fresh && masterIsAvailable(fresh, lane)) {
+        setMasterNotices((current) => ({
+          ...current,
+          [lane]: `${laneLabel} Master File rebuilt. Download is ready.`,
+        }));
+        return;
+      }
+
+      if (requestError) {
+        const durableReason = fresh?.source_artifacts?.files.find(
+          (artifact) => artifact.kind === MASTER_KIND[lane],
+        )?.disabled_reason ?? "";
+        setMasterErrors((current) => ({
+          ...current,
+          [lane]: formatMasterRebuildError(
+            requestError, lane, durableReason,
+          ),
+        }));
+        return;
+      }
+
+      if (refreshError) {
+        setMasterErrors((current) => ({
+          ...current,
+          [lane]: `${laneLabel} Master File was rebuilt, but the output cards `
+            + `could not refresh: ${readableError(refreshError)}. Reload this `
+            + "page; do not rerun concept generation.",
+        }));
+        return;
+      }
+
+      setMasterErrors((current) => ({
+        ...current,
+        [lane]: `${laneLabel} Master rebuild completed, but the server did `
+          + "not expose a downloadable file. Reload the page before trying again.",
+      }));
+    } finally {
+      setRebuildingMaster((current) => ({ ...current, [lane]: false }));
+    }
+  }
+
   return (
     <div className="checkpoint-card">
       <div>
@@ -787,6 +932,13 @@ function SourceArtifactsCard({
           <div className="outputs-grid">
             {outputs.map((artifact) => {
               const meta = OUTPUT_META[artifact.kind];
+              const lane = masterLane(artifact.kind);
+              const canRebuild = Boolean(
+                lane
+                && artifact.disabled
+                && sameLaneConceptIsAvailable(lane),
+              );
+              const laneBusy = lane ? rebuildingMaster[lane] : false;
               return (
                 <div
                   className={`output-card${artifact.disabled ? " output-disabled" : ""}`}
@@ -800,12 +952,34 @@ function SourceArtifactsCard({
                   </div>
                   <div className="output-name">{meta.name}</div>
                   {artifact.disabled ? (
-                    <div className="output-reason">
-                      {foldedReason(
-                        artifact.disabled_reason
-                          || "Not available for this run.",
+                    <>
+                      <div className="output-reason">
+                        {foldedReason(
+                          artifact.disabled_reason
+                            || "Not available for this run.",
+                        )}
+                      </div>
+                      {canRebuild && lane && (
+                        <button
+                          aria-label={`Rebuild ${meta.lane} Master File`}
+                          className="ghost output-rebuild"
+                          disabled={
+                            actionsDisabled
+                            || actionBusy
+                            || jobRunning
+                            || anyMasterRebuilding
+                          }
+                          onClick={() => void rebuildMasterLane(lane)}
+                          title={jobRunning
+                            ? "Wait for the active generation run to finish."
+                            : `Rebuild only the ${meta.lane} Master File from its preserved Concept File.`}
+                        >
+                          {laneBusy
+                            ? <><span className="spinner" aria-hidden="true" /> Rebuilding…</>
+                            : "Rebuild Master"}
+                        </button>
                       )}
-                    </div>
+                    </>
                   ) : (
                     <>
                       {artifact.note && (
@@ -828,6 +1002,16 @@ function SourceArtifactsCard({
                       </a>
                     </>
                   )}
+                  {lane && masterNotices[lane] && (
+                    <div className="muted" role="status">
+                      {masterNotices[lane]}
+                    </div>
+                  )}
+                  {lane && masterErrors[lane] && (
+                    <div className="error-box output-action-error" role="alert">
+                      {masterErrors[lane]}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -846,7 +1030,12 @@ function SourceArtifactsCard({
                 <input
                   accept=".xlsx"
                   data-testid={`upload-edited-${lane}`}
-                  disabled={actionBusy || artifact.disabled}
+                  disabled={
+                    actionsDisabled
+                    || actionBusy
+                    || anyMasterRebuilding
+                    || artifact.disabled
+                  }
                   id={inputId}
                   onChange={(event) => {
                     const file = event.target.files?.[0];
@@ -858,7 +1047,12 @@ function SourceArtifactsCard({
                 />
                 <button
                   className="ghost"
-                  disabled={actionBusy || artifact.disabled}
+                  disabled={
+                    actionsDisabled
+                    || actionBusy
+                    || anyMasterRebuilding
+                    || artifact.disabled
+                  }
                   onClick={() =>
                     document.getElementById(inputId)?.click()}
                 >

@@ -4,10 +4,18 @@ from sqlalchemy.orm import Session
 from .. import schemas
 from ..db import SessionLocal, get_db
 from ..services import build_assessments as svc
-from ..services import auth, progress, uploads
+from ..services import auth, progress, storage_capacity, uploads
 from .upload_limits import read_limited_upload
 
 router = APIRouter(prefix="/build-assessments", tags=["build-assessments"])
+
+
+def _storage_http_exception(
+    error: storage_capacity.StorageCapacityError,
+) -> HTTPException:
+    """The stable public contract for a retryable server-capacity refusal."""
+
+    return HTTPException(status_code=507, detail=error.public_detail())
 
 
 # --------------------------------------------------------------------------- #
@@ -486,7 +494,12 @@ def run_release_from_job(
 
     try:
         release = release_contract.rebuild_lane_master(
-            db, job_id, bc_release.LANE_POST, owner_sub=user.sub)
+            db,
+            job_id,
+            bc_release.LANE_POST,
+            owner_sub=user.sub,
+            claim_job_lock=True,
+        )
     except assessment_release_run.SourceQuestionLeak as e:
         raise HTTPException(409, str(e))
     except premap.PreExtractionError as e:
@@ -502,6 +515,17 @@ def run_release_from_job(
         raise HTTPException(400, str(e))
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
+    except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except storage_capacity.StorageCapacityError as e:
+        raise _storage_http_exception(e)
+    except OSError as e:
+        storage_error = storage_capacity.capacity_error_from(
+            e, phase="Master rebuild",
+        )
+        if storage_error is None:
+            raise
+        raise _storage_http_exception(storage_error)
     except release_svc.UploadRefused as e:
         raise HTTPException(409, str(e))
     except kernel.ContractError as e:
@@ -547,7 +571,12 @@ def run_pre_release_from_job(
 
     try:
         release = release_contract.rebuild_lane_master(
-            db, job_id, bc_release.LANE_PRE, owner_sub=user.sub)
+            db,
+            job_id,
+            bc_release.LANE_PRE,
+            owner_sub=user.sub,
+            claim_job_lock=True,
+        )
     except assessment_release_run.SourceQuestionLeak as e:
         raise HTTPException(409, str(e))
     except premap.PreExtractionError as e:
@@ -560,6 +589,17 @@ def run_pre_release_from_job(
         raise HTTPException(400, str(e))
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
+    except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except storage_capacity.StorageCapacityError as e:
+        raise _storage_http_exception(e)
+    except OSError as e:
+        storage_error = storage_capacity.capacity_error_from(
+            e, phase="Master rebuild",
+        )
+        if storage_error is None:
+            raise
+        raise _storage_http_exception(storage_error)
     except release_svc.UploadRefused as e:
         raise HTTPException(409, str(e))
     except kernel.ContractError as e:

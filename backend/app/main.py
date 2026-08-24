@@ -17,6 +17,8 @@ from .services import drive_checkpoints
 from .services import build_concepts_release_api_contract
 from .services import build_concepts_release_contract
 from .services import build_concepts_release_manifest
+from .services import assessment_release_service
+from .services import storage_capacity
 from .api import (
     admin as admin_api,
     auth as auth_api,
@@ -42,9 +44,43 @@ def bootstrap() -> None:
     model_provider.restore()
     build_concepts_release_manifest.install()
     build_concepts_release_contract.install()
+    # A crashed publisher leaves only an unpublished ``vN.staging`` tree.
+    # Sweep those exact trees before database/bootstrap writes so stale debris
+    # can return capacity to an otherwise full volume. Recovery is best-effort
+    # and never converts an operational warning into a failed boot.
+    try:
+        recovered = assessment_release_service.recover_incomplete_publications()
+        if recovered:
+            logging.getLogger(__name__).warning(
+                "recovered %d incomplete Master publication(s)",
+                len(recovered),
+            )
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "incomplete Master publication recovery failed", exc_info=True,
+        )
     init_db()
     db = SessionLocal()
     try:
+        # If atomic rename completed but the following SQLite commit returned
+        # an uncertain failure, preserve the complete target and finish only
+        # the matching unpublished row after byte/hash verification (without
+        # reviving a row that a later retry already superseded).
+        try:
+            reconciled = (
+                assessment_release_service.reconcile_complete_publications(db)
+            )
+            if reconciled:
+                logging.getLogger(__name__).warning(
+                    "reconciled %d complete Master publication(s)",
+                    len(reconciled),
+                )
+        except Exception:
+            db.rollback()
+            logging.getLogger(__name__).warning(
+                "complete Master publication reconciliation failed",
+                exc_info=True,
+            )
         syllabus_svc.bootstrap_syllabus(db)
     finally:
         db.close()
@@ -97,7 +133,13 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # Liveness stays HTTP 200 even when storage is critical; returning 503
+    # would make the platform restart-loop the same full volume. The payload
+    # gives operators the capacity state while Master preflight refuses safely.
+    return {
+        "status": "ok",
+        "storage": storage_capacity.health_status(),
+    }
 
 
 # Patch only the user-facing Build Concepts upload routes before FastAPI copies

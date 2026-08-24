@@ -46,7 +46,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from .. import models
-from . import generation, uploads
+from . import generation, storage_capacity, uploads
 
 
 RELEASE_VERSION = "aegis-concept-release-1"
@@ -575,6 +575,22 @@ def record_assessment_lane_unavailable(
         payload = release_payload(job, lane=resolved)
         if payload is None:
             return None
+        issue_details: dict[str, Any] = {
+            "lane": resolved,
+            "exception": type(error).__name__,
+            "error": str(error),
+            STAGED_VERSION_FIELD: staged_version(payload),
+        }
+        storage_error = storage_capacity.capacity_error_from(
+            error,
+            phase="Master generation",
+        )
+        if storage_error is not None:
+            # Operational mechanics only: these fields tell the UI/operator
+            # why the file could not be persisted and whether restoring
+            # capacity makes a lane-only retry meaningful. They make no
+            # statement about the authored rows.
+            issue_details.update(storage_error.details())
         issue = _issue(
             code=ASSESSMENT_LANE_UNAVAILABLE,
             severity="error",
@@ -585,12 +601,7 @@ def record_assessment_lane_unavailable(
                 "this lane is unaffected and its database upload is still "
                 "open; re-run the lane from the release page."
             ),
-            details={
-                "lane": resolved,
-                "exception": type(error).__name__,
-                "error": str(error),
-                STAGED_VERSION_FIELD: staged_version(payload),
-            },
+            details=issue_details,
         )
         key = release_key_for_lane(resolved)
         durable = copy.deepcopy(dict(job.question_inventory or {}))

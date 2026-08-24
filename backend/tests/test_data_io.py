@@ -36,7 +36,11 @@ def test_export_cell_limit_is_an_actionable_422(
 
 
 def test_health(client):
-    assert client.get("/health").json() == {"status": "ok"}
+    response = client.get("/health")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["storage"]["status"] in {"ok", "critical", "unknown"}
 
 
 def test_export_all_is_canonical_workbook(client):

@@ -1,10 +1,11 @@
 # Aegis Testing Handoff — 2026-08-22
 
 Current build under test: local integration branch
-**`assistant/all-xhigh`**, based on the integrated owner-feedback mainline and
-adding Q22's uniform Luna `xhigh` policy. It includes cache ordering/telemetry,
-Q21 workbook contracts, durable Pre-Learning recovery, and the Concept
-visible-route gate. Q22 is not deployed or live-tested.
+**`assistant/master-storage-recovery`**, based on the integrated `xhigh` and
+owner-feedback mainline. It includes cache ordering/telemetry, Q21 workbook
+contracts, durable Pre-Learning recovery, the Concept visible-route gate, and
+the narrow ENOSPC/Master-only recovery round. Neither the storage change nor
+Q22 is deployed or live-tested.
 
 The **2,791 passed** figure below belongs to historical PR #240. Use the newest
 final-gate row in `docs/residue-ledger.md` for the current branch.
@@ -55,6 +56,7 @@ and the resume dialog for the parked run appears with **Resume** enabled
 | 5 | **Watch live + auto-landing** (merged, #239) | Any device can attach read-only to a running job and, when it completes, lands automatically on the download-and-review page. Watching never restarts a run. |
 | 6 | **Console v2** (merged earlier) | Stage cards with per-stage time, tokens, and cost; parallel lanes as separate rails; mobile-friendly. |
 | 7 | **Q22 uniform Luna effort** | Every one of the 14 registered purposes requests `xhigh` on a normal Luna call. Purpose labels remain mandatory. Only provider rejection or structured-output truncation recovery may lower a retry; durable decisions retain their existing identity. |
+| 8 | **Master storage recovery** | Refuse a Master batch before provider spend when server bytes/inodes are insufficient, expose retryable storage evidence, and rebuild only a missing Pre or Post Master from its surviving Concept release after capacity is restored. |
 
 ---
 
@@ -235,6 +237,57 @@ before database mutation.
 - Clicking release on an existing Post-only historical job restores durable
   Pre authority without model/refiner spend, is idempotent, and returns 409 if
   the job is active.
+
+### T11 — ENOSPC recovery: Master-only retry (operator + browser)
+
+**Preconditions**
+
+1. Confirm no generation/rebuild worker is active. Inspect the live filesystem
+   using the ENOSPC runbook in `README.md`; extend the existing volume if
+   needed, then deploy between runs.
+2. Read `/health`. The HTTP response stays 200 for liveness; require
+   `storage.status: "ok"` and `storage.two_lane_batch.ready: true`; record the
+   available bytes/inodes plus both the one-lane retry and two-lane batch
+   requirements before retrying.
+3. Open the failed job whose Pre and Post Concept Files are downloadable and
+   whose Master cards are unavailable. Download both Concept files and record
+   their filenames and SHA-256 hashes before any rebuild.
+
+**Browser steps**
+
+1. On one unavailable Master card, click **Rebuild Master File** once. Confirm
+   its button becomes busy and the sibling rebuild/upload actions remain
+   disabled until the request finishes. Do not upload the PDF or press Resume.
+2. Refresh or reopen the job. Confirm that lane's Master now downloads and its
+   same-lane Concept download is still enabled. Download the Concept again and
+   compare its SHA-256 with the pre-rebuild copy.
+3. If the other Master is also unavailable, repeat the same one-lane action
+   only after the first finishes. Refresh again and download all four outputs.
+
+**Expect**
+
+- The Pre button uses `POST /build-assessments/releases/from-job/{job_id}/pre`;
+  the Post button uses `POST /build-assessments/releases/from-job/{job_id}`.
+- Both before/after Concept hashes match. The existing frozen job, staged
+  Concept release, source inventory and durable decisions remain the authority;
+  only the requested Master lane is rebuilt.
+- The run/activity log contains Master preflight/rebuild/publication work only:
+  no PDF conversion, canonical-source reconstruction, concept extraction,
+  Phase 3 Concept authoring, or new full-run start appears. Record any Master
+  provider usage separately; a retry may finish a decision that ENOSPC did not
+  persist, so "Master-only" does not mean "zero model cost".
+- A failed 507 keeps both Concept downloads available, shows actionable server
+  storage guidance, and permits the same button to be used after capacity is
+  restored. A concurrent original run or second rebuild returns/behaves as a
+  409 conflict rather than overlapping the job.
+- After success, all four outputs download and no `vN.staging` debris remains
+  under the affected assessment release.
+
+**FAIL-IF** either Concept artifact changes or disappears; clicking Rebuild
+starts source conversion or the Concept pipeline; both lane rebuilds overlap;
+a lost response leaves a successfully published Master shown as unavailable
+after refresh; storage exhaustion returns an opaque 500; a partial Master is
+served; or retry requires a full-file generation run.
 
 ---
 

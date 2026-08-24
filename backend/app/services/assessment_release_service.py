@@ -14,7 +14,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Mapping
@@ -28,8 +30,10 @@ from ..bulk_import import assessment_workbook
 from . import assessment_grouping as grouping
 from . import assessment_release as rel
 from . import identity
+from . import storage_capacity
 
 _TITLE_TAG_RE = re.compile(r"\(([^()]+)\)\s*$")
+_LOGGER = logging.getLogger(__name__)
 
 CONCEPTS_FILENAME = "aegis_concepts.xlsx"
 MASTER_FILENAME = "aegis_master.xlsx"
@@ -75,6 +79,37 @@ def _releases_root() -> Path:
 
 def _version_dir(release: models.AssessmentRelease) -> Path:
     return _releases_root() / release.release_uid / f"v{release.version}"
+
+
+def _is_staging_path(path: Path) -> bool:
+    """Whether ``path`` is exactly ``assessment_releases/<uid>/vN.staging``."""
+
+    name = path.name
+    version = (
+        name[1:-len(".staging")]
+        if name.startswith("v") and name.endswith(".staging")
+        else ""
+    )
+    if not version.isdigit() or not version:
+        return False
+    try:
+        return path.parent.resolve().parent == _releases_root().resolve()
+    except OSError:
+        return False
+
+
+def _remove_staging_tree(path: Path) -> bool:
+    """Remove only an unpublished staging tree, including nested debris."""
+
+    if not _is_staging_path(path):
+        raise ValueError(f"refusing to clean unexpected staging path {path}")
+    if path.is_symlink():
+        _LOGGER.warning("refusing to follow staging symlink %s", path)
+        return False
+    if not path.exists():
+        return False
+    shutil.rmtree(path)
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -455,6 +490,97 @@ def _readiness(release: models.AssessmentRelease, manifest: Mapping) -> str:
     return READY
 
 
+def _apply_publication_metadata(
+    release: models.AssessmentRelease,
+    target: Path,
+    manifest: Mapping,
+    *,
+    reconciled: bool = False,
+    preserve_state: bool = False,
+) -> None:
+    """Apply the database half of one already-complete publication."""
+
+    release.workbook_hashes = dict(manifest["workbook_sha256s"])
+    release.diagnostics = {
+        **(release.diagnostics or {}),
+        "readiness": manifest["readiness"],
+        "issues": manifest["issues"],
+        "read_back": manifest["read_back"],
+    }
+    publication = {
+        "directory": str(target),
+        "manifest": str(target / MANIFEST_FILENAME),
+        "published_at": datetime.utcnow().isoformat(),
+    }
+    if reconciled:
+        publication["reconciled_after_restart"] = True
+    release.publication = publication
+    if not preserve_state:
+        release.state = rel.advance_state(
+            release.state,
+            "ready_for_upload"
+            if manifest["readiness"] == READY
+            else "validated_with_flags",
+        )
+
+
+def _published_target_identity(target: Path) -> tuple[str, int] | None:
+    """Return the exact ``(release_uid, version)`` encoded by a safe path."""
+
+    name = target.name
+    version_text = name[1:] if name.startswith("v") else ""
+    if not version_text.isdigit() or target.is_symlink():
+        return None
+    try:
+        if target.parent.resolve().parent != _releases_root().resolve():
+            return None
+    except OSError:
+        return None
+    return target.parent.name, int(version_text)
+
+
+def _verified_target_manifest(target: Path) -> dict:
+    """Read and hash-check a complete atomically exposed target directory."""
+
+    identity = _published_target_identity(target)
+    if identity is None or not target.is_dir():
+        raise UploadRefused(f"unsafe Master publication target {target}")
+    release_uid, version = identity
+    paths = {
+        "concepts_xlsx": target / CONCEPTS_FILENAME,
+        "master_xlsx": target / MASTER_FILENAME,
+        "manifest": target / MANIFEST_FILENAME,
+    }
+    for path in paths.values():
+        if path.is_symlink() or not path.is_file():
+            raise UploadRefused(
+                f"incomplete Master publication target {target}"
+            )
+    try:
+        manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise UploadRefused(
+            f"unreadable Master publication manifest at {target}"
+        ) from exc
+    if not isinstance(manifest, dict):
+        raise UploadRefused(f"invalid Master publication manifest at {target}")
+    if (
+        str(manifest.get("release_uid") or "") != release_uid
+        or int(manifest.get("version") or 0) != version
+    ):
+        raise UploadRefused(
+            f"Master publication identity mismatch at {target}"
+        )
+    expected_hashes = manifest.get("workbook_sha256s") or {}
+    for key in ("concepts_xlsx", "master_xlsx"):
+        actual = hashlib.sha256(paths[key].read_bytes()).hexdigest()
+        if actual != str(expected_hashes.get(key) or ""):
+            raise UploadRefused(
+                f"Master publication hash mismatch for {paths[key].name}"
+            )
+    return manifest
+
+
 def publish_release(
     db: Session, release: models.AssessmentRelease,
 ) -> models.AssessmentRelease:
@@ -467,34 +593,59 @@ def publish_release(
     served, so a release with only one successfully published file cannot
     exist (spec §13.2 step 7).
     """
-    # The run's own profile, read back off the row it was persisted on
-    # (spec-step8 T12/M7), through the same accessor ``create_release``
-    # staged it with — so a run whose context carried a profile DICT
-    # publishes instead of raising ``KeyError`` and shipping no workbook.
-    output = assessment_workbook.build_dual_output(
-        release.concept_snapshot,
-        _run_profile(release.provider_identity),
-    )
     target = _version_dir(release)
     staging = target.with_name(target.name + ".staging")
     staging_parent = staging.parent
-    staging_parent.mkdir(parents=True, exist_ok=True)
+    owns_staging = False
+    exposed_target = False
+    phase = "rendering Master workbooks"
     try:
-        staging.mkdir(exist_ok=False)  # publication lease
-    except FileExistsError as exc:
-        raise UploadRefused(
-            f"release {release.release_uid} v{release.version} is already "
-            "being published"
-        ) from exc
-    try:
-        (staging / CONCEPTS_FILENAME).write_bytes(output["concepts_xlsx"])
-        (staging / MASTER_FILENAME).write_bytes(output["master_xlsx"])
+        # The run's own profile, read back off the row it was persisted on
+        # (spec-step8 T12/M7), through the same accessor ``create_release``
+        # staged it with — so a run whose context carried a profile DICT
+        # publishes instead of raising ``KeyError`` and shipping no workbook.
+        output = assessment_workbook.build_dual_output(
+            release.concept_snapshot,
+            _run_profile(release.provider_identity),
+        )
         manifest = dict(output["manifest"])
         manifest["release_uid"] = release.release_uid
         manifest["version"] = release.version
         manifest["readiness"] = _readiness(release, manifest)
+        manifest_bytes = json.dumps(
+            manifest, ensure_ascii=False, indent=1,
+        ).encode("utf-8")
+
+        # Exact second gate: provider work is over, but no staging directory
+        # or partial workbook exists yet. The calculation uses the actual
+        # rendered byte strings plus the exact manifest serialization.
+        phase = "checking Master publication capacity"
+        storage_capacity.require_publication_capacity(
+            len(output["concepts_xlsx"])
+            + len(output["master_xlsx"])
+            + len(manifest_bytes),
+            required_inodes=4,
+            path=config.DATA_DIR,
+        )
+
+        phase = "creating Master publication staging directory"
+        staging_parent.mkdir(parents=True, exist_ok=True)
+        try:
+            staging.mkdir(exist_ok=False)  # publication lease
+            owns_staging = True
+        except FileExistsError as exc:
+            raise UploadRefused(
+                f"release {release.release_uid} v{release.version} is already "
+                "being published"
+            ) from exc
+
+        phase = f"writing {CONCEPTS_FILENAME}"
+        (staging / CONCEPTS_FILENAME).write_bytes(output["concepts_xlsx"])
+        phase = f"writing {MASTER_FILENAME}"
+        (staging / MASTER_FILENAME).write_bytes(output["master_xlsx"])
         # Reopen from disk and re-hash: what will be served is what was
         # validated, not what was in memory.
+        phase = "verifying staged Master workbooks"
         for filename, expected in (
             (CONCEPTS_FILENAME,
              manifest["workbook_sha256s"]["concepts_xlsx"]),
@@ -505,37 +656,66 @@ def publish_release(
             if digest != expected:
                 raise UploadRefused(
                     f"{filename} changed between render and publication")
-        (staging / MANIFEST_FILENAME).write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=1),
-            encoding="utf-8")
+        phase = f"writing {MANIFEST_FILENAME}"
+        (staging / MANIFEST_FILENAME).write_bytes(manifest_bytes)
+        phase = "exposing the complete Master release"
         os.replace(staging, target)  # atomic exposure of the whole version
-    except Exception:
-        for stale in staging.glob("*"):
-            stale.unlink(missing_ok=True)
-        staging.rmdir()
-        raise
+        owns_staging = False
+        exposed_target = True
 
-    release.workbook_hashes = dict(manifest["workbook_sha256s"])
-    release.diagnostics = {
-        **(release.diagnostics or {}),
-        "readiness": manifest["readiness"],
-        "issues": manifest["issues"],
-        "read_back": manifest["read_back"],
-    }
-    release.publication = {
-        "directory": str(target),
-        "manifest": str(target / MANIFEST_FILENAME),
-        "published_at": datetime.utcnow().isoformat(),
-    }
-    release.state = rel.advance_state(
-        release.state,
-        "ready_for_upload"
-        if manifest["readiness"] == READY
-        else "validated_with_flags",
-    )
-    db.commit()
-    db.refresh(release)
-    return release
+        phase = "committing Master publication metadata"
+        _apply_publication_metadata(release, target, manifest)
+        db.commit()
+        db.refresh(release)
+        _LOGGER.info(
+            "Master publication completed release_uid=%s version=%s "
+            "payload_bytes=%s",
+            release.release_uid,
+            release.version,
+            len(output["concepts_xlsx"])
+            + len(output["master_xlsx"])
+            + len(manifest_bytes),
+        )
+        return release
+    except Exception as exc:
+        if owns_staging:
+            try:
+                _remove_staging_tree(staging)
+            except Exception:
+                # Cleanup is best-effort and can itself meet a damaged/full
+                # filesystem. It must never replace the publication failure.
+                _LOGGER.warning(
+                    "failed to clean Master staging directory %s",
+                    staging,
+                    exc_info=True,
+                )
+        if exposed_target:
+            # The rename proved all three hash-checked files were exposed, but
+            # a commit exception cannot tell us whether SQLite committed just
+            # before the connection failed. Deleting the target could destroy
+            # a valid committed release, so leave it intact. Startup verifies
+            # it byte-for-byte and promotes only the matching materialized row.
+            _LOGGER.error(
+                "Master target is complete but publication metadata commit "
+                "was uncertain release_uid=%s version=%s target=%s",
+                release.release_uid,
+                release.version,
+                target,
+            )
+        storage_error = storage_capacity.capacity_error_from(
+            exc,
+            phase=phase,
+        )
+        if storage_error is not None and storage_error is not exc:
+            _LOGGER.error(
+                "Master publication storage failure release_uid=%s "
+                "version=%s phase=%s",
+                release.release_uid,
+                release.version,
+                phase,
+            )
+            raise storage_error from exc
+        raise
 
 
 def recover_incomplete_publications() -> list[str]:
@@ -547,11 +727,115 @@ def recover_incomplete_publications() -> list[str]:
     if not root.is_dir():
         return removed
     for staging in root.glob("*/v*.staging"):
-        for stale in staging.glob("*"):
-            stale.unlink(missing_ok=True)
-        staging.rmdir()
-        removed.append(str(staging))
+        try:
+            if _remove_staging_tree(staging):
+                removed.append(str(staging))
+        except Exception:
+            # Recovery is an aid, never a reason the application cannot boot.
+            # Continue so one damaged entry does not hide every other stale
+            # staging tree from the sweep.
+            _LOGGER.warning(
+                "failed to recover incomplete Master publication %s",
+                staging,
+                exc_info=True,
+            )
     return removed
+
+
+def reconcile_complete_publications(db: Session) -> list[str]:
+    """Finish the DB half of an interrupted atomic publication.
+
+    Invariant: a target is reconciled only when its path identity, manifest
+    identity, both workbook hashes, and the stored AND recomputed frozen
+    snapshot hashes all match one existing unpublished row. A materialized row
+    advances normally. A row superseded by a retry receives its missing audit
+    metadata but remains superseded. A complete target is never deleted merely
+    because the preceding commit result was uncertain; a non-matching target
+    is left untouched for operator evidence and never made downloadable.
+    """
+
+    reconciled: list[str] = []
+    root = _releases_root()
+    if not root.is_dir():
+        return reconciled
+    for target in sorted(root.glob("*/v*")):
+        if target.name.endswith(".staging"):
+            continue
+        try:
+            identity = _published_target_identity(target)
+            if identity is None:
+                continue
+            release_uid, version = identity
+            release = (
+                db.query(models.AssessmentRelease)
+                .filter(
+                    models.AssessmentRelease.release_uid == release_uid,
+                    models.AssessmentRelease.version == version,
+                )
+                .one_or_none()
+            )
+            if release is None or release.state not in {
+                "materialized", "superseded",
+            }:
+                # A successful/ambiguous commit is already complete; uploaded
+                # and other states are never rewritten from disk.
+                continue
+            if release.publication or release.workbook_hashes:
+                # Reconciliation is only the missing DB half of an otherwise
+                # complete publication, never an overwrite of prior metadata.
+                continue
+            # Historical published versions are skipped above using only path
+            # identity + indexed row metadata. Workbook reads/hashes happen
+            # solely for the tiny set of genuinely orphaned targets.
+            manifest = _verified_target_manifest(target)
+            manifest_snapshot = str(
+                manifest.get("concept_snapshot_sha256") or ""
+            )
+            stored_snapshot = str(release.concept_snapshot_sha256 or "")
+            recomputed_snapshot = assessment_workbook.snapshot_sha256(
+                release.concept_snapshot,
+            )
+            if not manifest_snapshot or not (
+                manifest_snapshot == stored_snapshot == recomputed_snapshot
+            ):
+                raise UploadRefused(
+                    f"Master publication snapshot mismatch at {target}"
+                )
+            computed_readiness = _readiness(release, manifest)
+            if str(manifest.get("readiness") or "") != computed_readiness:
+                raise UploadRefused(
+                    f"Master publication readiness mismatch at {target}"
+                )
+            _apply_publication_metadata(
+                release,
+                target,
+                manifest,
+                reconciled=True,
+                preserve_state=release.state == "superseded",
+            )
+            db.commit()
+            db.refresh(release)
+            reconciled.append(str(target))
+            _LOGGER.warning(
+                "reconciled complete Master publication release_uid=%s "
+                "version=%s target=%s",
+                release_uid,
+                version,
+                target,
+            )
+        except Exception:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            # Preserve complete evidence. Invalid/foreign targets are neither
+            # deleted nor made visible through a release row.
+            _LOGGER.warning(
+                "could not reconcile complete Master publication %s",
+                target,
+                exc_info=True,
+            )
+    return reconciled
 
 
 # --------------------------------------------------------------------------- #

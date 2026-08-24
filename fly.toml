@@ -34,6 +34,17 @@ primary_region = 'ams'
 [[mounts]]
   source = 'aegis_data'
   destination = '/data'
+  # New volumes must not inherit Fly's 1GB default: /data holds SQLite,
+  # uploads, durable model decisions, release versions, workbooks, and the
+  # learner-facing source-asset store. Existing volumes are not resized by
+  # initial_size; use the non-destructive ENOSPC runbook in README.md once.
+  initial_size = '10GB'
+  # Preserve working headroom as the durable corpus grows. Fly extends the
+  # volume in 5GB steps at 80% use, with a deliberate 50GB cost ceiling.
+  # Capacity beyond that ceiling requires an explicit operator decision.
+  auto_extend_size_threshold = 80
+  auto_extend_size_increment = '5GB'
+  auto_extend_size_limit = '50GB'
   # The volume is learner-facing infrastructure (Q8): published image URLs
   # resolve from it. Keep a month of daily snapshots instead of the 5-day
   # default so an operator can restore past a late-noticed loss.

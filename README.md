@@ -229,7 +229,7 @@ stores both runtime files and SQLite there. Create the encrypted volume once in
 the app's primary region before deploying this configuration:
 
 ```bash
-fly volumes create aegis_data --app projectaegis --region ams --snapshot-retention 30
+fly volumes create aegis_data --app projectaegis --region ams --size 10 --snapshot-retention 30
 fly deploy --app projectaegis --ha=false
 ```
 
@@ -244,6 +244,79 @@ and back up the volume containing the current `/data` directory.
 A multi-machine production deployment should move run metadata and events to
 managed PostgreSQL and large checkpoint/upload artifacts to private object
 storage; the portable bundle remains the human-controlled backup.
+
+### Recovering `No space left on device` without losing a run
+
+`OSError: [Errno 28] No space left on device` is a storage/inode failure, not
+a model or prompt verdict. Stop starting new generation runs until the mounted
+filesystem has headroom. First inspect the production volume without changing
+it:
+
+```bash
+fly volumes list --app projectaegis
+fly ssh console --app projectaegis
+df -h /data /
+df -i /data /
+du -xhd1 /data | sort -h
+exit
+```
+
+`df -h` distinguishes exhausted storage blocks from available capacity;
+`df -i` checks inode exhaustion. The directory summary identifies growth but
+is not permission to delete it. If `/data` is full, extend the existing volume
+to a new **total** size greater than its current size (20GB is an example, not
+a mandatory value), then verify the mounted filesystem:
+
+```bash
+fly volumes extend <volume-id> --size 20
+fly ssh console --app projectaegis
+df -h /data
+exit
+fly deploy --app projectaegis --ha=false
+curl -fsS https://projectaegis.fly.dev/health
+```
+
+Volume extension is non-destructive and cannot be reversed by shrinking. The
+checked-in mount policy gives newly created volumes 10GB and asks Fly to extend
+them at 80% use in 5GB increments, capped at 50GB. `initial_size` does not
+resize an already-created volume, which is why the one-time `volumes extend`
+step is required after an existing volume reaches ENOSPC. Auto-extension is a
+headroom guardrail, not a retention policy: continue monitoring storage and do
+not treat the 50GB ceiling as permission to delete historical data blindly.
+Before starting a normal run, the health payload must show
+`storage.status: "ok"` and `storage.two_lane_batch.ready: true`; the separate
+`storage.one_lane_retry` object explains whether only a single Master recovery
+could fit.
+
+Do **not** make space by blindly deleting any of the following:
+
+- `/data/aegis.db`, its WAL/SHM siblings, or either Bulk Import workbook;
+- `/data/source-asset-store/`, whose content-addressed files back published
+  learner image URLs;
+- `/data/assessment_releases/`, which contains published Concept/Master
+  versions and their manifests;
+- `/data/uploads/` or an individual job's source artifacts, checkpoints, audit
+  snapshots, or decision store.
+
+Those paths carry database authority, published assets, downloadable releases,
+or the evidence needed for a safe resume. Back up first and establish explicit
+retention rules before removing any data.
+
+After capacity is restored, rebuild only the unavailable Master lane against
+the existing frozen Build Concepts job. Do not reconvert the PDF or rerun the
+Concept pipeline. The authenticated API routes are:
+
+- Post Master: `POST /build-assessments/releases/from-job/{job_id}`
+- Pre Master: `POST /build-assessments/releases/from-job/{job_id}/pre`
+
+These routes reuse the job's staged Concept release and durable decisions;
+they may finish any decisions that were not persisted before ENOSPC, then mint
+a complete atomic Master release. On the run's output card, an unavailable
+Master whose same-lane Concept File is still available now shows **Rebuild
+Master File**. Use the Pre-Learning and Post-Learning controls one at a time;
+the active rebuild holds the job's exclusive-operation lock and the sibling
+control remains disabled until it finishes. The routes above remain the
+authenticated operator/API equivalents.
 
 ### Backups (the volume is learner-facing infrastructure)
 
