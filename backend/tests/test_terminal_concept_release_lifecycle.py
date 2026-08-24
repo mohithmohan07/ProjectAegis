@@ -4,6 +4,8 @@ from __future__ import annotations
 import pytest
 
 from app.services import build_concepts_release as release
+from app.services import build_concepts_release_files as release_files
+from app.services import build_concepts_release_manifest as release_manifest
 from app.services import build_concepts_release_publication as publication
 from app.services import build_concepts_terminal_release_contract as terminal
 
@@ -46,6 +48,19 @@ def test_failed_checkpoint_stays_resumable_and_database_closed(db):
     with pytest.raises(ValueError, match=terminal.TERMINAL_GENERATION_DEFECT):
         publication.upload_release_to_database(db, job.id)
 
+    # Every public gate must see the same defect. These modules import the
+    # function by name, so the terminal contract deliberately rebinds them.
+    assert release_files.structural_defects is release.structural_defects
+    assert release_manifest.structural_defects is release.structural_defects
+    manifest = release_manifest.release_artifact_entries(job)
+    database_entry = next(
+        row for row in manifest if row.get("kind") == "database_upload"
+    )
+    assert any(
+        terminal.TERMINAL_GENERATION_DEFECT in defect
+        for defect in database_entry.get("structural_defects") or []
+    )
+
 
 def test_final_content_ready_release_keeps_normal_released_lifecycle(db):
     terminal.install()
@@ -77,6 +92,10 @@ def test_legacy_terminal_payload_is_inferred_without_breaking_old_releases():
         "checkpoint_stage": "final_content_ready",
         "issues": [],
     }
+    old_without_checkpoint = {
+        "checkpoint_stage": "",
+        "issues": [],
+    }
     failed = {
         "checkpoint_stage": "final_content_ready",
         "issues": [{
@@ -91,5 +110,8 @@ def test_legacy_terminal_payload_is_inferred_without_breaking_old_releases():
     }
 
     assert terminal.payload_terminal_generation_complete(clean) is True
+    assert terminal.payload_terminal_generation_complete(
+        old_without_checkpoint
+    ) is True
     assert terminal.payload_terminal_generation_complete(failed) is False
     assert terminal.payload_terminal_generation_complete(partial) is False
