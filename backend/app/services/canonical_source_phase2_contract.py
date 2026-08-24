@@ -4,7 +4,7 @@ from __future__ import annotations
 import copy
 from functools import wraps
 from types import ModuleType
-from typing import Any
+from typing import Any, Mapping
 
 from .. import models
 from . import canonical_source, canonical_source_phase2 as phase2
@@ -265,14 +265,28 @@ def install() -> None:
         sections,
         records,
     ):
-        items = [
-            item for item in (inventory or {}).get("items") or []
-            if isinstance(item, dict)
-        ]
-        canonical_inventory = bool(items) and all(
-            item.get("_acsd_source_contract") == phase2.SOURCE_CONTRACT_MODE
-            for item in items
+        source_contract = (
+            inventory.get("source_contract")
+            if isinstance(inventory, Mapping) else None
         )
+        canonical_inventory = bool(
+            isinstance(source_contract, Mapping)
+            and source_contract.get("mode") == phase2.SOURCE_CONTRACT_MODE
+        )
+        # Compatibility for early Phase-2 inventories that carried the source
+        # contract only on rows.  Crucially this is not keyed to ``bool(items)``:
+        # an authoritative questionless chapter has zero rows and must remain a
+        # canonical zero, never fall through to raw task re-extraction.
+        if not canonical_inventory:
+            items = [
+                item for item in (inventory or {}).get("items") or []
+                if isinstance(item, dict)
+            ]
+            canonical_inventory = bool(items) and all(
+                item.get("_acsd_source_contract")
+                == phase2.SOURCE_CONTRACT_MODE
+                for item in items
+            )
         if canonical_inventory:
             return _finish_canonical_inventory(
                 inventory,
