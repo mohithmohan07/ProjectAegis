@@ -106,3 +106,33 @@ def test_q19_join_preserves_canonical_membership_and_only_finishes_mechanics(
     )
     assert "_topic_scope" not in finished["items"][0]
     assert finished["stats"]["total_inventory_items"] == 1
+
+
+def test_questionless_acsd_is_authoritative_zero_not_a_raw_reextract(monkeypatch):
+    contract.install()
+    monkeypatch.setattr(g, "_openai_json", _provider_must_not_run)
+    canonical = {
+        "source_contract": {
+            "mode": phase2.SOURCE_CONTRACT_MODE,
+            "source_reader": "questionless-regression",
+        },
+        "tasks": [],
+    }
+
+    with phase2.activate(canonical):
+        inventory = phase2.inventory_from_canonical(canonical)
+        assert inventory["items"] == []
+        finished = g._finish_inventory_with_topics(
+            inventory,
+            [],
+            meta={},
+            sections=[{
+                "heading": "Teaching only",
+                "body": "This section contains explanatory prose only.",
+            }],
+            records=[],
+        )
+
+    assert finished["items"] == []
+    assert finished["source_contract"]["mode"] == phase2.SOURCE_CONTRACT_MODE
+    assert finished["stats"]["total_inventory_items"] == 0
