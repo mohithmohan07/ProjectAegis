@@ -5,9 +5,10 @@ an OpenAI SDK client and reads ``config.OPENAI_MODEL``. Google exposes an
 OpenAI-compatible endpoint for Gemini, so switching provider is a matter of
 pointing that same client at a different ``base_url``/``api_key`` and model
 name — the JSON-mode call format, retry policy, queueing and usage metering
-all stay identical. Reasoning-effort negotiation degrades automatically
-(``max`` → ``xhigh`` → ``high``), and ``high`` is the top effort Gemini's
-compatibility layer accepts.
+all stay identical. For GPT-5.6 Luna, the central policy requests ``xhigh``
+for every purpose and negotiates downward only when an endpoint rejects it.
+The Gemini compatibility path is unchanged and omits OpenAI's unsupported
+reasoning parameter entirely.
 
 The selection is persisted to ``DATA_DIR`` so it survives restarts, applied
 process-wide at selection time and at bootstrap, and picked up by the next

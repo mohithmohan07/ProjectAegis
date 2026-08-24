@@ -31,8 +31,8 @@ from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-2"
-CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-2"
+MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-3"
+CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-3"
 GROUP_POLICY_VERSION = "assessment-master-refiner-group-1"
 CANDIDATE_KIND = "assessment.master_refiner.candidate"
 GROUP_KIND = "assessment.master_refiner.group"
@@ -131,7 +131,8 @@ CRITIC_SYSTEM = (
     "and the immutable identity boundary against the rendered Master evidence. "
     "Never rewrite, gate, retry, adjudicate, or choose alternate content. A "
     "mechanically valid author decision always stands; dissent is recorded for "
-    "review. Return only {verdict:'verified|dissent', confidence:0.0, issues:[]}."
+    "review. Return only strict JSON: "
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}.'
 )
 
 

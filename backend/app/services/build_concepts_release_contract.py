@@ -20,6 +20,7 @@ from . import build_concepts_release as release
 from . import progress
 from . import build_concepts_release_files as release_files
 from . import release_refiner
+from . import storage_capacity
 from .phase3 import kernel
 
 # The two Master lanes build concurrently (owner "Go", 2026-08-21), each
@@ -318,12 +319,42 @@ def _lane_has_staged_concept_release(
         return True
 
 
+def _record_master_failure(
+    db,
+    job_id: int,
+    lane: str,
+    *,
+    owner_sub: str | None,
+    error: BaseException,
+) -> None:
+    """The single serialized write seam for every Master-lane failure."""
+
+    try:
+        with _LANE_ISSUE_LOCK:
+            db.rollback()
+            job = uploads.get_job(
+                db,
+                job_id,
+                owner_sub=owner_sub,
+                module="build_concepts",
+            )
+            release.record_assessment_lane_unavailable(
+                db, job, lane=lane, error=error,
+            )
+    except Exception:
+        # The underlying recorder is deliberately non-raising. This second
+        # ring preserves the original failure even when the full volume also
+        # prevents the database from recording its diagnosis.
+        pass
+
+
 def rebuild_lane_master(
     db,
     job_id: int,
     lane: str,
     *,
     owner_sub: str | None = None,
+    claim_job_lock: bool = False,
 ):
     """Build one Master lane, recording any failure before it propagates.
 
@@ -344,30 +375,63 @@ def rebuild_lane_master(
         if lane == release.LANE_PRE
         else assessment_release_run.run_release_for_job
     )
-    try:
-        return runner(db, job_id, owner_sub=owner_sub)
-    except Exception as exc:
+
+    def _run_and_record():
         try:
-            # Serialized across the concurrent lanes: the recorder is a
-            # read-modify-write of the shared job issue ledger, and the
-            # rollback + fresh read happen INSIDE the lock so each lane
-            # records onto the other's committed state, never over it.
-            with _LANE_ISSUE_LOCK:
-                db.rollback()
-                job = uploads.get_job(
-                    db,
-                    job_id,
-                    owner_sub=owner_sub,
-                    module="build_concepts",
+            # A lane reserves capacity before the runner can create its
+            # decision store or make its first provider call. The reservation
+            # is mechanical filesystem accounting; no authored content enters
+            # the decision.
+            with storage_capacity.reserve_master_capacity(
+                job_id=job_id,
+                lane=lane,
+            ) as capacity:
+                progress.log(
+                    f"Master storage preflight passed for the {lane} lane "
+                    f"before provider spend ({capacity.available_bytes} "
+                    "bytes available)."
                 )
-                release.record_assessment_lane_unavailable(
-                    db, job, lane=lane, error=exc)
-        except Exception:
-            # The recorder is already defensive; this is the second
-            # ring, so that a database that cannot even be read back
-            # still cannot mask the original failure.
-            pass
-        raise
+                return runner(db, job_id, owner_sub=owner_sub)
+        except Exception as exc:
+            storage_error = storage_capacity.capacity_error_from(
+                exc,
+                phase="Master generation",
+            )
+            recorded_error = storage_error or exc
+            if storage_error is not None:
+                progress.log(
+                    f"Master storage refused the {lane} lane at "
+                    f"{storage_error.phase}: {storage_error}",
+                    level="warning",
+                )
+            _record_master_failure(
+                db,
+                job_id,
+                lane,
+                owner_sub=owner_sub,
+                error=recorded_error,
+            )
+            if storage_error is not None and storage_error is not exc:
+                raise storage_error from exc
+            raise
+
+    if not claim_job_lock:
+        # Automatic Pre/Post siblings are already inside the original Build
+        # Concepts operation lock. Re-acquiring its non-reentrant lock from
+        # their worker threads would reject the run that owns it.
+        return _run_and_record()
+
+    # Explicit rebuilds are independent HTTP mutations. Verify ownership
+    # before consulting the lock, then claim the same lock used by generation
+    # so a click cannot overlap the original run or a second rebuild.
+    uploads.get_job(
+        db,
+        job_id,
+        owner_sub=owner_sub,
+        module="build_concepts",
+    )
+    with uploads.exclusive_job_operation(job_id):
+        return _run_and_record()
 
 
 def _build_master_siblings(
@@ -440,50 +504,91 @@ def _build_master_siblings(
     if not lanes:
         return built
 
-    # This must be a real stage boundary, not only a progress-label change:
-    # usage attribution reads the last ``progress.step`` and the frontend
-    # creates stage cards from step events.  Without it every Master token —
-    # including cache reads/writes — is charged to concept extraction even
-    # though the lane labels themselves survive the worker fan-out.
-    progress.step(
-        "Building Master files (Outputs 02/04)",
-        value=0.965,
-    )
+    # The two automatic siblings are one promised output batch. Check their
+    # combined reservation before either worker can spend; otherwise a nearly
+    # full volume could let the first lane start while immediately refusing
+    # the second. Explicit one-lane rebuilds retain the per-lane guard above.
+    try:
+        # Admission and reservation are ONE operation: all lane tokens appear
+        # atomically. Each remains until its worker has joined, at which point
+        # statvfs already carries that lane's real consumption.
+        with storage_capacity.reserve_master_batch_capacity(
+            job_id=job_id,
+            lanes=lanes,
+        ) as batch_reservation:
+            batch_capacity = batch_reservation.snapshot
+            progress.log(
+                f"Master storage preflight passed for the {len(lanes)}-lane "
+                f"batch before provider spend "
+                f"({batch_capacity.available_bytes} bytes available)."
+            )
 
-    def _build_lane(lane: str) -> dict[str, Any] | None:
-        from ..db import SessionLocal
+            # This must be a real stage boundary, not only a progress-label
+            # change: usage attribution reads the last ``progress.step`` and
+            # the frontend creates stage cards from step events.
+            progress.step(
+                "Building Master files (Outputs 02/04)",
+                value=0.965,
+            )
 
-        lane_db = SessionLocal()
-        try:
-            result = {"release_id": rebuild_lane_master(
-                lane_db, job_id, lane, owner_sub=owner_sub).id}
-            lane_db.commit()
-            return result
-        except Exception:  # noqa: BLE001 — see the docstring
-            # ``rebuild_lane_master`` already recorded the failure as the
-            # lane's ``assessment_lane_unavailable`` issue (and committed
-            # it on this same session); here the re-raise is swallowed so
-            # one Master-lane fault cannot cost the finished concept
-            # outputs or the sibling Master.
-            try:
-                lane_db.rollback()
-            except Exception:
-                pass
-            return None
-        finally:
-            lane_db.close()
+            def _build_lane(lane: str) -> dict[str, Any] | None:
+                from ..db import SessionLocal
 
-    results = kernel.parallel_map_in_order(
-        lanes,
-        _build_lane,
-        max_workers=len(lanes),
-        labels=[
-            "Master · Output 02 (Pre)" if lane == release.LANE_PRE
-            else "Master · Output 04 (Post)"
-            for lane in lanes
-        ],
-        announce="Master files",
-    )
+                lane_db = SessionLocal()
+                try:
+                    # Bind inside the worker itself. Context propagation by a
+                    # pool is not assumed, and the lane's normal reservation
+                    # then borrows (rather than double-counts) its batch slice.
+                    with storage_capacity.use_master_batch_lane(
+                        batch_reservation,
+                        job_id=job_id,
+                        lane=lane,
+                    ):
+                        result = {"release_id": rebuild_lane_master(
+                            lane_db,
+                            job_id,
+                            lane,
+                            owner_sub=owner_sub,
+                        ).id}
+                        lane_db.commit()
+                    return result
+                except Exception:  # noqa: BLE001 — see the docstring
+                    # ``rebuild_lane_master`` already recorded the failure as
+                    # this lane's issue. Swallow only here so the sibling and
+                    # both finished Concept outputs remain available.
+                    try:
+                        lane_db.rollback()
+                    except Exception:
+                        pass
+                    return None
+                finally:
+                    lane_db.close()
+
+            results = kernel.parallel_map_in_order(
+                lanes,
+                _build_lane,
+                max_workers=len(lanes),
+                labels=[
+                    "Master · Output 02 (Pre)"
+                    if lane == release.LANE_PRE
+                    else "Master · Output 04 (Post)"
+                    for lane in lanes
+                ],
+                announce="Master files",
+            )
+    except storage_capacity.StorageCapacityError as exc:
+        for lane in lanes:
+            _record_master_failure(
+                db,
+                job_id,
+                lane,
+                owner_sub=owner_sub,
+                error=exc,
+            )
+            built[lane] = None
+        progress.log(str(exc), level="warning")
+        return built
+
     built.update(dict(zip(lanes, results)))
     # The lanes committed on their own sessions; drop this session's
     # cached state so the caller reads their results, not stale rows.
@@ -519,8 +624,9 @@ def _run_generation_release(
       by the time control reaches here, so the deposit interceptor
       ``install()`` wires cannot see the assessment lane; (c) one site, so
       a fifth exit added later inherits it rather than being forgotten.
-    * the staged result is returned unchanged — the assessment lane is a
-      sibling of the concept release, never a gate on it.
+    * the staged Concept result remains the authority, with one additive
+      ``master_outputs`` operation summary so the streamed result cannot say
+      four files are ready when either Master sibling was refused.
     """
 
     staged = _stage_generation_release(
@@ -528,11 +634,41 @@ def _run_generation_release(
     # HONEST PROGRESS (owner report, 2026-08-21: "after 100% it is still
     # running" — and paying). ``_build_master_siblings`` opens the real
     # stage boundary after it confirms at least one lane exists; only the
-    # true end of all four outputs says Done.
-    _build_master_siblings(
+    # true end says Done, with the observed lane outcomes rather than a promise.
+    master_builds = _build_master_siblings(
         db, job_id, target_chapter_id, owner_sub=kwargs.get("owner_sub"))
-    progress.set_progress(1.0, label="Done — all four outputs ready")
-    return staged
+    master_outputs = {
+        lane: {
+            "ready": master_builds.get(lane) is not None,
+            **(master_builds.get(lane) or {}),
+        }
+        for lane in (release.LANE_PRE, release.LANE_POST)
+    }
+    all_four_ready = all(
+        bool(master_outputs[lane]["ready"])
+        for lane in (release.LANE_PRE, release.LANE_POST)
+    )
+    if all_four_ready:
+        done_label = "Done — all four outputs ready"
+    else:
+        missing = ", ".join(
+            "Pre" if lane == release.LANE_PRE else "Post"
+            for lane in (release.LANE_PRE, release.LANE_POST)
+            if not master_outputs[lane]["ready"]
+        )
+        ready_count = sum(
+            int(bool(master_outputs[lane]["ready"]))
+            for lane in (release.LANE_PRE, release.LANE_POST)
+        )
+        done_label = (
+            "Done — Concept stage complete; Master files ready "
+            f"{ready_count}/2 (unavailable: {missing})"
+        )
+    progress.set_progress(1.0, label=done_label)
+    result = dict(staged)
+    result["master_outputs"] = master_outputs
+    result["all_four_outputs_ready"] = all_four_ready
+    return result
 
 
 def _stage_generation_release(

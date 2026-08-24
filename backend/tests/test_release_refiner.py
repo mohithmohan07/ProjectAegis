@@ -133,7 +133,7 @@ def test_assessment_master_output_kind_delegates_lazily(monkeypatch):
     expected = (
         [{"delegated": True}],
         {
-            "policy_version": "assessment-master-refiner-2",
+            "policy_version": "assessment-master-refiner-3",
             "output_kind": "assessment_master",
             "changes": [],
         },

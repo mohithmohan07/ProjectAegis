@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { beforeEach, expect, test, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
 import type { UploadJob } from "../types";
 import DocumentUpload from "./DocumentUpload";
@@ -7,6 +7,7 @@ import DocumentUpload from "./DocumentUpload";
 const streamNdjsonMock = vi.hoisted(() => vi.fn());
 const apiMock = vi.hoisted(() => ({
   getUploadJob: vi.fn(),
+  rebuildMasterFromConceptJob: vi.fn(),
   uploadConceptRelease: vi.fn(),
   uploadEditedWorkbook: vi.fn(),
   checkpointUrl: vi.fn((id: number) => `/checkpoint/${id}`),
@@ -105,7 +106,12 @@ function convertedJob(): UploadJob {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage.clear();
   apiMock.getUploadJob.mockRejectedValue(new Error("no saved job"));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 test("shows the Phase 2 source-critical cutover without overstating semantic use", () => {
@@ -354,6 +360,150 @@ test.each([
   },
 );
 
+test("a hard refresh restores the missing Masters and rebuilds only the chosen lane", async () => {
+  const failed = failedMastersJob();
+  window.localStorage.setItem(
+    "aegis-upload-job:concepts:post",
+    JSON.stringify({
+      id: failed.id,
+      module: failed.module,
+      learning_kind: failed.learning_kind,
+      filename: failed.filename,
+      created_at: failed.created_at,
+    }),
+  );
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob
+    .mockResolvedValueOnce(failed)
+    .mockResolvedValue(rebuiltMasterJob("pre"));
+  apiMock.rebuildMasterFromConceptJob.mockResolvedValue({ id: 21 });
+
+  const firstPage = render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(await screen.findByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getAllByText(/does not regenerate or modify Concepts/i))
+    .toHaveLength(2);
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  }));
+
+  expect(await screen.findByRole("link", {
+    name: "Download the Pre-Learning Master File",
+  })).toBeDefined();
+  expect(apiMock.rebuildMasterFromConceptJob).toHaveBeenCalledWith(81, "pre");
+  expect(apiMock.rebuildMasterFromConceptJob).toHaveBeenCalledTimes(1);
+
+  // A second mount is the browser-level contract of a hard refresh: the
+  // server reconstructs the four cards from the durable job and the browser
+  // retains the exact job pointer, including the still-missing sibling lane.
+  firstPage.unmount();
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(await screen.findByRole("link", {
+    name: "Download the Pre-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  })).toBeDefined();
+});
+
+test("a transient restore failure keeps the paid run pointer and can retry", async () => {
+  const failed = failedMastersJob();
+  const storageKey = "aegis-upload-job:concepts:post";
+  const marker = JSON.stringify({
+    id: failed.id,
+    module: failed.module,
+    learning_kind: failed.learning_kind,
+    filename: failed.filename,
+    created_at: failed.created_at,
+  });
+  window.localStorage.setItem(storageKey, marker);
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob
+    .mockRejectedValueOnce(Object.assign(new Error("deploy restarting"), {
+      status: 503,
+    }))
+    .mockResolvedValue(failed);
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "saved pointer is still safe",
+  );
+  expect(window.localStorage.getItem(storageKey)).toBe(marker);
+  fireEvent.click(screen.getByRole("button", { name: "Retry saved run" }));
+
+  expect(await screen.findByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  })).toBeDefined();
+  expect(window.localStorage.getItem(storageKey)).toBe(marker);
+});
+
+test("a restored running rebuild refreshes itself and unlocks the finished lane", async () => {
+  vi.useFakeTimers();
+  const running = failedMastersJob();
+  running.generation_running = true;
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob.mockResolvedValue(rebuiltMasterJob("post"));
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={running}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  }).hasAttribute("disabled")).toBe(true);
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+
+  expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 81);
+  expect(screen.getByRole("link", {
+    name: "Download the Post-Learning Master File",
+  })).toBeDefined();
+  expect(screen.getByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  }).hasAttribute("disabled")).toBe(false);
+});
+
 // --------------------------------------------------------------------------- #
 // Owner report 2026-08-21: both Pre files downloaded EMPTY with the recorded
 // reason nowhere on the page. An enabled output that will be empty now carries
@@ -402,4 +552,261 @@ test("an enabled-but-empty Pre output shows the recorded reason and still downlo
       name: "Download the Pre-Learning Concept File",
     }),
   ).toBeDefined();
+});
+
+// --------------------------------------------------------------------------- #
+// A Master-lane fault must be recoverable from the already-frozen Concept
+// release. Rebuilding one Master is an explicit lane-specific act: it never
+// reruns Concept generation and can never fall through to the sibling lane.
+// --------------------------------------------------------------------------- #
+
+function failedMastersJob(): UploadJob {
+  const job = convertedJob();
+  job.status = "released";
+  if (!job.source_artifacts) throw new Error("fixture missing artifacts");
+  job.source_artifacts.files = [
+    {
+      kind: "pre_release_bulk_import",
+      label: "Download the Pre-Learning Concept File",
+      filename: "pre_concepts.xlsx",
+      media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      size_bytes: 1024,
+      download_url: "/build-concepts/uploads/81/release-bulk-import.xlsx?lane=pre",
+      action: "download",
+    },
+    {
+      kind: "pre_release_master",
+      label: "Pre-Learning Master File",
+      filename: "",
+      media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      size_bytes: 0,
+      download_url: "",
+      action: "download",
+      disabled: true,
+      disabled_reason: "The 'pre' lane's Master File was not built: OSError: [Errno 28] No space left on device.",
+    },
+    {
+      kind: "release_bulk_import",
+      label: "Download the Post-Learning Concept File",
+      filename: "post_concepts.xlsx",
+      media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      size_bytes: 1024,
+      download_url: "/build-concepts/uploads/81/release-bulk-import.xlsx",
+      action: "download",
+    },
+    {
+      kind: "release_master",
+      label: "Post-Learning Master File",
+      filename: "",
+      media_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      size_bytes: 0,
+      download_url: "",
+      action: "download",
+      disabled: true,
+      disabled_reason: "The 'post' lane's Master File was not built: OSError: [Errno 28] No space left on device.",
+    },
+  ];
+  return job;
+}
+
+function rebuiltMasterJob(lane: "pre" | "post"): UploadJob {
+  const job = failedMastersJob();
+  const kind = lane === "pre" ? "pre_release_master" : "release_master";
+  const master = job.source_artifacts?.files.find(
+    (artifact) => artifact.kind === kind,
+  );
+  if (!master) throw new Error("fixture missing Master");
+  master.disabled = false;
+  master.disabled_reason = undefined;
+  master.label = `Download the ${lane === "pre" ? "Pre-Learning" : "Post-Learning"} Master File`;
+  master.filename = `${lane}_master.xlsx`;
+  master.download_url = `/build-assessments/releases/${lane === "pre" ? 21 : 22}/master.xlsx`;
+  return job;
+}
+
+test.each([
+  ["pre", "Pre-Learning"],
+  ["post", "Post-Learning"],
+] as const)(
+  "rebuilds only the disabled %s Master and refreshes its Download",
+  async (lane, laneLabel) => {
+    apiMock.rebuildMasterFromConceptJob.mockResolvedValue({ id: 22 });
+    apiMock.getUploadJob.mockResolvedValue(rebuiltMasterJob(lane));
+    const onJob = vi.fn();
+
+    render(
+      <RunConsoleProvider>
+        <DocumentUpload
+          module="concepts"
+          conceptKind="post"
+          externalJob={failedMastersJob()}
+          onJob={onJob}
+        />
+      </RunConsoleProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: `Rebuild ${laneLabel} Master File`,
+    }));
+
+    await vi.waitFor(() =>
+      expect(apiMock.rebuildMasterFromConceptJob).toHaveBeenCalledWith(81, lane),
+    );
+    await vi.waitFor(() => expect(apiMock.getUploadJob).toHaveBeenCalledWith(
+      "concepts", 81,
+    ));
+    await vi.waitFor(() => expect(onJob).toHaveBeenCalled());
+    expect(screen.getByRole("link", {
+      name: `Download the ${laneLabel} Master File`,
+    })).toBeDefined();
+    expect(screen.getByText(`${laneLabel} Master File rebuilt. Download is ready.`))
+      .toBeDefined();
+  },
+);
+
+test("a Master rebuild suppresses a duplicate click in the same lane", async () => {
+  let finish: ((value: unknown) => void) | undefined;
+  apiMock.rebuildMasterFromConceptJob.mockImplementation(() =>
+    new Promise((resolve) => { finish = resolve; }));
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={failedMastersJob()}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  const button = screen.getByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  });
+  fireEvent.click(button);
+  fireEvent.click(button);
+
+  expect(apiMock.rebuildMasterFromConceptJob).toHaveBeenCalledTimes(1);
+  expect(button.hasAttribute("disabled")).toBe(true);
+  expect(button.textContent).toContain("Rebuilding");
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  }).hasAttribute("disabled")).toBe(true);
+
+  finish?.({ id: 21 });
+});
+
+test("a 507 gives actionable storage recovery and preserves Concept downloads", async () => {
+  const failed = failedMastersJob();
+  apiMock.rebuildMasterFromConceptJob.mockRejectedValue(
+    Object.assign(new Error("Insufficient Storage"), { status: 507 }),
+  );
+  apiMock.getUploadJob.mockResolvedValue(failed);
+  const onJob = vi.fn();
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={failed}
+        onJob={onJob}
+      />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  }));
+
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Server storage is full");
+  expect(alert.textContent).toContain("restore capacity on the server filesystem");
+  expect(alert.textContent).toContain("do not rerun concept generation");
+  expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 81);
+  expect(onJob).toHaveBeenCalledWith(failed);
+  expect(screen.getByRole("link", {
+    name: "Download the Post-Learning Concept File",
+  })).toBeDefined();
+});
+
+test("a lost response is reconciled from the refreshed durable Master", async () => {
+  apiMock.rebuildMasterFromConceptJob.mockRejectedValue(
+    new Error("network connection lost"),
+  );
+  apiMock.getUploadJob.mockResolvedValue(rebuiltMasterJob("post"));
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={failedMastersJob()}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  }));
+
+  expect(await screen.findByText(
+    "Post-Learning Master File rebuilt. Download is ready.",
+  )).toBeDefined();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.getByRole("link", {
+    name: "Download the Post-Learning Master File",
+  })).toBeDefined();
+});
+
+test("disables both rebuild controls while this job is already running", () => {
+  const job = failedMastersJob();
+  job.generation_running = true;
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  for (const laneLabel of ["Pre-Learning", "Post-Learning"]) {
+    expect(screen.getByRole("button", {
+      name: `Rebuild ${laneLabel} Master File`,
+    }).hasAttribute("disabled")).toBe(true);
+  }
+});
+
+test("does not offer a Pre Master rebuild when no Pre Concept was staged", () => {
+  const job = failedMastersJob();
+  const preConcept = job.source_artifacts?.files.find(
+    (artifact) => artifact.kind === "pre_release_bulk_import",
+  );
+  if (!preConcept) throw new Error("fixture missing Pre Concept");
+  preConcept.disabled = true;
+  preConcept.download_url = "";
+  preConcept.disabled_reason = "This run staged no Pre-Learning release.";
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.queryByRole("button", {
+    name: "Rebuild Pre-Learning Master File",
+  })).toBeNull();
+  expect(screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  })).toBeDefined();
 });

@@ -1195,6 +1195,30 @@ math. It is a serialization/shape contract: medium choice and rubric content
 remain model-authored; code enforces only declared type, lexical format,
 cardinality, and exact marks mechanically.
 
+### Q22 · Decided — every registered Luna purpose requests xhigh
+
+Owner ruling, 23 Aug 2026: keep Luna at `xhigh` throughout the pipeline. All
+14 values in `OpenAIPurpose` therefore request `xhigh`, including extraction,
+transcription, metadata, author, critic, Pre-Learning, and workbook work.
+Purpose labels remain mandatory for routing, transport coverage, usage audit,
+and future policy decisions; they no longer select different effort tiers.
+
+`xhigh` is the preferred normal request, not a command to remove reliability
+recovery. If an endpoint rejects it as unsupported, the shared capability
+negotiator may step down `xhigh` → `high` → `medium` → `low` → `none` and
+finally omit the parameter, caching the accepted ceiling process-wide. A
+structured response that truncates may likewise retry with more output room
+and one rung less reasoning. On ordinary GPT-5.6 Luna calls neither exception
+should apply, so the request remains `xhigh`.
+
+Reasoning effort is transport policy, not prompt, schema, payload, or durable
+decision-key identity. Existing decide-once records therefore keep their keys
+and replay without model spend; only fresh calls and true cache misses use the
+new preferred effort. No cost or quality improvement is claimed from this
+ruling alone: purposes formerly at `max` move down one rung while purposes
+formerly at `high`, `medium`, or `low` move up. The same-PDF live acceptance
+must measure the net effect before any production claim.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

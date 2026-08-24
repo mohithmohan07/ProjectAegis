@@ -331,9 +331,8 @@ def test_call_gpt_json_builds_a_request_a_reasoning_model_accepts(
     # The modern parameter name, not the removed max_tokens.
     assert "max_completion_tokens" in request
     assert "max_tokens" not in request
-    # Question parsing/enrichment is source-extraction work; the policy
-    # right-sizes it to "high" rather than requesting maximum deliberation.
-    assert request["reasoning_effort"] == "high"
+    # Q22 applies the same preferred effort to every registered purpose.
+    assert request["reasoning_effort"] == "xhigh"
     assert [message["role"] for message in request["messages"]] == [
         "system",
         "user",
@@ -347,9 +346,9 @@ def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
 
     class _RejectingCompletions(_FakeCompletions):
         def create(self, **kwargs):
-            if kwargs.get("reasoning_effort") == "high":
+            if kwargs.get("reasoning_effort") == "xhigh":
                 error = Exception(
-                    "Unsupported value: 'reasoning_effort' does not support 'high'"
+                    "Unsupported value: 'reasoning_effort' does not support 'xhigh'"
                 )
                 error.status_code = 400
                 error.param = "reasoning_effort"
@@ -366,4 +365,38 @@ def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
     data = module.call_gpt_json("gpt-5.6-luna", "system", "user")
 
     assert data == {"questions": []}
-    assert [call["reasoning_effort"] for call in calls] == ["high", "medium"]
+    assert [call["reasoning_effort"] for call in calls] == ["xhigh", "high"]
+
+
+def test_responses_api_concept_extraction_requests_uniform_xhigh(monkeypatch):
+    """The surviving Responses API CLI path follows the same Q22 policy."""
+
+    calls: list[dict] = []
+
+    class _Responses:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return types.SimpleNamespace(output_text=json.dumps({"rows": []}))
+
+    class _Client:
+        def __init__(self, *args, **kwargs) -> None:
+            self.responses = _Responses()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    import openai
+
+    monkeypatch.setattr(openai, "OpenAI", _Client)
+    module_name = "aegis_pipeline.mmd_to_concepts_excel"
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+    module = importlib.import_module(module_name)
+    module.MAX_RETRIES = 1
+
+    assert module.gpt_extract_concepts(
+        "Chapter 1", "Source text", "Mathematics", model="gpt-5.6-luna"
+    ) == []
+    assert len(calls) == 1
+    request = calls[0]
+    assert request["model"] == "gpt-5.6-luna"
+    assert request["reasoning"] == {"effort": "xhigh"}
+    assert "reasoning_effort" not in request
+    assert request["text"]["format"]["type"] == "json_schema"

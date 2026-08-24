@@ -27,8 +27,10 @@ from .phase3 import kernel
 # ``-6`` places the stable rules, metadata, and curricular evidence before
 # the candidate suffix and marks the explicit GPT-5.6 cache breakpoint.
 # ``-7`` layers the owner-format answer/rubric contract on that transport
-# shape so replay cannot collide with either decision identity.
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-7"
+# shape. ``-8`` makes lowercase paper-option labels part of the authored
+# contract. ``-9`` makes the uppercase prohibition explicit, so candidates
+# authored before this final clarification cannot replay under the new prompt.
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-9"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -71,7 +73,10 @@ MATERIALIZE_SYSTEM = (
     "answer_content carries the option text (never empty, never a "
     "duplicate), whose correct_answer is \"1\" on exactly one option "
     "and \"0\" on every other, and whose answer_type names the option's "
-    "medium — exactly Phrases, Equation, or Image. The question stem must "
+    "medium — exactly Phrases, Equation, or Image. The answers array is the "
+    "paper display order and maps to lowercase a), b), c), d), e), f); option "
+    "labels are never uppercase. Do not include a label inside "
+    "answer_content because the workbook adds it. The question stem must "
     "not enumerate the options: options ride only answers[]; a stem that "
     "restates \"a) ... b) ...\" is a defect. For Descriptive cells, "
     "return a complete "
@@ -89,7 +94,7 @@ MATERIALIZE_SYSTEM = (
     "using the same scheme and order the item itself uses (SOP §5.4), so "
     "each part maps to its marking cleanly.\n"
     "answer_explanation must open by naming the correct answer — for an "
-    "Objective item, the correct option by its letter and text (e.g. "
+    "Objective item, the correct option by its lowercase letter and text (e.g. "
     "\"b) Get ready — ...\") — and then explain why it is correct. For "
     "Descriptive cells, display_answer and answer_explanation carry the "
     "SAME model answer (SOP §5.4 keeps them the same): the explanation "
@@ -132,10 +137,13 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "that enumerates its own options), invented subquestions (a part "
     "the source item does not itself carry), explanation/answer "
     "consistency (the explanation must name the correct answer — the "
-    "correct option's letter and text on an Objective item — and agree "
+    "correct option's lowercase letter and text on an Objective item — and "
+    "agree "
     "with the display answer), literary over-quoting (a whole poem "
     "or passage quoted where only the asked-about lines belong), "
-    "declared answer-cell medium purity, unsupported KaTeX/Markdown tables, "
+    "lowercase paper-option order with no label duplicated inside option "
+    "content, declared answer-cell medium purity, unsupported KaTeX/Markdown "
+    "tables, "
     "and the minimum two rubric blocks on a 4-mark Descriptive item. Do not "
     "classify Open/Specific or audit "
     "mark allocation here. Do not "

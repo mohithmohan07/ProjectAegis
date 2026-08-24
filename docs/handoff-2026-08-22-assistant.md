@@ -16,6 +16,14 @@ resume claims below where explicitly noted; `docs/residue-ledger.md` carries
 the detailed evidence and `docs/testing-handoff-2026-08-22.md` carries the
 current live acceptance addendum.
 
+**Continuation update, 2026-08-23.** The owner ruled that all Luna work stays
+at `xhigh`. Branch `assistant/all-xhigh` records this as Q22 and changes the
+central transport policy so all 14 registered purposes request `xhigh`.
+Purpose labels remain mandatory; provider-capability and structured-output
+recovery may lower a retry. This transport-policy change does not re-key
+durable decisions. Cost and semantic effect remain live-unproven until the
+same-PDF acceptance in the testing handoff.
+
 ---
 
 ## 1. What this project is
@@ -48,10 +56,12 @@ Model provider: OpenAI **gpt-5.6-luna** via JSON-mode chat
    silently.** Only the pre-spend pauses (source review, source-topic
    recovery, Type granularity) and genuine impossibility may stop a run.
 2. **`docs/aegis-restructure.md`** — the design "soul" plus the **owner
-   decision register §12 (Q1–Q21)**. Every owner ruling gets a register
+   decision register §12 (Q1–Q22)**. Every owner ruling gets a register
    entry. Q20 calibrates pre-learning coverage to ~5 questions per concept;
    Q21 defines raw Equation cells, plain Phrases cells, lowercase options,
-   multi-block four-mark rubrics, and the table fallback contract.
+   multi-block four-mark rubrics, and the table fallback contract; Q22 makes
+   `xhigh` the preferred Luna effort for all 14 registered purposes while
+   preserving bounded recovery fallbacks.
 3. **`docs/residue-ledger.md`** — the chronological round-by-round state
    ledger. Its real convention: each round of work is a
    `## <round name> (<date>: …)` SECTION holding an
@@ -207,10 +217,11 @@ model call declares a `purpose=` from the 14-value Literal. Enforcement
 is a runtime `ValueError` from `reasoning_effort_for` plus module-scoped
 static sweeps (`test_openai_policy.py` covers generation/gpt_writer;
 `test_concept_example_ownership.py` covers its own module) — there is
-NO single repo-wide sweep, so never invent a purpose string. Master
-authors run `concept_mapping` (max effort), critics
-`concept_validation` (high). Provider-max completion headroom (128k) is
-ON by default.
+NO single repo-wide sweep, so never invent a purpose string. Under Q22 every
+registered purpose requests `xhigh`; purpose labels still identify and audit
+the work rather than selecting a tier. A provider rejection or structured-
+output truncation may lower a recovery request. Provider-max completion
+headroom (128k) is ON by default.
 
 **Concurrency:** global gate `AEGIS_OPENAI_MAX_CONCURRENCY` (fly.toml
 sets 48), per-lane workers `AEGIS_PHASE3_DECISION_WORKERS` (16),
@@ -243,8 +254,9 @@ byte-stable**). Frontend
 Killed poem run: ~66 min to the Masters; Post Master lane 5.2M tokens /
 $1.47 through routing (~200 calls, ~24–26k tok/call, blended $0.283/M —
 input-mass dominated). Full-chapter Master estimate ≈1,100–1,400 calls.
-Original root causes, in order:
-1. ~7 recorded decisions per question × (author max + critic high).
+Original root causes, in order (the effort mix below describes the historical
+2026-08-21 measurement; Q22 now requests `xhigh` for both roles):
+1. ~7 recorded decisions per question × (author max + critic high), historically.
 2. **Cache-hostile payload ordering — fixed offline, live effect unproven.**
    Materialization, answer restriction, marking and routing now put their
    complete stable evidence first, candidate evidence last, and use explicit
@@ -277,8 +289,9 @@ note the two files live in DIFFERENT packages.
    loops in `assessment_release_run.py` are plain for-loops; the
    assessment master refiner is propose-serial by design — consider
    propose-parallel/apply-serial.
-5. **Lever 5 — author effort tiering** (needs an owner ruling): drop
-   cells/marking/levels authors from max→high.
+5. **Lever 5 — author effort tiering: SUPERSEDED by Q22.** The owner selected
+   uniform `xhigh`, so there is no stage-specific author/critic effort tiering.
+   Measure the resulting same-PDF cost; do not infer a saving from effort alone.
 6. **Batch API overnight lane** (owner: "later"): 50% price, fits the
    barrier structure.
 7. **Q17 stage 2 + Q18 stage 2** (designed, not built): stitched-figure

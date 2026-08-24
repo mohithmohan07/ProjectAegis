@@ -540,6 +540,17 @@ export const api = {
     `${BASE}/build-assessments/releases/${id}/concepts.xlsx`,
   releaseMasterUrl: (id: number) =>
     `${BASE}/build-assessments/releases/${id}/master.xlsx`,
+  /** Rebuild exactly one missing Master from the immutable Concept release
+   * already staged by a Build Concepts job. The lane is mandatory: the two
+   * routes deliberately have different shapes, and silently defaulting to
+   * Post could rebuild the wrong deliverable. */
+  rebuildMasterFromConceptJob: (jobId: number, lane: "post" | "pre") =>
+    http<AssessmentRelease>(
+      lane === "pre"
+        ? `/build-assessments/releases/from-job/${jobId}/pre`
+        : `/build-assessments/releases/from-job/${jobId}`,
+      { method: "POST" },
+    ),
   uploadReleaseMaster: (id: number) =>
     http<AssessmentReleaseUploadResult>(
       `/build-assessments/releases/${id}/upload-to-database`,
@@ -551,8 +562,10 @@ export interface AssessmentRelease {
   id: number;
   release_uid: string;
   version: number;
+  release_state?: string;
   state: string;
   readiness: string;
+  lane?: "post" | "pre";
   concept_snapshot_sha256: string;
   workbook_sha256s: Record<string, string>;
   published: boolean;

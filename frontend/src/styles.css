@@ -871,6 +871,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .output-name { font-weight: 650; font-size: 13.5px; }
 .output-meta { font-size: 11px; color: var(--muted); }
 .output-card .button-link { align-self: flex-start; margin-top: 4px; padding: 5px 14px; font-size: 12.5px; }
+.output-card .output-rebuild { align-self: flex-start; margin-top: 4px; padding: 5px 14px; font-size: 12.5px; }
+.output-card .output-action-error { margin-top: 4px; }
 .output-disabled { background: var(--panel-2); box-shadow: none; }
 .output-disabled .output-name { color: var(--text-2); }
 .output-reason { font-size: 11.5px; line-height: 1.5; color: var(--muted); }

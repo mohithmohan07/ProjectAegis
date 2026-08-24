@@ -640,7 +640,9 @@ _IDENTIFY_CAT = "Build Assessments · upload extraction"
 
 _TYPE_HINTS = {
     "objective": "OBJECTIVE — MCQ / fill-in-the-blank. For MCQs emit 3-4 "
-                 "options with exactly one correct_answer = 'Yes'.",
+                 "options in display order with exactly one correct_answer = "
+                 "'Yes'. The order maps to lowercase paper labels a), b), "
+                 "c), d); do not include those labels in answer_content.",
     "subjective": "SUBJECTIVE — short answer; emit mark-wise rubric points "
                   "whose weightages sum to the marks.",
     "descriptive": "DESCRIPTIVE — long answer; emit mark-wise rubric points "

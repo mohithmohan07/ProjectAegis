@@ -17,20 +17,20 @@ from app.services import generation, workbooks
 
 
 EXPECTED_REASONING_POLICY = {
-    "assessment_generation": "max",
-    "source_extraction": "high",
-    "source_adjudication": "max",
-    "page_transcription": "medium",
-    "chapter_outline": "max",
-    "concept_mapping": "max",
-    "concept_detailing": "max",
-    "concept_validation": "high",
-    "semantic_resolution": "max",
-    "pre_learning": "max",
-    "workbook_planning": "max",
-    "workbook_authoring": "max",
-    "revision_editing": "medium",
-    "metadata": "low",
+    "assessment_generation": "xhigh",
+    "source_extraction": "xhigh",
+    "source_adjudication": "xhigh",
+    "page_transcription": "xhigh",
+    "chapter_outline": "xhigh",
+    "concept_mapping": "xhigh",
+    "concept_detailing": "xhigh",
+    "concept_validation": "xhigh",
+    "semantic_resolution": "xhigh",
+    "pre_learning": "xhigh",
+    "workbook_planning": "xhigh",
+    "workbook_authoring": "xhigh",
+    "revision_editing": "xhigh",
+    "metadata": "xhigh",
 }
 
 
@@ -66,18 +66,8 @@ def test_default_model_and_complete_reasoning_policy(monkeypatch):
 
     assert openai_policy.configured_openai_model() == "gpt-5.6-luna"
     assert openai_policy.REASONING_EFFORT_BY_PURPOSE == EXPECTED_REASONING_POLICY
-    # Judgment-heavy purposes ask for the deepest deliberation the model will
-    # give; fidelity-heavy purposes are verified copy/structure work where
-    # deep reasoning only adds latency.
-    for judgment in (
-        "source_adjudication", "concept_mapping", "concept_detailing",
-        "semantic_resolution",
-    ):
-        assert openai_policy.REASONING_EFFORT_BY_PURPOSE[judgment] == "max"
-    for fidelity in ("page_transcription", "revision_editing", "metadata"):
-        assert openai_policy.REASONING_EFFORT_BY_PURPOSE[fidelity] in {
-            "low", "medium",
-        }
+    assert openai_policy.UNIFORM_REASONING_EFFORT == "xhigh"
+    assert set(openai_policy.REASONING_EFFORT_BY_PURPOSE.values()) == {"xhigh"}
 
 
 def test_model_override_keeps_purpose_policy(monkeypatch):
@@ -88,10 +78,10 @@ def test_model_override_keeps_purpose_policy(monkeypatch):
     }
     assert openai_policy.chat_request_policy(
         "metadata", model="gpt-5.6-luna"
-    )["reasoning_effort"] == "low"
+    )["reasoning_effort"] == "xhigh"
     assert openai_policy.chat_request_policy(
         "concept_mapping", model="gpt-5.6-luna"
-    )["reasoning_effort"] == "max"
+    )["reasoning_effort"] == "xhigh"
     with pytest.raises(ValueError, match="Unknown OpenAI request purpose"):
         openai_policy.reasoning_effort_for("unregistered")  # type: ignore[arg-type]
 
@@ -114,7 +104,7 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     assert result == {"ok": True}
     call = _CapturingClient.completions.calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "high"
+    assert call["reasoning_effort"] == "xhigh"
     assert call["response_format"] == {"type": "json_object"}
     assert call["max_completion_tokens"] == 321
     generation._openai_gate = None
@@ -439,7 +429,7 @@ def test_workbook_call_uses_same_policy_and_preserves_json_mode():
     assert result == '{"ok": true}'
     call = completions.calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "max"
+    assert call["reasoning_effort"] == "xhigh"
     assert call["response_format"] == {"type": "json_object"}
     assert call["max_completion_tokens"] == 654
 
@@ -476,7 +466,7 @@ def test_workbook_does_not_retry_unrelated_provider_failures():
 class _UnsupportedEffortError(Exception):
     """The provider's structured 400 for an effort the model does not accept."""
 
-    def __init__(self, effort: str = "max") -> None:
+    def __init__(self, effort: str = "xhigh") -> None:
         super().__init__(
             f"Unsupported value: 'reasoning_effort' does not support {effort!r}"
         )
@@ -486,9 +476,9 @@ class _UnsupportedEffortError(Exception):
 
 
 def test_effort_ceiling_is_discovered_once_and_reused_process_wide(monkeypatch):
-    """The whole reason `max` everywhere is affordable.
+    """An unsupported uniform ``xhigh`` request is probed only once.
 
-    A model that rejects `max` must cost one probe for the process, not one
+    A model that rejects `xhigh` must cost one probe for the process, not one
     rejected request per call, and the ceiling must be visible to every call
     path rather than relearned by each.
     """
@@ -497,29 +487,28 @@ def test_effort_ceiling_is_discovered_once_and_reused_process_wide(monkeypatch):
 
     assert openai_policy.chat_request_policy(
         "concept_mapping", model="gpt-5.6-luna"
-    )["reasoning_effort"] == "max"
+    )["reasoning_effort"] == "xhigh"
 
     assert openai_policy.note_unsupported_reasoning_effort(
-        "gpt-5.6-luna", "max"
-    ) == "xhigh"
+        "gpt-5.6-luna", "xhigh"
+    ) == "high"
 
     # Every later request — any purpose, any call path — is now built at the
-    # discovered ceiling without touching the provider again; purposes whose
-    # policy already sits below the ceiling keep their own effort.
-    for purpose, expected in (
-        ("concept_mapping", "xhigh"),
-        ("workbook_authoring", "xhigh"),
-        ("concept_validation", "high"),
-        ("metadata", "low"),
+    # discovered ceiling without touching the provider again.
+    for purpose in (
+        "concept_mapping",
+        "workbook_authoring",
+        "concept_validation",
+        "metadata",
     ):
         assert openai_policy.chat_request_policy(
             purpose, model="gpt-5.6-luna"
-        )["reasoning_effort"] == expected
+        )["reasoning_effort"] == "high"
 
     # A different model is unaffected by another model's ceiling.
     assert openai_policy.chat_request_policy(
         "concept_mapping", model="gpt-5.6-other"
-    )["reasoning_effort"] == "max"
+    )["reasoning_effort"] == "xhigh"
 
 
 def test_effort_ceiling_only_ratchets_downward(monkeypatch):
@@ -553,7 +542,7 @@ def test_generation_negotiates_effort_instead_of_replaying_the_same_request(
 
         def create(self, **kwargs):
             self.calls.append(kwargs)
-            if kwargs.get("reasoning_effort") == "max":
+            if kwargs.get("reasoning_effort") == "xhigh":
                 raise _UnsupportedEffortError()
             return _json_response()
 
@@ -570,10 +559,10 @@ def test_generation_negotiates_effort_instead_of_replaying_the_same_request(
     assert result == {"ok": True}
     # One probe, one immediate retry at the next rung — not three identical 400s.
     assert [call.get("reasoning_effort") for call in completions.calls] == [
-        "max",
         "xhigh",
+        "high",
     ]
-    assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "xhigh"
+    assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "high"
     generation._openai_gate = None
 
 
@@ -606,7 +595,7 @@ def test_single_attempt_records_the_ceiling_without_a_second_request(monkeypatch
     # single_attempt promises exactly one physical request...
     assert len(completions.calls) == 1
     # ...but the ceiling it discovered still spares every later caller.
-    assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "xhigh"
+    assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "high"
     generation._openai_gate = None
 
 
@@ -620,7 +609,7 @@ def test_workbook_writer_negotiates_unsupported_effort():
 
         def create(self, **kwargs):
             self.calls.append(kwargs)
-            if kwargs.get("reasoning_effort") == "max":
+            if kwargs.get("reasoning_effort") == "xhigh":
                 raise _UnsupportedEffortError()
             return _json_response()
 
@@ -637,11 +626,11 @@ def test_workbook_writer_negotiates_unsupported_effort():
 
     assert result == '{"ok": true}'
     assert [call.get("reasoning_effort") for call in completions.calls] == [
-        "max",
         "xhigh",
+        "high",
     ]
     assert completions.calls[-1]["max_completion_tokens"] == 654
-    assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "xhigh"
+    assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "high"
 
 
 def test_offline_helper_negotiates_down_to_an_accepted_effort():
@@ -651,7 +640,7 @@ def test_offline_helper_negotiates_down_to_an_accepted_effort():
 
     def invoke(effort: str):
         seen.append(effort)
-        if effort in {"max", "xhigh"}:
+        if effort == "xhigh":
             raise _UnsupportedEffortError(effort)
         return f"ok@{effort}"
 
@@ -660,7 +649,7 @@ def test_offline_helper_negotiates_down_to_an_accepted_effort():
     )
 
     assert result == "ok@high"
-    assert seen == ["max", "xhigh", "high"]
+    assert seen == ["xhigh", "high"]
     # The ceiling is remembered, so a second call starts where the first landed.
     assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "high"
 
@@ -669,6 +658,28 @@ def test_offline_helper_negotiates_down_to_an_accepted_effort():
         "gpt-5.6-luna", "pre_learning", invoke
     ) == "ok@high"
     assert seen == ["high"]
+
+
+def test_offline_helper_recognizes_responses_api_reasoning_param():
+    """Responses API errors name the field ``reasoning.effort``."""
+
+    seen: list[str] = []
+
+    class ResponsesEffortError(RuntimeError):
+        status_code = 400
+        param = "reasoning.effort"
+        code = "unsupported_value"
+
+    def invoke(effort: str):
+        seen.append(effort)
+        if effort == "xhigh":
+            raise ResponsesEffortError("Unsupported reasoning.effort value")
+        return f"ok@{effort}"
+
+    assert openai_policy.call_with_effort_negotiation(
+        "gpt-5.6-luna", "concept_mapping", invoke
+    ) == "ok@high"
+    assert seen == ["xhigh", "high"]
 
 
 def test_offline_helper_does_not_swallow_unrelated_failures():
