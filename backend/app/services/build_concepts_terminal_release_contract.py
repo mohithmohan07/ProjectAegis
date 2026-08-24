@@ -15,9 +15,9 @@ family or invalidating historical clean releases:
   converted/unpublished lifecycle state after staging the evidence;
 * ``structural_defects`` always refuses a non-terminal payload, independent of
   row shape, inventory size, or semantic issue anchoring; and
-* legacy payloads infer terminality only from their recorded final checkpoint
-  plus the absence of a generation error, so already-completed releases remain
-  publishable after deployment.
+* legacy payloads infer terminality from their recorded checkpoint/error state,
+  while old synthetic/manual releases that predate checkpoint recording remain
+  compatible when they carry neither a checkpoint nor a generation failure.
 """
 from __future__ import annotations
 
@@ -27,6 +27,8 @@ from typing import Any, Mapping
 
 from .. import models
 from . import build_concepts_release as release
+from . import build_concepts_release_files as release_files
+from . import build_concepts_release_manifest as release_manifest
 from . import build_concepts_release_publication as publication
 from . import generation
 
@@ -82,15 +84,14 @@ def payload_terminal_generation_complete(
         return False
     if TERMINAL_GENERATION_FIELD in payload:
         return payload.get(TERMINAL_GENERATION_FIELD) is True
-    # Backward compatibility: historical successful releases did not carry the
-    # field.  ``final_content_ready`` is the durable terminal Concept checkpoint;
-    # a recorded generation error keeps even a final-row diagnostic release
-    # non-terminal.
-    return (
-        str(payload.get("checkpoint_stage") or "").strip()
-        == "final_content_ready"
-        and not _payload_has_generation_error(payload)
-    )
+    if _payload_has_generation_error(payload):
+        return False
+    stage = str(payload.get("checkpoint_stage") or "").strip()
+    # Historical successful releases created before this contract can have no
+    # recorded checkpoint at all (notably synthetic/manual review fixtures and
+    # old interactive releases).  Absence plus no generation error is therefore
+    # legacy-compatible.  A *recorded* non-terminal stage is never compatible.
+    return stage in {"", "final_content_ready"}
 
 
 def _post_terminal_from_call(
@@ -106,7 +107,11 @@ def _post_terminal_from_call(
     checkpoint = kwargs.get("checkpoint")
     if not isinstance(checkpoint, Mapping):
         checkpoint = job.generation_checkpoint or {}
-    return _checkpoint_stage(checkpoint) == "final_content_ready"
+    stage = _checkpoint_stage(checkpoint)
+    # Same compatibility rule as legacy payload inference: an explicit
+    # non-terminal checkpoint blocks; an old/manual stage with no checkpoint and
+    # no error is allowed to retain its historical terminal semantics.
+    return stage in {"", "final_content_ready"}
 
 
 def _write_terminal_marker(
@@ -213,8 +218,11 @@ def install() -> None:
     release.stage_release = stage_release
     release.stage_pre_release = stage_pre_release
     release.structural_defects = structural_defects
-    # Publication imported the function by name, so update that bound symbol as
-    # well; otherwise the explicit CMS action would keep the old gate even while
-    # every other release reader saw the new one.
+    # These modules imported the gate by name. Rebind every public consumer so
+    # the publication act, eager/lazy output manifests, and UI affordances all
+    # report the exact same terminal authority rather than disagreeing because
+    # of Python import-time aliases.
     publication.structural_defects = structural_defects
+    release_files.structural_defects = structural_defects
+    release_manifest.structural_defects = structural_defects
     release._TERMINAL_RELEASE_CONTRACT_VERSION = CONTRACT_VERSION
