@@ -1,6 +1,8 @@
 """Residual Type coverage is a Fixer judgment, never a semantic regex fallback."""
 from __future__ import annotations
 
+import copy
+
 from app.services import generation as g
 from app.services import type_coverage_fixer_contract as contract
 from app.services.phase3 import fixer as fixer_mod
@@ -93,6 +95,30 @@ def test_residual_coverage_uses_recorded_fixer_and_restores_source_wording(
     assert audit["qids"] == ["QINV-0001"]
     assert audit["decision_key"]
     assert len(store.keys()) == 1
+
+
+def test_fixer_provenance_follows_qid_through_semantic_type_merge():
+    before = _valid_fixer({})["types"]
+    before[0]["_fixer_type_coverage"] = {
+        "decision_key": "decision-123",
+        "qids": ["QINV-0001"],
+        "rationale": "Residual coverage needed one recorded judgment.",
+    }
+    after = copy.deepcopy(before)
+    after[0].pop("_fixer_type_coverage")
+    after[0]["type_title"] = "Merged reusable sound-pattern task"
+
+    carried = contract._carry_fixer_provenance(before, after)
+
+    assert carried[0]["_fixer_type_coverage"]["decision_key"] == "decision-123"
+    assert carried[0]["_fixer_type_coverage"]["qids"] == ["QINV-0001"]
+    assert carried[0]["_fixer_type_coverage_history"] == [
+        carried[0]["_fixer_type_coverage"]
+    ]
+    assert any(
+        "provenance retained after semantic Type consolidation" in flag
+        for flag in carried[0].get("review_flags") or []
+    )
 
 
 def test_no_live_fixer_never_falls_back_to_deterministic_semantics(monkeypatch):
