@@ -17,6 +17,7 @@ from .services import drive_checkpoints
 from .services import build_concepts_release_api_contract
 from .services import build_concepts_release_contract
 from .services import build_concepts_release_manifest
+from .services import build_concepts_terminal_release_contract
 from .services import assessment_release_service
 from .services import storage_capacity
 from .api import (
@@ -44,6 +45,7 @@ def bootstrap() -> None:
     model_provider.restore()
     build_concepts_release_manifest.install()
     build_concepts_release_contract.install()
+    build_concepts_terminal_release_contract.install()
     # A crashed publisher leaves only an unpublished ``vN.staging`` tree.
     # Sweep those exact trees before database/bootstrap writes so stale debris
     # can return capacity to an otherwise full volume. Recovery is best-effort
