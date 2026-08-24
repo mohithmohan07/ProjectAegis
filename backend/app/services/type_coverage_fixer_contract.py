@@ -15,7 +15,8 @@ recovery step:
   move, and public Example wording is restored from the canonical inventory;
 * the decision is content-addressed in the same durable Phase-3 Fixer store;
 * a contract-satisfying result ships with visible review flags on the affected
-  mined Types; and
+  mined Types, and that provenance follows the QIDs through the immediately
+  following semantic Type-consolidation pass; and
 * when no live Fixer exists or it cannot satisfy the checker, no semantic value
   is fabricated.  The existing exact-cover gate refuses the run as genuine
   protocol/provider impossibility.
@@ -43,8 +44,10 @@ def _normal(value: object) -> str:
     return " ".join(str(value or "").split())
 
 
-def _qid(item: Mapping[str, Any]) -> str:
-    return _normal(item.get("qid"))
+def _qid(item: object) -> str:
+    if isinstance(item, Mapping):
+        return _normal(item.get("qid"))
+    return _normal(item)
 
 
 def _source_item(item: Mapping[str, Any]) -> dict[str, Any]:
@@ -133,12 +136,29 @@ def _checker(
             defects.append(
                 "the Fixer produced duplicate QID assignment(s): "
                 + ", ".join(
-                    _qid(row) for row in duplicates[:12] if _qid(row)
+                    qid for row in duplicates[:12]
+                    if (qid := _qid(row))
                 )
             )
         return defects
 
     return check
+
+
+def _owned_qids(mtype: Mapping[str, Any]) -> set[str]:
+    owned = {
+        str(qid or "").strip()
+        for qid in mtype.get("source_question_ids") or []
+        if str(qid or "").strip()
+    }
+    for case in mtype.get("case_prompts") or []:
+        if not isinstance(case, dict):
+            continue
+        for example in generation._case_examples(case):
+            qid = str(example.get("source_question_id") or "").strip()
+            if qid:
+                owned.add(qid)
+    return owned
 
 
 def _flag_affected_types(
@@ -153,18 +173,7 @@ def _flag_affected_types(
     for mtype in out:
         if not isinstance(mtype, dict):
             continue
-        owned = {
-            str(qid or "").strip()
-            for qid in mtype.get("source_question_ids") or []
-        }
-        for case in mtype.get("case_prompts") or []:
-            if not isinstance(case, dict):
-                continue
-            for example in generation._case_examples(case):
-                qid = str(example.get("source_question_id") or "").strip()
-                if qid:
-                    owned.add(qid)
-        recovered = sorted(owned & missed_qids)
+        recovered = sorted(_owned_qids(mtype) & missed_qids)
         if not recovered:
             continue
         flags = list(mtype.get("review_flags") or [])
@@ -184,6 +193,64 @@ def _flag_affected_types(
     return out
 
 
+def _carry_fixer_provenance(
+    before: list[dict], after: list[dict],
+) -> list[dict]:
+    """Keep the recorded Fixer decision attached after semantic Type merging."""
+    audit_by_qid: dict[str, dict[str, Any]] = {}
+    for mtype in before:
+        if not isinstance(mtype, Mapping):
+            continue
+        audit = mtype.get("_fixer_type_coverage")
+        if not isinstance(audit, Mapping):
+            continue
+        for qid in audit.get("qids") or []:
+            value = str(qid or "").strip()
+            if value:
+                audit_by_qid[value] = copy.deepcopy(dict(audit))
+    if not audit_by_qid:
+        return after
+
+    out = copy.deepcopy(after)
+    for mtype in out:
+        if not isinstance(mtype, dict):
+            continue
+        recovered = sorted(_owned_qids(mtype) & set(audit_by_qid))
+        if not recovered:
+            continue
+        grouped: dict[str, dict[str, Any]] = {}
+        for qid in recovered:
+            audit = audit_by_qid[qid]
+            key = str(audit.get("decision_key") or "")
+            row = grouped.setdefault(key, {
+                "decision_key": key,
+                "qids": [],
+                "rationale": str(audit.get("rationale") or ""),
+            })
+            row["qids"].append(qid)
+        history = list(mtype.get("_fixer_type_coverage_history") or [])
+        for audit in grouped.values():
+            if audit not in history:
+                history.append(audit)
+            flag = (
+                "fixer: residual Type coverage provenance retained after "
+                "semantic Type consolidation for "
+                + ", ".join(audit["qids"])
+                + (
+                    f" — {audit['rationale']}"
+                    if audit.get("rationale") else ""
+                )
+            )
+            flags = list(mtype.get("review_flags") or [])
+            if flag not in flags:
+                flags.append(flag)
+            mtype["review_flags"] = flags
+        mtype["_fixer_type_coverage_history"] = history
+        if len(history) == 1:
+            mtype["_fixer_type_coverage"] = copy.deepcopy(history[0])
+    return out
+
+
 def install() -> None:
     if getattr(generation, "_TYPE_COVERAGE_FIXER_CONTRACT_VERSION", 0) >= (
         CONTRACT_VERSION
@@ -191,7 +258,9 @@ def install() -> None:
         return
 
     original = generation._append_deterministic_type_fallbacks
+    original_consolidate = generation._consolidate_semantic_types_via_api
     generation._LEGACY_DETERMINISTIC_TYPE_FALLBACKS = original
+    generation._PRE_FIXER_TYPE_CONSOLIDATION = original_consolidate
 
     @wraps(original)
     def recover_with_fixer(
@@ -308,5 +377,25 @@ def install() -> None:
         )
         return candidate, len(missed_qids)
 
+    @wraps(original_consolidate)
+    def consolidate_with_fixer_provenance(
+        mined_types: dict, *, inventory: dict, meta: dict,
+    ) -> dict:
+        before = copy.deepcopy((mined_types or {}).get("types") or [])
+        result = original_consolidate(
+            mined_types, inventory=inventory, meta=meta
+        )
+        if not isinstance(result, dict):
+            return result
+        result = copy.deepcopy(result)
+        result["types"] = _carry_fixer_provenance(
+            before,
+            list(result.get("types") or []),
+        )
+        return result
+
     generation._append_deterministic_type_fallbacks = recover_with_fixer
+    generation._consolidate_semantic_types_via_api = (
+        consolidate_with_fixer_provenance
+    )
     generation._TYPE_COVERAGE_FIXER_CONTRACT_VERSION = CONTRACT_VERSION
