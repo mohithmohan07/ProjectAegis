@@ -188,7 +188,10 @@ def install() -> None:
             lane=release.LANE_PRE,
             complete=complete,
         )
-        return release.release_result(job)
+        # Preserve stage_pre_release's existing lane-specific return contract;
+        # the terminal marker is durable state, not a reason to reshape what
+        # the caller receives.
+        return result
 
     @wraps(original_structural_defects)
     def structural_defects(payload):
