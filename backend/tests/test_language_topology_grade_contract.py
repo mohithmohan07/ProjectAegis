@@ -61,8 +61,12 @@ def _instruction_set():
 def test_live_contract_removes_stanza_and_line_pair_structure_quotas():
     contract.install()
 
-    author = topology._AUTHOR_SYSTEM.casefold()
-    critic = topology._CRITIC_SYSTEM.casefold()
+    # Prompt contracts are semantic prose; source formatting may wrap a sentence
+    # across lines without changing the instruction. Normalize whitespace before
+    # asserting the live meaning so editorial wrapping cannot create a false
+    # negative in the regression.
+    author = " ".join(topology._AUTHOR_SYSTEM.casefold().split())
+    critic = " ".join(topology._CRITIC_SYSTEM.casefold().split())
 
     assert topology.LANGUAGE_ADAPTER_VERSION == "language-topology-2"
     assert "one topic per stanza" not in author
