@@ -70,6 +70,9 @@ from .type_coverage_fixer_contract import (
 from .postlearning_formation_contract import (
     install as _install_postlearning_formation_contract,
 )
+from .postlearning_host_contract import (
+    install as _install_postlearning_host_contract,
+)
 from .postlearning_support_contract import (
     install as _install_postlearning_support_contract,
 )
@@ -151,9 +154,13 @@ _install_question_polishing_contract(generation)
 _install_language_topology_grade_contract()
 _install_type_coverage_fixer_contract()
 # The literary plan is the Post-Learning topology authority. Install its
-# projection before the support transport and the Job-79 duplicate-row wrapper
+# projection before Host/support transport and the Job-79 duplicate-row wrapper
 # so a fresh run starts from the plan's stanza/episode concepts.
 _install_postlearning_formation_contract()
+# Host may define a missing universal concept, but a sealed literary plan is a
+# complete Post map. Reconcile any temporary Host row to a planned concept
+# before Q14 and Assemble can publish it.
+_install_postlearning_host_contract()
 # Carry the plan's exact support-block destinations through Container 02 and
 # into Activity/Info Hub after Polish, before Assemble seals the rows.
 _install_postlearning_support_contract()
@@ -189,5 +196,6 @@ del _install_question_polishing_contract
 del _install_language_topology_grade_contract
 del _install_type_coverage_fixer_contract
 del _install_postlearning_formation_contract
+del _install_postlearning_host_contract
 del _install_postlearning_support_contract
 del _install_prelearning_formation_contract
