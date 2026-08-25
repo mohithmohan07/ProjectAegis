@@ -102,10 +102,15 @@ nothing — so dissent freely and precisely."""
 
 
 def install() -> None:
-    if getattr(topology, "_GRADE_TOPOLOGY_CONTRACT_VERSION", 0) >= (
-        CONTRACT_VERSION
-    ):
-        return
+    """Reassert the live bindings on every call; module reloads must be harmless.
+
+    ``importlib.reload(language_topology)`` re-executes that module in its
+    existing dictionary. Python therefore resets the prompt/version constants
+    defined by the base module but can leave our private contract marker behind.
+    A marker-only early return would then preserve the OLD prompt even though
+    the contract appeared installed. These assignments are pure/idempotent, so
+    rebinding them every time is the correct service-level contract.
+    """
     topology.LANGUAGE_ADAPTER_VERSION = LANGUAGE_ADAPTER_VERSION
     topology._AUTHOR_SYSTEM = AUTHOR_SYSTEM
     topology._CRITIC_SYSTEM = CRITIC_SYSTEM
