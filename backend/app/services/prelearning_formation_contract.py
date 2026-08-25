@@ -498,9 +498,15 @@ def _duplicate_groups(rows: list[Mapping[str, Any]]) -> list[list[int]]:
 def _description_and_mastery(details: object) -> tuple[str, str]:
     from . import concept_refiner as cr
 
+    # Settle carries Description and Achieving Mastery on separate lines, while
+    # later house-format rows use the `` // `` section separator. Normalize the
+    # exact field delimiter mechanically so both shapes share one parser.
+    text = str(details or "")
+    text = text.replace("\\nAchieving Mastery:", " // Achieving Mastery:")
+    text = text.replace("\nAchieving Mastery:", " // Achieving Mastery:")
     description = ""
     mastery = ""
-    for label, content in cr.split_sections(str(details or "")):
+    for label, content in cr.split_sections(text):
         name = _normal(label).casefold()
         if name.startswith("description"):
             description = _normal(content)
