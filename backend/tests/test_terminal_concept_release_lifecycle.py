@@ -38,7 +38,10 @@ def test_failed_checkpoint_stays_resumable_and_database_closed(db):
 
     payload = release.release_payload(job)
     assert payload is not None
-    assert payload[terminal.TERMINAL_GENERATION_FIELD] is False
+    # Terminal authority is derived from the release's existing checkpoint and
+    # issue fields; the frozen Post payload shape is not extended by this fix.
+    assert terminal.TERMINAL_GENERATION_FIELD not in payload
+    assert terminal.payload_terminal_generation_complete(payload) is False
     assert job.status == terminal.PARTIAL_RELEASE_STATUS
     assert job.checkpoint_available is True
     assert terminal.TERMINAL_GENERATION_DEFECT in "\n".join(
@@ -62,6 +65,32 @@ def test_failed_checkpoint_stays_resumable_and_database_closed(db):
     )
 
 
+def test_failure_before_any_checkpoint_is_diagnostic_not_fake_resumable(db):
+    terminal.install()
+    job, chapter = _job(db)
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=[],
+        inventory={"items": [], "stats": {"items": 0}},
+        mined_types={"types": []},
+        checkpoint={},
+        error=RuntimeError("provider quota exhausted before first checkpoint"),
+        reason="failure before durable progress",
+    )
+
+    payload = release.release_payload(job)
+    assert payload is not None
+    assert terminal.payload_terminal_generation_complete(payload) is False
+    assert job.status == release.RELEASE_STATUS
+    assert job.checkpoint_available is False
+    assert terminal.TERMINAL_GENERATION_DEFECT in "\n".join(
+        release.structural_defects(payload)
+    )
+
+
 def test_final_content_ready_release_keeps_normal_released_lifecycle(db):
     terminal.install()
     job, chapter = _job(db)
@@ -79,7 +108,8 @@ def test_final_content_ready_release_keeps_normal_released_lifecycle(db):
 
     payload = release.release_payload(job)
     assert payload is not None
-    assert payload[terminal.TERMINAL_GENERATION_FIELD] is True
+    assert terminal.TERMINAL_GENERATION_FIELD not in payload
+    assert terminal.payload_terminal_generation_complete(payload) is True
     assert job.status == release.RELEASE_STATUS
     assert job.checkpoint_available is False
     assert terminal.TERMINAL_GENERATION_DEFECT not in "\n".join(
