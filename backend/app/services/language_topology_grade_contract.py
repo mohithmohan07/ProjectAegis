@@ -7,16 +7,18 @@ story breaks and episodes; every local teaching topic closes with a
 culmination; and a final Detailed Analysis topic carries the standard
 whole-work lenses.
 
-Those are curriculum semantics, not a line-count algorithm.  The model still
+Those are curriculum semantics, not a line-count algorithm. The model still
 owns every judgment: where a stanza or story break actually begins and ends,
 which adjacent lines form one meaning-bearing unit, which episodes are
 independently teachable, where a support block belongs, and how the grade and
-board should shape the writing.  Deterministic code validates only the plan's
+board should shape the writing. Deterministic code validates only the plan's
 IDs, role vocabulary and exact accounting.
 
-Version 3 deliberately re-keys the content-addressed plan cache.  A plan made
-under the retired "group neighbouring stanzas when convenient" prompt must not
-replay after the sourcebook reading contract is restored.
+Version 4 deliberately re-keys the content-addressed plan cache. It retains the
+sourcebook-faithful literary grain introduced by version 3 and makes every
+support block's transport verdict explicit, so a plan cannot describe the
+right stanza/episode topology while leaving Word Baskets, device boxes,
+performance cues or threaded language components stranded in the plan text.
 """
 from __future__ import annotations
 
@@ -26,8 +28,8 @@ import sys
 from . import language_topology as topology
 
 
-CONTRACT_VERSION = 3
-LANGUAGE_ADAPTER_VERSION = "language-topology-3"
+CONTRACT_VERSION = 4
+LANGUAGE_ADAPTER_VERSION = "language-topology-4"
 SEMANTIC_ROLES = (
     "ordinary",
     "stanza_culmination",
@@ -85,18 +87,27 @@ instruction, discussion cue, diagram, project, Word Basket, vocabulary box,
 Poetic Device box, facilitator/teacher note or exercise heading does not become
 a concept merely because it is printed as a block.
 
-Home each support block by meaning:
-- tasks and performance cues travel with the concept they support and retain
-  their task identities for Activity/Info Hub or question routing;
-- a vocabulary/Word-Basket entry and its sourcebook sense stay reachable from
-  the concept that uses it, while remaining prerequisite evidence where
-  appropriate;
-- an explanatory device box is carried whole, including its quoted example,
-  to the concept whose text it illustrates;
-- facilitator guidance is recorded as teacher guidance, never learner content;
-- grammar, listening, speaking, phonics and writing components are threaded to
-  the literary concepts where they are observed, never promoted to standalone
-  Topics solely because they are printed at the end.
+Home each support occurrence by meaning and record the transport verdict in the
+plan, not merely in prose:
+- For every learner-facing support block that must remain reachable — a Warm-up
+  or performance cue, Word Basket or vocabulary gloss, explanatory Poetic
+  Device box, grammar/listening/speaking/phonics/writing component, project or
+  similar enrichment — add one threaded_components entry with its exact
+  block_id, the one destination_plan_concept_id whose teaching it supports, the
+  skill it contributes and the rationale for that home.
+- Keep the source block whole. A Word-Basket sense, definition, example,
+  quotation, table or instruction is not replaced by a summary.
+- Source questions remain identified by task_qids on the concept they assess.
+  A task-bearing support/performance occurrence may also be threaded so it can
+  appear in the Activity/Info Hub, but its existing question identity must be
+  retained; never invent, copy or remove a task to make the topology fit.
+- Use non_teaching_block_ids for pure headings, layout/furniture and
+  facilitator-only guidance that should be recorded for audit but not shown as
+  learner teaching. Do not place the same source occurrence in both
+  threaded_components and non_teaching_block_ids.
+- Grammar, listening, speaking, phonics and writing are threaded to the
+  literary concepts where they are observed; they are never promoted to
+  standalone Topics solely because they are printed at the end.
 
 DETAILED ANALYSIS — BOTH MODES
 After all stanza/story Topics, create the final Topic with display_name exactly
@@ -146,12 +157,15 @@ and every local Topic closes with a substantive culmination.
 
 For both modes, detect Warm-up, recitation directions, exercises, diagrams,
 Word Baskets, device boxes, facilitator notes, grammar or phonics promoted into
-standalone concepts/Topics when they should be placed or threaded; sourcebook
-content dropped or summarized when it must be carried whole; descriptions that
-would merely retell instead of teach; duplicated mastery capabilities; and any
-source task or block left without a truthful home. Never audit by a preferred
-count or by physical line arithmetic. Your dissent is advisory and must be
-precise; it never blocks or rewrites the author's plan."""
+standalone concepts/Topics when they should be placed or threaded; a support
+block named only in prose but missing its threaded_components or explicit
+non_teaching verdict; one support occurrence routed to several concepts without
+an explicit multi-placement authority; sourcebook content dropped or
+summarized when it must be carried whole; descriptions that would merely retell
+instead of teach; duplicated mastery capabilities; and any source task or block
+left without a truthful home. Never audit by a preferred count or by physical
+line arithmetic. Your dissent is advisory and must be precise; it never blocks
+or rewrites the author's plan."""
 
 
 def _current_topology_modules():
