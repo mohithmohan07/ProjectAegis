@@ -2,15 +2,15 @@
 
 The Step-11 adapter correctly gives the model authority over literary meaning,
 but its original system prompt simultaneously hard-coded ``one topic per
-stanza`` and then requested concepts per pair of lines.  That is volume/shape
+stanza`` and then requested concepts per pair of lines. That is volume/shape
 structure in prompt form: a short Grade-6 poem with six compact stanzas was
 therefore driven toward six teaching topics plus Detailed Analysis regardless
 of what the sourcebook or learner level actually warranted.
 
-This contract removes that quota from the live prompt.  Topic/concept grain is
+This contract removes that quota from the live prompt. Topic/concept grain is
 again a model judgment grounded in the source, the Architect's grade-band and
 board/sourcebook instructions, and what a teacher would actually teach as one
-coherent unit.  Stanzas remain evidence and may define a boundary when their
+coherent unit. Stanzas remain evidence and may define a boundary when their
 meaning genuinely warrants one; they never create a topic merely by existing.
 
 Changing the adapter version deliberately re-keys the content-addressed plan
@@ -46,7 +46,7 @@ POEM mode: read stanza boundaries, meaning shifts, voice, imagery, sound and
 progression as evidence. Group adjacent stanzas/lines under one Topic when a
 teacher would teach them as one coherent idea or progression; separate them
 only when the poem makes a genuinely distinct teachable shift. A stanza does
-NOT automatically become a Topic. Within each Topic, create concepts only for
+not automatically become a Topic. Within each Topic, create concepts only for
 independently teachable meanings/skills. Combine neighbouring lines, vocabulary
 and devices when they serve the same learning idea; create a separate poetic-
 device or vocabulary concept only when the source and grade make it useful as
