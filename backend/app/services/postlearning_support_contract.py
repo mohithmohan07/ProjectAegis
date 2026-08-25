@@ -224,9 +224,13 @@ def _append_hub(details: object, source_bodies: Sequence[str]) -> str:
     )
     if index >= 0:
         label, existing = sections[index]
-        pieces = [existing.strip()] if existing.strip() else []
+        existing_text = existing.strip()
+        pieces = [existing_text] if existing_text else []
         for body in bodies:
-            if body not in pieces:
+            # A replay sees the combined Hub body as one section. Membership
+            # in that exact source-owned text, not list-shape, is the idempotent
+            # guard; no semantic comparison or normalization is involved.
+            if body not in existing_text:
                 pieces.append(body)
         sections[index] = (label, "\n\n".join(pieces))
     else:
