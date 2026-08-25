@@ -1,4 +1,4 @@
-"""Literary topology grain follows the source/grade, never stanza arithmetic."""
+"""Literary topology follows the sourcebook reading unit without line arithmetic."""
 from __future__ import annotations
 
 import importlib
@@ -27,7 +27,7 @@ WORK = "A Small New Start"
 
 
 def _topology():
-    """Resolve the current service module after any reload/re-import in the suite."""
+    """Resolve the current service module after any reload/re-import."""
     module = importlib.import_module("app.services.language_topology")
     contract.install()
     return module
@@ -50,85 +50,202 @@ def _instruction_set():
                 "rationale": "The source is stanza-structured verse.",
             },
             "subject_topology_guidance": (
-                "Grade Six: teach the short poem as a coherent new-school "
-                "experience, then consolidate its sound device."
+                "Grade Six: read each stanza as its own meaning unit and "
+                "finish with whole-poem analysis."
             ),
             "grade_band_vocabulary": (
-                "Use clear Grade Six explanations and combine closely related "
-                "ideas rather than over-fragmenting them."
+                "Use clear Grade Six explanations without fragmenting one "
+                "meaning-bearing pair of lines."
             ),
             "board_publication_conventions": (
-                "Warm-up, poem reading, Poetic Device and task labels are "
-                "sourcebook structure, not automatic teaching-topic boundaries."
+                "Warm-up, read-and-recite, Poetic Device and task labels are "
+                "supporting sourcebook blocks, not automatic concepts."
             ),
             "chapter_cautions": [],
         },
     }
 
 
-def _grouped_plan(topology, canonical):
+def _concept(
+    concept_id: str,
+    display_name: str,
+    role: str,
+    block_ids: list[str],
+    *,
+    task_qids: list[str] | None = None,
+    facets: list[str] | None = None,
+    mastery: str,
+    rationale: str,
+):
+    return {
+        "plan_concept_id": concept_id,
+        "display_name": display_name,
+        "semantic_role": role,
+        "facets": list(facets or []),
+        "source_block_ids": list(block_ids),
+        "task_qids": list(task_qids or []),
+        "achieving_mastery": mastery,
+        "rationale": rationale,
+    }
+
+
+def _stanza_plan(topology, canonical):
     blocks = topology._content_blocks(canonical)
     tasks = topology._task_payloads(canonical)
-    block_ids = [str(block.get("block_id") or "") for block in blocks]
+
+    def ids_with(*needles: str) -> list[str]:
+        return [
+            str(block.get("block_id") or "")
+            for block in blocks
+            if any(
+                needle in str(block.get("raw_text") or "")
+                for needle in needles
+            )
+        ]
+
+    first_stanza = ids_with(
+        "We enter school with plans to make",
+        "A Small New Start",
+    )
+    second_stanza = ids_with("We try new work and help our friends")
+    used_local = set(first_stanza) | set(second_stanza)
+    analysis_evidence = [
+        str(block.get("block_id") or "")
+        for block in blocks
+        if str(block.get("block_id") or "") not in used_local
+    ]
+    verse = list(dict.fromkeys([*first_stanza, *second_stanza]))
     task_qids = [task["qid"] for task in tasks]
 
-    # Several source pieces (two verse paragraphs, the device explanation and
-    # the task area) are deliberately taught under ONE coherent Grade-6 topic.
-    # The only second topic is the required chapter-wide Detailed Analysis.
     return {
         "topics": [
             {
                 "plan_topic_id": "PT-1",
-                "display_name": "Beginning Grade Six with confidence",
-                "evidence_block_ids": block_ids,
+                "display_name": "Stanza 1 - Plans for a shared beginning",
+                "evidence_block_ids": first_stanza,
                 "concepts": [
-                    {
-                        "plan_concept_id": "PC-1",
-                        "display_name": "A shared new-school beginning",
-                        "semantic_role": "ordinary",
-                        "facets": ["meaning", "confidence", "teamwork"],
-                        "source_block_ids": block_ids,
-                        "task_qids": task_qids,
-                        "achieving_mastery": (
-                            "Explain the poem's shared beginning and identify "
-                            "the taught sound pattern."
+                    _concept(
+                        "PC-1",
+                        "Entering school with plans to learn together",
+                        "ordinary",
+                        first_stanza,
+                        facets=["meaning", "shared learning"],
+                        mastery=(
+                            "Explain how the opening pair joins personal plans "
+                            "with learning together."
                         ),
-                        "rationale": (
-                            "The short Grade-6 source develops one coherent "
-                            "learning idea, so its neighbouring pieces are "
-                            "taught together."
+                        rationale=(
+                            "The two adjacent lines carry one complete idea "
+                            "about beginning school with shared purpose."
                         ),
-                    },
+                    ),
+                    _concept(
+                        "PC-2",
+                        "The opening stanza as one invitation",
+                        "stanza_culmination",
+                        first_stanza,
+                        facets=["stanza synthesis"],
+                        mastery=(
+                            "Connect the stanza's meaning and paired end sounds "
+                            "in one explanation."
+                        ),
+                        rationale="The stanza closes one coherent opening appeal.",
+                    ),
                 ],
             },
             {
                 "plan_topic_id": "PT-2",
-                "display_name": topology.detailed_analysis_title(WORK),
-                "evidence_block_ids": [],
+                "display_name": "Stanza 2 - Effort that continues together",
+                "evidence_block_ids": second_stanza,
                 "concepts": [
-                    {
-                        "plan_concept_id": "PC-2",
-                        "display_name": "Theme / Central Idea",
-                        "semantic_role": "detailed_analysis",
-                        "facets": ["theme"],
-                        "source_block_ids": [],
-                        "task_qids": [],
-                        "achieving_mastery": "State the central idea clearly.",
-                        "rationale": "Whole-work synthesis.",
-                    },
-                    {
-                        "plan_concept_id": "PC-3",
-                        "display_name": "Whole-poem culmination",
-                        "semantic_role": "chapter_culmination",
-                        "facets": ["synthesis"],
-                        "source_block_ids": [],
-                        "task_qids": [],
-                        "achieving_mastery": (
-                            "Connect the poem's meaning and sound device in a "
-                            "single explanation."
+                    _concept(
+                        "PC-3",
+                        "Trying new work and helping friends",
+                        "ordinary",
+                        second_stanza,
+                        facets=["effort", "cooperation"],
+                        mastery=(
+                            "Explain how effort and helping others sustain the "
+                            "poem's new beginning."
                         ),
-                        "rationale": "Consolidates the chapter without repetition.",
-                    },
+                        rationale=(
+                            "The second pair of lines forms a distinct stanza "
+                            "about persistence and mutual help."
+                        ),
+                    ),
+                    _concept(
+                        "PC-4",
+                        "The second stanza as a promise to continue",
+                        "stanza_culmination",
+                        second_stanza,
+                        facets=["stanza synthesis"],
+                        mastery=(
+                            "Show how action, cooperation and rhyme make the "
+                            "stanza feel resolved."
+                        ),
+                        rationale="The stanza completes its own teaching movement.",
+                    ),
+                ],
+            },
+            {
+                "plan_topic_id": "PT-3",
+                "display_name": topology.detailed_analysis_title(WORK),
+                "evidence_block_ids": analysis_evidence,
+                "concepts": [
+                    _concept(
+                        "PC-5", "Theme / Central Idea", "detailed_analysis",
+                        verse, facets=["theme"],
+                        mastery="State the poem's central idea with support.",
+                        rationale="Whole-poem thematic synthesis.",
+                    ),
+                    _concept(
+                        "PC-6", "Plot / Development of Ideas",
+                        "detailed_analysis", verse, facets=["development"],
+                        mastery=(
+                            "Trace the movement from beginning school to "
+                            "sustained shared effort."
+                        ),
+                        rationale=(
+                            "For this non-narrative poem the lens examines idea "
+                            "progression rather than inventing a plot."
+                        ),
+                    ),
+                    _concept(
+                        "PC-7", "Characterisation / Speaker",
+                        "detailed_analysis", verse, facets=["speaker"],
+                        mastery="Describe the inclusive speaking voice.",
+                        rationale="The poem has a shared voice rather than a cast.",
+                    ),
+                    _concept(
+                        "PC-8", "Setting & Atmosphere", "detailed_analysis",
+                        verse, facets=["school setting", "atmosphere"],
+                        mastery="Explain the hopeful school atmosphere.",
+                        rationale="The school beginning shapes the mood.",
+                    ),
+                    _concept(
+                        "PC-9", "Language & Literary Devices",
+                        "detailed_analysis", [*verse, *analysis_evidence],
+                        task_qids=task_qids,
+                        facets=["alliteration", "rhyme"],
+                        mastery=(
+                            "Identify the taught sound device and explain how "
+                            "sound supports meaning."
+                        ),
+                        rationale=(
+                            "The source's device explanation and task belong in "
+                            "the whole-work language analysis."
+                        ),
+                    ),
+                    _concept(
+                        "PC-10", "Culmination: the poem as a whole",
+                        "chapter_culmination", verse,
+                        facets=["whole-work synthesis"],
+                        mastery=(
+                            "Connect theme, speaker, atmosphere and sound in one "
+                            "whole-poem explanation."
+                        ),
+                        rationale="Final synthesis without repeating the lenses.",
+                    ),
                 ],
             },
         ],
@@ -138,11 +255,11 @@ def _grouped_plan(topology, canonical):
     }
 
 
-def test_live_api_author_uses_grade_calibrated_contract(monkeypatch, tmp_path):
-    """Exercise the real model seam; do not infer semantics with string rules."""
+def test_live_api_author_uses_sourcebook_faithful_contract(monkeypatch, tmp_path):
+    """Exercise the real model seam; no local stanza parser authors the plan."""
     topology = _topology()
     canonical = _canonical()
-    grouped = _grouped_plan(topology, canonical)
+    plan = _stanza_plan(topology, canonical)
     systems: list[str] = []
 
     def fake_provider(
@@ -152,7 +269,7 @@ def test_live_api_author_uses_grade_calibrated_contract(monkeypatch, tmp_path):
         if system == contract.CRITIC_SYSTEM:
             return {"verdict": "concur", "dissents": []}
         assert system == contract.AUTHOR_SYSTEM
-        return grouped
+        return plan
 
     monkeypatch.setattr(topology, "_CACHE_DIR", tmp_path / "cache")
     monkeypatch.setattr(topology, "_provider_ready", lambda: True)
@@ -165,19 +282,21 @@ def test_live_api_author_uses_grade_calibrated_contract(monkeypatch, tmp_path):
     )
 
     assert sealed["adapter_version"] == contract.LANGUAGE_ADAPTER_VERSION
-    assert sealed["plan"] == grouped
+    assert sealed["plan"] == plan
     assert [topic["display_name"] for topic in sealed["plan"]["topics"]] == [
-        "Beginning Grade Six with confidence",
+        "Stanza 1 - Plans for a shared beginning",
+        "Stanza 2 - Effort that continues together",
         topology.detailed_analysis_title(WORK),
     ]
     assert systems == [contract.AUTHOR_SYSTEM, contract.CRITIC_SYSTEM]
 
 
-def test_mechanical_contract_accepts_grouped_poem_units_without_one_topic_per_stanza():
+def test_mechanical_contract_accepts_stanza_topics_and_topic_culminations():
     topology = _topology()
     canonical = _canonical()
-    plan = _grouped_plan(topology, canonical)
+    plan = _stanza_plan(topology, canonical)
 
+    assert "topic_culmination" in topology.SEMANTIC_ROLES
     assert topology.plan_defects(
         plan,
         topology._content_blocks(canonical),
@@ -186,7 +305,17 @@ def test_mechanical_contract_accepts_grouped_poem_units_without_one_topic_per_st
     ) == []
 
 
-def test_adapter_version_rekeys_old_stanza_authored_plan_identity(monkeypatch):
+def test_prompt_binds_sourcebook_structure_without_physical_line_arithmetic():
+    _topology()
+
+    assert "Each stanza you identify becomes one Topic" in contract.AUTHOR_SYSTEM
+    assert "never iterate physical lines two at a time" in contract.AUTHOR_SYSTEM
+    assert "Warm-up" in contract.AUTHOR_SYSTEM
+    assert "Detailed Analysis" in contract.AUTHOR_SYSTEM
+    assert "target count" in contract.AUTHOR_SYSTEM
+
+
+def test_adapter_version_rekeys_retired_grouped_stanza_plan_identity(monkeypatch):
     topology = _topology()
     canonical = _canonical()
     instruction_set = _instruction_set()
@@ -198,7 +327,7 @@ def test_adapter_version_rekeys_old_stanza_authored_plan_identity(monkeypatch):
     )
 
     monkeypatch.setattr(
-        topology, "LANGUAGE_ADAPTER_VERSION", "language-topology-1"
+        topology, "LANGUAGE_ADAPTER_VERSION", "language-topology-2"
     )
     old_key = topology._decision_key(
         canonical,
