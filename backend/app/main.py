@@ -17,6 +17,9 @@ from .services import drive_checkpoints
 from .services import build_concepts_release_api_contract
 from .services import build_concepts_release_contract
 from .services import build_concepts_release_manifest
+from .services import build_concepts_terminal_release_contract
+from .services import type_coverage_fixer_contract
+from .services import language_topology_grade_contract
 from .services import assessment_release_service
 from .services import storage_capacity
 from .api import (
@@ -42,8 +45,15 @@ def bootstrap() -> None:
     from .services import model_provider
 
     model_provider.restore()
+    # Install source/content decision contracts before any run can reach their
+    # model prompts. The literary contract deliberately re-keys language-plan
+    # decisions so a stanza-count-authored plan can never replay under the new
+    # grade/source-calibrated instructions.
+    language_topology_grade_contract.install()
     build_concepts_release_manifest.install()
     build_concepts_release_contract.install()
+    build_concepts_terminal_release_contract.install()
+    type_coverage_fixer_contract.install()
     # A crashed publisher leaves only an unpublished ``vN.staging`` tree.
     # Sweep those exact trees before database/bootstrap writes so stale debris
     # can return capacity to an otherwise full volume. Recovery is best-effort

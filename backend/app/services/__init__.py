@@ -61,6 +61,12 @@ from .chapter_reading_contract import (
 from .question_polishing_contract import (
     install as _install_question_polishing_contract,
 )
+from .language_topology_grade_contract import (
+    install as _install_language_topology_grade_contract,
+)
+from .type_coverage_fixer_contract import (
+    install as _install_type_coverage_fixer_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -127,6 +133,14 @@ _install_chapter_reading_contract(generation)
 # extracted question inventory before it is checkpointed, and presents the
 # polished wording wherever public Example text is rendered.
 _install_question_polishing_contract(generation)
+# Job-78 authority repair: the literary plan and the residual Type-coverage
+# fallback are semantic decisions, so install these outermost after every
+# legacy/source compatibility wrapper has settled. This service-level location
+# is intentional: direct chapter harnesses and recovery tooling import
+# ``app.services`` without FastAPI bootstrap and must see the same contracts as
+# the web application.
+_install_language_topology_grade_contract()
+_install_type_coverage_fixer_contract()
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -152,3 +166,5 @@ del _install_canonical_source_phase352_chunk_override_compat
 del _install_canonical_source_phase36_source_critical_turnover_contract
 del _install_chapter_reading_contract
 del _install_question_polishing_contract
+del _install_language_topology_grade_contract
+del _install_type_coverage_fixer_contract
