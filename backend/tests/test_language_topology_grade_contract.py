@@ -1,8 +1,9 @@
 """Literary topology grain follows the source/grade, never stanza arithmetic."""
 from __future__ import annotations
 
+import importlib
+
 from app.services import canonical_source_phase2 as phase2
-from app.services import language_topology as topology
 from app.services import language_topology_grade_contract as contract
 
 
@@ -23,6 +24,13 @@ Alliteration repeats an initial consonant sound.
 Find one example of alliteration.
 """
 WORK = "A Small New Start"
+
+
+def _topology():
+    """Resolve the current service module after any reload/re-import in the suite."""
+    module = importlib.import_module("app.services.language_topology")
+    contract.install()
+    return module
 
 
 def _canonical():
@@ -58,29 +66,7 @@ def _instruction_set():
     }
 
 
-def test_live_contract_removes_stanza_and_line_pair_structure_quotas():
-    contract.install()
-
-    # Prompt contracts are semantic prose; source formatting may wrap a sentence
-    # across lines without changing the instruction. Normalize whitespace before
-    # asserting the live meaning so editorial wrapping cannot create a false
-    # negative in the regression.
-    author = " ".join(topology._AUTHOR_SYSTEM.casefold().split())
-    critic = " ".join(topology._CRITIC_SYSTEM.casefold().split())
-
-    assert topology.LANGUAGE_ADAPTER_VERSION == "language-topology-2"
-    assert "one topic per stanza" not in author
-    assert "one concept per pair of lines" not in author
-    assert "a stanza does not automatically become a topic" in author
-    assert "never target a number of topics or concepts" in author
-    assert "grade" in author and "sourcebook" in author
-    assert "false granularity" in critic
-    assert "target count" in critic
-
-
-def test_mechanical_contract_accepts_grouped_poem_units_without_one_topic_per_stanza():
-    contract.install()
-    canonical = _canonical()
+def _grouped_plan(topology, canonical):
     blocks = topology._content_blocks(canonical)
     tasks = topology._task_payloads(canonical)
     block_ids = [str(block.get("block_id") or "") for block in blocks]
@@ -89,7 +75,7 @@ def test_mechanical_contract_accepts_grouped_poem_units_without_one_topic_per_st
     # Several source pieces (two verse paragraphs, the device explanation and
     # the task area) are deliberately taught under ONE coherent Grade-6 topic.
     # The only second topic is the required chapter-wide Detailed Analysis.
-    plan = {
+    return {
         "topics": [
             {
                 "plan_topic_id": "PT-1",
@@ -151,16 +137,57 @@ def test_mechanical_contract_accepts_grouped_poem_units_without_one_topic_per_st
         "notes": "",
     }
 
+
+def test_live_api_author_uses_grade_calibrated_contract(monkeypatch, tmp_path):
+    """Exercise the real model seam; do not infer semantics with string rules."""
+    topology = _topology()
+    canonical = _canonical()
+    grouped = _grouped_plan(topology, canonical)
+    systems: list[str] = []
+
+    def fake_provider(
+        *, system, prompt, schema, purpose="source_adjudication", max_tokens=None,
+    ):
+        systems.append(system)
+        if system == contract.CRITIC_SYSTEM:
+            return {"verdict": "concur", "dissents": []}
+        assert system == contract.AUTHOR_SYSTEM
+        return grouped
+
+    monkeypatch.setattr(topology, "_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(topology, "_provider_ready", lambda: True)
+    monkeypatch.setattr(topology, "_call_provider", fake_provider)
+
+    sealed = topology.author_language_plan(
+        canonical,
+        instruction_set=_instruction_set(),
+        work_name=WORK,
+    )
+
+    assert sealed["adapter_version"] == contract.LANGUAGE_ADAPTER_VERSION
+    assert sealed["plan"] == grouped
+    assert [topic["display_name"] for topic in sealed["plan"]["topics"]] == [
+        "Beginning Grade Six with confidence",
+        topology.detailed_analysis_title(WORK),
+    ]
+    assert systems == [contract.AUTHOR_SYSTEM, contract.CRITIC_SYSTEM]
+
+
+def test_mechanical_contract_accepts_grouped_poem_units_without_one_topic_per_stanza():
+    topology = _topology()
+    canonical = _canonical()
+    plan = _grouped_plan(topology, canonical)
+
     assert topology.plan_defects(
         plan,
-        blocks,
-        tasks,
+        topology._content_blocks(canonical),
+        topology._task_payloads(canonical),
         work_name=WORK,
     ) == []
 
 
 def test_adapter_version_rekeys_old_stanza_authored_plan_identity(monkeypatch):
-    contract.install()
+    topology = _topology()
     canonical = _canonical()
     instruction_set = _instruction_set()
     new_key = topology._decision_key(
@@ -170,7 +197,9 @@ def test_adapter_version_rekeys_old_stanza_authored_plan_identity(monkeypatch):
         work_name=WORK,
     )
 
-    monkeypatch.setattr(topology, "LANGUAGE_ADAPTER_VERSION", "language-topology-1")
+    monkeypatch.setattr(
+        topology, "LANGUAGE_ADAPTER_VERSION", "language-topology-1"
+    )
     old_key = topology._decision_key(
         canonical,
         instruction_set["instruction_set_sha256"],
