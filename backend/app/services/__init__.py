@@ -76,6 +76,9 @@ from .postlearning_host_contract import (
 from .postlearning_support_contract import (
     install as _install_postlearning_support_contract,
 )
+from .postlearning_support_routing_contract import (
+    install as _install_postlearning_support_routing_contract,
+)
 from .prelearning_formation_contract import (
     install as _install_prelearning_formation_contract,
 )
@@ -164,6 +167,9 @@ _install_postlearning_host_contract()
 # Carry the plan's exact support-block destinations through Container 02 and
 # into Activity/Info Hub after Polish, before Assemble seals the rows.
 _install_postlearning_support_contract()
+# The plan also outranks Place for those exact task-bearing support occurrences;
+# compact activity rendering stays downstream while non-task support stays whole.
+_install_postlearning_support_routing_contract()
 # Job-79 formation repair: Settle collisions and final prerequisite membership
 # are model judgments behind the same Phase-3 seam. Install last so every direct
 # service harness, recovery tool, and web run sees the exact same API authority.
@@ -198,4 +204,5 @@ del _install_type_coverage_fixer_contract
 del _install_postlearning_formation_contract
 del _install_postlearning_host_contract
 del _install_postlearning_support_contract
+del _install_postlearning_support_routing_contract
 del _install_prelearning_formation_contract
