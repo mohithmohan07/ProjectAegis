@@ -67,6 +67,21 @@ from .language_topology_grade_contract import (
 from .type_coverage_fixer_contract import (
     install as _install_type_coverage_fixer_contract,
 )
+from .postlearning_formation_contract import (
+    install as _install_postlearning_formation_contract,
+)
+from .postlearning_host_contract import (
+    install as _install_postlearning_host_contract,
+)
+from .postlearning_support_contract import (
+    install as _install_postlearning_support_contract,
+)
+from .postlearning_support_routing_contract import (
+    install as _install_postlearning_support_routing_contract,
+)
+from .prelearning_formation_contract import (
+    install as _install_prelearning_formation_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -141,6 +156,24 @@ _install_question_polishing_contract(generation)
 # the web application.
 _install_language_topology_grade_contract()
 _install_type_coverage_fixer_contract()
+# The literary plan is the Post-Learning topology authority. Install its
+# projection before Host/support transport and the Job-79 duplicate-row wrapper
+# so a fresh run starts from the plan's stanza/episode concepts.
+_install_postlearning_formation_contract()
+# Host may define a missing universal concept, but a sealed literary plan is a
+# complete Post map. Reconcile any temporary Host row to a planned concept
+# before Q14 and Assemble can publish it.
+_install_postlearning_host_contract()
+# Carry the plan's exact support-block destinations through Container 02 and
+# into Activity/Info Hub after Polish, before Assemble seals the rows.
+_install_postlearning_support_contract()
+# The plan also outranks Place for those exact task-bearing support occurrences;
+# compact activity rendering stays downstream while non-task support stays whole.
+_install_postlearning_support_routing_contract()
+# Job-79 formation repair: Settle collisions and final prerequisite membership
+# are model judgments behind the same Phase-3 seam. Install last so every direct
+# service harness, recovery tool, and web run sees the exact same API authority.
+_install_prelearning_formation_contract()
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -168,3 +201,8 @@ del _install_chapter_reading_contract
 del _install_question_polishing_contract
 del _install_language_topology_grade_contract
 del _install_type_coverage_fixer_contract
+del _install_postlearning_formation_contract
+del _install_postlearning_host_contract
+del _install_postlearning_support_contract
+del _install_postlearning_support_routing_contract
+del _install_prelearning_formation_contract
