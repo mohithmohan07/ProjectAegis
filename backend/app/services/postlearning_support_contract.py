@@ -2,8 +2,8 @@
 
 The language-plan author already decides which concept owns every Warm-up,
 performance cue, Word Basket, device box, grammar/listening/phonics component
-and other source-owned support occurrence.  That verdict used to stop inside
-the plan artifact.  This contract carries it through the shared pipeline:
+and other source-owned support occurrence. That verdict used to stop inside
+the plan artifact. This contract carries it through the shared pipeline:
 
 * a task-bearing threaded block becomes a Container-02 activity/info-hub item
   without losing its existing Container-03 question identity;
@@ -14,7 +14,7 @@ the plan artifact.  This contract carries it through the shared pipeline:
 
 The semantic act is the model's recorded ``threaded_components`` decision.
 This module performs only ID validation, exact-once transport, source-text
-copying and envelope resealing.  It never guesses from labels, subjects,
+copying and envelope resealing. It never guesses from labels, subjects,
 positions or vocabulary.
 """
 from __future__ import annotations
@@ -27,8 +27,8 @@ from typing import Any, Mapping, Sequence
 from . import postlearning_formation_contract as post
 
 
-CONTRACT_VERSION = 1
-SUPPORT_VERSION = "post-language-support-1"
+CONTRACT_VERSION = 2
+SUPPORT_VERSION = "post-language-support-2"
 SUPPORT_FIELD = "_aegis_language_threaded_support"
 NON_TEACHING_FIELD = "_aegis_language_non_teaching_blocks"
 SUPPORT_AUDIT_FIELDS = frozenset({SUPPORT_FIELD, NON_TEACHING_FIELD})
@@ -60,6 +60,14 @@ def _task_ids(block: Mapping[str, Any]) -> list[str]:
             if text and text not in values:
                 values.append(text)
     return values
+
+
+def _threaded_block_ids(plan: Mapping[str, Any]) -> set[str]:
+    return {
+        str(row.get("block_id") or "").strip()
+        for row in plan.get("threaded_components") or []
+        if isinstance(row, Mapping) and str(row.get("block_id") or "").strip()
+    }
 
 
 def support_records(env: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
@@ -123,6 +131,7 @@ def non_teaching_records(env: Mapping[str, Any]) -> list[dict[str, Any]]:
     if plan is None:
         return []
     blocks = _block_catalog(env)
+    threaded = _threaded_block_ids(plan)
     records: list[dict[str, Any]] = []
     seen: set[str] = set()
     for value in plan.get("non_teaching_block_ids") or []:
@@ -132,6 +141,11 @@ def non_teaching_records(env: Mapping[str, Any]) -> list[dict[str, Any]]:
         if block_id not in blocks:
             raise ValueError(
                 f"language plan non-teaching block {block_id!r} is unknown"
+            )
+        if block_id in threaded:
+            raise ValueError(
+                f"language plan block {block_id} is both threaded support and "
+                "non-teaching; one source occurrence needs one support verdict"
             )
         seen.add(block_id)
         records.append({
@@ -160,14 +174,18 @@ def prepare_envelope(env: Mapping[str, Any]) -> dict[str, Any]:
     promoted_qids: list[str] = []
     inventory = copy.deepcopy(dict(out.get("inventory") or {}))
     items: list[dict[str, Any]] = []
-    for raw in inventory.get("items") or []:
+    for position, raw in enumerate(inventory.get("items") or [], start=1):
         if not isinstance(raw, Mapping):
-            continue
+            raise ValueError(
+                f"question inventory item {position} is not an object"
+            )
         item = copy.deepcopy(dict(raw))
         task_id = str(
             item.get("_acsd_task_id") or item.get("task_id") or ""
         ).strip()
         if task_id and task_id in threaded_task_ids:
+            # Non-destructive dual role: the QID remains in Container 03 and
+            # joins Container 02 through the same recorded identity.
             item["_activity_origin"] = True
             qid = str(item.get("qid") or "").strip()
             if qid and qid not in promoted_qids:
@@ -292,8 +310,21 @@ def _register_release_audit_fields() -> None:
 
 def install() -> None:
     """Install support transport after Post formation and before Pre repair."""
+    envelope = importlib.import_module("app.services.phase3.envelope")
     runner = importlib.import_module("app.services.phase3.runner")
     polish = importlib.import_module("app.services.phase3.polish")
+
+    # Fresh runs must persist the already-materialized envelope. The runner
+    # wrapper below still upgrades legacy stored envelopes on read.
+    current_build = envelope.build
+    if not getattr(current_build, "_aegis_postlearning_support_build", False):
+        @wraps(current_build)
+        def build_with_support(*args, **kwargs):
+            return prepare_envelope(current_build(*args, **kwargs))
+
+        build_with_support._aegis_postlearning_support_build = True
+        build_with_support._aegis_postlearning_support_original = current_build
+        envelope.build = build_with_support
 
     current_run = runner.run
     if not getattr(current_run, "_aegis_postlearning_support_runner", False):
