@@ -70,6 +70,9 @@ from .type_coverage_fixer_contract import (
 from .postlearning_formation_contract import (
     install as _install_postlearning_formation_contract,
 )
+from .postlearning_support_contract import (
+    install as _install_postlearning_support_contract,
+)
 from .prelearning_formation_contract import (
     install as _install_prelearning_formation_contract,
 )
@@ -148,10 +151,12 @@ _install_question_polishing_contract(generation)
 _install_language_topology_grade_contract()
 _install_type_coverage_fixer_contract()
 # The literary plan is the Post-Learning topology authority. Install its
-# projection before the Job-79 duplicate-row wrapper so a fresh run starts from
-# the plan's stanza/episode concepts, and any residual drift is reconciled
-# before the generic duplicate guard sees the rows.
+# projection before the support transport and the Job-79 duplicate-row wrapper
+# so a fresh run starts from the plan's stanza/episode concepts.
 _install_postlearning_formation_contract()
+# Carry the plan's exact support-block destinations through Container 02 and
+# into Activity/Info Hub after Polish, before Assemble seals the rows.
+_install_postlearning_support_contract()
 # Job-79 formation repair: Settle collisions and final prerequisite membership
 # are model judgments behind the same Phase-3 seam. Install last so every direct
 # service harness, recovery tool, and web run sees the exact same API authority.
@@ -184,4 +189,5 @@ del _install_question_polishing_contract
 del _install_language_topology_grade_contract
 del _install_type_coverage_fixer_contract
 del _install_postlearning_formation_contract
+del _install_postlearning_support_contract
 del _install_prelearning_formation_contract
