@@ -307,12 +307,15 @@ def test_mechanical_contract_accepts_stanza_topics_and_topic_culminations():
 
 def test_prompt_binds_sourcebook_structure_without_physical_line_arithmetic():
     _topology()
+    prompt = " ".join(contract.AUTHOR_SYSTEM.split())
 
-    assert "Each stanza you identify becomes one Topic" in contract.AUTHOR_SYSTEM
-    assert "never iterate physical lines two at a time" in contract.AUTHOR_SYSTEM
-    assert "Warm-up" in contract.AUTHOR_SYSTEM
-    assert "Detailed Analysis" in contract.AUTHOR_SYSTEM
-    assert "target count" in contract.AUTHOR_SYSTEM
+    assert "Each stanza you identify becomes one Topic" in prompt
+    assert "never iterate physical lines two at a time" in prompt
+    assert "Warm-up" in prompt
+    assert "Detailed Analysis" in prompt
+    assert "threaded_components" in prompt
+    assert "non_teaching_block_ids" in prompt
+    assert "target count" in prompt
 
 
 def test_adapter_version_rekeys_retired_grouped_stanza_plan_identity(monkeypatch):
