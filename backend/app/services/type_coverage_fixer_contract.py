@@ -1,27 +1,14 @@
 """Replace residual semantic Type fabrication with one recorded Fixer decision.
 
-Type mining already spends its authored broad repairs and focused additive
-repairs.  The final fallback used to cross the Rule-1 boundary: code inspected
-question wording/source kind and *authored* a new Type title, Case title and
-semantic task pattern from regex/verb tables.  That is meaning, not mechanics.
+Production Build Concepts inventories carry the Phase-2 canonical source
+contract. For those inventories, Type mining already spends its authored broad
+repairs and focused additive repairs; any residual semantic coverage goes to The
+Fixer and never to regex/verb tables.
 
-This production contract keeps the exact-cover hard gate but changes the last
-recovery step:
-
-* the remaining missed QIDs, their complete canonical wording/context and the
-  immutable existing Type metadata go to The Fixer once;
-* the existing focused-delta validator remains the mechanical checker — every
-  missed QID must be represented exactly once, existing assignments cannot
-  move, and public Example wording is restored from the canonical inventory;
-* the decision is content-addressed in the same durable Phase-3 Fixer store;
-* a contract-satisfying result ships with visible review flags on the affected
-  mined Types, and that provenance follows the QIDs through the immediately
-  following semantic Type-consolidation pass; and
-* when no live Fixer exists or it cannot satisfy the checker, no semantic value
-  is fabricated.  The existing exact-cover gate refuses the run as genuine
-  protocol/provider impossibility.
-
-No subject, grade, source-kind, keyword or text-shape rule chooses a Type.
+A small legacy helper path is retained only for non-canonical programmatic/test
+inventories that predate Phase 2 and therefore cannot participate in the live
+source-authority contract. It is not reachable from production Build Concepts,
+whose source-critical gate requires the ACSD contract before paid generation.
 """
 from __future__ import annotations
 
@@ -30,13 +17,14 @@ import hashlib
 from functools import wraps
 from typing import Any, Mapping
 
+from . import canonical_source_phase2 as phase2
 from . import generation
 from . import progress
 from .phase3 import fixer as fixer_mod
 from .phase3 import kernel
 
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 DECISION_KIND = "fixer.type_coverage"
 
 
@@ -50,8 +38,15 @@ def _qid(item: object) -> str:
     return _normal(item)
 
 
+def _canonical_production_inventory(inventory: Mapping[str, Any]) -> bool:
+    contract = inventory.get("source_contract")
+    return bool(
+        isinstance(contract, Mapping)
+        and contract.get("mode") == phase2.SOURCE_CONTRACT_MODE
+    )
+
+
 def _source_item(item: Mapping[str, Any]) -> dict[str, Any]:
-    """Full semantic evidence needed for the decision, no positional guessing."""
     return {
         "qid": _qid(item),
         "source_kind": _normal(item.get("source_kind")),
@@ -70,29 +65,18 @@ def _source_item(item: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _candidate_from_response(
-    response: Mapping[str, Any],
-    *,
-    types: list[dict],
-    missed_items: list[dict],
-    inventory: dict,
+    response: Mapping[str, Any], *, types: list[dict],
+    missed_items: list[dict], inventory: dict,
 ) -> list[dict]:
     delta = generation._validate_focused_type_delta(
-        dict(response),
-        missed_items=missed_items,
-        existing_types=types,
+        dict(response), missed_items=missed_items, existing_types=types,
     )
     return generation._normalize_mined_type_candidate(
-        generation._merge_focused_type_delta(types, delta),
-        inventory,
+        generation._merge_focused_type_delta(types, delta), inventory,
     )
 
 
-def _checker(
-    *,
-    types: list[dict],
-    missed_items: list[dict],
-    inventory: dict,
-):
+def _checker(*, types: list[dict], missed_items: list[dict], inventory: dict):
     expected = {_qid(item) for item in missed_items if _qid(item)}
     before = generation._inventory_assignment_counts(types)
 
@@ -102,15 +86,11 @@ def _checker(
             defects.append("rationale is required")
         try:
             candidate = _candidate_from_response(
-                response,
-                types=types,
-                missed_items=missed_items,
+                response, types=types, missed_items=missed_items,
                 inventory=inventory,
             )
-        except Exception as exc:  # mechanical response contract
-            defects.append(f"invalid additive Type delta: {exc}")
-            return defects
-
+        except Exception as exc:
+            return [f"invalid additive Type delta: {exc}"]
         after = generation._inventory_assignment_counts(candidate)
         altered = sorted(
             qid for qid, count in before.items()
@@ -136,8 +116,7 @@ def _checker(
             defects.append(
                 "the Fixer produced duplicate QID assignment(s): "
                 + ", ".join(
-                    qid for row in duplicates[:12]
-                    if (qid := _qid(row))
+                    qid for row in duplicates[:12] if (qid := _qid(row))
                 )
             )
         return defects
@@ -162,10 +141,7 @@ def _owned_qids(mtype: Mapping[str, Any]) -> set[str]:
 
 
 def _flag_affected_types(
-    types: list[dict],
-    *,
-    missed_qids: set[str],
-    decision: Mapping[str, Any],
+    types: list[dict], *, missed_qids: set[str], decision: Mapping[str, Any],
 ) -> list[dict]:
     out = copy.deepcopy(types)
     rationale = _normal((decision.get("response") or {}).get("rationale"))[:240]
@@ -193,10 +169,7 @@ def _flag_affected_types(
     return out
 
 
-def _carry_fixer_provenance(
-    before: list[dict], after: list[dict],
-) -> list[dict]:
-    """Keep the recorded Fixer decision attached after semantic Type merging."""
+def _carry_fixer_provenance(before: list[dict], after: list[dict]) -> list[dict]:
     audit_by_qid: dict[str, dict[str, Any]] = {}
     for mtype in before:
         if not isinstance(mtype, Mapping):
@@ -210,7 +183,6 @@ def _carry_fixer_provenance(
                 audit_by_qid[value] = copy.deepcopy(dict(audit))
     if not audit_by_qid:
         return after
-
     out = copy.deepcopy(after)
     for mtype in out:
         if not isinstance(mtype, dict):
@@ -234,12 +206,8 @@ def _carry_fixer_provenance(
                 history.append(audit)
             flag = (
                 "fixer: residual Type coverage provenance retained after "
-                "semantic Type consolidation for "
-                + ", ".join(audit["qids"])
-                + (
-                    f" — {audit['rationale']}"
-                    if audit.get("rationale") else ""
-                )
+                "semantic Type consolidation for " + ", ".join(audit["qids"])
+                + (f" — {audit['rationale']}" if audit.get("rationale") else "")
             )
             flags = list(mtype.get("review_flags") or [])
             if flag not in flags:
@@ -257,8 +225,18 @@ def install() -> None:
     ):
         return
 
-    original = generation._append_deterministic_type_fallbacks
-    original_consolidate = generation._consolidate_semantic_types_via_api
+    # When upgrading v1 in-process, recover the pre-v1 helper rather than
+    # wrapping the v1 Fixer wrapper as the legacy path.
+    original = getattr(
+        generation,
+        "_LEGACY_DETERMINISTIC_TYPE_FALLBACKS",
+        generation._append_deterministic_type_fallbacks,
+    )
+    original_consolidate = getattr(
+        generation,
+        "_PRE_FIXER_TYPE_CONSOLIDATION",
+        generation._consolidate_semantic_types_via_api,
+    )
     generation._LEGACY_DETERMINISTIC_TYPE_FALLBACKS = original
     generation._PRE_FIXER_TYPE_CONSOLIDATION = original_consolidate
 
@@ -266,6 +244,14 @@ def install() -> None:
     def recover_with_fixer(
         types: list[dict], *, missed_items: list[dict], inventory: dict,
     ) -> tuple[list[dict], int]:
+        # Non-canonical callers are outside the production Phase-2 authority
+        # contract. Preserve their historical helper behavior for compatibility;
+        # live Build Concepts cannot enter this branch.
+        if not _canonical_production_inventory(inventory):
+            return original(
+                types, missed_items=missed_items, inventory=inventory
+            )
+
         missed = [
             copy.deepcopy(item)
             for item in missed_items
@@ -273,7 +259,6 @@ def install() -> None:
         ]
         if not missed:
             return types, 0
-
         provider = fixer_mod.default_provider()
         if provider is None:
             progress.log(
@@ -304,8 +289,7 @@ def install() -> None:
                     "exactly one Example under exactly one Case. You may add a "
                     "Case to an existing Type by its exact type_id or add a new "
                     "Type. Never omit a residual QID and never claim any other "
-                    "QID. The checker restores public Example wording from the "
-                    "canonical inventory. Response schema: {\"types\": [...], "
+                    "QID. Response schema: {\"types\": [...], "
                     "\"rationale\": \"...\"}."
                 ),
             },
@@ -314,22 +298,16 @@ def install() -> None:
                 types
             ),
         }
-        # Payload hashing already binds the exact inventory evidence and current
-        # Type metadata.  The stable source-contract digest is an additional
-        # envelope identity when available; no content meaning is inferred.
         source_contract = inventory.get("source_contract")
         source_contract = (
             dict(source_contract) if isinstance(source_contract, Mapping) else {}
         )
         envelope_sha = str(
             source_contract.get("source_contract_hash")
-            or source_contract.get("source_sha256")
-            or ""
-        )
-        if not envelope_sha:
-            envelope_sha = hashlib.sha256(
-                repr(sorted(missed_qids)).encode("utf-8")
-            ).hexdigest()
+            or source_contract.get("source_sha256") or ""
+        ) or hashlib.sha256(
+            repr(sorted(missed_qids)).encode("utf-8")
+        ).hexdigest()
 
         try:
             decision = kernel.decide(
@@ -341,9 +319,7 @@ def install() -> None:
                 payload=payload,
                 provider=provider,
                 checker=_checker(
-                    types=types,
-                    missed_items=missed,
-                    inventory=inventory,
+                    types=types, missed_items=missed, inventory=inventory,
                 ),
                 store=generation._phase3_fixer_store(),
                 policy_version=fixer_mod.FIXER_POLICY_VERSION,
@@ -359,15 +335,11 @@ def install() -> None:
             return types, 0
 
         candidate = _candidate_from_response(
-            decision.get("response") or {},
-            types=types,
-            missed_items=missed,
-            inventory=inventory,
+            decision.get("response") or {}, types=types,
+            missed_items=missed, inventory=inventory,
         )
         candidate = _flag_affected_types(
-            candidate,
-            missed_qids=missed_qids,
-            decision=decision,
+            candidate, missed_qids=missed_qids, decision=decision,
         )
         progress.log(
             "The Fixer resolved residual Type coverage for "
@@ -389,13 +361,10 @@ def install() -> None:
             return result
         result = copy.deepcopy(result)
         result["types"] = _carry_fixer_provenance(
-            before,
-            list(result.get("types") or []),
+            before, list(result.get("types") or []),
         )
         return result
 
     generation._append_deterministic_type_fallbacks = recover_with_fixer
-    generation._consolidate_semantic_types_via_api = (
-        consolidate_with_fixer_provenance
-    )
+    generation._consolidate_semantic_types_via_api = consolidate_with_fixer_provenance
     generation._TYPE_COVERAGE_FIXER_CONTRACT_VERSION = CONTRACT_VERSION
