@@ -312,7 +312,7 @@ def test_prompt_binds_sourcebook_structure_without_physical_line_arithmetic():
     assert "Each stanza you identify becomes one Topic" in prompt
     assert "never iterate physical lines two at a time" in prompt
     assert "Warm-up" in prompt
-    assert "Detailed Analysis" in prompt
+    assert "DETAILED ANALYSIS" in prompt
     assert "threaded_components" in prompt
     assert "non_teaching_block_ids" in prompt
     assert "target count" in prompt
