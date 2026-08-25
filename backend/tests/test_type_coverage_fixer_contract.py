@@ -37,8 +37,8 @@ def _inventory():
 
 def _valid_fixer(_payload):
     # Deliberately put incorrect public Example prose in the model response.
-    # The existing focused-delta validator must restore the canonical source
-    # wording before anything can ship.
+    # The existing focused-delta validator must restore the canonical rendered
+    # inventory wording before anything can ship.
     return {
         "types": [{
             "type_id": "TYPE-FIXER-0001",
@@ -84,8 +84,12 @@ def test_residual_coverage_uses_recorded_fixer_and_restores_source_wording(
     assert recovered[0]["source_question_ids"] == ["QINV-0001"]
     example = g._case_examples(recovered[0]["case_prompts"][0])[0]
     assert example["source_question_id"] == "QINV-0001"
-    assert example["example_prompt"] == (
-        "Find more examples of Alliteration from the poem."
+    assert example["example_prompt"] == g._inventory_task_text(
+        inventory["items"][0]
+    )
+    assert "MODEL MUST NOT OWN THIS WORDING" not in example["example_prompt"]
+    assert "Find more examples of Alliteration from the poem." in (
+        example["example_prompt"]
     )
     assert any(
         "fixer: residual Type coverage" in flag
