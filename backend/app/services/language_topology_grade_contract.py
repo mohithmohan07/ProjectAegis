@@ -19,10 +19,13 @@ silently replayed after deployment.
 """
 from __future__ import annotations
 
+import importlib
+import sys
+
 from . import language_topology as topology
 
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 LANGUAGE_ADAPTER_VERSION = "language-topology-2"
 
 AUTHOR_SYSTEM = """\
@@ -101,17 +104,28 @@ Your dissent is an advisory review flag for a human reviewer — it blocks
 nothing — so dissent freely and precisely."""
 
 
-def install() -> None:
-    """Reassert the live bindings on every call; module reloads must be harmless.
+def _current_topology_modules():
+    """Return every live module object that may hold the adapter globals.
 
-    ``importlib.reload(language_topology)`` re-executes that module in its
-    existing dictionary. Python therefore resets the prompt/version constants
-    defined by the base module but can leave our private contract marker behind.
-    A marker-only early return would then preserve the OLD prompt even though
-    the contract appeared installed. These assignments are pure/idempotent, so
-    rebinding them every time is the correct service-level contract.
+    Most reloads execute in place, but some tests/tools intentionally evict and
+    re-import modules. In that case this contract's captured module reference
+    and the current package module can differ. Rebinding both is harmless and
+    keeps direct service runs, recovery tools and test reloads on one contract.
     """
-    topology.LANGUAGE_ADAPTER_VERSION = LANGUAGE_ADAPTER_VERSION
-    topology._AUTHOR_SYSTEM = AUTHOR_SYSTEM
-    topology._CRITIC_SYSTEM = CRITIC_SYSTEM
-    topology._GRADE_TOPOLOGY_CONTRACT_VERSION = CONTRACT_VERSION
+    targets = [topology]
+    current = sys.modules.get("app.services.language_topology")
+    if current is not None and current not in targets:
+        targets.append(current)
+    imported = importlib.import_module("app.services.language_topology")
+    if imported not in targets:
+        targets.append(imported)
+    return targets
+
+
+def install() -> None:
+    """Reassert the live bindings on every current module object."""
+    for target in _current_topology_modules():
+        target.LANGUAGE_ADAPTER_VERSION = LANGUAGE_ADAPTER_VERSION
+        target._AUTHOR_SYSTEM = AUTHOR_SYSTEM
+        target._CRITIC_SYSTEM = CRITIC_SYSTEM
+        target._GRADE_TOPOLOGY_CONTRACT_VERSION = CONTRACT_VERSION
