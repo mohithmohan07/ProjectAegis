@@ -67,6 +67,9 @@ from .language_topology_grade_contract import (
 from .type_coverage_fixer_contract import (
     install as _install_type_coverage_fixer_contract,
 )
+from .prelearning_formation_contract import (
+    install as _install_prelearning_formation_contract,
+)
 
 # Production order is intentional and fail-closed: preserve source identity first,
 # defer Type allocation to the topology freeze, restore integration boundaries,
@@ -141,6 +144,10 @@ _install_question_polishing_contract(generation)
 # the web application.
 _install_language_topology_grade_contract()
 _install_type_coverage_fixer_contract()
+# Job-79 formation repair: Settle collisions and final prerequisite membership
+# are model judgments behind the same Phase-3 seam. Install last so every direct
+# service harness, recovery tool, and web run sees the exact same API authority.
+_install_prelearning_formation_contract()
 
 del _install_closed_inventory_contract
 del _install_concept_topology_contract
@@ -168,3 +175,4 @@ del _install_chapter_reading_contract
 del _install_question_polishing_contract
 del _install_language_topology_grade_contract
 del _install_type_coverage_fixer_contract
+del _install_prelearning_formation_contract
