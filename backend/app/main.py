@@ -20,6 +20,7 @@ from .services import build_concepts_release_manifest
 from .services import build_concepts_terminal_release_contract
 from .services import type_coverage_fixer_contract
 from .services import language_topology_grade_contract
+from .services import four_output_release_contract
 from .services import assessment_release_service
 from .services import storage_capacity
 from .api import (
@@ -54,6 +55,11 @@ def bootstrap() -> None:
     build_concepts_release_contract.install()
     build_concepts_terminal_release_contract.install()
     type_coverage_fixer_contract.install()
+    # The Job-79 literary contracts transform the Phase-3 envelope and author
+    # the Pre sibling inside the rewritten runner. Install the mechanical
+    # handoff last so the durable envelope and release capture are the exact
+    # artifacts those contracts produced, not their pre-transformation inputs.
+    four_output_release_contract.install()
     # A crashed publisher leaves only an unpublished ``vN.staging`` tree.
     # Sweep those exact trees before database/bootstrap writes so stale debris
     # can return capacity to an otherwise full volume. Recovery is best-effort
