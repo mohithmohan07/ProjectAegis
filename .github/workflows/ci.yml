@@ -1,10 +1,11 @@
 name: CI
 
 on:
-  # Owner ruling (21 Aug 2026): no automatic runs on every push — CI runs
-  # only when triggered by hand. Start it from the repo's Actions tab
-  # ("Run workflow") when a check is wanted. To restore automatic
-  # validation later, re-add the push/pull_request triggers here.
+  # Owner ruling (26 Aug 2026): CI runs automatically on pull requests, so
+  # every PR carries its own checks. Plain pushes without a PR still do not
+  # run CI (per the 21 Aug 2026 ruling); use the Actions tab ("Run
+  # workflow") to check a branch by hand.
+  pull_request:
   workflow_dispatch:
 
 concurrency:
