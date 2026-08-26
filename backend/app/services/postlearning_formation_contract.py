@@ -187,6 +187,28 @@ def _known_ids(env: Mapping[str, Any]) -> tuple[set[str], set[str]]:
     return block_ids, qids
 
 
+def _recorded_split_children(env: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Model-split child QIDs keyed by the parent QID the inventory recorded.
+
+    The plan is authored and replayed against the canonical bundle's task
+    QIDs, while this boundary validates against the inventory — where the
+    reader may have split one printed task into recorded sub-questions.
+    A parent reference resolves only through that recorded ``parent_qid``
+    linkage, in inventory order; nothing is matched by wording or shape.
+    """
+    children: dict[str, list[str]] = {}
+    for row in (env.get("inventory") or {}).get("items") or []:
+        if not isinstance(row, Mapping):
+            continue
+        qid = str(row.get("qid") or "")
+        parent = str(
+            row.get("parent_qid") or row.get("_acsd_parent_qid") or ""
+        )
+        if qid and parent and parent != qid:
+            children.setdefault(parent, []).append(qid)
+    return children
+
+
 def plan_entries(env: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Validate and flatten the transported plan in its authored order."""
     plan = language_plan(env)
@@ -203,6 +225,7 @@ def plan_entries(env: Mapping[str, Any]) -> list[dict[str, Any]]:
             topics_by_plan_id.setdefault(plan_topic_id, []).append(row)
 
     known_blocks, known_qids = _known_ids(env)
+    split_children = _recorded_split_children(env)
     seen_topics: set[str] = set()
     seen_concepts: set[str] = set()
     seen_task_owners: set[str] = set()
@@ -256,13 +279,23 @@ def plan_entries(env: Mapping[str, Any]) -> list[dict[str, Any]]:
                     f"language plan concept {plan_concept_id} names unknown "
                     "source block(s): " + ", ".join(unknown_blocks[:6])
                 )
-            task_qids = _list_strings(concept.get("task_qids"))
-            unknown_qids = [value for value in task_qids if value not in known_qids]
+            resolved_qids: list[str] = []
+            expansions: dict[str, list[str]] = {}
+            unknown_qids: list[str] = []
+            for qid in _list_strings(concept.get("task_qids")):
+                if qid in known_qids:
+                    resolved_qids.append(qid)
+                elif qid in split_children:
+                    expansions[qid] = list(split_children[qid])
+                    resolved_qids.extend(split_children[qid])
+                else:
+                    unknown_qids.append(qid)
             if unknown_qids:
                 raise ValueError(
                     f"language plan concept {plan_concept_id} names unknown "
                     "task(s): " + ", ".join(unknown_qids[:6])
                 )
+            task_qids = list(dict.fromkeys(resolved_qids))
             repeated_qids = [value for value in task_qids if value in seen_task_owners]
             if repeated_qids:
                 raise ValueError(
@@ -287,6 +320,7 @@ def plan_entries(env: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "facets": _list_strings(concept.get("facets")),
                 "source_block_ids": source_block_ids,
                 "task_qids": task_qids,
+                "task_qid_expansions": expansions,
                 "achieving_mastery": mastery,
                 "rationale": _normal(concept.get("rationale")),
                 "culmination": culmination,
