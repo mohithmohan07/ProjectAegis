@@ -843,3 +843,35 @@ def test_the_fixer_may_never_pick_replace_source(monkeypatch):
     # Protocol impossibility: the caller's raise then ends the run.
     assert fixed_id is None
     assert calls == 3
+
+
+# ---------------------------------------------------------------------------
+# The Fixer's dedicated model (owner direction, 2026-08-27)
+
+
+def test_live_fixer_requests_the_fixer_model(monkeypatch):
+    """Every live Fixer decision is requested from GPT-5.6 Terra by
+    default — the highest-stakes call in the run is not tied to the
+    deployment's general-purpose model — and the env override names a
+    different model for this seam alone."""
+
+    captured: list[dict] = []
+
+    def fake_openai_json(system, user, *args, **kwargs):
+        captured.append({"system": system, "user": user, **kwargs})
+        return {"decision": "recorded"}
+
+    monkeypatch.setattr(g, "_openai_json", fake_openai_json)
+
+    monkeypatch.delenv(fixer_mod.FIXER_MODEL_ENV, raising=False)
+    assert fixer_mod.fixer_model() == fixer_mod.DEFAULT_FIXER_MODEL == (
+        "gpt-5.6-terra"
+    )
+    fixer_mod.live_fixer(_payload())
+    assert captured[-1]["model"] == "gpt-5.6-terra"
+    assert captured[-1]["purpose"] == "concept_validation"
+
+    monkeypatch.setenv(fixer_mod.FIXER_MODEL_ENV, "gpt-5.6-luna")
+    assert fixer_mod.fixer_model() == "gpt-5.6-luna"
+    fixer_mod.live_fixer(_payload())
+    assert captured[-1]["model"] == "gpt-5.6-luna"

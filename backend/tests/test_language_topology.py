@@ -115,7 +115,7 @@ def _script(canonical, *, plan=None, critic=None, fail_first=False):
     good = plan or _valid_plan(canonical)
 
     def call(*, system, prompt, schema, purpose="source_adjudication",
-             max_tokens=None):
+             max_tokens=None, model=None):
         if system == lt._CRITIC_SYSTEM:
             calls["critic"] += 1
             return critic or {"verdict": "concur", "dissents": []}

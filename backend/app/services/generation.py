@@ -2881,8 +2881,15 @@ def _openai_json(
     single_attempt: bool = False,
     prompt_cache_prefix: str = "",
     prompt_cache_key: str = "",
+    model: str | None = None,
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
+
+    ``model`` overrides the deployment's configured model for THIS call
+    only (the Fixer's dedicated model, ``phase3.fixer.fixer_model``). It
+    rides the same request policy, effort negotiation, retry loop and
+    usage accounting as the configured model; ``None`` keeps
+    ``config.OPENAI_MODEL`` for every ordinary caller.
 
     Concurrency-safe for multiple simultaneous users on one shared API key:
     calls queue on a process-wide gate (never stampede the API), and
@@ -2913,7 +2920,9 @@ def _openai_json(
     transient_errors = (
         RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
     limit = config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
-    request_policy = chat_request_policy(purpose, model=config.OPENAI_MODEL)
+    request_policy = chat_request_policy(
+        purpose, model=model or config.OPENAI_MODEL
+    )
     # Disable SDK-level retries: this layer already supplies the retry policy
     # and can surface each wait to the active progress stream.
     from . import model_provider

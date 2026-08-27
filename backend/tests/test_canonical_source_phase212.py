@@ -56,7 +56,7 @@ def _script_author(rules):
     calls = {"author": 0, "critic": 0, "fixer": 0, "correction": 0}
 
     def call(*, system, prompt, schema, purpose="source_extraction",
-             max_tokens=None):
+             max_tokens=None, model=None):
         payload = json.loads(prompt)
         if system == qx._CRITIC_SYSTEM:
             calls["critic"] += 1
@@ -263,7 +263,7 @@ def test_critic_dissent_is_one_flag_never_a_gate(monkeypatch, tmp_path):
     call, calls = _script_author(MARATHI_RULES)
 
     def with_dissent(*, system, prompt, schema, purpose="source_extraction",
-                     max_tokens=None):
+                     max_tokens=None, model=None):
         if system == qx._CRITIC_SYSTEM:
             return {
                 "verdict": "dissent",
@@ -292,7 +292,7 @@ def test_correction_round_repairs_missing_coverage(monkeypatch, tmp_path):
 
     def drop_one_then_correct(*, system, prompt,
                               schema, purpose="source_extraction",
-                              max_tokens=None):
+                              max_tokens=None, model=None):
         response = call(system=system, prompt=prompt, schema=schema,
                         purpose=purpose, max_tokens=max_tokens)
         if system == qx._AUTHOR_SYSTEM and state["first"]:
