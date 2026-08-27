@@ -132,6 +132,43 @@ class SourceQuestionLeak(ReleaseRunError):
     """
 
 
+# The Master build's coarse stage sequence, in execution order, consumed
+# by the optional in-run progress observer (``stage_progress`` below and
+# the wiring in ``build_concepts_release_contract._build_master_siblings``)
+# so the two concurrently-building lanes fill one fixed slice of the bar
+# as their stages finish. Mechanics only — names and order, no content —
+# and the run's behavior is identical when no observer is attached.
+MASTER_BUILD_STAGES = (
+    "inventory",
+    "cells",
+    "materialize",
+    "restriction",
+    "marking",
+    "routing",
+    "levels",
+    "clustering",
+    "describe",
+    "qa",
+    "refine",
+    "publish",
+)
+
+
+def _observe_stage(observer, stage, done=None, total=None) -> None:
+    """Report one stage boundary/step to the optional progress observer.
+
+    Never raises: progress is an assist, and a reporting defect must not
+    cost a Master lane.
+    """
+
+    if observer is None:
+        return
+    try:
+        observer(stage, done, total)
+    except Exception:  # noqa: BLE001 - progress must never fail the lane
+        pass
+
+
 def _authority_pair(
     authorities: Mapping[str, Any], key: str,
 ) -> tuple[Any | None, Any | None]:
@@ -1398,8 +1435,15 @@ def run_release_for_job(
     decision_store: kernel.DecisionStore | None = None,
     supersedes: models.AssessmentRelease | None = None,
     image_downloader: question_image_grid.Downloader | None = None,
+    stage_progress=None,
 ) -> models.AssessmentRelease:
     """Run the complete assessment pipeline for one generated job.
+
+    ``stage_progress`` is an optional ``(stage, done, total)`` callable
+    reporting the ``MASTER_BUILD_STAGES`` boundaries (and, for the long
+    fan-outs, per-unit counts) to the caller's progress accounting. It is
+    an assist only — never consulted for any decision, and a raising
+    observer is swallowed (``_observe_stage``).
 
     ``authorities`` optionally injects (author, critic) call pairs per stage
     — keys: cells, materialize, answer_restriction, marking, route, level,
@@ -1582,6 +1626,7 @@ def run_release_for_job(
         envelope_sha256=envelope_sha256,
         decision_store=decision_store,
     )
+    _observe_stage(stage_progress, "inventory")
     if snapshot_directory is not None:
         # Each Master lane keeps its OWN durable audit snapshots. The two
         # lanes share one artifact directory and one filename family
@@ -1761,6 +1806,7 @@ def run_release_for_job(
             # lane's parallel of the source lane's per-atom verdicts
             # below. An explicit ``blueprint_cells`` argument remains the
             # zero-spend path for callers that already hold the cells.
+            _observe_stage(stage_progress, "cells")
             progress.log(
                 f"Deciding assessment cells for {len(questions)} generated "
                 "question(s)."
@@ -1845,6 +1891,7 @@ def run_release_for_job(
                 concept_keys=concept_keys,
             )
         else:
+            _observe_stage(stage_progress, "cells")
             progress.log(
                 f"Classifying {len(atoms)} source atom(s) into blueprint "
                 "cells.")
@@ -1895,6 +1942,7 @@ def run_release_for_job(
     )
 
     # Stage 4 — materialize complete semantic candidates (zero-loss inside).
+    _observe_stage(stage_progress, "materialize", 0, len(obligations))
     progress.log(f"Materializing {len(obligations)} assessment candidate(s).")
     materialize_provider, materialize_critic = _authority_pair(
         authorities, "materialize"
@@ -1912,6 +1960,12 @@ def run_release_for_job(
         critic=materialize_critic,
         store=store,
         fixer=fixer,
+        on_result=(
+            None if stage_progress is None
+            else lambda index, item, result: _observe_stage(
+                stage_progress, "materialize", index + 1, len(obligations)
+            )
+        ),
     )
     candidates = materialized["candidates"]
     if len(candidates) != len(obligations) or len(candidates) != len(cells):
@@ -2083,6 +2137,7 @@ def run_release_for_job(
     # Stage 5 — decide Open/Specific from the complete, unweighted answer
     # space and the authoritative v2.0 registry.  The registry is evidence,
     # never an executable lookup; there is no local or sheet-kind default.
+    _observe_stage(stage_progress, "restriction")
     progress.log(
         f"Classifying the answer space of {len(candidates)} candidate(s)."
     )
@@ -2139,6 +2194,7 @@ def run_release_for_job(
     # Stage 6 — allocate the explicit cell's canonical marks without changing
     # the materializer's semantic answer space.  Duration and keyboard mode
     # are authored here too; the workbook renderer has no local defaults.
+    _observe_stage(stage_progress, "marking", 0, len(candidates))
     progress.log(f"Authoring marking for {len(candidates)} candidate(s).")
     marking_provider, marking_critic = _authority_pair(
         authorities, "marking"
@@ -2152,6 +2208,12 @@ def run_release_for_job(
         critic=marking_critic,
         store=store,
         fixer=fixer,
+        on_result=(
+            None if stage_progress is None
+            else lambda index, item, result: _observe_stage(
+                stage_progress, "marking", index + 1, len(candidates)
+            )
+        ),
     )
     marking_by_candidate = _candidate_rows_exactly(
         "assessment marking", candidates, marking_rows
@@ -2189,6 +2251,7 @@ def run_release_for_job(
 
     # Stage 7 — route only across the immutable staged concept-release
     # concepts (this run's own lane; OD4 numbers them 01 or 03).
+    _observe_stage(stage_progress, "routing")
     progress.log(
         f"Routing {len(candidates)} candidate(s) across "
         f"{len(concept_payload)} concept(s).")
@@ -2250,6 +2313,7 @@ def run_release_for_job(
         candidate["concept_key"] = str(concept_key)
         eligible.append(candidate)
 
+    _observe_stage(stage_progress, "levels")
     level_provider, level_critic = _authority_pair(authorities, "level")
     level_rows = grouping.decide_levels(
         [
@@ -2339,9 +2403,13 @@ def run_release_for_job(
     tier_order = {tier: index for index, tier in enumerate(grouping.TIER_CODES)}
 
     groups: list[dict] = []
-    for (concept_key, tier), members in sorted(
+    sorted_buckets = sorted(
         buckets.items(),
         key=lambda item: (item[0][0], tier_order[item[0][1]]),
+    )
+    _observe_stage(stage_progress, "clustering", 0, len(sorted_buckets))
+    for bucket_index, ((concept_key, tier), members) in enumerate(
+        sorted_buckets
     ):
         concept = concept_records_by_key[concept_key]
         concept_evidence = _concept_evidence(concept)
@@ -2410,6 +2478,10 @@ def run_release_for_job(
                 placement = placement_by_candidate[member["candidate_id"]]
                 placement["group_key"] = record["group_key"]
             groups.append(record)
+        _observe_stage(
+            stage_progress, "clustering",
+            bucket_index + 1, len(sorted_buckets),
+        )
 
     duplicate_group_keys = rel.duplicate_group_keys(groups)
     if duplicate_group_keys:
@@ -2450,7 +2522,8 @@ def run_release_for_job(
         str(candidate.get("candidate_id") or ""): candidate
         for candidate in eligible
     }
-    for record in groups:
+    _observe_stage(stage_progress, "describe", 0, len(groups))
+    for group_index, record in enumerate(groups):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
@@ -2481,12 +2554,16 @@ def run_release_for_job(
         }
         if _needs_review(description):
             _append_warning(record, _DESCRIPTION_WARNING)
+        _observe_stage(
+            stage_progress, "describe", group_index + 1, len(groups)
+        )
 
     # Stage 11 — every group receives the complete, symmetric same-home/tier
     # sibling context. QA only flags and never changes the authored records.
     qa_provider, qa_critic = _authority_pair(authorities, "qa")
     quality_groups = [_group_evidence(group) for group in groups]
-    for record in groups:
+    _observe_stage(stage_progress, "qa", 0, len(groups))
+    for group_index, record in enumerate(groups):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
@@ -2533,6 +2610,7 @@ def run_release_for_job(
             or str(review.get("quality_review") or "") == "flagged"
         ):
             _append_warning(record, _QUALITY_WARNING)
+        _observe_stage(stage_progress, "qa", group_index + 1, len(groups))
 
     _assert_learner_text_unchanged(learner_text_before, candidates)
     _snapshot_groups(
@@ -2599,6 +2677,7 @@ def run_release_for_job(
     # decides each unit once, rolls back any identity/arithmetic/read-back
     # regression, and never blocks this release: unavailable units remain
     # authored byte-stable with visible review flags.
+    _observe_stage(stage_progress, "refine")
     progress.log(
         "Assessment release: refining final Master prose with immutable "
         "question and marking identities."
@@ -2612,6 +2691,12 @@ def run_release_for_job(
     refined_records, refinement_diff, refinement_flags = (
         release_refiner.refine_release(
             [payload],
+            on_unit=(
+                None if stage_progress is None
+                else lambda done, total: _observe_stage(
+                    stage_progress, "refine", done, total
+                )
+            ),
             metadata={**meta, "assessment_profile": profile},
             provider=refiner_provider,
             critic=refiner_critic,
@@ -2777,6 +2862,7 @@ def run_release_for_job(
         # answer.
         supersedes = release_core.release_chain_head(
             db, job.id, staged_lane)
+    _observe_stage(stage_progress, "publish")
     release = release_service.create_release(
         db,
         chapter_id=chapter_id,
@@ -2794,6 +2880,7 @@ def run_release_for_job(
         ),
     )
     release = release_service.publish_release(db, release)
+    _observe_stage(stage_progress, "done")
     progress.log(
         f"Assessment release {release.release_uid} v{release.version} "
         f"published: readiness "

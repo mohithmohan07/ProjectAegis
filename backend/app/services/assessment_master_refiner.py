@@ -22,6 +22,7 @@ import unicodedata
 from collections import Counter
 from typing import Any, Mapping, Sequence
 
+from .. import config
 from ..bulk_import import assessment_workbook
 from . import assessment_profile
 from . import katex_rules
@@ -927,8 +928,14 @@ def refine_master(
     store: kernel.DecisionStore | None = None,
     envelope_sha256: str | None = None,
     fixer: kernel.Provider | None = None,
+    on_unit=None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
-    """Refine one complete assessment payload; never raise or block."""
+    """Refine one complete assessment payload; never raise or block.
+
+    ``on_unit(done, total)`` is an optional progress hook called after
+    each unit is applied or contained: reporting mechanics only, never an
+    input to any decision, and a raising observer is swallowed.
+    """
 
     originals = [
         copy.deepcopy(dict(record))
@@ -999,81 +1006,61 @@ def refine_master(
             if list(group.get("member_candidate_ids") or [])
         )
 
-        for unit_kind, index in units:
-            collection = "candidates" if unit_kind == "candidate" else "groups"
-            record = current[collection][index]
-            id_field = "candidate_id" if unit_kind == "candidate" else "group_key"
-            unit_id = str(record.get(id_field) or "").strip()
-            policy = (
-                CANDIDATE_POLICY_VERSION
-                if unit_kind == "candidate"
-                else GROUP_POLICY_VERSION
-            )
-            kind = CANDIDATE_KIND if unit_kind == "candidate" else GROUP_KIND
-            rendered_rows = (
-                current_state["candidate_rows"].get(unit_id, [])
-                if unit_kind == "candidate"
-                else current_state["group_rows"].get(unit_id, [])
-            )
-            if not unit_id or not rendered_rows:
-                reason = (
-                    f"{unit_kind} {unit_id or '<blank>'!r} has no unique "
-                    "rendered Master evidence"
-                )
-                _append_warning(record)
-                record[AUDIT_FIELD] = _audit(
-                    unit_kind=unit_kind,
-                    policy_version=policy,
-                    status="unavailable",
-                    changed_paths=[],
-                    rationale=reason,
-                    review_flags=[reason],
-                )
-                release_flags.append(reason)
-                continue
+        # The units run in TWO WAVES — every candidate, then every group —
+        # each wave deciding in parallel and applying sequentially, the
+        # pattern release_refiner.py already uses for the concepts lane.
+        # The evidence each unit is shown is unchanged from the serial
+        # loop this replaces: a candidate's rendered rows are its own and
+        # are untouched by any other candidate's whitelisted prose, so the
+        # wave-opening render is the same evidence the serial loop showed
+        # it; a group's rendered rows DO include its members' rows, which
+        # is why groups wait for every candidate application before their
+        # wave's payloads are assembled. Application, rollback, audits and
+        # flags stay strictly in unit order, so the refined payload is the
+        # one the serial loop produced.
+        workers = config.phase3_decision_workers()
+        done_units = 0
+        total_units = len(units)
 
-            decision_record = _model_record(record)
-            payload = _unit_payload(
-                unit_kind=unit_kind,
-                unit_id=unit_id,
-                record=record,
-                rendered_rows=rendered_rows,
-                metadata=metadata,
-                instruction_set=instruction_set,
-                context={
-                    **context,
-                    "member_questions": [
-                        {
-                            "candidate_id": str(candidate.get("candidate_id") or ""),
-                            "question": str(candidate.get("question") or ""),
-                            "question_text": str(candidate.get("question_text") or ""),
-                        }
-                        for candidate in current.get("candidates") or []
-                        if unit_kind == "group"
-                        and str(candidate.get("candidate_id") or "")
-                        in set(record.get("member_candidate_ids") or [])
-                    ],
-                },
-            )
-            decision: Mapping[str, Any] | None = None
+        def _report_unit() -> None:
+            # Reporting mechanics only; a raising observer must not reach
+            # the never-raise seam and convert into a global fallback.
+            if on_unit is None:
+                return
+            try:
+                on_unit(done_units, total_units)
+            except Exception:  # noqa: BLE001 - progress is an assist
+                pass
+
+        def _apply_outcome(entry: dict[str, Any], outcome: object) -> None:
+            nonlocal current, current_state, done_units
+            unit_kind = entry["unit_kind"]
+            collection = entry["collection"]
+            index = entry["index"]
+            policy = entry["policy"]
+            unit_id = entry["unit_id"]
+            record = current[collection][index]
+            decision = outcome if isinstance(outcome, Mapping) else None
             decision_flags: list[str] = []
             try:
-                decision = kernel.decide(
-                    kind=kind,
-                    unit_id=unit_id,
-                    envelope_sha256=envelope_sha,
-                    payload=payload,
-                    provider=provider,
-                    checker=_response_checker(
+                if entry.get("no_evidence"):
+                    reason = (
+                        f"{unit_kind} {unit_id or '<blank>'!r} has no unique "
+                        "rendered Master evidence"
+                    )
+                    _append_warning(record)
+                    record[AUDIT_FIELD] = _audit(
                         unit_kind=unit_kind,
-                        unit_id=unit_id,
-                        original=decision_record,
-                    ),
-                    critic=critic,
-                    store=decision_store,
-                    policy_version=policy,
-                    fixer=fixer,
-                )
+                        policy_version=policy,
+                        status="unavailable",
+                        changed_paths=[],
+                        rationale=reason,
+                        review_flags=[reason],
+                    )
+                    release_flags.append(reason)
+                    return
+                if isinstance(outcome, BaseException):
+                    raise outcome
                 decision_flags = [
                     str(flag)
                     for flag in decision.get("review_flags") or []
@@ -1084,46 +1071,57 @@ def refine_master(
                 if not isinstance(proposal, Mapping):
                     raise MasterRefinerError("kernel returned no proposal record")
                 rationale = str(response.get("rationale") or "")
-                trial = copy.deepcopy(current)
-                trial_record = trial[collection][index]
                 if unit_kind == "candidate":
                     before_changes = _candidate_changes(record, proposal, rationale)
-                    _apply_candidate_prose(trial_record, proposal)
                 else:
                     before_changes = _group_changes(record, proposal, rationale)
-                    trial_record["semantic_description"] = copy.deepcopy(
-                        proposal["semantic_description"]
+                if before_changes:
+                    trial = copy.deepcopy(current)
+                    trial_record = trial[collection][index]
+                    if unit_kind == "candidate":
+                        _apply_candidate_prose(trial_record, proposal)
+                    else:
+                        trial_record["semantic_description"] = copy.deepcopy(
+                            proposal["semantic_description"]
+                        )
+                    trial_state = _validation_state(trial, profile)
+                    regressions = _new_errors(
+                        current_state["errors"], trial_state["errors"]
                     )
-                trial_state = _validation_state(trial, profile)
-                regressions = _new_errors(
-                    current_state["errors"], trial_state["errors"]
-                )
-                if regressions:
-                    reason = (
-                        "Refiner proposal introduced a new mechanical/read-back "
-                        "defect: " + "; ".join(regressions[:6])
-                    )
-                    _append_warning(record)
-                    record[AUDIT_FIELD] = _audit(
-                        unit_kind=unit_kind,
-                        policy_version=policy,
-                        status="rolled_back",
-                        changed_paths=[],
-                        rationale=reason,
-                        review_flags=[*decision_flags, reason],
-                        decision=decision,
-                    )
-                    release_flags.append(f"{unit_kind}[{unit_id}]: {reason}")
-                    continue
-
-                current = trial
-                current_state = trial_state
-                record = current[collection][index]
+                    if regressions:
+                        reason = (
+                            "Refiner proposal introduced a new "
+                            "mechanical/read-back defect: "
+                            + "; ".join(regressions[:6])
+                        )
+                        _append_warning(record)
+                        record[AUDIT_FIELD] = _audit(
+                            unit_kind=unit_kind,
+                            policy_version=policy,
+                            status="rolled_back",
+                            changed_paths=[],
+                            rationale=reason,
+                            review_flags=[*decision_flags, reason],
+                            decision=decision,
+                        )
+                        release_flags.append(f"{unit_kind}[{unit_id}]: {reason}")
+                        return
+                    current = trial
+                    current_state = trial_state
+                    record = current[collection][index]
+                # An accepted no-op proposal applies nothing and re-proves
+                # nothing: typed-equality across the whole whitelist means
+                # the rendered workbook is byte-identical, so the per-unit
+                # workbook render/read-back is skipped instead of re-run —
+                # the single largest mechanical cost of this pass on a
+                # payload the model mostly leaves alone. The final combined
+                # validation below still proves the complete result.
                 paths = [row["field_path"] for row in before_changes]
                 if decision_flags:
                     _append_warning(record)
                     release_flags.extend(
-                        f"{unit_kind}[{unit_id}]: {flag}" for flag in decision_flags
+                        f"{unit_kind}[{unit_id}]: {flag}"
+                        for flag in decision_flags
                     )
                 record[AUDIT_FIELD] = _audit(
                     unit_kind=unit_kind,
@@ -1149,6 +1147,121 @@ def refine_master(
                     decision=decision,
                 )
                 release_flags.append(f"{unit_kind}[{unit_id}]: {reason}")
+            finally:
+                done_units += 1
+                _report_unit()
+
+        def _run_wave(unit_list: list[tuple[str, int]]) -> None:
+            if not unit_list:
+                return
+            # Payloads are assembled up front, in this thread, from the
+            # wave's opening records and render — pool workers only run
+            # the content-addressed decision itself, so nothing they read
+            # is mutated while they run.
+            state = current_state
+            prepared: list[dict[str, Any]] = []
+            for unit_kind, index in unit_list:
+                collection = (
+                    "candidates" if unit_kind == "candidate" else "groups"
+                )
+                record = current[collection][index]
+                id_field = (
+                    "candidate_id" if unit_kind == "candidate" else "group_key"
+                )
+                unit_id = str(record.get(id_field) or "").strip()
+                entry: dict[str, Any] = {
+                    "unit_kind": unit_kind,
+                    "index": index,
+                    "collection": collection,
+                    "unit_id": unit_id,
+                    "policy": (
+                        CANDIDATE_POLICY_VERSION
+                        if unit_kind == "candidate"
+                        else GROUP_POLICY_VERSION
+                    ),
+                    "kind": (
+                        CANDIDATE_KIND
+                        if unit_kind == "candidate"
+                        else GROUP_KIND
+                    ),
+                }
+                rendered_rows = (
+                    state["candidate_rows"].get(unit_id, [])
+                    if unit_kind == "candidate"
+                    else state["group_rows"].get(unit_id, [])
+                )
+                if not unit_id or not rendered_rows:
+                    entry["no_evidence"] = True
+                    prepared.append(entry)
+                    continue
+                entry["decision_record"] = _model_record(record)
+                entry["payload"] = _unit_payload(
+                    unit_kind=unit_kind,
+                    unit_id=unit_id,
+                    record=record,
+                    rendered_rows=rendered_rows,
+                    metadata=metadata,
+                    instruction_set=instruction_set,
+                    context={
+                        **context,
+                        "member_questions": [
+                            {
+                                "candidate_id": str(
+                                    candidate.get("candidate_id") or ""
+                                ),
+                                "question": str(candidate.get("question") or ""),
+                                "question_text": str(
+                                    candidate.get("question_text") or ""
+                                ),
+                            }
+                            for candidate in current.get("candidates") or []
+                            if unit_kind == "group"
+                            and str(candidate.get("candidate_id") or "")
+                            in set(record.get("member_candidate_ids") or [])
+                        ],
+                    },
+                )
+                prepared.append(entry)
+
+            def _decide(entry: dict[str, Any]) -> object:
+                if entry.get("no_evidence"):
+                    return None
+                try:
+                    return kernel.decide(
+                        kind=entry["kind"],
+                        unit_id=entry["unit_id"],
+                        envelope_sha256=envelope_sha,
+                        payload=entry["payload"],
+                        provider=provider,
+                        checker=_response_checker(
+                            unit_kind=entry["unit_kind"],
+                            unit_id=entry["unit_id"],
+                            original=entry["decision_record"],
+                        ),
+                        critic=critic,
+                        store=decision_store,
+                        policy_version=entry["policy"],
+                        fixer=fixer,
+                    )
+                except Exception as exc:  # noqa: BLE001 - applied per unit
+                    return exc
+
+            outcomes = kernel.parallel_map_in_order(
+                prepared,
+                _decide,
+                max_workers=workers,
+                labels=[
+                    f"Master Refiner {entry['unit_kind']} "
+                    f"{position + 1}/{len(prepared)}"
+                    for position, entry in enumerate(prepared)
+                ],
+                announce="Master Refiner decisions",
+            )
+            for entry, outcome in zip(prepared, outcomes):
+                _apply_outcome(entry, outcome)
+
+        _run_wave([unit for unit in units if unit[0] == "candidate"])
+        _run_wave([unit for unit in units if unit[0] == "group"])
 
         final_state = _validation_state(current, profile)
         final_regressions = _new_errors(baseline["errors"], final_state["errors"])

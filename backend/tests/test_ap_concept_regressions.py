@@ -1555,7 +1555,11 @@ def test_concept_pipeline_reports_progress_after_skeleton(monkeypatch):
 
     progress_values = [value for value, _ in values]
     assert progress_values == sorted(progress_values)
-    assert {0.58, 0.72, 0.81, 0.85, 0.91, 1.0} <= set(progress_values)
+    # The pre-Phase-3 tail tops out at 0.815 so the rewritten Phase 3's
+    # 0.815 opening continues forward instead of jumping the bar back
+    # (the 97%-for-hours rebalance); 0.93 is the terminal validation
+    # stage and 1.0 the non-release completion default.
+    assert {0.58, 0.72, 0.81, 0.812, 0.815, 0.93, 1.0} <= set(progress_values)
     labels = " ".join(label for _, label in values)
     assert "inventorying questions" in labels
     # Type allocation is deferred to the rewritten Phase 3: the pre-final

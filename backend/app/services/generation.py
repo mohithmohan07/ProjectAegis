@@ -21115,7 +21115,10 @@ def _run_live_concept_pre_final_stages(
         progress.step(
             "Concept extraction — preparing final topology before Type "
             "allocation",
-            value=0.85,
+            # 0.812/0.815 rather than the old 0.85/0.91: the rewritten
+            # Phase 3 opens at 0.815 immediately after this block, and the
+            # bar must not run ahead of it and then jump backward.
+            value=0.812,
         )
         progress.log(
             "Deferred Type allocation until semantic concept topology is "
@@ -21133,7 +21136,7 @@ def _run_live_concept_pre_final_stages(
         if artifacts is not None:
             artifacts["mined_types"] = copy.deepcopy(mined_types)
         progress.set_progress(
-            0.91,
+            0.815,
             label=(
                 "Concept extraction — topology ready for final Type "
                 "allocation"
@@ -22050,6 +22053,12 @@ def concepts_from_mmd(
                     )
         if artifacts is not None:
             artifacts["mined_types"] = copy.deepcopy(mined_types)
+        # The terminal gate can still spend bounded repair calls; give it
+        # its own stage so the bar does not appear stuck on the last
+        # Phase 3 value while they run.
+        progress.step(
+            "Concept extraction — final validation and repair", value=0.93
+        )
         # Older terminal checkpoints can predate the canonical mastery/recap
         # contract. Upgrade those fields deterministically so resume remains
         # API-free while the exact rows sent to deposit satisfy today's gate.

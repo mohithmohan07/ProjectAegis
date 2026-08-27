@@ -922,11 +922,16 @@ def decide_markings(
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
     profile: Mapping | str | None = None,
+    on_result=None,
 ) -> list[dict[str, Any]]:
     """Return one cached marking verdict per candidate/cell pair, in order.
 
     ``profile`` is validation input ONLY (spec-step8 B2); it never joins the
     decision payload, so decision keys are unchanged.
+
+    ``on_result`` is forwarded verbatim to the fan-out
+    (``kernel.parallel_map_in_order``): an ordered progress hook only,
+    never an input to any decision.
     """
 
     envelope_sha = _envelope_hash(envelope_sha256)
@@ -993,6 +998,7 @@ def decide_markings(
         prepared,
         decide_one,
         max_workers=config.phase3_decision_workers(),
+        on_result=on_result,
     )
     expected_ids = [unit[0] for unit in prepared]
     returned_ids = [str(row.get("candidate_id") or "") for row in verdicts]

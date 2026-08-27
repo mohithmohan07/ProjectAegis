@@ -689,11 +689,16 @@ def materialize_candidates(
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
     profile: Mapping | str | None = None,
+    on_result=None,
 ) -> dict:
     """Materialize every obligation in order with exact-once accounting.
 
     ``profile`` is validation input ONLY (spec-step8 B2); see
     ``materialize_candidate``.
+
+    ``on_result`` is forwarded verbatim to the fan-out
+    (``kernel.parallel_map_in_order``): an ordered progress hook only,
+    never an input to any decision.
     """
 
     if not isinstance(meta, Mapping):
@@ -771,6 +776,7 @@ def materialize_candidates(
         prepared,
         decide_one,
         max_workers=config.phase3_decision_workers(),
+        on_result=on_result,
     )
     returned_ids = [
         str(candidate.get("candidate_id") or "") for candidate in candidates

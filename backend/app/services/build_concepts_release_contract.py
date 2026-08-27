@@ -181,7 +181,20 @@ def _stage_pre_sibling(
     failure, so a Pre-lane problem can never cost the finished Post rows.
     """
 
-    db.refresh(job)
+    try:
+        db.refresh(job)
+    except Exception as exc:  # noqa: BLE001 - the guarantee above is total
+        # ``stage_pre_release_from_run`` never raises, but this refresh
+        # sits OUTSIDE it and a session error here would take the staged
+        # Post release down with it — exactly what "never raises" exists
+        # to prevent.
+        progress.log(
+            "The Pre-Learning outputs could not be staged (the job row "
+            f"could not be refreshed: {type(exc).__name__}: {exc}); the "
+            "Post-Learning release is unaffected and ships.",
+            level="error",
+        )
+        return
     release.stage_pre_release_from_run(
         db,
         job,
@@ -216,6 +229,14 @@ def _release_after_result(
         if isinstance(raw_pending, Mapping):
             pending = dict(raw_pending)
     if captured:
+        # A real stage boundary (usage attribution reads the last step and
+        # the console renders stage cards from step events), and a fresh
+        # bar value: the concept Refiner still runs one recorded decision
+        # per rendered row before anything is staged.
+        progress.step(
+            "Refining and staging release outputs (Outputs 01/03)",
+            value=0.945,
+        )
         refined_records, refinements = _refine_captured_records(
             db,
             job,
@@ -355,6 +376,7 @@ def rebuild_lane_master(
     *,
     owner_sub: str | None = None,
     claim_job_lock: bool = False,
+    stage_progress=None,
 ):
     """Build one Master lane, recording any failure before it propagates.
 
@@ -391,7 +413,12 @@ def rebuild_lane_master(
                     f"before provider spend ({capacity.available_bytes} "
                     "bytes available)."
                 )
-                return runner(db, job_id, owner_sub=owner_sub)
+                return runner(
+                    db,
+                    job_id,
+                    owner_sub=owner_sub,
+                    stage_progress=stage_progress,
+                )
         except Exception as exc:
             storage_error = storage_capacity.capacity_error_from(
                 exc,
@@ -486,6 +513,8 @@ def _build_master_siblings(
     the Post build, and vice versa.
     """
 
+    from . import assessment_release_run
+
     built: dict[str, dict[str, Any] | None] = {}
     lanes: list[str] = []
     for lane in (release.LANE_PRE, release.LANE_POST):
@@ -497,7 +526,15 @@ def _build_master_siblings(
             # answer: the alternative is a doomed run whose reason is
             # thrown away. The lane's Master entry is still PRESENT
             # and disabled with the "not built for this run" reason,
-            # so nothing about it is silent.
+            # so nothing about it is silent — and neither is this skip:
+            # the journal says which lane was skipped and why.
+            progress.log(
+                f"The {lane} lane has no staged concept release, so its "
+                "Master File (Output "
+                f"{'02' if lane == release.LANE_PRE else '04'}) is not "
+                "built on this run.",
+                level="warning",
+            )
             built[lane] = None
             continue
         lanes.append(lane)
@@ -528,8 +565,54 @@ def _build_master_siblings(
             # the frontend creates stage cards from step events.
             progress.step(
                 "Building Master files (Outputs 02/04)",
-                value=0.965,
+                value=0.955,
             )
+            # The Master builds own 0.955 → 0.995 of the bar and fill it
+            # as their stages (and the long fan-outs' units) finish, so
+            # the console no longer freezes on one value for the entire
+            # build — the "97% for hours" report. One shared span, one
+            # equal-weight tracker per lane; emission is monotone, so the
+            # two concurrent lanes cannot walk the bar backward.
+            span = progress.Span(
+                0.955, 0.995, label="Building Master files (Outputs 02/04)"
+            )
+            stage_index = {
+                name: position
+                for position, name in enumerate(
+                    assessment_release_run.MASTER_BUILD_STAGES
+                )
+            }
+            stage_index["done"] = len(
+                assessment_release_run.MASTER_BUILD_STAGES
+            )
+
+            def _lane_observer(lane: str):
+                tracker = span.tracker(float(stage_index["done"]))
+                lane_name = "Pre" if lane == release.LANE_PRE else "Post"
+
+                def observe(stage, done=None, total=None) -> None:
+                    position = stage_index.get(str(stage))
+                    if position is None:
+                        return
+                    units = float(position)
+                    suffix = ""
+                    if done is not None and total:
+                        units += max(0.0, min(1.0, float(done) / float(total)))
+                        suffix = f" {int(done)}/{int(total)}"
+                    tracker.set_units(
+                        units,
+                        label=(
+                            f"Master files — {lane_name}: {stage}{suffix}"
+                        ),
+                    )
+
+                return observe
+
+            # Both trackers register BEFORE the fan-out starts: a lazily
+            # registered second tracker would briefly let the first lane's
+            # fraction fill the whole band, and the monotone guard would
+            # then hold the bar flat until the true mean caught up.
+            lane_observers = {lane: _lane_observer(lane) for lane in lanes}
 
             def _build_lane(lane: str) -> dict[str, Any] | None:
                 from ..db import SessionLocal
@@ -549,6 +632,7 @@ def _build_master_siblings(
                             job_id,
                             lane,
                             owner_sub=owner_sub,
+                            stage_progress=lane_observers[lane],
                         ).id}
                         lane_db.commit()
                     return result

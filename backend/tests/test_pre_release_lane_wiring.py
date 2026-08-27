@@ -1555,7 +1555,7 @@ def test_master_siblings_build_concurrently_on_their_own_sessions(
         def __init__(self, lane):
             self.id = f"REL-{lane}"
 
-    def _fake_rebuild(lane_db, job_id, lane, *, owner_sub=None):
+    def _fake_rebuild(lane_db, job_id, lane, *, owner_sub=None, stage_progress=None):
         seen[lane] = lane_db
         return _Stub(lane)
 
@@ -1586,7 +1586,7 @@ def test_one_master_lane_fault_does_not_cost_the_sibling(db, monkeypatch):
         def __init__(self, lane):
             self.id = f"REL-{lane}"
 
-    def _fake_rebuild(lane_db, job_id, lane, *, owner_sub=None):
+    def _fake_rebuild(lane_db, job_id, lane, *, owner_sub=None, stage_progress=None):
         if lane == release.LANE_PRE:
             raise RuntimeError("boom")
         return _Stub(lane)
