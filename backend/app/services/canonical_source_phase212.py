@@ -91,8 +91,14 @@ def _call_provider(
     schema: dict[str, Any],
     purpose: str = "source_extraction",
     max_tokens: int | None = None,
+    model: str | None = None,
 ) -> dict[str, Any]:
-    """One bounded strict-schema text call through the shared Aegis controls."""
+    """One bounded strict-schema text call through the shared Aegis controls.
+
+    ``model`` overrides the configured model for THIS call only — the
+    Fixer's dedicated model (``phase3.fixer.fixer_model``); ``None``
+    keeps the deployment's configured model.
+    """
     from . import canonical_source_phase22 as phase22
 
     return phase22._openai_multimodal_json(
@@ -102,6 +108,7 @@ def _call_provider(
         response_schema=schema,
         purpose=purpose,  # type: ignore[arg-type]
         max_tokens=max_tokens or _max_output_tokens(),
+        model=model,
     )
 
 
@@ -1229,10 +1236,15 @@ def _fixer_decide(
         "context_after": context_after,
         "candidates_overlapping_this_block": overlapping,
     }, ensure_ascii=False)
+    from .phase3 import fixer as fixer_mod
+
     response = _call_provider(
         system=_FIXER_SYSTEM,
         prompt=prompt,
         schema=fixer_schema(block_id),
+        # The Fixer's decisions run on its own model at every stage that
+        # invokes one (owner direction, 2026-08-27).
+        model=fixer_mod.fixer_model(),
     )
     decision_sha = canonical_source._sha256_text(
         "␟".join([

@@ -47,11 +47,30 @@ has):
 """
 from __future__ import annotations
 
-from typing import Any
+import os
+from typing import Any, Final
 
 # Stamped as the decision-store policy version on every Fixer decision so
 # a future charter change mints new keys instead of replaying old verdicts.
 FIXER_POLICY_VERSION = "fixer-1"
+
+# The Fixer runs on its OWN model (owner direction, 2026-08-27: "Use the
+# Terra for the Fixer"): its one recorded decision per blocked point is
+# the highest-stakes call in the run — everything else already spent —
+# so it is not tied to the deployment's general-purpose model. Same
+# override pattern as AEGIS_AUTONOMOUS_RESOLUTION_MODEL: the env names a
+# different model for this seam only, and the transport clamps to the
+# documented capacity of the model actually requested.
+DEFAULT_FIXER_MODEL: Final = "gpt-5.6-terra"
+FIXER_MODEL_ENV: Final = "AEGIS_FIXER_OPENAI_MODEL"
+
+
+def fixer_model() -> str:
+    """The model every live Fixer decision is requested from."""
+
+    return (
+        os.environ.get(FIXER_MODEL_ENV, "").strip() or DEFAULT_FIXER_MODEL
+    )
 
 
 def live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
@@ -64,6 +83,7 @@ def live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
         prompts.FIXER_SYSTEM,
         prompts.render(payload),
         purpose="concept_validation",
+        model=fixer_model(),
     )
 
 
