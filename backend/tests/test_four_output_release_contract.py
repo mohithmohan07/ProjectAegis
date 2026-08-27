@@ -80,6 +80,16 @@ def test_release_capture_recovers_authored_pre_bundle_from_sidecars(monkeypatch)
         {"concept_title": "Prior knowledge"}
     ]
     assert captured["phase3_pre_release_handoff"]["source"] == "phase3_sidecars"
+    # The regression this handoff shipped with: the raw sidecar pair has no
+    # schema_version, and storing it verbatim made the staging gate
+    # (valid_phase3_pre_release_bundle) reject the recovered, already-paid
+    # Pre authority as malformed — the run then staged no Pre release. The
+    # handoff must mint the one real bundle shape.
+    from app.services import generation
+
+    assert generation.valid_phase3_pre_release_bundle(
+        captured["phase3_pre_release"]
+    ), "restored sidecar authority must satisfy the staging gate"
 
 
 def test_missing_pre_sidecars_are_not_misread_as_empty_pre_learning(monkeypatch):

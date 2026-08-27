@@ -155,7 +155,7 @@ def _pre_entries(job: models.UploadJob, stem: str) -> list[dict[str, Any]]:
                 "download_url": "",
                 "action": "download",
                 "disabled": True,
-                "disabled_reason": release_files.PRE_NOT_STAGED,
+                "disabled_reason": release_files.pre_not_staged_reason(job),
             },
             master_entry(job, lane=LANE_PRE),
         ])

@@ -96,6 +96,15 @@ STAGED_RELEASE_UID_FIELD = "staged_release_uid"
 # refusing the concept lane's database write for a fault in a different
 # lane is Rule G's two-publication separation collapsed.
 ASSESSMENT_LANE_UNAVAILABLE = "assessment_lane_unavailable"
+# The durable WHY when a run stages no Pre lane at all. The T15-2 record
+# above rides the lane's staged payload, so a run whose Pre staging never
+# produced a payload had nowhere to record its reason — the manifest's
+# Output 01 could only say "the run journal records why", and the journal
+# is truncated by the job's next streamed operation. This key is a
+# SIBLING of the two payload slots on ``job.question_inventory``: written
+# when Pre staging skips or fails, cleared by the next successful Pre
+# staging, and read by both manifest twins as Output 01's stated reason.
+PRE_RELEASE_UNAVAILABLE_KEY = "_aegis_pre_release_unavailable"
 RELEASE_STATUS = "released"
 RELEASE_ROW_STATUS_FIELD = "_aegis_release_status"
 RELEASE_ROW_ERRORS_FIELD = "_aegis_release_errors"
@@ -621,6 +630,60 @@ def record_assessment_lane_unavailable(
         except Exception:
             pass
         return None
+
+
+def pre_release_unavailable_record(
+    job: models.UploadJob,
+) -> dict[str, Any] | None:
+    """The recorded reason this job's last Pre staging staged nothing.
+
+    The read half of ``record_pre_release_unavailable``: both manifest
+    twins transcribe it into Output 01's disabled reason so the reviewer
+    is told WHY the file is missing instead of only that it is.
+    """
+
+    inventory = job.question_inventory
+    if not isinstance(inventory, Mapping):
+        return None
+    record = inventory.get(PRE_RELEASE_UNAVAILABLE_KEY)
+    if not isinstance(record, Mapping) or not _normal(record.get("reason")):
+        return None
+    return dict(record)
+
+
+def record_pre_release_unavailable(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    reason: str,
+    exception: str = "",
+) -> None:
+    """Durably record WHY this run staged no Pre-Learning release.
+
+    Q13's shape, one slot earlier than ``record_assessment_lane_
+    unavailable``: that recorder writes onto the lane's staged payload,
+    so a staging attempt that produced NO payload had nowhere to leave
+    its reason and the manifest could only point at a journal the next
+    streamed operation truncates. Never raises — a recorder that can
+    raise is the same defect one level up — and the next successful Pre
+    staging clears it (``stage_pre_release``).
+    """
+
+    try:
+        durable = copy.deepcopy(dict(job.question_inventory or {}))
+        durable[PRE_RELEASE_UNAVAILABLE_KEY] = {
+            "reason": _normal(reason),
+            "exception": _normal(exception),
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        job.question_inventory = durable
+        db.commit()
+        db.refresh(job)
+    except Exception:  # pragma: no cover - the recorder must never raise
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
 
 def release_available(
@@ -3250,6 +3313,22 @@ def stage_pre_release_from_run(
                 "post_type_assignment", "final_content_ready",
             }
             if not terminal:
+                # The one path that stages nothing by design: the run never
+                # completed Phase 03, so there is no Pre authority to
+                # stage. It used to return SILENTLY, which made Output
+                # 01's "the run journal records why" untrue — record the
+                # why durably AND in the journal.
+                reason = (
+                    "no Phase 03 Pre-Learning authority was available when "
+                    "the release was staged (the run did not complete "
+                    "Phase 03, so there was no Pre map to stage)"
+                )
+                record_pre_release_unavailable(db, job, reason=reason)
+                progress.log(
+                    "The Pre-Learning outputs were not staged: " + reason
+                    + ". Re-running generation stages the Pre lane.",
+                    level="error",
+                )
                 return None
             map_defect = (
                 "a terminal concept checkpoint proves Phase 03 completed, "
@@ -3313,6 +3392,19 @@ def stage_pre_release_from_run(
             "run and their absence is recorded here rather than reported as "
             "an empty Pre map.",
             level="error",
+        )
+        # The journal line above is truncated by the job's next streamed
+        # operation; the durable record is what Output 01's disabled
+        # reason transcribes (both manifest twins).
+        record_pre_release_unavailable(
+            db,
+            job,
+            reason=(
+                "Pre-Learning staging failed "
+                f"({type(exc).__name__}: {exc}); the Post-Learning release "
+                "was unaffected and shipped"
+            ),
+            exception=type(exc).__name__,
         )
         return None
 
@@ -3909,6 +4001,9 @@ def stage_pre_release(
     payload = _account_for_source_identity(job, payload, inventory)
     durable_inventory = copy.deepcopy(dict(job.question_inventory or {}))
     durable_inventory[PRE_RELEASE_KEY] = copy.deepcopy(payload)
+    # A staged Pre release supersedes any recorded "this run staged no
+    # Pre lane" reason from an earlier failed attempt.
+    durable_inventory.pop(PRE_RELEASE_UNAVAILABLE_KEY, None)
     job.question_inventory = durable_inventory
     db.commit()
     db.refresh(job)
