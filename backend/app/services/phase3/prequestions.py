@@ -523,8 +523,14 @@ def build(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
+    progress_span: progress.Span | None = None,
 ) -> dict[str, Any]:
     """Author the coverage plan, then the questions, for every Pre concept.
+
+    ``progress_span``, when given, is this stage's slice of the progress
+    bar (mechanics only): the chapter plan takes the first unit and each
+    authored pre-concept advances the rest, so the console bar moves
+    through the authoring pass instead of freezing on its opening value.
 
     ``pre_map`` is ``premap.build``'s result. Returns ``{"plans":
     {pre_concept_id: {"total", "split", "rationale"}}, "questions":
@@ -702,6 +708,23 @@ def build(
         f"{len(plans)} pre-concept(s), each with its own authored "
         "rationale (model-judged; a thin pre-concept is never padded)."
     )
+    # One unit for the plan (recorded above), one per pre-concept whose
+    # plan asked for questions. A fixed mechanical allocation, not a
+    # duration estimate.
+    span_tracker = None
+    if progress_span is not None:
+        wanted_count = sum(
+            1 for concept_id in concept_ids
+            if int((plans.get(concept_id) or {}).get("total") or 0) > 0
+        )
+        span_tracker = progress_span.tracker(1.0 + wanted_count)
+        span_tracker.set_units(
+            1.0,
+            label=(
+                "Pre-Learning questions: coverage planned for "
+                f"{len(plans)} pre-concept(s)"
+            ),
+        )
 
     # ---- authoring: one decision per pre-concept its plan asked for ---
     review_flags: dict[str, list[str]] = {}
@@ -773,7 +796,19 @@ def build(
 
     workers = config.phase3_decision_workers()
     for concept_id, authored, block, flags in kernel.parallel_map_in_order(
-        wanted, _author, max_workers=workers
+        wanted,
+        _author,
+        max_workers=workers,
+        on_result=(
+            None if span_tracker is None
+            else lambda index, item, result: span_tracker.advance(
+                1.0,
+                label=(
+                    "Pre-Learning questions: pre-concept "
+                    f"{index + 1}/{len(wanted)} authored"
+                ),
+            )
+        ),
     ):
         if block:
             blocked[concept_id] = block

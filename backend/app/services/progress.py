@@ -149,6 +149,75 @@ def current_value() -> float:
     return 0.0
 
 
+class Span:
+    """One stage's fixed slice of the progress bar, fed by unit counts.
+
+    Mechanics only: the band is a fixed allocation decided by the caller,
+    units are counts of finished work, and the emitted fraction is the
+    band linearly filled by ``done/total`` across every registered
+    tracker. Emission is monotone under the span's own lock, so parallel
+    writers (the two Master lanes) can report out of step without the bar
+    ever moving backward.
+    """
+
+    def __init__(self, start: float, end: float, *, label: str = "") -> None:
+        self._start = max(0.0, min(1.0, float(start)))
+        self._end = max(self._start, min(1.0, float(end)))
+        self._label = str(label)
+        self._lock = threading.Lock()
+        self._trackers: list["SpanTracker"] = []
+        self._emitted = float("-inf")
+
+    def tracker(self, total_units: float) -> "SpanTracker":
+        """Register one writer owning ``total_units`` units of this band.
+
+        Every tracker carries equal weight: with two Master lanes the band
+        fills with the mean of the two lanes' fractions, and a lone writer
+        owns the whole band.
+        """
+        tracker = SpanTracker(self, float(total_units))
+        with self._lock:
+            self._trackers.append(tracker)
+        return tracker
+
+    def _report_locked(self, label: str) -> None:
+        """Emit the band value for the current cursors. Lock must be held."""
+        if not self._trackers:
+            return
+        fraction = sum(
+            min(1.0, tracker._units / tracker._total)
+            if tracker._total > 0 else 1.0
+            for tracker in self._trackers
+        ) / len(self._trackers)
+        value = self._start + (self._end - self._start) * fraction
+        if value <= self._emitted:
+            return
+        self._emitted = value
+        # Emitted under the span lock so concurrent trackers cannot
+        # reorder two increasing values into a backward blip.
+        set_progress(value, label=label or self._label)
+
+
+class SpanTracker:
+    """One writer's cursor inside a :class:`Span` (see ``Span.tracker``)."""
+
+    def __init__(self, span: Span, total_units: float) -> None:
+        self._span = span
+        self._total = max(0.0, total_units)
+        self._units = 0.0
+
+    def set_units(self, units: float, *, label: str = "") -> None:
+        """Move this writer's cursor to ``units`` (never backward)."""
+        with self._span._lock:
+            self._units = max(self._units, min(float(units), self._total))
+            self._span._report_locked(label)
+
+    def advance(self, units: float = 1.0, *, label: str = "") -> None:
+        with self._span._lock:
+            self._units = min(self._units + max(0.0, float(units)), self._total)
+            self._span._report_locked(label)
+
+
 def usage(data: dict) -> None:
     """Emit the latest aggregate OpenAI usage for the active run."""
     _emit({"type": "usage", "data": data})

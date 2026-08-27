@@ -1035,8 +1035,15 @@ def build(
     critic: kernel.Critic | None = None,
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
+    progress_span: progress.Span | None = None,
 ) -> dict[str, Any]:
     """Build the Pre-Learning concept map from the merged capture.
+
+    ``progress_span``, when given, is this stage's slice of the progress
+    bar (mechanics only): the map decision, the needed-for link batches,
+    and the Pre analysis each fill a fixed share of it as they finish, so
+    the console bar moves during the Pre lane instead of freezing on the
+    stage's opening value.
 
     ``prerequisites`` is ``prelearn.merge``'s result; ``post_rows`` is
     the run's finished Post rows, used ONLY as link targets (their
@@ -1137,6 +1144,11 @@ def build(
             # artifact readers use it.
             empty["decision_flags"]["empty_capture"] = list(
                 verdict["review_flags"]
+            )
+        if progress_span is not None:
+            progress_span.tracker(1.0).set_units(
+                1.0,
+                label="Pre-Learning map: empty-capture verdict recorded",
             )
         progress.log(
             "Pre-Learning map: the run captured no prerequisite element. "
@@ -1311,6 +1323,20 @@ def build(
             "pre_concept_ids": member_ids,
         })
 
+    # Three equal-weight units: the map decision (done here), the
+    # needed-for link batches, and the Pre analysis. Unit weights are a
+    # fixed mechanical allocation, not a duration estimate.
+    span_tracker = (
+        progress_span.tracker(3.0) if progress_span is not None else None
+    )
+    if span_tracker is not None:
+        span_tracker.set_units(
+            1.0,
+            label=(
+                f"Pre-Learning map: {len(rows)} pre-concept(s) across "
+                f"{len(topics)} pre-topic(s) authored"
+            ),
+        )
     progress.log(
         f"Pre-Learning map: {len(rows)} pre-concept(s) across "
         f"{len(topics)} pre-topic(s), built from the captured "
@@ -1390,10 +1416,21 @@ def build(
             ], flags
 
         workers = config.phase3_decision_workers()
+        link_batches = list(range(0, len(pre_payload), _LINK_BATCH_SIZE))
         for start, decided_batch, flags in kernel.parallel_map_in_order(
-            range(0, len(pre_payload), _LINK_BATCH_SIZE),
+            link_batches,
             _decide_links,
             max_workers=workers,
+            on_result=(
+                None if span_tracker is None
+                else lambda index, item, result: span_tracker.advance(
+                    1.0 / max(1, len(link_batches)),
+                    label=(
+                        "Pre-Learning map: needed-for links "
+                        f"{index + 1}/{len(link_batches)} decided"
+                    ),
+                )
+            ),
         ):
             if flags:
                 decision_flags[f"needed_for#{start}"] = list(flags)
@@ -1446,6 +1483,10 @@ def build(
     # It runs HERE — after the rows exist, before the guard — so the
     # stamped item text is inside the surface ``_refuse_source_qids``
     # scans, and inside the seal that follows.
+    if span_tracker is not None:
+        span_tracker.set_units(
+            2.0, label="Pre-Learning map: needed-for links decided"
+        )
     analysis = preanalyse_mod.analyse(
         env,
         {"prerequisites": captured},
@@ -1460,6 +1501,10 @@ def build(
     )
     for pre_id, flags in preanalyse_mod.stamp(rows, analysis).items():
         review_flags.setdefault(pre_id, []).extend(flags)
+    if span_tracker is not None:
+        span_tracker.set_units(
+            3.0, label="Pre-Learning map: analysis allotted"
+        )
 
     # ---- the fail-closed guard, then advisory validation, then the seal
     #

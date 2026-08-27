@@ -450,7 +450,7 @@ def test_explicit_rebuild_preserves_the_lane_concept_authority_and_master_bands(
 
     runner_calls: list[tuple[int, str]] = []
 
-    def preserved_runner(_db, job_id, *, owner_sub=None):
+    def preserved_runner(_db, job_id, *, owner_sub=None, stage_progress=None):
         current_job = uploads.get_job(
             _db,
             job_id,

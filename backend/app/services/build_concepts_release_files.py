@@ -31,6 +31,7 @@ from .build_concepts_release import (
     RELEASE_ROW_ROUTES_FIELD,
     RELEASE_ROW_STATUS_FIELD,
     normalize_lane,
+    pre_release_unavailable_record,
     release_payload,
     release_state,
     row_projection_defect,
@@ -161,6 +162,37 @@ PRE_NOT_STAGED = (
     "File to download. The run journal records why; re-running generation "
     "stages the Pre lane."
 )
+# Output 02's disabled reason when a live Pre Master exists but the run's
+# staged Pre concept slot does not: the Master is from an earlier staging
+# of this job, and serving it enabled beside a PRE_NOT_STAGED Output 01
+# reports four coherent outputs that do not exist (owner report: Output
+# 02 downloadable while 01 says the run staged no Pre release).
+MASTER_STALE_FOR_RUN = (
+    "This lane's Master File was built from a release this run no longer "
+    "stages, so it is not served as one of this run's outputs. Re-running "
+    "generation re-stages the lane and rebuilds its Master File."
+)
+
+
+def pre_not_staged_reason(job: models.UploadJob) -> str:
+    """Output 01's stated reason when the run staged no Pre lane.
+
+    The recorded WHY (``record_pre_release_unavailable``) when the run
+    left one — the more specific of two true things — with the generic
+    sentence as the fallback for runs that predate the record. Shared by
+    both manifest twins so they cannot disagree on the sentence.
+    """
+
+    recorded = pre_release_unavailable_record(job)
+    reason = str((recorded or {}).get("reason") or "").strip()
+    if not reason:
+        return PRE_NOT_STAGED
+    if not reason.endswith("."):
+        reason += "."
+    return (
+        "This run staged no Pre-Learning release: " + reason
+        + " Re-running generation stages the Pre lane."
+    )
 
 
 def master_entry(
@@ -260,6 +292,18 @@ def master_entry(
         entry["disabled_reason"] = (
             str((recorded or {}).get("message") or "")
             or _MASTER_NOT_PUBLISHED
+        )
+        return entry
+    if lane_payload is None:
+        # A live Master row whose lane has NO staged concept payload is a
+        # Master from an EARLIER staging of this job (the slot was wiped
+        # by a re-run/reconversion that staged no sibling). Serving it
+        # enabled beside Output 01's "this run staged no Pre release"
+        # reports four coherent outputs that do not exist, so the entry
+        # stays present and disabled with the truthful reason.
+        entry["disabled"] = True
+        entry["disabled_reason"] = (
+            str((recorded or {}).get("message") or "") or MASTER_STALE_FOR_RUN
         )
         return entry
     entry["label"] = f"Download the {label}"
@@ -1402,7 +1446,7 @@ def _pre_release_entries(
                 "download_url": "",
                 "action": "download",
                 "disabled": True,
-                "disabled_reason": PRE_NOT_STAGED,
+                "disabled_reason": pre_not_staged_reason(job),
             },
             master_entry(job, lane=LANE_PRE),
         ])

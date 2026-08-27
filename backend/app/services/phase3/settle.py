@@ -1206,10 +1206,11 @@ def settle(
         settled.extend(topic_settled)
         settled.extend(culm_rows)
         topics_done += 1
-        # The bar creeps through the Settle band instead of freezing at
-        # its opening value for the whole pass.
+        # The bar creeps through the Settle band (0.815 → 0.86, the slice
+        # runner.py allocates) instead of freezing at its opening value
+        # for the whole pass.
         progress.set_progress(
-            0.82 + 0.09 * topics_done / max(1, len(topics)),
+            0.815 + 0.045 * topics_done / max(1, len(topics)),
             label=(
                 "Phase 3 — Settle: topic "
                 f"{topics_done}/{len(topics)} authored"

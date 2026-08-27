@@ -589,7 +589,7 @@ def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
         def __init__(self, lane):
             self.id = f"REL-{lane}"
 
-    def rebuild(lane_db, job_id, lane, *, owner_sub=None):
+    def rebuild(lane_db, job_id, lane, *, owner_sub=None, stage_progress=None):
         nonlocal active, max_active
         assert job_id == job.id
         assert owner_sub == OWNER

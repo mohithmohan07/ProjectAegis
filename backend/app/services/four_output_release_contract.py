@@ -96,8 +96,24 @@ def _install_pre_release_handoff() -> None:
         # here, and absence is not interpreted as "no Pre-Learning".
         restored, defects = topology.restored_pre_release()
         if isinstance(restored, Mapping):
+            # Wrapped through the ONE bundle mint, never stored verbatim:
+            # ``restored_pre_release`` returns the raw map/questions pair
+            # without ``schema_version``, and the staging gate
+            # (``generation.valid_phase3_pre_release_bundle``) rejects a
+            # version-less mapping as malformed in-memory authority — the
+            # restored, already-paid Pre lane was thrown away by the very
+            # handoff that recovered it.
+            generation = importlib.import_module("app.services.generation")
             patched = copy.deepcopy(captured)
-            patched["phase3_pre_release"] = copy.deepcopy(dict(restored))
+            patched["phase3_pre_release"] = generation.phase3_pre_release_bundle(
+                dict(restored.get("pre_map") or {}),
+                dict(restored.get("pre_questions") or {}),
+                snapshot_writes=(
+                    restored["snapshot_writes"]
+                    if isinstance(restored.get("snapshot_writes"), Mapping)
+                    else None
+                ),
+            )
             patched["phase3_pre_release_handoff"] = {
                 "version": "four-output-release-handoff-1",
                 "source": "phase3_sidecars",

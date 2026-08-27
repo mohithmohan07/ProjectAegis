@@ -4707,6 +4707,12 @@ def generate_post_learning(
                 artifacts=artifacts,
                 resume_checkpoint=current_resume,
                 checkpoint_callback=save_checkpoint,
+                # Extraction is not the end of this operation: the release
+                # wrapper still refines, stages both concept lanes, and
+                # builds both Master files after it. 0.935 keeps the bar
+                # honest instead of announcing 100% with hours of Master
+                # work left (the "97% for hours" report).
+                completion_progress=0.935,
             )
 
     def generation_and_deposit_attempt() -> tuple[
@@ -4819,7 +4825,15 @@ def generate_post_learning(
             f"merged sources into {len(merged_ids)} existing"
         )
     db.commit()
-    progress.set_progress(1.0, label="Done")
+    if staged_release_only:
+        # The release wrapper still refines, stages Outputs 01/03 and
+        # builds Masters 02/04 after this returns; only its own final
+        # emission may say 1.0 (build_concepts_release_contract).
+        progress.set_progress(
+            0.94, label="Concept stage complete — staging release outputs"
+        )
+    else:
+        progress.set_progress(1.0, label="Done")
     if staged_release_only:
         progress.log(
             f"Captured {written.get('written', 0)} concept row(s) for the "

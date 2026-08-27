@@ -553,12 +553,17 @@ def refine_release(
     output_kind: str = "concepts_release",
     envelope_sha256: str | None = None,
     fixer: kernel.Provider | None = None,
+    on_unit=None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
     """Refine the captured release rows. Never raises, never blocks.
 
     Returns ``(refined_records, diff, review_flags)``. On any failure the
     UNREFINED records come back with a ``refiner unavailable`` flag; the
     caller stages whatever this function returns.
+
+    ``on_unit(done, total)`` is an optional progress hook consumed by the
+    assessment Master delegate only: reporting mechanics, never an input
+    to any decision. The concepts lane ignores it.
     """
 
     original = [
@@ -582,6 +587,7 @@ def refine_release(
                 store=store,
                 envelope_sha256=envelope_sha256,
                 fixer=fixer,
+                on_unit=on_unit,
             )
         return _refine(
             original,

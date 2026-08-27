@@ -323,9 +323,15 @@ def run(
             return done
         return pool.submit(contextvars.copy_context().run, decide)
 
+    # The Phase 3 band runs 0.815 → 0.93 and every stage below owns a
+    # fixed slice of it, sized so the model-heavy Pre-Learning lane at the
+    # end holds a visible share of the bar instead of freezing at ~97%
+    # (owner report: "97% but takes hours"). Values are mechanics — a
+    # fixed allocation, no duration estimate — and stay monotone with the
+    # 0.815 "topology ready" emission that precedes this call.
     progress.step(
         "Phase 3 — Settle: topology, grounding, and content authoring",
-        value=0.82,
+        value=0.815,
     )
     settled = settle_mod.settle(
         env,
@@ -343,7 +349,7 @@ def run(
             rider_pool, "settle", settled=copy.deepcopy(settled)
         )
         progress.step(
-            "Phase 3 — Host: certifying Type/Case and QID hosts", value=0.91
+            "Phase 3 — Host: certifying Type/Case and QID hosts", value=0.86
         )
         hosts = host_mod.host(
             env,
@@ -381,7 +387,7 @@ def run(
         progress.step(
             "Phase 3 — Place ∥ Analyse ∥ Polish: placement, error "
             "analysis, and content convergence",
-            value=0.93,
+            value=0.88,
         )
 
         def _place_lane():
@@ -453,7 +459,7 @@ def run(
     progress.step(
         "Phase 3 — Prerequisites: consolidating the running Phase 03 "
         "capture",
-        value=0.94,
+        value=0.885,
     )
     prerequisites = prelearn_mod.merge(
         env,
@@ -469,7 +475,7 @@ def run(
     progress.step(
         "Phase 3 — Assemble: embedding Types and routing QIDs "
         "(deterministic)",
-        value=0.96,
+        value=0.89,
     )
     assembled = assemble_mod.assemble(
         env, settled, hosts, placements, analysis
@@ -484,7 +490,7 @@ def run(
     # Q3). The Post rows are handed over read-only.
     progress.step(
         "Phase 3 — Pre-Learning: building the Phase 03 concept map",
-        value=0.97,
+        value=0.89,
     )
     try:
         pre_map = premap_mod.build(
@@ -498,6 +504,13 @@ def run(
             critic=injected.get("critic"),
             store=store,
             fixer=injected.get("fixer"),
+            # The map build owns 0.89 → 0.915 of the bar and creeps
+            # through it per finished decision, so the Pre lane no longer
+            # freezes the console on one value for its whole duration.
+            progress_span=progress.Span(
+                0.89, 0.915,
+                label="Phase 3 — Pre-Learning: building the concept map",
+            ),
         )
     except (
         premap_mod.PreExtractionError,
@@ -557,7 +570,7 @@ def run(
     # completes.
     progress.step(
         "Phase 3 — Pre-Learning: coverage plan and generated questions",
-        value=0.975,
+        value=0.915,
     )
     try:
         pre_questions = prequestions_mod.build(
@@ -568,6 +581,14 @@ def run(
             critic=injected.get("critic"),
             store=store,
             fixer=injected.get("fixer"),
+            # Question authoring owns 0.915 → 0.93 and creeps per
+            # authored pre-concept for the same reason as the map above.
+            progress_span=progress.Span(
+                0.915, 0.93,
+                label=(
+                    "Phase 3 — Pre-Learning: authoring generated questions"
+                ),
+            ),
         )
     except (
         premap_mod.PreExtractionError,

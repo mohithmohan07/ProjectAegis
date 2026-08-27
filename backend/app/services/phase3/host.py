@@ -768,8 +768,9 @@ def host(
         qid_map.update(batch_qids)
         new_concepts.extend(batch_new)
         batches_done += 1
+        # The Host band is 0.86 → 0.88, the slice runner.py allocates.
         progress.set_progress(
-            0.91 + 0.03 * batches_done / batch_total,
+            0.86 + 0.02 * batches_done / batch_total,
             label=(
                 "Phase 3 — Host: assignment batch "
                 f"{batches_done}/{batch_total} certified"
