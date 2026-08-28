@@ -16,6 +16,7 @@ stripped title tag on import.
 from __future__ import annotations
 
 import copy
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -198,7 +199,11 @@ def test_two_chapters_whose_titles_share_no_ascii_mint_distinct_ids(db):
 
     [measured, before S4] ``directory.concept_tag`` gave BOTH of these
     ``06MSSC_X_PL_X`` because ``_underscore_slug`` keeps only ``[A-Za-z0-9]+``
-    and falls back to ``"X"``. ``h8`` is what carries the uniqueness now.
+    and falls back to ``"X"``. The retired ``h8`` used to carry the
+    uniqueness here; since the 2026-08-27 audit decision the ``ch<id>``
+    segment carries it instead — appended ONLY when the slug collapses, so
+    the property this test pins (two Marathi chapters never share one
+    identity family) survives the hashless mint.
     """
     minted = []
     for title in ("सजीवांची वैशिष्ट्ये", "पदार्थ आणि पदार्थांचे गुणधर्म"):
@@ -211,10 +216,70 @@ def test_two_chapters_whose_titles_share_no_ascii_mint_distinct_ids(db):
     db.commit()
 
     assert len(set(minted)) == 2, minted
-    assert all("_X_" in value for value in minted), (
-        "the readable slug is expected to collapse; the hash is what "
-        "separates the two chapters"
+    assert all("_X_ch" in value for value in minted), (
+        "the readable slug is expected to collapse; the chapter-id segment "
+        "is what separates the two chapters"
     )
+
+
+def test_ascii_titled_chapters_mint_hashless_ids(db):
+    """The audit decision: no 8-hex hash in any identifier.
+
+    A chapter whose title yields a real slug mints exactly
+    ``<code_prefix>_<slug12>`` with no digest segment, and no ``ch<id>``
+    disambiguator either — that segment exists only for the collapsed-slug
+    case the test above pins.
+    """
+    chapter = _chapter(db, title="Self Help Is the Only Way",
+                       board="Maharashtra", grade="06", subject="English",
+                       code="06MSEN_SelfHelpIsth")
+    topic = _topic(db, chapter, "The Farmer Takes Responsibility",
+                   source_order=1)
+    concept = _concept(db, topic, "Choosing Self-Reliance", source_order=1)
+    db.commit()
+
+    minted = identity.machine_id_for_concept(concept)
+    assert minted.startswith("06MSEN_SelfHelpIsth_"), minted
+    assert "_ch" not in minted, minted
+    assert not re.search(r"_[0-9a-f]{8}_", minted), (
+        "the 8-hex digest segment was retired by the 2026-08-27 audit "
+        "decision"
+    )
+
+
+def test_same_family_slug_collision_disambiguates_with_chapter_id(db):
+    """[measured] the hashless mint let two same-family chapters whose
+    titles share their first twelve alphanumerics claim ONE identity, and
+    the S10 publication then refused the second chapter's run outright
+    ("group_key already belongs to a different database group"). The
+    earliest chapter keeps the clean audit shape; every later same-base
+    chapter mints the readable ``ch<id>`` disambiguator instead.
+    """
+    first = _chapter(db, title="In the World of Numbers",
+                     board="Maharashtra", grade="06", subject="Mathematics",
+                     code="06MSMA_Numbers")
+    first_topic = _topic(db, first, "Reading Large Numbers", source_order=1)
+    first_concept = _concept(db, first_topic, "Place Value", source_order=1)
+    db.commit()
+    first_minted = identity.machine_id_for_concept(first_concept)
+    assert first_minted.startswith("06MSMA_IntheWorldof_"), first_minted
+    assert "_ch" not in first_minted, first_minted
+
+    second = _chapter(db, title="In the World of Nations",
+                      board="Maharashtra", grade="06", subject="Mathematics",
+                      code="06MSMA_Nations")
+    second_topic = _topic(db, second, "Maps and Borders", source_order=1)
+    second_concept = _concept(db, second_topic, "Reading Maps",
+                              source_order=1)
+    db.commit()
+    second_minted = identity.machine_id_for_concept(second_concept)
+    assert second_minted.startswith(
+        f"06MSMA_IntheWorldof_ch{second.id}_"
+    ), second_minted
+    assert first_minted != second_minted
+    # The disambiguated tag still round-trips the importer's one regex.
+    label = f"Reading Maps ({second_minted})"
+    assert bi.strip_title_tag(label) == "Reading Maps"
 
 
 def test_every_minted_tag_round_trips_strip_title_tag(db):

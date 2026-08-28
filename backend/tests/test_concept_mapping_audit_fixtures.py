@@ -2080,6 +2080,10 @@ def test_english_post_normalized_render_uses_unique_source_aligned_ids() -> None
     topic_titles = list(dict.fromkeys(
         str(row["topic_title"]) for row in concept_rows
     ))
+    # These ids are CARRIED by the fixture snapshot, not minted fresh:
+    # persisted identity is never re-derived (identity.py P-C1), so the
+    # pre-decision hashed shape survives here even though new chapters now
+    # mint hashless (see test_persisted_identity).
     expected_topic_ids = {
         f"06MSEN_SelfHelpIsth_89ddc8fc_PL_T{number:02d}"
         for number in range(1, 6)

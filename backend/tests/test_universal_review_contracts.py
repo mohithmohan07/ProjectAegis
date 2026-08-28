@@ -147,6 +147,38 @@ def test_type_declared_answer_cells_use_one_whole_cell_medium():
     )
 
 
+def test_image_answer_cells_must_carry_a_source_visual():
+    # A declared-Image cell's contract is carrying a retrievable image.
+    # The 2026-08-27 owner audit measured source figures silently absent
+    # from Assessments and Rubrics — a sourceless Image cell is that
+    # defect, caught by syntax alone.
+    canonical = (
+        '[img src="https://images.example/number_line_fig1.png" '
+        'alt="Number line from 0 to 10"]'
+    )
+    assert kr.answer_cell_issues("Image", canonical) == []
+    # A bare URL is the CMS wire form raw_answer_cell reduces to.
+    assert kr.answer_cell_issues(
+        "Image", "https://images.example/self_help_fig_2.png"
+    ) == []
+    # Caption text alongside the source stays legal; underscores in the
+    # URL path must never read as TeX subscripts.
+    assert kr.answer_cell_issues(
+        "Image", f"Expected diagram: {canonical}"
+    ) == []
+
+    assert "image_missing_source" in kr.answer_cell_issues(
+        "Image", "The learner draws a number line."
+    )
+    assert "image_missing_source" in kr.answer_cell_issues("Image", "")
+    assert "image_katex_markup" in kr.answer_cell_issues(
+        "Image", f"{canonical} with [Katex]x=2[/Katex]"
+    )
+    assert "image_katex_markup" in kr.answer_cell_issues(
+        "Image", canonical + r" showing \frac{1}{2}"
+    )
+
+
 def test_legacy_export_cells_migrate_to_one_medium_without_input_mutation():
     source = (
         "A worked example uses [Katex] x^2 [/Katex]. "

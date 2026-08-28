@@ -278,6 +278,13 @@ def _answer_format_issues(
         "phrases_markup": (
             "Phrases content must not include image/link markup"
         ),
+        "image_missing_source": (
+            "Image content must carry an image source (canonical [img] tag "
+            "or its URL)"
+        ),
+        "image_katex_markup": (
+            "Image content must not include [Katex]/LaTeX markup"
+        ),
     }
     issues: list[str] = []
     for position, answer in enumerate(answers, start=1):

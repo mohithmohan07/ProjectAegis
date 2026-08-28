@@ -108,6 +108,7 @@ _BOOK_TAG_HINTS = [
     ("rs aggarwal", "RS"),
     ("rd sharma", "RD"),
     ("ncert", "NCERT"),
+    ("balbharati", "Balbharati"),
     ("gateway to social science", "Gateway_to_Social_Science"),
     ("morningstar", "MorningStar"),
     ("morning star", "MorningStar"),
@@ -350,8 +351,10 @@ def normalized_grade(grade: str) -> tuple[str, bool]:
     ([measured] a 54-character grade label produced an 87-character label with
     no margin), and ``models.Chapter.grade`` is itself ``String(8)`` — so the
     bound is twice what the column can even store. Column-fit mechanics, not a
-    judgment about what a grade means; the chapter id inside ``h8`` still
-    carries the uniqueness if two long tokens ever share a prefix.
+    judgment about what a grade means. Since the audit decision retired
+    ``h8``, two long tokens sharing a prefix rest on the title slug
+    alone — the reader claim gate and the publication duplicate scan
+    are the loud detectors when that residual risk lands.
     """
     raw = str(grade or "").strip()
     normalized = text_normalize.normalize_grade(raw)

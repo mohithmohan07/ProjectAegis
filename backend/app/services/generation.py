@@ -80,7 +80,7 @@ def _slug(text: str, length: int = 22) -> str:
 def question_label(concept: models.Concept, n: int) -> str:
     """THE one producer of D1/Q14's ``Question = <ConceptID> Q##`` pattern.
 
-    e.g. ``10CBMA_Circles_1f4a9c2b_PL_T01_C03 Q03``.
+    e.g. ``10CBMA_Circles_PL_T01_C03 Q03``.
 
     Nothing here is re-derived from a title. The base is the concept's
     PERSISTED ``machine_id`` through ``identity.machine_id_for_concept``, so a
@@ -1768,6 +1768,14 @@ COVERAGE IS MANDATORY (most important rule):
 - EVERY inventory item MUST appear in EXACTLY ONE Type's source_question_ids
   AND EXACTLY ONE example_prompt under a Case. The same qid/question must
   never appear in two Types, two Cases, or twice in the same Case.
+- A compound question ships as ONE Example. When the inventory carries both
+  a compound parent item and its recorded subpart items (a subpart's qid is
+  dotted, e.g. QINV-0009.1, and names its parent), classify the PARENT with
+  its complete question as the Example; its subpart items are covered
+  through it and must not each become a separate main-question Example —
+  the audited failure was one question rendered once whole and once per
+  subpart. A subpart whose parent item is NOT in the inventory is its own
+  independent item exactly as before.
 - NEVER skip an item because it looks trivial, routine, descriptive, or hard to
   classify. If an item fits no existing Type, CREATE a new Type for it.
 - In-text checkpoint questions, boxed "?" questions, and textbook activities
@@ -13617,7 +13625,8 @@ def _rendered_inventory_coverage_defects(
     Textbook ``activity`` items live in Activity/Info Hub rather than Types
     Examples, so they are excluded from this Types coverage contract.
     """
-    expected_by_qid: dict[str, str] = {}
+    participating: list[dict] = []
+    participating_qids: set[str] = set()
     for item in (inventory or {}).get("items") or []:
         if not isinstance(item, dict):
             continue
@@ -13626,6 +13635,22 @@ def _rendered_inventory_coverage_defects(
             continue
         source_kind = (item.get("source_kind") or "").strip().lower()
         if source_kind in _HUB_INVENTORY_KINDS:
+            continue
+        participating.append(item)
+        participating_qids.add(qid)
+    expected_by_qid: dict[str, str] = {}
+    for item in participating:
+        qid = (item.get("qid") or "").strip()
+        # Owner audit 2026-08-27 (item 1): a compound question renders as
+        # ONE Example — the parent's complete text — never once whole plus
+        # once per subpart. A subpart whose recorded parent also
+        # participates is therefore covered THROUGH the parent and must
+        # not demand its own rendered Example. Identity accounting over
+        # the extraction model's own ``parent_qid`` linkage, mirroring
+        # ``assessment_source_inventory.partition_compound_parents``; a
+        # subpart whose parent is absent keeps its own obligation.
+        parent_qid = str(item.get("parent_qid") or "").strip()
+        if parent_qid and parent_qid in participating_qids:
             continue
         key = _inventory_coverage_key(_inventory_task_text(item))
         if not key:
