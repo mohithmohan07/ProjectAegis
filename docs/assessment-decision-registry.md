@@ -12,7 +12,7 @@ module's kernel contract and the adopted architecture/handoff.
 | `assessment.cell` | `assessment-cell-2` | Source-atom blueprint axes and marks | `_aegis_assessment_cell_verdict` |
 | `assessment.materialize` | `assessment-materialize-9` | Question and complete unweighted semantic answer/rubric content; Q21 whole-cell medium and four-mark shape; lowercase paper-option labels with an explicit uppercase prohibition | `_aegis_assessment_materialization` |
 | `assessment.answer_restriction` | `assessment-answer-restriction-3` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
-| `assessment.marking` | `assessment-marking-6` | Model-authored weight decomposition, duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
+| `assessment.marking` | `assessment-marking-7` (exact valid `-6` decisions replay during rollout) | Model-authored weight decomposition, duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
 | `assessment.route` | `assessment-route-2` | One released concept home | `_aegis_assessment_route` |
 | `assessment.level` | `assessment-level-1` | Basic/Intermediate/Advanced verdict | `_aegis_assessment_level_verdict` |
 | `assessment.variant_cluster` | `assessment-variant-cluster-1` | Same-tier variant families | `_aegis_assessment_variant_cluster` |
@@ -50,6 +50,18 @@ weight, sub-question, diagram/step, duration, and keyboard decomposition under
 fail-closed arithmetic. No external marking-rubric or Question-Paper Blueprint
 document is consulted, expected, pending, or missing; neither document is
 runtime evidence.
+
+Policy `assessment-marking-7` transports that semantic verdict as a sparse,
+ordered marking projection: answer weights, subquestion/keyword weights,
+duration, keyboard mode, and rationale only. The server deep-copies the
+finalized candidate and overlays those values by exact array position. It
+does not decide any mark; it only enforces cardinality/order/arithmetic and
+makes question, option, correct-marker, rubric, subquestion, keyword, and
+declared-medium mutation impossible by construction. During the rollout an
+exact content-addressed `assessment-marking-6` hit is revalidated against its
+original immutable candidate, projected into the same sparse mechanics, and
+replayed without provider calls. A missing, corrupt, or drifted v6 record is a
+normal v7 miss; old records are never rewritten.
 
 The two Master Refiner kinds operate only after all assessment identities and
 question labels exist. Candidate and group contracts are deliberately

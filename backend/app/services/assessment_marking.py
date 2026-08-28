@@ -6,12 +6,13 @@ one explicit blueprint cell that owns the total marks.  By permanent design,
 the API's per-item verdict owns the decomposition of that total.  No external
 marking-rubric document is consulted or expected.
 
-The model authors the mark decomposition, duration, and keyboard mode.  Local
-code checks only the response contract: exact identity and semantic
-preservation, finite positive arithmetic, exact sums, kind-valid keyboard
-shape, and complete ordered coverage.  The shared decision kernel supplies
-bounded mechanical correction, immutable replay, an advisory critic, and the
-same-checker Fixer guarantee.
+The model authors the mark decomposition, duration, and keyboard mode.  Its
+response contains only those mutable decisions; local code binds them by
+position onto the original, immutable candidate evidence.  Local code checks
+only the response contract: finite positive arithmetic, exact sums,
+kind-valid keyboard shape, and complete ordered coverage.  The shared decision
+kernel supplies bounded mechanical correction, immutable replay, an advisory
+critic, and the same-checker Fixer guarantee.
 """
 from __future__ import annotations
 
@@ -30,9 +31,11 @@ from .phase3 import kernel
 
 
 # ``-5`` moved stable rules/metadata ahead of the candidate suffix and added
-# the explicit GPT-5.6 cache breakpoint.  ``-6`` layers the owner-format
-# contract on top so replay cannot collide with either provider input shape.
-MARKING_POLICY_VERSION = "assessment-marking-6"
+# the explicit GPT-5.6 cache breakpoint.  ``-6`` layered the owner-format
+# contract on top.  ``-7`` replaces fragile full-content echoing with a sparse
+# decision projection; immutable candidate content is now copied by the
+# server, so harmless model reserialization cannot block Master recovery.
+MARKING_POLICY_VERSION = "assessment-marking-7"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
 
 _PROMPT_CACHE_STABLE_KEYS = (
@@ -42,7 +45,13 @@ _PROMPT_CACHE_STABLE_KEYS = (
     "metadata",
 )
 
-MARKING_SYSTEM = (
+# Exact policy-v6 prompt bytes are retained only to locate and mechanically
+# revalidate already-paid decisions during the v7 rollout.  They are never
+# sent to the provider again.  Removing them would force every successful
+# marking in a parked/rebuild run to be purchased again merely because the
+# response transport changed.
+_LEGACY_MARKING_POLICY_VERSION = "assessment-marking-6"
+_LEGACY_MARKING_SYSTEM_V6 = (
     "You are the Aegis assessment marking author. Author the marking for ONE "
     "finalized assessment candidate after its Open/Specific answer-space "
     "contract has been adopted. The supplied explicit blueprint cell is the "
@@ -78,8 +87,7 @@ MARKING_SYSTEM = (
     '"answers":[],"sub_questions":[],"question_duration":1,'
     '"math_keyboard":"Yes|No|","rationale":"evidence-bound reason"}'
 )
-
-MARKING_CRITIC_SYSTEM = (
+_LEGACY_MARKING_CRITIC_SYSTEM_V6 = (
     "You are the independent advisory critic for one Aegis assessment "
     "marking verdict. Audit the proposed mark decomposition, duration, and "
     "keyboard mode against the complete finalized candidate, its adopted "
@@ -99,8 +107,7 @@ MARKING_CRITIC_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
 )
-
-_RESPONSE_FIELDS = frozenset({
+_LEGACY_RESPONSE_FIELDS_V6 = frozenset({
     "candidate_id",
     "question",
     "question_text",
@@ -109,6 +116,106 @@ _RESPONSE_FIELDS = frozenset({
     "question_duration",
     "math_keyboard",
     "rationale",
+})
+
+MARKING_SYSTEM = (
+    "You are the Aegis assessment marking author. Author the marking for ONE "
+    "finalized assessment candidate after its Open/Specific answer-space "
+    "contract has been adopted. The supplied explicit blueprint cell is the "
+    "sole authority for total marks. You intentionally own the per-item "
+    "decomposition of that total from the finalized candidate and adopted "
+    "answer contract. No external marking-rubric document is part of this "
+    "contract, consulted, or expected; do not claim one as evidence.\n"
+    "The server preserves question, question_text, every answer/option, "
+    "correct marker, rubric block, subquestion, keyword, declared medium, and "
+    "their order from the finalized candidate. Do not return `question`, "
+    "`question_text`, `answers`, `sub_questions`, keyword text, or any other "
+    "protected-content field. Your `rationale` may briefly explain the "
+    "numeric decisions without rewriting that content. Return only the "
+    "mutable marking projection described here.\n"
+    "The payload's `response_contract` is mechanical and authoritative for "
+    "this candidate. Echo its `candidate_id` exactly. Return exactly "
+    "`answer_weightages_length` numeric entries in `answer_weightages`, in "
+    "the supplied answer/rubric order. Return exactly "
+    "`subquestion_markings_length` objects in `subquestion_markings`, in the "
+    "supplied subquestion order. Each object has only `marks` and "
+    "`keyword_weightages`; its keyword array length must equal the matching "
+    "entry in `keyword_weightages_lengths`, in supplied keyword order. Empty "
+    "means `[]`: never add a placeholder row. Never add, remove, or reorder "
+    "positions. The user payload's `critic_rules` is audit context for a "
+    "different model; do not follow its response schema.\n"
+    "Author "
+    "a finite positive question_duration IN MINUTES — the wire contract's "
+    "unit; never seconds — and the response-appropriate "
+    "math_keyboard value without a local default: Objective requires the "
+    "authored empty string; Descriptive requires exactly Yes or No.\n"
+    "For Objective, exactly one correct option receives the cell's total "
+    "marks and every wrong option receives exact zero. For every "
+    "non-Objective item, every answer/rubric weight is positive and their "
+    "exact sum is the cell total. "
+    "A 4-mark Descriptive answer has at least two rubric blocks; never assign "
+    "all four marks to one block. When a non-Objective item has "
+    "subquestions, their positive "
+    "marks independently sum exactly to the same cell total; do not add the "
+    "answer-weight total and subquestion-mark total together. When a "
+    "subquestion has keyword rows, their positive weightages sum exactly to "
+    "that subquestion's marks. Do not use negative values, "
+    "cancellation, NaN, infinity, rounding tolerance, or a heuristic/default. "
+    "Use only the supplied positions to allocate represented working, diagram, "
+    "and subquestion contributions; do not double-count redundant work.\n"
+    "Return ONLY one strict JSON object with no additional fields. Shape "
+    "example for an Objective contract with two answers and no subquestions:\n"
+    '{"candidate_id":"COPY_EXACT_ID","answer_weightages":[1,0],'
+    '"subquestion_markings":[],"question_duration":2,'
+    '"math_keyboard":"","rationale":"evidence-bound numeric reason"}\n'
+    "Shape example for a Descriptive contract with two answers, two "
+    "subquestions, and keyword lengths [2,1]:\n"
+    '{"candidate_id":"COPY_EXACT_ID","answer_weightages":[1.5,2.5],'
+    '"subquestion_markings":[{"marks":2,"keyword_weightages":[1,1]},'
+    '{"marks":2,"keyword_weightages":[2]}],"question_duration":6,'
+    '"math_keyboard":"Yes","rationale":"evidence-bound numeric reason"}\n'
+    "Examples illustrate keys only. Replace the id, array lengths, numbers, "
+    "duration, and keyboard using this candidate and its response_contract."
+)
+
+MARKING_CRITIC_SYSTEM = (
+    "You are the independent advisory critic for one Aegis assessment "
+    "marking verdict. The proposal is a sparse decision projection: it "
+    "contains candidate_id, weights, duration, keyboard mode, and rationale "
+    "only; the "
+    "server binds it positionally to the unchanged finalized candidate. "
+    "Audit the proposed mark decomposition, duration, and "
+    "keyboard mode against the complete finalized candidate, its adopted "
+    "Open/Specific answer-space contract, metadata, and the supplied explicit "
+    "blueprint cell. Audit whether its positional weights appropriately cover "
+    "the unchanged candidate, including correct-option treatment, exact "
+    "arithmetic, grade fit, duration, and whether a math keyboard is actually "
+    "needed. Verify that represented working, diagram, and subquestion "
+    "contributions receive explicit marks and redundant steps receive no "
+    "marks. The server, not this proposal, guarantees immutable content. "
+    "Treat the explicit cell as the total-marks authority and the API's "
+    "per-item verdict as the intentional decomposition authority. No external "
+    "marking-rubric document is consulted or expected; do not claim one as "
+    "evidence. "
+    "Do not rewrite, replace, gate, or retry the author's decision. Dissent "
+    "ships only as review evidence and the mechanically valid authored "
+    "decision stands. State honest confidence.\n"
+    "Return ONLY strict JSON:\n"
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+)
+
+_RESPONSE_FIELDS = frozenset({
+    "candidate_id",
+    "answer_weightages",
+    "subquestion_markings",
+    "question_duration",
+    "math_keyboard",
+    "rationale",
+})
+
+_SUBQUESTION_MARKING_FIELDS = frozenset({
+    "marks",
+    "keyword_weightages",
 })
 
 _PRINT_POSITION_FIELDS = frozenset({
@@ -449,7 +556,9 @@ def _prepare_pair(
     )
 
 
-def _semantic_answers(value: Any) -> list[dict[str, Any]] | None:
+def _legacy_semantic_answers(value: Any) -> list[dict[str, Any]] | None:
+    """Policy-v6 immutable projection used only for paid-decision replay."""
+
     if not isinstance(value, list):
         return None
     rows: list[dict[str, Any]] = []
@@ -462,7 +571,11 @@ def _semantic_answers(value: Any) -> list[dict[str, Any]] | None:
     return rows
 
 
-def _semantic_subquestions(value: Any) -> list[dict[str, Any]] | None:
+def _legacy_semantic_subquestions(
+    value: Any,
+) -> list[dict[str, Any]] | None:
+    """Policy-v6 nested immutable projection for zero-spend replay."""
+
     if not isinstance(value, list):
         return None
     rows: list[dict[str, Any]] = []
@@ -487,33 +600,39 @@ def _semantic_subquestions(value: Any) -> list[dict[str, Any]] | None:
 
 
 def _weight_defects(
-    response: Mapping[str, Any], *, kind: str, total_marks: Decimal,
+    response: Mapping[str, Any], *, candidate: Mapping[str, Any], kind: str,
+    total_marks: Decimal,
 ) -> list[str]:
     defects: list[str] = []
-    answers = response.get("answers")
-    if not isinstance(answers, list):
-        return ["answers must be an array"]
+    answers = list(candidate.get("answers") or [])
+    answer_weightages = response.get("answer_weightages")
+    if not isinstance(answer_weightages, list):
+        return ["answer_weightages must be an array"]
+    if len(answer_weightages) != len(answers):
+        defects.append(
+            "answer_weightages must cover every answer/rubric block exactly "
+            f"once in order (expected {len(answers)}, got "
+            f"{len(answer_weightages)})"
+        )
 
     answer_weights: list[Decimal] = []
     if kind == "objective":
         correct_positions = [
             position
             for position, answer in enumerate(answers, start=1)
-            if isinstance(answer, Mapping)
-            and rel.is_correct_option(answer.get("correct_answer"))
+            if rel.is_correct_option(answer.get("correct_answer"))
         ]
         if len(correct_positions) != 1:
             defects.append(
                 f"objective requires exactly one correct option "
                 f"(got {len(correct_positions)})"
             )
-        for position, answer in enumerate(answers, start=1):
-            if not isinstance(answer, Mapping):
-                continue
-            weight = _decimal(answer.get("answer_weightage"))
+        for position, raw_weight in enumerate(answer_weightages, start=1):
+            weight = _decimal(raw_weight)
             if weight is None:
                 defects.append(
-                    f"answer {position} weight must be finite and numeric"
+                    f"answer_weightages entry {position} must be finite and "
+                    "numeric"
                 )
                 continue
             answer_weights.append(weight)
@@ -527,77 +646,117 @@ def _weight_defects(
                 defects.append(
                     f"wrong option {position} weight must be exact zero"
                 )
-        subquestions = response.get("sub_questions")
-        if isinstance(subquestions, list) and subquestions:
-            defects.append("objective marking must not contain subquestions")
     else:
         if total_marks == Decimal(4) and len(answers) < 2:
             defects.append(
                 "a 4-mark descriptive item requires at least two "
                 "answer/rubric blocks"
             )
-        for position, answer in enumerate(answers, start=1):
-            if not isinstance(answer, Mapping):
-                continue
-            weight = _decimal(answer.get("answer_weightage"))
+        for position, raw_weight in enumerate(answer_weightages, start=1):
+            weight = _decimal(raw_weight)
             if weight is None or weight <= 0:
                 defects.append(
-                    f"answer {position} weight must be finite and positive"
+                    f"answer_weightages entry {position} must be finite and "
+                    "positive"
                 )
                 continue
             answer_weights.append(weight)
 
-    if len(answer_weights) == len(answers) and sum(
+    if len(answer_weights) == len(answer_weightages) == len(answers) and sum(
         answer_weights, Decimal(0)
     ) != total_marks:
         defects.append(
             f"answer weights must sum exactly to total marks {total_marks}"
         )
 
-    if kind != "descriptive":
+    subquestions = list(candidate.get("sub_questions") or [])
+    subquestion_markings = response.get("subquestion_markings")
+    if not isinstance(subquestion_markings, list):
+        return [*defects, "subquestion_markings must be an array"]
+    if len(subquestion_markings) != len(subquestions):
+        defects.append(
+            "subquestion_markings must cover every subquestion exactly once "
+            f"in order (expected {len(subquestions)}, got "
+            f"{len(subquestion_markings)})"
+        )
+    if kind == "objective":
+        if subquestion_markings:
+            defects.append("objective marking must not contain subquestions")
         return defects
-    subquestions = response.get("sub_questions")
-    if not isinstance(subquestions, list):
-        return [*defects, "sub_questions must be an array"]
     if not subquestions:
         return defects
 
     sub_marks: list[Decimal] = []
-    for position, subquestion in enumerate(subquestions, start=1):
-        if not isinstance(subquestion, Mapping):
+    for position, marking in enumerate(subquestion_markings, start=1):
+        if not isinstance(marking, Mapping):
+            defects.append(
+                f"subquestion_markings entry {position} must be an object"
+            )
             continue
-        sub_mark = _decimal(subquestion.get("marks"))
+        unexpected = sorted(
+            str(field) for field in set(marking) - _SUBQUESTION_MARKING_FIELDS
+        )
+        if unexpected:
+            defects.append(
+                f"subquestion_markings entry {position} has unexpected "
+                f"fields {unexpected!r}"
+            )
+        sub_mark = _decimal(marking.get("marks"))
         if sub_mark is None or sub_mark <= 0:
             defects.append(
-                f"subquestion {position} marks must be finite and positive"
+                f"subquestion_markings entry {position} marks must be finite "
+                "and positive"
             )
             continue
         sub_marks.append(sub_mark)
-        keywords = subquestion.get("keywords")
-        if not isinstance(keywords, list) or not keywords:
-            # Some valid semantic rubrics use only the answer blocks.  When
-            # keyword rows exist, however, their arithmetic is mandatory.
+        expected_keywords = (
+            list(subquestions[position - 1].get("keywords") or [])
+            if position <= len(subquestions)
+            else []
+        )
+        keyword_weightages = marking.get("keyword_weightages")
+        if not isinstance(keyword_weightages, list):
+            defects.append(
+                f"subquestion_markings entry {position} "
+                "keyword_weightages must be an array"
+            )
+            continue
+        if len(keyword_weightages) != len(expected_keywords):
+            defects.append(
+                f"subquestion_markings entry {position} keyword_weightages "
+                "must cover every keyword exactly once in order "
+                f"(expected {len(expected_keywords)}, got "
+                f"{len(keyword_weightages)})"
+            )
+        if not expected_keywords:
             continue
         keyword_weights: list[Decimal] = []
-        for keyword_position, keyword in enumerate(keywords, start=1):
-            if not isinstance(keyword, Mapping):
-                continue
-            weight = _decimal(keyword.get("weightage"))
+        for keyword_position, raw_weight in enumerate(
+            keyword_weightages, start=1,
+        ):
+            weight = _decimal(raw_weight)
             if weight is None or weight <= 0:
                 defects.append(
-                    f"subquestion {position} keyword {keyword_position} "
-                    "weight must be finite and positive"
+                    f"subquestion_markings entry {position} "
+                    f"keyword_weightages entry {keyword_position} must be "
+                    "finite and positive"
                 )
                 continue
             keyword_weights.append(weight)
-        if len(keyword_weights) == len(keywords) and sum(
+        if (
+            len(keyword_weights)
+            == len(keyword_weightages)
+            == len(expected_keywords)
+        ) and sum(
             keyword_weights, Decimal(0)
         ) != sub_mark:
             defects.append(
                 f"subquestion {position} keyword weights must sum exactly "
                 "to its marks"
             )
-    if len(sub_marks) == len(subquestions) and sum(
+    if (
+        len(sub_marks) == len(subquestion_markings) == len(subquestions)
+    ) and sum(
         sub_marks, Decimal(0)
     ) != total_marks:
         defects.append(
@@ -610,14 +769,6 @@ def _checker(
     candidate: Mapping[str, Any], *, candidate_id: str, kind: str,
     total_marks: Decimal,
 ) -> kernel.Checker:
-    candidate_evidence = _content_evidence(candidate)
-    expected_answers = _semantic_answers(candidate_evidence.get("answers"))
-    expected_subquestions = _semantic_subquestions(
-        candidate_evidence.get("sub_questions")
-    )
-    assert expected_answers is not None
-    assert expected_subquestions is not None
-
     def check(response: Mapping[str, Any]) -> list[str]:
         if not isinstance(response, Mapping):
             return ["response is not an object"]
@@ -627,37 +778,6 @@ def _checker(
             defects.append(f"response has unexpected fields {unexpected!r}")
         if response.get("candidate_id") != candidate_id:
             defects.append(f"candidate_id must echo {candidate_id!r}")
-        for field in ("question", "question_text"):
-            if response.get(field) != candidate.get(field):
-                defects.append(f"{field} must remain exactly unchanged")
-
-        response_answers = _semantic_answers(response.get("answers"))
-        if response_answers is None:
-            defects.append("answers must be an array of objects")
-        elif len(response_answers) != len(expected_answers):
-            defects.append("answer cardinality must remain exactly unchanged")
-        elif response_answers != expected_answers:
-            defects.append(
-                "every non-weight answer/option/rubric field must remain "
-                "exactly unchanged"
-            )
-
-        response_subquestions = _semantic_subquestions(
-            response.get("sub_questions")
-        )
-        if response_subquestions is None:
-            defects.append(
-                "sub_questions and keyword rows must be arrays of objects"
-            )
-        elif len(response_subquestions) != len(expected_subquestions):
-            defects.append(
-                "subquestion cardinality must remain exactly unchanged"
-            )
-        elif response_subquestions != expected_subquestions:
-            defects.append(
-                "every non-mark subquestion and non-weight keyword field "
-                "must remain exactly unchanged"
-            )
 
         duration = _decimal(response.get("question_duration"))
         if duration is None or duration <= 0:
@@ -680,11 +800,99 @@ def _checker(
             defects.append("rationale must be a non-empty string")
 
         defects.extend(
-            _weight_defects(response, kind=kind, total_marks=total_marks)
+            _weight_defects(
+                response,
+                candidate=candidate,
+                kind=kind,
+                total_marks=total_marks,
+            )
         )
         return defects
 
     return check
+
+
+def _legacy_v6_overlay(
+    decision: Mapping[str, Any],
+    *,
+    candidate: Mapping[str, Any],
+    candidate_id: str,
+    kind: str,
+    total_marks: Decimal,
+) -> dict[str, Any] | None:
+    """Project one exact, valid v6 response into the v7 sparse contract.
+
+    The old decision remains immutable and authoritative.  This adapter only
+    avoids re-buying a semantic verdict that was already accepted under the
+    stricter full-echo contract.  Any missing/corrupt/drifted v6 record is a
+    cache miss and proceeds through the normal v7 author/Fixer path.
+    """
+
+    response = decision.get("response")
+    if not isinstance(response, Mapping):
+        return None
+    if set(response) - _LEGACY_RESPONSE_FIELDS_V6:
+        return None
+    if response.get("candidate_id") != candidate_id:
+        return None
+    if any(
+        response.get(field) != candidate.get(field)
+        for field in ("question", "question_text")
+    ):
+        return None
+
+    candidate_evidence = _content_evidence(candidate)
+    expected_answers = _legacy_semantic_answers(
+        candidate_evidence.get("answers")
+    )
+    response_answers = _legacy_semantic_answers(response.get("answers"))
+    expected_subquestions = _legacy_semantic_subquestions(
+        candidate_evidence.get("sub_questions")
+    )
+    response_subquestions = _legacy_semantic_subquestions(
+        response.get("sub_questions")
+    )
+    if (
+        response_answers is None
+        or expected_answers is None
+        or response_answers != expected_answers
+        or response_subquestions is None
+        or expected_subquestions is None
+        or response_subquestions != expected_subquestions
+    ):
+        return None
+
+    raw_answers = list(response.get("answers") or [])
+    raw_subquestions = list(response.get("sub_questions") or [])
+    overlay = {
+        "candidate_id": candidate_id,
+        "answer_weightages": [
+            copy.deepcopy(answer.get("answer_weightage"))
+            for answer in raw_answers
+        ],
+        "subquestion_markings": [
+            {
+                "marks": copy.deepcopy(subquestion.get("marks")),
+                "keyword_weightages": [
+                    copy.deepcopy(keyword.get("weightage"))
+                    for keyword in list(subquestion.get("keywords") or [])
+                ],
+            }
+            for subquestion in raw_subquestions
+        ],
+        "question_duration": copy.deepcopy(
+            response.get("question_duration")
+        ),
+        "math_keyboard": copy.deepcopy(response.get("math_keyboard")),
+        "rationale": copy.deepcopy(response.get("rationale")),
+    }
+    defects = _checker(
+        candidate,
+        candidate_id=candidate_id,
+        kind=kind,
+        total_marks=total_marks,
+    )(overlay)
+    return None if defects else overlay
 
 
 def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
@@ -705,7 +913,7 @@ def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
         purpose="concept_mapping",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
-            "marking-author-v5",
+            "marking-author-v6",
             prefix,
             shard_seed=candidate_id,
         ),
@@ -730,7 +938,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
         purpose="concept_validation",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
-            "marking-critic-v5",
+            "marking-critic-v6",
             prefix,
             shard_seed=candidate_id,
         ),
@@ -863,11 +1071,22 @@ def _payload(
     *,
     meta: Mapping[str, Any],
 ) -> dict[str, Any]:
+    answers = list(candidate.get("answers") or [])
+    subquestions = list(candidate.get("sub_questions") or [])
     return {
         "stage": "assessment.marking",
         "rules": MARKING_SYSTEM,
         "critic_rules": MARKING_CRITIC_SYSTEM,
         "metadata": _content_evidence(meta),
+        "response_contract": {
+            "candidate_id": str(candidate.get("candidate_id") or ""),
+            "answer_weightages_length": len(answers),
+            "subquestion_markings_length": len(subquestions),
+            "keyword_weightages_lengths": [
+                len(list(subquestion.get("keywords") or []))
+                for subquestion in subquestions
+            ],
+        },
         "candidate": _content_evidence(candidate),
         "adopted_answer_contract": _content_evidence(contract),
         "blueprint_evidence": {
@@ -885,22 +1104,58 @@ def _payload(
     }
 
 
+def _legacy_v6_payload(
+    candidate: Mapping[str, Any],
+    cell: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    *,
+    meta: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reconstruct the exact v6 key payload without calling its provider."""
+
+    payload = _payload(candidate, cell, contract, meta=meta)
+    payload.pop("response_contract", None)
+    payload["rules"] = _LEGACY_MARKING_SYSTEM_V6
+    payload["critic_rules"] = _LEGACY_MARKING_CRITIC_SYSTEM_V6
+    return payload
+
+
 def _assemble(
     response: Mapping[str, Any],
     *,
+    candidate: Mapping[str, Any],
     candidate_id: str,
     cell: Mapping[str, Any],
     decision: Mapping[str, Any],
 ) -> dict[str, Any]:
+    candidate_evidence = _content_evidence(candidate)
+    answers = copy.deepcopy(list(candidate_evidence.get("answers") or []))
+    for answer, weightage in zip(
+        answers, list(response.get("answer_weightages") or []), strict=True,
+    ):
+        answer["answer_weightage"] = copy.deepcopy(weightage)
+    subquestions = copy.deepcopy(
+        list(candidate_evidence.get("sub_questions") or [])
+    )
+    for subquestion, marking in zip(
+        subquestions,
+        list(response.get("subquestion_markings") or []),
+        strict=True,
+    ):
+        subquestion["marks"] = copy.deepcopy(marking.get("marks"))
+        for keyword, weightage in zip(
+            list(subquestion.get("keywords") or []),
+            list(marking.get("keyword_weightages") or []),
+            strict=True,
+        ):
+            keyword["weightage"] = copy.deepcopy(weightage)
     return {
         "candidate_id": candidate_id,
         "marks": float(_decimal(cell.get("marks")) or Decimal(0)),
-        "question": str(response.get("question") or ""),
-        "question_text": str(response.get("question_text") or ""),
-        "answers": copy.deepcopy(list(response.get("answers") or [])),
-        "sub_questions": copy.deepcopy(
-            list(response.get("sub_questions") or [])
-        ),
+        "question": str(candidate_evidence.get("question") or ""),
+        "question_text": str(candidate_evidence.get("question_text") or ""),
+        "answers": answers,
+        "sub_questions": subquestions,
         "question_duration": float(
             _decimal(response.get("question_duration")) or Decimal(0)
         ),
@@ -970,11 +1225,39 @@ def decide_markings(
         ],
     ) -> dict[str, Any]:
         candidate_id, candidate, cell, total_marks, contract = unit
+        legacy_decision = kernel.peek(
+            kind="assessment.marking",
+            unit_id=candidate_id,
+            envelope_sha256=envelope_sha,
+            payload=_legacy_v6_payload(
+                candidate, cell, contract, meta=metadata,
+            ),
+            store=decision_store,
+            policy_version=_LEGACY_MARKING_POLICY_VERSION,
+        )
+        if legacy_decision is not None:
+            legacy_overlay = _legacy_v6_overlay(
+                legacy_decision,
+                candidate=candidate,
+                candidate_id=candidate_id,
+                kind=str(cell["sheet_kind"]),
+                total_marks=total_marks,
+            )
+            if legacy_overlay is not None:
+                return _assemble(
+                    legacy_overlay,
+                    candidate=candidate,
+                    candidate_id=candidate_id,
+                    cell=cell,
+                    decision=legacy_decision,
+                )
+
+        payload = _payload(candidate, cell, contract, meta=metadata)
         decision = kernel.decide(
             kind="assessment.marking",
             unit_id=candidate_id,
             envelope_sha256=envelope_sha,
-            payload=_payload(candidate, cell, contract, meta=metadata),
+            payload=payload,
             provider=provider,
             checker=_checker(
                 candidate,
@@ -989,6 +1272,7 @@ def decide_markings(
         )
         return _assemble(
             decision["response"],
+            candidate=candidate,
             candidate_id=candidate_id,
             cell=cell,
             decision=decision,
