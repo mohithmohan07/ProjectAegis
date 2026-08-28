@@ -443,12 +443,20 @@ def test_a_moving_queue_extends_the_wait_instead_of_timing_out(monkeypatch):
     turning over normally; before the movement-anchored deadline, the
     resulting OpenAIQueueTimeoutError silently became a Post-only release
     with no Pre lane (owner report, 2026-08-28).
+
+    Deterministic: the "other run's" handoffs are simulated by stamping
+    the shared last-release marker WITHOUT freeing the slot — exactly a
+    waiter that keeps losing the (non-FIFO) handoff race — so the waiter
+    cannot luck into the slot before its arrival-anchored budget expires.
+    Arrival-anchored code raises at 0.4s here; movement-anchored code
+    survives to the real release at ~1.0s.
     """
     gate = threading.BoundedSemaphore(1)
     assert gate.acquire(blocking=False)
     monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 0.4)
     monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_QUIET_SECONDS", 0.05)
     monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_LOG_SECONDS", 0.1)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_MAX_SECONDS", 30.0)
     logs: list[str] = []
     monkeypatch.setattr(
         g.progress,
@@ -456,20 +464,14 @@ def test_a_moving_queue_extends_the_wait_instead_of_timing_out(monkeypatch):
         lambda message, **_kwargs: logs.append(str(message)),
     )
 
-    # Another run's requests keep the gate hot: a slot is released (and
-    # instantly reclaimed) every 0.2s — always inside the 0.4s window —
-    # until well past the waiter's own arrival-anchored deadline.
-    stop_at = time.monotonic() + 1.2
+    release_at = time.monotonic() + 1.0
 
     def churn():
-        while time.monotonic() < stop_at:
-            time.sleep(0.2)
-            g._release_openai_slot(gate)
-            if time.monotonic() >= stop_at:
-                return
-            if not gate.acquire(timeout=0.01):
-                return  # the waiter finally won the slot
-        g._release_openai_slot(gate)
+        while time.monotonic() < release_at:
+            time.sleep(0.15)
+            with g._openai_gate_lock:
+                g._openai_slot_last_release = time.monotonic()
+        gate.release()
 
     churner = threading.Thread(target=churn, daemon=True)
     churner.start()
@@ -482,6 +484,47 @@ def test_a_moving_queue_extends_the_wait_instead_of_timing_out(monkeypatch):
         gate.release()
 
     assert any("slot acquired after" in m for m in logs)
+
+
+def test_a_starved_waiter_still_fails_at_the_absolute_cap(monkeypatch):
+    """Movement extends the deadline, but never past the absolute cap.
+
+    Semaphores are not FIFO: a waiter can lose every handoff while churn
+    re-anchors its deadline forever. The cap bounds that starvation with
+    the same clear, resumable failure instead of a permanently hung run.
+    """
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_QUIET_SECONDS", 0.02)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_LOG_SECONDS", 0.05)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_MAX_SECONDS", 0.6)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        g.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+    stop = threading.Event()
+
+    def churn():
+        while not stop.is_set():
+            time.sleep(0.05)
+            with g._openai_gate_lock:
+                g._openai_slot_last_release = time.monotonic()
+
+    churner = threading.Thread(target=churn, daemon=True)
+    churner.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(g.OpenAIQueueTimeoutError, match="waited"):
+            g._acquire_openai_slot(gate, purpose="concept_mapping")
+    finally:
+        stop.set()
+        churner.join(timeout=2)
+        gate.release()
+    # It failed at the cap, not at the (perpetually re-anchored) window.
+    assert 0.5 <= time.monotonic() - started <= 5.0
 
 
 def test_a_wedged_gate_still_times_out(monkeypatch):

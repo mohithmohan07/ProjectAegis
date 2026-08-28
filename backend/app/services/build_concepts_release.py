@@ -3310,11 +3310,12 @@ def stage_pre_release_from_run(
                 "the in-memory Phase 03 Pre release authority is malformed"
             )
     if authority is None:
-        # The caller's captured pre-clear envelope first: the clean success
-        # path clears ``job.generation_checkpoint`` BEFORE the Pre sibling
-        # is staged, so without the captured copy this fallback always read
-        # an empty envelope on completed runs (owner report, 2026-08-28:
-        # recurring "run did not complete Phase 03").
+        # The caller's captured deposit-time envelope first: it is the
+        # direct transport of the envelope as it stood when the rows were
+        # materialized, independent of what later steps did to the job row
+        # (the clean success path clears ``job.generation_checkpoint`` and
+        # the Post ``stage_release`` then restores a pending-stripped copy;
+        # this fallback must not depend on that restore ordering).
         for envelope in (checkpoint_envelope, job.generation_checkpoint):
             for checkpoint in reversed(
                 generation._concept_checkpoint_entries(envelope)

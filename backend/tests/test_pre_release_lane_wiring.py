@@ -2785,12 +2785,13 @@ def _raise_after_capture(captured):
 
 
 def test_the_captured_pre_clear_envelope_saves_the_pre_lane(db, monkeypatch):
-    """The clean success path clears ``job.generation_checkpoint`` BEFORE the
-    Pre sibling is staged. When the in-memory bundle is unavailable and no
-    snapshot sidecar survives (an ephemeral artifact dir), the deposit-time
-    captured envelope is the only intact source of the Phase 03 Pre
-    authority — without it, completed runs recorded "the run did not
-    complete Phase 03" and shipped no Pre lane (owner report, 2026-08-28).
+    """The deposit-time captured envelope is a direct authority transport.
+
+    When the in-memory bundle is unavailable, no snapshot sidecar survives
+    (an ephemeral artifact dir), and the job row's envelope is empty —
+    whatever earlier steps did to it — the captured envelope alone must
+    stage the Pre lane, so staging never depends on the success path's
+    clear/restore ordering of ``job.generation_checkpoint``.
     """
 
     from app.services import generation, uploads

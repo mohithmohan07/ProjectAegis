@@ -202,10 +202,10 @@ def _stage_pre_sibling(
         target_chapter_id=target_chapter_id,
         inventory=inventory or {},
         phase3_pre_release=phase3_pre_release,
-        # The pre-clear envelope captured at the deposit boundary: the
-        # clean success path clears ``job.generation_checkpoint`` before
-        # this sibling is staged, so the captured copy is the only intact
-        # checkpoint source of the Pre authority on completed runs.
+        # The envelope captured at the deposit boundary — the direct
+        # transport of the Pre authority's checkpoint source, independent
+        # of the clear/restore the success path performs on the job row
+        # between deposit and this staging.
         checkpoint_envelope=checkpoint_envelope,
         terminal_checkpoint_proof=copy.deepcopy(
             build_concepts._PRE_RELEASE_TERMINAL_PROOF.get()

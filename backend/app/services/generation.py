@@ -2769,19 +2769,37 @@ def _acquire_openai_slot(
             last_release = _openai_slot_last_release
         anchor = max(started, last_release)
         remaining = timeout - (now - anchor)
+        # Semaphores are not FIFO: one waiter can keep losing the handoff
+        # race while churn re-anchors its deadline forever. The absolute
+        # cap bounds that starvation with the same clear, resumable
+        # failure — a slowdown, never a permanently hung run.
+        max_wait = config.OPENAI_SLOT_WAIT_MAX_SECONDS
+        if max_wait > 0:
+            remaining = min(remaining, max_wait - (now - started))
         if remaining <= 0:
+            if max_wait > 0 and now - started >= max_wait:
+                raise OpenAIQueueTimeoutError(
+                    "Timed out waiting for an available "
+                    f"{_provider_label()} generation slot: this request "
+                    f"waited {now - started:.0f}s total while the queue "
+                    "kept moving for other requests. If this run has a "
+                    "saved checkpoint, resume it after another generation "
+                    "finishes."
+                )
             raise OpenAIQueueTimeoutError(
-                "Timed out waiting for an available OpenAI generation slot "
-                f"(no slot was released for {timeout:.0f}s — the gate looks "
-                "wedged, not busy). If this run has a saved checkpoint, "
-                "resume it after another generation finishes."
+                "Timed out waiting for an available "
+                f"{_provider_label()} generation slot (no slot was "
+                f"released for {timeout:.0f}s — the gate looks wedged, "
+                "not busy). If this run has a saved checkpoint, resume it "
+                "after another generation finishes."
             )
         if not patience_noted and now - started > timeout:
             patience_noted = True
             progress.log(
-                "OpenAI capacity is still busy but the queue is moving; "
-                "continuing to wait for a free slot (parallel runs share "
-                f"{config.OPENAI_MAX_CONCURRENCY} slots).",
+                f"{_provider_label()} capacity is still busy but the "
+                "queue is moving; continuing to wait for a free slot "
+                f"(parallel runs share {config.OPENAI_MAX_CONCURRENCY} "
+                "slots).",
                 level="warning",
             )
         wait_for = min(config.OPENAI_SLOT_WAIT_LOG_SECONDS, remaining)
