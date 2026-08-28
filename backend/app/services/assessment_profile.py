@@ -54,6 +54,9 @@ _GRADE_6_ALIASES = (
     "6", "06", "class 6", "class 06", "grade 6", "grade 06",
     "standard 6", "standard 06", "std 6", "std 06",
 )
+_MATHEMATICS_SUBJECT_ALIASES = (
+    "math", "maths", "mathematics",
+)
 _ENGLISH_SUBJECT_ALIASES = (
     "english", "english language", "english literature",
 )
@@ -113,7 +116,7 @@ MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY: dict[str, Any] = {
     "metadata_match": {
         "board": _MSBSHSE_BOARD_ALIASES,
         "grade": _GRADE_6_ALIASES,
-        "subject": ("math", "maths", "mathematics"),
+        "subject": _MATHEMATICS_SUBJECT_ALIASES,
     },
     "difficulty_labels": {
         # Aegis's wire vocabulary -> the audit log's vocabulary.
@@ -270,6 +273,23 @@ MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE: dict[str, Any] = {
     "metadata_match": {
         "board": _MSBSHSE_BOARD_ALIASES,
         "grade": _GRADE_6_ALIASES,
+        # The audited workbook geometry and Subjective-sheet behavior are
+        # evidenced only for Mathematics and English.  Board + grade alone
+        # must not impose that contract on Science or another Grade-6 run.
+        "subject": _MATHEMATICS_SUBJECT_ALIASES,
+    },
+    "overrides": {
+        "sheet_kinds": ("objective", "descriptive", "subjective"),
+        "forced_blank_fields": ("question_disclaimer",),
+        "master_workbook": MSBSHSE_GRADE_6_MASTER_WORKBOOK_CONTRACT,
+    },
+}
+
+MSBSHSE_GRADE_6_ENGLISH_RUN_PROFILE_OVERRIDE: dict[str, Any] = {
+    "metadata_match": {
+        "board": _MSBSHSE_BOARD_ALIASES,
+        "grade": _GRADE_6_ALIASES,
+        "subject": _ENGLISH_SUBJECT_ALIASES,
     },
     "overrides": {
         "sheet_kinds": ("objective", "descriptive", "subjective"),
@@ -325,11 +345,15 @@ DEFAULT_PROFILE: dict = {
         MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY,
         MSBSHSE_GRADE_6_ENGLISH_FORMAT_POLICY,
     ),
-    # Program metadata can select a complete run-level widening without
-    # changing the pinned reference-1 defaults or reinterpreting historical
-    # partial profile records. The Grade-6 MSBSHSE source set uses the
-    # Subjective sheet and carries its authored chapter duration.
-    "run_profile_overrides": (MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE,),
+    # Conclusive program metadata can select a complete run-level widening
+    # without changing the pinned reference-1 defaults or reinterpreting
+    # historical partial profile records.  Only the audited Grade-6 MSBSHSE
+    # Mathematics and English sources use this Subjective-sheet/layout
+    # contract; other subjects keep the generic profile.
+    "run_profile_overrides": (
+        MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE,
+        MSBSHSE_GRADE_6_ENGLISH_RUN_PROFILE_OVERRIDE,
+    ),
 }
 
 _PROFILES: dict[str, dict] = {

@@ -50,6 +50,49 @@ def test_runner_persists_the_effective_materialized_envelope(monkeypatch, tmp_pa
     ]
 
 
+def test_effective_envelope_keeps_raw_checkpoint_boundary_on_replay(
+    monkeypatch, tmp_path,
+):
+    from app.services import canonical_source_phase3 as phase3_core
+
+    source = {
+        "envelope_sha256": "raw-envelope-seal",
+        "skeleton_rows": [{"concept_title": "raw checkpoint row"}],
+    }
+    effective = {
+        "envelope_sha256": "effective-envelope-seal",
+        "skeleton_rows": [{"concept_title": "planned literary row"}],
+    }
+    target = tmp_path / "source.phase3-envelope.json"
+    target.write_text(
+        json.dumps({
+            "boundary_skeleton_sha256": "raw-checkpoint-boundary",
+            "envelope": source,
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        phase3_core, "active_session", lambda: {"artifact_dir": str(tmp_path)}
+    )
+
+    contract._persist_effective_envelope(
+        effective, source_envelope=source
+    )
+    first = json.loads(target.read_text(encoding="utf-8"))
+    assert first["boundary_skeleton_sha256"] == "raw-checkpoint-boundary"
+    assert first["envelope"] == effective
+
+    # The next run is handed the already-effective envelope.  Its persisted
+    # wrapper still has to retain the raw 81% checkpoint identity rather than
+    # replacing it with the materialized literary skeleton identity.
+    contract._persist_effective_envelope(
+        effective, source_envelope=effective
+    )
+    second = json.loads(target.read_text(encoding="utf-8"))
+    assert second["boundary_skeleton_sha256"] == "raw-checkpoint-boundary"
+    assert second["envelope"] == effective
+
+
 def test_release_capture_recovers_authored_pre_bundle_from_sidecars(monkeypatch):
     from app.services import build_concepts_release_contract as release_contract
     from app.services import concept_topology_contract as topology

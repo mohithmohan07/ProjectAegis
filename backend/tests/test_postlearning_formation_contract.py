@@ -227,6 +227,147 @@ def test_materialization_replaces_generic_support_rows_with_plan_concepts():
     ]
 
 
+def test_only_a_sealed_plan_culmination_survives_a_one_concept_topic():
+    planned = {
+        "concept_title": "Culmination: Planned stanza close",
+        post.PLAN_IDENTITY_FIELD: {
+            "plan_topic_id": "PT-1",
+            "plan_concept_id": "PC-2",
+        },
+        post.SEMANTIC_ROLE_FIELD: "stanza_culmination",
+    }
+    unplanned = {"concept_title": "Culmination - Generic recap"}
+    duplicate = {
+        **planned,
+        "concept_title": "Culmination: Duplicate planned close",
+        post.PLAN_IDENTITY_FIELD: {
+            "plan_topic_id": "PT-1",
+            "plan_concept_id": "PC-EXTRA",
+        },
+    }
+
+    assert settle._culminations_to_author(
+        [unplanned], normal_concept_count=1,
+    ) == []
+    assert settle._culminations_to_author(
+        [planned], normal_concept_count=0,
+    ) == []
+    assert settle._culminations_to_author(
+        [unplanned, planned, duplicate], normal_concept_count=1,
+    ) == [planned]
+    # The shared multi-concept rule still permits one ordinary authored recap.
+    assert settle._culminations_to_author(
+        [unplanned], normal_concept_count=2,
+    ) == [unplanned]
+
+
+def test_settle_keeps_planned_one_concept_culminations_without_conformance():
+    """Job 81: each stanza plan intentionally carries one concept + close.
+
+    Settle must author those recorded closes directly. Dropping them would
+    force the language-plan seam to spend a chapter-wide conformance decision
+    merely to recreate rows that were already present in the sealed plan.
+    """
+    env = post.materialize_envelope(_env())
+    conformance_calls = {"n": 0}
+
+    def topology(request):
+        return {
+            "decisions": [
+                {
+                    "concept_id": row["concept_id"],
+                    "decision": "keep",
+                    "confidence": 0.999,
+                    "reason": "The recorded plan concept is singular.",
+                    "segments": [{
+                        "concept_title": row["concept_title"],
+                        "parent_concept": row["parent_concept"],
+                        "concept_details": row["concept_details"],
+                        "keywords": row["keywords"],
+                    }],
+                }
+                for row in request["concepts"]
+            ],
+        }
+
+    def grounding(request):
+        block_id = request["source_blocks"][0]["block_id"]
+        return {
+            "concepts": [
+                {
+                    "concept_id": row["concept_id"],
+                    "source_block_ids": [block_id],
+                    "reference_block_ids": [],
+                    "confidence": 0.999,
+                    "reason": "The topic block directly teaches the claim.",
+                }
+                for row in request["concepts"]
+            ],
+        }
+
+    def author(request):
+        response = {
+            "rows": [
+                {
+                    "concept_id": row["concept_id"],
+                    "concept_description": (
+                        "The source presents one coherent literary idea and "
+                        "develops its meaning through precise language, "
+                        "context, and effect. Learners connect the important "
+                        "detail to the speaker's purpose, explain how the "
+                        "wording shapes understanding, and support their "
+                        "interpretation with the named stanza evidence."
+                    ),
+                    "achieving_mastery": (
+                        "Learners can explain the source-grounded idea for "
+                        + row["concept_id"] + "."
+                    ),
+                }
+                for row in request["concepts"]
+            ],
+        }
+        if request.get("culminations"):
+            response["culminations"] = [
+                {
+                    "concept_id": row["concept_id"],
+                    "consolidation": (
+                        "Together the stanza's meaning and literary form "
+                        "create one complete invitation, allowing learners "
+                        "to explain both its message and its effect."
+                    ),
+                }
+                for row in request["culminations"]
+            ]
+        return response
+
+    def critic(_request):
+        return {"verdict": "verified", "confidence": 0.999, "issues": []}
+
+    def forbidden_conformance(_request):
+        conformance_calls["n"] += 1
+        raise AssertionError("planned rows must align without conformance")
+
+    rows = settle.settle(
+        env,
+        topology_provider=topology,
+        grounding_provider=grounding,
+        analysis_provider=author,
+        critic=critic,
+        store=kernel.DecisionStore(),
+        post_plan_provider=forbidden_conformance,
+    )
+
+    assert conformance_calls["n"] == 0
+    assert len(rows) == 4
+    assert [row[post.PLAN_IDENTITY_FIELD]["plan_concept_id"] for row in rows] == [
+        "PC-1", "PC-2", "PC-3", "PC-4",
+    ]
+    assert [row[post.SEMANTIC_ROLE_FIELD] for row in rows] == [
+        "ordinary", "stanza_culmination", "detailed_analysis",
+        "chapter_culmination",
+    ]
+
+
 def test_clean_conformance_stamps_plan_identity_without_a_model_call():
     env = post.materialize_envelope(_env())
     calls = {"n": 0}

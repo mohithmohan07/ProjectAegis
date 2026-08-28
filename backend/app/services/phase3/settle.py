@@ -28,6 +28,19 @@ _BATCH_SIZE = 12
 
 _DECISIONS = {"keep", "refine", "split"}
 
+# The Post-Learning language-plan seam writes these opaque audit fields onto
+# every skeleton row it explicitly planned.  Settle does not interpret the
+# literary role; it only uses the recorded identity to distinguish an
+# authoritative one-concept culmination from the generic recap rows that the
+# shared topology normally removes.
+_LANGUAGE_PLAN_IDENTITY_FIELD = "_aegis_language_plan_identity"
+_LANGUAGE_SEMANTIC_ROLE_FIELD = "_aegis_language_semantic_role"
+_PLANNED_CULMINATION_ROLES = frozenset({
+    "stanza_culmination",
+    "topic_culmination",
+    "chapter_culmination",
+})
+
 # The Q1 unbundling (docs/aegis-restructure.md §12 Q1) removed
 # misconception_error_analysis from settle.author's response schema and
 # house string. The suffix re-keys every stored authoring decision so a
@@ -131,6 +144,50 @@ def _known_block_ids(env: Mapping[str, Any]) -> set[str]:
 
 def _batched(values: list, size: int = _BATCH_SIZE) -> list[list]:
     return [values[i:i + size] for i in range(0, len(values), size)]
+
+
+def _is_planned_culmination(row: Mapping[str, Any]) -> bool:
+    """Return whether the sealed literary plan explicitly owns this recap.
+
+    A title alone is not authority: generic concept maps also carry authored
+    ``Culmination`` rows.  Requiring both the opaque plan identity and its
+    recorded culmination role keeps this exception limited to the model plan
+    that materialized the Phase-3 envelope.
+    """
+
+    identity = row.get(_LANGUAGE_PLAN_IDENTITY_FIELD)
+    return bool(
+        isinstance(identity, Mapping)
+        and str(identity.get("plan_topic_id") or "").strip()
+        and str(identity.get("plan_concept_id") or "").strip()
+        and _normal(row.get(_LANGUAGE_SEMANTIC_ROLE_FIELD))
+        in _PLANNED_CULMINATION_ROLES
+    )
+
+
+def _culminations_to_author(
+    rows: list[dict[str, Any]],
+    *,
+    normal_concept_count: int,
+) -> list[dict[str, Any]]:
+    """Select the one authored recap this topic may carry.
+
+    Shared maps retain the existing rule: a one-concept topic has nothing to
+    consolidate.  The sole exception is a culmination explicitly present in
+    the sealed literary plan, where the row represents the stanza/topic as a
+    whole rather than a generated restatement of its only ordinary concept.
+    At-most-one remains mechanical: an explicitly planned row outranks an
+    unmarked row, and source order breaks duplicate ties.
+    """
+
+    if not rows:
+        return []
+    planned = [row for row in rows if _is_planned_culmination(row)]
+    if normal_concept_count <= 0:
+        return []
+    if normal_concept_count == 1:
+        return planned[:1]
+    return (planned or rows)[:1]
 
 
 # ---------------------------------------------------------------------------
@@ -976,12 +1033,25 @@ def settle(
             row for row in culmination_rows
             if str(row.get("_semantic_topic_id") or "") == topic_id
         ]
-        if len(topic_settled) < 2:
-            # A culmination consolidates several concepts into one recap. A
-            # topic that teaches exactly one concept has nothing to
-            # consolidate — the recap would only restate it — so it ships
-            # without one, and no consolidation prose is authored for it.
-            topic_culms = []
+        selected_culms = _culminations_to_author(
+            topic_culms,
+            normal_concept_count=len(topic_settled),
+        )
+        if len(selected_culms) != len(topic_culms):
+            dropped = len(topic_culms) - len(selected_culms)
+            reason = (
+                "the topic teaches one ordinary concept and the recap was "
+                "not explicitly owned by the sealed literary plan"
+                if len(topic_settled) < 2 and not selected_culms
+                else "the exact-one culmination contract retained the "
+                "authoritative/source-first row"
+            )
+            progress.log(
+                f"Settle: dropped {dropped} redundant culmination row(s) "
+                f"from {topic_title!r}: {reason}.",
+                level="warning",
+            )
+        topic_culms = selected_culms
         culm_consolidations: dict[str, str] = {}
         authoring_batches = _batched(list(range(len(topic_settled))))
 

@@ -453,9 +453,22 @@ def download_release_diagnostics(
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
-        content = release_files.build_diagnostics_zip(job, lane=_lane(lane))
+        resolved_lane = _lane(lane)
+        # A diagnostic archive spans the database row and the job's canonical
+        # artifact directory.  Claim the same lock as generation and explicit
+        # Master rebuilds for the entire read, otherwise either operation can
+        # replace files between archive members and produce a mixed snapshot.
+        # ``is_job_running`` is not enough here: a rebuild could start after
+        # that check and before ``build_diagnostics_zip`` finishes reading.
+        with uploads.exclusive_job_operation(job.id):
+            db.refresh(job)
+            content = release_files.build_diagnostics_zip(
+                job, lane=resolved_lane,
+            )
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
+    except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(404, str(e))
     return Response(

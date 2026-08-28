@@ -24,11 +24,23 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 
 
-def _persist_effective_envelope(env: Mapping[str, Any]) -> None:
-    """Persist exactly the envelope the wrapped Phase-3 runner will consume."""
+def _persist_effective_envelope(
+    env: Mapping[str, Any],
+    *,
+    source_envelope: Mapping[str, Any] | None = None,
+) -> None:
+    """Persist the effective envelope without losing its 81% boundary key.
+
+    ``source_envelope`` is what the topology seam handed to the runner before
+    literary materialization.  On both the first run and a replay, the wrapper
+    already on disk may carry that same source envelope plus the raw checkpoint
+    skeleton hash.  Preserve that hash; replacing it with the materialized
+    skeleton hash makes the next resume reject the sealed envelope and replay
+    every Phase-3 decision.
+    """
     phase3_core = importlib.import_module(
         "app.services.canonical_source_phase3"
     )
@@ -37,7 +49,24 @@ def _persist_effective_envelope(env: Mapping[str, Any]) -> None:
     if not artifact_dir:
         return
     target = Path(artifact_dir) / "source.phase3-envelope.json"
-    skeleton_sha = phase3_core._sha256_json(list(env.get("skeleton_rows") or []))
+    source = source_envelope or env
+    skeleton_sha = phase3_core._sha256_json(
+        list(source.get("skeleton_rows") or [])
+    )
+    source_sha = str(source.get("envelope_sha256") or "")
+    if target.exists() and source_sha:
+        try:
+            existing = json.loads(target.read_text(encoding="utf-8"))
+            existing_env = existing.get("envelope") or {}
+            if (
+                isinstance(existing_env, Mapping)
+                and str(existing_env.get("envelope_sha256") or "")
+                == source_sha
+                and str(existing.get("boundary_skeleton_sha256") or "")
+            ):
+                skeleton_sha = str(existing["boundary_skeleton_sha256"])
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass
     phase3_core._atomic_write(
         target,
         json.dumps(
@@ -65,7 +94,7 @@ def _install_runner_handoff() -> None:
         # Materialize first, then persist, then execute that SAME envelope.
         # The inner Job-79 wrapper sees its marker and is a no-op.
         effective = formation.materialize_envelope(env)
-        _persist_effective_envelope(effective)
+        _persist_effective_envelope(effective, source_envelope=env)
         return current(effective, *args, **kwargs)
 
     run_with_durable_envelope._aegis_four_output_envelope_handoff = True

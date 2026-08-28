@@ -82,11 +82,13 @@ try:
     from aegis_pipeline.openai_policy import (
         call_with_effort_negotiation,
         configured_openai_model,
+        ensure_json_mode_prompt,
     )
 except ImportError:  # pragma: no cover - direct script execution
     from openai_policy import (
         call_with_effort_negotiation,
         configured_openai_model,
+        ensure_json_mode_prompt,
     )
 
 MODEL_PARSE = configured_openai_model()
@@ -151,6 +153,9 @@ def call_gpt_json(
     No ``temperature`` is sent: reasoning models accept only their default, and
     passing a value is rejected outright.
     """
+    json_mode_system, json_mode_user = ensure_json_mode_prompt(
+        system_prompt, user_prompt
+    )
     response = call_with_effort_negotiation(
         model,
         "source_extraction",
@@ -158,8 +163,8 @@ def call_gpt_json(
             model=model,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": json_mode_system},
+                {"role": "user", "content": json_mode_user},
             ],
             max_completion_tokens=max_output_tokens,
             **({"reasoning_effort": effort} if effort else {}),

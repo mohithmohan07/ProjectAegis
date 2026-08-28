@@ -19,6 +19,7 @@ from aegis_pipeline.openai_policy import (
     DEFAULT_OPENAI_MODEL,
     OpenAIPurpose,
     chat_request_policy,
+    ensure_json_mode_prompt,
     is_unsupported_reasoning_effort_error,
     note_unsupported_reasoning_effort,
 )
@@ -391,11 +392,14 @@ class GPTWriter:
         max_tokens: int,
         purpose: OpenAIPurpose,
     ) -> str:
+        json_mode_system, json_mode_user = ensure_json_mode_prompt(
+            system, user
+        )
         kwargs: dict[str, Any] = {
             **chat_request_policy(purpose, model=self.model),
             "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
+                {"role": "system", "content": json_mode_system},
+                {"role": "user", "content": json_mode_user},
             ],
             "response_format": {"type": "json_object"},
         }

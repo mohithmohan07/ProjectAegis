@@ -772,7 +772,11 @@ def _validation_state(
         )
         for index, answer in enumerate(candidate.get("answers") or [], start=1):
             expected.append((
-                f"{answer_field}_{index}", answer.get("answer_content")
+                f"{answer_field}_{index}",
+                katex_rules.raw_answer_cell(
+                    str(answer.get("answer_type") or ""),
+                    str(answer.get("answer_content") or ""),
+                ),
             ))
         for sub_index, subquestion in enumerate(
             candidate.get("sub_questions") or [], start=1
@@ -781,7 +785,13 @@ def _validation_state(
                 subquestion.get("keywords") or [], start=1
             ):
                 expected.append(
-                    (f"sq{sub_index}_keyword_{key_index}", keyword.get("keyword"))
+                    (
+                        f"sq{sub_index}_keyword_{key_index}",
+                        katex_rules.raw_answer_cell(
+                            str(keyword.get("answer_type") or ""),
+                            str(keyword.get("keyword") or ""),
+                        ),
+                    )
                 )
         for field, value in expected:
             if _wire_text(row.get(field)) != _wire_text(value):

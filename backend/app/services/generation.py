@@ -26,6 +26,7 @@ from typing import Any, Callable, Mapping
 from aegis_pipeline.openai_policy import (
     OpenAIPurpose,
     chat_request_policy,
+    ensure_json_mode_prompt,
     is_unsupported_reasoning_effort_error,
     note_unsupported_reasoning_effort,
 )
@@ -2987,6 +2988,7 @@ def _openai_json(
     from openai import (
         APIConnectionError,
         APITimeoutError,
+        BadRequestError,
         InternalServerError,
         OpenAI,
         RateLimitError,
@@ -3007,9 +3009,12 @@ def _openai_json(
         max_retries=0,
         **model_provider.client_kwargs(),
     )
+    # Enforce the JSON-mode wire contract centrally so every caller,
+    # including editable prompt overrides, is protected by the same boundary.
+    json_mode_system, json_mode_user = ensure_json_mode_prompt(system, user)
     messages, prompt_cache_args = _explicit_prompt_cache_request(
-        system=system,
-        user=user,
+        system=json_mode_system,
+        user=json_mode_user,
         prompt_cache_prefix=prompt_cache_prefix,
         prompt_cache_key=prompt_cache_key,
         model=str(request_policy["model"]),
@@ -3032,6 +3037,14 @@ def _openai_json(
                 "image_url": {"url": image_url, "detail": "high"},
             })
         user_message["content"] = multimodal_content
+    request_messages_sha256 = hashlib.sha256(
+        json.dumps(
+            messages,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()
     gate = _get_openai_gate()
     last_err: Exception | None = None
     attempt = 0  # hard failures (bad JSON, truncation, 4xx)
@@ -3133,6 +3146,21 @@ def _openai_json(
                         level="warning",
                     )
                     continue
+            # A provider-side 400 is a deterministic request rejection.  The
+            # identical replay cannot repair it and previously caused three
+            # pointless physical requests before the checkpoint surfaced the
+            # same failure.  Malformed model output still follows the bounded
+            # parse-retry path below; only the provider's BadRequest response
+            # fails immediately.
+            if isinstance(e, BadRequestError):
+                raise RuntimeError(
+                    f"{_provider_label()} rejected the generation request "
+                    f"for purpose {purpose!r} with model "
+                    f"{request_policy['model']!r} (HTTP 400, messages SHA-256 "
+                    f"{request_messages_sha256}); the identical request was "
+                    "not retried: "
+                    f"{e}"
+                ) from e
             last_err = e
             attempt += 1
             if attempt >= hard_attempt_limit:

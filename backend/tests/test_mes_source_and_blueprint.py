@@ -13,6 +13,7 @@ import pytest
 from app import models
 from app.services import assessment_blueprint as bp
 from app.services import assessment_profile
+from app.services import assessment_release as release
 from app.services import assessment_source_inventory as si
 from app.services import build_assessments
 from app.services.phase3 import kernel
@@ -108,6 +109,153 @@ def test_source_atoms_hash_is_stable():
     a = si.build_source_atoms(_inventory(), source_document_hash="sha256:doc")
     b = si.build_source_atoms(_inventory(), source_document_hash="sha256:doc")
     assert a["sha256"] == b["sha256"]
+
+
+def test_governing_mcq_instruction_is_shared_context_not_an_atom():
+    inventory = {
+        "items": [
+            {
+                "qid": "QINV-0003",
+                "raw_task": (
+                    "Read the following questions and tick ☑ the correct "
+                    "answer."
+                ),
+            },
+            {
+                "qid": "QINV-0004",
+                "raw_task": (
+                    "What does the poem describe?\n"
+                    "(a) A new school year\n(b) A holiday"
+                ),
+                "shared_context": "The poem begins with a brand new start.",
+            },
+            {
+                "qid": "QINV-0005",
+                "raw_task": (
+                    "What does buckle up suggest?\n"
+                    "(a) Get ready\n(b) Sit quietly"
+                ),
+            },
+            {
+                "qid": "QINV-0006",
+                "raw_task": "Explain the final stanza in two sentences.",
+            },
+        ],
+    }
+
+    built = si.build_source_atoms(inventory, source_document_hash="doc")
+
+    assert [atom["source_qid"] for atom in built["atoms"]] == [
+        "QINV-0004", "QINV-0005", "QINV-0006",
+    ]
+    assert built["ledger"] == {
+        "QINV-0004": 0, "QINV-0005": 1, "QINV-0006": 2,
+    }
+    directive = "Read the following questions and tick ☑ the correct answer."
+    assert built["atoms"][0]["shared_context"] == (
+        "The poem begins with a brand new start.\n\n" + directive
+    )
+    assert built["atoms"][1]["shared_context"] == directive
+    assert built["atoms"][2]["shared_context"] == ""
+    assert built["context_only"] == [{
+        "source_qid": "QINV-0003",
+        "role": "shared_response_instruction",
+        "raw_text": directive,
+        "attached_source_qids": ["QINV-0004", "QINV-0005"],
+    }]
+    assert built["zero_loss"] == {
+        "missing": [], "unexpected": [], "double_counted": [], "holds": True,
+    }
+
+
+def test_governing_words_without_plural_adjacent_option_blocks_stay_an_atom():
+    inventory = {"items": [
+        {
+            "qid": "QINV-0001",
+            "raw_task": (
+                "Read the following questions and tick the correct answer."
+            ),
+        },
+        {
+            "qid": "QINV-0002",
+            "raw_task": "Which answer is correct?\n(a) One\n(b) Two",
+        },
+        {
+            "qid": "QINV-0003",
+            "raw_task": "Explain your choice.",
+        },
+    ]}
+
+    built = si.build_source_atoms(inventory)
+
+    assert [atom["source_qid"] for atom in built["atoms"]] == [
+        "QINV-0001", "QINV-0002", "QINV-0003",
+    ]
+    assert built["context_only"] == []
+
+
+def test_governing_instruction_without_qid_still_fails_identity_gate():
+    inventory = {"items": [
+        {
+            "raw_task": (
+                "Read the following questions and tick the correct answer."
+            ),
+        },
+        {
+            "qid": "QINV-0002",
+            "raw_task": "First question?\n(a) One\n(b) Two",
+        },
+        {
+            "qid": "QINV-0003",
+            "raw_task": "Second question?\n(a) Three\n(b) Four",
+        },
+    ]}
+
+    with pytest.raises(si.SourceInventoryError, match=r"without (?:a )?QID"):
+        si.build_source_atoms(inventory)
+
+
+def test_source_atom_uses_authoritative_caption_when_asset_alt_is_absent():
+    caption_url = "https://x/source-assets/tree-diagram.png"
+    explicit_url = "https://x/source-assets/explicit.png"
+    atom = si.source_atom_from_item(
+        {
+            "qid": "QINV-0011",
+            "source_kind": "checkpoint_question",
+            "raw_task": "Complete the following tree diagram.",
+            "image_urls": [caption_url, explicit_url],
+            "_image_captions": {
+                caption_url: "Source visual",
+                explicit_url: "caption must not replace explicit alt",
+            },
+            "image_assets": [{
+                "url": explicit_url,
+                "alt": "Explicit source asset alt",
+                "sha256": "explicit-sha",
+            }],
+        },
+        source_document_hash="sha256:doc",
+    )
+
+    assert atom["assets"] == [
+        {
+            "source_page": None,
+            "bbox": None,
+            "sha256": "",
+            "url": caption_url,
+            "alt": "Source visual",
+            "order": 1,
+        },
+        {
+            "source_page": None,
+            "bbox": None,
+            "sha256": "explicit-sha",
+            "url": explicit_url,
+            "alt": "Explicit source asset alt",
+            "order": 2,
+        },
+    ]
+    assert release.validate_source_atom(atom) == []
 
 
 # --------------------------------------------------------------------------- #

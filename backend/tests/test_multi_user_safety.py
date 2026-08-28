@@ -5,7 +5,7 @@ import time
 
 import httpx
 import pytest
-from openai import APITimeoutError, RateLimitError
+from openai import APITimeoutError, BadRequestError, RateLimitError
 
 from app import config
 from app.services import generation as g
@@ -19,6 +19,18 @@ def _rate_limit_error(
     response = httpx.Response(429, request=request, headers=headers)
     body = {"error": {"code": code}} if code else None
     return RateLimitError("rate limited", response=response, body=body)
+
+
+def _bad_request_error() -> BadRequestError:
+    request = httpx.Request(
+        "POST", "https://api.openai.com/v1/chat/completions"
+    )
+    response = httpx.Response(400, request=request)
+    return BadRequestError(
+        "invalid request",
+        response=response,
+        body={"error": {"code": "invalid_request_error"}},
+    )
 
 
 class _FakeResponse:
@@ -265,6 +277,18 @@ def test_bad_json_still_uses_bounded_retries(fake_openai, monkeypatch):
     fake_openai.plan = [ValueError("boom"), ValueError("boom"), ValueError("boom")]
     with pytest.raises(RuntimeError, match="failed after 3 retries"):
         g._openai_json("s", "u")
+
+
+def test_bad_request_fails_immediately_without_identical_retries(
+    fake_openai, monkeypatch,
+):
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    fake_openai.plan = [_bad_request_error(), None]
+
+    with pytest.raises(RuntimeError, match="HTTP 400.*not retried"):
+        g._openai_json("s", "u")
+
+    assert fake_openai.plan == [None]
 
 
 def test_section_numbers_are_scrubbed_deterministically():
