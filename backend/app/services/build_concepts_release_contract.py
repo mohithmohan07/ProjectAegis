@@ -164,6 +164,7 @@ def _stage_pre_sibling(
     *,
     inventory: Mapping[str, Any] | None,
     phase3_pre_release: Mapping[str, Any] | None = None,
+    checkpoint_envelope: Mapping[str, Any] | None = None,
     reason: str,
 ) -> None:
     """Stage Pre Outputs 01/02 beside whatever the Post lane just released.
@@ -201,6 +202,11 @@ def _stage_pre_sibling(
         target_chapter_id=target_chapter_id,
         inventory=inventory or {},
         phase3_pre_release=phase3_pre_release,
+        # The pre-clear envelope captured at the deposit boundary: the
+        # clean success path clears ``job.generation_checkpoint`` before
+        # this sibling is staged, so the captured copy is the only intact
+        # checkpoint source of the Pre authority on completed runs.
+        checkpoint_envelope=checkpoint_envelope,
         terminal_checkpoint_proof=copy.deepcopy(
             build_concepts._PRE_RELEASE_TERMINAL_PROOF.get()
         ),
@@ -272,6 +278,7 @@ def _release_after_result(
             target_chapter_id,
             inventory=captured.get("inventory") or {},
             phase3_pre_release=captured.get("phase3_pre_release"),
+            checkpoint_envelope=captured.get("checkpoint"),
             reason=(
                 "Generation completed. The Phase 03 Pre-Learning outputs "
                 "were staged and were not uploaded to the database."
@@ -817,6 +824,7 @@ def _stage_generation_release(
                     target_chapter_id,
                     inventory=captured.get("inventory") or {},
                     phase3_pre_release=captured.get("phase3_pre_release"),
+                    checkpoint_envelope=captured.get("checkpoint"),
                     reason=(
                         "Generation failed after its final rows were "
                         "materialized. The Phase 03 Pre-Learning outputs "

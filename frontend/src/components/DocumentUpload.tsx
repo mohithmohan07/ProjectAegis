@@ -124,11 +124,14 @@ function safeStorageRemoveItem(key: string): void {
 }
 
 /**
- * Three-step document intake that NEVER auto-processes:
+ * Document intake. Uploading a file starts its parse in one go (owner
+ * request, 2026-08-28):
  *   1. Choose a file (staged locally — change it freely)
- *   2. Upload  → file is stored on the server (status "uploaded"), no MMD yet
- *   3. Convert → explicit, streamed MMD conversion (status "converted")
- * Re-upload/replace is allowed any time before generation.
+ *   2. Upload → the file is stored AND converted to MMD immediately
+ *      (status "converted"); the Console streams the parse live
+ *   3. Pick the deposit target, then start generation
+ * Replacing the file stays manual: a replacement is stored without
+ * parsing until Convert is pressed, so a wrong pick costs nothing.
  */
 export default function DocumentUpload({
   module,
@@ -357,6 +360,12 @@ export default function DocumentUpload({
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
       emit(created);
+      // Parsing starts in one go with the upload (owner request,
+      // 2026-08-28): the file converts immediately, then the deposit
+      // scope is chosen and generation started as separate steps.
+      // Replacing the file stays manual, so a wrong pick is still free
+      // to swap before its replacement is parsed.
+      await convertJob(created);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -380,15 +389,15 @@ export default function DocumentUpload({
     }
   }
 
-  async function convert() {
-    if (!job || disabled) return;
+  async function convertJob(target: UploadJob) {
+    if (disabled) return;
     invalidateSavedJobRestore();
     const requestGeneration = savedJobRequestGenerationRef.current;
     setBusy(true);
     setError(null);
     const path = module === "assessments"
-      ? api.paths.assessmentConvert(job.id)
-      : api.paths.conceptConvert(job.id);
+      ? api.paths.assessmentConvert(target.id)
+      : api.paths.conceptConvert(target.id);
     try {
       const result = await run<{
         status: string;
@@ -397,19 +406,19 @@ export default function DocumentUpload({
         source_artifacts?: UploadJob["source_artifacts"];
         openai_usage?: UploadJob["openai_usage"];
       }>(
-        `Converting ${job.filename} to MMD`,
+        `Converting ${target.filename} to MMD`,
         path,
         {},
         // The parse run reads and extends the SAME cumulative ledger the
         // generation run continues — label it the same way.
-        { cumulative: true, filename: job.filename },
+        { cumulative: true, filename: target.filename },
         {
           module,
-          jobId: job.id,
+          jobId: target.id,
           // The conversion finished while the connection was down:
           // rebuild the result from the completed job itself.
           recoverResult: async () => {
-            const finished = await api.getUploadJob(module, job.id);
+            const finished = await api.getUploadJob(module, target.id);
             return {
               status: finished.status,
               mmd_text: finished.mmd_text,
@@ -422,11 +431,11 @@ export default function DocumentUpload({
       );
       if (savedJobRequestGenerationRef.current !== requestGeneration) return;
       emit({
-        ...job,
+        ...target,
         status: "converted",
         mmd_text: result.mmd_text,
         source_artifacts: result.source_artifacts,
-        openai_usage: result.openai_usage ?? job.openai_usage,
+        openai_usage: result.openai_usage ?? target.openai_usage,
       });
     } catch (e) {
       if (savedJobRequestGenerationRef.current === requestGeneration) {
@@ -435,6 +444,11 @@ export default function DocumentUpload({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function convert() {
+    if (!job || disabled) return;
+    await convertJob(job);
   }
 
   async function restoreCheckpoint(file: File) {
@@ -510,8 +524,9 @@ export default function DocumentUpload({
           {file && <span className="muted mono">{file.name}</span>}
         </div>
         <div className="hint mt-8">
-          Uploading only stores the file — it is <strong>not</strong> processed yet, so you
-          can swap it if you picked the wrong one. Convert to MMD as a separate step.
+          Uploading stores the file and starts its conversion right away —
+          watch the Console for parse progress. You pick where to deposit
+          before anything is generated.
         </div>
         {restoringSavedJob && (
           <div className="muted mt-8" role="status">

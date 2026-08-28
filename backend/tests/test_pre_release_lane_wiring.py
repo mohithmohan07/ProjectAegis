@@ -2782,3 +2782,74 @@ def _raise_after_capture(captured):
         raise RuntimeError("generation failed after the deposit boundary")
 
     return _original
+
+
+def test_the_captured_pre_clear_envelope_saves_the_pre_lane(db, monkeypatch):
+    """The clean success path clears ``job.generation_checkpoint`` BEFORE the
+    Pre sibling is staged. When the in-memory bundle is unavailable and no
+    snapshot sidecar survives (an ephemeral artifact dir), the deposit-time
+    captured envelope is the only intact source of the Phase 03 Pre
+    authority — without it, completed runs recorded "the run did not
+    complete Phase 03" and shipped no Pre lane (owner report, 2026-08-28).
+    """
+
+    from app.services import generation, uploads
+
+    chapter = _chapter_with_concepts(db)
+    job = models.UploadJob(
+        owner_sub=OWNER, module="build_concepts", upload_type="textbook",
+        filename="ch.mmd", mmd_text="# Chapter", status="generated",
+        learning_kind="post", deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+        generation_checkpoint={},  # cleared by the success path
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    release.stage_release(
+        db, job, target_chapter_id=chapter.id, records=_post_records(),
+        reason="post",
+    )
+    # No snapshot sidecars anywhere near this job.
+    monkeypatch.setattr(
+        uploads, "source_artifact_directory",
+        lambda _job_id: "/nonexistent/aegis-test-artifacts",
+        raising=False,
+    )
+    envelope = {
+        "stage": "post_type_assignment",
+        generation.PHASE3_PRE_RELEASE_FIELD: (
+            generation.phase3_pre_release_bundle(_pre_map(), _pre_questions())
+        ),
+    }
+
+    staged = release.stage_pre_release_from_run(
+        db, job, target_chapter_id=chapter.id,
+        checkpoint_envelope=envelope,
+        reason="clean completion with captured envelope",
+    )
+    db.refresh(job)
+
+    assert staged is not None
+    payload = release.release_payload(job, lane="pre")
+    assert payload is not None
+    assert payload.get("records")
+
+    # Without the captured envelope the same state records WHY instead of
+    # staging silently — the pre-existing diagnostic stays intact.
+    bare = models.UploadJob(
+        owner_sub=OWNER, module="build_concepts", upload_type="textbook",
+        filename="ch2.mmd", mmd_text="# Chapter", status="generated",
+        learning_kind="post", deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+        generation_checkpoint={},
+    )
+    db.add(bare)
+    db.commit()
+    db.refresh(bare)
+    assert release.stage_pre_release_from_run(
+        db, bare, target_chapter_id=chapter.id, reason="no authority",
+    ) is None
+    db.refresh(bare)
+    record = release.pre_release_unavailable_record(bare)
+    assert record and "did not complete" in str(record)

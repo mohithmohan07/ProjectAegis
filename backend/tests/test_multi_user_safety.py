@@ -434,3 +434,72 @@ def test_sqlite_uses_wal_and_busy_timeout():
         busy = conn.exec_driver_sql("PRAGMA busy_timeout").scalar()
     assert str(mode).lower() == "wal"
     assert int(busy) >= 30000
+
+
+def test_a_moving_queue_extends_the_wait_instead_of_timing_out(monkeypatch):
+    """A busy-but-flowing gate must never kill a queued run.
+
+    Two parallel chapter runs exhaust the wait budget while slots keep
+    turning over normally; before the movement-anchored deadline, the
+    resulting OpenAIQueueTimeoutError silently became a Post-only release
+    with no Pre lane (owner report, 2026-08-28).
+    """
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 0.4)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_QUIET_SECONDS", 0.05)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_LOG_SECONDS", 0.1)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        g.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+
+    # Another run's requests keep the gate hot: a slot is released (and
+    # instantly reclaimed) every 0.2s — always inside the 0.4s window —
+    # until well past the waiter's own arrival-anchored deadline.
+    stop_at = time.monotonic() + 1.2
+
+    def churn():
+        while time.monotonic() < stop_at:
+            time.sleep(0.2)
+            g._release_openai_slot(gate)
+            if time.monotonic() >= stop_at:
+                return
+            if not gate.acquire(timeout=0.01):
+                return  # the waiter finally won the slot
+        g._release_openai_slot(gate)
+
+    churner = threading.Thread(target=churn, daemon=True)
+    churner.start()
+    try:
+        # Far beyond the 0.4s budget in wall time, yet never 0.4s without
+        # queue movement: the waiter must eventually acquire, not raise.
+        g._acquire_openai_slot(gate, purpose="concept_mapping")
+    finally:
+        churner.join(timeout=3)
+        gate.release()
+
+    assert any("slot acquired after" in m for m in logs)
+
+
+def test_a_wedged_gate_still_times_out(monkeypatch):
+    """No movement for the whole window stays a clear, resumable failure."""
+    gate = threading.BoundedSemaphore(1)
+    assert gate.acquire(blocking=False)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_QUIET_SECONDS", 0.05)
+    monkeypatch.setattr(config, "OPENAI_SLOT_WAIT_LOG_SECONDS", 0.05)
+    monkeypatch.setattr(g, "_openai_slot_last_release", 0.0)
+    logs: list[str] = []
+    monkeypatch.setattr(
+        g.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+    try:
+        with pytest.raises(g.OpenAIQueueTimeoutError, match="wedged"):
+            g._acquire_openai_slot(gate, purpose="concept_mapping")
+    finally:
+        gate.release()
