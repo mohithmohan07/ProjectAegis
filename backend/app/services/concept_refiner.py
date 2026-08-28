@@ -10,10 +10,10 @@ they are deposited, so the stored Bulk Import rows carry the exact format the
 team requires regardless of which extractor produced them:
 
 1. **Stable reusable Type numbering.** Extractors restart ``Type 01`` inside
-   every concept. We allocate numbers in textbook/topic order, but semantically
-   consolidated Types rendered on more than one concept or topic retain the
-   SAME ``Type NN`` when their hidden mined-Type identity is supplied. Their
-   ``Case NN`` sequence continues across those hosts.
+   every concept. We allocate numbers in textbook/topic order while preserving
+   hidden reusable-Type identity. Ownership is decided upstream; audit-only
+   lanes may retain a split long enough to report it without renumbering it as
+   several apparently different Types.
 2. **One continuous Type sequence for the whole chapter.** Culmination rows
    share the same ``Type NN`` counter as regular concepts, in row order.
    They previously carried a separate "Miscellaneous Type NN" sequence, which
@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 
 _SECTION_SEP = " // "
 # Matches a Type/Case token, optionally already prefixed with "Miscellaneous "
@@ -55,6 +56,11 @@ _MISCONCEPTIONS_LABEL = "Misconceptions"
 _ERROR_ANALYSIS_LABEL = "Error Analysis"
 _ANALYSIS_LABEL = "Misconception/ Error Analysis"
 _TYPE_ORIGIN_SEALS_KEY = "_type_origin_seals"
+_RELEASE_TYPE_CASE_ROUTES_KEY = "_aegis_release_type_case_routes"
+
+
+class SplitTypeHostError(RuntimeError):
+    """Raised when one reusable Type is rendered under several concepts."""
 
 
 def _number_from_token(value: str) -> int | None:
@@ -311,16 +317,208 @@ def _record_origin_seals(record: dict) -> tuple[str, list[re.Match], list[str]]:
     return content, matches, seals
 
 
+def _type_host_key(record: dict, row_index: int) -> tuple[str, str]:
+    """Return one stable concept-host identity for a rendered record."""
+    topic = str(
+        record.get("_semantic_topic_id") or record.get("topic") or ""
+    )
+    title = str(
+        record.get("concept_title") or record.get("concept") or ""
+    )
+    topic_key = re.sub(r"\W+", " ", topic.casefold()).strip()
+    title_key = re.sub(r"\W+", " ", title.casefold()).strip()
+    # Malformed anonymous rows must not accidentally become one concept merely
+    # because both public identity fields are blank.
+    return topic_key, title_key or f"__row_{row_index}"
+
+
+def split_type_host_violations(records: list[dict]) -> list[dict]:
+    """Return every reusable Type identity rendered on multiple concepts.
+
+    The sealed mined-Type identity is authoritative when present.  Exact
+    public Type definitions are the deterministic fallback for older rows,
+    because a reusable Type is chapter-level and duplicate definitions must
+    not be assigned fresh numbers merely to conceal a second host.  Rewritten
+    Phase 3 rows also carry explicit ``TYPE::CASE`` release routes; those catch
+    activity or damaged-text rows whose visible Type block is unavailable.
+    """
+    occurrences: dict[tuple[str, str], dict] = {}
+
+    def add(
+        identity: tuple[str, str],
+        *,
+        row_index: int,
+        host: tuple[str, str],
+        display: str,
+        kind: str,
+    ) -> None:
+        entry = occurrences.setdefault(identity, {
+            "display": display,
+            "kind": kind,
+            "hosts": {},
+        })
+        entry["hosts"].setdefault(host, set()).add(row_index)
+
+    pending_routes: list[tuple[int, tuple[str, str], str]] = []
+    for row_index, record in enumerate(records):
+        if not isinstance(record, dict):
+            continue
+        host = _type_host_key(record, row_index)
+        content, matches, seals = _record_origin_seals(record)
+        for type_index, match in enumerate(matches):
+            end = (
+                matches[type_index + 1].start()
+                if type_index + 1 < len(matches)
+                else len(content)
+            )
+            segment = content[match.start():end]
+            signature = _type_signature(segment)
+            if not signature:
+                continue
+            seal = seals[type_index] if type_index < len(seals) else ""
+            if seal:
+                add(
+                    ("origin", seal),
+                    row_index=row_index,
+                    host=host,
+                    display=signature,
+                    kind="origin",
+                )
+            else:
+                add(
+                    ("definition", signature),
+                    row_index=row_index,
+                    host=host,
+                    display=signature,
+                    kind="definition",
+                )
+
+        for raw_route in record.get(_RELEASE_TYPE_CASE_ROUTES_KEY) or []:
+            type_id = (
+                str(raw_route.get("type_id") or "").strip()
+                if isinstance(raw_route, Mapping)
+                else str(raw_route or "").split("::", 1)[0].strip()
+            )
+            if type_id:
+                pending_routes.append((row_index, host, type_id))
+
+    # Route IDs and hidden origin seals are two representations of the same
+    # mined Type identity. Process routes only after all visible blocks so a
+    # route encountered on an earlier row can link to a seal encountered later.
+    for row_index, host, type_id in pending_routes:
+        origin_identity = ("origin", _seal_origin_identity(type_id))
+        identity = (
+            origin_identity
+            if origin_identity in occurrences
+            else ("release_route", type_id)
+        )
+        add(
+            identity,
+            row_index=row_index,
+            host=host,
+            display=(
+                occurrences[identity]["display"]
+                if identity in occurrences
+                else type_id
+            ),
+            kind=(
+                occurrences[identity]["kind"]
+                if identity in occurrences
+                else "release_route"
+            ),
+        )
+
+    raw_violations: list[dict] = []
+    for entry in occurrences.values():
+        hosts = entry["hosts"]
+        if len(hosts) <= 1:
+            continue
+        row_indexes = tuple(sorted({
+            row_index
+            for indexes in hosts.values()
+            for row_index in indexes
+        }))
+        raw_violations.append({
+            "type": entry["display"],
+            "kind": entry["kind"],
+            "row_indexes": list(row_indexes),
+            "concept_titles": [
+                str(
+                    records[index].get("concept_title")
+                    or records[index].get("concept")
+                    or ""
+                ).strip()
+                for index in row_indexes
+            ],
+        })
+
+    # Older rows can lack origin seals while carrying both a public definition
+    # and a release route. For one host-set these are parallel evidence, not
+    # automatically two Types. Pair the two evidence lists by cardinality:
+    # this removes the one-definition/one-route double count while retaining
+    # two distinguishable definitions or two distinct route IDs as two splits.
+    by_rows: dict[tuple[int, ...], list[dict]] = {}
+    for violation in raw_violations:
+        by_rows.setdefault(
+            tuple(violation["row_indexes"]), []
+        ).append(violation)
+    violations: list[dict] = []
+    for grouped in by_rows.values():
+        semantic = [
+            violation for violation in grouped
+            if violation["kind"] != "release_route"
+        ]
+        routes = [
+            violation for violation in grouped
+            if violation["kind"] == "release_route"
+        ]
+        if semantic and routes:
+            representatives = (
+                semantic if len(semantic) >= len(routes) else routes
+            )
+        else:
+            representatives = grouped
+        for representative in representatives:
+            violations.append({
+                key: value
+                for key, value in representative.items()
+                if key != "kind"
+            })
+    return violations
+
+
+def assert_single_concept_type_hosts(records: list[dict]) -> None:
+    """Enforce the Q14 owner ruling before deterministic formatting."""
+    violations = split_type_host_violations(records)
+    if not violations:
+        return
+    first = violations[0]
+    titles = ", ".join(
+        repr(title or f"row {index + 1}")
+        for index, title in zip(
+            first["row_indexes"], first["concept_titles"]
+        )
+    )
+    raise SplitTypeHostError(
+        "one concept must own every reusable Type; "
+        f"{first['type']!r} spans {titles}"
+        + (
+            f" ({len(violations)} split Types total)"
+            if len(violations) > 1
+            else ""
+        )
+    )
+
+
 def carry_type_origin_metadata(before: dict, after: dict) -> dict:
     """Carry opaque Type identity across a row-local Types rebuild.
 
-    Cleanup helpers rebuild Case numbering within one record.  Without this
-    handoff, a chapter-global Type rendered on several topics can temporarily
-    restart at ``Case 01`` and become indistinguishable from unrelated local
-    Types before the next chapter-wide renumbering pass.  Match stable Type
-    headers and exact public Examples first. Rendered numbers are used only
-    when the block has no Example identity, preventing a broad API rewrite
-    from accidentally joining unrelated Types.
+    Cleanup helpers rebuild Case numbering within one record.  Keep the sealed
+    mined identity attached to its single owning concept so later formatting
+    cannot silently mint a second identity. Match stable Type headers and exact
+    public Examples first. Rendered numbers are used only when the block has no
+    Example identity, preventing a broad API rewrite from accidentally joining
+    unrelated Types.
     """
     before_content, before_matches, before_seals = _record_origin_seals(before)
     after_content, after_matches = _type_occurrences(after)
@@ -419,6 +617,8 @@ def carry_type_origin_metadata(before: dict, after: dict) -> dict:
     return after
 
 
+
+
 def _durable_rendered_type_origins(records: list[dict]) -> dict[tuple, str]:
     """Recover a previously rendered cross-topic Type identity.
 
@@ -510,10 +710,10 @@ def _renumber_reusable_block(
             if origin_type_ids and index < len(origin_type_ids)
             else ""
         )
-        # A mined Type ID is an opaque chapter-global identity.  It remains
-        # authoritative when its Cases are intentionally hosted on different
-        # concepts or source topics.  Legacy rows without that hidden handoff
-        # preserve the historical topic-plus-header matching behaviour.
+        # A mined Type ID is an opaque chapter-global identity. The formatter
+        # preserves it so the release audit can see a split instead of hiding
+        # it behind fresh numbers. Legacy rows without that hidden handoff keep
+        # their historical topic-plus-header matching behaviour.
         key = (
             ("origin_type_id", origin_type_id)
             if origin_type_id
@@ -580,18 +780,17 @@ def reduce_type_sections(details: str) -> str:
 
 
 def renumber_types_continuously(records: list[dict]) -> list[dict]:
-    """Renumber Types continuously while preserving reusable Type identity.
+    """Renumber Types continuously without making an ownership verdict.
 
     ONE chapter-wide continuous sequence -> "Type 01", "Type 02", ... shared
     by regular concepts and culmination rows alike, in row order. Culminations
     previously carried a separate "Miscellaneous Type NN" sequence, which read
-    as a parallel numbering to reviewers. A supplied hidden ``_origin_type_id`` keeps a
-    mined Type chapter-global even when its Cases have different concept/topic
-    hosts. The raw ID is immediately replaced by an opaque origin seal, which
-    survives row-local cleanup and checkpoint resume without entering public
-    Type text. Legacy rows without that handoff retain the prior behaviour:
-    within one source topic, repeated canonical Type definitions share one
-    number and their Cases continue increasing instead of restarting.
+    as a parallel numbering to reviewers. A supplied hidden ``_origin_type_id``
+    keeps the mined identity stable on its owning concept. The raw ID is
+    immediately replaced by an opaque origin seal, which survives row-local
+    cleanup and checkpoint resume without entering public Type text. The
+    formatter deliberately does not choose a Type owner: Phase 3 does that from
+    Case/QID evidence, while direct audit lanes preserve and report a split.
     """
     counter = 0
     regular_numbers: dict[tuple[str, ...], int] = {}

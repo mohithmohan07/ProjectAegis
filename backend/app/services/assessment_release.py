@@ -1206,10 +1206,15 @@ def unresolved_question_homes(
     sheet_by_kind = workbook.sheet_for_kind()
     renderable = tuple(sheet_by_kind)
     profile_name = assessment_profile.name(profile)
+    master_schema = workbook.output_schema("master", profile, snapshot)
+    descriptive_answer_slots = int(
+        master_schema.get("descriptive_answer_slots")
+        or workbook.MAX_DESCRIPTIVE_ANSWERS
+    )
     caps = (
         ("answers", workbook.MAX_OBJECTIVE_OPTIONS, ("objective",)),
         ("answers", workbook.MAX_SUBJECTIVE_ANSWERS, ("subjective",)),
-        ("answers", workbook.MAX_DESCRIPTIVE_ANSWERS, ("descriptive",)),
+        ("answers", descriptive_answer_slots, ("descriptive",)),
         ("sub_questions", workbook.MAX_SUBQUESTIONS, ("descriptive",)),
     )
 
@@ -1261,7 +1266,12 @@ def unresolved_question_homes(
         sheet_name = sheet_by_kind.get(kind)
         if sheet_name:
             findings.extend(_cell_shape_findings(
-                workbook._question_record(candidate, sheet_name, profile),
+                workbook._question_record(
+                    candidate,
+                    sheet_name,
+                    profile,
+                    descriptive_answer_slots=descriptive_answer_slots,
+                ),
                 f"{identity}",
                 candidate_id=candidate_id, question_label=label,
             ))

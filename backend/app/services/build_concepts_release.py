@@ -1696,9 +1696,8 @@ def audit_type_cases(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     """Return ordered Type/Case/Example rows, issues, and QID routes.
 
-    A reusable Type may legitimately span topics. Ownership is recorded at the
-    Case/QID level, so ``Type 01 / Case 01`` and ``Type 01 / Case 02`` can be
-    hosted under different concepts without duplicating either question.
+    Case/QID routes preserve the evidence used for placement, but Q14 requires
+    every Case of one reusable Type to share exactly one final concept owner.
     """
 
     output: list[dict[str, Any]] = []
@@ -3812,13 +3811,16 @@ def _lift_resolved_related_concepts(row: Mapping[str, Any]) -> dict[str, Any]:
     Called at publication, BEFORE ``_strip_release_fields`` (T3.3b): the
     marker is a registered audit field, so the strip drops it by
     construction and the column would empty at exactly the moment the
-    reviewer publishes.
+    reviewer publishes.  Presence is authoritative: an explicitly empty
+    marker means staging resolved no legitimate Post links and must clear
+    any stale source value rather than falling back to it.
     """
 
     lifted = dict(row)
-    resolved = str(lifted.get(PRE_ROW_RELATED_CONCEPTS_FIELD) or "")
-    if resolved:
-        lifted["related_concepts"] = resolved
+    if PRE_ROW_RELATED_CONCEPTS_FIELD in lifted:
+        lifted["related_concepts"] = str(
+            lifted.get(PRE_ROW_RELATED_CONCEPTS_FIELD) or ""
+        )
     return lifted
 
 

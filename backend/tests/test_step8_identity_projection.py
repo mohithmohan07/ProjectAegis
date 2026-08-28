@@ -17,11 +17,13 @@ import pytest
 from app import models
 from app.bulk_import import assessment_workbook as aw
 from app.bulk_import import reader
+from app.bulk_import import writer
 from app.services import assessment_blueprint
 from app.services import assessment_marking
 from app.services import assessment_materialization
 from app.services import assessment_profile
 from app.services import assessment_release as rel
+from app.services import assessment_release_service as release_service
 from app.services import assessment_release_snapshot as release_snapshot
 from app.services import build_concepts_release as release
 from app.services import identity
@@ -211,6 +213,282 @@ def test_an_id_less_title_with_a_baked_minted_tag_stays_verbatim():
     })
     assert record["concept_title"] == baked
     assert record["topic_title"] == "Light"
+
+
+def test_topic_title_composer_is_idempotent_and_uses_the_persisted_id():
+    persisted = "06CBSC_Mechanics_ab12cd34_PL_T07"
+    expected = f"Topic 02: Reflection ({persisted})"
+
+    assert identity.topic_title_cell("Reflection", persisted, 2) == expected
+    assert identity.topic_title_cell(expected, persisted, 2) == expected
+    assert identity.topic_title_cell(
+        "Topic 99: Reflection (06CBSC_Mechanics_PL)", persisted, 2,
+    ) == expected
+    assert identity.topic_title_cell(
+        "Reflection (06CBSC_Mechanics_PL)", persisted, 2,
+    ) == expected
+    assert identity.topic_title_cell(
+        "Ohm Law (V_I_R)", persisted, 2,
+    ) == f"Topic 02: Ohm Law (V_I_R) ({persisted})"
+    assert identity.topic_title_cell(
+        "Programming Language (PL)", persisted, 2,
+    ) == f"Topic 02: Programming Language (PL) ({persisted})"
+    assert identity.topic_title_cell(
+        "Topic 01: Programming Language (PL)", persisted, 2,
+    ) == f"Topic 02: Programming Language (PL) ({persisted})"
+    assert identity.topic_title_cell(
+        "Value (V_PL)", persisted, 2,
+    ) == f"Topic 02: Value (V_PL) ({persisted})"
+    assert identity.topic_title_cell(
+        "Topic 01: Value (V_PL)", persisted, 2,
+    ) == f"Topic 02: Value (V_PL) ({persisted})"
+
+    # An id-less legacy snapshot is gold input: neither its historical display
+    # ordinal nor its historical tag may be rewritten without a persisted id.
+    legacy = "Topic 09: Legacy (06CBSC_Mechanics_PL)"
+    assert identity.topic_title_cell(legacy, "", 1) == legacy
+
+    chapter = models.Chapter(chapter_title="Mechanics")
+    topic = models.Topic(
+        topic_title="Topic 99: Reflection (06CBSC_Mechanics_PL)",
+        topic_display_name="Reflection",
+        pre_post_learning="Post",
+        source_order=1,
+        machine_id=persisted,
+    )
+    chapter.topics.append(topic)
+    assert writer.composed_topic_title(topic) == expected.replace(
+        "Topic 02:", "Topic 01:",
+    )
+
+    transient = models.Topic(
+        topic_title="Legacy transient",
+        topic_display_name="Legacy transient",
+        pre_post_learning="Post",
+        source_order=2,
+    )
+    chapter.topics.append(transient)
+    assert writer.composed_topic_title(transient) == (
+        "Topic 02: Legacy transient"
+    )
+
+
+def test_concept_and_master_share_snapshot_ordered_per_lane_topic_titles():
+    specs = (
+        ("Post", "Post first", "06CBSC_Mixed_ab12cd34_PL_T09"),
+        (
+            "Pre", "Topic 88: Pre first (06CBSC_Mixed_PrL)",
+            "06CBSC_Mixed_ab12cd34_PrL_T04",
+        ),
+        ("post", "Post second", "06CBSC_Mixed_ab12cd34_PL_T03"),
+        ("pre-learning", "Pre second", "06CBSC_Mixed_ab12cd34_PrL_T08"),
+    )
+    topics = []
+    expected = []
+    lane_counts = {"PL": 0, "PrL": 0}
+    for index, (lane, title, machine_id) in enumerate(specs, start=1):
+        lane_token = identity.lane_token(lane)
+        lane_counts[lane_token] += 1
+        ordinal = lane_counts[lane_token]
+        readable = "Pre first" if "Pre first" in title else title
+        expected.append(
+            f"Topic {ordinal:02d}: {readable} ({machine_id})"
+        )
+        topics.append({
+            "topic_title": title,
+            "topic_machine_id": machine_id,
+            "topic_display_name": readable,
+            "pre_post_learning": lane,
+            "topic_concept_labels": "",
+            "related_topics": "",
+            "topic_description": "",
+            "concepts": [{
+                "concept_key": f"K{index}",
+                "concept_title": f"Concept {index}",
+                "concept_machine_id": f"{machine_id}_C01",
+                "concept_display_name": f"Concept {index}",
+                "concept_details": f"Description: concept {index}.",
+            }],
+        })
+    snapshot = {
+        "chapter": {"chapter_title": "Mixed lanes"},
+        "topics": topics,
+        "groups": [],
+        "candidates": [],
+    }
+
+    concept_rows = aw.parse_workbook(
+        aw.render_concept_file(snapshot)
+    )["sheets"]["Objective"]["rows"]
+    master_bytes, _issues = aw.render_master_file(snapshot)
+    master_rows = aw.parse_workbook(
+        master_bytes
+    )["sheets"]["Objective"]["rows"]
+
+    assert [row["topic_title"] for row in concept_rows] == expected
+    assert [row["topic_title"] for row in master_rows] == expected
+    assert len({identity.title_tag(value) for value in expected}) == 4
+
+
+def test_snapshot_and_bulk_writer_share_legacy_zero_source_order(monkeypatch):
+    chapter = models.Chapter(
+        chapter_code="06CBSC_ORDER",
+        board="CBSE",
+        grade="06",
+        subject="Science",
+        unit="Science",
+        chapter_title="Ordering",
+        chapter_display_name="Ordering",
+    )
+    positioned_topic = models.Topic(
+        topic_title="Positioned",
+        topic_display_name="Positioned",
+        pre_post_learning="Post",
+        source_order=1,
+        machine_id="06CBSC_Ordering_ab12cd34_PL_T01",
+    )
+    legacy_topic = models.Topic(
+        topic_title="Legacy zero",
+        topic_display_name="Legacy zero",
+        pre_post_learning="Post",
+        source_order=0,
+        machine_id="06CBSC_Ordering_ab12cd34_PL_T02",
+    )
+    chapter.topics.extend([legacy_topic, positioned_topic])
+    positioned_concept = models.Concept(
+        concept_title="Positioned concept",
+        concept_display_name="Positioned concept",
+        concept_details="Description: positioned.",
+        machine_id=f"{positioned_topic.machine_id}_C01",
+    )
+    legacy_concept = models.Concept(
+        concept_title="Legacy concept",
+        concept_display_name="Legacy concept",
+        concept_details="Description: legacy.",
+        machine_id=f"{legacy_topic.machine_id}_C01",
+    )
+    positioned_topic.concepts.append(positioned_concept)
+    legacy_topic.concepts.append(legacy_concept)
+    concepts = [legacy_concept, positioned_concept]
+    records = [
+        {"topic": concept.topic.topic_title,
+         "concept_title": concept.concept_title}
+        for concept in concepts
+    ]
+
+    def transient_hierarchy(*_args, **_kwargs):
+        return chapter, concepts, records, []
+
+    monkeypatch.setattr(
+        release_snapshot.build_concepts_release_files,
+        "transient_release_hierarchy",
+        transient_hierarchy,
+    )
+    bridge = release_snapshot.build(
+        None,
+        models.UploadJob(),
+        {"source_document_hash": "sha256:ordering", "records": records},
+    )
+    snapshot = bridge["snapshot"]
+
+    expected = [
+        writer.composed_topic_title(positioned_topic),
+        writer.composed_topic_title(legacy_topic),
+    ]
+    assert expected == [
+        f"Topic 01: Positioned ({positioned_topic.machine_id})",
+        f"Topic 02: Legacy zero ({legacy_topic.machine_id})",
+    ]
+    assert [topic["topic_title"] for topic in snapshot["topics"]] == [
+        "Positioned", "Legacy zero",
+    ]
+
+    concept_rows = aw.parse_workbook(
+        aw.render_concept_file(snapshot)
+    )["sheets"]["Objective"]["rows"]
+    master_bytes, _issues = aw.render_master_file(snapshot)
+    master_rows = aw.parse_workbook(
+        master_bytes
+    )["sheets"]["Objective"]["rows"]
+    assert [row["topic_title"] for row in concept_rows] == expected
+    assert [row["topic_title"] for row in master_rows] == expected
+
+
+def test_direct_snapshot_matches_writer_order_for_lane_less_legacy_rows(db):
+    chapter = models.Chapter(
+        chapter_code="06CBSC_DIRECTORDER",
+        board="CBSE",
+        grade="06",
+        subject="Science",
+        unit="Science",
+        chapter_title="Direct Ordering",
+        chapter_display_name="Direct Ordering",
+    )
+    positioned_topic = models.Topic(
+        chapter=chapter,
+        topic_title="Positioned topic",
+        topic_display_name="Positioned topic",
+        pre_post_learning="",
+        source_order=1,
+    )
+    legacy_topic = models.Topic(
+        chapter=chapter,
+        topic_title="Legacy topic",
+        topic_display_name="Legacy topic",
+        pre_post_learning="",
+        source_order=0,
+    )
+    positioned_concept = models.Concept(
+        topic=positioned_topic,
+        concept_title="Positioned concept",
+        concept_display_name="Positioned concept",
+        concept_details="Description: positioned.",
+        source_order=1,
+    )
+    legacy_concept = models.Concept(
+        topic=positioned_topic,
+        concept_title="Legacy concept",
+        concept_display_name="Legacy concept",
+        concept_details="Description: legacy.",
+        source_order=0,
+    )
+    other_concept = models.Concept(
+        topic=legacy_topic,
+        concept_title="Other concept",
+        concept_display_name="Other concept",
+        concept_details="Description: other.",
+        source_order=0,
+    )
+    db.add_all([
+        chapter, positioned_topic, legacy_topic, positioned_concept,
+        legacy_concept, other_concept,
+    ])
+    db.commit()
+    try:
+        snapshot = release_service.snapshot_from_chapter(
+            db, chapter.id, {},
+        )
+        ordered_topics = sorted(
+            chapter.topics, key=identity.source_order_key,
+        )
+        assert [topic["topic_title"] for topic in snapshot["topics"]] == [
+            topic.topic_title for topic in ordered_topics
+        ] == ["Positioned topic", "Legacy topic"]
+        assert [
+            writer._topic_number(topic) for topic in ordered_topics
+        ] == [1, 2]
+
+        first_concepts = snapshot["topics"][0]["concepts"]
+        assert [
+            concept["concept_title"] for concept in first_concepts
+        ] == [
+            concept.concept_title
+            for concept in sorted(
+                positioned_topic.concepts, key=identity.source_order_key,
+            )
+        ] == ["Positioned concept", "Legacy concept"]
+    finally:
+        _cleanup_chapter(db, "06CBSC_DIRECTORDER")
 
 
 _WIDENED = {

@@ -239,6 +239,7 @@ def run_context(
     lane: object,
     profile: Mapping[str, Any] | None = None,
     layout_id: str = "",
+    workbook_outputs: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """What the frozen row records about the run it executed under.
 
@@ -265,6 +266,8 @@ def run_context(
         # at the later create/publish seams.
         "assessment_profile": copy.deepcopy(dict(profile or {})),
     }
+    if workbook_outputs is not None:
+        context["workbook_outputs"] = copy.deepcopy(dict(workbook_outputs))
     if job is not None:
         context["job_id"] = int(job.id)
         payload = release_payload(job, lane=resolved)

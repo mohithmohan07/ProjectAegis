@@ -11,7 +11,7 @@ module's kernel contract and the adopted architecture/handoff.
 |---|---|---|---|
 | `assessment.cell` | `assessment-cell-3` | Source-atom blueprint axes and marks under the resolved assessment-format policy | `_aegis_assessment_cell_verdict` |
 | `assessment.generated_cell` | `assessment-generated-cell-3` | Generated pre-learning blueprint axes and marks under the resolved assessment-format policy | `_aegis_assessment_cell_verdict` |
-| `assessment.materialize` | `assessment-materialize-10` | Question and complete unweighted semantic answer/rubric content; exclusive main-versus-subquestion scoring; Subjective placeholders; canonical rich-text and option-label mechanics | `_aegis_assessment_materialization` |
+| `assessment.materialize` | `assessment-materialize-11` | Question and complete unweighted semantic answer/rubric content; exclusive main-versus-subquestion scoring; Subjective placeholders; canonical rich-text and option-label mechanics; selected Master answer-slot capacity | `_aegis_assessment_materialization` |
 | `assessment.answer_restriction` | `assessment-answer-restriction-3` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
 | `assessment.marking` | `assessment-marking-7` | Model-authored weight decomposition, exact policy-bound duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
 | `assessment.route` | `assessment-route-2` | One released concept home | `_aegis_assessment_route` |

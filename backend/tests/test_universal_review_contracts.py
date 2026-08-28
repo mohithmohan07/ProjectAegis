@@ -1540,7 +1540,7 @@ def test_host_entailment_review_preserves_unreviewed_activity_units(
     ] == ["TYPE-0001", "TYPE-ACTIVITY"]
 
 
-def test_reusable_type_hosts_remain_distinct_without_convergence_review(
+def test_legacy_consolidation_requires_recorded_owner_for_split_type(
     monkeypatch,
 ):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
@@ -1564,32 +1564,26 @@ def test_reusable_type_hosts_remain_distinct_without_convergence_review(
         "is_activity": False,
     }
 
-    result = g._consolidate_reusable_type_hosts(
-        per_concept={
-            "CONCEPT-0001": [first],
-            "CONCEPT-0002": [second],
-        },
-        original_types_by_id={"TYPE-0001": first},
-        allowed_cids_by_tid={
-            first["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
-            second["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
-        },
-        concept_payload=[
-            {"concept_id": "CONCEPT-0001", "concept": "Method Alpha"},
-            {"concept_id": "CONCEPT-0002", "concept": "Method Beta"},
-        ],
-        meta={},
-    )
-
-    assert set(result) == {"CONCEPT-0001", "CONCEPT-0002"}
-    assert result["CONCEPT-0001"][0]["_origin_type_id"] == "TYPE-0001"
-    assert result["CONCEPT-0002"][0]["_origin_type_id"] == "TYPE-0001"
-    assert result["CONCEPT-0001"][0]["type_title"] == (
-        "Applying a shared method"
-    )
-    assert result["CONCEPT-0002"][0]["type_title"] == (
-        "Applying a shared method"
-    )
+    with pytest.raises(
+        cr.SplitTypeHostError,
+        match="ownership review is required for TYPE-0001",
+    ):
+        g._consolidate_reusable_type_hosts(
+            per_concept={
+                "CONCEPT-0001": [first],
+                "CONCEPT-0002": [second],
+            },
+            original_types_by_id={"TYPE-0001": first},
+            allowed_cids_by_tid={
+                first["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+                second["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+            },
+            concept_payload=[
+                {"concept_id": "CONCEPT-0001", "concept": "Method Alpha"},
+                {"concept_id": "CONCEPT-0002", "concept": "Method Beta"},
+            ],
+            meta={},
+        )
 
 
 def test_mined_type_normalization_prunes_examples_without_inventory_qids():

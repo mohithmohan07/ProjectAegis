@@ -183,7 +183,7 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-10"
+        "assessment-materialize-11"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
@@ -603,6 +603,73 @@ def test_answer_medium_and_four_mark_rubric_shape_are_mechanical():
 
     assert any("equation_katex_wrapper" in defect for defect in defects)
     assert any("at least two answer/rubric blocks" in defect for defect in defects)
+
+
+def test_english_post_materialization_honors_thirty_answer_master_capacity():
+    meta = {
+        "board": "MSBSHSE",
+        "grade": "6",
+        "subject": "English",
+    }
+    cell = _cell(
+        sheet_kind="descriptive",
+        question_category="Long Answer",
+        marks=5.0,
+    )
+    seen = {}
+
+    def provider(request):
+        seen.update(copy.deepcopy(request))
+        return _descriptive_response(
+            request,
+            answers=[{
+                "answer_type": "Phrases",
+                "answer_content": f"[content]: criterion {number}",
+            } for number in range(1, 31)],
+            answer_explanation=(
+                "Evaporation, condensation and precipitation."
+            ),
+        )
+
+    candidate = am.materialize_candidate(
+        _atom(),
+        cell,
+        meta=meta,
+        learning_phase="Post",
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        critic=_verified,
+        store=kernel.DecisionStore(),
+    )
+
+    assert seen["workbook_capacities"] == {
+        "descriptive_answer_slots": 30,
+    }
+    assert len(candidate["answers"]) == 30
+    assert candidate["assessment_eligibility"] == "accepted"
+    assert candidate["authority"]["policy_version"] == (
+        "assessment-materialize-11"
+    )
+
+
+@pytest.mark.parametrize(
+    ("subject", "learning_phase", "expected"),
+    [
+        ("English", "Post", 30),
+        ("English", "Pre", 10),
+        ("Mathematics", "Post", 10),
+    ],
+)
+def test_descriptive_answer_capacity_is_profile_and_lane_aware(
+    subject, learning_phase, expected,
+):
+    meta = {"board": "MSBSHSE", "grade": "6", "subject": subject}
+    profile = am.assessment_profile.resolve_for_metadata(None, meta)
+
+    assert am._descriptive_answer_capacity(
+        profile,
+        learning_phase=learning_phase,
+    ) == expected
 
 
 def test_materialization_accepts_canonical_katex_array_markup():

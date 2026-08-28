@@ -29,13 +29,15 @@ from __future__ import annotations
 import copy
 import threading
 import uuid
+from pathlib import Path
 
+import openpyxl
 import pytest
 from sqlalchemy.orm.attributes import flag_modified
 
 from app import models
 from app.api import build_assessments as build_assessments_api
-from app.bulk_import import assessment_workbook
+from app.bulk_import import assessment_workbook, layouts
 from app.services import assessment_release as rel
 from app.services import assessment_release_run as run
 from app.services import assessment_release_service as svc
@@ -52,6 +54,7 @@ from tests.test_assessment_release_run import (
     _authorities,
     _chapter_with_concepts,
     _decision_context,
+    _make_job,
 )
 from tests.test_assessment_pre_release_lane import (
     _cells,
@@ -86,6 +89,52 @@ def _run_both_lanes(db, job, chapter, *, questions=2):
         **_decision_context(),
     )
     return pre, post
+
+
+def _published_layout_id(release_row, filename: str) -> str:
+    path = Path(release_row.publication["directory"]) / filename
+    workbook = openpyxl.load_workbook(
+        path, data_only=True, read_only=True,
+    )
+    try:
+        headers = {
+            name: next(
+                workbook[name].iter_rows(
+                    min_row=2, max_row=2, values_only=True,
+                ),
+                (),
+            )
+            for name in workbook.sheetnames
+        }
+    finally:
+        workbook.close()
+    return layouts.identify_workbook(headers).layout_id
+
+
+def _audit_post_authorities(db, chapter, *, mathematics: bool):
+    authorities, _ = _authorities(db, chapter)
+    cell_author, cell_critic = authorities["cells"]
+
+    def audit_cell_author(payload):
+        result = cell_author(payload)
+        if result["sheet_kind"] == "descriptive":
+            result["question_category"] = "Short Answer Type (3 Marks)"
+        return result
+
+    authorities["cells"] = (audit_cell_author, cell_critic)
+    if mathematics:
+        marking_author, marking_critic = authorities["marking"]
+
+        def audit_marking_author(payload):
+            result = marking_author(payload)
+            if payload["candidate"]["sheet_kind"] == "objective":
+                result["question_duration"] = 1
+            return result
+
+        authorities["marking"] = (
+            audit_marking_author, marking_critic,
+        )
+    return authorities
 
 
 def test_one_run_mints_one_release_per_lane_with_four_projections(db):
@@ -204,9 +253,81 @@ def test_the_release_row_carries_its_lane_the_profile_and_the_layout_the_run_exe
         identity = row.provider_identity
         assert identity["lane"] == lane
         assert identity["layout_id"] == "sop-mes-1"
+        assert identity["workbook_outputs"] == {
+            "concepts_xlsx": {
+                "layout_id": "sop-mes-1",
+                "contract_id": "concept-reference-1",
+            },
+            "master_xlsx": {
+                "layout_id": "sop-mes-1",
+                "contract_id": "reference-master-1",
+            },
+        }
         assert identity["profile"], "the run's profile name is recorded"
         assert identity["job_id"] == job.id
         assert identity["staged_release_version"] >= 1
+
+
+@pytest.mark.parametrize(
+    ("subject", "expected_layout_id"),
+    [
+        pytest.param(
+            "Mathematics",
+            layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+            id="mathematics",
+        ),
+        pytest.param(
+            "English",
+            layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+            id="english-post",
+        ),
+    ],
+)
+def test_release_persists_the_rendered_dynamic_master_layout(
+    db, subject, expected_layout_id,
+):
+    chapter = _chapter_with_concepts(db)
+    original_metadata = (chapter.board, chapter.grade, chapter.subject)
+    try:
+        chapter.board = "MSBSHSE"
+        chapter.grade = "06"
+        chapter.subject = subject
+        db.commit()
+        job = _make_job(db, chapter)
+        authorities = _audit_post_authorities(
+            db, chapter, mathematics=subject == "Mathematics",
+        )
+
+        released = run.run_release_for_job(
+            db,
+            job.id,
+            owner_sub=OWNER,
+            authorities=authorities,
+            **_decision_context(),
+        )
+
+        rendered_layout_id = _published_layout_id(
+            released, svc.MASTER_FILENAME,
+        )
+        assert rendered_layout_id == expected_layout_id
+        assert released.layout_id == rendered_layout_id
+        assert released.provider_identity["layout_id"] == rendered_layout_id
+        assert released.provider_identity["workbook_outputs"] == {
+            "concepts_xlsx": {
+                "layout_id": layouts.REFERENCE_LAYOUT_ID,
+                "contract_id": "concept-reference-1",
+            },
+            "master_xlsx": {
+                "layout_id": rendered_layout_id,
+                "contract_id": expected_layout_id,
+            },
+        }
+        assert _published_layout_id(
+            released, svc.CONCEPTS_FILENAME,
+        ) == layouts.REFERENCE_LAYOUT_ID
+    finally:
+        chapter.board, chapter.grade, chapter.subject = original_metadata
+        db.commit()
 
 
 def test_the_table_name_is_unchanged():

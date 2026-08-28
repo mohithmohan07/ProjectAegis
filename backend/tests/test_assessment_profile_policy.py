@@ -13,6 +13,12 @@ MATH_META = {
     "subject": "Mathematics",
 }
 
+ENGLISH_META = {
+    "board": "MSBSHSE",
+    "grade": "06",
+    "subject": "English",
+}
+
 
 def test_reference_profile_remains_pinned_and_msbshse_run_widens_it() -> None:
     assert profile.sheet_kinds() == ("objective", "descriptive")
@@ -75,6 +81,165 @@ def test_msbshse_grade_6_mathematics_policy_is_exact_and_narrow() -> None:
     }
     assert "Assertion & Reasons" not in str(policy)
     assert "Case Based Questions" not in str(policy)
+
+
+def test_msbshse_grade_6_english_policy_is_exact_taxonomy_only() -> None:
+    policy = profile.assessment_format_policy(metadata=ENGLISH_META)
+
+    assert policy["policy_id"] == "msbshse-grade-6-english-2026-08-27"
+    assert "metadata_match" not in policy
+    assert profile.question_categories(metadata=ENGLISH_META) == {
+        "objective": ("Multiple Choice Question",),
+        "subjective": ("Fill in the Blanks",),
+        "descriptive": (
+            "Very Short Answer Questions",
+            "Short Answer Type (2 Marks)",
+            "Short Answer Type (3 Marks)",
+            "Long Answer Type (4 Marks)",
+            "Composition Writing",
+        ),
+    }
+    for sheet_kind, categories in policy["formats_by_sheet"].items():
+        for category, rule in categories.items():
+            assert rule == {}, (sheet_kind, category)
+
+
+def test_msbshse_grade_6_english_does_not_inherit_math_constraints() -> None:
+    assert profile.question_marks_rule(
+        metadata=ENGLISH_META,
+        sheet_kind="descriptive",
+        question_category="Long Answer Type (4 Marks)",
+    ) == {}
+    assert profile.question_duration_rule(
+        metadata=ENGLISH_META,
+        sheet_kind="descriptive",
+        question_category="Long Answer Type (4 Marks)",
+    ) == {}
+    assert profile.question_duration_minutes(
+        metadata=ENGLISH_META,
+        sheet_kind="descriptive",
+        question_category="Long Answer Type (4 Marks)",
+        difficulty="High",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("metadata", "policy_id"),
+    [
+        pytest.param(
+            MATH_META,
+            "msbshse-grade-6-mathematics-2026-08-27",
+            id="mathematics",
+        ),
+        pytest.param(
+            ENGLISH_META,
+            "msbshse-grade-6-english-2026-08-27",
+            id="english",
+        ),
+    ],
+)
+def test_resolved_profile_carries_format_policy_selectors(
+    metadata: dict[str, str], policy_id: str,
+) -> None:
+    run_profile = profile.resolve_for_metadata(None, metadata)
+
+    assert profile.assessment_format_policy(run_profile)["policy_id"] == (
+        policy_id
+    )
+
+
+def test_explicit_format_policy_metadata_is_authoritative() -> None:
+    math_profile = profile.resolve_for_metadata(None, MATH_META)
+
+    assert profile.assessment_format_policy(
+        math_profile, ENGLISH_META,
+    )["policy_id"] == "msbshse-grade-6-english-2026-08-27"
+    assert profile.assessment_format_policy(
+        math_profile, {},
+    )["policy_id"] == "generic-cms"
+
+
+@pytest.mark.parametrize("metadata", [None, {}], ids=["absent", "empty"])
+def test_reresolving_persisted_profile_preserves_carried_metadata(
+    metadata: dict[str, str] | None,
+) -> None:
+    persisted = profile.resolve_for_metadata(None, ENGLISH_META)
+
+    rerun = profile.resolve_for_metadata(persisted, metadata)
+
+    assert rerun["_resolved_metadata"] == ENGLISH_META
+    assert profile.assessment_format_policy(rerun)["policy_id"] == (
+        "msbshse-grade-6-english-2026-08-27"
+    )
+    assert profile.master_workbook_contract(
+        rerun, learning_phase="Post",
+    )["descriptive_answer_slots"] == 30
+
+
+def test_partial_metadata_cannot_retarget_a_persisted_subject() -> None:
+    persisted = profile.resolve_for_metadata(None, MATH_META)
+
+    with pytest.raises(
+        ValueError,
+        match="cannot retarget resolved assessment profile selector 'subject'",
+    ):
+        profile.resolve_for_metadata(persisted, {"subject": "English"})
+
+
+def test_same_selector_partial_reentry_is_idempotent_across_aliases() -> None:
+    persisted = profile.resolve_for_metadata(None, MATH_META)
+
+    rerun = profile.resolve_for_metadata(persisted, {
+        "board": "Maharashtra (MSBSHSE)",
+        "grade": "Class 06",
+        "subject": "Maths",
+    })
+
+    assert rerun["_resolved_metadata"] == MATH_META
+    assert profile.assessment_format_policy(rerun)["policy_id"] == (
+        "msbshse-grade-6-mathematics-2026-08-27"
+    )
+
+
+def test_cross_board_metadata_cannot_retarget_a_persisted_profile() -> None:
+    persisted = profile.resolve_for_metadata(None, ENGLISH_META)
+
+    with pytest.raises(
+        ValueError,
+        match="cannot retarget resolved assessment profile selector 'board'",
+    ):
+        profile.resolve_for_metadata(persisted, {"board": "CBSE"})
+
+
+@pytest.mark.parametrize("cleared", [None, ""], ids=["null", "blank"])
+def test_explicit_clear_cannot_remove_a_carried_selector(cleared) -> None:
+    persisted = profile.resolve_for_metadata(None, ENGLISH_META)
+
+    with pytest.raises(
+        ValueError,
+        match="cannot retarget resolved assessment profile selector 'subject'",
+    ):
+        profile.resolve_for_metadata(persisted, {"subject": cleared})
+
+
+def test_blank_first_resolution_leaves_selectors_unknown_then_fillable() -> None:
+    unresolved = profile.resolve_for_metadata(None, {
+        "board": "   ",
+        "grade": None,
+        "subject": "",
+    })
+
+    assert unresolved["_resolved_metadata"] == {}
+
+    resolved = profile.resolve_for_metadata(unresolved, ENGLISH_META)
+
+    assert resolved["_resolved_metadata"] == ENGLISH_META
+    assert profile.assessment_format_policy(resolved)["policy_id"] == (
+        "msbshse-grade-6-english-2026-08-27"
+    )
+    assert profile.master_workbook_contract(
+        resolved, learning_phase="Post",
+    )["descriptive_answer_slots"] == 30
 
 
 def test_full_msbshse_display_name_resolves_the_same_policy() -> None:

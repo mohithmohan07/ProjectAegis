@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
 from .. import models
+from ..bulk_import import assessment_workbook
 from . import assessment_answer_restriction as answer_restriction
 from . import assessment_blueprint
 from . import assessment_cells as cell_decisions
@@ -1667,6 +1668,9 @@ def run_release_for_job(
 
     meta = dict(bridge["metadata"])
     profile = assessment_profile.resolve_for_metadata(profile, meta)
+    workbook_outputs = assessment_workbook.output_identities(
+        profile, bridge["snapshot"],
+    )
     format_policy = assessment_profile.assessment_format_policy(profile, meta)
     source_release_sha = str(
         bridge["source_concept_release_sha256"]
@@ -1993,6 +1997,7 @@ def run_release_for_job(
         critic=materialize_critic,
         store=store,
         fixer=fixer,
+        learning_phase=staged_lane,
         on_result=(
             None if stage_progress is None
             else lambda index, item, result: _observe_stage(
@@ -2906,6 +2911,7 @@ def run_release_for_job(
         supersedes = release_core.release_chain_head(
             db, job.id, staged_lane)
     _observe_stage(stage_progress, "publish")
+    master_layout_id = workbook_outputs["master_xlsx"]["layout_id"]
     release = release_service.create_release(
         db,
         chapter_id=chapter_id,
@@ -2914,12 +2920,13 @@ def run_release_for_job(
         owner_sub=owner_sub,
         supersedes=supersedes,
         lane=staged_lane,
-        layout_id=release_core.layout_id(),
+        layout_id=master_layout_id,
         provider_identity=release_core.run_context(
             job,
             lane=staged_lane,
             profile=profile,
-            layout_id=release_core.layout_id(),
+            layout_id=master_layout_id,
+            workbook_outputs=workbook_outputs,
         ),
     )
     release = release_service.publish_release(db, release)

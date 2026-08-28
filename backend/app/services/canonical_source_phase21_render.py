@@ -19,7 +19,7 @@ def intact_type_assignment_units(
     canonical: dict[str, Any] | None,
     expand_units=None,
 ) -> list[dict]:
-    """Expand reusable Types into independently routed Case placement units."""
+    """Expand Types into Case evidence units before one-owner consolidation."""
     owners: dict[str, str] = {}
     source_types = [raw for raw in types if isinstance(raw, dict)]
     if not callable(expand_units):
@@ -218,7 +218,8 @@ def restore_mined_type_taxonomy(
             changed += 1
         # The restoration above numbers fragments only within one row. Hand
         # the immutable mined-Type identities to the chapter-wide renumbering
-        # pass so the same Type and its Case sequence continue across hosts.
+        # pass so the owned Type and its Case sequence remain stable on the one
+        # concept selected by Q14.
         record["_origin_type_id"] = fragment_origin_ids
     after_counts = generation._rendered_inventory_example_counts(out, expected_keys)
     if before_counts != after_counts:
@@ -261,5 +262,9 @@ def normalize_final_records(
             sections.append((label, content))
         record["concept_details"] = generation.cr.join_sections(sections)
         cleaned.append(record)
+    # This is a terminal Phase 2.1 boundary, not the generic formatter used by
+    # Assemble's audit lane. A split here must rewind to the authoritative Host
+    # owner decision instead of being normalized into a publishable payload.
+    generation.cr.assert_single_concept_type_hosts(cleaned)
     cleaned = generation.cr.renumber_types_continuously(cleaned)
     return generation.cv.ensure_valid_learner_analysis(cleaned)

@@ -320,10 +320,18 @@ def test_the_canonical_registry_entries_did_not_move_with_FIELDS_BY_KIND():
     for kind in ("objective", "subjective", "descriptive"):
         assert list(canonical[kind]) != list(bi.FIELDS_BY_KIND[kind]), kind
     assert layouts.CANONICAL_CURRENT.sheet_name_by_kind() != bi.SHEET_BY_KIND
-    # All four entries are registered, so an older workbook still identifies.
+    # The historical entries remain registered alongside the two normalized
+    # audit Master output roles, so an older workbook still identifies.
     assert set(layouts.LAYOUTS) == {
         layouts.REFERENCE_LAYOUT_ID, "canonical-current",
         "canonical-no-question-text", "canonical-legacy-concept-band",
+        layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+        layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+    }
+    assert layouts.CURRENT_TARGET_LAYOUT_IDS == {
+        layouts.REFERENCE_LAYOUT_ID,
+        layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+        layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
     }
 
 

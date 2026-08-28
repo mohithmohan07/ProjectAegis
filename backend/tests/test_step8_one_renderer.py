@@ -408,6 +408,12 @@ def test_every_profile_key_has_a_named_reader():
         "run_profile_overrides": (
             "app/services/assessment_release_run.py",
             "run_release_for_job", "resolve_for_metadata"),
+        "master_workbook": (
+            "app/bulk_import/assessment_workbook.py", "output_schema",
+            "master_workbook_contract"),
+        "master_workbook_overrides": (
+            "app/bulk_import/assessment_workbook.py", "output_schema",
+            "master_workbook_contract"),
     }
     readers = {
         key: value if len(value) == 3 else (*value, key)

@@ -14,6 +14,7 @@ import pytest
 
 from app.bulk_import import assessment_workbook as mp
 from app.services import assessment_grouping as ag
+from app.services import assessment_profile
 from app.services import assessment_release as rel
 
 
@@ -728,6 +729,54 @@ def test_formula_injection_and_cell_limit_guards():
     ]
     assert [f["field"] for f in findings] == ["question"]
     assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
+
+
+def test_staged_shape_uses_the_selected_descriptive_answer_capacity():
+    snapshot = copy.deepcopy(_snapshot())
+    descriptive = snapshot["candidates"][1]
+    descriptive["sub_questions"] = []
+    descriptive["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": f"[content]: criterion {number}",
+        "answer_weightage": "",
+    } for number in range(1, 12)]
+    english_profile = assessment_profile.resolve_for_metadata(None, {
+        "board": "MSBSHSE",
+        "grade": "6",
+        "subject": "English",
+    })
+
+    post_findings = rel.unresolved_question_homes(snapshot, english_profile)
+    assert not [
+        finding for finding in post_findings
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answers"
+    ]
+
+    # The staging audit must inspect every widened cell too, not merely stop
+    # counting at the historical ten-slot layout.
+    descriptive["answers"][10]["answer_content"] = "x" * (mp.CELL_LIMIT + 1)
+    widened_cell_findings = rel.unresolved_question_homes(
+        snapshot, english_profile,
+    )
+    assert [
+        finding["field"] for finding in widened_cell_findings
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answer_content_11"
+    ] == ["answer_content_11"]
+
+    descriptive["answers"][10]["answer_content"] = "[content]: criterion 11"
+    snapshot["topics"][0]["pre_post_learning"] = "Pre"
+    pre_overflows = [
+        finding for finding in rel.unresolved_question_homes(
+            snapshot, english_profile,
+        )
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answers"
+    ]
+    assert [(finding["cap"], finding["actual"]) for finding in pre_overflows] == [
+        (10, 11),
+    ]
 
 
 def test_a_control_character_is_repaired_not_raised():

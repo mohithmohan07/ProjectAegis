@@ -751,9 +751,16 @@ def transient_release_hierarchy(
             # concept titles legitimately contain commas). On a POST row
             # nothing authors a concept↔concept relation yet, so it is
             # whatever the record carries, which is blank.
+            # Presence of the staged Pre marker is authoritative, including
+            # the empty string: no resolved Post ids means a stale imported
+            # relation must be cleared.  Rows without the marker (for example
+            # Post or legacy releases) continue to use their public column.
             related_concepts=str(
-                record.get(PRE_ROW_RELATED_CONCEPTS_FIELD)
-                or record.get("related_concepts")
+                (
+                    record.get(PRE_ROW_RELATED_CONCEPTS_FIELD)
+                    if PRE_ROW_RELATED_CONCEPTS_FIELD in record
+                    else record.get("related_concepts")
+                )
                 or ""
             ),
             digicards=str(record.get("digicards") or ""),

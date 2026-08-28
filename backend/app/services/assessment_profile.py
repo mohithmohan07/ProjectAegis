@@ -54,6 +54,52 @@ _GRADE_6_ALIASES = (
     "6", "06", "class 6", "class 06", "grade 6", "grade 06",
     "standard 6", "standard 06", "std 6", "std 06",
 )
+_ENGLISH_SUBJECT_ALIASES = (
+    "english", "english language", "english literature",
+)
+
+
+# Workbook geometry is a run-profile fact, just like the set of enabled
+# sheets.  The default stays on the committed MES reference layout.  The
+# 2026-08-27 MSBSHSE Grade-6 audit records a distinct Master layout: each
+# entity band has an ``is_update_*`` column and Descriptive restores the
+# concept-source column.  One English Post workbook additionally needs 30
+# Descriptive rubric slots.  Those are declarative capabilities selected by
+# metadata + lane; no renderer branch names a subject or chapter.
+DEFAULT_MASTER_WORKBOOK_CONTRACT: dict[str, Any] = {
+    "contract_id": "reference-master-1",
+    "include_update_fields": False,
+    "include_descriptive_concept_source": False,
+    "descriptive_answer_slots": 10,
+    "natural_label_aggregates": False,
+    "aggregate_rendered_questions_only": False,
+}
+
+MSBSHSE_GRADE_6_MASTER_WORKBOOK_CONTRACT: dict[str, Any] = {
+    "contract_id": "msbshse-grade-6-master-2026-08-27",
+    "include_update_fields": True,
+    "include_descriptive_concept_source": True,
+    "descriptive_answer_slots": 10,
+    "natural_label_aggregates": True,
+    "aggregate_rendered_questions_only": True,
+}
+
+MSBSHSE_GRADE_6_MASTER_WORKBOOK_OVERRIDES: tuple[dict[str, Any], ...] = (
+    {
+        "metadata_match": {
+            "board": _MSBSHSE_BOARD_ALIASES,
+            "grade": _GRADE_6_ALIASES,
+            "subject": _ENGLISH_SUBJECT_ALIASES,
+        },
+        "learning_phases": ("post",),
+        "overrides": {
+            "contract_id": (
+                "msbshse-grade-6-english-post-master-2026-08-27"
+            ),
+            "descriptive_answer_slots": 30,
+        },
+    },
+)
 
 
 # The assessment-format policy supplied in the 2026-08-27 concept-mapping
@@ -191,6 +237,35 @@ MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY: dict[str, Any] = {
     },
 }
 
+
+# The English audit supplies only its exact authoring taxonomy.  Empty rule
+# mappings are deliberate: unlike Mathematics, the evidence does not define
+# an English marks or duration contract, so later stages remain free to use
+# their existing authored/marking values without inventing restrictions.
+MSBSHSE_GRADE_6_ENGLISH_FORMAT_POLICY: dict[str, Any] = {
+    "policy_id": "msbshse-grade-6-english-2026-08-27",
+    "metadata_match": {
+        "board": _MSBSHSE_BOARD_ALIASES,
+        "grade": _GRADE_6_ALIASES,
+        "subject": _ENGLISH_SUBJECT_ALIASES,
+    },
+    "formats_by_sheet": {
+        "objective": {
+            "Multiple Choice Question": {},
+        },
+        "subjective": {
+            "Fill in the Blanks": {},
+        },
+        "descriptive": {
+            "Very Short Answer Questions": {},
+            "Short Answer Type (2 Marks)": {},
+            "Short Answer Type (3 Marks)": {},
+            "Long Answer Type (4 Marks)": {},
+            "Composition Writing": {},
+        },
+    },
+}
+
 MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE: dict[str, Any] = {
     "metadata_match": {
         "board": _MSBSHSE_BOARD_ALIASES,
@@ -199,6 +274,7 @@ MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE: dict[str, Any] = {
     "overrides": {
         "sheet_kinds": ("objective", "descriptive", "subjective"),
         "forced_blank_fields": ("question_disclaimer",),
+        "master_workbook": MSBSHSE_GRADE_6_MASTER_WORKBOOK_CONTRACT,
     },
 }
 
@@ -228,6 +304,12 @@ DEFAULT_PROFILE: dict = {
     # The wire value this school's Master rows carry in ``group_status``
     # when a group declares none.
     "group_status": "Active",
+    # Output-role geometry. Concept files always use the committed reference
+    # schema; only Master rendering reads this contract.
+    "master_workbook": DEFAULT_MASTER_WORKBOOK_CONTRACT,
+    "master_workbook_overrides": (
+        MSBSHSE_GRADE_6_MASTER_WORKBOOK_OVERRIDES
+    ),
     # Automatic secondary QuestionTag placements are off; a future profile
     # may enable explicit, audited secondaries.
     "automatic_secondary_tags": False,
@@ -241,6 +323,7 @@ DEFAULT_PROFILE: dict = {
     },
     "assessment_format_overrides": (
         MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY,
+        MSBSHSE_GRADE_6_ENGLISH_FORMAT_POLICY,
     ),
     # Program metadata can select a complete run-level widening without
     # changing the pinned reference-1 defaults or reinterpreting historical
@@ -279,7 +362,39 @@ def resolve_for_metadata(
     """Resolve one run profile and apply only conclusive metadata overrides."""
 
     resolved = resolve(profile)
-    run_metadata = metadata if isinstance(metadata, Mapping) else {}
+    # A resolved profile is persisted with its selector metadata and can pass
+    # through this boundary again during release/build orchestration.  Start
+    # with those carried selectors so an absent (or empty) metadata payload
+    # cannot silently erase a previously conclusive run.  A partial explicit
+    # payload may fill a selector that was not previously known, but it may
+    # not retarget a persisted run.  The latter would leave already-applied
+    # sheet/workbook overrides stale, so conflicting values (including an
+    # explicit clear) fail closed instead of producing a hybrid profile.
+    carried_metadata = resolved.get("_resolved_metadata")
+    run_metadata = (
+        copy.deepcopy(dict(carried_metadata))
+        if isinstance(carried_metadata, Mapping)
+        else {}
+    )
+    if isinstance(metadata, Mapping):
+        for key, value in metadata.items():
+            field = str(key)
+            if (
+                field in ("board", "grade", "subject")
+                and field in run_metadata
+                and not _same_metadata_selector(
+                    resolved, field, run_metadata[field], value,
+                )
+            ):
+                raise ValueError(
+                    "cannot retarget resolved assessment profile selector "
+                    f"{field!r}: carried {run_metadata[field]!r}, "
+                    f"explicit {value!r}"
+                )
+            # Preserve the carried wire spelling for an equivalent selector;
+            # this makes same-run re-entry byte-idempotent across aliases.
+            if field not in run_metadata:
+                run_metadata[field] = copy.deepcopy(value)
     run_overrides = resolved.get("run_profile_overrides")
     if run_overrides is None:
         run_overrides = DEFAULT_PROFILE["run_profile_overrides"]
@@ -290,10 +405,21 @@ def resolve_for_metadata(
             continue
         overrides = candidate.get("overrides")
         if isinstance(overrides, Mapping):
-            for key in ("sheet_kinds", "forced_blank_fields"):
+            for key in (
+                "sheet_kinds", "forced_blank_fields", "master_workbook",
+            ):
                 if key in overrides:
                     resolved[key] = copy.deepcopy(overrides[key])
         break
+    # The resolved profile is persisted with the release and later reaches
+    # the deterministic workbook renderer without another directory read.
+    # Carry only the exact selector fields the declarative workbook override
+    # needs; this is metadata transport, never a subject-specific decision.
+    resolved["_resolved_metadata"] = {
+        key: copy.deepcopy(run_metadata.get(key))
+        for key in ("board", "grade", "subject")
+        if _metadata_token(run_metadata.get(key))
+    }
     return resolved
 
 
@@ -400,6 +526,116 @@ def _matches_metadata(
     return True
 
 
+def _same_metadata_selector(
+    profile: Mapping | str | None,
+    field: str,
+    carried: Any,
+    explicit: Any,
+) -> bool:
+    """Whether two wire values select the same declarative profile lane.
+
+    Exact normalized values are always equivalent.  Aliases are equivalent
+    only when a profile policy declares them in the same selector set; this
+    keeps re-entry generic and avoids encoding board/subject knowledge in the
+    resolver.  Empty/null values never equal a populated carried selector.
+    """
+
+    carried_token = _metadata_token(carried)
+    explicit_token = _metadata_token(explicit)
+    if not carried_token or not explicit_token:
+        return carried_token == explicit_token
+    if carried_token == explicit_token:
+        return True
+
+    for collection_key in (
+        "run_profile_overrides",
+        "assessment_format_overrides",
+        "master_workbook_overrides",
+    ):
+        for candidate in _value(profile, collection_key) or ():
+            if not isinstance(candidate, Mapping):
+                continue
+            match = candidate.get("metadata_match")
+            if not isinstance(match, Mapping) or field not in match:
+                continue
+            raw_aliases = match[field]
+            if isinstance(raw_aliases, str):
+                aliases = (raw_aliases,)
+            else:
+                try:
+                    aliases = tuple(raw_aliases)
+                except TypeError:
+                    aliases = (raw_aliases,)
+            alias_tokens = {_metadata_token(alias) for alias in aliases}
+            if carried_token in alias_tokens and explicit_token in alias_tokens:
+                return True
+    return False
+
+
+def master_workbook_contract(
+    profile: Mapping | str | None = None,
+    *,
+    learning_phase: str = "",
+) -> dict[str, Any]:
+    """Resolve deterministic Master-workbook geometry for one run/lane.
+
+    The run-level base contract is selected by ``resolve_for_metadata`` and
+    survives publication inside the persisted profile. Narrow overrides may
+    additionally match that carried metadata and the explicitly observed
+    learning lane. Concept-file geometry never reads this function.
+
+    Invalid partial values fall back to the pinned reference capacity. A
+    smaller capacity cannot remove columns from the committed base layout, so
+    the minimum is ten Descriptive answer slots.
+    """
+
+    selected = _value(profile, "master_workbook")
+    contract = (
+        copy.deepcopy(dict(selected))
+        if isinstance(selected, Mapping)
+        else copy.deepcopy(DEFAULT_MASTER_WORKBOOK_CONTRACT)
+    )
+    resolved_profile = resolve(profile)
+    metadata = resolved_profile.get("_resolved_metadata")
+    if not isinstance(metadata, Mapping):
+        metadata = {}
+    phase = _metadata_token(learning_phase)
+    for candidate in _value(profile, "master_workbook_overrides") or ():
+        if not isinstance(candidate, Mapping) or not _matches_metadata(
+            candidate, metadata,
+        ):
+            continue
+        phases = tuple(
+            _metadata_token(value)
+            for value in candidate.get("learning_phases") or ()
+        )
+        if phases and phase not in phases:
+            continue
+        overrides = candidate.get("overrides")
+        if isinstance(overrides, Mapping):
+            contract.update(copy.deepcopy(dict(overrides)))
+        break
+
+    try:
+        slots = int(contract.get("descriptive_answer_slots", 10))
+    except (TypeError, ValueError):
+        slots = 10
+    contract["descriptive_answer_slots"] = max(10, slots)
+    contract["include_update_fields"] = bool(
+        contract.get("include_update_fields", False)
+    )
+    contract["include_descriptive_concept_source"] = bool(
+        contract.get("include_descriptive_concept_source", False)
+    )
+    contract["natural_label_aggregates"] = bool(
+        contract.get("natural_label_aggregates", False)
+    )
+    contract["aggregate_rendered_questions_only"] = bool(
+        contract.get("aggregate_rendered_questions_only", False)
+    )
+    return contract
+
+
 def assessment_format_policy(
     profile: Mapping | str | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -413,7 +649,16 @@ def assessment_format_policy(
     """
 
     selected = _value(profile, "assessment_format")
-    run_metadata = metadata if isinstance(metadata, Mapping) else {}
+    if isinstance(metadata, Mapping):
+        # Supplying metadata is an explicit lookup and must not be
+        # contaminated by selectors carried from a different run.
+        run_metadata = metadata
+    else:
+        resolved_profile = resolve(profile)
+        carried_metadata = resolved_profile.get("_resolved_metadata")
+        run_metadata = (
+            carried_metadata if isinstance(carried_metadata, Mapping) else {}
+        )
     for candidate in _value(profile, "assessment_format_overrides") or ():
         if isinstance(candidate, Mapping) and _matches_metadata(
             candidate, run_metadata

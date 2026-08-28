@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.services import canonical_source
 from app.services import canonical_source_phase2 as phase2
 from app.services import canonical_source_phase21 as phase21
@@ -241,8 +243,8 @@ def test_all_inventory_bearing_checkpoint_stages_reject_previous_versions():
         "question_inventory": 3,
         generation._TYPE_TAXONOMY_CHECKPOINT_STAGE: 3,
         generation._CONCEPT_CHECKPOINT_STAGE: 3,
-        "post_type_assignment": 7,
-        "final_content_ready": 8,
+        "post_type_assignment": 8,
+        "final_content_ready": 9,
     }
 
     assert {
@@ -654,7 +656,7 @@ def test_taxonomy_restore_replaces_question_fragment_titles_losslessly():
     assert first in details and second in details
 
 
-def test_final_normalization_keeps_authored_types_and_renumbers_cases_per_host():
+def test_final_normalization_rejects_one_type_across_multiple_hosts():
     first = "Write a short note on Giuseppe Mazzini."
     second = "Write a short note on Count Camillo de Cavour."
     inventory = {"items": [
@@ -722,22 +724,13 @@ def test_final_normalization_keeps_authored_types_and_renumbers_cases_per_host()
         },
     ]
 
-    normalized = phase21_render.normalize_final_records(
-        generation, records, inventory, mined
-    )
-
-    # Under the rewrite, normalize_final_records never rebuilds Types from
-    # the mined taxonomy: the Assemble pass's per-question rendering is
-    # authoritative, so the authored Type text (global Type numbers and
-    # Case titles included) survives verbatim; only Case numbering is
-    # renumbered continuously within each host, plus cleanup.
-    assert "Type 01:" in normalized[0]["concept_details"]
-    assert "Case 01: Mazzini" in normalized[0]["concept_details"]
-    assert "Revolutionary organiser" not in normalized[0]["concept_details"]
-    assert "Type 02:" in normalized[1]["concept_details"]
-    assert "Case 01: Cavour" in normalized[1]["concept_details"]
-    assert "Case 02:" not in normalized[1]["concept_details"]
-    assert all("_origin_type_id" not in record for record in normalized)
+    with pytest.raises(
+        generation.cr.SplitTypeHostError,
+        match="one concept must own every reusable Type",
+    ):
+        phase21_render.normalize_final_records(
+            generation, records, inventory, mined
+        )
 
 
 def test_activity_hub_cleanup_removes_repeated_labels():

@@ -202,9 +202,28 @@ def test_current_post_type_checkpoint_with_matching_v2_ledger_resumes():
         **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
 
-    assert checkpoint["stage_schema_version"] == 7
+    assert checkpoint["stage_schema_version"] == 8
     assert g._compatible_concept_checkpoint_entry(checkpoint)
     assert g._newest_compatible_concept_checkpoint(checkpoint) == checkpoint
+
+    split_type = copy.deepcopy(checkpoint)
+    route = {
+        "type_id": "TYPE-0001",
+        "case_id": "CASE-0001",
+        "qids": ["QINV-0001"],
+    }
+    split_type["records"][0][
+        "_aegis_release_type_case_routes"
+    ] = [route]
+    split_type["records"].append({
+        "topic": "Later Method",
+        "parent_concept": "Methods",
+        "concept_title": "Second host",
+        "concept_details": "Description: A second host must not survive.",
+        "keywords": "method",
+        "_aegis_release_type_case_routes": [route],
+    })
+    assert not g._compatible_concept_checkpoint_entry(split_type)
 
     missing_mined_ledger = copy.deepcopy(checkpoint)
     missing_mined_ledger["mined_types"].pop(

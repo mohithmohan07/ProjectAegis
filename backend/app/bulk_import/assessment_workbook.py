@@ -32,6 +32,7 @@ import hashlib
 import io
 import json
 import math
+import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
@@ -88,6 +89,220 @@ MAX_SUBJECTIVE_ANSWERS = 20
 MAX_DESCRIPTIVE_ANSWERS = 10
 MAX_SUBQUESTIONS = 15
 MAX_SUBQUESTION_KEYWORDS = 6
+
+_UPDATE_FIELD_AFTER = {
+    "is_update_chapter": "chapter_title",
+    "is_update_topic": "topic_title",
+    "is_update_concept": "concept_title",
+    "is_update_question": "question_label",
+}
+
+# One owner for both render and read-back of the update-marker contract.  The
+# identity probes deliberately exclude the marker itself and non-identifying
+# decoration: a concept-only tail has Chapter/Topic/Concept markers, but no
+# Group/Question markers.
+_UPDATE_FIELD_PRESENCE = {
+    "is_update_chapter": ("chapter_title",),
+    "is_update_topic": ("topic_title",),
+    "is_update_concept": ("concept_title",),
+    "is_update_group": (
+        "group_name", "group_display_name", "group_type",
+    ),
+    "is_update_question": ("question_label", "question"),
+}
+
+
+def _snapshot_learning_phase(snapshot: Mapping | None) -> str:
+    """One explicit topic lane, or blank when a snapshot is mixed/unknown."""
+
+    phases = {
+        str(topic.get("pre_post_learning") or "").strip().casefold()
+        for topic in (snapshot or {}).get("topics") or []
+        if isinstance(topic, Mapping)
+        and str(topic.get("pre_post_learning") or "").strip()
+    }
+    return next(iter(phases)) if len(phases) == 1 else ""
+
+
+def _insert_after(fields: list[str], anchor: str, value: str) -> None:
+    if value in fields:
+        return
+    fields.insert(fields.index(anchor) + 1, value)
+
+
+def _master_fields(contract: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Build a clean Master schema from the committed Concept schema.
+
+    This is positional mechanics only.  It removes the possibility of the
+    duplicate headers and styled trailing columns present in the hand-edited
+    audit files: every field is inserted once into a unique base list.
+    """
+
+    fields_by_sheet = {name: list(fields) for name, fields in FIELDS.items()}
+    include_updates = bool(contract.get("include_update_fields"))
+    include_descriptive_source = bool(
+        contract.get("include_descriptive_concept_source")
+    )
+    try:
+        descriptive_slots = max(
+            MAX_DESCRIPTIVE_ANSWERS,
+            int(contract.get(
+                "descriptive_answer_slots", MAX_DESCRIPTIVE_ANSWERS,
+            )),
+        )
+    except (TypeError, ValueError):
+        descriptive_slots = MAX_DESCRIPTIVE_ANSWERS
+
+    for sheet, fields in fields_by_sheet.items():
+        if include_updates:
+            for update_field, anchor in _UPDATE_FIELD_AFTER.items():
+                _insert_after(fields, anchor, update_field)
+            group_anchor = (
+                "group_display_name"
+                if sheet == "Descriptive"
+                else "group_name"
+            )
+            _insert_after(fields, group_anchor, "is_update_group")
+        if (
+            sheet == "Descriptive"
+            and include_descriptive_source
+            and "concept_source" not in fields
+        ):
+            _insert_after(fields, "concept_question_labels", "concept_source")
+
+    descriptive = fields_by_sheet["Descriptive"]
+    answer_explanation = descriptive.index("answer_explanation")
+    expanded_answers = [
+        field
+        for number in range(
+            MAX_DESCRIPTIVE_ANSWERS + 1, descriptive_slots + 1,
+        )
+        for field in (
+            f"answer_type_{number}",
+            f"answer_weightage_{number}",
+            f"answer_content_{number}",
+        )
+    ]
+    descriptive[answer_explanation:answer_explanation] = expanded_answers
+    return fields_by_sheet
+
+
+def _master_bands(
+    fields_by_sheet: Mapping[str, list[str]],
+    contract: Mapping[str, Any],
+) -> dict[str, list[dict]]:
+    """Rebase row-1 bands by their authoritative boundary field names."""
+
+    bands_by_sheet: dict[str, list[dict]] = {}
+    for sheet, base_bands in BANDS.items():
+        base_fields = FIELDS[sheet]
+        final_fields = fields_by_sheet[sheet]
+        rebased = []
+        for band in base_bands:
+            start_field = base_fields[band["start"] - 1]
+            end_field = base_fields[band["end"] - 1]
+            end = final_fields.index(end_field) + 1
+            if (
+                sheet == "Descriptive"
+                and band["label"].strip() == "Concept"
+                and contract.get("include_descriptive_concept_source")
+            ):
+                end = final_fields.index("concept_source") + 1
+            rebased.append({
+                "label": band["label"],
+                "start": final_fields.index(start_field) + 1,
+                "end": end,
+            })
+        bands_by_sheet[sheet] = rebased
+    return bands_by_sheet
+
+
+def output_schema(
+    role: str,
+    profile: Mapping | str | None = None,
+    snapshot: Mapping | None = None,
+) -> dict[str, Any]:
+    """Return exact fields/bands/capacity for one deterministic output role.
+
+    Concept files always use the committed 67/374/144 schema. Master files
+    read the resolved run profile and the snapshot's explicit Pre/Post lane.
+    The returned structures are copies so callers cannot mutate module state.
+    """
+
+    normalized_role = str(role or "").strip().casefold()
+    if normalized_role == "concept":
+        return {
+            "role": "concept",
+            "contract_id": "concept-reference-1",
+            "fields": {name: list(fields) for name, fields in FIELDS.items()},
+            "bands": {
+                name: [dict(band) for band in bands]
+                for name, bands in BANDS.items()
+            },
+            "descriptive_answer_slots": MAX_DESCRIPTIVE_ANSWERS,
+        }
+    if normalized_role != "master":
+        raise ValueError(f"unknown workbook output role {role!r}")
+    contract = assessment_profile.master_workbook_contract(
+        profile,
+        learning_phase=_snapshot_learning_phase(snapshot),
+    )
+    fields_by_sheet = _master_fields(contract)
+    return {
+        "role": "master",
+        "contract_id": str(contract.get("contract_id") or ""),
+        "fields": fields_by_sheet,
+        "bands": _master_bands(fields_by_sheet, contract),
+        "descriptive_answer_slots": int(
+            contract.get("descriptive_answer_slots")
+            or MAX_DESCRIPTIVE_ANSWERS
+        ),
+        "natural_label_aggregates": bool(
+            contract.get("natural_label_aggregates", False)
+        ),
+        "aggregate_rendered_questions_only": bool(
+            contract.get("aggregate_rendered_questions_only", False)
+        ),
+    }
+
+
+def _schema_identity(schema: Mapping[str, Any]) -> dict[str, str]:
+    """Join one exact output schema to the registered reader layout."""
+
+    headers = {
+        sheet: tuple(schema["fields"][sheet])
+        for sheet in SHEET_ORDER
+    }
+    identified = layouts.identify_workbook(headers)
+    return {
+        "layout_id": identified.layout_id,
+        "contract_id": str(schema.get("contract_id") or ""),
+    }
+
+
+def output_identities(
+    profile: Mapping | str | None = None,
+    snapshot: Mapping | None = None,
+) -> dict[str, dict[str, str]]:
+    """Registered layout + schema contract identity for both projections."""
+
+    return {
+        "concepts_xlsx": _schema_identity(
+            output_schema("concept", profile, snapshot)
+        ),
+        "master_xlsx": _schema_identity(
+            output_schema("master", profile, snapshot)
+        ),
+    }
+
+
+def _natural_label_key(value: str) -> tuple:
+    """Stable human ordering (``Q2`` before ``Q10``), without mutation."""
+
+    return tuple(
+        (0, int(token)) if token.isdigit() else (1, token.casefold())
+        for token in re.split(r"(\d+)", str(value))
+    )
 
 
 class WorkbookRenderError(ValueError):
@@ -250,6 +465,7 @@ def _row_values(
     sheet: str, record: Mapping[str, Any],
     forced_blank: tuple[str, ...] = (),
     *, oversized: list[dict] | None = None,
+    schema: Mapping[str, Any] | None = None,
 ) -> list:
     """Serialize one record positionally.
 
@@ -260,10 +476,19 @@ def _row_values(
     read-back can never disagree.
     """
     blank = frozenset(forced_blank)
-    fields = FIELDS[sheet]
+    fields = (schema or output_schema("concept"))["fields"][sheet]
+    materialized = dict(record)
+    for update_field, identity_fields in _UPDATE_FIELD_PRESENCE.items():
+        if update_field not in fields:
+            continue
+        populated = any(
+            value is not None and str(value).strip()
+            for value in (materialized.get(name) for name in identity_fields)
+        )
+        materialized[update_field] = "No" if populated else ""
     row = []
     for field in fields:
-        value = "" if field in blank else record.get(field, "")
+        value = "" if field in blank else materialized.get(field, "")
         row.append(_cell_value(
             value, context=f"{sheet}:{field}", oversized=oversized))
     return row
@@ -273,6 +498,7 @@ def _append_record(
     ws, sheet: str, record: Mapping[str, Any],
     forced_blank: tuple[str, ...] = (),
     *, oversized: list[dict] | None = None,
+    schema: Mapping[str, Any] | None = None,
 ) -> None:
     """Append exact content and literalize every formula-like string.
 
@@ -283,7 +509,7 @@ def _append_record(
     """
 
     values = _row_values(
-        sheet, record, forced_blank, oversized=oversized,
+        sheet, record, forced_blank, oversized=oversized, schema=schema,
     )
     ws.append(values)
     row_number = ws.max_row
@@ -292,8 +518,11 @@ def _append_record(
             ws.cell(row=row_number, column=column).data_type = "s"
 
 
-def _write_headers(ws, sheet: str) -> None:
-    for band in BANDS[sheet]:
+def _write_headers(
+    ws, sheet: str, schema: Mapping[str, Any] | None = None,
+) -> None:
+    active = schema or output_schema("concept")
+    for band in active["bands"][sheet]:
         cell = ws.cell(row=1, column=band["start"])
         cell.value = band["label"]
         cell.font = Font(bold=True)
@@ -302,18 +531,21 @@ def _write_headers(ws, sheet: str) -> None:
             ws.merge_cells(
                 start_row=1, start_column=band["start"],
                 end_row=1, end_column=band["end"])
-    for i, field in enumerate(FIELDS[sheet], start=1):
+    for i, field in enumerate(active["fields"][sheet], start=1):
         cell = ws.cell(row=2, column=i)
         cell.value = field
         cell.font = Font(bold=True, size=9)
     ws.freeze_panes = "A3"
 
 
-def _new_workbook() -> openpyxl.Workbook:
+def _new_workbook(
+    schema: Mapping[str, Any] | None = None,
+) -> openpyxl.Workbook:
+    active = schema or output_schema("concept")
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     for name in SHEET_ORDER:
-        _write_headers(wb.create_sheet(name), name)
+        _write_headers(wb.create_sheet(name), name, active)
     return wb
 
 
@@ -342,7 +574,11 @@ def _workbook_bytes(wb: openpyxl.Workbook) -> bytes:
 def _concept_rows(snapshot: Mapping) -> list[dict]:
     rows = []
     chapter = dict(snapshot.get("chapter") or {})
+    lane_positions: dict[str, int] = {}
     for topic in snapshot.get("topics") or []:
+        lane = identity.lane_token(str(topic.get("pre_post_learning") or ""))
+        topic_ordinal = lane_positions.get(lane, 0) + 1
+        lane_positions[lane] = topic_ordinal
         topic_fields = {
             k: v for k, v in topic.items() if k != "concepts"
         }
@@ -350,6 +586,7 @@ def _concept_rows(snapshot: Mapping) -> list[dict]:
             rows.append({
                 "chapter": chapter,
                 "topic": topic_fields,
+                "topic_ordinal": topic_ordinal,
                 "concept": dict(concept),
             })
     return rows
@@ -365,20 +602,11 @@ _IDENTITY_TRIO = ("concept_key", "concept_machine_id", "release_row_identity")
 _TOPIC_IDENTITY = ("topic_machine_id",)
 
 
-def _titled_topic(topic: Mapping) -> str:
-    """The topic title CELL: the shared composed identity (T14/B4).
-
-    Same conditional as ``_titled_concept`` below, same gold-safety
-    reasoning: no id, verbatim title.  NOTE the deliberate format
-    difference from the bulk-import workbook: ``writer.composed_topic_title``
-    prefixes ``"Topic NN: "``; this renderer's cell is the bare composed
-    title.  Both shapes round-trip the reader's ``strip_topic_title`` and
-    the audit could not construct a divergence, but they are two formats,
-    not one.
-    """
+def _titled_topic(topic: Mapping, ordinal: int = 1) -> str:
+    """The shared topic-title cell, numbered within its snapshot lane."""
     title = str(topic.get("topic_title") or "")
     machine_id = str(topic.get("topic_machine_id") or "").strip()
-    return identity.titled(title, machine_id) if machine_id else title
+    return identity.topic_title_cell(title, machine_id, ordinal)
 
 
 def _identity_tag_replacement(kind: str, mapping: Mapping) -> dict | None:
@@ -434,7 +662,9 @@ def _bands_record(entry: Mapping) -> dict:
     record.update({
         k: v for k, v in entry["topic"].items() if k not in _TOPIC_IDENTITY
     })
-    record["topic_title"] = _titled_topic(entry["topic"])
+    record["topic_title"] = _titled_topic(
+        entry["topic"], int(entry.get("topic_ordinal") or 1),
+    )
     record.update({
         k: v for k, v in entry["concept"].items() if k not in _IDENTITY_TRIO
     })
@@ -467,7 +697,8 @@ def render_concept_file(
     ``render_shape_overflow`` on the concept row it belongs to.
     """
     forced_blank = assessment_profile.forced_blank_fields(profile)
-    wb = _new_workbook()
+    schema = output_schema("concept", profile, snapshot)
+    wb = _new_workbook(schema)
     ws = wb["Objective"]
     for entry in _concept_rows(snapshot):
         record = _bands_record(entry)
@@ -479,6 +710,7 @@ def render_concept_file(
             record[field] = ""
         _append_record(
             ws, "Objective", record, forced_blank, oversized=oversized,
+            schema=schema,
         )
     return _workbook_bytes(wb)
 
@@ -490,6 +722,7 @@ def render_concept_file(
 def _question_record(
     candidate: Mapping, sheet: str, profile: Mapping | str | None = None,
     *, truncated: list[dict] | None = None,
+    descriptive_answer_slots: int = MAX_DESCRIPTIVE_ANSWERS,
 ) -> dict:
     """Project one candidate onto its sheet's question columns.
 
@@ -633,7 +866,7 @@ def _question_record(
         # dedicated sub_question_N columns. Re-appending it to question_text
         # duplicates both the visible task and, downstream, its scoring.
         for n, answer in enumerate(
-            _cap("answers", answers, MAX_DESCRIPTIVE_ANSWERS), start=1
+            _cap("answers", answers, descriptive_answer_slots), start=1
         ):
             record[f"answer_type_{n}"] = answer.get("answer_type", "")
             record[f"answer_weightage_{n}"] = answer.get(
@@ -733,6 +966,8 @@ def render_master_file(
     reason.
     """
     forced_blank = assessment_profile.forced_blank_fields(profile)
+    schema = output_schema("master", profile, snapshot)
+    descriptive_answer_slots = int(schema["descriptive_answer_slots"])
     concept_entries = {
         str(entry["concept"].get("concept_key") or ""): entry
         for entry in _concept_rows(snapshot)
@@ -816,11 +1051,20 @@ def render_master_file(
         # sheet kind — the label is a fact about the concept and the group,
         # not about which sheet the row lands on, and
         # ``validate_master_file``'s read-back expects exactly this set.
-        concept_labels.setdefault(concept_key, []).append(label)
-        group_labels.setdefault(group_key, []).append(label)
+        if (
+            home is None
+            or not schema.get("aggregate_rendered_questions_only")
+        ):
+            concept_labels.setdefault(concept_key, []).append(label)
+            group_labels.setdefault(group_key, []).append(label)
         placed.append((candidate, home))
 
-    wb = _new_workbook()
+    if schema.get("natural_label_aggregates"):
+        for aggregates in (concept_labels, group_labels):
+            for labels in aggregates.values():
+                labels.sort(key=_natural_label_key)
+
+    wb = _new_workbook(schema)
     group_provenance: list[dict] = []
 
     def _append_group_row(
@@ -829,6 +1073,7 @@ def render_master_file(
         ws = wb[sheet]
         _append_record(
             ws, sheet, record, forced_blank, oversized=oversized,
+            schema=schema,
         )
         group_provenance.append({
             "sheet": sheet,
@@ -879,7 +1124,11 @@ def render_master_file(
             groups_by_key[group_key], group_labels.get(group_key, []),
             profile))
         record.update(
-            _question_record(candidate, sheet, profile, truncated=truncated))
+            _question_record(
+                candidate, sheet, profile, truncated=truncated,
+                descriptive_answer_slots=descriptive_answer_slots,
+            )
+        )
         return record
 
     question_rows = 0
@@ -930,7 +1179,7 @@ def render_master_file(
             record[field] = ""
         _append_record(
             wb["Objective"], "Objective", record, forced_blank,
-            oversized=oversized,
+            oversized=oversized, schema=schema,
         )
         questionless.append({
             "concept_key": concept_key,
@@ -1016,7 +1265,10 @@ def parse_workbook(data: bytes) -> dict:
     return parsed
 
 
-def _header_errors(parsed: Mapping) -> list[str]:
+def _header_errors(
+    parsed: Mapping, schema: Mapping[str, Any] | None = None,
+) -> list[str]:
+    active = schema or output_schema("concept")
     errors = []
     if parsed.get("sheet_order") != SHEET_ORDER:
         errors.append(
@@ -1026,7 +1278,7 @@ def _header_errors(parsed: Mapping) -> list[str]:
         if sheet is None:
             errors.append(f"missing sheet {name!r}")
             continue
-        if sheet["fields"] != FIELDS[name]:
+        if sheet["fields"] != active["fields"][name]:
             errors.append(f"{name}: header row differs from the template")
     return errors
 
@@ -1245,13 +1497,14 @@ def _subjective_marking_errors(
 
 def _descriptive_marking_errors(
     row: Mapping[str, Any], *, label: str, marks: Decimal | None,
+    answer_slots: int = MAX_DESCRIPTIVE_ANSWERS,
 ) -> list[str]:
     errors: list[str] = []
     answer_weights: list[Decimal] = []
     populated_answers = 0
     complete_answers = 0
     populated_answer_numbers: list[int] = []
-    for n in range(1, MAX_DESCRIPTIVE_ANSWERS + 1):
+    for n in range(1, answer_slots + 1):
         fields = (
             f"answer_type_{n}",
             f"answer_content_{n}",
@@ -1463,7 +1716,7 @@ def validate_concept_file(
     parsed: Mapping, snapshot: Mapping,
     profile: Mapping | str | None = None,
 ) -> list[str]:
-    errors = _header_errors(parsed)
+    errors = _header_errors(parsed, output_schema("concept", profile, snapshot))
     if errors:
         return errors
     rows = parsed["sheets"]["Objective"]["rows"]
@@ -1479,7 +1732,8 @@ def validate_concept_file(
     # cell shipped with no verification at all while the concept cell had
     # three).
     expected_topics = [
-        _titled_topic(e["topic"]) for e in _concept_rows(snapshot)
+        _titled_topic(e["topic"], int(e.get("topic_ordinal") or 1))
+        for e in _concept_rows(snapshot)
     ]
     actual_topics = [str(r.get("topic_title") or "") for r in rows]
     if actual_topics != expected_topics:
@@ -1514,7 +1768,9 @@ def validate_master_file(
 ) -> list[str]:
     profile = assessment_profile.resolve(profile)
     forced_blank = assessment_profile.forced_blank_fields(profile)
-    errors = _header_errors(parsed)
+    schema = output_schema("master", profile, snapshot)
+    descriptive_answer_slots = int(schema["descriptive_answer_slots"])
+    errors = _header_errors(parsed, schema)
     if errors:
         return errors
     if "subjective" not in assessment_profile.sheet_kinds(profile) and (
@@ -1575,6 +1831,7 @@ def validate_master_file(
     }
     concept_keys = set(concept_entries)
     expected_group_labels: dict[str, list[str]] = {}
+    expected_concept_labels: dict[str, list[str]] = {}
     expected_question_labels: dict[str, list[str]] = {
         name: [] for name in ("Objective", "Subjective", "Descriptive")
     }
@@ -1589,6 +1846,10 @@ def validate_master_file(
         concept_key = str(candidate.get("concept_key") or "")
         group_key = str(candidate.get("group_key") or "")
         label = str(candidate.get("question_label") or "")
+        home = rel.candidate_home_finding(
+            candidate, concept_entries, groups_by_key,
+            tuple(renderable_sheets), profile_name,
+        )
         if (
             concept_key in concept_keys
             and group_key in groups_by_key
@@ -1602,19 +1863,26 @@ def validate_master_file(
                     f"not match group {group_key!r} home "
                     f"{group_concept_key!r}")
                 continue
-            expected_group_labels.setdefault(group_key, []).append(label)
-            if str(candidate.get("sheet_kind") or "") in renderable_sheets:
+            if (
+                home is None
+                or not schema.get("aggregate_rendered_questions_only")
+            ):
+                expected_group_labels.setdefault(group_key, []).append(label)
+                expected_concept_labels.setdefault(
+                    concept_key, [],
+                ).append(label)
+            if home is None:
                 placed_by_concept[concept_key] = (
                     placed_by_concept.get(concept_key, 0) + 1)
-        home = rel.candidate_home_finding(
-            candidate, concept_entries, groups_by_key,
-            tuple(renderable_sheets), profile_name,
-        )
         if home is None:
             sheet_name = renderable_sheets[
                 str(candidate.get("sheet_kind") or "")
             ]
             expected_question_labels[sheet_name].append(label)
+    if schema.get("natural_label_aggregates"):
+        for aggregates in (expected_group_labels, expected_concept_labels):
+            for labels in aggregates.values():
+                labels.sort(key=_natural_label_key)
     expected_group_keys = {
         group_key for group_key, labels in expected_group_labels.items()
         if labels
@@ -1664,14 +1932,26 @@ def validate_master_file(
     # judge those (``None`` skips the check below) instead of judging by
     # collapse order.
     expected_topic_by_concept: dict[str, str | None] = {}
+    expected_source_by_path: dict[tuple[str, str], str | None] = {}
     for e in _concept_rows(snapshot):
         composed_key = _titled_concept(e["concept"])
-        expected_value = _titled_topic(e["topic"])
+        expected_value = _titled_topic(
+            e["topic"], int(e.get("topic_ordinal") or 1),
+        )
         if composed_key in expected_topic_by_concept:
             if expected_topic_by_concept[composed_key] != expected_value:
                 expected_topic_by_concept[composed_key] = None
         else:
             expected_topic_by_concept[composed_key] = expected_value
+        source_key = (expected_value, composed_key)
+        source_value = str(e["concept"].get("concept_source") or "")
+        if source_key in expected_source_by_path:
+            if expected_source_by_path[source_key] != source_value:
+                # A duplicated snapshot path that disagrees about its source
+                # is not something read-back may silently resolve by order.
+                expected_source_by_path[source_key] = None
+        else:
+            expected_source_by_path[source_key] = source_value
     for name in ("Objective", "Subjective", "Descriptive"):
         sheet_rows = parsed["sheets"][name]["rows"]
         row_numbers = parsed["sheets"][name].get("row_numbers")
@@ -1684,8 +1964,62 @@ def validate_master_file(
         for i, row in zip(row_numbers, sheet_rows):
             row_concept_title = str(row.get("concept_title") or "")
             seen_concepts.add(row_concept_title)
-            question_fields = FIELDS[name][
-                _INDEX[name]["question_label"]:
+            sheet_fields = schema["fields"][name]
+            for update_field, identity_fields in _UPDATE_FIELD_PRESENCE.items():
+                if update_field not in sheet_fields:
+                    continue
+                entity_populated = any(
+                    _populated(row.get(field)) for field in identity_fields
+                )
+                expected_update = "No" if entity_populated else ""
+                raw_update = row.get(update_field)
+                actual_update = (
+                    "" if raw_update is None else str(raw_update)
+                )
+                if actual_update != expected_update:
+                    errors.append(
+                        f"{name} row {i}: {update_field} "
+                        f"{actual_update!r} != {expected_update!r} for "
+                        f"the {'populated' if entity_populated else 'blank'} "
+                        "entity band"
+                    )
+
+            if "concept_source" in sheet_fields:
+                raw_source = row.get("concept_source")
+                actual_source = (
+                    "" if raw_source is None else str(raw_source)
+                )
+                if not row_concept_title:
+                    expected_source = ""
+                else:
+                    source_key = (
+                        str(row.get("topic_title") or ""),
+                        row_concept_title,
+                    )
+                    if source_key not in expected_source_by_path:
+                        expected_source = None
+                        errors.append(
+                            f"{name} row {i}: concept_source cannot be "
+                            "matched to a snapshot concept"
+                        )
+                    else:
+                        expected_source = expected_source_by_path[source_key]
+                        if expected_source is None:
+                            errors.append(
+                                f"{name} row {i}: snapshot concept_source "
+                                "is ambiguous for this topic/concept path"
+                            )
+                if (
+                    expected_source is not None
+                    and actual_source != expected_source
+                ):
+                    errors.append(
+                        f"{name} row {i}: concept_source "
+                        f"{actual_source!r} != snapshot value "
+                        f"{expected_source!r}"
+                    )
+            question_fields = sheet_fields[
+                sheet_fields.index("question_label"):
             ]
             has_question_band = any(
                 row.get(field) is not None
@@ -1763,6 +2097,16 @@ def validate_master_file(
                         errors.append(
                             f"{name} row {i}: concept home does not match "
                             f"{group_key!r}")
+                    expected_concept_aggregate = ", ".join(
+                        expected_concept_labels.get(group_concept_key, [])
+                    )
+                    if str(row.get("concept_question_labels") or "") != (
+                        expected_concept_aggregate
+                    ):
+                        errors.append(
+                            f"{name} row {i}: concept_question_labels "
+                            "does not match surviving concept members"
+                        )
                     expected_concept_rollups = expected_rollups.get(
                         group_concept_key, {}
                     )
@@ -1880,6 +2224,7 @@ def validate_master_file(
             else:
                 errors.extend(_descriptive_marking_errors(
                     row, label=label, marks=marks,
+                    answer_slots=descriptive_answer_slots,
                 ))
 
     # Every concept (questionless included) and every created group appears.
@@ -1942,6 +2287,10 @@ def build_dual_output(
     snapshot. Returns concepts/master bytes plus the shared manifest."""
     profile = assessment_profile.resolve(profile)
     snapshot_hash = snapshot_sha256(snapshot)
+    concept_schema = output_schema("concept", profile, snapshot)
+    master_schema = output_schema("master", profile, snapshot)
+    concept_identity = _schema_identity(concept_schema)
+    master_identity = _schema_identity(master_schema)
     concepts_bytes = render_concept_file(snapshot, profile)
     master_bytes, issues = render_master_file(snapshot, profile)
     concept_errors = validate_concept_file(
@@ -1952,6 +2301,25 @@ def build_dual_output(
     manifest = {
         "profile": assessment_profile.name(profile),
         "template_source": MANIFEST.get("source", ""),
+        "workbook_contracts": {
+            "concepts_xlsx": {
+                **concept_identity,
+                "field_counts": {
+                    sheet: len(concept_schema["fields"][sheet])
+                    for sheet in SHEET_ORDER
+                },
+            },
+            "master_xlsx": {
+                **master_identity,
+                "field_counts": {
+                    sheet: len(master_schema["fields"][sheet])
+                    for sheet in SHEET_ORDER
+                },
+                "descriptive_answer_slots": master_schema[
+                    "descriptive_answer_slots"
+                ],
+            },
+        },
         "concept_snapshot_sha256": snapshot_hash,
         "workbook_sha256s": {
             "concepts_xlsx": hashlib.sha256(concepts_bytes).hexdigest(),

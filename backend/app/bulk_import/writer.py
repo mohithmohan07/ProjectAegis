@@ -694,21 +694,22 @@ def composed_topic_title(
 ) -> str:
     """Tagged topic title cell, e.g. 'Topic 01: <Title> (<machine id>)'.
 
-    ``strip_topic_title`` normalizes the stored title first so an already-tagged
-    value never gets a second 'Topic NN:'/code prefix.
+    The shared composer normalizes an identified stored title so an
+    already-tagged value never gets a second ``Topic NN:``/code prefix.
 
     The tag is the topic's PERSISTED ``machine_id``, read through
     ``identity.machine_id_for_topic``, not ``directory.topic_tag``: that
     function stamps ONE chapter-level code on every topic of the chapter, so
     the cell could not tell two topics apart, and it re-derives from the
-    chapter title, so a rename re-keyed every row. The composition itself
-    lives in ``identity.titled`` — shared with the Master renderer, stripped
-    from neither (T14).
+    chapter title, so a rename re-keyed every row. The whole cell composition
+    lives in ``identity.topic_title_cell`` and is shared with the Master
+    renderer (T14).
     """
-    clean = strip_topic_title(topic.topic_title) or topic.topic_title
-    return (
-        f"Topic {_topic_number(topic, export_scope):02d}: "
-        f"{identity.titled(clean, identity.machine_id_for_topic(topic))}"
+    return identity.topic_title_cell(
+        topic.topic_title,
+        identity.machine_id_for_topic(topic),
+        _topic_number(topic, export_scope),
+        number_without_id=True,
     )
 
 

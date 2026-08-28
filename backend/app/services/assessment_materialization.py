@@ -30,8 +30,9 @@ from .phase3 import kernel
 # shape. ``-8`` and ``-9`` pin lowercase paper-option labels. ``-10`` adds
 # the supported Subjective wire and makes multipart Descriptive questions
 # use the dedicated sub-question rubric columns rather than scoring the same
-# parts twice.
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-10"
+# parts twice. ``-11`` binds the selected Master-workbook Descriptive answer
+# capacity into both the authored decision and its mechanical checker.
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-11"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -52,6 +53,34 @@ MAX_SUBJECTIVE_ANSWERS = 20
 MAX_DESCRIPTIVE_ANSWERS = 10
 MAX_SUBQUESTIONS = 15
 MAX_SUBQUESTION_KEYWORDS = 6
+
+
+def _descriptive_answer_capacity(
+    profile: Mapping | str | None,
+    *,
+    learning_phase: str = "",
+) -> int:
+    """Return the Descriptive answer slots the selected Master can render.
+
+    Ten remains the compatibility floor for historical/reference profiles.
+    A resolved run profile may widen that positional capacity for one
+    explicitly identified lane (the audited Grade-6 English Post contract
+    uses thirty).  The scalar capacity, rather than the profile itself, is
+    later bound into each decision payload.
+    """
+
+    contract = assessment_profile.master_workbook_contract(
+        profile,
+        learning_phase=learning_phase,
+    )
+    try:
+        capacity = int(
+            contract.get("descriptive_answer_slots", MAX_DESCRIPTIVE_ANSWERS)
+        )
+    except (TypeError, ValueError):
+        capacity = MAX_DESCRIPTIVE_ANSWERS
+    return max(MAX_DESCRIPTIVE_ANSWERS, capacity)
+
 
 MATERIALIZE_SYSTEM = (
     "You are the Aegis assessment materialization author. Materialize ONE "
@@ -302,7 +331,11 @@ def _malformed_rubric_tag(value: Any, answer_type: Any) -> bool:
 
 
 def _proposal_defects(
-    proposal: Mapping[str, Any], cell: Mapping, candidate_id: str,
+    proposal: Mapping[str, Any],
+    cell: Mapping,
+    candidate_id: str,
+    *,
+    descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
 ) -> list[str]:
     """Validate response mechanics only; semantic quality belongs to models."""
 
@@ -445,9 +478,9 @@ def _proposal_defects(
             defects.append("missing display answer")
         if not answers and not subquestions:
             defects.append("descriptive needs at least one answer/rubric block")
-        if len(answers) > MAX_DESCRIPTIVE_ANSWERS:
+        if len(answers) > descriptive_answer_capacity:
             defects.append(
-                f"more than {MAX_DESCRIPTIVE_ANSWERS} answer blocks"
+                f"more than {descriptive_answer_capacity} answer blocks"
             )
         marks = _to_float(cell.get("marks"))
         if subquestions and answers:
@@ -537,9 +570,19 @@ def _proposal_defects(
     return defects
 
 
-def _checker(cell: Mapping, candidate_id: str) -> kernel.Checker:
+def _checker(
+    cell: Mapping,
+    candidate_id: str,
+    *,
+    descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
+) -> kernel.Checker:
     def check(response: Mapping[str, Any]) -> list[str]:
-        return _proposal_defects(response, cell, candidate_id)
+        return _proposal_defects(
+            response,
+            cell,
+            candidate_id,
+            descriptive_answer_capacity=descriptive_answer_capacity,
+        )
 
     return check
 
@@ -726,12 +769,16 @@ def _decision_payload(
     candidate_id: str,
     meta: Mapping,
     context: Any,
+    descriptive_answer_capacity: int,
 ) -> dict[str, Any]:
     return {
         "stage": "assessment.materialize",
         "rules": MATERIALIZE_SYSTEM,
         "candidate_id": candidate_id,
         "metadata": copy.deepcopy(dict(meta)),
+        "workbook_capacities": {
+            "descriptive_answer_slots": descriptive_answer_capacity,
+        },
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "curricular_evidence": copy.deepcopy(context),
@@ -745,6 +792,7 @@ def _materialize_prepared(
     candidate_id: str,
     meta: Mapping,
     context: Any,
+    descriptive_answer_capacity: int,
     envelope_sha256: str,
     provider: kernel.Provider,
     critic: kernel.Critic | None,
@@ -752,7 +800,12 @@ def _materialize_prepared(
     fixer: kernel.Provider | None,
 ) -> dict:
     payload = _decision_payload(
-        atom, cell, candidate_id=candidate_id, meta=meta, context=context,
+        atom,
+        cell,
+        candidate_id=candidate_id,
+        meta=meta,
+        context=context,
+        descriptive_answer_capacity=descriptive_answer_capacity,
     )
     decision = kernel.decide(
         kind="assessment.materialize",
@@ -760,7 +813,11 @@ def _materialize_prepared(
         envelope_sha256=envelope_sha256,
         payload=payload,
         provider=provider,
-        checker=_checker(cell, candidate_id),
+        checker=_checker(
+            cell,
+            candidate_id,
+            descriptive_answer_capacity=descriptive_answer_capacity,
+        ),
         critic=critic,
         store=store,
         policy_version=MATERIALIZE_POLICY_VERSION,
@@ -784,14 +841,21 @@ def materialize_candidate(
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
     profile: Mapping | str | None = None,
+    learning_phase: str = "",
 ) -> dict:
     """Materialize one obligation through a content-addressed decision.
 
-    ``profile`` is validation input ONLY (spec-step8 B2). It never joins
-    ``meta`` or the decision payload, so decision keys are unchanged.
+    ``profile`` remains validation input (spec-step8 B2), not authored
+    metadata.  Only the selected workbook's scalar Descriptive capacity is
+    bound into the decision payload, so a widened Post lane cannot replay a
+    decision checked against the ten-slot reference layout (or vice versa).
     """
 
     run_profile = assessment_profile.resolve_for_metadata(profile, meta)
+    descriptive_answer_capacity = _descriptive_answer_capacity(
+        run_profile,
+        learning_phase=learning_phase,
+    )
     candidate_id = _validate_obligation(atom, cell, meta, run_profile)
     envelope_sha = _envelope_hash(envelope_sha256)
     provider, critic, fixer = _live_authorities(provider, critic, fixer)
@@ -801,6 +865,7 @@ def materialize_candidate(
         candidate_id=candidate_id,
         meta=meta,
         context=context,
+        descriptive_answer_capacity=descriptive_answer_capacity,
         envelope_sha256=envelope_sha,
         provider=provider,
         critic=critic,
@@ -820,12 +885,14 @@ def materialize_candidates(
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
     profile: Mapping | str | None = None,
+    learning_phase: str = "",
     on_result=None,
 ) -> dict:
     """Materialize every obligation in order with exact-once accounting.
 
-    ``profile`` is validation input ONLY (spec-step8 B2); see
-    ``materialize_candidate``.
+    ``profile`` is validation input (spec-step8 B2); see
+    ``materialize_candidate``. ``learning_phase`` selects only a declared
+    lane-specific workbook-capacity override.
 
     ``on_result`` is forwarded verbatim to the fan-out
     (``kernel.parallel_map_in_order``): an ordered progress hook only,
@@ -836,6 +903,10 @@ def materialize_candidates(
         raise MaterializationError("materialization metadata is not an object")
     envelope_sha = _envelope_hash(envelope_sha256)
     run_profile = assessment_profile.resolve_for_metadata(profile, meta)
+    descriptive_answer_capacity = _descriptive_answer_capacity(
+        run_profile,
+        learning_phase=learning_phase,
+    )
     prepared: list[tuple[Mapping | None, Mapping, str]] = []
     seen: set[str] = set()
     for position, pair in enumerate(pairs, start=1):
@@ -872,6 +943,7 @@ def materialize_candidates(
                 candidate_id=candidate_id,
                 meta=meta,
                 context=context,
+                descriptive_answer_capacity=descriptive_answer_capacity,
                 envelope_sha256=envelope_sha,
                 provider=provider,
                 critic=critic,

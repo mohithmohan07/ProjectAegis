@@ -539,10 +539,16 @@ def test_subjective_readback_fails_closed(mutate, expected):
     parsed, snapshot, provenance = _parsed_master(subjective=True)
     row = _question_row(parsed, "Subjective")
     mutate(row)
+    profile = assessment_profile.resolve_for_metadata(None, {
+        "board": "MSBSHSE",
+        "grade": "6",
+        "subject": "Mathematics",
+    })
 
     errors = workbook.validate_master_file(
         parsed,
         copy.deepcopy(snapshot),
+        profile=profile,
         group_provenance=provenance,
     )
 

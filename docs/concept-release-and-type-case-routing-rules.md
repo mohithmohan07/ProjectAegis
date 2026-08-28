@@ -49,8 +49,8 @@ Every source QID must have exactly one final Type/Case assignment.
 
 - A QID may not appear in two Cases.
 - A QID may not appear under two Types.
-- A QID may not be duplicated merely because its Type is rendered under more
-  than one concept or topic.
+- A Type may not render under more than one concept or topic; every QID
+  assigned to that Type follows its single owning concept.
 - Every QID in the Question/Task Inventory must be accounted for.
 - A rendered QID absent from the source inventory is an error.
 

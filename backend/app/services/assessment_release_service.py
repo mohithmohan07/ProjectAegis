@@ -147,12 +147,11 @@ def snapshot_from_chapter(
             or str(topic.pre_post_learning or "").strip().casefold()
             == lane.casefold()
         ),
-        key=lambda t: (t.source_order, t.id),
+        key=identity.source_order_key,
     )
     snapshot_topics = []
     for topic in topics:
-        concepts = sorted(
-            topic.concepts, key=lambda c: (c.source_order, c.id))
+        concepts = sorted(topic.concepts, key=identity.source_order_key)
         snapshot_topics.append({
             "topic_title": topic.topic_title,
             "topic_display_name": topic.topic_display_name,

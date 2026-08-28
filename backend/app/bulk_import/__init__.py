@@ -190,9 +190,20 @@ def strip_title_tag(text: str) -> str:
     return _TITLE_TAG_RE.sub("", text or "").strip()
 
 
+def strip_topic_number(text: str) -> str:
+    """Remove only a leading ``Topic NN:`` prefix from a topic cell.
+
+    Keeping this separate from :func:`strip_topic_title` lets the shared
+    topic-cell composer remove an old display ordinal without assuming that
+    every underscore-bearing parenthetical in a readable title is an
+    identity tag.
+    """
+    return _TOPIC_NUM_RE.sub("", text or "").strip()
+
+
 def strip_topic_title(text: str) -> str:
     """Remove a leading ``Topic NN:`` and a trailing tag from a topic title."""
-    return strip_title_tag(_TOPIC_NUM_RE.sub("", text or "")).strip()
+    return strip_title_tag(strip_topic_number(text)).strip()
 
 
 def merge_sources(existing: str, new: str) -> str:

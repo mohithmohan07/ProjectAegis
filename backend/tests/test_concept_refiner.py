@@ -447,3 +447,128 @@ def test_activity_info_hub_section_order_and_append():
         "Misconception/ Error Analysis",
     ]
     assert "Activity 11.1" in cr.activity_hub_body(normalized)
+
+
+def test_single_host_guard_rejects_split_origin_without_mutating_rows():
+    import copy
+
+    import pytest
+
+    records = [
+        {
+            **_rec(
+                "First Host",
+                "Description: d // Types: Type 01: Shared Method "
+                "Case 01: First variation // Misconception: m",
+            ),
+            "_origin_type_id": "TYPE-SHARED",
+        },
+        {
+            **_rec(
+                "Second Host",
+                "Description: d // Types: Type 01: Shared Method "
+                "Case 01: Second variation // Misconception: m",
+            ),
+            "_origin_type_id": "TYPE-SHARED",
+        },
+    ]
+    before = copy.deepcopy(records)
+
+    with pytest.raises(
+        cr.SplitTypeHostError,
+        match="one concept must own every reusable Type",
+    ):
+        cr.assert_single_concept_type_hosts(records)
+
+    assert issubclass(cr.SplitTypeHostError, RuntimeError)
+    assert records == before
+
+
+def test_mapping_release_routes_detect_split_type_without_visible_text():
+    import pytest
+
+    records = [
+        {
+            "topic": "Methods",
+            "concept_title": "First Host",
+            "concept_details": "Description: first.",
+            "_aegis_release_type_case_routes": [{
+                "type_id": "TYPE-0001",
+                "case_id": "CASE-0001",
+            }],
+        },
+        {
+            "topic": "Methods",
+            "concept_title": "Second Host",
+            "concept_details": "Description: second.",
+            "_aegis_release_type_case_routes": [{
+                "type_id": "TYPE-0001",
+                "case_id": "CASE-0002",
+            }],
+        },
+    ]
+
+    violations = cr.split_type_host_violations(records)
+
+    assert violations == [{
+        "type": "TYPE-0001",
+        "row_indexes": [0, 1],
+        "concept_titles": ["First Host", "Second Host"],
+    }]
+    with pytest.raises(cr.SplitTypeHostError):
+        cr.assert_single_concept_type_hosts(records)
+
+
+def test_visible_definition_and_route_are_one_split_diagnostic():
+    records = [
+        {
+            "topic": "Methods",
+            "concept_title": title,
+            "concept_details": (
+                "Description: d // Types: Type 01: Shared Method "
+                f"Case 01: {title} variation // Misconception: m"
+            ),
+            "_aegis_release_type_case_routes": [{
+                "type_id": "TYPE-SHARED",
+                "case_id": case_id,
+            }],
+        }
+        for title, case_id in (
+            ("First Host", "CASE-0001"),
+            ("Second Host", "CASE-0002"),
+        )
+    ]
+
+    assert cr.split_type_host_violations(records) == [{
+        "type": "shared method",
+        "row_indexes": [0, 1],
+        "concept_titles": ["First Host", "Second Host"],
+    }]
+
+
+def test_distinct_split_types_on_same_hosts_remain_distinct_diagnostics():
+    records = [
+        {
+            "topic": "Methods",
+            "concept_title": title,
+            "concept_details": (
+                "Description: d // Types: Type 01: Alpha Method "
+                f"Case 01: {title} alpha "
+                "Type 02: Beta Method "
+                f"Case 01: {title} beta // Misconception: m"
+            ),
+            "_aegis_release_type_case_routes": [
+                {"type_id": "TYPE-ALPHA", "case_id": f"A-{index}"},
+                {"type_id": "TYPE-BETA", "case_id": f"B-{index}"},
+            ],
+        }
+        for index, title in enumerate(("First Host", "Second Host"), start=1)
+    ]
+
+    violations = cr.split_type_host_violations(records)
+
+    assert len(violations) == 2
+    assert {violation["type"] for violation in violations} == {
+        "alpha method",
+        "beta method",
+    }

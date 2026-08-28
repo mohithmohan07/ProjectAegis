@@ -1662,7 +1662,8 @@ COVERAGE IS MANDATORY (most important rule):
   When lettered/roman subparts are independently answerable (for example,
   separate "Write a note on ..." targets), emit stable child inventory items
   carrying ``parent_qid`` and the complete shared instruction plus that one
-  child ask. Those child items may later become Cases on different concepts.
+  child ask. Those child items may supply different Case-host evidence, but if
+  they share a Type the owner pass ultimately places every Case together.
   Keep dependent subparts that share data, a passage, a figure, intermediate
   results, or one integrated response as ONE atomic inventory item.
 - In-text CHECKPOINT questions (boxed "?" questions, "Let's recall",
@@ -1713,9 +1714,10 @@ Rules:
   into image_urls AND keep the figure reference in raw_task.
 - Set topic_hint to the nearest MAIN section heading (or "[Chapter opening]"
   for pre-section items) so later placement stays in reading order.
-- ``topic_hint`` routes the individual inventory item; it is not a boundary on
-  reuse. Two items from different topics may instantiate one reusable Type,
-  while their Cases remain independently routed to their own concepts.
+- ``topic_hint`` supplies routing evidence for the individual inventory item;
+  it is not a boundary on reuse. Two items from different topics may
+  instantiate one reusable Type. Their Cases are judged independently first,
+  then the Type-owner verdict moves every Case/QID to one final concept.
 - Use content_objects for all extracted subject matter and representations.
 - A task may be non-numerical; do not reject it as generic because it is descriptive.
 - Preserve source traceability in this debug JSON only; source labels must not be
@@ -1794,10 +1796,10 @@ Rules:
   skills, choose the Type that most directly assesses the final ask, or create
   one integrated Type for that mixed skill — never duplicate the question.
 - A Type owns only the reusable answering method: action, representation,
-  constraints, and expected response form. It may span concepts and textbook
-  topics. Every Case owns its own concept/topic route and must assess one
-  granular destination; Cases on different concepts remain separate under the
-  same Type identity.
+  constraints, and expected response form. Its source evidence may span
+  concepts and textbook topics. Every Case first supplies its own granular
+  concept/topic routing evidence; a later Type-owner verdict chooses one of
+  those supported concepts and every Case/QID of the Type renders there.
 - Split Types when questions share a formula or surface procedure but assess
   different concepts. In particular, direct formula calculations and
   contextual/real-life modeling or applications belong in separate Types when
@@ -2036,6 +2038,9 @@ Rules:
 - Worked derivation tasks belong with the concept teaching that derivation;
   merely applying or verifying the finished formula does not.
 - Keep parent questions and all of their dependent subparts together.
+- These Case verdicts are evidence, not permission to render one Type on
+  several concepts. A later owner verdict consolidates every Case/QID of a
+  reusable Type onto one supported concept.
 """)
 
 prompts.register(
@@ -2062,7 +2067,8 @@ DELTA RULES:
   references, and image URLs. Never include a solution or answer.
 - A missed item may attach to an existing Type from another topic when its
   answering method is genuinely the same. Emit a new Case with its own exact
-  topic/concept/parent/activity/placement route; never rewrite existing Cases.
+  topic/concept/parent/activity placement evidence; the later Type-owner pass
+  still consolidates every Case/QID of that Type onto one final concept.
 - Create a new Type only for a distinct method, representation, constraint, or
   expected response—not merely for a different content target or host.
 - Cover every provided missed qid, but emit no unchanged Type, Case, or Example.
@@ -2087,6 +2093,9 @@ Rules:
 - Never invent concept_id or type_id values; use only the ones provided.
 - Treat type_id as an opaque assignment-unit ID. A case-scoped ID identifies
   the one Case carried by that unit, not the whole original multi-Case Type.
+- Judge each Case unit independently here. If sibling Cases choose different
+  concepts, the mandatory Type-owner pass subsequently chooses one supported
+  owner and moves every Case/QID of the original Type there.
 - Choose from the unit's actual Case, all of its Examples, and its
   source_question_ids. Never split Examples within one Case across concepts.
 - The original Type title, description, and concept hints are supporting
@@ -9379,12 +9388,12 @@ def _apply_case_route_to_unit(unit: dict, raw_case: object) -> dict:
 def _annotate_mined_type_case_routes(
     types: list[dict], inventory: dict,
 ) -> list[dict]:
-    """Make topic, concept and delivery role authoritative per Case.
+    """Make topic, concept and delivery-role evidence authoritative per Case.
 
-    A reusable Type may span many concepts/topics.  Each Case remains a
-    single-host assignment unit. Certified v2 Cases split by semantic owner,
-    never by physical source topic; legacy dry/test payloads retain their old
-    source-scoped normalization until the ownership stage certifies them.
+    Each Case remains a single-host assignment unit during evidence gathering.
+    Certified v2 Cases are judged by semantic owner, never by physical source
+    topic; the mandatory Type-owner stage later consolidates sibling Cases and
+    their QIDs onto one concept before rendering.
     """
     by_qid = {
         str(item.get("qid") or "").strip(): item
@@ -12850,15 +12859,15 @@ def _consolidate_reusable_type_hosts(
     concept_payload: list[dict],
     meta: dict,
 ) -> dict[str, list[dict]]:
-    """Preserve independently certified Case hosts for reusable Types.
+    """Reject a split reusable Type before the legacy renderer can hide it.
 
-    Type reuse and Case placement are orthogonal. A reusable Type is expected
-    to render on several concepts/topics when its Cases assess different
-    content. Phase 3.3 has already certified every Case/QID host, so this
-    boundary must not move those Cases, rename the operator, or spend another
-    model call attempting to force one shared destination.
+    Current Phase 3 resolves one recorded ownership verdict per split Type in
+    ``phase3.host.consolidate_type_ownership``. This older deterministic seam
+    has no such verdict and therefore may not choose a winner by first row,
+    majority, or source order. A split here means the ownership pass was
+    bypassed; fail closed so it is rerun with every Case and QID moving to the
+    one decided owner.
     """
-    split_origins: set[str] = set()
     hosts_by_origin: dict[str, set[str]] = {}
     for cid, units in per_concept.items():
         for unit in units:
@@ -12867,17 +12876,15 @@ def _consolidate_reusable_type_hosts(
                 unit.get("_origin_type_id")
                 or unit_id.split("::", 1)[0]
             ).strip()
-            if origin and not unit.get("is_activity"):
+            if origin:
                 hosts_by_origin.setdefault(origin, set()).add(cid)
-    split_origins = {
+    split_origins = sorted(
         origin for origin, hosts in hosts_by_origin.items() if len(hosts) > 1
-    }
+    )
     if split_origins:
-        progress.log(
-            f"Preserved {len(split_origins)} reusable Type(s) across their "
-            "independently certified Case hosts; no one-host convergence call "
-            "was made.",
-            level="success",
+        raise cr.SplitTypeHostError(
+            "one concept must own every reusable Type; ownership review is "
+            "required for " + ", ".join(split_origins)
         )
     return copy.deepcopy(per_concept)
 
@@ -15144,20 +15151,15 @@ def _disambiguate_certified_split_type_cases(
     inventory: dict | None,
     mined_types: dict | None,
 ) -> list[dict]:
-    """Qualify only proven distinct Cases split from one reusable Type.
+    """Reject certified split Types instead of cosmetically renaming Cases.
 
-    One mined Type can legitimately contain several Cases that the host review
-    assigns to different concepts. Rendering those Case-scoped units preserves
-    the source Examples and reviewed placements, but can leave two normal rows
-    with the same Type and Case definition. The strict hierarchy contract
-    rejects that cross-row duplicate.
-
-    Repair only when exact inventory Examples prove that the colliding segments
-    belong to distinct mined Case IDs/signatures from the same Type and every
-    QID is still on its certified host. Keep the canonical Type heading intact
-    and qualify only the later Case definition with its current concept title.
-    This preserves reusable Type identity and continuous Case numbering.
+    This compatibility entry point used to append concept titles to repeated
+    Case definitions while leaving one mined Type on several concepts. That
+    made the text look unique without fixing ownership. Q14 requires the Host
+    pass to choose one concept and move every Case/QID there; terminal cleanup
+    has no authority to invent that semantic verdict, so it fails closed.
     """
+    cr.assert_single_concept_type_hosts(records)
     # Most final boundaries have no collision. Avoid rebuilding the full
     # inventory-key index on those common/idempotent calls.
     fast_seen: dict[tuple[str, str, tuple[str, ...]], int] = {}
@@ -19361,13 +19363,13 @@ _CONCEPT_CHECKPOINT_STAGES = {
     },
     "post_type_assignment": {
         "order": 70,
-        "version": 7,
+        "version": 8,
         "progress": 0.91,
         "label": "Type assignment and activity hubs complete",
     },
     "final_content_ready": {
         "order": 80,
-        "version": 8,
+        "version": 9,
         "progress": 0.98,
         "label": "Final content ready for deterministic validation",
     },
@@ -19627,10 +19629,9 @@ def _compatible_concept_checkpoint_entry(
     schema = checkpoint.get("schema_version")
     stage = checkpoint.get("stage")
     if schema == _LEGACY_CONCEPT_CHECKPOINT_SCHEMA:
-        # Schema 2 predates independent leaf Cases and Case-owned placement.
-        # It has no stage contract version capable of proving that a saved
-        # Type did not collapse all of its Cases onto one concept.  Replaying
-        # it would silently restore the obsolete one-host taxonomy.
+        # Schema 2 predates independent leaf Cases, closed QID allocation, and
+        # the recorded one-owner verdict. It cannot prove why Cases share one
+        # host or that every member QID moved with its Type.
         return False
     spec = _CONCEPT_CHECKPOINT_STAGES.get(stage)
     if schema != _CONCEPT_CHECKPOINT_SCHEMA or spec is None:
@@ -19671,6 +19672,14 @@ def _compatible_concept_checkpoint_entry(
             and _checkpoint_has_fields(checkpoint, ("records", list))
         )
     if not _checkpoint_has_fields(checkpoint, ("records", list)):
+        return False
+    if (
+        stage in {"post_type_assignment", "final_content_ready"}
+        and cr.split_type_host_violations(checkpoint.get("records") or [])
+    ):
+        # A terminal shortcut must never resurrect the pre-Q14 shape where
+        # deterministic cleanup preserved one Type across several concepts.
+        # Rewind to Host so the recorded owner verdict can move every Case/QID.
         return False
     if stage == "source_topic_review":
         recovery = checkpoint.get("source_topic_recovery")
