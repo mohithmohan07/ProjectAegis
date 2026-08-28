@@ -18,6 +18,7 @@ from app.services import assessment_master_refiner as refiner
 from app.services import assessment_profile
 from app.services import assessment_release as rel
 from app.services import assessment_release_service as release_service
+from app.services import katex_rules
 from app.services.phase3 import kernel
 
 
@@ -456,6 +457,48 @@ def test_fixture_exercises_the_real_release_and_workbook_contracts():
         f"{MACHINE_ID} Q01",
         f"{MACHINE_ID} Q02",
     ]
+
+
+def test_image_answer_readback_compares_with_the_rendered_url_projection():
+    payload = _payload()
+    answer = payload["candidates"][0]["answers"][0]
+    answer["answer_type"] = "Image"
+    answer["answer_content"] = (
+        '[img src="https://assets.example/cube.png" alt="cube"]'
+    )
+    profile = assessment_profile.resolve_for_metadata(
+        _METADATA["profile"], _METADATA,
+    )
+
+    state = refiner._validation_state(payload, profile)
+
+    assert state["errors"] == []
+    row = state["candidate_rows"][OBJECTIVE_ID][0]
+    assert row["answer_content_1"] == "https://assets.example/cube.png"
+    assert row["answer_content_1"] == katex_rules.raw_answer_cell(
+        answer["answer_type"], answer["answer_content"],
+    )
+
+
+def test_equation_answer_and_keyword_readback_use_the_raw_wire_projection():
+    payload = _payload()
+    answer = payload["candidates"][0]["answers"][0]
+    answer["answer_type"] = "Equation"
+    answer["answer_content"] = "  x^2  "
+    keyword = payload["candidates"][1]["sub_questions"][0]["keywords"][0]
+    keyword["answer_type"] = "Equation"
+    keyword["keyword"] = r"  x^2+1  "
+    profile = assessment_profile.resolve_for_metadata(
+        _METADATA["profile"], _METADATA,
+    )
+
+    state = refiner._validation_state(payload, profile)
+
+    assert state["errors"] == []
+    objective = state["candidate_rows"][OBJECTIVE_ID][0]
+    descriptive = state["candidate_rows"][DESCRIPTIVE_ID][0]
+    assert objective["answer_content_1"] == "x^2"
+    assert descriptive["sq1_keyword_1"] == "x^2+1"
 
 
 def test_subjective_placeholder_and_answer_column_round_trip_through_refiner():
@@ -1088,12 +1131,29 @@ def test_model_evidence_recursively_excludes_printer_positions():
     assert records[0]["groups"][0]["reading_order"] == 10
 
 
-def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved():
-    """Excel normalises carriage returns; exact read-back must catch it."""
+def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved(
+    monkeypatch,
+):
+    """A consumer-normalised XLSX value rolls back only its authored unit."""
 
     original = _payload()
     order = []
     normalised_by_xlsx = "polished\rprose"
+    real_parse = aw.parse_workbook
+
+    def consumer_normalising_parse(data):
+        parsed = real_parse(data)
+        for sheet in (parsed.get("sheets") or {}).values():
+            for row in sheet.get("rows") or []:
+                for field, value in list(row.items()):
+                    if isinstance(value, str):
+                        row[field] = value.replace("\r", "\n")
+        return parsed
+
+    # OpenPyXL's handling of encoded CR characters has changed across pinned
+    # runtime rebuilds. Make the consumer transformation explicit so this test
+    # continues to exercise the rollback contract, not that library detail.
+    monkeypatch.setattr(aw, "parse_workbook", consumer_normalising_parse)
 
     def provider(request):
         order.append(request["row_ref"])

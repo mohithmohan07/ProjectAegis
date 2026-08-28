@@ -1683,6 +1683,7 @@ def run_release_for_job(
     pre_blocked_generated: list[dict] = []
     duplicates_removed: list[dict] = []
     pre_learning_claimed: list[dict] = []
+    source_context_dispositions: list[dict] = []
     compound_parents_represented: list[dict] = []
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
@@ -1874,6 +1875,15 @@ def run_release_for_job(
             source_document_hash=str(bridge["source_document_hash"]),
         )
         atoms = built["atoms"]
+        source_context_dispositions = list(built.get("context_only") or [])
+        if source_context_dispositions:
+            progress.log(
+                "Assessment release: retained "
+                f"{len(source_context_dispositions)} governing response "
+                "instruction(s) as shared context; no standalone assessment "
+                "candidate was created for those source rows.",
+                level="success",
+            )
 
         if blueprint_cells is None and atoms:
             # Q18 (owner ruling b, 2026-08-21) — one recorded per-chapter
@@ -2748,6 +2758,10 @@ def run_release_for_job(
         # way as the two dispositions above.
         "compound_parents_represented": compound_parents_represented,
     }
+    if source_context_dispositions:
+        # An auditable zero-loss disposition: the source row survives in each
+        # named child's shared context but is not itself a question obligation.
+        payload["source_context_dispositions"] = source_context_dispositions
     if staged_lane == build_concepts_release.LANE_PRE:
         # Which lane this Master belongs to, stated rather than inferred —
         # and stated only by the lane that needs to state it, so the

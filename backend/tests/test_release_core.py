@@ -673,8 +673,10 @@ def test_one_build_concepts_run_produces_all_four_outputs(db, monkeypatch):
     finally:
         progress._sink.reset(sink_token)
 
-    assert [name for name, _job, _mode in seen] == ["pre", "post"], (
-        "both Master lanes are built, in the owner's numbering"
+    started_lanes = [name for name, _job, _mode in seen]
+    assert len(started_lanes) == 2 and set(started_lanes) == {"pre", "post"}, (
+        "both Master lanes are built exactly once; their concurrent worker "
+        "start order is intentionally not a contract"
     )
     assert all(job_id == job.id for _name, job_id, _mode in seen)
     assert not any(mode for _name, _job, mode in seen), (
@@ -740,6 +742,84 @@ def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
     assert sessions[release.LANE_PRE] is not db
     assert sessions[release.LANE_POST] is not db
     assert sessions[release.LANE_PRE] is not sessions[release.LANE_POST]
+
+
+def test_nonterminal_concept_checkpoint_skips_all_master_spend(
+    db, monkeypatch,
+):
+    """Job 81's 81% release is evidence, not Master-authoring authority."""
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+    inventory = copy.deepcopy(job.question_inventory)
+
+    post = inventory[release.release_key_for_lane(release.LANE_POST)]
+    post["checkpoint_stage"] = "pre_type_assignment"
+    post.setdefault("issues", []).append({
+        "phase": "generation",
+        "severity": "error",
+        "message": "provider rejected the JSON-mode request",
+    })
+    pre = inventory[release.release_key_for_lane(release.LANE_PRE)]
+    pre.setdefault("snapshot_defects", []).append(
+        "terminal_generation_incomplete: Post stopped at "
+        "pre_type_assignment"
+    )
+    job.question_inventory = inventory
+    flag_modified(job, "question_inventory")
+    db.commit()
+
+    called: list[str] = []
+
+    def should_not_build(*_args, **_kwargs):
+        called.append("provider")
+        raise AssertionError("a non-terminal release reached Master generation")
+
+    monkeypatch.setattr(release_contract, "rebuild_lane_master", should_not_build)
+    events: list[dict] = []
+    sink_token = progress._sink.set(events.append)
+    try:
+        built = release_contract._build_master_siblings(
+            db, job.id, chapter.id, owner_sub=OWNER,
+        )
+    finally:
+        progress._sink.reset(sink_token)
+
+    assert built == {release.LANE_PRE: None, release.LANE_POST: None}
+    assert called == []
+    assert not any(
+        event.get("label") == "Building Master files (Outputs 02/04)"
+        for event in events
+    )
+
+
+def test_explicit_master_rebuild_rejects_nonterminal_concept_pre_spend(
+    db, monkeypatch,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+    inventory = copy.deepcopy(job.question_inventory)
+    post = inventory[release.release_key_for_lane(release.LANE_POST)]
+    post["checkpoint_stage"] = "pre_type_assignment"
+    job.question_inventory = inventory
+    flag_modified(job, "question_inventory")
+    db.commit()
+
+    called: list[str] = []
+
+    def should_not_run(*_args, **_kwargs):
+        called.append("provider")
+        raise AssertionError("provider call escaped terminality gate")
+
+    monkeypatch.setattr(run, "run_release_for_job", should_not_run)
+    with pytest.raises(run.ReleaseRunError, match="Resume Concept generation"):
+        release_contract.rebuild_lane_master(
+            db,
+            job.id,
+            release.LANE_POST,
+            owner_sub=OWNER,
+        )
+    assert called == []
 
 
 def _stub_release(db, chapter, lane):
@@ -835,8 +915,10 @@ def test_an_assessment_lane_failure_does_not_cost_the_concept_outputs(
     lost — a mid-run halt after the model budget is spent, which
     CLAUDE.md and Q13 forbid.
 
-    Six assertions, over all four exits and every exception type this call
-    site can actually see.
+    Completed Concept exits still record every Master failure. A generation
+    failure exit is different: its non-terminal Concept payload must skip the
+    Master runner before the injected failure (or any provider spend) can
+    occur. Both paths preserve the downloadable Concept evidence.
     """
 
     chapter = _chapter_with_concepts(db)
@@ -878,11 +960,17 @@ def test_an_assessment_lane_failure_does_not_cost_the_concept_outputs(
         assert payload is not None, lane
         assert release.release_state(payload) == control_states[lane], lane
 
-    # (iv) each lane's failure is NAMED on that lane's concept release.
+    nonterminal = exit_name.startswith("raised")
+
+    # (iv) completed lanes name Master failures. Non-terminal lanes never
+    # enter Master generation, so they must not manufacture a second issue.
     expected = type(make_error()).__name__
     for lane in release.RELEASE_LANES:
         issue = release.assessment_lane_issue(
             release.release_payload(job, lane=lane))
+        if nonterminal:
+            assert issue is None, lane
+            continue
         assert issue is not None, lane
         assert issue["code"] == release.ASSESSMENT_LANE_UNAVAILABLE
         assert issue["details"]["lane"] == lane
@@ -898,7 +986,15 @@ def test_an_assessment_lane_failure_does_not_cost_the_concept_outputs(
             ("release_master", release.LANE_POST),
         ):
             assert by_kind[kind]["disabled"] is True, (name, kind)
-            assert expected in by_kind[kind]["disabled_reason"], (name, kind)
+            if nonterminal:
+                disabled_reason = by_kind[kind]["disabled_reason"]
+                assert "not" in disabled_reason and "built" in disabled_reason, (
+                    name, kind, disabled_reason,
+                )
+            else:
+                assert expected in by_kind[kind]["disabled_reason"], (
+                    name, kind,
+                )
         for kind in ("pre_release_bulk_import", "release_bulk_import"):
             assert not by_kind[kind].get("disabled"), (name, kind)
 

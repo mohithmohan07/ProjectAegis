@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping
 from .. import models
 from . import build_concepts, uploads
 from . import build_concepts_release as release
+from . import build_concepts_terminal_release_contract as terminal_release
 from . import progress
 from . import build_concepts_release_files as release_files
 from . import release_refiner
@@ -310,19 +311,21 @@ def _release_after_result(
     return staged
 
 
-def _lane_has_staged_concept_release(
+def _lane_master_eligibility(
     db,
     job_id: int,
     lane: str,
     *,
     owner_sub: str | None = None,
-) -> bool:
-    """Is there a staged CONCEPT release in this lane's slot to build from?
+) -> tuple[bool, str]:
+    """Can this lane's staged Concept release safely author a Master file?
 
-    A mechanical precondition, not a judgment about content: the
-    assessment lane reads the staged concept payload for ITS lane, and a
-    lane whose slot is empty raises ``ReleaseRunError`` before the runner
-    does anything at all.
+    The assessment lane reads the staged Concept payload for ITS lane. An
+    empty slot cannot be built. Neither can a non-terminal checkpoint
+    release: the model-heavy Master pipeline cannot repair its missing
+    generation authority; it can only spend against an output whose database
+    upload is already blocked. Job 81 demonstrated that failure mode after
+    its 81% checkpoint.
 
     Asking first matters because the failure is otherwise unrecordable.
     ``record_assessment_lane_unavailable`` writes onto the lane's staged
@@ -342,9 +345,35 @@ def _lane_has_staged_concept_release(
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=owner_sub, module="build_concepts")
-        return release.release_payload(job, lane=lane) is not None
+        # Pre is a sibling projection of the same Concept run and has no
+        # independent generation lifecycle. A non-terminal Post authority
+        # therefore blocks both Master lanes even if an older/partial Pre slot
+        # happens to look complete in isolation.
+        post_payload = release.release_payload(job, lane=release.LANE_POST)
+        if (
+            post_payload is not None
+            and not terminal_release.payload_terminal_generation_complete(
+                post_payload
+            )
+        ):
+            return False, (
+                "the Concept run comes from a non-terminal generation "
+                "checkpoint"
+            )
+        payload = release.release_payload(job, lane=lane)
+        if payload is None:
+            return False, "no staged Concept release"
+        if not terminal_release.payload_terminal_generation_complete(payload):
+            return False, (
+                "the staged Concept release comes from a non-terminal "
+                "generation checkpoint"
+            )
+        return True, ""
     except Exception:
-        return True
+        # An unreadable answer ATTEMPTS.  A transient read failure must not
+        # silently turn a promised healthy Master output into a skip; the
+        # runner's normal failure ledger will record the concrete problem.
+        return True, ""
 
 
 def _record_master_failure(
@@ -405,6 +434,19 @@ def rebuild_lane_master(
         else assessment_release_run.run_release_for_job
     )
 
+    def _require_terminal_concept_release() -> None:
+        eligible, reason = _lane_master_eligibility(
+            db,
+            job_id,
+            lane,
+            owner_sub=owner_sub,
+        )
+        if not eligible:
+            raise assessment_release_run.ReleaseRunError(
+                f"The {lane} Master file cannot be built: {reason}. "
+                "Resume Concept generation first."
+            )
+
     def _run_and_record():
         try:
             # A lane reserves capacity before the runner can create its
@@ -453,6 +495,7 @@ def rebuild_lane_master(
         # Automatic Pre/Post siblings are already inside the original Build
         # Concepts operation lock. Re-acquiring its non-reentrant lock from
         # their worker threads would reject the run that owns it.
+        _require_terminal_concept_release()
         return _run_and_record()
 
     # Explicit rebuilds are independent HTTP mutations. Verify ownership
@@ -465,6 +508,7 @@ def rebuild_lane_master(
         module="build_concepts",
     )
     with uploads.exclusive_job_operation(job_id):
+        _require_terminal_concept_release()
         return _run_and_record()
 
 
@@ -525,9 +569,10 @@ def _build_master_siblings(
     built: dict[str, dict[str, Any] | None] = {}
     lanes: list[str] = []
     for lane in (release.LANE_PRE, release.LANE_POST):
-        if not _lane_has_staged_concept_release(
+        eligible, skip_reason = _lane_master_eligibility(
             db, job_id, lane, owner_sub=owner_sub,
-        ):
+        )
+        if not eligible:
             # No slot, so nothing to build a Master from and nowhere
             # to record a failure onto. Skipping is the honest
             # answer: the alternative is a doomed run whose reason is
@@ -536,10 +581,10 @@ def _build_master_siblings(
             # so nothing about it is silent — and neither is this skip:
             # the journal says which lane was skipped and why.
             progress.log(
-                f"The {lane} lane has no staged concept release, so its "
-                "Master File (Output "
-                f"{'02' if lane == release.LANE_PRE else '04'}) is not "
-                "built on this run.",
+                f"The {lane} lane Master File is not built because "
+                f"{skip_reason}. Output "
+                f"{'02' if lane == release.LANE_PRE else '04'} remains "
+                "unavailable on this run without provider spend.",
                 level="warning",
             )
             built[lane] = None
@@ -695,7 +740,7 @@ def _run_generation_release(
     *args,
     **kwargs,
 ) -> dict[str, Any]:
-    """Stage the two concept lanes, then build the two Master lanes.
+    """Stage the two concept lanes, then build each eligible Master lane.
 
     Three lines, and every one of them is load-bearing:
 
@@ -704,16 +749,14 @@ def _run_generation_release(
       raised/checkpoint — and all four ``stage_release`` /
       ``_stage_pre_sibling`` pairs stay exactly where they were.
     * ``_build_master_siblings`` is called ONCE, on the single tail all
-      four exits converge on. Not four times beside ``_stage_pre_sibling``,
-      for three checkable reasons: (a) all four exits reach it, INCLUDING
-      the two failure exits, which are exactly where "one run, four
-      outputs" would otherwise silently degrade to two on the runs that
-      most need the evidence — ``_stage_pre_sibling``'s own docstring
-      makes this argument for the Pre lane and it applies unchanged one
-      lane further; (b) it is OUTSIDE the ``_RELEASE_MODE`` /
+      four exits converge on. Its eligibility boundary refuses non-terminal
+      Concept releases before any Master provider spend, while completed
+      Pre/Post lanes retain their parallel build. Keeping the call here,
+      rather than four times beside ``_stage_pre_sibling``, also means it is
+      OUTSIDE the ``_RELEASE_MODE`` /
       ``_RELEASE_CAPTURE`` context vars, whose ``finally`` has already run
       by the time control reaches here, so the deposit interceptor
-      ``install()`` wires cannot see the assessment lane; (c) one site, so
+      ``install()`` wires cannot see the assessment lane. One site means
       a fifth exit added later inherits it rather than being forgotten.
     * the staged Concept result remains the authority, with one additive
       ``master_outputs`` operation summary so the streamed result cannot say

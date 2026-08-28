@@ -7,13 +7,16 @@ and OR relationships, options and source answers, shared context, ordered
 images, and Type/Case route evidence.
 
 Everything here is deterministic mechanics: transformation, identity, and
-accounting. No field is classified, shortened, or dropped by shape — a QID
-that cannot be carried forward stops the run rather than disappearing
-(zero-loss invariant, spec §14).
+accounting. A narrowly shaped governing response instruction may be retained
+as shared context for its immediately following option-bearing questions
+instead of becoming a question by itself. Its QID receives an explicit
+context disposition, so no source occurrence disappears from the zero-loss
+accounting (spec §14).
 """
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any, Mapping
 
 from . import assessment_release as rel
@@ -41,6 +44,117 @@ _POSITION_FIELDS = frozenset({
     "_phase32_segment_order",
     "_phase32_source_order",
 })
+
+
+_GOVERNING_MCQ_INSTRUCTION_RE = re.compile(
+    r"^read the following questions? and "
+    r"(?:tick|mark|select|choose)(?: [☑✓✔])? the correct "
+    r"(?:answer|option)s?[.!]?$",
+    re.IGNORECASE,
+)
+_OPTION_LINE_RE = re.compile(
+    r"^[ \t]*(?:\(([a-h])\)|([a-h])[.)])[ \t]+\S",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _governing_mcq_instruction(item: Mapping) -> str:
+    """Return the exact directive text only for the bounded known shape.
+
+    This deliberately does not try to decide whether arbitrary imperative
+    prose is a task. The lexical form must be the standalone ``read the
+    following ... correct answer`` instruction used to govern an option
+    block; the adjacent-child requirement is enforced separately below.
+    """
+
+    raw = str(item.get("raw_task") or "").strip()
+    normalized = re.sub(r"\s+", " ", raw)
+    return raw if _GOVERNING_MCQ_INSTRUCTION_RE.fullmatch(normalized) else ""
+
+
+def _has_objective_option_block(item: Mapping) -> bool:
+    """Whether the row mechanically carries at least two labelled options."""
+
+    options = item.get("options")
+    if isinstance(options, list):
+        present = [value for value in options if value not in (None, "", {})]
+        if len(present) >= 2:
+            return True
+    text = str(item.get("raw_task") or item.get("normalized_task") or "")
+    labels = {
+        str(match.group(1) or match.group(2) or "").casefold()
+        for match in _OPTION_LINE_RE.finditer(text)
+    }
+    return len(labels) >= 2
+
+
+def _assessment_items(
+    items: list[Mapping],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition question obligations from shared response instructions.
+
+    A directive is context-only only when two or more immediately following
+    inventory rows each carry a mechanically visible option block. This
+    adjacency/cardinality guard prevents a free-standing learner instruction
+    or ordinary imperative prose from being reclassified by wording alone.
+    """
+
+    context_for_index: dict[int, list[str]] = {}
+    context_only_indices: set[int] = set()
+    dispositions: list[dict[str, Any]] = []
+
+    for index, item in enumerate(items):
+        instruction = _governing_mcq_instruction(item)
+        if not instruction:
+            continue
+        instruction_qid = str(item.get("qid") or "").strip()
+        if not instruction_qid:
+            # Leave it in the assessment set so the ordinary identity gate
+            # below names the missing QID instead of laundering it through a
+            # context-only disposition.
+            continue
+        child_indices: list[int] = []
+        cursor = index + 1
+        while cursor < len(items) and _has_objective_option_block(items[cursor]):
+            child_indices.append(cursor)
+            cursor += 1
+        if len(child_indices) < 2:
+            continue
+
+        child_qids = [
+            str(items[child_index].get("qid") or "").strip()
+            for child_index in child_indices
+        ]
+        if any(not qid for qid in child_qids):
+            # The ordinary identity gate below names the malformed child. Do
+            # not let this normalization hide it behind a context disposition.
+            continue
+        context_only_indices.add(index)
+        for child_index in child_indices:
+            context_for_index.setdefault(child_index, []).append(instruction)
+        dispositions.append({
+            "source_qid": instruction_qid,
+            "role": "shared_response_instruction",
+            "raw_text": instruction,
+            "attached_source_qids": child_qids,
+        })
+
+    assessment_items: list[dict[str, Any]] = []
+    for index, item in enumerate(items):
+        if index in context_only_indices:
+            continue
+        row = copy.deepcopy(dict(item))
+        additions = context_for_index.get(index) or []
+        if additions:
+            existing = str(row.get("shared_context") or "").strip()
+            parts = [existing] if existing else []
+            for instruction in additions:
+                if instruction not in parts:
+                    parts.append(instruction)
+            row["shared_context"] = "\n\n".join(parts)
+            row["requires_context"] = True
+        assessment_items.append(row)
+    return assessment_items, dispositions
 
 
 def _semantic_evidence(value: Any) -> Any:
@@ -77,6 +191,9 @@ def _subpart_of(qid: str, parent_qid: str) -> str:
 def _assets_of(item: Mapping) -> list[dict]:
     """Ordered source assets. Order is reading order of the item's images."""
     assets: list[dict] = []
+    captions = item.get("_image_captions")
+    if not isinstance(captions, Mapping):
+        captions = {}
     for order, url in enumerate(item.get("image_urls") or [], start=1):
         url = str(url or "").strip()
         if not url:
@@ -88,12 +205,19 @@ def _assets_of(item: Mapping) -> list[dict]:
             ):
                 meta = candidate
                 break
+        explicit_alt = str(meta.get("alt") or "")
+        caption_alt = str(captions.get(url) or "")
         assets.append({
             "source_page": meta.get("source_page"),
             "bbox": meta.get("bbox"),
             "sha256": str(meta.get("sha256") or ""),
             "url": url,
-            "alt": str(meta.get("alt") or ""),
+            # ``_image_captions[url]`` is canonical source evidence, so it is
+            # a safe fallback when Phase 2 did not also emit ``image_assets``.
+            # A usable explicit asset alt remains authoritative.
+            "alt": (
+                explicit_alt if explicit_alt.strip() else caption_alt
+            ),
             "order": order,
         })
     return assets
@@ -191,9 +315,11 @@ def build_source_atoms(
 ) -> dict:
     """The complete lossless atom set for one job's inventory.
 
-    Returns ``{"atoms": [...], "ledger": {qid: index}, "sha256": ...}``.
-    Every inventory QID maps to exactly one atom and back; any break stops
-    the run with the exact identities named.
+    Returns atoms, their bidirectional QID ledger, the atom hash, and any
+    source rows intentionally retained as shared-context dispositions.
+    Every assessment-obligation QID maps to exactly one atom and back; every
+    context-only QID is named in ``context_only``. Any other break stops the
+    run with the exact identities named.
     """
     inventory = question_inventory or {}
     raw_items = inventory.get("items") or []
@@ -206,11 +332,12 @@ def build_source_atoms(
                 f"source inventory item {position} is not an object"
             )
         items.append(item)
+    assessment_items, context_only = _assessment_items(items)
     mined_types = inventory.get("mined_types")
     type_case_rows = inventory.get("type_case_rows")
     atoms: list[dict] = []
     ledger: dict[str, int] = {}
-    for item in items:
+    for item in assessment_items:
         qid = str(item.get("qid") or "").strip()
         if not qid:
             raise SourceInventoryError(
@@ -233,7 +360,7 @@ def build_source_atoms(
     report = rel.zero_loss_report(
         obligations=[str(item.get("qid") or "") for item in items],
         accepted=[atom["source_qid"] for atom in atoms],
-        flagged=[],
+        flagged=[row["source_qid"] for row in context_only],
     )
     if not report["holds"]:
         raise SourceInventoryError(
@@ -244,6 +371,8 @@ def build_source_atoms(
         "atoms": atoms,
         "ledger": ledger,
         "sha256": rel.sha256_json(atoms),
+        "context_only": context_only,
+        "zero_loss": report,
     }
 
 

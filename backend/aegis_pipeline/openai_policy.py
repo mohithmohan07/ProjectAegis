@@ -68,6 +68,24 @@ OpenAIPurpose = Literal[
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 
 
+def ensure_json_mode_prompt(system: str, user: str) -> tuple[str, str]:
+    """Satisfy the provider precondition for ``json_object`` requests.
+
+    OpenAI rejects JSON mode before model execution unless the messages say
+    ``json`` in some form.  Callers and editable prompt overrides still own
+    their schemas and semantics; this helper adds only the missing transport
+    instruction and never rewrites either payload.
+    """
+    system_text = str(system or "")
+    user_text = str(user or "")
+    if "json" not in f"{system_text}\n{user_text}".casefold():
+        system_text = (
+            system_text.rstrip()
+            + "\n\nReturn exactly one valid json object."
+        )
+    return system_text, user_text
+
+
 # Q22 makes ``xhigh`` the uniform preferred effort for every registered Luna
 # purpose. Purpose labels remain mandatory because they are the routing and
 # audit contract even though they no longer select different effort tiers.

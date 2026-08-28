@@ -19,6 +19,12 @@ ENGLISH_META = {
     "subject": "English",
 }
 
+SCIENCE_META = {
+    "board": "MSBSHSE",
+    "grade": "06",
+    "subject": "Science",
+}
+
 
 def test_reference_profile_remains_pinned_and_msbshse_run_widens_it() -> None:
     assert profile.sheet_kinds() == ("objective", "descriptive")
@@ -56,6 +62,23 @@ def test_generic_format_fallback_is_the_existing_cms_vocabulary() -> None:
         question_category="Long Answer",
         difficulty="Moderate",
     ) is None
+
+
+def test_msbshse_grade_6_science_keeps_the_generic_run_profile() -> None:
+    run_profile = profile.resolve_for_metadata(None, SCIENCE_META)
+
+    assert profile.sheet_kinds(run_profile) == (
+        "objective", "descriptive",
+    )
+    assert profile.forced_blank_fields(run_profile) == (
+        "chapter_duration", "question_disclaimer",
+    )
+    assert profile.master_workbook_contract(
+        run_profile, learning_phase="Post",
+    )["contract_id"] == "reference-master-1"
+    assert profile.assessment_format_policy(run_profile)["policy_id"] == (
+        "generic-cms"
+    )
 
 
 def test_msbshse_grade_6_mathematics_policy_is_exact_and_narrow() -> None:
@@ -427,14 +450,18 @@ def test_board_grade_aliases_select_matching_run_and_format_overrides(
         ),
     ],
 )
-def test_board_grade_partial_metadata_widens_only_the_run_profile(
+def test_board_grade_partial_metadata_keeps_the_pinned_run_profile(
     metadata,
 ) -> None:
     run_profile = profile.resolve_for_metadata(None, metadata)
 
-    assert profile.sheet_kinds(run_profile) == (
-        "objective", "descriptive", "subjective",
+    assert profile.sheet_kinds(run_profile) == ("objective", "descriptive")
+    assert profile.forced_blank_fields(run_profile) == (
+        "chapter_duration", "question_disclaimer",
     )
+    assert profile.master_workbook_contract(
+        run_profile, learning_phase="Post",
+    )["contract_id"] == "reference-master-1"
     assert profile.assessment_format_policy(
         run_profile, metadata,
     )["policy_id"] == "generic-cms"

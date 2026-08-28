@@ -233,8 +233,8 @@ def test_concurrent_batch_admission_is_atomic_and_second_launches_no_worker(
     )
     monkeypatch.setattr(
         release_contract,
-        "_lane_has_staged_concept_release",
-        lambda *_args, **_kwargs: True,
+        "_lane_master_eligibility",
+        lambda *_args, **_kwargs: (True, ""),
     )
     recorded: list[tuple[int, str]] = []
     monkeypatch.setattr(

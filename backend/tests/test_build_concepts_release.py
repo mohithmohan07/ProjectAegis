@@ -15,6 +15,7 @@ from app.services import build_concepts_release_contract as release_contract
 from app.services import build_concepts_release_files as release_files
 from app.services import build_concepts_release_manifest
 from app.services import build_concepts_release_publication as publication
+from app.services import uploads
 
 
 def _chapter(db):
@@ -1269,6 +1270,32 @@ def test_release_routes_and_manual_decision_endpoint_are_unattended(client, db):
     )
     assert manual.status_code == 409
     assert "unattended" in manual.json()["detail"].lower()
+
+
+def test_diagnostics_route_refuses_to_read_during_a_job_operation(
+    client, db, monkeypatch,
+):
+    """A rebuild cannot be interleaved with the multi-file ZIP snapshot."""
+
+    job, _chapter = _job(db)
+    assembled: list[bool] = []
+
+    def unexpected_assembly(*_args, **_kwargs):
+        assembled.append(True)
+        raise AssertionError("diagnostics were assembled while the job ran")
+
+    monkeypatch.setattr(
+        release_files, "build_diagnostics_zip", unexpected_assembly,
+    )
+
+    with uploads.exclusive_job_operation(job.id):
+        response = client.get(
+            f"/build-concepts/uploads/{job.id}/diagnostics.zip"
+        )
+
+    assert response.status_code == 409
+    assert "already running" in response.json()["detail"]
+    assert assembled == []
 
 
 def test_explicit_upload_publishes_flagged_rows_and_is_idempotent(db, monkeypatch):

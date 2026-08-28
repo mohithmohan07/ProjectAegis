@@ -86,6 +86,18 @@ def test_model_override_keeps_purpose_policy(monkeypatch):
         openai_policy.reasoning_effort_for("unregistered")  # type: ignore[arg-type]
 
 
+def test_json_mode_prompt_adds_only_the_missing_transport_instruction():
+    system, user = openai_policy.ensure_json_mode_prompt("system", "payload")
+    assert system.endswith("Return exactly one valid json object.")
+    assert user == "payload"
+
+    existing_system, existing_user = openai_policy.ensure_json_mode_prompt(
+        "Return ONLY strict JSON.", "payload"
+    )
+    assert existing_system == "Return ONLY strict JSON."
+    assert existing_user == "payload"
+
+
 def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     import openai
 
@@ -106,6 +118,7 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     assert call["model"] == "gpt-5.6-luna"
     assert call["reasoning_effort"] == "xhigh"
     assert call["response_format"] == {"type": "json_object"}
+    assert "json" in str(call["messages"])
     assert call["max_completion_tokens"] == 321
     generation._openai_gate = None
 
@@ -162,10 +175,9 @@ def test_generation_uses_explicit_only_cache_for_gpt56_prefix(monkeypatch):
     )
     assert call["prompt_cache_options"] == {"mode": "explicit"}
     stable_block, variable_block = call["messages"][1]["content"]
-    assert call["messages"][0] == {
-        "role": "system",
-        "content": "stable system",
-    }
+    assert call["messages"][0]["role"] == "system"
+    assert call["messages"][0]["content"].startswith("stable system")
+    assert "json" in call["messages"][0]["content"]
     assert stable_block["prompt_cache_breakpoint"] == {"mode": "explicit"}
     assert stable_block["text"] + variable_block["text"] == (
         '{"stage":"assessment.materialize","candidate":"CAND-2"}'
@@ -431,6 +443,7 @@ def test_workbook_call_uses_same_policy_and_preserves_json_mode():
     assert call["model"] == "gpt-5.6-luna"
     assert call["reasoning_effort"] == "xhigh"
     assert call["response_format"] == {"type": "json_object"}
+    assert "json" in str(call["messages"]).casefold()
     assert call["max_completion_tokens"] == 654
 
 
