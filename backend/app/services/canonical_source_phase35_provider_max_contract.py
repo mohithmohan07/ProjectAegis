@@ -33,7 +33,7 @@ from . import canonical_source_phase34_structured_output_contract as phase34
 from . import generation
 from . import progress
 
-_CONTRACT_VERSION = 5
+_CONTRACT_VERSION = 6
 
 
 def _active() -> bool:
@@ -112,9 +112,15 @@ def install() -> None:
         single_attempt: bool = False,
         prompt_cache_prefix: str = "",
         prompt_cache_key: str = "",
+        model: str | None = None,
+        image_urls: list[str] | None = None,
     ) -> dict:
         _log_policy_once()
-        effective = _bounded_completion(max_tokens) if _active() else max_tokens
+        effective = (
+            _bounded_completion(max_tokens, model=model)
+            if _active()
+            else max_tokens
+        )
         kwargs = {
             "max_tokens": effective,
             "retries": retries,
@@ -131,6 +137,16 @@ def install() -> None:
             # two-string shape everywhere else.
             kwargs["prompt_cache_prefix"] = prompt_cache_prefix
             kwargs["prompt_cache_key"] = prompt_cache_key
+        if model is not None:
+            # Model selection belongs to the transport boundary.  The wrapper
+            # must not reject the Fixer's dedicated model or compute its
+            # provider ceiling against the deployment's default model.
+            kwargs["model"] = model
+        if image_urls is not None:
+            # Place author/critic/Fixer calls carry the exact pooled source
+            # images.  A stale wrapper signature previously rejected this
+            # keyword before the provider call and crashed the live run.
+            kwargs["image_urls"] = image_urls
         return generation._PHASE35_ORIGINAL_OPENAI_JSON(
             system,
             user,

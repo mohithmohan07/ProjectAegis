@@ -85,7 +85,7 @@ def test_live_json_calls_receive_provider_max_allowance(monkeypatch):
     assert all(row["purpose"] == "concept_validation" for row in captured)
 
 
-def test_v5_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
+def test_v6_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
     _activate(monkeypatch)
     captured: dict = {}
 
@@ -103,7 +103,7 @@ def test_v5_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
         prompt_cache_key="aegis:marking-author-v5:0123456789abcdef:2",
     )
 
-    assert phase35._CONTRACT_VERSION == 5
+    assert phase35._CONTRACT_VERSION == 6
     assert result == {"ok": True}
     assert captured["prompt_cache_prefix"] == (
         '{"stage":"assessment.marking",'
@@ -111,6 +111,37 @@ def test_v5_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
     assert captured["prompt_cache_key"] == (
         "aegis:marking-author-v5:0123456789abcdef:2"
     )
+
+
+def test_v6_wrapper_forwards_model_and_source_images(monkeypatch):
+    """The live Place/Fixer transport cannot be narrowed by the wrapper."""
+
+    _activate(monkeypatch)
+    captured: dict = {}
+
+    def original(system, user, **kwargs):
+        captured.update({"system": system, "user": user, **kwargs})
+        return {"ok": True}
+
+    monkeypatch.setattr(generation, "_PHASE35_ORIGINAL_OPENAI_JSON", original)
+    images = [
+        "https://assets.example/source-1.png",
+        "https://assets.example/source-2.png",
+    ]
+
+    result = generation._openai_json(
+        "system",
+        "user",
+        max_tokens=321,
+        purpose="concept_mapping",
+        model="gpt-5.6-terra",
+        image_urls=images,
+    )
+
+    assert result == {"ok": True}
+    assert captured["max_tokens"] == 128_000
+    assert captured["model"] == "gpt-5.6-terra"
+    assert captured["image_urls"] == images
 
 
 def test_live_strict_schema_budget_and_retry_cap_use_provider_ceiling(monkeypatch):

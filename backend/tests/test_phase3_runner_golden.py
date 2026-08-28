@@ -583,6 +583,41 @@ def test_settled_rows_snapshot_lands_beside_the_store(
     assert len(capture["prerequisites"]) == 16
 
 
+def test_a_place_failure_stops_before_analyse_or_polish(
+    golden_envelope, replay_providers, tmp_path, monkeypatch,
+):
+    """A failed earlier lane must not leave later provider spend running."""
+
+    calls: list[str] = []
+
+    def fail_place(*_args, **_kwargs):
+        calls.append("place")
+        raise TypeError(
+            "_openai_json() got an unexpected keyword argument 'image_urls'"
+        )
+
+    def should_not_analyse(*_args, **_kwargs):
+        calls.append("analyse")
+        raise AssertionError("Analyse started after Place had already failed")
+
+    def should_not_polish(*_args, **_kwargs):
+        calls.append("polish")
+        raise AssertionError("Polish started after Place had already failed")
+
+    monkeypatch.setattr(runner.place_mod, "place", fail_place)
+    monkeypatch.setattr(runner.analyse_mod, "analyse", should_not_analyse)
+    monkeypatch.setattr(runner.polish_mod, "polish", should_not_polish)
+
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
+        runner.run(
+            golden_envelope,
+            store_dir=tmp_path / "phase3-decisions",
+            providers=replay_providers,
+        )
+
+    assert calls == ["place"]
+
+
 def test_pre_snapshot_replace_is_atomic_and_reports_failure(
     tmp_path, monkeypatch,
 ):

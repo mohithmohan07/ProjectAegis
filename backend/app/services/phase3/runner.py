@@ -244,14 +244,15 @@ def run(
     store_dir: str | Path | None = None,
     providers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Settle → Host → (Place ∥ Analyse ∥ Polish) → Assemble.
+    """Settle → Host → Place → Analyse → Polish → Assemble.
 
     Place, Analyse, and Polish read the same frozen post-Host input and
-    write disjoint artifacts, so they run as parallel lanes (sequential
-    when ``AEGIS_PHASE3_DECISION_WORKERS=1``); the stage-boundary
-    prerequisite captures for Settle and Host ride on a side thread over
-    deep-copied boundary evidence. Every decision payload is identical to
-    the sequential order's, so the decision store and the output are too.
+    write disjoint artifacts, but they run one at a time.  This makes a
+    failing lane stop before either later lane can spend provider calls and
+    gives the run one exact failing stage.  Parallelism remains bounded
+    inside each lane's independent batches.  The stage-boundary prerequisite
+    captures for Settle and Host may ride alongside their adjacent completed
+    stage, but both are joined before Place begins.
 
     ``providers`` is test-only injection ({"topology", "grounding",
     "analysis", "host", "place", "analyse", "analyse_allot", "prelearn",
@@ -374,20 +375,21 @@ def run(
         host_capture = _schedule_capture(rider_pool, "host")
         # Phase 2.2 places Container-02 chapter-wide, Phase 2.4 + 4.3 (Q1)
         # builds the misconception/error-analysis inventory, and the
-        # terminal quality pass converges content — three passes that all
-        # read the SAME frozen input (the settled rows plus host-created
-        # concepts) and write disjoint artifacts that only meet in
-        # deterministic Assemble. So they run as parallel lanes, each on
-        # its own deep copy of the rows; the placements ride into
-        # Assemble, the inventory allots to concept ids, and Polish still
-        # converges content BEFORE Assemble seals anything. An empty
-        # Container-02 pool skips its pass without a decision, exactly as
-        # in the sequential order.
+        # terminal quality pass converges content.  They all read the SAME
+        # frozen input (the settled rows plus host-created concepts) and write
+        # disjoint artifacts, but execute in canonical order so an earlier
+        # failure cannot leave later lanes spending in the background.
         stage_rows = [*settled, *(hosts.get("new_concepts") or [])]
+        settle_capture_result = settle_capture.result()
+        host_capture_result = host_capture.result()
         progress.step(
-            "Phase 3 — Place ∥ Analyse ∥ Polish: placement, error "
+            "Phase 3 — Place → Analyse → Polish: placement, error "
             "analysis, and content convergence",
             value=0.88,
+        )
+        progress.log(
+            "Phase 3 stage sequence: Place, Analyse, and Polish run one "
+            "at a time; each lane must finish before the next starts."
         )
 
         def _place_lane():
@@ -422,23 +424,18 @@ def run(
                 fixer=injected.get("fixer"),
             )
 
-        lane_results = kernel.parallel_map_in_order(
-            [_place_lane, _analyse_lane, _polish_lane],
-            lambda lane: lane(),
-            max_workers=min(3, workers),
-            labels=["Place", "Analyse", "Polish"],
-            announce="Phase 3 stage overlap",
-        )
-        placements, place_capture = lane_results[0]
-        analysis, analyse_capture = lane_results[1]
-        polished = lane_results[2]
+        with progress.label_scope("Place"):
+            placements, place_capture = _place_lane()
         _snapshot_place(placements, store_dir)
+        with progress.label_scope("Analyse"):
+            analysis, analyse_capture = _analyse_lane()
         _snapshot_analysis(analysis, store_dir)
-        # The merge consumes the captures in canonical stage order,
-        # whatever order the riders and lanes actually finished in.
+        with progress.label_scope("Polish"):
+            polished = _polish_lane()
+        # The merge consumes the captures in canonical stage order.
         captures = [
-            settle_capture.result(),
-            host_capture.result(),
+            settle_capture_result,
+            host_capture_result,
             place_capture,
             analyse_capture,
         ]
