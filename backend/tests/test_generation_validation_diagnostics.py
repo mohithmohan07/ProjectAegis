@@ -1578,7 +1578,7 @@ def test_legacy_81_percent_checkpoint_and_v7_without_owner_ledger_are_rejected()
         records[0],
         basis="type_host_review",
     )
-    current_v7_without_owner_ledger = g._make_concept_checkpoint(
+    current_v8_without_owner_ledger = g._make_concept_checkpoint(
         "post_type_assignment",
         records=records,
         question_task_inventory=inventory,
@@ -1586,11 +1586,11 @@ def test_legacy_81_percent_checkpoint_and_v7_without_owner_ledger_are_rejected()
         method_row_snapshot=[],
         **{g.PHASE3_PRE_RELEASE_FIELD: _empty_pre_bundle()},
     )
-    history["checkpoints"].append(current_v7_without_owner_ledger)
+    history["checkpoints"].append(current_v8_without_owner_ledger)
 
-    assert current_v7_without_owner_ledger["stage_schema_version"] == 7
+    assert current_v8_without_owner_ledger["stage_schema_version"] == 8
     assert not g._compatible_concept_checkpoint_entry(
-        current_v7_without_owner_ledger
+        current_v8_without_owner_ledger
     )
     assert g._newest_compatible_concept_checkpoint(history) is None
 

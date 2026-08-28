@@ -156,25 +156,26 @@ Classification comes first and is independent of placement. A Type is defined
 by what it asks, not by where its questions happened to appear. Placement is a
 separate decision taken afterwards, against a Type that is already defined.
 
-### One Type spans topics; its Cases and Examples place individually
+### Cases are judged individually; one concept owns the Type
 
-A Type is a **chapter-level identity**. It is not owned by a topic and is never
-split to make its parts fit one. Placement happens *below* it: each Case, and
-each Example under that Case, is allotted to whatever concept and topic it
-belongs to, independently of its siblings.
+A Type is a **chapter-level identity** and is never split merely to make its
+parts fit. Each Case and QID is first judged against the concept it teaches;
+those verdicts are placement evidence. If sibling Cases identify different
+concepts, the Q14 owner verdict chooses one supported concept for the Type and
+moves every Case and QID there. One Type therefore renders under one concept.
 
 Worked example — a Type covering short notes on historical figures:
 
 |Type|Case|Example|Placed in|
 |-|-|-|-|
-|Short note on a historical figure|Napoleon|Write a short note on Napoleon|Topic 4|
-|Short note on a historical figure|Mussolini|Write a short note on Mussolini|Topic 5|
-|Short note on a historical figure|Hitler|Write a short note on Hitler|Topic 4|
+|Short note on a historical figure|Napoleon|Write a short note on Napoleon|Candidate Topic 4|
+|Short note on a historical figure|Mussolini|Write a short note on Mussolini|Candidate Topic 5|
+|Short note on a historical figure|Hitler|Write a short note on Hitler|Candidate Topic 4|
 
-One Type, three Cases, landing across two topics — and two of them landing in
-the *same* topic. All three keep the same reusable Type identity. Splitting
-this into a "Topic 4 Type" and a "Topic 5 Type" would destroy the reusability
-that made it a Type in the first place.
+One Type, three Case-level candidate verdicts across two topics. The owner pass
+chooses Topic 4 or Topic 5 from that evidence and places all three Cases there.
+Creating separate "Topic 4" and "Topic 5" Type identities is also forbidden:
+that would only hide the repeated Type behind different numbering.
 
 (The Type and Case wording above is deliberately rough; the structure is what
 this example fixes, not the phrasing.)
@@ -339,4 +340,3 @@ Two alternatives have been raised and not yet ruled on:
 evidence supports rather than deleting it, retiring only if that also fails.
 Preserves teaching content; preferred by external review.
 * Or Modify based on Evidence/ Type.
-

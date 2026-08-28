@@ -187,19 +187,43 @@ _UNTERMINATED_TABULAR_RE = re.compile(
     r"(?P<body>.*)\Z",
     re.IGNORECASE | re.DOTALL,
 )
-_ARRAY_ENV_RE = re.compile(
-    r"\\begin\s*\{\s*array\s*\}\s*"
-    r"(?:\[[^\]]*\]\s*)?\{[^}]*\}"
-    r"(?P<body>.*?)\\end\s*\{\s*array\s*\}",
-    re.IGNORECASE | re.DOTALL,
-)
-_UNTERMINATED_ARRAY_RE = re.compile(
-    r"\\begin\s*\{\s*array\s*\}\s*"
-    r"(?:\[[^\]]*\]\s*)?\{[^}]*\}(?P<body>.*)\Z",
-    re.IGNORECASE | re.DOTALL,
-)
 _UNSUPPORTED_TABLE_BEGIN_RE = re.compile(
-    r"\\begin\s*\{\s*(?:tabular|array)\s*\}", re.IGNORECASE,
+    r"\\begin\s*\{\s*tabular\s*\}", re.IGNORECASE,
+)
+_ARRAY_BEGIN_RE = re.compile(
+    r"\\begin\s*\{\s*array\s*\}", re.IGNORECASE,
+)
+_ARRAY_END_RE = re.compile(
+    r"\\end\s*\{\s*array\s*\}", re.IGNORECASE,
+)
+_CANONICAL_ARRAY_ENV_RE = re.compile(
+    r"\\begin\{array\}\{[^{}\r\n]+\}"
+    r"(?P<body>.*?)\\end\{array\}",
+    re.DOTALL,
+)
+_UNSUPPORTED_KATEX_COMMAND_RE = re.compile(
+    r"\\(?:mathrm|hspace|phantom|boxed)\b", re.IGNORECASE,
+)
+# TeX permits an optional vertical-space argument immediately after a row
+# break (for example ``\\[0.4cm]``).  That form is not in the CMS KaTeX
+# subset: authors must use an ordinary ``\\`` row break instead.
+_RAW_ROW_SPACING_RE = re.compile(
+    r"(?<!\\)\\\\\s*\[[^\]\r\n]*\]",
+)
+_LITERAL_NEWLINE_BEFORE_LIST_ITEM_RE = re.compile(
+    r"\\n(?=[ \t]*(?:\([A-Za-z]\)|[A-Za-z][.)]"
+    r"|\([ivxlcdmIVXLCDM]+\)|\d+[.)]|[-*•]))",
+)
+_LEGACY_ROMAN_ATOM_RE = re.compile(
+    r"\\mathrm\s*\{",
+)
+# Only a dimension-shaped optional row gap can be removed without risking
+# that a bracketed array cell (for example ``[1, 2]``) is mistaken for
+# presentation-only spacing.
+_LEGACY_SAFE_ROW_SPACING_RE = re.compile(
+    r"(?<!\\)\\\\\s*\[\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*"
+    r"(?:pt|pc|in|bp|cm|mm|dd|cc|sp|ex|em)\s*\]",
+    re.IGNORECASE,
 )
 _TABLE_ROW_RE = re.compile(r"(?<!\\)\\\\(?:\[[^\]]*\])?")
 _TABLE_COLUMN_RE = re.compile(r"(?<!\\)&")
@@ -213,9 +237,15 @@ _FOOTNOTE_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 _RAW_BLOCK_MATH_PATTERNS = (
-    re.compile(r"\$\$(?P<body>.+?)\$\$", re.DOTALL),
-    re.compile(r"\\\[(?P<body>.+?)\\\]", re.DOTALL),
-    re.compile(r"\\\((?P<body>.+?)\\\)", re.DOTALL),
+    re.compile(
+        r"(?<!\\)\$\$(?P<body>.+?)(?<!\\)\$\$", re.DOTALL,
+    ),
+    re.compile(
+        r"(?<!\\)\\\[(?P<body>.+?)(?<!\\)\\\]", re.DOTALL,
+    ),
+    re.compile(
+        r"(?<!\\)\\\((?P<body>.+?)(?<!\\)\\\)", re.DOTALL,
+    ),
 )
 _SINGLE_DOLLAR_MATH_RE = re.compile(
     r"(?<!\\)\$(?!\$)(?P<body>[^$\n]+?)(?<!\\)\$(?!\$)"
@@ -402,12 +432,13 @@ def legacy_export_answer_cell(
     """
 
     declared = str(answer_type or "").strip()
-    rendered = raw_answer_cell(declared, str(content or ""))
+    source = legacy_export_rich_text(str(content or ""))
+    rendered = raw_answer_cell(declared, source)
     issues = answer_cell_issues(declared, rendered)
     if not issues or declared.casefold() != "phrases":
         return declared, rendered
 
-    plain_markup = _legacy_markup_as_text(str(content or ""))
+    plain_markup = _legacy_markup_as_text(source)
     without_orphan_wrappers = _strip_unmatched_katex_tokens(plain_markup)
     if without_orphan_wrappers != plain_markup:
         phrase = raw_answer_cell("Phrases", without_orphan_wrappers)
@@ -420,16 +451,22 @@ def legacy_export_answer_cell(
     if math_issues.intersection(issues):
         equation_source = canonicalize_rich_text(plain_markup)
         equation = raw_answer_cell("Equation", equation_source)
-        if not answer_cell_issues("Equation", equation):
+        equation_issues = answer_cell_issues("Equation", equation)
+        if not equation_issues:
             return "Equation", equation
         # Historic formulae sometimes use multi-letter variable names such
         # as ``PT`` inside an otherwise valid KaTeX span.  The strict lexical
         # checker cannot distinguish those from loose prose.  Preserve the
         # entire authored value as an explicit TeX text atom rather than
         # guessing a variable split or letting the invalid legacy cell ship.
-        literal_equation = _tex_text(unwrap_katex(plain_markup).strip())
-        if not answer_cell_issues("Equation", literal_equation):
-            return "Equation", literal_equation
+        # This compatibility fallback is safe only for that one lexical
+        # defect.  Unsupported commands, delimiters, or malformed structures
+        # must remain visible defects; escaping those as literal text would
+        # silently change their mathematical meaning.
+        if set(equation_issues) == {"equation_plain_text"}:
+            literal_equation = _tex_text(unwrap_katex(plain_markup).strip())
+            if not answer_cell_issues("Equation", literal_equation):
+                return "Equation", literal_equation
 
     phrase = raw_answer_cell("Phrases", plain_markup)
     if not answer_cell_issues("Phrases", phrase):
@@ -739,13 +776,37 @@ def _has_markdown_table(value: str) -> bool:
     return any(_markdown_table_start(lines, index) for index in range(len(lines)))
 
 
+def _has_noncanonical_array(value: str) -> bool:
+    """Return whether array-like markup is not one complete CMS form.
+
+    The supported spelling is deliberately exact:
+    ``\\begin{array}{<columns>}...\\end{array}``.  Optional positioning,
+    whitespace inside either environment token, missing column declarations,
+    unterminated environments, and nested arrays stay visible as defects
+    instead of being guessed into a different representation.
+    """
+
+    text = str(value or "")
+    beginnings = list(_ARRAY_BEGIN_RE.finditer(text))
+    endings = list(_ARRAY_END_RE.finditer(text))
+    if not beginnings and not endings:
+        return False
+    canonical = list(_CANONICAL_ARRAY_ENV_RE.finditer(text))
+    return (
+        len(beginnings) != len(canonical)
+        or len(endings) != len(canonical)
+    )
+
+
 def replace_unsupported_tables(text: str) -> str:
-    """Replace unsupported tabular/array markup without dropping a cell.
+    """Replace unsupported tabular/Markdown markup without dropping a cell.
 
     A source-associated image is a semantic choice and therefore belongs to
     the model pass.  This fallback handles only the mechanical case in which
-    table markup reaches a serializer: it retains ordered cells and labels
-    their coordinates, with no inferred headings or reconstructed meaning.
+    an unsupported table dialect reaches a serializer: it retains ordered
+    cells and labels their coordinates, with no inferred headings or
+    reconstructed meaning.  Canonical KaTeX ``array`` environments are a
+    supported CMS representation and pass through byte-for-byte.
     """
 
     value = str(text or "")
@@ -753,23 +814,13 @@ def replace_unsupported_tables(text: str) -> str:
     def table(match: re.Match) -> str:
         return _labeled_table(str(match.group("body") or ""))
 
-    def array(match: re.Match) -> str:
-        return _labeled_table(str(match.group("body") or ""))
-
-    def unterminated_array(match: re.Match) -> str:
-        return _labeled_table(str(match.group("body") or ""))
-
     def replace_dialects(body: str) -> str:
         replaced = _TABULAR_RE.sub(table, body)
-        replaced = _ARRAY_ENV_RE.sub(array, replaced)
         # Closed environments were consumed above.  A remaining declaration
         # is a malformed source-converter tail; label everything after it so
         # no cell or following text disappears and no unsupported dialect
         # reaches the CMS.
         replaced = _UNTERMINATED_TABULAR_RE.sub(table, replaced)
-        replaced = _UNTERMINATED_ARRAY_RE.sub(
-            unterminated_array, replaced,
-        )
         return replaced
 
     def wrapped(match: re.Match) -> str:
@@ -777,11 +828,11 @@ def replace_unsupported_tables(text: str) -> str:
         replaced = replace_dialects(body)
         return replaced if replaced != body else match.group(0)
 
-    # A table inside a KaTeX wrapper must lose the wrapper as well: the CMS
-    # does not render either table dialect through KaTeX.
+    # A tabular environment inside a KaTeX wrapper must lose the wrapper as
+    # well: the CMS does not render that dialect through KaTeX.
     value = _KATEX_TAG_RE.sub(wrapped, value)
-    # The same is true for raw display-math wrappers.  Removing only the
-    # array would otherwise let canonicalization re-wrap coordinate labels as
+    # The same is true for raw display-math wrappers.  Removing only tabular
+    # would otherwise let canonicalization re-wrap coordinate labels as
     # ``[Katex] Table row ... [/Katex]``.
     for pattern in _RAW_BLOCK_MATH_PATTERNS:
         value = pattern.sub(wrapped, value)
@@ -806,6 +857,32 @@ def _has_raw_math(value: str) -> bool:
         not _looks_like_currency_pair(match)
         for match in _SINGLE_DOLLAR_MATH_RE.finditer(value)
     )
+
+
+_RAW_TEX_MATH_DELIMITER_RE = re.compile(
+    r"(?<!\\)(?:\\\\)*\\[\[\]()]",
+)
+_UNESCAPED_DOLLAR_RE = re.compile(
+    r"(?<!\\)(?:\\\\)*\$",
+)
+
+
+def _has_raw_tex_math_delimiter(value: str) -> bool:
+    """Recognize TeX delimiters using the preceding backslash parity.
+
+    A canonical array row break followed by a parenthesized cell contains
+    ``\\\\(``, whose two backslashes are structural and do not open raw math.
+    An odd run still leaves a real ``\\(``/``\\[`` delimiter after any escaped
+    pairs and must be rejected.
+    """
+
+    return _RAW_TEX_MATH_DELIMITER_RE.search(str(value or "")) is not None
+
+
+def _has_unescaped_dollar(value: str) -> bool:
+    """Return whether a dollar is preceded by an even backslash run."""
+
+    return _UNESCAPED_DOLLAR_RE.search(str(value or "")) is not None
 
 
 def _has_raw_equation(value: str) -> bool:
@@ -852,6 +929,74 @@ def _balanced_group_end(
     return None
 
 
+def _normalize_legacy_roman_atoms(value: str) -> str:
+    """Rewrite plain, balanced ``\\mathrm{...}`` as supported ``\\text``.
+
+    For a body made only of letters/digits and horizontal whitespace, both
+    commands render the same upright text atom.  TeX is case-sensitive, and a
+    body containing operators, commands, grouping, or other syntax may have
+    mathematical semantics that ``\\text`` would change.  Those forms remain
+    byte-for-byte visible so the strict validator refuses them instead of an
+    export migration guessing their meaning.
+    """
+
+    parts: list[str] = []
+    cursor = 0
+    while True:
+        match = _LEGACY_ROMAN_ATOM_RE.search(value, cursor)
+        if match is None:
+            parts.append(value[cursor:])
+            break
+        opening = value.find("{", match.start(), match.end())
+        end = _balanced_group_end(value, opening, "{", "}")
+        if end is None:
+            parts.append(value[cursor:match.end()])
+            cursor = match.end()
+            continue
+        body = value[opening + 1:end - 1]
+        # Mathpix commonly uses a leading ``~`` inside ``\mathrm`` solely as
+        # unit spacing (``\mathrm{~kg}``).  A normal space in ``\text`` has
+        # the same displayed role and carries no mathematical operator.
+        normalized_body = body.replace("~", " ")
+        if not normalized_body.strip() or any(
+            not (character.isalnum() or character in " \t")
+            for character in normalized_body
+        ):
+            parts.append(value[cursor:end])
+            cursor = end
+            continue
+        parts.append(value[cursor:match.start()])
+        parts.append(r"\text{" + normalized_body + "}")
+        cursor = end
+    return "".join(parts)
+
+
+def legacy_export_rich_text(text: str) -> str:
+    """Project known historical rich text onto the current strict wire.
+
+    This helper belongs only at public workbook serialization seams.  It
+    performs deterministic, meaning-preserving repairs on the exported copy:
+    unsupported table dialects are labelled by coordinates, plain balanced
+    ``\\mathrm`` atoms become ``\\text`` atoms, presentation-only row gaps
+    become ordinary row breaks, and a complete raw canonical array gains its
+    required ``[Katex]`` wrapper.  A literal ``\\n`` immediately before a list
+    label becomes the real line break it represented.  Other forbidden
+    commands, malformed groups, and ambiguous row-spacing syntax remain
+    untouched and therefore continue to fail strict validation.
+    """
+
+    value = replace_unsupported_tables(str(text or ""))
+    value = _normalize_legacy_roman_atoms(value)
+    value = _LEGACY_SAFE_ROW_SPACING_RE.sub(lambda _match: r"\\", value)
+    value = _LITERAL_NEWLINE_BEFORE_LIST_ITEM_RE.sub(
+        lambda _match: "\n", value,
+    )
+    stripped = value.strip()
+    if _CANONICAL_ARRAY_ENV_RE.fullmatch(stripped):
+        return katex(stripped)
+    return value
+
+
 _TEX_TEXT_COMMAND_RE = re.compile(
     r"\\(?:text|textrm|textsf|texttt|mathrm|mathbf|mathit|operatorname)\s*\{",
     re.IGNORECASE,
@@ -879,9 +1024,15 @@ def _mask_tex_text_groups(value: str) -> str:
 
 def _equation_has_loose_prose(value: str) -> bool:
     lexical = _mask_tex_text_groups(value)
+    # The canonical array column declaration is structural LaTeX, not prose.
+    # Mask it as one token before the generic environment-name pass; otherwise
+    # a declaration such as ``{cc}`` is misread as a two-letter word and the
+    # serializer escapes the entire valid array into ``\text{...}``.
+    lexical = re.sub(
+        r"\\begin\{array\}\{[^{}\r\n]+\}", " ", lexical,
+    )
     lexical = re.sub(
         r"\\(?:begin|end)\{[^}]*\}", " ", lexical,
-        flags=re.IGNORECASE,
     )
     lexical = re.sub(r"\\[A-Za-z]+", " ", lexical)
     lexical = re.sub(r"\\.", " ", lexical)
@@ -897,16 +1048,22 @@ def answer_cell_issues(answer_type: str, content: str) -> list[str]:
     if (
         _UNSUPPORTED_TABLE_BEGIN_RE.search(value)
         or _has_markdown_table(value)
+        or _has_noncanonical_array(value)
     ):
         issues.append("unsupported_table")
 
     if kind == "equation":
+        if _UNSUPPORTED_KATEX_COMMAND_RE.search(value):
+            issues.append("equation_unsupported_command")
+        if _RAW_ROW_SPACING_RE.search(value):
+            issues.append("equation_row_spacing")
         if _KATEX_TOKEN_RE.search(value) or _KATEX_LIKE_TAG_RE.search(value):
             issues.append("equation_katex_wrapper")
+        delimiter_value = _RAW_ROW_SPACING_RE.sub("", value)
         if (
-            _has_raw_math(value)
-            or re.search(r"(?<!\\)\$", value)
-            or re.search(r"\\[\[\]()]", value)
+            _has_raw_math(delimiter_value)
+            or _has_unescaped_dollar(delimiter_value)
+            or _has_raw_tex_math_delimiter(delimiter_value)
         ):
             issues.append("equation_math_delimiter")
         if (
@@ -934,8 +1091,8 @@ def answer_cell_issues(answer_type: str, content: str) -> list[str]:
             issues.append("phrases_latex")
         if (
             _has_raw_math(value)
-            or re.search(r"(?<!\\)\$", value)
-            or re.search(r"\\[\[\]()]", value)
+            or _has_unescaped_dollar(value)
+            or _has_raw_tex_math_delimiter(value)
         ):
             issues.append("phrases_math_delimiter")
         if (
@@ -1375,8 +1532,13 @@ def rich_text_issues(
     if (
         _UNSUPPORTED_TABLE_BEGIN_RE.search(value)
         or _has_markdown_table(value)
+        or _has_noncanonical_array(value)
     ):
         issues.append("unsupported_table")
+    if _UNSUPPORTED_KATEX_COMMAND_RE.search(value):
+        issues.append("unsupported_katex_command")
+    if _RAW_ROW_SPACING_RE.search(value):
+        issues.append("katex_row_spacing")
     tokens = list(_KATEX_TOKEN_RE.finditer(value))
     depth = 0
     malformed_order = False
@@ -1415,6 +1577,19 @@ def rich_text_issues(
     ):
         issues.append("noncanonical_katex_case")
 
+    # Wrappers establish the rendering medium; they do not make a second set
+    # of raw delimiters valid.  Inspect their bodies before masking the spans
+    # from the rich-text checks below.
+    for match in _KATEX_TAG_RE.finditer(value):
+        body = str(match.group("body") or "")
+        delimiter_body = _RAW_ROW_SPACING_RE.sub("", body)
+        if (
+            _has_raw_math(delimiter_body)
+            or _has_unescaped_dollar(delimiter_body)
+            or _has_raw_tex_math_delimiter(delimiter_body)
+        ):
+            issues.append("raw_math_delimiter")
+
     masked = _KATEX_TAG_RE.sub("", value)
     if re.search(r"!\[", masked):
         issues.append("markdown_image")
@@ -1423,11 +1598,15 @@ def rich_text_issues(
             "", _MARKDOWN_LINK_RE.sub("", masked)),
         lambda _value: "",
     )
-    delimiter_masked = _CURRENCY_TOKEN_RE.sub("", math_masked)
+    if _LITERAL_NEWLINE_BEFORE_LIST_ITEM_RE.search(math_masked):
+        issues.append("literal_newline_escape")
+    delimiter_masked = _RAW_ROW_SPACING_RE.sub(
+        "", _CURRENCY_TOKEN_RE.sub("", math_masked),
+    )
     if (
         _has_raw_math(math_masked)
-        or re.search(r"(?<!\\)\$", delimiter_masked)
-        or re.search(r"\\[\[\]()]|(?<!\\)\$\$", delimiter_masked)
+        or _has_unescaped_dollar(delimiter_masked)
+        or _has_raw_tex_math_delimiter(delimiter_masked)
     ):
         issues.append("raw_math_delimiter")
     if (
@@ -1478,6 +1657,9 @@ columns:
     \\(...\\), or \\[...\\] delimiters.
     Inline vs. block mode is auto-detected from the content (presence of
     \\begin, \\array, \\frac, \\sum, \\int, \\prod, or \\oint triggers block).
+  - A textual table may use the canonical form
+    [Katex] \\begin{array}{...}...\\end{array} [/Katex]. Keep the entire array
+    inside one wrapper and use ordinary \\\\ row breaks with no spacing option.
   - Images: [img src="https://..." alt="..."]. Use double quotes only;
     src must be a full public HTTPS URL and must come before alt. No other
     attributes are allowed.
@@ -1487,21 +1669,25 @@ columns:
 Type-declared answer_content and keyword cells use exactly ONE medium:
   - Equation: the WHOLE cell is raw LaTeX. Never include [Katex] wrappers,
     math delimiters, an image/link, or plain prose outside a TeX text atom.
+    A textual table is raw \\begin{array}{...}...\\end{array} in this cell.
   - Phrases: the WHOLE cell is plain text. Never include LaTeX, [Katex], math
     delimiters, or image/link markup.
   - Never mix prose and wrapped/raw maths in one answer/rubric block. If an
     Equation cell needs words, encode them inside \\text{...} so the complete
     cell remains valid raw LaTeX.
 
-KaTeX tables/arrays and Markdown pipe tables are unsupported. When the source
-already supplies the table as an associated image, preserve that source
-image. Otherwise retain every cell as mechanically labelled plain text (for
-example, "Table row 1, column 2: 8611"); never emit tabular or array markup
-and never reconstruct missing meaning.
+Canonical KaTeX arrays are supported as described above. LaTeX tabular and
+Markdown pipe tables remain unsupported. When the source already supplies a
+table containing an image, preserve the complete source-table image rather
+than fragment screenshots. Otherwise retain every cell as mechanically
+labelled plain text (for example, "Table row 1, column 2: 8611"); never emit
+tabular markup or reconstruct missing meaning.
 
 Forbidden: raw math delimiters, nested [Katex], single-quoted img attrs,
 empty [Katex] tags, raw LaTeX outside a [Katex] tag, Markdown images,
-raw tabular/array/footnote commands, and [0.4cm]-style spacing.
+raw tabular/footnote commands, noncanonical or unterminated arrays, the
+unsupported commands \\mathrm, \\hspace, \\phantom, and \\boxed, and optional
+row spacing such as \\\\[0.4cm]. Use \\text{...} for words in mathematics.
 """
 
 _prompts.register(

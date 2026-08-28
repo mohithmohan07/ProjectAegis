@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 
 from app import config, models
+from app.bulk_import import assessment_workbook, reader, writer
 from app.services import assessment_grouping as ag
+from app.services import assessment_profile
 from app.services import assessment_release_service as svc
 
 OWNER = "local:default"
@@ -276,6 +278,72 @@ def test_flagged_content_publishes_with_warnings_and_still_uploads(db):
     result = svc.upload_master_to_database(db, published, owner_sub=OWNER)
     assert result["questions_created"] == 1
     assert published.state == "uploaded"
+
+
+def test_subjective_release_upload_generic_export_strict_roundtrip(
+    db, tmp_path,
+):
+    """Publication's internal answer schema survives the generic XLSX seam."""
+
+    profile = assessment_profile.resolve_for_metadata(
+        assessment_profile.DEFAULT_PROFILE,
+        {"board": "MSBSHSE", "grade": "6", "subject": "Mathematics"},
+    )
+    profile["forced_blank_fields"] = ()
+
+    def make_subjective(payload):
+        candidate = payload["candidates"][0]
+        candidate.update({
+            "sheet_kind": "subjective",
+            "question_category": "Fill in the blanks",
+            "question": "A cube is a $$a$$.",
+            "question_text": "A cube is a $$a$$.",
+            "marks": 1,
+            "question_duration": 1,
+            "math_keyboard": "No",
+            "question_disclaimer": "Release-authored disclaimer.",
+            "answers": [{
+                "answer_type": "Phrases",
+                "answer_content": "solid",
+                "answer_display": "solid",
+                "answer_weightage": "1",
+                "placeholder": "a",
+            }],
+            "answer_explanation": "A cube occupies space.",
+        })
+
+    release, _payload_, label = _fresh_release(
+        db,
+        mutate=make_subjective,
+        provider_identity={"assessment_profile": profile},
+    )
+    published = svc.publish_release(db, release)
+    result = svc.upload_master_to_database(db, published, owner_sub=OWNER)
+    assert result["questions_created"] == 1
+
+    stored = db.query(models.Question).filter_by(question_label=label).one()
+    assert stored.question_source == "UpSchool DB"
+    assert stored.question_disclaimer == "Release-authored disclaimer."
+    assert stored.answer_restriction == "Specific"
+    assert stored.answers[0]["answer_content"] == "solid"
+    assert stored.answers[0]["answer_weightage"] == "1"
+
+    exported = writer.write_workbook(db, question_ids=[stored.id])
+    parsed = assessment_workbook.parse_workbook(exported)
+    row = next(
+        row for row in parsed["sheets"]["Subjective"]["rows"]
+        if row.get("question_label") == label
+    )
+    assert row["answer_1"] == "solid"
+    assert str(row["weightage_1"]) == "1"
+    assert row["answer_restriction"] == "Specific"
+    assert row["question_source"] == "UpSchool DB"
+    assert row["question_disclaimer"] == "Release-authored disclaimer."
+
+    path = tmp_path / "subjective-release-roundtrip.xlsx"
+    path.write_bytes(exported)
+    imported = reader.import_workbook(db, path, strict_content=True)
+    assert imported["questions"] == 0
 
 
 def test_staged_master_waits_for_exact_output03_publication(db):

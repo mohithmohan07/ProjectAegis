@@ -34,9 +34,10 @@ complete payload first and sends `records=[payload]` through the seam. The
 assessment module returns exactly one complete payload record, an ordered
 release diff, and review flags.
 
-Generated `NA` group shells participate in transient render/read-back
-validation but are not model units. Only authored groups in the payload are
-eligible for refinement.
+Required empty BG/IG/AG group shells remain in the immutable payload but are
+deliberately omitted from workbook rows and recorded in the render issues
+ledger. Only occupied authored groups are model units; read-back validates
+both occupied rows and the exact omitted-shell ledger.
 
 ## 2. Decision units and evidence
 
@@ -45,7 +46,7 @@ descriptions have different response contracts:
 
 | Unit | Decision kind | Policy | Unit ID |
 |---|---|---|---|
-| Candidate | `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-3` | `candidate_id` |
+| Candidate | `assessment.master_refiner.candidate` | `assessment-master-refiner-candidate-4` | `candidate_id` |
 | Group | `assessment.master_refiner.group` | `assessment-master-refiner-group-1` | `group_key` |
 
 Each unit receives:
@@ -76,7 +77,7 @@ Only these candidate prose leaves are editable:
 
 - `display_answer` for a Descriptive candidate;
 - `answer_explanation`;
-- `answers[*].answer_content` for Objective and Descriptive candidates; and
+- `answers[*].answer_content` for Objective, Descriptive, and Subjective candidates; and
 - `sub_questions[*].keywords[*].keyword` (wording only).
 
 Only this group prose leaf is editable:
@@ -90,9 +91,10 @@ cardinality, ordering, or other decomposition field is editable.
 Q21 narrows the editable answer leaf by its already-declared medium. An
 `Equation` proposal remains one full raw-LaTeX cell without `[Katex]` and any
 prose stays inside a TeX text atom; a `Phrases` proposal remains wholly plain
-text. The checker also rejects tabular/array/Markdown-table syntax. These are
-lexical mechanics only; the Refiner's model remains responsible for semantic
-prose preservation.
+text. The checker rejects tabular, Markdown-table, and noncanonical array
+syntax. A text-only table may use one complete canonical
+`\\begin{array}{column-spec}...\\end{array}` block. These are lexical mechanics
+only; the Refiner's model remains responsible for semantic prose preservation.
 
 Everything outside the whitelist is immutable and type-stable, including:
 
@@ -174,7 +176,7 @@ with warnings. The Refiner never blocks publication.
 
 The immutable assessment payload carries `refinements`, shaped as:
 
-- umbrella policy `assessment-master-refiner-3`;
+- umbrella policy `assessment-master-refiner-4`;
 - `output_kind="assessment_master"`;
 - the two decision-kind/policy identities;
 - ordered changes with `unit_kind`, `unit_id`, precise `field_path`, `before`,
@@ -207,10 +209,11 @@ pending or missing; the Question-Paper Blueprint & Analysis document is not
 runtime evidence.
 
 Slice 5 removes stale pending/missing-dependency wording from marking prompts,
-audits, comments and the assessment decision registry. Because this changes
-the model evidence contract, the marking policy advances to
-`assessment-marking-3`; immutable v2 decisions remain in the store and the new
-policy records a deliberate re-decision.
+audits, comments and the assessment decision registry. The current marking
+policy is `assessment-marking-7`; it additionally binds exact category marks
+and duration mechanics from the resolved assessment-format policy. Immutable
+earlier decisions remain in the store and the versioned policy records a
+deliberate re-decision.
 
 ## 8. Regression and golden contract
 

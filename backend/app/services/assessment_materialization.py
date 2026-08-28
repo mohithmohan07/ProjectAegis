@@ -27,10 +27,12 @@ from .phase3 import kernel
 # ``-6`` places the stable rules, metadata, and curricular evidence before
 # the candidate suffix and marks the explicit GPT-5.6 cache breakpoint.
 # ``-7`` layers the owner-format answer/rubric contract on that transport
-# shape. ``-8`` makes lowercase paper-option labels part of the authored
-# contract. ``-9`` makes the uppercase prohibition explicit, so candidates
-# authored before this final clarification cannot replay under the new prompt.
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-9"
+# shape. ``-8`` and ``-9`` pin lowercase paper-option labels. ``-10`` adds
+# the supported Subjective wire and makes multipart Descriptive questions
+# use the dedicated sub-question rubric columns rather than scoring the same
+# parts twice. ``-11`` binds the selected Master-workbook Descriptive answer
+# capacity into both the authored decision and its mechanical checker.
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-11"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -47,9 +49,38 @@ BLOCKED_ELIGIBILITY = "blocked"
 
 # Workbook capacities are positional mechanics, not content judgments.
 MAX_OBJECTIVE_OPTIONS = 6
+MAX_SUBJECTIVE_ANSWERS = 20
 MAX_DESCRIPTIVE_ANSWERS = 10
 MAX_SUBQUESTIONS = 15
 MAX_SUBQUESTION_KEYWORDS = 6
+
+
+def _descriptive_answer_capacity(
+    profile: Mapping | str | None,
+    *,
+    learning_phase: str = "",
+) -> int:
+    """Return the Descriptive answer slots the selected Master can render.
+
+    Ten remains the compatibility floor for historical/reference profiles.
+    A resolved run profile may widen that positional capacity for one
+    explicitly identified lane (the audited Grade-6 English Post contract
+    uses thirty).  The scalar capacity, rather than the profile itself, is
+    later bound into each decision payload.
+    """
+
+    contract = assessment_profile.master_workbook_contract(
+        profile,
+        learning_phase=learning_phase,
+    )
+    try:
+        capacity = int(
+            contract.get("descriptive_answer_slots", MAX_DESCRIPTIVE_ANSWERS)
+        )
+    except (TypeError, ValueError):
+        capacity = MAX_DESCRIPTIVE_ANSWERS
+    return max(MAX_DESCRIPTIVE_ANSWERS, capacity)
+
 
 MATERIALIZE_SYSTEM = (
     "You are the Aegis assessment materialization author. Materialize ONE "
@@ -78,8 +109,14 @@ MATERIALIZE_SYSTEM = (
     "labels are never uppercase. Do not include a label inside "
     "answer_content because the workbook adds it. The question stem must "
     "not enumerate the options: options ride only answers[]; a stem that "
-    "restates \"a) ... b) ...\" is a defect. For Descriptive cells, "
-    "return a complete "
+    "restates \"a) ... b) ...\" is a defect. For Subjective cells, return "
+    "one answer object per response blank, in blank order, with "
+    "answer_content, answer_display, answer_type, and a lowercase "
+    "single-letter placeholder. The question uses the matching tokens "
+    "$$a$$, $$b$$, ...; correct_answer is the empty string because these "
+    "are expected responses rather than options, and the item carries no "
+    "subquestions. For "
+    "Descriptive cells, return a complete "
     "display answer, complete semantic answer/rubric blocks (each "
     "answers[] entry an object whose answer_content carries the block "
     "text and whose answer_type is Phrases, Equation, or Image), and "
@@ -88,8 +125,14 @@ MATERIALIZE_SYSTEM = (
     "keywords array of {\"answer_type\":\"Phrases|Equation|Image\","
     "\"keyword\":\"...\"} objects). Author no "
     "subquestion the source item does not itself carry: a single-part "
-    "question ships with an empty sub_questions[] — never wrapped in an "
-    "invented part restating the stem. Each sub_questions[] text begins "
+    "question ships with answer/rubric blocks and an empty "
+    "sub_questions[] — never wrapped in an invented part restating the "
+    "stem. A genuinely multipart question instead ships with answers=[] "
+    "and places all scoring evidence only in sub_questions[].keywords, so "
+    "the main rubric and the sub-question rubric never score the same "
+    "content twice. Its main question contains only shared instruction or "
+    "context; part text lives only in sub_questions[]. Each "
+    "sub_questions[] text begins "
     "with its enumeration label — a), b), c)… or (i), (ii), (iii)… — "
     "using the same scheme and order the item itself uses (SOP §5.4), so "
     "each part maps to its marking cleanly.\n"
@@ -108,18 +151,28 @@ MATERIALIZE_SYSTEM = (
     "answer, and explanation. A type-declared answer_content uses exactly "
     "one whole-cell medium: Equation means full raw LaTeX with NO [Katex] "
     "wrapper and with any words inside \\text{...}; Phrases means wholly "
-    "plain text with no TeX or [Katex]. Never mix the two. A 4-mark "
-    "Descriptive item must have at least two distinct rubric blocks; one "
-    "4-mark block is invalid. KaTeX tabular/array markup and Markdown pipe "
-    "tables are unsupported. If "
+    "plain text with no TeX or [Katex]. Never mix the two. Prefix each "
+    "Descriptive Phrases rubric block with one exact functional tag such "
+    "as [content]:, [method]:, [accuracy]:, [working]:, [language]:, "
+    "[creative]:, [evidence]:, or [diagram]:; a bracketed tag without its "
+    "colon is malformed. A 4-mark single-part Descriptive item must have "
+    "at least two distinct rubric blocks; one 4-mark block is invalid. "
+    "In a rich-text field, a text-only table uses one complete "
+    "\\begin{array}{column-spec}...\\end{array} inside [Katex]. In an "
+    "Equation answer/keyword cell, use that complete array raw, without "
+    "the wrapper. If "
     "the supplied source atom already associates an image with a table, "
-    "preserve that source image; otherwise preserve every cell as explicitly "
-    "labelled plain text (Table row N, column N), without semantic "
-    "reconstruction. Use meaningful, neutral alt text for every image. Do "
+    "preserve that full table as one source image rather than a partial array "
+    "or separate cell screenshots. Use meaningful, neutral alt text for every "
+    "image. If the source deliberately leaves a quantity, table cell, or "
+    "learner choice blank, preserve that openness or express the solution "
+    "symbolically; never invent convenient numbers merely to manufacture one "
+    "numeric answer. Do "
     "not leak an answer in the question, options, or alt text.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","question":"","display_answer":"",'
-    '"answers":[{"answer_content":"","correct_answer":"1",'
+    '"answers":[{"answer_content":"","answer_display":"",'
+    '"placeholder":"a","correct_answer":"1|0|",'
     '"answer_type":"Phrases"}],'
     '"sub_questions":[{"text":"","keywords":['
     '{"answer_type":"Phrases","keyword":""}]}],'
@@ -142,9 +195,12 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "with the display answer), literary over-quoting (a whole poem "
     "or passage quoted where only the asked-about lines belong), "
     "lowercase paper-option order with no label duplicated inside option "
-    "content, declared answer-cell medium purity, unsupported KaTeX/Markdown "
-    "tables, "
-    "and the minimum two rubric blocks on a 4-mark Descriptive item. Do not "
+    "content, declared answer-cell medium purity, table/image integrity, "
+    "fabricated values where the source intentionally leaves inputs open, "
+    "Subjective placeholder/answer alignment, multipart content or rubrics "
+    "duplicated between main fields and sub-question fields, malformed "
+    "rubric tags, and the minimum two rubric blocks on a 4-mark single-part "
+    "Descriptive item. Do not "
     "classify Open/Specific or audit "
     "mark allocation here. Do not "
     "rewrite, retry, or gate the proposal. Your dissent ships for review and "
@@ -236,15 +292,50 @@ def _learner_rich_text(proposal: Mapping) -> list[str]:
     return [str(value or "") for value in values]
 
 
-def _rich_text_defects(proposal: Mapping) -> list[str]:
-    blob = "\n".join(_learner_rich_text(proposal))
+def _rich_text_defects(
+    proposal: Mapping, *, sheet_kind: str = "",
+) -> list[str]:
+    values = _learner_rich_text(proposal)
+    if sheet_kind == "subjective":
+        for answer in proposal.get("answers") or []:
+            if isinstance(answer, Mapping):
+                values.append(str(answer.get("answer_display") or ""))
+    if sheet_kind == "subjective" and values:
+        # ``$$a$$`` is the Subjective importer's placeholder token, not a
+        # raw-math delimiter. Mask only the exact tokens declared by the
+        # ordered answer blocks before applying the general rich-text gate.
+        question = values[0]
+        for answer in proposal.get("answers") or []:
+            if not isinstance(answer, Mapping):
+                continue
+            placeholder = str(answer.get("placeholder") or "")
+            if len(placeholder) == 1 and "a" <= placeholder <= "t":
+                question = question.replace(f"$${placeholder}$$", "")
+        values[0] = question
+    blob = "\n".join(values)
     return [
         f"rich-text: {code}" for code in katex_rules.rich_text_issues(blob)
     ]
 
 
+def _duplicated_option_label(value: Any) -> bool:
+    """Whether an option already carries the label the renderer supplies."""
+
+    return rel.option_content_has_label(value)
+
+
+def _malformed_rubric_tag(value: Any, answer_type: Any) -> bool:
+    """Functional rubric prefixes are a wire format, not a judgment."""
+
+    return rel.malformed_rubric_tag(value, answer_type)
+
+
 def _proposal_defects(
-    proposal: Mapping[str, Any], cell: Mapping, candidate_id: str,
+    proposal: Mapping[str, Any],
+    cell: Mapping,
+    candidate_id: str,
+    *,
+    descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
 ) -> list[str]:
     """Validate response mechanics only; semantic quality belongs to models."""
 
@@ -292,7 +383,7 @@ def _proposal_defects(
                 subquestions.append(subquestion)
 
     kind = str(cell.get("sheet_kind") or "")
-    if kind in {"objective", "descriptive"}:
+    if kind in {"objective", "subjective", "descriptive"}:
         # The CMS's answer_type column was shipping empty because no pass
         # ever authored it (owner review, job 65). The medium is the
         # model's call; the gate is enum membership — the same shape as
@@ -339,19 +430,65 @@ def _proposal_defects(
         populated = [content for content in contents if content]
         if len(set(populated)) != len(populated):
             defects.append("duplicate option text")
+        for position, content in enumerate(contents, start=1):
+            if _duplicated_option_label(content):
+                defects.append(
+                    f"objective option {position} must not include its own "
+                    "letter label"
+                )
         if not str(proposal.get("answer_explanation") or "").strip():
             defects.append("missing answer explanation")
+    elif kind == "subjective":
+        if not 1 <= len(answers) <= MAX_SUBJECTIVE_ANSWERS:
+            defects.append(
+                f"subjective needs 1..{MAX_SUBJECTIVE_ANSWERS} answers "
+                f"(got {len(answers)})"
+            )
+        if subquestions:
+            defects.append("subjective candidate must not have subquestions")
+        question = str(proposal.get("question") or "")
+        for position, answer in enumerate(answers, start=1):
+            content = str(answer.get("answer_content") or "").strip()
+            if not content:
+                defects.append(f"subjective answer {position} has no content")
+            display = answer.get("answer_display")
+            if not isinstance(display, str) or not display.strip():
+                defects.append(
+                    f"subjective answer {position} needs answer_display"
+                )
+            expected = chr(ord("a") + position - 1)
+            if answer.get("placeholder") != expected:
+                defects.append(
+                    f"subjective answer {position} placeholder must be "
+                    f"{expected!r}"
+                )
+            token = f"$${expected}$$"
+            if question.count(token) != 1:
+                defects.append(
+                    f"subjective question must contain placeholder token "
+                    f"{token!r} exactly once"
+                )
+            if str(answer.get("correct_answer") or "").strip():
+                defects.append(
+                    f"subjective answer {position} must not carry an "
+                    "objective correct marker"
+                )
     elif kind == "descriptive":
         if not str(proposal.get("display_answer") or "").strip():
             defects.append("missing display answer")
-        if not answers:
+        if not answers and not subquestions:
             defects.append("descriptive needs at least one answer/rubric block")
-        if len(answers) > MAX_DESCRIPTIVE_ANSWERS:
+        if len(answers) > descriptive_answer_capacity:
             defects.append(
-                f"more than {MAX_DESCRIPTIVE_ANSWERS} answer blocks"
+                f"more than {descriptive_answer_capacity} answer blocks"
             )
         marks = _to_float(cell.get("marks"))
-        if marks == 4 and len(answers) < 2:
+        if subquestions and answers:
+            defects.append(
+                "multipart descriptive must keep main answers empty and use "
+                "only subquestion keyword rubrics"
+            )
+        if marks == 4 and not subquestions and len(answers) < 2:
             defects.append(
                 "a 4-mark descriptive item requires at least two "
                 "answer/rubric blocks"
@@ -361,11 +498,24 @@ def _proposal_defects(
                 defects.append(
                     f"answer/rubric block {position} has no content"
                 )
+            if _malformed_rubric_tag(
+                answer.get("answer_content"), answer.get("answer_type"),
+            ):
+                defects.append(
+                    f"answer/rubric block {position} does not start with an "
+                    "allowed functional tag or is without its required colon"
+                )
         if len(subquestions) > MAX_SUBQUESTIONS:
             defects.append(f"more than {MAX_SUBQUESTIONS} subquestions")
         for position, subquestion in enumerate(subquestions, start=1):
-            if not str(subquestion.get("text") or "").strip():
+            subquestion_text = str(subquestion.get("text") or "").strip()
+            if not subquestion_text:
                 defects.append(f"subquestion {position} has no text")
+            elif subquestion_text in str(proposal.get("question") or ""):
+                defects.append(
+                    f"subquestion {position} text is duplicated in the main "
+                    "question"
+                )
             keywords = subquestion.get("keywords")
             if not isinstance(keywords, list):
                 defects.append(
@@ -376,6 +526,11 @@ def _proposal_defects(
                 defects.append(
                     f"subquestion with more than "
                     f"{MAX_SUBQUESTION_KEYWORDS} keyword slots"
+                )
+            if not keywords:
+                defects.append(
+                    f"subquestion {position} needs at least one keyword "
+                    "rubric"
                 )
             for keyword_position, keyword in enumerate(keywords, start=1):
                 if not isinstance(keyword, Mapping):
@@ -403,13 +558,31 @@ def _proposal_defects(
                         f"subquestion {position} keyword {keyword_position} "
                         f"medium-format: {issue}"
                     )
-    defects.extend(_rich_text_defects(proposal))
+                if _malformed_rubric_tag(
+                    keyword.get("keyword"), keyword_type,
+                ):
+                    defects.append(
+                        f"subquestion {position} keyword {keyword_position} "
+                        "does not start with an allowed functional tag or is "
+                        "without its required colon"
+                    )
+    defects.extend(_rich_text_defects(proposal, sheet_kind=kind))
     return defects
 
 
-def _checker(cell: Mapping, candidate_id: str) -> kernel.Checker:
+def _checker(
+    cell: Mapping,
+    candidate_id: str,
+    *,
+    descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
+) -> kernel.Checker:
     def check(response: Mapping[str, Any]) -> list[str]:
-        return _proposal_defects(response, cell, candidate_id)
+        return _proposal_defects(
+            response,
+            cell,
+            candidate_id,
+            descriptive_answer_capacity=descriptive_answer_capacity,
+        )
 
     return check
 
@@ -596,12 +769,16 @@ def _decision_payload(
     candidate_id: str,
     meta: Mapping,
     context: Any,
+    descriptive_answer_capacity: int,
 ) -> dict[str, Any]:
     return {
         "stage": "assessment.materialize",
         "rules": MATERIALIZE_SYSTEM,
         "candidate_id": candidate_id,
         "metadata": copy.deepcopy(dict(meta)),
+        "workbook_capacities": {
+            "descriptive_answer_slots": descriptive_answer_capacity,
+        },
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "curricular_evidence": copy.deepcopy(context),
@@ -615,6 +792,7 @@ def _materialize_prepared(
     candidate_id: str,
     meta: Mapping,
     context: Any,
+    descriptive_answer_capacity: int,
     envelope_sha256: str,
     provider: kernel.Provider,
     critic: kernel.Critic | None,
@@ -622,7 +800,12 @@ def _materialize_prepared(
     fixer: kernel.Provider | None,
 ) -> dict:
     payload = _decision_payload(
-        atom, cell, candidate_id=candidate_id, meta=meta, context=context,
+        atom,
+        cell,
+        candidate_id=candidate_id,
+        meta=meta,
+        context=context,
+        descriptive_answer_capacity=descriptive_answer_capacity,
     )
     decision = kernel.decide(
         kind="assessment.materialize",
@@ -630,7 +813,11 @@ def _materialize_prepared(
         envelope_sha256=envelope_sha256,
         payload=payload,
         provider=provider,
-        checker=_checker(cell, candidate_id),
+        checker=_checker(
+            cell,
+            candidate_id,
+            descriptive_answer_capacity=descriptive_answer_capacity,
+        ),
         critic=critic,
         store=store,
         policy_version=MATERIALIZE_POLICY_VERSION,
@@ -654,14 +841,22 @@ def materialize_candidate(
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
     profile: Mapping | str | None = None,
+    learning_phase: str = "",
 ) -> dict:
     """Materialize one obligation through a content-addressed decision.
 
-    ``profile`` is validation input ONLY (spec-step8 B2). It never joins
-    ``meta`` or the decision payload, so decision keys are unchanged.
+    ``profile`` remains validation input (spec-step8 B2), not authored
+    metadata.  Only the selected workbook's scalar Descriptive capacity is
+    bound into the decision payload, so a widened Post lane cannot replay a
+    decision checked against the ten-slot reference layout (or vice versa).
     """
 
-    candidate_id = _validate_obligation(atom, cell, meta, profile)
+    run_profile = assessment_profile.resolve_for_metadata(profile, meta)
+    descriptive_answer_capacity = _descriptive_answer_capacity(
+        run_profile,
+        learning_phase=learning_phase,
+    )
+    candidate_id = _validate_obligation(atom, cell, meta, run_profile)
     envelope_sha = _envelope_hash(envelope_sha256)
     provider, critic, fixer = _live_authorities(provider, critic, fixer)
     return _materialize_prepared(
@@ -670,6 +865,7 @@ def materialize_candidate(
         candidate_id=candidate_id,
         meta=meta,
         context=context,
+        descriptive_answer_capacity=descriptive_answer_capacity,
         envelope_sha256=envelope_sha,
         provider=provider,
         critic=critic,
@@ -689,12 +885,14 @@ def materialize_candidates(
     store: kernel.DecisionStore | None = None,
     fixer: kernel.Provider | None = None,
     profile: Mapping | str | None = None,
+    learning_phase: str = "",
     on_result=None,
 ) -> dict:
     """Materialize every obligation in order with exact-once accounting.
 
-    ``profile`` is validation input ONLY (spec-step8 B2); see
-    ``materialize_candidate``.
+    ``profile`` is validation input (spec-step8 B2); see
+    ``materialize_candidate``. ``learning_phase`` selects only a declared
+    lane-specific workbook-capacity override.
 
     ``on_result`` is forwarded verbatim to the fan-out
     (``kernel.parallel_map_in_order``): an ordered progress hook only,
@@ -704,6 +902,11 @@ def materialize_candidates(
     if not isinstance(meta, Mapping):
         raise MaterializationError("materialization metadata is not an object")
     envelope_sha = _envelope_hash(envelope_sha256)
+    run_profile = assessment_profile.resolve_for_metadata(profile, meta)
+    descriptive_answer_capacity = _descriptive_answer_capacity(
+        run_profile,
+        learning_phase=learning_phase,
+    )
     prepared: list[tuple[Mapping | None, Mapping, str]] = []
     seen: set[str] = set()
     for position, pair in enumerate(pairs, start=1):
@@ -712,7 +915,9 @@ def materialize_candidates(
                 f"materialization pair {position} is not an atom/cell pair"
             )
         atom, cell = pair
-        candidate_id = _validate_obligation(atom, cell, meta, profile)
+        candidate_id = _validate_obligation(
+            atom, cell, meta, run_profile,
+        )
         if candidate_id in seen:
             raise MaterializationError(
                 "materialization obligations repeat candidate_id "
@@ -738,6 +943,7 @@ def materialize_candidates(
                 candidate_id=candidate_id,
                 meta=meta,
                 context=context,
+                descriptive_answer_capacity=descriptive_answer_capacity,
                 envelope_sha256=envelope_sha,
                 provider=provider,
                 critic=critic,

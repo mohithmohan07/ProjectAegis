@@ -1696,9 +1696,8 @@ def audit_type_cases(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
     """Return ordered Type/Case/Example rows, issues, and QID routes.
 
-    A reusable Type may legitimately span topics. Ownership is recorded at the
-    Case/QID level, so ``Type 01 / Case 01`` and ``Type 01 / Case 02`` can be
-    hosted under different concepts without duplicating either question.
+    Case/QID routes preserve the evidence used for placement, but Q14 requires
+    every Case of one reusable Type to share exactly one final concept owner.
     """
 
     output: list[dict[str, Any]] = []
@@ -2723,6 +2722,44 @@ def _chapter_meta_for_release(
             level="warning",
         )
         return {}
+
+
+def _pre_chapter_meta_from_staged_post(
+    job: models.UploadJob,
+    pre_meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Use one chapter description and duration across both release lanes.
+
+    The Pre metadata pass still authors its own ``topic_descriptions`` from
+    the prerequisite topology.  Chapter-level meaning, however, belongs to
+    the shared source chapter, so the already-staged Post sibling is the
+    authority for the two chapter-level fields consumed by the workbook
+    projections.  Copy only those fields: importing the Post sibling's whole
+    metadata object would overwrite the Pre lane's distinct topic prose.
+
+    A direct/legacy Pre staging call can have no Post sibling.  In that case
+    keep the Pre pass's result rather than turning an otherwise downloadable
+    diagnostic release into an exception.
+    """
+
+    merged = copy.deepcopy(dict(pre_meta or {}))
+    post_payload = release_payload(job, lane=LANE_POST)
+    post_meta = (
+        post_payload.get("chapter_meta")
+        if isinstance(post_payload, Mapping)
+        else None
+    )
+    if not isinstance(post_meta, Mapping):
+        return merged
+    for field in ("chapter_description", "chapter_duration_minutes"):
+        if field in post_meta:
+            merged[field] = copy.deepcopy(post_meta[field])
+        else:
+            # Absence is part of the Post authority too.  Retaining a Pre
+            # value here would let the shared chapter diverge merely because
+            # one independently-authored Post field was omitted.
+            merged.pop(field, None)
+    return merged
 
 
 def _directory_metadata_for_release(
@@ -3774,13 +3811,16 @@ def _lift_resolved_related_concepts(row: Mapping[str, Any]) -> dict[str, Any]:
     Called at publication, BEFORE ``_strip_release_fields`` (T3.3b): the
     marker is a registered audit field, so the strip drops it by
     construction and the column would empty at exactly the moment the
-    reviewer publishes.
+    reviewer publishes.  Presence is authoritative: an explicitly empty
+    marker means staging resolved no legitimate Post links and must clear
+    any stale source value rather than falling back to it.
     """
 
     lifted = dict(row)
-    resolved = str(lifted.get(PRE_ROW_RELATED_CONCEPTS_FIELD) or "")
-    if resolved:
-        lifted["related_concepts"] = resolved
+    if PRE_ROW_RELATED_CONCEPTS_FIELD in lifted:
+        lifted["related_concepts"] = str(
+            lifted.get(PRE_ROW_RELATED_CONCEPTS_FIELD) or ""
+        )
     return lifted
 
 
@@ -3906,8 +3946,11 @@ def stage_pre_release(
     source_document_hash = "sha256:" + hashlib.sha256(
         str(job.mmd_text or "").encode("utf-8")
     ).hexdigest()
-    chapter_meta = _chapter_meta_for_release(
-        db, target, annotated, pre_post="Pre",
+    chapter_meta = _pre_chapter_meta_from_staged_post(
+        job,
+        _chapter_meta_for_release(
+            db, target, annotated, pre_post="Pre",
+        ),
     )
     payload = {
         "version": RELEASE_VERSION,

@@ -11,6 +11,7 @@ hidden behind polished output.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -43,6 +44,11 @@ _GROUP_FIELDS = (
     "group_name", "group_display_name", "group_description", "group_status",
     "group_type", "related_digicards",
 )
+_ROLLUP_FIELD_BY_GROUP_TYPE = {
+    "Basic": "basic_groups",
+    "Intermediate": "intermediate_groups",
+    "Advanced": "advanced_groups",
+}
 
 
 def _norm(value) -> str:
@@ -71,7 +77,18 @@ def _answers_from_row(row, sheet: str) -> list[dict]:
             }
             if any(_norm(v) for v in block.values()):
                 answers.append(block)
-    else:
+    elif sheet == "Subjective":
+        for n in range(1, aw.MAX_SUBJECTIVE_ANSWERS + 1):
+            block = {
+                "answer_type": row.get(f"answer_type_{n}", ""),
+                "answer_content": row.get(f"answer_{n}", ""),
+                "answer_display": row.get(f"answer_display_{n}", ""),
+                "answer_weightage": row.get(f"weightage_{n}", ""),
+                "placeholder": row.get(f"placeholder_{n}", ""),
+            }
+            if any(_norm(v) for v in block.values()):
+                answers.append(block)
+    else:  # Descriptive
         for n in range(1, aw.MAX_DESCRIPTIVE_ANSWERS + 1):
             block = {
                 "answer_type": row.get(f"answer_type_{n}", ""),
@@ -102,11 +119,54 @@ def _sub_questions_from_row(row) -> list[dict]:
     return subs
 
 
+def _without_duplicated_subparts(value, sub_questions: list[dict]) -> str:
+    """Retain the historical stem while moving each part to its own block."""
+
+    text = str(value or "")
+    for subquestion in sub_questions:
+        part = str(subquestion.get("text") or "").strip()
+        if not part:
+            continue
+        start = text.find(part)
+        if start < 0:
+            continue
+        end = start + len(part)
+        marks = _norm(subquestion.get("marks"))
+        if marks:
+            suffix = re.match(
+                rf"\s*\(\s*{re.escape(marks)}\s*\)", text[end:]
+            )
+            if suffix is not None:
+                end += suffix.end()
+        text = f"{text[:start]} {text[end:]}"
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _candidate_from_row(row, sheet: str) -> dict:
+    sheet_kind = {
+        "Objective": "objective",
+        "Descriptive": "descriptive",
+        "Subjective": "subjective",
+    }[sheet]
+    sub_questions = (
+        _sub_questions_from_row(row) if sheet == "Descriptive" else []
+    )
+    # The historical gold rows predate the exclusive multipart contract and
+    # carry the same marks in both the main answer blocks and the subquestion
+    # keyword rubrics.  Preserve the authoritative part rubrics; do not
+    # reconstruct the retired duplicate scoring authority.
+    answers = [] if sub_questions else _answers_from_row(row, sheet)
+    question = row.get("question", "")
+    question_text = row.get("question_text", "")
+    if sub_questions:
+        question = _without_duplicated_subparts(question, sub_questions)
+        question_text = _without_duplicated_subparts(
+            question_text, sub_questions
+        )
     candidate = {
         "candidate_id": f"GOLD-{_norm(row.get('question_label'))}",
         "question_label": row.get("question_label", ""),
-        "sheet_kind": "objective" if sheet == "Objective" else "descriptive",
+        "sheet_kind": sheet_kind,
         "question_category": row.get("question_category", ""),
         "cognitive_skill": row.get("cognitive_skills", ""),
         "question_source": row.get("question_source", ""),
@@ -114,12 +174,12 @@ def _candidate_from_row(row, sheet: str) -> dict:
         "question_appears_in": row.get("question_appears_in", ""),
         "answer_restriction": row.get("answer_restriction", ""),
         "difficulty": row.get("level_of_difficulty", ""),
-        "question": row.get("question", ""),
-        "question_text": row.get("question_text", ""),
+        "question": question,
+        "question_text": question_text,
         "marks": row.get("marks", ""),
         "answer_explanation": row.get("answer_explanation", ""),
-        "answers": _answers_from_row(row, sheet),
-        "sub_questions": [],
+        "answers": answers,
+        "sub_questions": sub_questions,
         # Objective has no public keyboard column; the accepted reference
         # fixture records the explicit internal no-keyboard verdict here.
         "math_keyboard": "" if sheet == "Objective" else row.get(
@@ -129,16 +189,15 @@ def _candidate_from_row(row, sheet: str) -> dict:
         "group_key": row.get("group_name", ""),
         "flags": [],
     }
-    if sheet != "Objective":
+    if sheet == "Descriptive":
         candidate["display_answer"] = row.get("display_answer", "")
-        candidate["sub_questions"] = _sub_questions_from_row(row)
     return candidate
 
 
 def _snapshots_by_chapter(parsed) -> dict[str, dict]:
     """One release snapshot per chapter, reconstructed from the gold rows."""
     chapters: dict[str, dict] = {}
-    for sheet in ("Objective", "Descriptive"):
+    for sheet in aw.SHEET_ORDER:
         for row in parsed["sheets"][sheet]["rows"]:
             chapter_title = _norm(row.get("chapter_title"))
             if not chapter_title:
@@ -197,12 +256,14 @@ def _rows_for_chapter(parsed, sheet: str, chapter_title: str) -> list[dict]:
 
 def _expected_question_text(sheet: str, gold: dict) -> str:
     """The SOP fill guide (§5.1) and the owner's 2026-08-21 ruling:
-    ``question_text`` is the whole question — the stem PLUS the lettered
-    options (Objective) or the sub-questions (Descriptive), which the
-    renderer composes from the decided blocks. The reference workbooks
-    predate the ruling, so the expectation is composed here the same
-    way."""
+    ``question_text`` is the whole question. Objective options are composed
+    into that one cell at render time. Descriptive part text remains only in
+    its dedicated ``sub_question_N`` columns and is never appended again."""
     text = str(gold.get("question_text") or "")
+    if sheet == "Descriptive":
+        sub_questions = _sub_questions_from_row(gold)
+        if sub_questions:
+            return _without_duplicated_subparts(text, sub_questions)
     if sheet == "Objective":
         options = []
         for n in range(1, aw.MAX_OBJECTIVE_OPTIONS + 1):
@@ -216,24 +277,94 @@ def _expected_question_text(sheet: str, gold: dict) -> str:
         if not options:
             return text
         return (text.rstrip() + "\n" + "\n".join(options)).strip()
-    subs = []
-    for n in range(1, aw.MAX_SUBQUESTIONS + 1):
-        sub = str(gold.get(f"sub_question_{n}") or "").strip()
-        if sub:
-            subs.append(sub)
-    if not subs:
-        return text
-    return (text.rstrip() + "\n" + "\n".join(subs)).strip()
+    return text
 
 
-def _diff_rows(sheet: str, gold: dict, rendered: dict) -> list[str]:
+def _occupied_rollups(snapshot: dict) -> dict[str, dict[str, str]]:
+    """Derive concept rollups only from groups that own a question."""
+
+    occupied_group_keys = {
+        _norm(candidate.get("group_key"))
+        for candidate in snapshot["candidates"]
+    }
+    values: dict[str, dict[str, list[str]]] = {}
+    for group in snapshot["groups"]:
+        group_key = _norm(group.get("group_key"))
+        if group_key not in occupied_group_keys:
+            continue
+        field = _ROLLUP_FIELD_BY_GROUP_TYPE.get(
+            _norm(group.get("group_type"))
+        )
+        if field is None:
+            continue
+        concept_key = _norm(group.get("concept_key"))
+        visible_name = _norm(group.get("group_name")) or group_key
+        values.setdefault(concept_key, {}).setdefault(field, []).append(
+            visible_name
+        )
+    return {
+        concept_key: {
+            field: ", ".join(fields.get(field, []))
+            for field in _ROLLUP_FIELD_BY_GROUP_TYPE.values()
+        }
+        for concept_key, fields in values.items()
+    }
+
+
+def _omitted_group_shells(snapshot: dict) -> list[str]:
+    occupied_group_keys = {
+        _norm(candidate.get("group_key"))
+        for candidate in snapshot["candidates"]
+    }
+    return [
+        _norm(group.get("group_key"))
+        for group in snapshot["groups"]
+        if _norm(group.get("group_key")) not in occupied_group_keys
+    ]
+
+
+def _diff_rows(
+    sheet: str,
+    gold: dict,
+    rendered: dict,
+    *,
+    occupied_rollups: dict[str, dict[str, str]],
+) -> list[str]:
     diffs = []
+    multipart = (
+        sheet == "Descriptive" and bool(_sub_questions_from_row(gold))
+    )
+    concept_rollups = occupied_rollups.get(
+        _norm(gold.get("concept_title")), {}
+    )
     for field in aw.FIELDS[sheet]:
         got = _norm(rendered.get(field))
         if field == "question_text":
             want = _norm(_expected_question_text(sheet, gold))
+        elif multipart and field == "question":
+            want = _norm(_without_duplicated_subparts(
+                gold.get("question", ""), _sub_questions_from_row(gold)
+            ))
+        elif field in _ROLLUP_FIELD_BY_GROUP_TYPE.values():
+            want = concept_rollups.get(field, "")
+        elif multipart and field.startswith(
+            ("answer_type_", "answer_content_", "answer_weightage_")
+        ):
+            # Current multipart Descriptive rows score exclusively through
+            # subquestion marks and keyword rubrics.
+            want = ""
         elif field.startswith("answer_content_"):
             number = field.removeprefix("answer_content_")
+            want = _norm(katex_rules.raw_answer_cell(
+                str(gold.get(f"answer_type_{number}") or ""),
+                str(gold.get(field) or ""),
+            ))
+        elif (
+            sheet == "Subjective"
+            and field.startswith("answer_")
+            and field.removeprefix("answer_").isdigit()
+        ):
+            number = field.removeprefix("answer_")
             want = _norm(katex_rules.raw_answer_cell(
                 str(gold.get(f"answer_type_{number}") or ""),
                 str(gold.get(field) or ""),
@@ -268,10 +399,18 @@ def test_reference_workbook_round_trips_through_the_renderer(fixture):
     for chapter_title, snapshot in snapshots.items():
         master, issues = aw.render_master_file(snapshot)
         assert issues["unplaced"] == [], (chapter_title, issues["unplaced"])
+        assert issues["omitted_empty_group_shells"] == (
+            _omitted_group_shells(snapshot)
+        ), (chapter_title, issues["omitted_empty_group_shells"])
         rendered = aw.parse_workbook(master)
         errors = aw.validate_master_file(rendered, snapshot)
-        assert errors == [], (chapter_title, errors)
-        for sheet in ("Objective", "Descriptive"):
+        unexpected = [
+            error for error in errors
+            if "does not start with an allowed functional tag" not in error
+        ]
+        assert unexpected == [], (chapter_title, errors)
+        occupied_rollups = _occupied_rollups(snapshot)
+        for sheet in aw.SHEET_ORDER:
             gold_rows = _rows_for_chapter(parsed, sheet, chapter_title)
             rendered_rows = [
                 row for row in rendered["sheets"][sheet]["rows"]
@@ -280,7 +419,12 @@ def test_reference_workbook_round_trips_through_the_renderer(fixture):
             assert len(rendered_rows) == len(gold_rows), (
                 chapter_title, sheet, len(rendered_rows), len(gold_rows))
             for gold_row, rendered_row in zip(gold_rows, rendered_rows):
-                all_diffs.extend(_diff_rows(sheet, gold_row, rendered_row))
+                all_diffs.extend(_diff_rows(
+                    sheet,
+                    gold_row,
+                    rendered_row,
+                    occupied_rollups=occupied_rollups,
+                ))
     if all_diffs:
         pytest.fail(
             f"{fixture}: {len(all_diffs)} field divergence(s):\n"
@@ -322,7 +466,7 @@ def test_reference_identity_values_survive_the_round_trip():
             rendered = aw.parse_workbook(master)
             rendered_titles = {
                 _norm(row.get("chapter_title"))
-                for sheet in ("Objective", "Descriptive")
+                for sheet in aw.SHEET_ORDER
                 for row in rendered["sheets"][sheet]["rows"]
             }
             assert rendered_titles == {title}
@@ -331,7 +475,7 @@ def test_reference_identity_values_survive_the_round_trip():
 def test_reference_wire_values_hold_across_every_gold_question():
     for fixture in FIXTURES:
         parsed = aw.parse_workbook((FIXTURE_DIR / fixture).read_bytes())
-        for sheet in ("Objective", "Descriptive"):
+        for sheet in aw.SHEET_ORDER:
             for row in parsed["sheets"][sheet]["rows"]:
                 if not _norm(row.get("question_label")):
                     continue

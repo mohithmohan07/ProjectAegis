@@ -434,6 +434,12 @@ def _canonical_layout(layout_id: str, *, concept_fields: Sequence[str],
 # --------------------------------------------------------------------------- #
 
 REFERENCE_LAYOUT_ID = "sop-mes-1"
+MSBSHSE_GRADE_6_MASTER_LAYOUT_ID = (
+    "msbshse-grade-6-master-2026-08-27"
+)
+MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID = (
+    "msbshse-grade-6-english-post-master-2026-08-27"
+)
 REFERENCE_WORKBOOK_PATH = (
     Path(__file__).resolve().parents[2]
     / "data" / "Testing" / "reference_bulk_import" / "bulk_import_format.xlsx"
@@ -450,10 +456,21 @@ _REFERENCE_KIND_BY_SHEET = {
 
 
 def _header_names(values: Iterable) -> tuple[str, ...]:
-    names = ["" if value is None else str(value).strip() for value in values]
-    while names and not names[-1]:
-        names.pop()
-    return tuple(names)
+    """Return header cell text byte-exactly, dropping only absent tail cells.
+
+    Whitespace is data in a field name.  Stripping here made a workbook with
+    ``"question_label "`` or ``"question_label\n"`` identify as canonical
+    even though every later lookup addresses ``"question_label"``.  A
+    trailing ``None`` is different: openpyxl may expose styled but genuinely
+    absent cells after the final header, and those carry no field name.
+    Interior ``None`` values become an explicit empty name and therefore fail
+    exact tuple equality as they should.
+    """
+
+    raw = list(values)
+    while raw and raw[-1] is None:
+        raw.pop()
+    return tuple("" if value is None else str(value) for value in raw)
 
 
 def _blocks_from_bands(fields: Sequence[str],
@@ -632,6 +649,155 @@ def _manifest_drift(sheets: Mapping[str, SheetLayout], sheet_order: Sequence[str
 
 
 # --------------------------------------------------------------------------- #
+# Normalized 2026-08-27 audit Master layouts
+#
+# These are output-role layouts, not replacements for ``sop-mes-1``.  They
+# are derived only from the committed reference workbook's registered fields
+# and bands.  In particular, they do not import ``assessment_workbook`` (which
+# already imports this registry through ``bulk_import``) and therefore cannot
+# create a renderer/reader import cycle.
+#
+# The hand-edited audit workbooks are evidence, not layout authorities: some
+# carry duplicate headers and styled trailing columns.  The registered target
+# is instead the unique insertion contract below.  Exact header equality then
+# makes those raw defects fail closed while accepting the clean renderer.
+# --------------------------------------------------------------------------- #
+
+_AUDIT_UPDATE_FIELD_AFTER = (
+    ("is_update_chapter", "chapter_title"),
+    ("is_update_topic", "topic_title"),
+    ("is_update_concept", "concept_title"),
+    ("is_update_question", "question_label"),
+)
+_AUDIT_BASE_DESCRIPTIVE_ANSWER_SLOTS = 10
+_AUDIT_ENGLISH_POST_DESCRIPTIVE_ANSWER_SLOTS = 30
+
+
+def _insert_unique_after(fields: list[str], anchor: str, field: str) -> None:
+    """Insert one new field after one unambiguous reference-field anchor."""
+
+    if fields.count(anchor) != 1:
+        raise ValueError(
+            f"audit Master anchor {anchor!r} is not unique in the reference "
+            "layout"
+        )
+    if field in fields:
+        raise ValueError(
+            f"audit Master field {field!r} already exists in the reference "
+            "layout"
+        )
+    fields.insert(fields.index(anchor) + 1, field)
+
+
+def _audit_master_fields(
+    reference: SheetLayout,
+    *,
+    descriptive_answer_slots: int,
+) -> tuple[str, ...]:
+    """Reference fields plus the audit's documented, unique insertions."""
+
+    fields = list(reference.fields)
+    for field, anchor in _AUDIT_UPDATE_FIELD_AFTER:
+        _insert_unique_after(fields, anchor, field)
+    _insert_unique_after(
+        fields,
+        "group_display_name" if reference.kind == "descriptive" else "group_name",
+        "is_update_group",
+    )
+
+    if reference.kind == "descriptive":
+        _insert_unique_after(
+            fields, "concept_question_labels", "concept_source",
+        )
+        if descriptive_answer_slots < _AUDIT_BASE_DESCRIPTIVE_ANSWER_SLOTS:
+            raise ValueError(
+                "an audit Master cannot remove committed descriptive answer "
+                "slots"
+            )
+        extra = [
+            f"{prefix}_{number}"
+            for number in range(
+                _AUDIT_BASE_DESCRIPTIVE_ANSWER_SLOTS + 1,
+                descriptive_answer_slots + 1,
+            )
+            for prefix in (
+                "answer_type", "answer_weightage", "answer_content",
+            )
+        ]
+        explanation = fields.index("answer_explanation")
+        fields[explanation:explanation] = extra
+
+    if len(fields) != len(set(fields)):
+        duplicates = sorted({name for name in fields if fields.count(name) > 1})
+        raise ValueError(
+            "normalized audit Master fields must be unique; duplicates: "
+            + ", ".join(duplicates)
+        )
+    return tuple(fields)
+
+
+def _audit_master_bands(
+    reference: SheetLayout,
+    fields: Sequence[str],
+) -> tuple[Band, ...]:
+    """Rebase reference bands by their boundary field names.
+
+    This preserves the committed workbook's intentional band gaps.  The only
+    new ownership statement is Descriptive ``concept_source``: the audit log
+    places it at the end of the Concept band.
+    """
+
+    rebased: list[Band] = []
+    for band in reference.bands:
+        start_field = reference.fields[band.start - 1]
+        end_field = reference.fields[band.end - 1]
+        end = fields.index(end_field) + 1
+        if (
+            reference.kind == "descriptive"
+            and band.label.strip() == "Concept"
+        ):
+            end = fields.index("concept_source") + 1
+        rebased.append(Band(
+            band.label,
+            fields.index(start_field) + 1,
+            end,
+        ))
+    return tuple(rebased)
+
+
+def _audit_master_layout(
+    reference: Layout,
+    layout_id: str,
+    *,
+    descriptive_answer_slots: int,
+) -> Layout:
+    """Build one normalized Master reader layout from ``sop-mes-1``."""
+
+    sheets: dict[str, SheetLayout] = {}
+    for kind, reference_sheet in reference.sheets.items():
+        fields = _audit_master_fields(
+            reference_sheet,
+            descriptive_answer_slots=descriptive_answer_slots,
+        )
+        bands = _audit_master_bands(reference_sheet, fields)
+        sheets[kind] = SheetLayout(
+            layout_id,
+            kind,
+            reference_sheet.sheet_name,
+            _blocks_from_bands(fields, bands),
+            bands,
+        )
+    return Layout(
+        layout_id,
+        sheets,
+        ignored_sheets=(),
+        source=(
+            f"normalized 2026-08-27 audit Master derived from {reference.id}"
+        ),
+    )
+
+
+# --------------------------------------------------------------------------- #
 # The registry
 # --------------------------------------------------------------------------- #
 
@@ -670,9 +836,39 @@ for _defect in _REGISTRY_DEFECTS:
     )
 if _reference_layout is not None:
     register(_reference_layout)
+    register(_audit_master_layout(
+        _reference_layout,
+        MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+        descriptive_answer_slots=_AUDIT_BASE_DESCRIPTIVE_ANSWER_SLOTS,
+    ))
+    register(_audit_master_layout(
+        _reference_layout,
+        MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+        descriptive_answer_slots=(
+            _AUDIT_ENGLISH_POST_DESCRIPTIVE_ANSWER_SLOTS
+        ),
+    ))
 register(CANONICAL_CURRENT)
 register(CANONICAL_NO_QUESTION_TEXT)
 register(CANONICAL_LEGACY_CONCEPT_BAND)
+
+# These layouts are current, deliberate output roles.  They are not the
+# historical inputs that must have a migration home in ``sop-mes-1``.  Keeping
+# that classification explicit prevents a future registry-wide migration
+# invariant from treating 20 legitimate English descriptive answer slots as
+# disposable legacy columns.
+CURRENT_TARGET_LAYOUT_IDS = frozenset({
+    REFERENCE_LAYOUT_ID,
+    MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+    MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+})
+
+# A generated Master is one three-tab artifact, in this exact order.  Older
+# registered inputs retain their historical partial-workbook tolerance.
+STRICT_COMPLETE_LAYOUT_IDS = frozenset({
+    MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+    MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+})
 
 
 def layout(layout_id: str) -> Layout:
@@ -787,6 +983,69 @@ def _refuse(sheet_name: str, names: Sequence[str], reason: str) -> WorkbookLayou
     return WorkbookLayoutError(message, detail=detail)
 
 
+def _workbook_claim(
+    entry: Layout,
+    headers: Mapping[str, Sequence],
+) -> WorkbookIdentity | None:
+    """Return ``entry``'s whole-workbook claim, if every tab belongs to it.
+
+    Two normalized Master layouts intentionally share their Objective and
+    Subjective headers; only English Post expands Descriptive.  Choosing a
+    layout one sheet at a time would therefore produce a false mixed-layout
+    refusal.  Whole-workbook matching resolves the discriminator without any
+    fuzzy/header-prefix logic.
+    """
+
+    matched: list[SheetIdentity] = []
+    ignored: list[str] = []
+    for sheet_name, values in headers.items():
+        names = _header_names(values)
+        candidate = next(
+            (
+                (kind, sheet_layout)
+                for kind, sheet_layout in entry.sheets.items()
+                if sheet_layout.sheet_name == sheet_name
+                and sheet_layout.fields == names
+            ),
+            None,
+        )
+        if candidate is not None:
+            kind, _sheet_layout = candidate
+            matched.append(SheetIdentity(entry.id, kind, sheet_name))
+            continue
+        if sheet_name in entry.ignored_sheets:
+            ignored.append(sheet_name)
+            continue
+        return None
+    if not matched:
+        return None
+    return WorkbookIdentity(entry.id, tuple(matched), tuple(ignored))
+
+
+def _require_strict_workbook_shape(
+    identity: WorkbookIdentity,
+    headers: Mapping[str, Sequence],
+) -> None:
+    """Refuse an incomplete/reordered normalized Master output."""
+
+    if identity.layout_id not in STRICT_COMPLETE_LAYOUT_IDS:
+        return
+    expected_order = tuple(
+        sheet_layout.sheet_name
+        for sheet_layout in identity.layout.sheets.values()
+    )
+    found_order = tuple(headers)
+    if found_order == expected_order:
+        return
+    found = identity.sheets[0]
+    raise _refuse(
+        found.sheet_name,
+        found.sheet.fields,
+        "normalized Master sheets must be complete and in canonical "
+        f"order {expected_order!r}; found {found_order!r}",
+    )
+
+
 def identify_workbook(headers: Mapping[str, Sequence]) -> WorkbookIdentity:
     """Identify a whole workbook, or refuse it.
 
@@ -797,6 +1056,18 @@ def identify_workbook(headers: Mapping[str, Sequence]) -> WorkbookIdentity:
     of a file whose geometry is unknown is the corruption this gate exists to
     prevent.
     """
+    # Prefer one layout that claims the artifact as a whole.  This is still
+    # exact equality, and is necessary because the 10-slot and 30-slot Master
+    # roles deliberately share two of their three sheet schemas.
+    claims = [
+        claim
+        for entry in LAYOUTS.values()
+        if (claim := _workbook_claim(entry, headers)) is not None
+    ]
+    if len(claims) == 1:
+        _require_strict_workbook_shape(claims[0], headers)
+        return claims[0]
+
     identified: list[SheetIdentity] = []
     unidentified: list[tuple[str, tuple[str, ...]]] = []
     for sheet_name, values in headers.items():
@@ -825,6 +1096,9 @@ def identify_workbook(headers: Mapping[str, Sequence]) -> WorkbookIdentity:
 
     layout_id = layout_ids.pop()
     entry = LAYOUTS[layout_id]
+    _require_strict_workbook_shape(
+        WorkbookIdentity(layout_id, tuple(identified), ()), headers,
+    )
     ignored: list[str] = []
     for sheet_name, names in unidentified:
         if sheet_name in entry.ignored_sheets:

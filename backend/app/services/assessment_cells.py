@@ -20,7 +20,7 @@ from . import assessment_profile
 from .phase3 import kernel
 
 
-CELL_POLICY_VERSION = "assessment-cell-2"
+CELL_POLICY_VERSION = "assessment-cell-3"
 
 CELL_SYSTEM = (
     "You are the Aegis assessment-cell author. For ONE source-owned question "
@@ -33,14 +33,16 @@ CELL_SYSTEM = (
     "categories, skills, difficulties, or marks. The no-local-fallback "
     "invariant applies; give your evidence-bound verdict rather than applying "
     "a default.\n"
-    "sheet_kind is objective, subjective, or descriptive as allowed by the "
-    "active assessment profile. question_category must be the CMS's exact "
-    "name for the category, from the sheet kind's own list — objective: "
-    "Multiple Choice Question, Assertion & Reasons, True/False, Fill in "
-    "the Blanks; subjective: Fill in the Blanks, Very Short Answer, Short "
-    "Answer, Sentence Transformation, Error Correction; descriptive: Long "
-    "Answer, Case Based Questions, Passage Based Questions, Extract Based "
-    "Questions, Composition Writing — never an abbreviation or paraphrase. "
+    "sheet_kind must be one of the exact values supplied under "
+    "profile.allowed_sheet_kinds. question_category must be one exact key "
+    "supplied for that sheet under "
+    "profile.assessment_format_policy.formats_by_sheet; never abbreviate or "
+    "paraphrase it. Apply that category's marks contract. A fixed contract "
+    "permits only its listed value; a per-subpoint contract sets total marks "
+    "from the number of represented subpoints and its marks-per-subpoint. "
+    "When that rule supplies max_subpoints, split a larger compound task "
+    "into separate cells rather than exceeding the wire's representable "
+    "subpoint count. "
     "cognitive_skill is Remember, Understand, "
     "Apply, Analyse, Evaluate, or Create. difficulty is Less, Moderate, or "
     "High; Bloom and difficulty are independent. marks is a realistic "
@@ -51,7 +53,7 @@ CELL_SYSTEM = (
     '"rationale":"evidence-bound reason"}'
 )
 
-GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-2"
+GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-3"
 
 GENERATED_CELL_SYSTEM = (
     "You are the Aegis assessment-cell author for ONE GENERATED "
@@ -66,14 +68,15 @@ GENERATED_CELL_SYSTEM = (
     "categories, skills, difficulties, or marks. The no-local-fallback "
     "invariant applies; give your evidence-bound verdict rather than "
     "applying a default.\n"
-    "sheet_kind is objective, subjective, or descriptive as allowed by the "
-    "active assessment profile. question_category must be the CMS's exact "
-    "name for the category, from the sheet kind's own list — objective: "
-    "Multiple Choice Question, Assertion & Reasons, True/False, Fill in "
-    "the Blanks; subjective: Fill in the Blanks, Very Short Answer, Short "
-    "Answer, Sentence Transformation, Error Correction; descriptive: Long "
-    "Answer, Case Based Questions, Passage Based Questions, Extract Based "
-    "Questions, Composition Writing — never an abbreviation or paraphrase. "
+    "sheet_kind must be one of the exact values supplied under "
+    "profile.allowed_sheet_kinds. question_category must be one exact key "
+    "supplied for that sheet under "
+    "profile.assessment_format_policy.formats_by_sheet; never abbreviate or "
+    "paraphrase it. Apply that category's marks contract. A fixed contract "
+    "permits only its listed value; a per-subpoint contract sets total marks "
+    "from the number of represented subpoints and its marks-per-subpoint. "
+    "When that rule supplies max_subpoints, author only a cell within that "
+    "representable limit. "
     "cognitive_skill is Remember, Understand, "
     "Apply, Analyse, Evaluate, or Create. difficulty is Less, Moderate, or "
     "High; Bloom and difficulty are independent. marks is a realistic "
@@ -159,21 +162,30 @@ def _allowed_sheet_kinds(profile: Mapping[str, Any]) -> tuple[str, ...]:
     return assessment_profile.sheet_kinds(profile)
 
 
-def _profile_payload(profile: Mapping[str, Any]) -> dict[str, Any]:
-    appears_in = str(profile.get("appears_in") or "").strip()
+def _profile_payload(
+    profile: Mapping[str, Any], meta: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    run_profile = assessment_profile.resolve_for_metadata(profile, meta)
+    appears_in = str(run_profile.get("appears_in") or "").strip()
     if not appears_in:
         raise CellDecisionError(
             "assessment cell decisions require an explicit appears_in profile value"
         )
     return {
-        "name": str(profile.get("name") or ""),
-        "allowed_sheet_kinds": list(_allowed_sheet_kinds(profile)),
+        "name": str(run_profile.get("name") or ""),
+        "allowed_sheet_kinds": list(_allowed_sheet_kinds(run_profile)),
         "appears_in": appears_in,
+        "assessment_format_policy": (
+            assessment_profile.assessment_format_policy(run_profile, meta)
+        ),
     }
 
 
 def _verdict_checker(
-    id_field: str, id_value: str, allowed_sheet_kinds: tuple[str, ...]
+    id_field: str,
+    id_value: str,
+    allowed_sheet_kinds: tuple[str, ...],
+    format_policy: Mapping[str, Any],
 ) -> kernel.Checker:
     """Mechanics only: identity, required fields, enums, and numeric shape.
 
@@ -193,18 +205,21 @@ def _verdict_checker(
                 "sheet_kind must be one of "
                 f"{allowed_sheet_kinds} (got {response.get('sheet_kind')!r})"
             )
+        sheet_kind = str(response.get("sheet_kind") or "")
+        formats_by_sheet = format_policy.get("formats_by_sheet")
+        if not isinstance(formats_by_sheet, Mapping):
+            formats_by_sheet = {}
+        sheet_formats = formats_by_sheet.get(sheet_kind)
+        if not isinstance(sheet_formats, Mapping):
+            sheet_formats = {}
         category = response.get("question_category")
-        allowed_categories = bi.QUESTION_CATEGORIES.get(
-            str(response.get("sheet_kind") or ""), []
-        )
+        allowed_categories = tuple(str(value) for value in sheet_formats)
         if not isinstance(category, str) or not str(category or "").strip():
             defects.append("question_category must be a non-empty string")
-        elif allowed_categories and category not in allowed_categories:
-            # The CMS's own per-sheet vocabulary (the owner's review found
-            # "MCQ" / "Multiple Choice" / "Multiple Choice Question" on
-            # sibling rows). An enum-membership gate is schema mechanics,
-            # the same shape as the cognitive-skill and difficulty gates
-            # beside it; naming the list lets corrections converge.
+        elif category not in allowed_categories:
+            # Enum membership is schema mechanics.  The enum itself comes
+            # from the active profile so this service contains no school- or
+            # board-specific category prose.
             defects.append(
                 "question_category must be one of "
                 f"{tuple(allowed_categories)} for sheet_kind "
@@ -223,6 +238,7 @@ def _verdict_checker(
                 f"(got {response.get('difficulty')!r})"
             )
         marks = response.get("marks")
+        numeric_marks: float | None = None
         if isinstance(marks, bool):
             defects.append("marks must be numeric")
         else:
@@ -230,8 +246,100 @@ def _verdict_checker(
                 numeric_marks = float(marks)
                 if not math.isfinite(numeric_marks) or numeric_marks <= 0:
                     defects.append("marks must be finite and positive")
+                    numeric_marks = None
             except (TypeError, ValueError):
                 defects.append("marks must be numeric")
+        category_rule = (
+            sheet_formats.get(category) if isinstance(category, str) else None
+        )
+        marks_rule = (
+            category_rule.get("marks")
+            if isinstance(category_rule, Mapping)
+            else None
+        )
+        if (
+            isinstance(category_rule, Mapping)
+            and "marks" in category_rule
+            and not isinstance(marks_rule, Mapping)
+        ):
+            defects.append(
+                f"question_category {category!r} has a non-object marks "
+                "policy"
+            )
+        if numeric_marks is not None and isinstance(marks_rule, Mapping):
+            mode = str(marks_rule.get("mode") or "")
+            if not mode:
+                defects.append(
+                    f"question_category {category!r} has a marks policy "
+                    "without a mode"
+                )
+            elif mode == "fixed":
+                allowed_marks = tuple(
+                    value for value in marks_rule.get("allowed") or ()
+                    if not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and math.isfinite(float(value))
+                )
+                if numeric_marks not in {
+                    float(value) for value in allowed_marks
+                }:
+                    defects.append(
+                        "marks must be one of "
+                        f"{allowed_marks} for question_category {category!r} "
+                        f"(got {marks!r})"
+                    )
+            elif mode == "per_subpoint":
+                unit = marks_rule.get("marks_per_subpoint")
+                max_subpoints = marks_rule.get("max_subpoints")
+                valid_max_subpoints: float | None = None
+                if "max_subpoints" in marks_rule:
+                    if (
+                        isinstance(max_subpoints, bool)
+                        or not isinstance(max_subpoints, (int, float))
+                        or not math.isfinite(float(max_subpoints))
+                        or float(max_subpoints) <= 0
+                        or not float(max_subpoints).is_integer()
+                    ):
+                        defects.append(
+                            f"question_category {category!r} has an invalid "
+                            "max_subpoints policy; it must be a positive "
+                            "integer"
+                        )
+                    else:
+                        valid_max_subpoints = float(max_subpoints)
+                if (
+                    isinstance(unit, bool)
+                    or not isinstance(unit, (int, float))
+                    or not math.isfinite(float(unit))
+                    or float(unit) <= 0
+                ):
+                    defects.append(
+                        f"question_category {category!r} has an invalid "
+                        "marks-per-subpoint policy"
+                    )
+                else:
+                    represented = numeric_marks / float(unit)
+                    if not represented.is_integer():
+                        defects.append(
+                            "marks must be a positive whole-number multiple "
+                            f"of {unit} for question_category {category!r} "
+                            f"(got {marks!r})"
+                        )
+                    if (
+                        valid_max_subpoints is not None
+                        and represented > valid_max_subpoints
+                    ):
+                        defects.append(
+                            f"question_category {category!r} can represent "
+                            f"at most {max_subpoints:g} subpoint(s) in one "
+                            f"{response.get('sheet_kind')} cell (got "
+                            f"{represented:g})"
+                        )
+            elif mode:
+                defects.append(
+                    f"question_category {category!r} has unknown marks "
+                    f"policy mode {mode!r}"
+                )
         if not isinstance(response.get("rationale"), str) or not str(
             response.get("rationale") or ""
         ).strip():
@@ -242,16 +350,22 @@ def _verdict_checker(
 
 
 def _cell_checker(
-    source_qid: str, allowed_sheet_kinds: tuple[str, ...]
+    source_qid: str,
+    allowed_sheet_kinds: tuple[str, ...],
+    format_policy: Mapping[str, Any],
 ) -> kernel.Checker:
-    return _verdict_checker("source_qid", source_qid, allowed_sheet_kinds)
+    return _verdict_checker(
+        "source_qid", source_qid, allowed_sheet_kinds, format_policy
+    )
 
 
 def _generated_cell_checker(
-    pre_question_id: str, allowed_sheet_kinds: tuple[str, ...]
+    pre_question_id: str,
+    allowed_sheet_kinds: tuple[str, ...],
+    format_policy: Mapping[str, Any],
 ) -> kernel.Checker:
     return _verdict_checker(
-        "pre_question_id", pre_question_id, allowed_sheet_kinds
+        "pre_question_id", pre_question_id, allowed_sheet_kinds, format_policy
     )
 
 
@@ -368,8 +482,9 @@ def decide_cells(
         raise CellDecisionError("assessment cell metadata must be an object")
     if not isinstance(profile, Mapping):
         raise CellDecisionError("assessment cell profile must be an object")
-    profile_evidence = _profile_payload(profile)
+    profile_evidence = _profile_payload(profile, meta)
     allowed_sheet_kinds = tuple(profile_evidence["allowed_sheet_kinds"])
+    format_policy = profile_evidence["assessment_format_policy"]
 
     prepared: list[tuple[str, dict[str, Any]]] = []
     seen: set[str] = set()
@@ -409,7 +524,9 @@ def decide_cells(
             envelope_sha256=envelope_sha,
             payload=payload,
             provider=provider,
-            checker=_cell_checker(source_qid, allowed_sheet_kinds),
+            checker=_cell_checker(
+                source_qid, allowed_sheet_kinds, format_policy
+            ),
             critic=critic,
             store=store,
             policy_version=CELL_POLICY_VERSION,
@@ -525,8 +642,9 @@ def decide_generated_cells(
         raise CellDecisionError("assessment cell metadata must be an object")
     if not isinstance(profile, Mapping):
         raise CellDecisionError("assessment cell profile must be an object")
-    profile_evidence = _profile_payload(profile)
+    profile_evidence = _profile_payload(profile, meta)
     allowed_sheet_kinds = tuple(profile_evidence["allowed_sheet_kinds"])
+    format_policy = profile_evidence["assessment_format_policy"]
     concepts = dict(concept_records_by_key or {})
     concept_key_by_pre_id, ambiguous_pre_ids = concept_keys_by_pre_id(
         concepts
@@ -612,7 +730,7 @@ def decide_generated_cells(
             payload=payload,
             provider=provider,
             checker=_generated_cell_checker(
-                pre_question_id, allowed_sheet_kinds
+                pre_question_id, allowed_sheet_kinds, format_policy
             ),
             critic=critic,
             store=store,

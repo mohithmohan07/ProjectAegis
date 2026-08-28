@@ -285,7 +285,7 @@ def build(
         rows_by_topic_object.setdefault(marker, []).append(row)
     ordered_topics = sorted(
         topic_objects.items(),
-        key=lambda item: (int(item[1].source_order or 0), item[1].topic_title),
+        key=lambda item: identity.source_order_key(item[1]),
     )
     snapshot_topics = []
     for marker, topic in ordered_topics:

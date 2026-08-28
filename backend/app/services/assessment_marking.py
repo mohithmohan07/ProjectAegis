@@ -32,7 +32,9 @@ from .phase3 import kernel
 # ``-5`` moved stable rules/metadata ahead of the candidate suffix and added
 # the explicit GPT-5.6 cache breakpoint.  ``-6`` layers the owner-format
 # contract on top so replay cannot collide with either provider input shape.
-MARKING_POLICY_VERSION = "assessment-marking-6"
+# ``-7`` adds Subjective answer blocks, the board/profile duration contract,
+# and mutually exclusive main-vs-subquestion rubrics.
+MARKING_POLICY_VERSION = "assessment-marking-7"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
 
 _PROMPT_CACHE_STABLE_KEYS = (
@@ -40,6 +42,7 @@ _PROMPT_CACHE_STABLE_KEYS = (
     "rules",
     "critic_rules",
     "metadata",
+    "assessment_format_policy",
 )
 
 MARKING_SYSTEM = (
@@ -57,12 +60,19 @@ MARKING_SYSTEM = (
     "a finite positive question_duration IN MINUTES — the wire contract's "
     "unit; never seconds — and the response-appropriate "
     "math_keyboard value without a local default: Objective requires the "
-    "authored empty string; Descriptive requires exactly Yes or No.\n"
+    "authored empty string; Subjective and Descriptive require exactly Yes "
+    "or No. Obey the supplied assessment_format_policy duration table. For "
+    "a per-subpoint rule, author duration_basis_count from the represented "
+    "subpoints and make duration its exact prescribed multiple; otherwise "
+    "return duration_basis_count as null.\n"
     "For Objective, exactly one correct option receives the cell's total "
-    "marks and every wrong option receives exact zero. For Descriptive, every "
-    "answer/rubric weight is positive and their exact sum is the cell total. "
-    "A 4-mark Descriptive answer has at least two rubric blocks; never assign "
-    "all four marks to one block. Preserve each answer/rubric and keyword "
+    "marks and every wrong option receives exact zero. For Subjective, every "
+    "expected-answer weight is positive and their exact sum is the cell "
+    "total. For a single-part Descriptive item, every answer/rubric weight is "
+    "positive and their exact sum is the cell total. A 4-mark single-part "
+    "Descriptive answer has at least two rubric blocks; never assign all four "
+    "marks to one block. A multipart Descriptive item keeps answers=[] and "
+    "scores only its subquestions/keywords. Preserve each answer/rubric and keyword "
     "cell's declared medium: Equation is full raw LaTeX without [Katex], "
     "while Phrases is wholly plain text without TeX. "
     "When subquestions exist, their positive marks sum exactly to the cell "
@@ -72,10 +82,13 @@ MARKING_SYSTEM = (
     "Where the authored question/rubric represents scored working or a "
     "diagram contribution, allocate its step or diagram marks explicitly. "
     "Enumerate every represented subquestion exactly to match the stem, and "
-    "award no marks for redundant steps.\n"
+    "award no marks for redundant steps. Allocate marks in fair, logical "
+    "increments consistent with the represented scoring evidence; never "
+    "use token slivers such as 0.1 merely to force a sum.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","question":"","question_text":"",'
     '"answers":[],"sub_questions":[],"question_duration":1,'
+    '"duration_basis_count":null,'
     '"math_keyboard":"Yes|No|","rationale":"evidence-bound reason"}'
 )
 
@@ -107,6 +120,7 @@ _RESPONSE_FIELDS = frozenset({
     "answers",
     "sub_questions",
     "question_duration",
+    "duration_basis_count",
     "math_keyboard",
     "rationale",
 })
@@ -210,10 +224,9 @@ def _validate_answer_space(
     total_marks: Decimal,
 ) -> None:
     answers = candidate.get("answers")
-    if not isinstance(answers, list) or not answers:
+    if not isinstance(answers, list):
         raise MarkingError(
-            f"marking candidate {candidate_id!r} requires at least one "
-            "answer/rubric block"
+            f"marking candidate {candidate_id!r} answers is not an array"
         )
     for position, answer in enumerate(answers, start=1):
         if not isinstance(answer, Mapping):
@@ -241,12 +254,6 @@ def _validate_answer_space(
                 f"{position} violates its declared medium: "
                 + ", ".join(format_issues)
             )
-    if kind == "descriptive" and total_marks == Decimal(4) and len(answers) < 2:
-        raise MarkingError(
-            f"marking candidate {candidate_id!r} is a 4-mark descriptive "
-            "item and requires at least two answer/rubric blocks"
-        )
-
     subquestions = candidate.get("sub_questions")
     if not isinstance(subquestions, list):
         raise MarkingError(
@@ -296,6 +303,37 @@ def _validate_answer_space(
                     f"{position} keyword {keyword_position} violates its "
                     "declared medium: " + ", ".join(keyword_issues)
                 )
+    if kind in {"objective", "subjective"} and not answers:
+        raise MarkingError(
+            f"marking candidate {candidate_id!r} requires at least one "
+            "answer block"
+        )
+    if kind == "subjective" and subquestions:
+        raise MarkingError(
+            f"subjective marking candidate {candidate_id!r} cannot carry "
+            "subquestions"
+        )
+    if kind == "descriptive":
+        if not answers and not subquestions:
+            raise MarkingError(
+                f"marking candidate {candidate_id!r} requires a main rubric "
+                "or subquestion rubrics"
+            )
+        if answers and subquestions:
+            raise MarkingError(
+                f"multipart marking candidate {candidate_id!r} must not "
+                "duplicate scoring in main answer blocks"
+            )
+        if (
+            total_marks == Decimal(4)
+            and not subquestions
+            and len(answers) < 2
+        ):
+            raise MarkingError(
+                f"marking candidate {candidate_id!r} is a 4-mark "
+                "single-part descriptive item and requires at least two "
+                "answer/rubric blocks"
+            )
 
 
 def _adopted_contract(
@@ -435,6 +473,11 @@ def _prepare_pair(
                 f"objective marking candidate {candidate_id!r} requires "
                 f"exactly one correct option (got {correct_count})"
             )
+    elif kind == "subjective" and candidate.get("sub_questions"):
+        raise MarkingError(
+            f"subjective marking candidate {candidate_id!r} cannot carry "
+            "subquestions"
+        )
     contract = _adopted_contract(candidate, candidate_id)
     candidate_copy = copy.deepcopy(dict(candidate))
     candidate_copy["candidate_id"] = candidate_id
@@ -488,6 +531,7 @@ def _semantic_subquestions(value: Any) -> list[dict[str, Any]] | None:
 
 def _weight_defects(
     response: Mapping[str, Any], *, kind: str, total_marks: Decimal,
+    marks_rule: Mapping[str, Any],
 ) -> list[str]:
     defects: list[str] = []
     answers = response.get("answers")
@@ -530,10 +574,48 @@ def _weight_defects(
         subquestions = response.get("sub_questions")
         if isinstance(subquestions, list) and subquestions:
             defects.append("objective marking must not contain subquestions")
+    elif kind == "subjective":
+        if not answers:
+            defects.append("subjective marking needs at least one answer")
+        marks_unit = (
+            _decimal(marks_rule.get("marks_per_subpoint"))
+            if str(marks_rule.get("mode") or "") == "per_subpoint"
+            else None
+        )
+        for position, answer in enumerate(answers, start=1):
+            if not isinstance(answer, Mapping):
+                continue
+            weight = _decimal(answer.get("answer_weightage"))
+            if weight is None or weight <= 0:
+                defects.append(
+                    f"answer {position} weight must be finite and positive"
+                )
+                continue
+            answer_weights.append(weight)
+            if marks_unit is not None and weight != marks_unit:
+                defects.append(
+                    f"subjective answer {position} weight must equal the "
+                    f"active marks-per-subpoint unit {marks_unit:g}"
+                )
+        subquestions = response.get("sub_questions")
+        if isinstance(subquestions, list) and subquestions:
+            defects.append("subjective marking must not contain subquestions")
     else:
-        if total_marks == Decimal(4) and len(answers) < 2:
+        subquestions = response.get("sub_questions")
+        if not isinstance(subquestions, list):
+            subquestions = []
+        if answers and subquestions:
             defects.append(
-                "a 4-mark descriptive item requires at least two "
+                "multipart descriptive must not duplicate scoring in main "
+                "answer blocks"
+            )
+        if (
+            total_marks == Decimal(4)
+            and not subquestions
+            and len(answers) < 2
+        ):
+            defects.append(
+                "a 4-mark single-part descriptive item requires at least two "
                 "answer/rubric blocks"
             )
         for position, answer in enumerate(answers, start=1):
@@ -547,9 +629,15 @@ def _weight_defects(
                 continue
             answer_weights.append(weight)
 
-    if len(answer_weights) == len(answers) and sum(
-        answer_weights, Decimal(0)
-    ) != total_marks:
+    score_in_main_answers = kind != "descriptive" or not (
+        isinstance(response.get("sub_questions"), list)
+        and response.get("sub_questions")
+    )
+    if (
+        score_in_main_answers
+        and len(answer_weights) == len(answers)
+        and sum(answer_weights, Decimal(0)) != total_marks
+    ):
         defects.append(
             f"answer weights must sum exactly to total marks {total_marks}"
         )
@@ -575,8 +663,9 @@ def _weight_defects(
         sub_marks.append(sub_mark)
         keywords = subquestion.get("keywords")
         if not isinstance(keywords, list) or not keywords:
-            # Some valid semantic rubrics use only the answer blocks.  When
-            # keyword rows exist, however, their arithmetic is mandatory.
+            defects.append(
+                f"subquestion {position} needs at least one keyword rubric"
+            )
             continue
         keyword_weights: list[Decimal] = []
         for keyword_position, keyword in enumerate(keywords, start=1):
@@ -606,9 +695,103 @@ def _weight_defects(
     return defects
 
 
+def _format_rule(
+    format_policy: Mapping[str, Any], *, kind: str, category: str,
+) -> Mapping[str, Any] | None:
+    """Return one exact profile-owned format rule, if it is declared."""
+
+    formats = format_policy.get("formats_by_sheet")
+    if not isinstance(formats, Mapping):
+        return None
+    sheet = formats.get(kind)
+    if not isinstance(sheet, Mapping):
+        return None
+    rule = sheet.get(category)
+    return rule if isinstance(rule, Mapping) else None
+
+
+def _validate_cell_format_contract(
+    cell: Mapping[str, Any], total_marks: Decimal,
+    format_policy: Mapping[str, Any],
+) -> None:
+    """Fail before provider spend when a cell violates its profile contract."""
+
+    cell_id = str(cell.get("cell_id") or "")
+    kind = str(cell.get("sheet_kind") or "")
+    category = str(cell.get("question_category") or "")
+    rule = _format_rule(format_policy, kind=kind, category=category)
+    if rule is None:
+        raise MarkingError(
+            f"marking blueprint cell {cell_id!r} category {category!r} is "
+            f"not permitted for sheet_kind {kind!r} by the active profile"
+        )
+    marks_rule = rule.get("marks")
+    if "marks" not in rule:
+        return
+    if not isinstance(marks_rule, Mapping):
+        raise MarkingError(
+            f"marking blueprint cell {cell_id!r} has a non-object marks policy"
+        )
+    mode = str(marks_rule.get("mode") or "")
+    if not mode:
+        raise MarkingError(
+            f"marking blueprint cell {cell_id!r} has a marks policy without "
+            "a mode"
+        )
+    if mode == "fixed":
+        allowed = {
+            value
+            for raw in marks_rule.get("allowed") or ()
+            if (value := _decimal(raw)) is not None and value > 0
+        }
+        if total_marks not in allowed:
+            raise MarkingError(
+                f"marking blueprint cell {cell_id!r} marks {total_marks:g} "
+                f"are outside the active category contract {tuple(sorted(allowed))}"
+            )
+    elif mode == "per_subpoint":
+        unit = _decimal(marks_rule.get("marks_per_subpoint"))
+        raw_max_subpoints = marks_rule.get("max_subpoints")
+        max_subpoints = _decimal(raw_max_subpoints)
+        if "max_subpoints" in marks_rule and (
+            isinstance(raw_max_subpoints, bool)
+            or not isinstance(raw_max_subpoints, (int, float, Decimal))
+            or max_subpoints is None
+            or max_subpoints <= 0
+            or max_subpoints != max_subpoints.to_integral_value()
+        ):
+            raise MarkingError(
+                f"marking blueprint cell {cell_id!r} has invalid "
+                "max_subpoints; it must be a positive integer"
+            )
+        if unit is None or unit <= 0 or total_marks % unit != 0:
+            raise MarkingError(
+                f"marking blueprint cell {cell_id!r} marks {total_marks:g} "
+                "are not a positive whole-subpoint multiple"
+            )
+        else:
+            represented = total_marks / unit
+            if (
+                max_subpoints is not None
+                and represented > max_subpoints
+            ):
+                raise MarkingError(
+                    f"marking blueprint cell {cell_id!r} represents "
+                    f"{represented:g} subpoints, but the active category "
+                    f"wire can represent at most {max_subpoints:g}"
+                )
+    elif mode:
+        raise MarkingError(
+            f"marking blueprint cell {cell_id!r} has unknown marks policy "
+            f"mode {mode!r}"
+        )
+
+
 def _checker(
     candidate: Mapping[str, Any], *, candidate_id: str, kind: str,
     total_marks: Decimal,
+    duration_rule: Mapping[str, Any],
+    marks_rule: Mapping[str, Any],
 ) -> kernel.Checker:
     candidate_evidence = _content_evidence(candidate)
     expected_answers = _semantic_answers(candidate_evidence.get("answers"))
@@ -667,20 +850,113 @@ def _checker(
         elif not math.isfinite(float(duration)) or float(duration) <= 0:
             defects.append("question_duration must fit a finite workbook number")
 
+        basis_count = response.get("duration_basis_count")
+        basis: Decimal | None = None
+        if basis_count is not None:
+            basis = _decimal(basis_count)
+            if basis is None or basis <= 0 or basis != basis.to_integral_value():
+                defects.append(
+                    "duration_basis_count must be null or a positive integer"
+                )
+
+        duration_mode = str(duration_rule.get("mode") or "")
+        expected_duration: Decimal | None = None
+        if duration_mode == "matrix":
+            if basis_count is not None:
+                defects.append(
+                    "duration_basis_count must be null for a matrix duration"
+                )
+            minutes = duration_rule.get("minutes_by_difficulty")
+            if isinstance(minutes, Mapping):
+                expected_duration = _decimal(
+                    minutes.get(str(candidate.get("difficulty") or ""))
+                )
+            if expected_duration is None or expected_duration <= 0:
+                defects.append(
+                    "active duration matrix has no positive value for the "
+                    "candidate difficulty"
+                )
+        elif duration_mode == "per_subpoint":
+            per_subpoint = _decimal(
+                duration_rule.get("minutes_per_subpoint")
+            )
+            if basis is None or basis <= 0 or basis != basis.to_integral_value():
+                defects.append(
+                    "per-subpoint duration requires duration_basis_count"
+                )
+            elif per_subpoint is None or per_subpoint <= 0:
+                defects.append(
+                    "active per-subpoint duration has no positive minute unit"
+                )
+            else:
+                expected_duration = basis * per_subpoint
+            marks_unit = _decimal(marks_rule.get("marks_per_subpoint"))
+            expected_basis = (
+                total_marks / marks_unit
+                if marks_unit is not None
+                and marks_unit > 0
+                and total_marks % marks_unit == 0
+                else None
+            )
+            if (
+                basis is not None
+                and expected_basis is not None
+                and basis != expected_basis
+            ):
+                defects.append(
+                    "duration_basis_count must equal the represented "
+                    f"whole-subpoint count ({expected_basis:g})"
+                )
+            if (
+                kind == "subjective"
+                and expected_basis is not None
+                and len(expected_answers) != int(expected_basis)
+            ):
+                defects.append(
+                    "subjective expected-answer count must equal the "
+                    f"represented whole-subpoint count ({expected_basis:g})"
+                )
+        elif duration_mode:
+            defects.append(
+                f"active duration contract has unknown mode {duration_mode!r}"
+            )
+        elif basis_count is not None:
+            defects.append(
+                "duration_basis_count must be null when no per-subpoint "
+                "duration contract applies"
+            )
+        if (
+            duration is not None
+            and duration > 0
+            and expected_duration is not None
+            and duration != expected_duration
+        ):
+            defects.append(
+                "question_duration must equal the active profile contract "
+                f"({expected_duration:g} minutes)"
+            )
+
         keyboard = response.get("math_keyboard")
         if not isinstance(keyboard, str):
             defects.append("math_keyboard must be a string")
         elif kind == "objective" and keyboard != "":
             defects.append("objective math_keyboard must be exactly blank")
-        elif kind == "descriptive" and keyboard not in {"Yes", "No"}:
+        elif kind in {"subjective", "descriptive"} and keyboard not in {
+            "Yes", "No",
+        }:
             defects.append(
-                "descriptive math_keyboard must be exactly Yes or No"
+                f"{kind} math_keyboard must be exactly Yes or No"
             )
         if not _nonempty_text(response.get("rationale")):
             defects.append("rationale must be a non-empty string")
 
         defects.extend(
-            _weight_defects(response, kind=kind, total_marks=total_marks)
+            _weight_defects(
+                response,
+                kind=kind,
+                total_marks=total_marks,
+                marks_rule=marks_rule,
+            )
         )
         return defects
 
@@ -862,12 +1138,14 @@ def _payload(
     contract: Mapping[str, Any],
     *,
     meta: Mapping[str, Any],
+    format_policy: Mapping[str, Any],
 ) -> dict[str, Any]:
     return {
         "stage": "assessment.marking",
         "rules": MARKING_SYSTEM,
         "critic_rules": MARKING_CRITIC_SYSTEM,
         "metadata": _content_evidence(meta),
+        "assessment_format_policy": _content_evidence(format_policy),
         "candidate": _content_evidence(candidate),
         "adopted_answer_contract": _content_evidence(contract),
         "blueprint_evidence": {
@@ -904,6 +1182,12 @@ def _assemble(
         "question_duration": float(
             _decimal(response.get("question_duration")) or Decimal(0)
         ),
+        "duration_basis_count": (
+            int(_decimal(response.get("duration_basis_count")))
+            if response.get("duration_basis_count") is not None
+            and _decimal(response.get("duration_basis_count")) is not None
+            else None
+        ),
         "math_keyboard": str(response.get("math_keyboard") or ""),
         "rationale": str(response.get("rationale") or ""),
         "blueprint_authority": _blueprint_authority(cell),
@@ -926,8 +1210,9 @@ def decide_markings(
 ) -> list[dict[str, Any]]:
     """Return one cached marking verdict per candidate/cell pair, in order.
 
-    ``profile`` is validation input ONLY (spec-step8 B2); it never joins the
-    decision payload, so decision keys are unchanged.
+    ``profile`` owns the allowed sheet/category, marks, and duration contract.
+    Its resolved authoring policy joins the decision payload and therefore the
+    immutable decision identity.
 
     ``on_result`` is forwarded verbatim to the fan-out
     (``kernel.parallel_map_in_order``): an ordered progress hook only,
@@ -936,13 +1221,17 @@ def decide_markings(
 
     envelope_sha = _envelope_hash(envelope_sha256)
     metadata = _metadata(meta)
+    run_profile = assessment_profile.resolve_for_metadata(profile, metadata)
+    format_policy = assessment_profile.assessment_format_policy(
+        run_profile, metadata,
+    )
     prepared: list[
         tuple[str, dict[str, Any], dict[str, Any], Decimal, dict[str, Any]]
     ] = []
     seen_candidates: set[str] = set()
     seen_cells: set[str] = set()
     for position, pair in enumerate(pairs, start=1):
-        unit = _prepare_pair(pair, position, profile)
+        unit = _prepare_pair(pair, position, run_profile)
         candidate_id, _candidate, cell, _marks, _contract = unit
         cell_id = str(cell["cell_id"])
         if candidate_id in seen_candidates:
@@ -955,6 +1244,7 @@ def decide_markings(
             )
         seen_candidates.add(candidate_id)
         seen_cells.add(cell_id)
+        _validate_cell_format_contract(cell, _marks, format_policy)
         prepared.append(unit)
     if not prepared:
         return []
@@ -974,13 +1264,35 @@ def decide_markings(
             kind="assessment.marking",
             unit_id=candidate_id,
             envelope_sha256=envelope_sha,
-            payload=_payload(candidate, cell, contract, meta=metadata),
+            payload=_payload(
+                candidate,
+                cell,
+                contract,
+                meta=metadata,
+                format_policy=format_policy,
+            ),
             provider=provider,
             checker=_checker(
                 candidate,
                 candidate_id=candidate_id,
                 kind=str(cell["sheet_kind"]),
                 total_marks=total_marks,
+                duration_rule=(
+                    _format_rule(
+                        format_policy,
+                        kind=str(cell["sheet_kind"]),
+                        category=str(cell["question_category"]),
+                    )
+                    or {}
+                ).get("duration") or {},
+                marks_rule=(
+                    _format_rule(
+                        format_policy,
+                        kind=str(cell["sheet_kind"]),
+                        category=str(cell["question_category"]),
+                    )
+                    or {}
+                ).get("marks") or {},
             ),
             critic=critic,
             store=decision_store,

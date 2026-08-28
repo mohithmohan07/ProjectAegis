@@ -26,8 +26,10 @@ CONCEPT_KEY = "release:test:0001"
 MACHINE_ID = "06MSMA_T01_Shapes"
 OBJECTIVE_ID = "CAND-OBJECTIVE"
 DESCRIPTIVE_ID = "CAND-DESCRIPTIVE"
+SUBJECTIVE_ID = "CAND-SUBJECTIVE"
 BASIC_GROUP = f"({MACHINE_ID}) BG01"
 INTERMEDIATE_GROUP = f"({MACHINE_ID}) IG01"
+ADVANCED_GROUP = f"({MACHINE_ID}) AG01"
 
 _METADATA = {
     "board": "MSBSHSE",
@@ -137,7 +139,7 @@ def _payload() -> dict:
         {
             "cell_id": "CELL-DESCRIPTIVE",
             "sheet_kind": "descriptive",
-            "question_category": "Long Answer",
+            "question_category": "Long Answer Type (4 Marks)",
             "cognitive_skill": "Understand",
             "difficulty": "Moderate",
             "marks": 4.0,
@@ -157,7 +159,7 @@ def _payload() -> dict:
             "cognitive_skill": "Remember",
             "difficulty": "Less",
             "marks": 1.0,
-            "question_duration": 2.0,
+            "question_duration": 1.0,
             "math_keyboard": "",
             "question_appears_in": "Pre/Post-Worksheet/Test",
             "answer_restriction": "Specific",
@@ -193,11 +195,11 @@ def _payload() -> dict:
             "source_atom_ids": ["QINV-0002"],
             "blueprint_cell_id": "CELL-DESCRIPTIVE",
             "sheet_kind": "descriptive",
-            "question_category": "Long Answer",
+            "question_category": "Long Answer Type (4 Marks)",
             "cognitive_skill": "Understand",
             "difficulty": "Moderate",
             "marks": 4.0,
-            "question_duration": 5.0,
+            "question_duration": 6.0,
             "math_keyboard": "No",
             "question_appears_in": "Pre/Post-Worksheet/Test",
             "answer_restriction": "Open",
@@ -205,18 +207,9 @@ def _payload() -> dict:
             "question": "Explain how a square differs from a cube.",
             "question_text": "Explain how a square differs from a cube.",
             "display_answer": _DESCRIPTIVE_DISPLAY,
-            "answers": [
-                {
-                    "answer_type": "Phrases",
-                    "answer_content": "Square: two dimensions.",
-                    "answer_weightage": "2",
-                },
-                {
-                    "answer_type": "Phrases",
-                    "answer_content": "Cube: three dimensions.",
-                    "answer_weightage": "2",
-                },
-            ],
+            # Multipart scoring lives only in the subquestion keyword
+            # rubrics. Main answer blocks would duplicate the same marks.
+            "answers": [],
             "sub_questions": [
                 {
                     "text": "State the dimensions of a square.",
@@ -224,7 +217,7 @@ def _payload() -> dict:
                     "keywords": [{
                         "answer_type": "Phrases",
                         "weightage": "2",
-                        "keyword": "two dimensions",
+                        "keyword": "[content]: two dimensions",
                     }],
                 },
                 {
@@ -233,7 +226,7 @@ def _payload() -> dict:
                     "keywords": [{
                         "answer_type": "Phrases",
                         "weightage": "2",
-                        "keyword": "three dimensions",
+                        "keyword": "[content]: three dimensions",
                     }],
                 },
             ],
@@ -308,6 +301,73 @@ def _payload() -> dict:
     }
 
 
+def _payload_with_subjective() -> dict:
+    payload = _payload()
+    source_qid = "QINV-0003"
+    payload["source_atoms"].append({
+        "source_qid": source_qid,
+        "source_document_hash": "d" * 64,
+        "source_kind": "exercise",
+        "raw_text": "Complete: A cube is a ____ shape.",
+        "normalized_public_text": "Complete: A cube is a ____ shape.",
+        "assets": [],
+    })
+    payload["blueprint_cells"].append({
+        "cell_id": "CELL-SUBJECTIVE",
+        "sheet_kind": "subjective",
+        "question_category": "Fill in the blanks",
+        "cognitive_skill": "Remember",
+        "difficulty": "Less",
+        "marks": 1.0,
+        "count": 1,
+        "appears_in": "Pre/Post-Worksheet/Test",
+        "source_policy": "recorded fixture",
+    })
+    payload["candidates"].append({
+        "candidate_id": SUBJECTIVE_ID,
+        "question_label": f"{MACHINE_ID} Q03",
+        "source_atom_ids": [source_qid],
+        "blueprint_cell_id": "CELL-SUBJECTIVE",
+        "sheet_kind": "subjective",
+        "question_category": "Fill in the blanks",
+        "cognitive_skill": "Remember",
+        "difficulty": "Less",
+        "marks": 1.0,
+        "question_duration": 1.0,
+        "math_keyboard": "No",
+        "question_appears_in": "Pre/Post-Worksheet/Test",
+        "answer_restriction": "Specific",
+        "restriction_reason": "The source sentence has one expected word.",
+        "question": "Complete: A cube is a $$a$$ shape.",
+        "question_text": "Complete: A cube is a $$a$$ shape.",
+        "display_answer": "",
+        "answers": [{
+            "answer_type": "Phrases",
+            "answer_content": "solid",
+            "answer_display": "solid",
+            "answer_weightage": "1",
+            "placeholder": "a",
+        }],
+        "sub_questions": [],
+        "answer_explanation": "A cube occupies three-dimensional space.",
+        "assets": [],
+        "concept_id": CONCEPT_KEY,
+        "concept_key": CONCEPT_KEY,
+        "group_key": BASIC_GROUP,
+        "flags": [],
+    })
+    payload["groups"][0]["member_candidate_ids"].append(SUBJECTIVE_ID)
+    payload["placements"].append({
+        "candidate_id": SUBJECTIVE_ID,
+        "concept_id": CONCEPT_KEY,
+        "concept_key": CONCEPT_KEY,
+        "group_key": BASIC_GROUP,
+        "evidence": "The item assesses recognition of a solid shape.",
+        "secondary_placements": [],
+    })
+    return payload
+
+
 def _verified_critic(_payload: dict) -> dict:
     return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
@@ -374,12 +434,15 @@ def _without_refiner_bookkeeping(payload: dict) -> dict:
 
 def _rendered_rows(payload: dict) -> dict[str, dict]:
     snapshot = release_service.snapshot_from_staged_release(payload)
-    built = aw.build_dual_output(snapshot, _METADATA["profile"])
+    profile = assessment_profile.resolve_for_metadata(
+        _METADATA["profile"], _METADATA,
+    )
+    built = aw.build_dual_output(snapshot, profile)
     assert built["valid"], built["manifest"]["read_back"]
     parsed = aw.parse_workbook(built["master_xlsx"])
     return {
         str(row.get("question_label") or ""): row
-        for sheet in ("Objective", "Descriptive")
+        for sheet in aw.sheet_for_kind().values()
         for row in parsed["sheets"][sheet]["rows"]
         if str(row.get("question_label") or "")
     }
@@ -393,6 +456,101 @@ def test_fixture_exercises_the_real_release_and_workbook_contracts():
         f"{MACHINE_ID} Q01",
         f"{MACHINE_ID} Q02",
     ]
+
+
+def test_subjective_placeholder_and_answer_column_round_trip_through_refiner():
+    payload = _payload_with_subjective()
+    profile = assessment_profile.resolve_for_metadata(
+        _METADATA["profile"], _METADATA,
+    )
+    assert rel.freeze_payload(payload, profile)["errors"] == []
+
+    def provider(request):
+        def polish(record, _request):
+            if record.get("candidate_id") == SUBJECTIVE_ID:
+                record["answers"][0]["answer_content"] = "Solid"
+
+        return _proposal(request, polish)
+
+    records, diff, flags = _refine(payload, provider)
+    assert flags == []
+    assert any(
+        change["unit_id"] == SUBJECTIVE_ID for change in diff["changes"]
+    )
+    subjective = _unit(records[0], SUBJECTIVE_ID)
+    assert subjective[refiner.AUDIT_FIELD]["status"] == "applied"
+    row = _rendered_rows(records[0])[f"{MACHINE_ID} Q03"]
+    assert row["question"] == "Complete: A cube is a $$a$$ shape."
+    assert row["placeholder_1"] == "a"
+    assert row["answer_1"] == "Solid"
+    assert "answer_content_1" not in row
+
+
+def test_empty_required_group_shell_is_omitted_and_recorded():
+    payload = _payload()
+    snapshot = release_service.snapshot_from_staged_release(payload)
+    built = aw.build_dual_output(snapshot, _METADATA["profile"])
+    assert built["valid"], built["manifest"]["read_back"]
+    assert built["manifest"]["issues"]["omitted_empty_group_shells"] == [
+        ADVANCED_GROUP
+    ]
+
+    state = refiner._validation_state(
+        payload, assessment_profile.resolve(_METADATA["profile"])
+    )
+    assert state["errors"] == []
+    assert ADVANCED_GROUP not in state["group_rows"]
+
+
+def test_refiner_checker_uses_exclusive_multipart_scoring_contract():
+    multipart = copy.deepcopy(_payload()["candidates"][1])
+    checker = refiner._response_checker(
+        unit_kind="candidate",
+        unit_id=DESCRIPTIVE_ID,
+        original=multipart,
+    )
+    valid_response = {
+        "record_kind": "candidate",
+        "row_ref": DESCRIPTIVE_ID,
+        "record": multipart,
+        "rationale": "The multipart rubric is already clear.",
+    }
+    assert checker(valid_response) == []
+
+    duplicated = copy.deepcopy(multipart)
+    duplicated["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": "Duplicated main rubric.",
+        "answer_weightage": "4",
+    }]
+    duplicate_checker = refiner._response_checker(
+        unit_kind="candidate",
+        unit_id=DESCRIPTIVE_ID,
+        original=duplicated,
+    )
+    duplicate_response = {**valid_response, "record": duplicated}
+    assert any(
+        "subquestion keyword rubrics exclusively" in defect
+        for defect in duplicate_checker(duplicate_response)
+    )
+
+    single_part = copy.deepcopy(multipart)
+    single_part["sub_questions"] = []
+    single_part["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": "One undivided rubric block.",
+        "answer_weightage": "4",
+    }]
+    single_checker = refiner._response_checker(
+        unit_kind="candidate",
+        unit_id=DESCRIPTIVE_ID,
+        original=single_part,
+    )
+    single_response = {**valid_response, "record": single_part}
+    assert any(
+        "single-part 4-mark descriptive" in defect
+        for defect in single_checker(single_response)
+    )
 
 
 def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
@@ -415,11 +573,8 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
                 record["display_answer"] = _DESCRIPTIVE_DISPLAY.replace(
                     "A square is flat", "The square is flat"
                 )
-                record["answers"][0]["answer_content"] = (
-                    "A square has two dimensions."
-                )
                 record["sub_questions"][0]["keywords"][0]["keyword"] = (
-                    "two spatial dimensions"
+                    "[content]: two spatial dimensions"
                 )
             elif record.get("group_key") == BASIC_GROUP:
                 record["semantic_description"] = (
@@ -449,7 +604,6 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert [change["unit_id"] for change in diff["changes"]] == [
         OBJECTIVE_ID,
         OBJECTIVE_ID,
-        DESCRIPTIVE_ID,
         DESCRIPTIVE_ID,
         DESCRIPTIVE_ID,
         BASIC_GROUP,
@@ -483,10 +637,12 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert descriptive["display_answer"] == refined["candidates"][1][
         "display_answer"
     ]
-    assert descriptive["answer_content_1"] == (
-        "A square has two dimensions."
+    assert descriptive["question_text"] == (
+        original["candidates"][1]["question_text"]
     )
-    assert descriptive["sq1_keyword_1"] == "two spatial dimensions"
+    assert descriptive["sq1_keyword_1"] == (
+        "[content]: two spatial dimensions"
+    )
 
 
 def _question_drift(record, _request):
@@ -944,8 +1100,8 @@ def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved():
             if record.get("candidate_id") == OBJECTIVE_ID:
                 record["answers"][0]["answer_content"] = normalised_by_xlsx
             elif record.get("candidate_id") == DESCRIPTIVE_ID:
-                record["answers"][0]["answer_content"] = (
-                    "A square extends in two dimensions."
+                record["sub_questions"][0]["keywords"][0]["keyword"] = (
+                    "[content]: two-dimensional extent"
                 )
             elif record.get("group_key") == BASIC_GROUP:
                 record["semantic_description"] = normalised_by_xlsx
@@ -970,9 +1126,9 @@ def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved():
     assert _unit(refined, BASIC_GROUP)["semantic_description"] == (
         original["groups"][0]["semantic_description"]
     )
-    assert _unit(refined, DESCRIPTIVE_ID)["answers"][0][
-        "answer_content"
-    ] == "A square extends in two dimensions."
+    assert _unit(refined, DESCRIPTIVE_ID)["sub_questions"][0][
+        "keywords"
+    ][0]["keyword"] == "[content]: two-dimensional extent"
     assert _unit(refined, INTERMEDIATE_GROUP)["semantic_description"] == (
         "Explaining the dimensional contrast between shapes."
     )
@@ -1005,3 +1161,50 @@ def test_candidate_refiner_checker_keeps_declared_answer_medium_pure():
     })
 
     assert any("phrases_katex" in defect for defect in defects)
+
+
+def test_candidate_refiner_cannot_reintroduce_labels_or_malformed_tags():
+    objective = _payload()["candidates"][0]
+    labelled = copy.deepcopy(objective)
+    labelled["answers"][0]["answer_content"] = "a) Cube"
+    objective_checker = refiner._response_checker(
+        unit_kind="candidate",
+        unit_id=OBJECTIVE_ID,
+        original=objective,
+    )
+    objective_defects = objective_checker({
+        "record_kind": "candidate",
+        "row_ref": OBJECTIVE_ID,
+        "record": labelled,
+        "rationale": "Polish attempted.",
+    })
+    assert any("repeats its letter label" in defect for defect in objective_defects)
+
+    descriptive = copy.deepcopy(_payload()["candidates"][1])
+    descriptive["sub_questions"] = []
+    descriptive["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": "[content]: correct comparison",
+        "answer_weightage": "2",
+    }, {
+        "answer_type": "Phrases",
+        "answer_content": "[method]: valid reasoning",
+        "answer_weightage": "2",
+    }]
+    malformed = copy.deepcopy(descriptive)
+    malformed["answers"][0]["answer_content"] = "[content] missing colon"
+    descriptive_checker = refiner._response_checker(
+        unit_kind="candidate",
+        unit_id=DESCRIPTIVE_ID,
+        original=descriptive,
+    )
+    descriptive_defects = descriptive_checker({
+        "record_kind": "candidate",
+        "row_ref": DESCRIPTIVE_ID,
+        "record": malformed,
+        "rationale": "Polish attempted.",
+    })
+    assert any(
+        "without its required colon" in defect
+        for defect in descriptive_defects
+    )

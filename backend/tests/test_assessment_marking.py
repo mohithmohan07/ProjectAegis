@@ -16,6 +16,14 @@ META = {
     "grade": "6",
     "chapter_title": "Shapes",
 }
+MSBSHSE_META = {
+    **META,
+    "board": "MSBSHSE",
+}
+SUBJECTIVE_PROFILE = {
+    **marking.assessment_profile.DEFAULT_PROFILE,
+    "sheet_kinds": ("objective", "descriptive", "subjective"),
+}
 
 
 def _restriction_audit() -> dict:
@@ -38,16 +46,24 @@ def _restriction_audit() -> dict:
 
 
 def _cell(
-    cell_id: str = "CELL-DESC", *, kind: str = "descriptive", marks=4,
+    cell_id: str = "CELL-DESC",
+    *,
+    kind: str = "descriptive",
+    marks=4,
+    category: str | None = None,
+    difficulty: str = "Moderate",
 ) -> dict:
+    default_categories = {
+        "objective": "Multiple Choice Question",
+        "subjective": "Short Answer",
+        "descriptive": "Long Answer",
+    }
     return {
         "cell_id": cell_id,
         "sheet_kind": kind,
-        "question_category": (
-            "Multiple Choice Question" if kind == "objective" else "Long Answer"
-        ),
+        "question_category": category or default_categories[kind],
         "cognitive_skill": "Understand",
-        "difficulty": "Moderate",
+        "difficulty": difficulty,
         "marks": marks,
         "count": 1,
         "appears_in": ["Pre/Post-Worksheet/Test"],
@@ -61,8 +77,17 @@ def _candidate(
     cell_id: str = "CELL-DESC",
     kind: str = "descriptive",
     marks=4,
+    category: str | None = None,
+    difficulty: str = "Moderate",
+    multipart: bool = False,
 ) -> dict:
-    cell = _cell(cell_id, kind=kind, marks=marks)
+    cell = _cell(
+        cell_id,
+        kind=kind,
+        marks=marks,
+        category=category,
+        difficulty=difficulty,
+    )
     if kind == "objective":
         answers = [
             {
@@ -83,21 +108,30 @@ def _candidate(
         sub_questions = []
         question = "Which listed shape is two-dimensional?"
         restriction = "Specific"
-    else:
+    elif kind == "subjective":
         answers = [
             {
                 "answer_type": "Phrases",
-                "answer_content": "A square is two-dimensional.",
+                "answer_content": "two-dimensional",
                 "answer_weightage": "",
-                "placeholder": "first contrast",
+                "answer_display": "Text",
+                "placeholder": "a",
             },
             {
                 "answer_type": "Phrases",
-                "answer_content": "A cube is three-dimensional.",
+                "answer_content": "three-dimensional",
                 "answer_weightage": "",
-                "placeholder": "second contrast",
+                "answer_display": "Text",
+                "placeholder": "b",
             },
         ]
+        sub_questions = []
+        question = "Complete: A square is $$a$$; a cube is $$b$$."
+        restriction = "Specific"
+    elif multipart:
+        # Multipart Descriptive rows score only their subquestion rubrics.
+        # Keeping answers=[] is the contract under test, not a convenience.
+        answers = []
         sub_questions = [
             {
                 "text": "State two properties of a square.",
@@ -127,6 +161,24 @@ def _candidate(
                 ],
             },
         ]
+        question = "Answer both parts about a square and a cube."
+        restriction = "Open"
+    else:
+        answers = [
+            {
+                "answer_type": "Phrases",
+                "answer_content": "A square is two-dimensional.",
+                "answer_weightage": "",
+                "placeholder": "first contrast",
+            },
+            {
+                "answer_type": "Phrases",
+                "answer_content": "A cube is three-dimensional.",
+                "answer_weightage": "",
+                "placeholder": "second contrast",
+            },
+        ]
+        sub_questions = []
         question = "Explain how a square differs from a cube."
         restriction = "Open"
     audit = _restriction_audit()
@@ -166,14 +218,30 @@ def _valid_response(request: dict) -> dict:
         answers[1]["answer_weightage"] = 0
         duration = 2
         keyboard = ""
-    else:
-        answers[0]["answer_weightage"] = "1.5"
-        answers[1]["answer_weightage"] = "2.5"
+    elif cell["sheet_kind"] == "subjective":
+        each = str(cell["marks"] / len(answers))
+        for answer in answers:
+            answer["answer_weightage"] = each
+        duration = 2
+        keyboard = "No"
+    elif sub_questions:
+        # This helper's multipart fixture is deliberately a four-mark, two-
+        # part item so arithmetic mutations can target each independent sum.
         sub_questions[0]["marks"] = 2
         sub_questions[1]["marks"] = 2
         sub_questions[0]["keywords"][0]["weightage"] = 1
         sub_questions[0]["keywords"][1]["weightage"] = 1
         sub_questions[1]["keywords"][0]["weightage"] = 2
+        duration = 6
+        keyboard = "Yes"
+    else:
+        if cell["marks"] == 4:
+            answers[0]["answer_weightage"] = "1.5"
+            answers[1]["answer_weightage"] = "2.5"
+        else:
+            each = str(cell["marks"] / len(answers))
+            for answer in answers:
+                answer["answer_weightage"] = each
         duration = 6
         keyboard = "Yes"
     return {
@@ -183,6 +251,7 @@ def _valid_response(request: dict) -> dict:
         "answers": answers,
         "sub_questions": sub_questions,
         "question_duration": duration,
+        "duration_basis_count": None,
         "math_keyboard": keyboard,
         "rationale": "The decomposition covers every required scoring unit.",
     }
@@ -235,6 +304,9 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     payload = author_requests[0]
     assert payload["stage"] == "assessment.marking"
     assert payload["candidate"] == candidate
+    assert payload["assessment_format_policy"] == (
+        marking.assessment_profile.assessment_format_policy(None, META)
+    )
     assert payload["adopted_answer_contract"] == {
         "answer_restriction": "Open",
         "restriction_reason": candidate["restriction_reason"],
@@ -269,8 +341,9 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
         candidate["answers"][0]["answer_content"]
     )
     assert verdict["answers"][0]["answer_weightage"] == "1.5"
-    assert verdict["sub_questions"][0]["keywords"][0]["weightage"] == 1
+    assert verdict["sub_questions"] == []
     assert verdict["question_duration"] == 6.0
+    assert verdict["duration_basis_count"] is None
     assert verdict["math_keyboard"] == "Yes"
     assert verdict["flags"] == []
     assert verdict["blueprint_authority"] == {
@@ -289,7 +362,7 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
         ),
     }
     authority = verdict["authority"]
-    assert authority["policy_version"] == "assessment-marking-6"
+    assert authority["policy_version"] == "assessment-marking-7"
     assert "created_at" not in authority and "provider" not in authority
     stored = store.get(authority["decision_key"])
     assert stored is not None
@@ -324,9 +397,9 @@ def test_marking_replays_without_author_critic_or_fixer(monkeypatch) -> None:
     assert len(store.keys()) == 1
 
 
-def test_stale_v2_marking_record_redecides_under_current_policy(monkeypatch) -> None:
+def test_stale_v6_marking_record_redecides_under_current_policy(monkeypatch) -> None:
     monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
-    assert marking.MARKING_POLICY_VERSION == "assessment-marking-6"
+    assert marking.MARKING_POLICY_VERSION == "assessment-marking-7"
     pair = (_candidate(), _cell())
     store = kernel.DecisionStore()
     calls = 0
@@ -337,14 +410,14 @@ def test_stale_v2_marking_record_redecides_under_current_policy(monkeypatch) -> 
         return _valid_response(request)
 
     monkeypatch.setattr(
-        marking, "MARKING_POLICY_VERSION", "assessment-marking-2"
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-6"
     )
     stale = marking.decide_markings(
         [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
         provider=author, store=store,
     )[0]
     monkeypatch.setattr(
-        marking, "MARKING_POLICY_VERSION", "assessment-marking-6"
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-7"
     )
     current = marking.decide_markings(
         [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
@@ -352,8 +425,8 @@ def test_stale_v2_marking_record_redecides_under_current_policy(monkeypatch) -> 
     )[0]
 
     assert calls == 2
-    assert stale["authority"]["policy_version"] == "assessment-marking-2"
-    assert current["authority"]["policy_version"] == "assessment-marking-6"
+    assert stale["authority"]["policy_version"] == "assessment-marking-6"
+    assert current["authority"]["policy_version"] == "assessment-marking-7"
     assert stale["authority"]["decision_key"] != (
         current["authority"]["decision_key"]
     )
@@ -416,8 +489,6 @@ def test_marking_payload_recursively_strips_print_positions(monkeypatch) -> None
     }
     candidate["assets"][0]["bbox"] = [1, 2, 3, 4]
     candidate["answers"][0]["row_number"] = 9
-    candidate["sub_questions"][0]["source_page"] = 18
-    candidate["sub_questions"][0]["keywords"][0]["bbox"] = [1, 2, 3, 4]
     candidate["_aegis_assessment_answer_restriction"]["source_page"] = 18
     cell = _cell()
     cell["source_order"] = 7
@@ -438,16 +509,39 @@ def test_marking_payload_recursively_strips_print_positions(monkeypatch) -> None
     assert seen["candidate"]["source_context"] == {"semantic": "preserved"}
     assert "bbox" not in seen["candidate"]["assets"][0]
     assert "row_number" not in seen["candidate"]["answers"][0]
-    assert "source_page" not in seen["candidate"]["sub_questions"][0]
-    assert "bbox" not in seen["candidate"]["sub_questions"][0][
-        "keywords"
-    ][0]
     assert "source_page" not in seen["adopted_answer_contract"]["audit"]
     assert "source_order" not in seen["blueprint_evidence"][
         "explicit_blueprint_cell"
     ]
     assert seen["metadata"]["semantic_meta"] == "preserved"
     assert "printer_page" not in seen["metadata"]
+
+
+def test_multipart_payload_recursively_strips_subquestion_positions(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(multipart=True)
+    candidate["sub_questions"][0]["source_page"] = 18
+    candidate["sub_questions"][0]["keywords"][0]["bbox"] = [1, 2, 3, 4]
+    seen = {}
+
+    def provider(request):
+        seen.update(copy.deepcopy(request))
+        return _valid_response(request)
+
+    marking.decide_markings(
+        [(candidate, _cell())],
+        meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        store=kernel.DecisionStore(),
+    )
+
+    assert "source_page" not in seen["candidate"]["sub_questions"][0]
+    assert "bbox" not in seen["candidate"]["sub_questions"][0][
+        "keywords"
+    ][0]
 
 
 @pytest.mark.parametrize(
@@ -515,53 +609,68 @@ def test_non_object_marking_response_still_reaches_same_checker_fixer(
 
 
 @pytest.mark.parametrize(
-    "mutate",
+    ("mode", "mutate"),
     [
         pytest.param(
+            "single",
             lambda row: row.__setitem__("question", "Rewritten question"),
             id="question",
         ),
         pytest.param(
+            "single",
             lambda row: row.__setitem__("question_text", "Rewritten text"),
             id="question-text",
         ),
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__("answer_type", "Essay"),
             id="answer-type",
         ),
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__(
                 "answer_content", "Changed rubric"
             ),
             id="answer-content",
         ),
-        pytest.param(lambda row: row["answers"].pop(), id="answer-cardinality"),
         pytest.param(
+            "single",
+            lambda row: row["answers"].pop(),
+            id="answer-cardinality",
+        ),
+        pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0].__setitem__(
                 "text", "Changed subquestion"
             ),
             id="subquestion-text",
         ),
         pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0]["keywords"][0].__setitem__(
                 "keyword", "changed keyword"
             ),
             id="keyword-text",
         ),
         pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0]["keywords"][0].__setitem__(
                 "answer_type", "Essay"
             ),
             id="keyword-type",
         ),
         pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0]["keywords"].pop(),
             id="keyword-cardinality",
         ),
     ],
 )
-def test_semantic_answer_space_changes_fail_closed(monkeypatch, mutate) -> None:
+def test_semantic_answer_space_changes_fail_closed(
+    monkeypatch, mode, mutate,
+) -> None:
     monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(multipart=mode == "multipart")
 
     def invalid(request: dict) -> dict:
         response = _valid_response(request)
@@ -570,7 +679,7 @@ def test_semantic_answer_space_changes_fail_closed(monkeypatch, mutate) -> None:
 
     with pytest.raises(kernel.ContractError) as exc_info:
         marking.decide_markings(
-            [(_candidate(), _cell())],
+            [(candidate, _cell())],
             meta=META,
             envelope_sha256=ENVELOPE_SHA256,
             provider=invalid,
@@ -605,9 +714,10 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
 
 
 @pytest.mark.parametrize(
-    ("mutate", "expected"),
+    ("mode", "mutate", "expected"),
     [
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__(
                 "answer_weightage", float("nan")
             ),
@@ -615,6 +725,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="answer-nan",
         ),
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__(
                 "answer_weightage", float("inf")
             ),
@@ -622,6 +733,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="answer-infinity",
         ),
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__(
                 "answer_weightage", "1e1000000"
             ),
@@ -629,6 +741,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="answer-outside-workbook-domain",
         ),
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__(
                 "answer_weightage", "+1.5"
             ),
@@ -636,6 +749,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="answer-signed-string",
         ),
         pytest.param(
+            "single",
             lambda row: (
                 row["answers"][0].__setitem__("answer_weightage", -1),
                 row["answers"][1].__setitem__("answer_weightage", 5),
@@ -644,16 +758,19 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="answer-negative-cancellation",
         ),
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__("answer_weightage", 0),
             "finite and positive",
             id="answer-zero",
         ),
         pytest.param(
+            "single",
             lambda row: row["answers"][0].__setitem__("answer_weightage", 1),
             "sum exactly",
             id="answer-wrong-sum",
         ),
         pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0].__setitem__(
                 "marks", float("nan")
             ),
@@ -661,6 +778,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="submark-nan",
         ),
         pytest.param(
+            "multipart",
             lambda row: (
                 row["sub_questions"][0].__setitem__("marks", -1),
                 row["sub_questions"][1].__setitem__("marks", 5),
@@ -669,11 +787,13 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="submark-negative-cancellation",
         ),
         pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0].__setitem__("marks", 1),
             "subquestion marks must sum exactly",
             id="submark-wrong-sum",
         ),
         pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0]["keywords"][0].__setitem__(
                 "weightage", float("nan")
             ),
@@ -681,6 +801,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="keyword-nan",
         ),
         pytest.param(
+            "multipart",
             lambda row: (
                 row["sub_questions"][0]["keywords"][0].__setitem__(
                     "weightage", -1
@@ -693,6 +814,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="keyword-negative-cancellation",
         ),
         pytest.param(
+            "multipart",
             lambda row: row["sub_questions"][0]["keywords"][0].__setitem__(
                 "weightage", 0.5
             ),
@@ -700,31 +822,37 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             id="keyword-wrong-sum",
         ),
         pytest.param(
+            "single",
             lambda row: row.__setitem__("question_duration", float("nan")),
             "question_duration",
             id="duration-nan",
         ),
         pytest.param(
+            "single",
             lambda row: row.__setitem__("question_duration", float("inf")),
             "question_duration",
             id="duration-infinity",
         ),
         pytest.param(
+            "single",
             lambda row: row.__setitem__("question_duration", 0),
             "question_duration",
             id="duration-zero",
         ),
         pytest.param(
+            "single",
             lambda row: row.__setitem__("question_duration", "1e-10000"),
             "question_duration",
             id="duration-underflow",
         ),
         pytest.param(
+            "single",
             lambda row: row.__setitem__("question_duration", "1e1000000"),
             "question_duration",
             id="duration-overflow",
         ),
         pytest.param(
+            "single",
             lambda row: row.__setitem__("math_keyboard", ""),
             "descriptive math_keyboard",
             id="descriptive-keyboard-blank",
@@ -732,9 +860,10 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
     ],
 )
 def test_invalid_marking_arithmetic_never_ships(
-    monkeypatch, mutate, expected: str,
+    monkeypatch, mode, mutate, expected: str,
 ) -> None:
     monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(multipart=mode == "multipart")
 
     def invalid(request: dict) -> dict:
         response = _valid_response(request)
@@ -743,7 +872,7 @@ def test_invalid_marking_arithmetic_never_ships(
 
     with pytest.raises(kernel.ContractError) as exc_info:
         marking.decide_markings(
-            [(_candidate(), _cell())], meta=META,
+            [(candidate, _cell())], meta=META,
             envelope_sha256=ENVELOPE_SHA256,
             provider=invalid, store=kernel.DecisionStore(),
         )
@@ -825,7 +954,7 @@ def test_fixer_is_revalidated_by_the_same_semantic_and_arithmetic_checker(
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.marking",
         "unit_id": "CAND-DESC",
-        "policy_version": "assessment-marking-6",
+        "policy_version": "assessment-marking-7",
     }
 
 
@@ -953,3 +1082,494 @@ def test_invalid_answer_medium_or_single_four_mark_rubric_fails_before_spend():
             envelope_sha256=ENVELOPE_SHA256,
             provider=_forbidden("the author"),
         )
+
+
+def test_descriptive_main_and_subquestion_rubrics_are_mutually_exclusive():
+    mixed = _candidate()
+    mixed["sub_questions"] = copy.deepcopy(
+        _candidate(multipart=True)["sub_questions"]
+    )
+
+    with pytest.raises(marking.MarkingError, match="must not duplicate"):
+        marking.decide_markings(
+            [(mixed, _cell())],
+            meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=_forbidden("the author"),
+        )
+
+
+def test_subjective_marking_scores_answers_without_subquestions(monkeypatch):
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(
+        "CAND-SUBJ", cell_id="CELL-SUBJ", kind="subjective", marks=2,
+    )
+    cell = _cell("CELL-SUBJ", kind="subjective", marks=2)
+
+    verdict = marking.decide_markings(
+        [(candidate, cell)],
+        meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=_valid_response,
+        store=kernel.DecisionStore(),
+        profile=SUBJECTIVE_PROFILE,
+    )[0]
+
+    assert [row["answer_weightage"] for row in verdict["answers"]] == [
+        "1.0", "1.0",
+    ]
+    assert verdict["sub_questions"] == []
+    assert verdict["math_keyboard"] == "No"
+    assert verdict["question_duration"] == 2.0
+    assert verdict["duration_basis_count"] is None
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        pytest.param(
+            lambda row: row["answers"][0].__setitem__(
+                "answer_weightage", 0
+            ),
+            "finite and positive",
+            id="zero-answer-weight",
+        ),
+        pytest.param(
+            lambda row: row.__setitem__("math_keyboard", ""),
+            "subjective math_keyboard",
+            id="blank-keyboard",
+        ),
+        pytest.param(
+            lambda row: row["answers"][0].__setitem__(
+                "answer_content", "changed"
+            ),
+            "unchanged",
+            id="changed-answer",
+        ),
+    ],
+)
+def test_subjective_marking_contract_fails_closed(
+    monkeypatch, mutate, expected,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(
+        "CAND-SUBJ", cell_id="CELL-SUBJ", kind="subjective", marks=2,
+    )
+    cell = _cell("CELL-SUBJ", kind="subjective", marks=2)
+
+    def invalid(request: dict) -> dict:
+        response = _valid_response(request)
+        mutate(response)
+        return response
+
+    with pytest.raises(kernel.ContractError) as exc_info:
+        marking.decide_markings(
+            [(candidate, cell)],
+            meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=invalid,
+            store=kernel.DecisionStore(),
+            profile=SUBJECTIVE_PROFILE,
+        )
+    assert any(expected in defect for defect in exc_info.value.defects)
+
+
+def test_subjective_subquestions_fail_before_provider_spend():
+    candidate = _candidate(
+        "CAND-SUBJ", cell_id="CELL-SUBJ", kind="subjective", marks=2,
+    )
+    candidate["sub_questions"] = copy.deepcopy(
+        _candidate(multipart=True)["sub_questions"]
+    )
+
+    with pytest.raises(marking.MarkingError, match="cannot carry subquestions"):
+        marking.decide_markings(
+            [(candidate, _cell("CELL-SUBJ", kind="subjective", marks=2))],
+            meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=_forbidden("the author"),
+            profile=SUBJECTIVE_PROFILE,
+        )
+
+
+MATRIX_DURATION_CASES = [
+    ("objective", "Multiple Choice Question", 1, difficulty, 1)
+    for difficulty in ("Less", "Moderate", "High")
+] + [
+    ("descriptive", category, marks, difficulty, minutes)
+    for category, marks, durations in (
+        ("Very Short Answer Questions", 1, (1, 1, 2)),
+        ("Short Answer Type (2 Marks)", 2, (2, 2, 3)),
+        ("Short Answer Type (3 Marks)", 3, (4, 5, 6)),
+        ("Long Answer Type (4 Marks)", 4, (5, 6, 7)),
+        ("Long Answer Type (5 Marks)", 5, (5, 7, 7)),
+    )
+    for difficulty, minutes in zip(("Less", "Moderate", "High"), durations)
+]
+
+
+@pytest.mark.parametrize(
+    ("kind", "category", "marks", "difficulty", "minutes"),
+    MATRIX_DURATION_CASES,
+)
+def test_msbshse_class_6_math_matrix_duration_is_exact(
+    monkeypatch, kind, category, marks, difficulty, minutes,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(
+        "CAND-MATRIX",
+        cell_id="CELL-MATRIX",
+        kind=kind,
+        marks=marks,
+        category=category,
+        difficulty=difficulty,
+    )
+    cell = _cell(
+        "CELL-MATRIX",
+        kind=kind,
+        marks=marks,
+        category=category,
+        difficulty=difficulty,
+    )
+    seen = {}
+
+    def provider(request: dict) -> dict:
+        seen.update(copy.deepcopy(request))
+        response = _valid_response(request)
+        response["question_duration"] = minutes
+        response["duration_basis_count"] = None
+        return response
+
+    verdict = marking.decide_markings(
+        [(candidate, cell)],
+        meta=MSBSHSE_META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        store=kernel.DecisionStore(),
+    )[0]
+
+    policy = seen["assessment_format_policy"]
+    assert policy["policy_id"] == "msbshse-grade-6-mathematics-2026-08-27"
+    assert policy["formats_by_sheet"][kind][category]["duration"] == {
+        "mode": "matrix",
+        "minutes_by_difficulty": {
+            row_difficulty: expected
+            for row_difficulty, expected in zip(
+                ("Less", "Moderate", "High"),
+                next(
+                    values
+                    for row_category, _row_marks, values in (
+                        ("Multiple Choice Question", 1, (1, 1, 1)),
+                        ("Very Short Answer Questions", 1, (1, 1, 2)),
+                        ("Short Answer Type (2 Marks)", 2, (2, 2, 3)),
+                        ("Short Answer Type (3 Marks)", 3, (4, 5, 6)),
+                        ("Long Answer Type (4 Marks)", 4, (5, 6, 7)),
+                        ("Long Answer Type (5 Marks)", 5, (5, 7, 7)),
+                    )
+                    if row_category == category
+                ),
+            )
+        },
+    }
+    assert verdict["question_duration"] == float(minutes)
+    assert verdict["duration_basis_count"] is None
+
+
+def test_msbshse_matrix_duration_rejects_a_positive_but_wrong_value(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(
+        "CAND-MATRIX",
+        cell_id="CELL-MATRIX",
+        marks=2,
+        category="Short Answer Type (2 Marks)",
+        difficulty="High",
+    )
+    cell = _cell(
+        "CELL-MATRIX",
+        marks=2,
+        category="Short Answer Type (2 Marks)",
+        difficulty="High",
+    )
+
+    def wrong_duration(request: dict) -> dict:
+        response = _valid_response(request)
+        response["question_duration"] = 2
+        return response
+
+    with pytest.raises(kernel.ContractError) as exc_info:
+        marking.decide_markings(
+            [(candidate, cell)],
+            meta=MSBSHSE_META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=wrong_duration,
+            store=kernel.DecisionStore(),
+        )
+    assert any(
+        "active profile contract (3 minutes)" in defect
+        for defect in exc_info.value.defects
+    )
+
+
+@pytest.mark.parametrize(
+    ("kind", "category", "marks", "basis_count"),
+    [
+        # The Objective wire has one correct-option score, so compound
+        # source tasks must be split into one-subpoint cells.
+        ("objective", "Match the Following", 1, 1),
+        ("objective", "True or False", 1, 1),
+        ("objective", "Fill in the blanks", 1, 1),
+        # The Subjective fixture contains two declared response slots.
+        ("subjective", "Fill in the blanks", 2, 2),
+    ],
+)
+def test_msbshse_per_subpoint_duration_uses_contract_bound_basis(
+    monkeypatch, kind, category, marks, basis_count,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(
+        "CAND-SUBPOINT",
+        cell_id="CELL-SUBPOINT",
+        kind=kind,
+        marks=marks,
+        category=category,
+    )
+    cell = _cell(
+        "CELL-SUBPOINT", kind=kind, marks=marks, category=category,
+    )
+
+    def provider(request: dict) -> dict:
+        response = _valid_response(request)
+        response["question_duration"] = basis_count
+        response["duration_basis_count"] = basis_count
+        return response
+
+    verdict = marking.decide_markings(
+        [(candidate, cell)],
+        meta=MSBSHSE_META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        store=kernel.DecisionStore(),
+    )[0]
+
+    assert verdict["question_duration"] == float(basis_count)
+    assert verdict["duration_basis_count"] == basis_count
+
+
+@pytest.mark.parametrize(
+    "category",
+    ["Match the Following", "True or False", "Fill in the blanks"],
+)
+def test_msbshse_objective_compound_subpoints_fail_before_provider(
+    category,
+) -> None:
+    candidate = _candidate(
+        "CAND-COMPOUND",
+        cell_id="CELL-COMPOUND",
+        kind="objective",
+        marks=2,
+        category=category,
+    )
+    cell = _cell(
+        "CELL-COMPOUND", kind="objective", marks=2, category=category,
+    )
+
+    with pytest.raises(marking.MarkingError, match="at most 1"):
+        marking.decide_markings(
+            [(candidate, cell)],
+            meta=MSBSHSE_META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=_forbidden("the author"),
+        )
+
+
+@pytest.mark.parametrize(
+    "malformed_maximum",
+    [
+        pytest.param("one", id="nonnumeric"),
+        pytest.param(True, id="bool"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param(1.5, id="fractional"),
+    ],
+)
+def test_marking_rejects_malformed_max_subpoints_before_provider_spend(
+    malformed_maximum,
+) -> None:
+    custom_profile = copy.deepcopy(marking.assessment_profile.DEFAULT_PROFILE)
+    custom_profile.update({
+        "sheet_kinds": ("objective",),
+        "assessment_format": {
+            "policy_id": "malformed-maximum-test",
+            "formats_by_sheet": {
+                "objective": {
+                    "Match the Following": {
+                        "marks": {
+                            "mode": "per_subpoint",
+                            "marks_per_subpoint": 1,
+                            "max_subpoints": malformed_maximum,
+                        },
+                    },
+                },
+            },
+        },
+        "assessment_format_overrides": (),
+        "run_profile_overrides": (),
+    })
+    candidate = _candidate(
+        "CAND-BAD-MAX",
+        cell_id="CELL-BAD-MAX",
+        kind="objective",
+        marks=1,
+        category="Match the Following",
+    )
+    cell = _cell(
+        "CELL-BAD-MAX",
+        kind="objective",
+        marks=1,
+        category="Match the Following",
+    )
+
+    with pytest.raises(
+        marking.MarkingError,
+        match="invalid max_subpoints; it must be a positive integer",
+    ):
+        marking.decide_markings(
+            [(candidate, cell)],
+            meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=_forbidden("the author"),
+            profile=custom_profile,
+        )
+
+
+def test_msbshse_subjective_each_answer_uses_the_policy_mark_unit(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(
+        "CAND-UNIT",
+        cell_id="CELL-UNIT",
+        kind="subjective",
+        marks=2,
+        category="Fill in the blanks",
+    )
+    cell = _cell(
+        "CELL-UNIT",
+        kind="subjective",
+        marks=2,
+        category="Fill in the blanks",
+    )
+
+    def uneven(request: dict) -> dict:
+        response = _valid_response(request)
+        response["answers"][0]["answer_weightage"] = 0.5
+        response["answers"][1]["answer_weightage"] = 1.5
+        response["question_duration"] = 2
+        response["duration_basis_count"] = 2
+        return response
+
+    with pytest.raises(kernel.ContractError) as exc_info:
+        marking.decide_markings(
+            [(candidate, cell)],
+            meta=MSBSHSE_META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=uneven,
+            store=kernel.DecisionStore(),
+        )
+    assert any(
+        "marks-per-subpoint unit 1" in defect
+        for defect in exc_info.value.defects
+    )
+
+
+@pytest.mark.parametrize(
+    ("duration", "basis_count", "expected"),
+    [
+        (3, None, "requires duration_basis_count"),
+        (3, 2.5, "positive integer"),
+        (3, 2, "whole-subpoint count (3)"),
+    ],
+)
+def test_msbshse_per_subpoint_duration_fails_closed(
+    monkeypatch, duration, basis_count, expected,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    candidate = _candidate(
+        "CAND-SUBPOINT",
+        cell_id="CELL-SUBPOINT",
+        kind="subjective",
+        marks=3,
+        category="Fill in the blanks",
+    )
+    cell = _cell(
+        "CELL-SUBPOINT",
+        kind="subjective",
+        marks=3,
+        category="Fill in the blanks",
+    )
+
+    def invalid(request: dict) -> dict:
+        response = _valid_response(request)
+        response["question_duration"] = duration
+        response["duration_basis_count"] = basis_count
+        return response
+
+    with pytest.raises(kernel.ContractError) as exc_info:
+        marking.decide_markings(
+            [(candidate, cell)],
+            meta=MSBSHSE_META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=invalid,
+            store=kernel.DecisionStore(),
+        )
+    assert any(expected in defect for defect in exc_info.value.defects)
+
+
+def test_generic_profile_keeps_model_authored_duration_without_basis(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+    seen = {}
+
+    def provider(request: dict) -> dict:
+        seen.update(copy.deepcopy(request))
+        response = _valid_response(request)
+        response["question_duration"] = 9
+        response["duration_basis_count"] = None
+        return response
+
+    verdict = marking.decide_markings(
+        [(_candidate(), _cell())],
+        meta=META,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        store=kernel.DecisionStore(),
+    )[0]
+
+    assert seen["assessment_format_policy"]["policy_id"] == "generic-cms"
+    assert verdict["question_duration"] == 9.0
+    assert verdict["duration_basis_count"] is None
+
+
+def test_generic_profile_rejects_an_invented_duration_basis(monkeypatch):
+    monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
+
+    def invalid(request: dict) -> dict:
+        response = _valid_response(request)
+        response["duration_basis_count"] = 1
+        return response
+
+    with pytest.raises(kernel.ContractError) as exc_info:
+        marking.decide_markings(
+            [(_candidate(), _cell())],
+            meta=META,
+            envelope_sha256=ENVELOPE_SHA256,
+            provider=invalid,
+            store=kernel.DecisionStore(),
+        )
+    assert any(
+        "must be null when no per-subpoint" in defect
+        for defect in exc_info.value.defects
+    )

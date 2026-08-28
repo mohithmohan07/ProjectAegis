@@ -28,7 +28,7 @@ def _candidate(index: int = 1, **changes) -> dict:
         "question": "Explain two valid ways to identify the solid.",
         "question_text": "Explain two valid ways to identify the solid.",
         "sheet_kind": "descriptive",
-        "question_category": "Long Answer",
+        "question_category": "Short Answer Type (3 Marks)",
         "cognitive_skill": "Analyse",
         "difficulty": "Moderate",
         "marks": 3,

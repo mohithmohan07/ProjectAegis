@@ -863,7 +863,7 @@ def test_merge_exhaustion_without_a_fixer_fails_closed(
 # the existing passes are untouched (spec T1)
 
 
-def test_no_existing_pass_was_re_keyed_by_this_slice():
+def test_no_unrelated_existing_pass_was_re_keyed_by_this_slice():
     """Adding a ``prerequisites`` field to Settle/Host/Place/Analyse would
     re-key every stored decision for those passes (kernel.decision_key
     hashes the whole payload and store.put never overwrites). The capture
@@ -874,7 +874,10 @@ def test_no_existing_pass_was_re_keyed_by_this_slice():
     assert confidence_policy.POLICY_VERSION == (
         "semantic-confidence-policy-3"
     )  # settle + host
-    assert place.POLICY_VERSION == "place-1"
+    # The concept-mapping audit deliberately re-keyed Place: the Fixer now
+    # receives the same source images as author/critic, and each figure must
+    # return exactly one of concept_id or disposition.
+    assert place.POLICY_VERSION == "place-2"
     assert analyse.POLICY_VERSION == "analysis-1"
     # Polish keys off its content-code list; the constant is pinned so a
     # change there is deliberate rather than a side effect of this slice.

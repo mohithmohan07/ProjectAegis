@@ -642,6 +642,64 @@ def titled(name: str, machine_id: str) -> str:
     return f"{clean} ({tag})" if tag else clean
 
 
+def topic_title_cell(
+    name: str,
+    machine_id: str,
+    ordinal: int = 1,
+    *,
+    number_without_id: bool = False,
+) -> str:
+    """Compose one topic cell from display position and persisted identity.
+
+    Identified topics use the one canonical wire shape shared by the Concept
+    and Master renderers: ``Topic NN: <title> (<persisted machine id>)``.
+    ``ordinal`` is supplied by the caller's closed-world export/snapshot
+    order; it is display position, never an identity source.  The persisted
+    ``machine_id`` is carried verbatim, so a legacy chapter-level tag cannot
+    collapse two sibling topics onto the same identity.
+
+    An id-less legacy value is returned byte-for-byte by default.  Assessment
+    snapshots may already contain their historical prefix/tag, and composing
+    or stripping either would silently rewrite gold input.  The bulk writer
+    opts into ``number_without_id`` for its older transient/public-export
+    contract, which always supplied ``Topic NN:`` even before identity was
+    persisted.
+
+    With an id, an existing ``Topic NN:`` prefix is replaced rather than
+    stacked.  Its carried workbook tag is removed before :func:`titled`
+    applies the persisted id.  The same replacement applies to the old
+    chapter-level topic tag grammar ending in ``_PL``/``_PrL``, even when its
+    prefix was already stripped.  An ordinary readable parenthetical such as
+    ``Ohm Law (V_I_R)`` remains part of the title.
+    """
+    raw = str(name or "")
+    persisted = str(machine_id or "").strip()
+    position = max(int(ordinal or 1), 1)
+    if not persisted:
+        if not number_without_id:
+            return raw
+        readable = bi.strip_topic_title(raw) or raw
+        return f"Topic {position:02d}: {readable}"
+
+    unnumbered = bi.strip_topic_number(raw)
+    carried_tag = title_tag(unnumbered)
+    carried_parts = carried_tag.split("_") if carried_tag else []
+    persisted_parts = persisted.split("_")
+    persisted_topic_ordinal = minted_topic_ordinal(persisted)
+    legacy_chapter_tag = (
+        len(carried_parts) >= 3
+        and persisted_topic_ordinal is not None
+        and carried_parts[0] == persisted_parts[0]
+        and carried_parts[-1] == persisted_parts[-2]
+    )
+    readable = (
+        bi.strip_title_tag(unnumbered)
+        if legacy_chapter_tag
+        else unnumbered
+    )
+    return f"Topic {position:02d}: {titled(readable, persisted)}"
+
+
 def topic_concept_roster(topic, export_scope=None) -> str:
     """Column J: every concept of ``topic`` exactly as its own title cell reads.
 

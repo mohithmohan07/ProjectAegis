@@ -10,9 +10,11 @@ import copy
 import io
 
 import openpyxl
+import pytest
 
 from app.bulk_import import assessment_workbook as mp
 from app.services import assessment_grouping as ag
+from app.services import assessment_profile
 from app.services import assessment_release as rel
 
 
@@ -61,7 +63,7 @@ def _snapshot() -> dict:
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 1.0,
-        "question_duration": 2.0,
+        "question_duration": 1.0,
         "math_keyboard": "",
         "question_appears_in": "Pre/Post-Worksheet/Test",
         "answer_restriction": "Specific",
@@ -83,30 +85,29 @@ def _snapshot() -> dict:
         "candidate_id": "CAND-2",
         "question_label": "06MSMA_T01_TwoDim Q02",
         "sheet_kind": "descriptive",
-        "question_category": "Long Answer",
+        "question_category": "Long Answer Type (4 Marks)",
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "marks": 4.0,
-        "question_duration": 5.0,
+        "question_duration": 6.0,
         "math_keyboard": "No",
         "question_appears_in": "Pre/Post-Worksheet/Test",
         "answer_restriction": "Open",
         "question": "Explain how a square differs from a cube.",
         "question_text": "Explain how a square differs from a cube.",
         "display_answer": "A square is flat with two dimensions ...",
-        "answers": [
-            {"answer_type": "Phrases", "answer_weightage": "2",
-             "answer_content": "square described as two-dimensional"},
-            {"answer_type": "Phrases", "answer_weightage": "2",
-             "answer_content": "cube described as three-dimensional"},
-        ],
+        # Multipart items keep all scoring evidence with their parts.  Main
+        # answer blocks would duplicate the same four marks.
+        "answers": [],
         "sub_questions": [
             {"text": "Name the number of faces of a cube.", "marks": "2",
              "keywords": [
                  {"answer_type": "Phrases", "weightage": "2",
-                  "keyword": "six faces"}]},
+                  "keyword": "[content]: six faces"}]},
             {"text": "State the dimensions of a square.", "marks": "2",
-             "keywords": []},
+             "keywords": [
+                 {"answer_type": "Phrases", "weightage": "2",
+                  "keyword": "[content]: two dimensions"}]},
         ],
         "answer_explanation": "",
         "concept_key": "C_A",
@@ -199,18 +200,17 @@ def test_master_contains_everything_including_questionless_concepts():
     }
     assert provenance[("Objective", 3)] == "(06MSMA_T01_TwoDim) BG01"
     assert provenance[("Descriptive", 3)] == "(06MSMA_T01_TwoDim) IG01"
-    assert provenance[("Objective", 4)] == "(06MSMA_T01_TwoDim) AG01"
-    assert parsed["sheets"]["Objective"]["row_numbers"] == [3, 4, 5]
+    assert "(06MSMA_T01_TwoDim) AG01" not in provenance.values()
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [3, 4]
     assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
 
-    # One objective question row, one catalogue row for the AG01 the
-    # occupied concept's questions do not represent (its IG01 lives on the
-    # Descriptive sheet), and ONE tail row for the questionless concept
-    # (OWNER RULING OD5).
+    # Empty tier shells remain in the snapshot but do not become assessment
+    # rows.  The sole catalogue row is the one OD5 tail row for the genuinely
+    # questionless concept.
     question_rows = [r for r in objective_rows if r["question_label"]]
     catalogue_rows = [r for r in objective_rows if not r["question_label"]]
     assert len(question_rows) == 1
-    assert len(catalogue_rows) == 2
+    assert len(catalogue_rows) == 1
     tail = [
         r for r in catalogue_rows
         if r["concept_title"].startswith("Three-dimensional")]
@@ -221,7 +221,8 @@ def test_master_contains_everything_including_questionless_concepts():
         for field in (
             "group_name", "group_display_name", "group_description",
             "group_status", "group_type", "group_question_labels",
-            "related_digicards", "concept_question_labels",
+            "related_digicards", "concept_question_labels", "basic_groups",
+            "intermediate_groups", "advanced_groups",
         )
     )
     assert [
@@ -236,6 +237,12 @@ def test_master_contains_everything_including_questionless_concepts():
     # The shells stay in the payload; the difference is RECORDED, not silent.
     assert {g["group_key"] for g in _snapshot()["groups"]} >= set(
         issues["questionless_concepts"][0]["shell_group_keys"])
+    assert sorted(issues["omitted_empty_group_shells"]) == [
+        "(06MSMA_T01_ThreeDim) AG01",
+        "(06MSMA_T01_ThreeDim) BG01",
+        "(06MSMA_T01_ThreeDim) IG01",
+        "(06MSMA_T01_TwoDim) AG01",
+    ]
 
     q = question_rows[0]
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
@@ -247,12 +254,20 @@ def test_master_contains_everything_including_questionless_concepts():
     assert q["group_question_labels"] == "06MSMA_T01_TwoDim Q01"
     assert q["concept_question_labels"] == (
         "06MSMA_T01_TwoDim Q01, 06MSMA_T01_TwoDim Q02")
+    assert q["basic_groups"] == "(06MSMA_T01_TwoDim) BG01"
+    assert q["intermediate_groups"] == "(06MSMA_T01_TwoDim) IG01"
+    assert q["advanced_groups"] == ""
 
     d = descriptive_rows[0]
     assert d["sub_question_1"] == "Name the number of faces of a cube."
-    assert d["sq1_keyword_1"] == "six faces"
+    assert d["sq1_keyword_1"] == "[content]: six faces"
+    assert d["sq2_keyword_1"] == "[content]: two dimensions"
     assert d["display_answer"].startswith("A square is flat")
     assert d["answer_restriction"] == "Open"
+    assert d["answer_content_1"] == ""
+    assert d["basic_groups"] == "(06MSMA_T01_TwoDim) BG01"
+    assert d["intermediate_groups"] == "(06MSMA_T01_TwoDim) IG01"
+    assert d["advanced_groups"] == ""
 
 
 def test_unresolved_placement_rides_the_manifest_never_disappears():
@@ -279,6 +294,155 @@ def test_master_validation_names_wire_value_and_arithmetic_defects():
     errors = mp.validate_master_file(mp.parse_workbook(master), snapshot)
     assert any("not the profile wire value" in e for e in errors)
     assert any("correct weightage 3 != marks 1" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    ("replacement", "expected"),
+    [
+        pytest.param(
+            "", "populated Question band requires a non-blank question_label",
+            id="blank-label",
+        ),
+        pytest.param(
+            "ROGUE Q99", "question label row set/order differs",
+            id="rogue-label",
+        ),
+    ],
+)
+def test_master_readback_reconciles_question_row_identity(
+    replacement: str, expected: str,
+):
+    snapshot = _snapshot()
+    master, issues = mp.render_master_file(snapshot)
+    parsed = mp.parse_workbook(master)
+    row = next(
+        item for item in parsed["sheets"]["Objective"]["rows"]
+        if item.get("question_label")
+    )
+    row["question_label"] = replacement
+
+    errors = mp.validate_master_file(
+        parsed,
+        copy.deepcopy(snapshot),
+        group_provenance=issues["group_provenance"],
+    )
+
+    assert any(expected in error for error in errors), errors
+    assert any(
+        "question label row set/order differs" in error for error in errors
+    ), errors
+
+
+def test_master_readback_refuses_a_labelled_blank_question():
+    snapshot = _snapshot()
+    master, issues = mp.render_master_file(snapshot)
+    parsed = mp.parse_workbook(master)
+    row = next(
+        item for item in parsed["sheets"]["Objective"]["rows"]
+        if item.get("question_label")
+    )
+    row["question"] = ""
+
+    errors = mp.validate_master_file(
+        parsed,
+        copy.deepcopy(snapshot),
+        group_provenance=issues["group_provenance"],
+    )
+
+    assert any("question must not be blank" in error for error in errors)
+
+
+def test_master_readback_rejects_duplicate_concept_tail_rows():
+    snapshot = _snapshot()
+    master, issues = mp.render_master_file(snapshot)
+    parsed = mp.parse_workbook(master)
+    sheet = parsed["sheets"]["Objective"]
+    tail = next(
+        item for item in sheet["rows"]
+        if not any(
+            str(item.get(field) or "").strip()
+            for field in mp.FIELDS["Objective"][
+                mp._INDEX["Objective"]["question_label"]:
+            ]
+        )
+    )
+    sheet["rows"].append(copy.deepcopy(tail))
+    sheet["row_numbers"].append(max(sheet["row_numbers"]) + 1)
+
+    errors = mp.validate_master_file(
+        parsed,
+        copy.deepcopy(snapshot),
+        group_provenance=issues["group_provenance"],
+    )
+
+    assert any(
+        "concept-only tail row set/order differs" in error
+        for error in errors
+    ), errors
+
+
+def test_master_readback_rejects_questionless_group_scaffolding():
+    snapshot = _snapshot()
+    master, issues = mp.render_master_file(snapshot)
+    parsed = mp.parse_workbook(master)
+    tail = next(
+        item for item in parsed["sheets"]["Objective"]["rows"]
+        if not item.get("question_label")
+    )
+    group = next(
+        item for item in snapshot["groups"]
+        if item["concept_key"] == "C_B" and item["group_type"] == "Basic"
+    )
+    tail.update({
+        "group_name": group["group_name"],
+        "group_display_name": group["group_display_name"],
+        "group_description": group["semantic_description"],
+        "group_status": group["group_status"],
+        "group_type": group["group_type"],
+        "group_question_labels": "",
+    })
+
+    errors = mp.validate_master_file(
+        parsed,
+        copy.deepcopy(snapshot),
+        group_provenance=issues["group_provenance"],
+    )
+
+    assert any(
+        "without a Question band must also keep the Group band blank" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    "malformed_field", ["answers", "sub_questions", "keywords"],
+)
+def test_master_projection_remains_total_for_non_array_containers(
+    malformed_field: str,
+):
+    snapshot = _snapshot()
+    candidate = (
+        snapshot["candidates"][0]
+        if malformed_field == "answers"
+        else snapshot["candidates"][1]
+    )
+    if malformed_field == "keywords":
+        candidate["sub_questions"][0]["keywords"] = 1
+        ledger_field = "sub_questions[1].keywords"
+    else:
+        candidate[malformed_field] = 1
+        ledger_field = malformed_field
+
+    findings = rel.unresolved_question_homes(snapshot)
+    master, issues = mp.render_master_file(snapshot)
+
+    assert master[:2] == b"PK"
+    assert isinstance(findings, list)
+    assert any(
+        entry.get("field") == ledger_field
+        and entry.get("reason") == "invalid_container_shape"
+        for entry in issues["truncated_rows"]
+    ), issues["truncated_rows"]
 
 
 def test_master_provenance_distinguishes_shared_friendly_group_names():
@@ -347,21 +511,30 @@ def test_master_provenance_distinguishes_shared_friendly_group_names():
 
 def test_equation_answer_and_keyword_cells_are_raw():
     """Q21 supersedes the older wrapped answer_content interpretation."""
-    snapshot = copy.deepcopy(_snapshot())
-    descriptive = snapshot["candidates"][1]
-    descriptive["answers"][0] = {
+    answer_snapshot = copy.deepcopy(_snapshot())
+    descriptive = answer_snapshot["candidates"][1]
+    descriptive["sub_questions"] = []
+    descriptive["answers"] = [{
         "answer_type": "Equation", "answer_weightage": "2",
         "answer_content": "1 mark: States [Katex] 3n=12 [/Katex].",
-    }
-    descriptive["sub_questions"][0]["keywords"][0] = {
-        "answer_type": "Equation", "weightage": "2",
-        "keyword": "[Katex] 3n=3\\times4=12 [/Katex]",
-    }
-    master, _ = mp.render_master_file(snapshot)
+    }, {
+        "answer_type": "Phrases", "answer_weightage": "2",
+        "answer_content": "[method]: Completes the comparison.",
+    }]
+    master, _ = mp.render_master_file(answer_snapshot)
     row = mp.parse_workbook(master)["sheets"]["Descriptive"]["rows"][0]
     assert row["answer_content_1"] == (
         r"\text{1 mark: States }3n=12\text{.}"
     )
+
+    keyword_snapshot = copy.deepcopy(_snapshot())
+    descriptive = keyword_snapshot["candidates"][1]
+    descriptive["sub_questions"][0]["keywords"][0] = {
+        "answer_type": "Equation", "weightage": "2",
+        "keyword": "[Katex] 3n=3\\times4=12 [/Katex]",
+    }
+    master, _ = mp.render_master_file(keyword_snapshot)
+    row = mp.parse_workbook(master)["sheets"]["Descriptive"]["rows"][0]
     assert row["sq1_keyword_1"] == "3n=3\\times4=12"
 
 
@@ -494,7 +667,7 @@ def test_master_provenance_uses_physical_sheet_row_numbers():
     workbook.close()
 
     parsed = mp.parse_workbook(buffer.getvalue())
-    assert parsed["sheets"]["Objective"]["row_numbers"] == [4, 5, 6]
+    assert parsed["sheets"]["Objective"]["row_numbers"] == [4, 5]
     assert parsed["sheets"]["Descriptive"]["row_numbers"] == [3]
     shifted_provenance = copy.deepcopy(issues["group_provenance"])
     for item in shifted_provenance:
@@ -512,7 +685,7 @@ def test_formula_injection_and_cell_limit_guards():
     parsed = mp.parse_workbook(master)
     q = [r for r in parsed["sheets"]["Objective"]["rows"]
          if r["question_label"]][0]
-    assert q["question"] == "'=HYPERLINK evil"
+    assert q["question"] == "=HYPERLINK evil"
 
     # INVERTED by spec-step8 S9, and inverted deliberately rather than
     # deleted: this assertion pinned a REAL behaviour that is now wrong.
@@ -556,6 +729,54 @@ def test_formula_injection_and_cell_limit_guards():
     ]
     assert [f["field"] for f in findings] == ["question"]
     assert findings[0]["question_label"] == "06MSMA_T01_TwoDim Q01"
+
+
+def test_staged_shape_uses_the_selected_descriptive_answer_capacity():
+    snapshot = copy.deepcopy(_snapshot())
+    descriptive = snapshot["candidates"][1]
+    descriptive["sub_questions"] = []
+    descriptive["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": f"[content]: criterion {number}",
+        "answer_weightage": "",
+    } for number in range(1, 12)]
+    english_profile = assessment_profile.resolve_for_metadata(None, {
+        "board": "MSBSHSE",
+        "grade": "6",
+        "subject": "English",
+    })
+
+    post_findings = rel.unresolved_question_homes(snapshot, english_profile)
+    assert not [
+        finding for finding in post_findings
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answers"
+    ]
+
+    # The staging audit must inspect every widened cell too, not merely stop
+    # counting at the historical ten-slot layout.
+    descriptive["answers"][10]["answer_content"] = "x" * (mp.CELL_LIMIT + 1)
+    widened_cell_findings = rel.unresolved_question_homes(
+        snapshot, english_profile,
+    )
+    assert [
+        finding["field"] for finding in widened_cell_findings
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answer_content_11"
+    ] == ["answer_content_11"]
+
+    descriptive["answers"][10]["answer_content"] = "[content]: criterion 11"
+    snapshot["topics"][0]["pre_post_learning"] = "Pre"
+    pre_overflows = [
+        finding for finding in rel.unresolved_question_homes(
+            snapshot, english_profile,
+        )
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answers"
+    ]
+    assert [(finding["cap"], finding["actual"]) for finding in pre_overflows] == [
+        (10, 11),
+    ]
 
 
 def test_a_control_character_is_repaired_not_raised():
@@ -660,10 +881,8 @@ def test_the_truncated_cell_states_a_true_count_and_stays_under_the_cap():
       (182 chars) and the cut used the FORMATTED mark (178). A false
       sentence inside a repair whose whole justification is that the record
       stays true.
-    * the formula-injection guard ran AFTER the truncation and PREPENDED a
-      character, so a truncated cell beginning ``=`` was written at
-      ``CELL_LIMIT + 1``. openpyxl does not enforce the cap, so it saved —
-      violating the format limit the module says it is honouring.
+    * formula-like content must remain exact and is protected by Cell string
+      typing, not a payload-mutating apostrophe.
     """
     import re
 
@@ -673,11 +892,42 @@ def test_the_truncated_cell_states_a_true_count_and_stays_under_the_cap():
     assert len(plain) <= mp.CELL_LIMIT
 
     guarded = mp._cell_value("=" + "x" * 40000, context="t")
-    assert guarded.startswith("'=")
+    assert guarded.startswith("=")
     assert len(guarded) <= mp.CELL_LIMIT
     stated = int(re.search(r"first (\d+) of (\d+)", guarded).group(1))
-    # One for the guard prefix, which is reserved before the cut now.
-    assert stated == guarded.index("\n[Aegis:") - 1
+    assert stated == guarded.index("\n[Aegis:")
+
+
+def test_formula_like_and_negative_answers_roundtrip_as_literal_text():
+    snapshot = copy.deepcopy(_snapshot())
+    snapshot["candidates"][0]["answers"][0].update({
+        "answer_type": "Equation",
+        "answer_content": "-3, -2, -1",
+    })
+    snapshot["candidates"][0]["answers"][1].update({
+        "answer_type": "Phrases",
+        "answer_content": "=HYPERLINK(\"https://invalid\",\"x\")",
+    })
+
+    master, _issues = mp.render_master_file(snapshot)
+    parsed = mp.parse_workbook(master)
+    row = next(
+        item for item in parsed["sheets"]["Objective"]["rows"]
+        if item.get("question_label")
+    )
+    assert row["answer_content_1"] == "-3, -2, -1"
+    assert row["answer_content_2"] == (
+        "=HYPERLINK(\"https://invalid\",\"x\")"
+    )
+
+    workbook = openpyxl.load_workbook(io.BytesIO(master), data_only=False)
+    worksheet = workbook["Objective"]
+    formula_cell = worksheet.cell(
+        row=3, column=mp._INDEX["Objective"]["answer_content_2"] + 1,
+    )
+    assert formula_cell.data_type == "s"
+    assert formula_cell.value == "=HYPERLINK(\"https://invalid\",\"x\")"
+    workbook.close()
 
 
 def test_capacity_overflow_is_a_named_defect_with_the_label_named():

@@ -12,6 +12,7 @@ import pytest
 
 from app import models
 from app.services import assessment_blueprint as bp
+from app.services import assessment_profile
 from app.services import assessment_source_inventory as si
 from app.services import build_assessments
 from app.services.phase3 import kernel
@@ -185,12 +186,28 @@ def test_blueprint_validation_rejects_nonfinite_marks(invalid_marks: float):
         bp.validate_cells(cells)
 
 
-def test_strict_profile_rejects_subjective_cells():
+def test_strict_profile_widens_subjective_only_for_resolved_ms_grade_6_run():
+    default_cells = bp.compile_cells_from_batches(
+        [_Batch(question_type="subjective")], concepts=[_Concept(1)],
+        default_marks={"subjective": 3.0}, strict_profile=True,
+    )
+    with pytest.raises(bp.BlueprintError, match="sheet_kind"):
+        bp.validate_cells(default_cells, strict_profile=True)
+
+    ms_grade_6 = assessment_profile.resolve_for_metadata(None, {
+        "board": "MSBSHSE", "grade": "6", "subject": "Mathematics",
+    })
     cells = bp.compile_cells_from_batches(
         [_Batch(question_type="subjective")], concepts=[_Concept(1)],
-        default_marks={"subjective": 3.0}, strict_profile=True)
+        default_marks={"subjective": 3.0}, strict_profile=True,
+    )
+    bp.validate_cells(cells, strict_profile=True, profile=ms_grade_6)
+
+    objective_only = {"sheet_kinds": ("objective",)}
     with pytest.raises(bp.BlueprintError, match="sheet_kind"):
-        bp.validate_cells(cells, strict_profile=True)
+        bp.validate_cells(
+            cells, strict_profile=True, profile=objective_only,
+        )
     # The same cells are legal for the legacy concept-mapping path.
     bp.validate_cells(cells)
 

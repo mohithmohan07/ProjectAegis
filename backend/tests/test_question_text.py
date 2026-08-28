@@ -6,7 +6,7 @@ import openpyxl
 
 from app import bulk_import as bi
 from app import models
-from app.bulk_import import layouts
+from app.bulk_import import layouts, reader
 from app.db import _backfill_and_normalize
 from app.services import generation
 
@@ -118,7 +118,7 @@ def test_export_workbook_carries_question_text_where_the_authority_puts_it(
     assert wb.sheetnames == bi.SHEET_ORDER
 
 
-def test_legacy_import_backfills_question_text(client, db, tmp_path):
+def test_legacy_import_backfills_question_text(db, tmp_path):
     """Template WITHOUT question_text imports safely; backfill = plain question."""
     # Built from the FROZEN registry entry for the pre-question_text template,
     # never from ``writer._write_headers`` (that writer moves in S7). Every
@@ -150,9 +150,7 @@ def test_legacy_import_backfills_question_text(client, db, tmp_path):
     path = tmp_path / "legacy_qt.xlsx"
     wb.save(path)
 
-    files = {"file": ("legacy_qt.xlsx", io.BytesIO(path.read_bytes()),
-                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
-    counts = client.post("/data/import", files=files).json()
+    counts = reader.import_workbook(db, path)
     assert counts["questions"] == 1
 
     q = db.query(models.Question).filter_by(
@@ -213,7 +211,7 @@ def test_context_attached_to_question_text():
 
 # ------------------------------ validation ----------------------------------- #
 
-def test_import_validation_reports_issues(client, tmp_path):
+def test_import_validation_reports_issues(db, tmp_path):
     # Real headers on all three sheets, from the frozen registry entry: the
     # one-column stubs this fixture used to write match no layout, and the
     # reader now refuses a workbook whose geometry it cannot establish.
@@ -250,9 +248,7 @@ def test_import_validation_reports_issues(client, tmp_path):
     path = tmp_path / "validate.xlsx"
     wb.save(path)
 
-    files = {"file": ("validate.xlsx", io.BytesIO(path.read_bytes()),
-                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
-    counts = client.post("/data/import", files=files).json()
+    counts = reader.import_workbook(db, path)
     issues = "\n".join(counts["issues"])
     assert "unknown cognitive skill" in issues
     assert "unknown level_of_difficulty" in issues

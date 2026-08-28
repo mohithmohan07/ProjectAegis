@@ -369,7 +369,12 @@ def phase2_inventory_issues(
                 "qid": qid,
             })
             continue
-        rich_issues = kr.rich_text_issues(display)
+        # Source evidence may carry mechanically migratable Mathpix roman-unit
+        # atoms. Validate the safe public projection without mutating the
+        # canonical source payload or its content-addressed contract hash.
+        rich_issues = kr.rich_text_issues(
+            kr.legacy_export_rich_text(display)
+        )
         if rich_issues:
             issues.append({
                 "severity": "error",

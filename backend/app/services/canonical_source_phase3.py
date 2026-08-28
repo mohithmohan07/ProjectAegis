@@ -2100,7 +2100,13 @@ def _clean_public_text(
     text = _restore_rich_tokens(text, protected)
     for pattern in _EMPTY_MATH_DELIMITER_PATTERNS:
         text = pattern.sub(" ", text)
-    text = kr.canonicalize_rich_text(text)
+    # Canonical blocks remain immutable source evidence.  Apply bounded
+    # compatibility repairs only to this rendered public projection, so
+    # historical Mathpix ``\mathrm{...}`` unit/text atoms do not invalidate
+    # otherwise canonical semantic output or perturb the source contract.
+    text = kr.legacy_export_rich_text(
+        kr.canonicalize_rich_text(text)
+    )
     issues = set(kr.rich_text_issues(text))
     if issues and issues.issubset({"raw_latex", "raw_math_expression"}):
         repaired = kr.repair_unwrapped_math(text)

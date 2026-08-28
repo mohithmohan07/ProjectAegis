@@ -192,7 +192,29 @@ def test_legacy_export_strips_only_orphan_katex_tokens_from_phrases():
     assert kr.answer_cell_issues(paired_type, paired_content) == []
 
 
-def test_unsupported_katex_tables_become_lossless_coordinate_labels():
+def test_legacy_mathrm_repair_is_plain_only_and_case_sensitive():
+    plain = r"[Katex] \mathrm{pH} [/Katex]"
+    assert kr.legacy_export_rich_text(plain) == (
+        r"[Katex] \text{pH} [/Katex]"
+    )
+
+    for source in (
+        r"[Katex] \mathrm{x+1} [/Katex]",
+        r"[Katex] \mathrm{\frac{1}{2}} [/Katex]",
+        r"[Katex] \Mathrm{x} [/Katex]",
+    ):
+        migrated = kr.legacy_export_rich_text(source)
+        assert migrated == source
+        assert "unsupported_katex_command" in kr.rich_text_issues(migrated)
+
+        answer_type, answer = kr.legacy_export_answer_cell(
+            "Phrases", source,
+        )
+        assert (answer_type, answer) == ("Phrases", source)
+        assert kr.answer_cell_issues(answer_type, answer)
+
+
+def test_canonical_katex_array_is_supported_without_transcription():
     source = (
         r"[Katex] \begin{array}{cc}"
         r"\text{Name of peak} & \text{Altitude (in metres)} \\ "
@@ -203,20 +225,70 @@ def test_unsupported_katex_tables_become_lossless_coordinate_labels():
 
     rendered = kr.canonicalize_rich_text(source)
 
-    assert rendered.splitlines() == [
-        "Table row 1, column 1: Name of peak; "
-        "Table row 1, column 2: Altitude (in metres)",
-        "Table row 2, column 1: K-2; Table row 2, column 2: 8611",
-        "Table row 3, column 1: Makalu; Table row 3, column 2: 8485",
-    ]
+    assert rendered == source
     assert kr.rich_text_issues(rendered) == []
-    assert "unsupported_table" in kr.rich_text_issues(source)
+
+
+def test_canonical_array_is_raw_in_an_equation_cell():
+    source = (
+        r"\begin{array}{cc}\text{Name}&\text{Value}\\A&1\end{array}"
+    )
+
+    assert kr.raw_answer_cell("Equation", source) == source
+    assert kr.answer_cell_issues("Equation", source) == []
+    assert kr.rich_answer_display("Equation", source) == (
+        f"[Katex] {source} [/Katex]"
+    )
+    assert "raw_latex" in kr.rich_text_issues(source)
+
+
+def test_array_row_break_before_parenthesized_cell_is_not_a_delimiter():
+    raw = r"\begin{array}{c}(1)\\(2)\end{array}"
+    wrapped = f"[Katex] {raw} [/Katex]"
+
+    assert kr.answer_cell_issues("Equation", raw) == []
+    assert kr.rich_text_issues(wrapped) == []
+    assert "raw_math_delimiter" not in kr.rich_text_issues(raw)
+
+    # Three backslashes are a row break followed by a real ``\(`` token.
+    real_delimiter = r"\begin{array}{c}(1)\\\(x\)\end{array}"
+    assert "equation_math_delimiter" in kr.answer_cell_issues(
+        "Equation", real_delimiter,
+    )
+    assert "raw_math_delimiter" in kr.rich_text_issues(
+        f"[Katex] {real_delimiter} [/Katex]"
+    )
+
+
+def test_array_environment_is_case_sensitive_at_every_strict_seam():
+    noncanonical = r"\begin{Array}{c}1\\2\end{Array}"
+
+    assert "unsupported_table" in kr.answer_cell_issues(
+        "Equation", noncanonical,
+    )
+    assert "unsupported_table" in kr.rich_text_issues(
+        f"[Katex] {noncanonical} [/Katex]"
+    )
+    assert kr.legacy_export_rich_text(noncanonical) == noncanonical
+
+
+def test_legacy_export_wraps_only_a_complete_raw_canonical_array():
+    raw = r"\begin{array}{c}(1)\\(2)\end{array}"
+
+    migrated = kr.legacy_export_rich_text(raw)
+
+    assert migrated == f"[Katex] {raw} [/Katex]"
+    assert kr.rich_text_issues(migrated) == []
+
+    mixed = f"Values: {raw}"
+    assert kr.legacy_export_rich_text(mixed) == mixed
+    assert "raw_latex" in kr.rich_text_issues(mixed)
 
 
 @pytest.mark.parametrize(
     ("opening", "closing"), [(r"\[", r"\]"), ("$$", "$$")],
 )
-def test_raw_display_array_drops_math_delimiters_around_plain_labels(
+def test_raw_display_array_is_repaired_to_one_canonical_wrapper(
     opening, closing,
 ):
     source = (
@@ -226,13 +298,12 @@ def test_raw_display_array_drops_math_delimiters_around_plain_labels(
         + closing
     )
 
+    assert "raw_math_delimiter" in kr.rich_text_issues(source)
+
     rendered = kr.canonicalize_rich_text(source)
 
-    assert rendered.splitlines() == [
-        "Table row 1, column 1: Name; Table row 1, column 2: Height",
-        "Table row 2, column 1: K-2; Table row 2, column 2: 8611",
-    ]
-    assert "[Katex]" not in rendered
+    assert rendered.startswith(r"[Katex] \begin{array}{cc}")
+    assert rendered.endswith(r"\end{array} [/Katex]")
     assert kr.rich_text_issues(rendered) == []
 
 
@@ -253,16 +324,40 @@ def test_raw_display_array_drops_math_delimiters_around_plain_labels(
         ),
     ],
 )
-def test_source_converter_array_variants_all_use_the_same_fallback(source):
+def test_noncanonical_array_variants_remain_visible_defects(source):
     assert "unsupported_table" in kr.rich_text_issues(source)
 
     rendered = kr.canonicalize_rich_text(source)
 
-    assert rendered.splitlines() == [
-        "Table row 1, column 1: A; Table row 1, column 2: B",
-        "Table row 2, column 1: 1; Table row 2, column 2: 2",
-    ]
-    assert kr.rich_text_issues(rendered) == []
+    assert "Table row" not in rendered
+    assert "unsupported_table" in kr.rich_text_issues(rendered)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [r"\mathrm{m}", r"x\hspace{1em}y", r"\phantom{0}", r"\boxed{2}"],
+)
+def test_unsupported_katex_commands_are_rejected_in_both_media(command):
+    rich = f"[Katex] {command} [/Katex]"
+
+    assert "unsupported_katex_command" in kr.rich_text_issues(rich)
+    assert "equation_unsupported_command" in kr.answer_cell_issues(
+        "Equation", command,
+    )
+
+
+def test_array_row_spacing_and_nested_raw_delimiters_are_rejected():
+    spaced = r"\begin{array}{c}1\\[0.12 cm]2\end{array}"
+
+    assert "katex_row_spacing" in kr.rich_text_issues(
+        f"[Katex] {spaced} [/Katex]"
+    )
+    assert "equation_row_spacing" in kr.answer_cell_issues(
+        "Equation", spaced,
+    )
+    assert "raw_math_delimiter" in kr.rich_text_issues(
+        r"[Katex] \[x+1\] [/Katex]"
+    )
 
 
 def test_positioned_unterminated_tabular_tail_preserves_pipe_cells():
@@ -548,6 +643,16 @@ def test_literal_trailing_newline_escape_is_normalized_outside_katex():
         r"Description: The escape sequence `\n` starts a new line.")
     assert kr.canonicalize_rich_text(instructional) == instructional
     assert not kr.rich_text_issues(instructional)
+
+
+@pytest.mark.parametrize("label", ["a)", "(a)", "a.", "A."])
+def test_literal_newline_escapes_before_option_labels_are_rejected(label):
+    broken = f"Choose one.\\n{label} Alpha"
+
+    assert "literal_newline_escape" in kr.rich_text_issues(broken)
+    repaired = kr.legacy_export_rich_text(broken)
+    assert repaired == f"Choose one.\n{label} Alpha"
+    assert "literal_newline_escape" not in kr.rich_text_issues(repaired)
 
 
 def test_inventory_examples_strip_headings_and_emit_canonical_media():
@@ -1435,7 +1540,7 @@ def test_host_entailment_review_preserves_unreviewed_activity_units(
     ] == ["TYPE-0001", "TYPE-ACTIVITY"]
 
 
-def test_reusable_type_hosts_remain_distinct_without_convergence_review(
+def test_legacy_consolidation_requires_recorded_owner_for_split_type(
     monkeypatch,
 ):
     monkeypatch.setattr(g.config, "use_live_generation", lambda: True)
@@ -1459,32 +1564,26 @@ def test_reusable_type_hosts_remain_distinct_without_convergence_review(
         "is_activity": False,
     }
 
-    result = g._consolidate_reusable_type_hosts(
-        per_concept={
-            "CONCEPT-0001": [first],
-            "CONCEPT-0002": [second],
-        },
-        original_types_by_id={"TYPE-0001": first},
-        allowed_cids_by_tid={
-            first["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
-            second["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
-        },
-        concept_payload=[
-            {"concept_id": "CONCEPT-0001", "concept": "Method Alpha"},
-            {"concept_id": "CONCEPT-0002", "concept": "Method Beta"},
-        ],
-        meta={},
-    )
-
-    assert set(result) == {"CONCEPT-0001", "CONCEPT-0002"}
-    assert result["CONCEPT-0001"][0]["_origin_type_id"] == "TYPE-0001"
-    assert result["CONCEPT-0002"][0]["_origin_type_id"] == "TYPE-0001"
-    assert result["CONCEPT-0001"][0]["type_title"] == (
-        "Applying a shared method"
-    )
-    assert result["CONCEPT-0002"][0]["type_title"] == (
-        "Applying a shared method"
-    )
+    with pytest.raises(
+        cr.SplitTypeHostError,
+        match="ownership review is required for TYPE-0001",
+    ):
+        g._consolidate_reusable_type_hosts(
+            per_concept={
+                "CONCEPT-0001": [first],
+                "CONCEPT-0002": [second],
+            },
+            original_types_by_id={"TYPE-0001": first},
+            allowed_cids_by_tid={
+                first["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+                second["type_id"]: {"CONCEPT-0001", "CONCEPT-0002"},
+            },
+            concept_payload=[
+                {"concept_id": "CONCEPT-0001", "concept": "Method Alpha"},
+                {"concept_id": "CONCEPT-0002", "concept": "Method Beta"},
+            ],
+            meta={},
+        )
 
 
 def test_mined_type_normalization_prunes_examples_without_inventory_qids():

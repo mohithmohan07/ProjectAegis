@@ -37,6 +37,15 @@ def _new_workbook_for(layout: layouts.Layout, rows_by_kind: dict) -> openpyxl.Wo
         ws.append([band.label for band in sheet_layout.bands])
         ws.append(list(sheet_layout.fields))
         for cells in rows_by_kind.get(kind, []):
+            # Synthetic valid-question fixtures should exercise the contract
+            # under a real positive duration. Tests that intentionally probe a
+            # blank duration provide the field explicitly and are not changed.
+            cells = dict(cells)
+            if (
+                cells.get(("question", "question_label"))
+                and ("question", "question_duration") not in cells
+            ):
+                cells[("question", "question_duration")] = "1"
             row = [""] * len(sheet_layout.fields)
             for (block, field), value in cells.items():
                 index = sheet_layout.column(block, field)
@@ -57,6 +66,78 @@ def _post(client, path):
         "/data/import",
         files={"file": (path.name, io.BytesIO(path.read_bytes()), _XLSX)},
     )
+
+
+def _math_policy_context(marker: str) -> dict:
+    return {
+        ("chapter", "chapter_title"): (
+            f"Policy {marker} "
+            "(06_Mathematics_MSBSHSE_Balbharati)"
+        ),
+        ("topic", "topic_title"): f"Topic 01: Policy {marker}",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): f"Policy {marker}",
+        ("concept", "concept_display_name"): f"Policy {marker}",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+    }
+
+
+def _math_policy_descriptive_cells(
+    marker: str,
+    *,
+    category: str = "Short Answer Type (2 Marks)",
+    marks: str = "2",
+    difficulty: str = "Easy",
+    duration: str = "2",
+) -> dict:
+    cells = _math_policy_context(marker)
+    cells.update({
+        ("question", "question_label"):
+            f"06MSMA_Policy{marker}_PL_T01_C01 Q01",
+        ("question", "question_category"): category,
+        ("question", "question"): "Show the method.",
+        ("question", "question_text"): "Show the method.",
+        ("question", "marks"): marks,
+        ("question", "level_of_difficulty"): difficulty,
+        ("question", "question_duration"): duration,
+        ("question", "math_keyboard"): "No",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "[method]: valid method",
+        ("question", "answer_weightage_1"): marks,
+    })
+    return cells
+
+
+def _math_policy_subjective_cells(
+    marker: str,
+    *,
+    marks: str = "2",
+    duration: str = "2",
+    answer_count: int = 2,
+) -> dict:
+    cells = _math_policy_context(marker)
+    tokens = [f"$${chr(ord('a') + n)}$$" for n in range(answer_count)]
+    prompt = "Complete " + " and ".join(tokens) + "."
+    cells.update({
+        ("question", "question_label"):
+            f"06MSMA_Policy{marker}_PL_T01_C01 Q01",
+        ("question", "question_category"): "Fill in the blanks",
+        ("question", "question"): prompt,
+        ("question", "question_text"): prompt,
+        ("question", "marks"): marks,
+        ("question", "level_of_difficulty"): "Medium",
+        ("question", "question_duration"): duration,
+        ("question", "math_keyboard"): "No",
+    })
+    for n in range(1, answer_count + 1):
+        placeholder = chr(ord("a") + n - 1)
+        cells[("question", f"answer_type_{n}")] = "Phrases"
+        cells[("question", f"answer_{n}")] = f"answer {n}"
+        cells[("question", f"answer_display_{n}")] = f"answer {n}"
+        cells[("question", f"weightage_{n}")] = "1"
+        cells[("question", f"placeholder_{n}")] = placeholder
+    return cells
 
 
 @pytest.fixture(autouse=True)
@@ -239,10 +320,18 @@ def test_the_canonical_registry_entries_did_not_move_with_FIELDS_BY_KIND():
     for kind in ("objective", "subjective", "descriptive"):
         assert list(canonical[kind]) != list(bi.FIELDS_BY_KIND[kind]), kind
     assert layouts.CANONICAL_CURRENT.sheet_name_by_kind() != bi.SHEET_BY_KIND
-    # All four entries are registered, so an older workbook still identifies.
+    # The historical entries remain registered alongside the two normalized
+    # audit Master output roles, so an older workbook still identifies.
     assert set(layouts.LAYOUTS) == {
         layouts.REFERENCE_LAYOUT_ID, "canonical-current",
         "canonical-no-question-text", "canonical-legacy-concept-band",
+        layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+        layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+    }
+    assert layouts.CURRENT_TARGET_LAYOUT_IDS == {
+        layouts.REFERENCE_LAYOUT_ID,
+        layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+        layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
     }
 
 
@@ -310,15 +399,41 @@ def test_reference_workbook_imports_by_name(db, fixture_name):
     # as identities gave [measured] six duplicate topic machine_ids in these
     # eight topics, which is one ``question_label`` for two concepts and a
     # silently dropped question (R4). They are now recorded, one note per row,
-    # and the id is minted on first use. Every OTHER issue must still be
-    # absent, so the filter keys on the stable code token and not on prose.
+    # and the id is minted on first use. The Science reference also retains
+    # one legacy ``\mathrm`` expression in both learner text and its Equation
+    # rubric. Current imports preserve that frozen content but record both
+    # medium defects for review. Every OTHER issue must still be absent, so
+    # the filters key on stable content, not an incidental ordering.
     identity_notes = [
         issue for issue in counts["issues"]
         if "(imported_without_machine_id)" in issue
     ]
     assert identity_notes, "the legacy chapter-level tags must be RECORDED"
+    legacy_medium_notes = [
+        issue for issue in counts["issues"]
+        if issue.startswith(
+            "06MSSC_Measur_PL_T04_LaboratoryThermometerL Q01:"
+        )
+        and "\\mathrm" in issue
+    ]
+    assert len(legacy_medium_notes) == (
+        2 if fixture_name == "grade6_science.xlsx" else 0
+    ), legacy_medium_notes
+    legacy_multipart_notes = [
+        issue for issue in counts["issues"]
+        if "multipart descriptive duplicates scoring" in issue
+    ]
+    assert len(legacy_multipart_notes) == 1, legacy_multipart_notes
+    legacy_rubric_notes = [
+        issue for issue in counts["issues"]
+        if "does not start with an allowed functional tag" in issue
+    ]
     assert [
-        issue for issue in counts["issues"] if issue not in identity_notes
+        issue for issue in counts["issues"]
+        if issue not in identity_notes
+        and issue not in legacy_medium_notes
+        and issue not in legacy_multipart_notes
+        and issue not in legacy_rubric_notes
     ] == []
 
     descriptive = [
@@ -584,12 +699,12 @@ def test_uppercase_option_scan_uses_layout_capacity_not_populated_blocks(
             id="markdown-table",
         ),
         pytest.param(
-            "katex-array",
+            "katex-tabular",
             (
-                r"Study [Katex] \begin{array}{cc}"
-                r"A&B\\1&2\end{array} [/Katex]."
+                r"Study [Katex] \begin{tabular}{cc}"
+                r"A&B\\1&2\end{tabular} [/Katex]."
             ),
-            id="katex-array-table",
+            id="katex-tabular-table",
         ),
     ],
 )
@@ -625,7 +740,9 @@ def test_unsupported_rich_question_tables_refuse_the_whole_import(
 
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert "question_text contains unsupported table markup" in detail
+    assert "question_text" in detail
+    assert "unsupported" in detail.casefold()
+    assert "table" in detail.casefold()
     assert "unsupported_table" in detail
     db.expire_all()
     assert db.query(models.Chapter).count() == before
@@ -634,7 +751,7 @@ def test_unsupported_rich_question_tables_refuse_the_whole_import(
     ).first() is None
 
 
-def test_subjective_answer_table_is_transcribed_before_persistence(
+def test_subjective_answer_table_is_refused_before_persistence(
     client, db, tmp_path,
 ):
     layout = layouts.layout("canonical-current")
@@ -665,17 +782,12 @@ def test_subjective_answer_table_is_transcribed_before_persistence(
 
     response = _post(client, path)
 
-    assert response.status_code == 200, response.text
+    assert response.status_code == 422, response.text
+    assert "unsupported_table" in response.json()["detail"]
     db.expire_all()
-    question = db.query(models.Question).filter_by(
+    assert db.query(models.Question).filter_by(
         question_label=label,
-    ).one()
-    persisted = question.answers[0]["answer"]
-    assert "|---|" not in persisted
-    assert persisted.splitlines() == [
-        "Table row 1, column 1: Name; Table row 1, column 2: Value",
-        "Table row 2, column 1: Alpha; Table row 2, column 2: 1",
-    ]
+    ).first() is None
 
 
 def test_four_mark_single_rubric_refuses_before_database_mutation(
@@ -697,8 +809,9 @@ def test_four_mark_single_rubric_refuses_before_database_mutation(
         ("question", "question_text"): "Explain the method.",
         ("question", "marks"): "4",
         ("question", "answer_type_1"): "Phrases",
-        ("question", "answer_content_1"): "One combined rubric.",
+        ("question", "answer_content_1"): "[content]: one combined rubric.",
         ("question", "answer_weightage_1"): "4",
+        ("question", "math_keyboard"): "No",
     }
     path = _save(
         _new_workbook_for(layout, {"descriptive": [cells]}),
@@ -710,7 +823,7 @@ def test_four_mark_single_rubric_refuses_before_database_mutation(
     response = _post(client, path)
 
     assert response.status_code == 422
-    assert "4-mark descriptive requires at least two" in (
+    assert "4-mark single-part descriptive requires at least two" in (
         response.json()["detail"]
     )
     db.expire_all()
@@ -718,6 +831,390 @@ def test_four_mark_single_rubric_refuses_before_database_mutation(
     assert db.query(models.Question).filter_by(
         question_label=label,
     ).first() is None
+
+
+def test_four_mark_multipart_can_score_only_subquestion_rubrics(
+    client, db, tmp_path,
+):
+    """The two-rubric rule belongs to a single-part 4-mark question.
+
+    A multipart item carries no main answer blocks: its subquestion marks and
+    keyword rubrics own the score.
+    """
+
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_FourMarkMultipart_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Four Mark Multipart Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Four Mark Multipart",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Four mark multipart",
+        ("concept", "concept_display_name"): "Four mark multipart",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Answer both parts.",
+        ("question", "question_text"): "Answer both parts.",
+        ("question", "marks"): "4",
+        ("question", "math_keyboard"): "No",
+        ("question", "sub_question_1"): "State the first result.",
+        ("question", "sub_question_marks_1"): "2",
+        ("question", "sq1_answer_type_1"): "Phrases",
+        ("question", "sq1_weightage_1"): "2",
+        ("question", "sq1_keyword_1"): "[content]: first result",
+        ("question", "sub_question_2"): "Explain the second result.",
+        ("question", "sub_question_marks_2"): "2",
+        ("question", "sq2_answer_type_1"): "Phrases",
+        ("question", "sq2_weightage_1"): "2",
+        ("question", "sq2_keyword_1"): "[method]: second result",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        "four_mark_multipart.xlsx",
+    )
+
+    response = _post(client, path)
+
+    assert response.status_code == 200, response.text
+    assert not any(
+        "4-mark descriptive requires" in issue
+        for issue in response.json()["issues"]
+    )
+    db.expire_all()
+    question = db.query(models.Question).filter_by(
+        question_label=label,
+    ).one()
+    assert question.answers == []
+    assert [part["marks"] for part in question.sub_questions] == ["2", "2"]
+    assert [
+        part["keywords"][0]["weightage"]
+        for part in question.sub_questions
+    ] == ["2", "2"]
+
+
+def test_multipart_import_does_not_sum_main_weights_when_subquestions_score(
+    db, tmp_path,
+):
+    """Legacy main rubric residue cannot replace multipart score ownership."""
+
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_MultipartScoreOwner_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Multipart Score Owner Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Multipart Score Owner",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Multipart score owner",
+        ("concept", "concept_display_name"): "Multipart score owner",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Answer both parts.",
+        ("question", "question_text"): "Answer both parts.",
+        ("question", "marks"): "4",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "Legacy shared rubric.",
+        ("question", "answer_weightage_1"): "1",
+        ("question", "sub_question_1"): "Give the result.",
+        ("question", "sub_question_marks_1"): "4",
+        ("question", "sq1_answer_type_1"): "Phrases",
+        ("question", "sq1_weightage_1"): "4",
+        ("question", "sq1_keyword_1"): "[content]: result",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        "multipart_score_owner.xlsx",
+    )
+
+    counts = reader.import_workbook(db, path)
+
+    assert not any(
+        "answer weightage sum" in issue
+        or "4-mark descriptive requires" in issue
+        for issue in counts["issues"]
+    ), counts["issues"]
+    assert any(
+        "multipart descriptive duplicates scoring" in issue
+        for issue in counts["issues"]
+    )
+
+
+def test_literal_newline_escape_refuses_before_database_mutation(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_LiteralNewline_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Literal Newline Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Formatting",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Option formatting",
+        ("concept", "concept_display_name"): "Option formatting",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): r"Choose one.\na) Alpha\nb) Beta",
+        ("question", "question_text"): r"Choose one.\na) Alpha\nb) Beta",
+        ("question", "question_duration"): "1",
+        ("question", "marks"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "Alpha",
+        ("question", "correct_answer_1"): "1",
+        ("question", "answer_weightage_1"): "1",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"objective": [cells]}),
+        tmp_path,
+        "literal_newline.xlsx",
+    )
+
+    before = db.query(models.Question).count()
+    response = _post(client, path)
+
+    assert response.status_code == 422, response.text
+    assert "literal \\n found" in response.json()["detail"]
+    assert db.query(models.Question).count() == before
+
+
+def test_subjective_placeholders_are_not_treated_as_raw_math(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_SubjectivePlaceholders_PL_T01_C01 Q01"
+    prompt = "Complete $$a$$, then complete $$b$$."
+    cells = {
+        ("chapter", "chapter_title"):
+            "Subjective Placeholder Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Subjective Placeholders",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Subjective placeholders",
+        ("concept", "concept_display_name"): "Subjective placeholders",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): prompt,
+        ("question", "question_text"): prompt,
+        ("question", "marks"): "2",
+        ("question", "math_keyboard"): "No",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_1"): "first",
+        ("question", "answer_display_1"): "first",
+        ("question", "weightage_1"): "1",
+        ("question", "placeholder_1"): "a",
+        ("question", "answer_type_2"): "Phrases",
+        ("question", "answer_2"): "second",
+        ("question", "answer_display_2"): "second",
+        ("question", "weightage_2"): "1",
+        ("question", "placeholder_2"): "b",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"subjective": [cells]}),
+        tmp_path,
+        "subjective_placeholders.xlsx",
+    )
+
+    response = _post(client, path)
+
+    assert response.status_code == 200, response.text
+    assert not any(
+        "raw math" in issue or "unbalanced [Katex]" in issue
+        for issue in response.json()["issues"]
+    ), response.json()["issues"]
+    db.expire_all()
+    question = db.query(models.Question).filter_by(
+        question_label=label,
+    ).one()
+    assert question.question == prompt
+    assert [answer["placeholder"] for answer in question.answers] == ["a", "b"]
+
+
+def test_strict_import_accepts_all_msbshse_math_policy_sheets(
+    client, db, tmp_path,
+):
+    """The chapter tag selects the narrow policy without local guessing."""
+
+    layout = layouts.layout("canonical-current")
+    objective = _math_policy_context("PositiveObjective")
+    objective.update({
+        ("question", "question_label"):
+            "06MSMA_PolicyPositiveObjective_PL_T01_C01 Q01",
+        ("question", "question_category"): "Multiple Choice Question",
+        ("question", "question"): "Which value is even?",
+        ("question", "question_text"): "Which value is even?",
+        ("question", "marks"): "1",
+        ("question", "level_of_difficulty"): "Hard",
+        ("question", "question_duration"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "2",
+        ("question", "correct_answer_1"): "Yes",
+        ("question", "answer_weightage_1"): "1",
+        ("question", "answer_type_2"): "Phrases",
+        ("question", "answer_content_2"): "3",
+        ("question", "correct_answer_2"): "No",
+        ("question", "answer_weightage_2"): "0",
+    })
+    descriptive = _math_policy_descriptive_cells("PositiveDescriptive")
+    subjective = _math_policy_subjective_cells("PositiveSubjective")
+    path = _save(
+        _new_workbook_for(
+            layout,
+            {
+                "objective": [objective],
+                "descriptive": [descriptive],
+                "subjective": [subjective],
+            },
+        ),
+        tmp_path,
+        "math_policy_positive.xlsx",
+    )
+
+    response = _post(client, path)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["questions"] == 3
+    db.expire_all()
+    stored = {
+        question.question_label: question
+        for question in db.query(models.Question).filter(
+            models.Question.question_label.in_({
+                "06MSMA_PolicyPositiveObjective_PL_T01_C01 Q01",
+                "06MSMA_PolicyPositiveDescriptive_PL_T01_C01 Q01",
+                "06MSMA_PolicyPositiveSubjective_PL_T01_C01 Q01",
+            })
+        )
+    }
+    assert stored[
+        "06MSMA_PolicyPositiveObjective_PL_T01_C01 Q01"
+    ].level_of_difficulty == "High"
+    assert stored[
+        "06MSMA_PolicyPositiveDescriptive_PL_T01_C01 Q01"
+    ].level_of_difficulty == "Less"
+    assert stored[
+        "06MSMA_PolicyPositiveSubjective_PL_T01_C01 Q01"
+    ].level_of_difficulty == "Moderate"
+
+
+@pytest.mark.parametrize(
+    ("case", "kind", "overrides", "answer_count", "expected"),
+    [
+        pytest.param(
+            "WrongSheet",
+            "descriptive",
+            {"question_category": "Multiple Choice Question"},
+            0,
+            "is not permitted for sheet_kind 'descriptive'",
+            id="wrong-sheet-category",
+        ),
+        pytest.param(
+            "WrongFixedMarks",
+            "descriptive",
+            {"marks": "3"},
+            0,
+            "marks 3 must be one of",
+            id="wrong-fixed-marks",
+        ),
+        pytest.param(
+            "WrongMatrixDuration",
+            "descriptive",
+            {"difficulty": "Hard", "duration": "2"},
+            0,
+            "question_duration 2 does not match policy duration 3",
+            id="wrong-matrix-duration",
+        ),
+        pytest.param(
+            "FractionalSubpoints",
+            "subjective",
+            {"marks": "2.5", "duration": "2"},
+            2,
+            "positive whole number of policy subpoints",
+            id="wrong-per-subpoint-marks",
+        ),
+        pytest.param(
+            "WrongSubpointDuration",
+            "subjective",
+            {"marks": "2", "duration": "1"},
+            2,
+            "question_duration 1 does not match policy duration 2",
+            id="wrong-per-subpoint-duration",
+        ),
+        pytest.param(
+            "WrongAnswerCount",
+            "subjective",
+            {"marks": "2", "duration": "2"},
+            1,
+            "Subjective answer count 1 does not match represented subpoint "
+            "count 2",
+            id="subjective-answer-count",
+        ),
+    ],
+)
+def test_strict_import_rejects_msbshse_math_policy_mismatches_before_writes(
+    client, db, tmp_path, case, kind, overrides, answer_count, expected,
+):
+    layout = layouts.layout("canonical-current")
+    if kind == "descriptive":
+        cells = _math_policy_descriptive_cells(
+            case,
+            category=overrides.get(
+                "question_category", "Short Answer Type (2 Marks)"
+            ),
+            marks=overrides.get("marks", "2"),
+            difficulty=overrides.get("difficulty", "Easy"),
+            duration=overrides.get("duration", "2"),
+        )
+    else:
+        cells = _math_policy_subjective_cells(
+            case,
+            marks=overrides.get("marks", "2"),
+            duration=overrides.get("duration", "2"),
+            answer_count=answer_count,
+        )
+    label = cells[("question", "question_label")]
+    path = _save(
+        _new_workbook_for(layout, {kind: [cells]}),
+        tmp_path,
+        f"math_policy_{case}.xlsx",
+    )
+    chapter_count = db.query(models.Chapter).count()
+    question_count = db.query(models.Question).count()
+
+    response = _post(client, path)
+
+    assert response.status_code == 422, response.text
+    assert expected in response.json()["detail"]
+    db.expire_all()
+    assert db.query(models.Chapter).count() == chapter_count
+    assert db.query(models.Question).count() == question_count
+    assert db.query(models.Question).filter_by(
+        question_label=label,
+    ).first() is None
+
+
+def test_strict_math_policy_skips_an_empty_question_band(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    cells = _math_policy_context("ConceptTail")
+    for field in ("group_name", "group_type"):
+        cells.pop(("group", field))
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        "math_policy_concept_tail.xlsx",
+    )
+
+    response = _post(client, path)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["questions"] == 0
+    assert response.json()["groups"] == 0
+    assert db.query(models.Concept).filter_by(
+        concept_title="Policy ConceptTail"
+    ).one()
 
 
 def test_mixed_phrases_rubric_refuses_before_database_mutation(
@@ -826,6 +1323,274 @@ def test_answer_type_is_normalized_and_validated_before_database_mutation(
     ).first() is None
 
 
+def test_legacy_words_alias_strict_imports_as_canonical_phrases(
+    client, db, tmp_path,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_TypeWordsPositive_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Words Alias Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Words Alias",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Words alias",
+        ("concept", "concept_display_name"): "Words alias",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Give the answer.",
+        ("question", "question_text"): "Give the answer.",
+        ("question", "marks"): "1",
+        ("question", "question_duration"): "1",
+        ("question", "math_keyboard"): "No",
+        ("question", "answer_type_1"): "Words",
+        ("question", "answer_content_1"): "[content]: complete answer",
+        ("question", "answer_weightage_1"): "1",
+    }
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        "legacy_words_positive.xlsx",
+    )
+
+    response = _post(client, path)
+
+    assert response.status_code == 200, response.text
+    db.expire_all()
+    question = db.query(models.Question).filter_by(
+        question_label=label,
+    ).one()
+    assert question.answers[0]["answer_type"] == "Phrases"
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    [
+        pytest.param(
+            "question_label", "",
+            "populated Question band requires a non-blank question_label",
+            id="blank-question-label",
+        ),
+        pytest.param(
+            "question", "", "question must not be blank",
+            id="blank-question",
+        ),
+        pytest.param(
+            "marks", "+1", "marks must be finite and positive",
+            id="signed-marks-text",
+        ),
+        pytest.param(
+            "question_duration", "+1",
+            "question_duration must be finite and positive",
+            id="signed-duration-text",
+        ),
+    ],
+)
+def test_strict_import_refuses_missing_identity_and_signed_numeric_text(
+    client, db, tmp_path, field, value, expected,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_StrictIdentity_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Strict Identity Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Strict Identity",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Strict identity",
+        ("concept", "concept_display_name"): "Strict identity",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question_category"): "Multiple Choice Question",
+        ("question", "question"): "Which option is correct?",
+        ("question", "question_text"): "Which option is correct?",
+        ("question", "marks"): "1",
+        ("question", "question_duration"): "1",
+        ("question", "answer_type_1"): "Phrases",
+        ("question", "answer_content_1"): "First",
+        ("question", "correct_answer_1"): "Yes",
+        ("question", "answer_weightage_1"): "1",
+        ("question", "answer_type_2"): "Phrases",
+        ("question", "answer_content_2"): "Second",
+        ("question", "correct_answer_2"): "No",
+        ("question", "answer_weightage_2"): "0",
+    }
+    cells[("question", field)] = value
+    path = _save(
+        _new_workbook_for(layout, {"objective": [cells]}),
+        tmp_path,
+        f"strict_{field}.xlsx",
+    )
+    before = (
+        db.query(models.Chapter).count(),
+        db.query(models.Question).count(),
+    )
+
+    response = _post(client, path)
+
+    assert response.status_code == 422, response.text
+    assert expected in response.json()["detail"]
+    db.expire_all()
+    assert (
+        db.query(models.Chapter).count(),
+        db.query(models.Question).count(),
+    ) == before
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_strict_import_refuses_a_tag_without_rubric_content(
+    client, db, tmp_path, multipart,
+):
+    layout = layouts.layout("canonical-current")
+    label = "09CBPH_EmptyRubric_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            "Empty Rubric Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): "Topic 01: Empty Rubric",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): "Empty rubric",
+        ("concept", "concept_display_name"): "Empty rubric",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "State the result.",
+        ("question", "question_text"): "State the result.",
+        ("question", "marks"): "1",
+        ("question", "question_duration"): "1",
+        ("question", "math_keyboard"): "No",
+    }
+    if multipart:
+        cells.update({
+            ("question", "sub_question_1"): "Give the result.",
+            ("question", "sub_question_marks_1"): "1",
+            ("question", "sq1_answer_type_1"): "Phrases",
+            ("question", "sq1_weightage_1"): "1",
+            ("question", "sq1_keyword_1"): "[content]:   ",
+        })
+    else:
+        cells.update({
+            ("question", "answer_type_1"): "Phrases",
+            ("question", "answer_content_1"): "[content]:   ",
+            ("question", "answer_weightage_1"): "1",
+        })
+    path = _save(
+        _new_workbook_for(layout, {"descriptive": [cells]}),
+        tmp_path,
+        f"empty_rubric_{'multipart' if multipart else 'main'}.xlsx",
+    )
+    before = db.query(models.Question).count()
+
+    response = _post(client, path)
+
+    assert response.status_code == 422, response.text
+    assert "allowed functional tag" in response.json()["detail"]
+    db.expire_all()
+    assert db.query(models.Question).count() == before
+
+
+@pytest.mark.parametrize(
+    ("kind", "positional_cells", "expected"),
+    [
+        pytest.param(
+            "objective",
+            {
+                ("question", "answer_type_2"): "Phrases",
+                ("question", "answer_content_2"): "Only slot two",
+                ("question", "correct_answer_2"): "Yes",
+                ("question", "answer_weightage_2"): "1",
+            },
+            "objective option blocks must be contiguous from slot 1",
+            id="objective-options",
+        ),
+        pytest.param(
+            "subjective",
+            {
+                ("question", "question"): "Complete $$b$$.",
+                ("question", "question_text"): "Complete $$b$$.",
+                ("question", "answer_type_2"): "Phrases",
+                ("question", "answer_2"): "second",
+                ("question", "answer_display_2"): "second",
+                ("question", "weightage_2"): "1",
+                ("question", "placeholder_2"): "b",
+            },
+            "subjective answer blocks must be contiguous from slot 1",
+            id="subjective-answers",
+        ),
+        pytest.param(
+            "descriptive",
+            {
+                ("question", "answer_type_2"): "Phrases",
+                ("question", "answer_content_2"): "[content]: slot two",
+                ("question", "answer_weightage_2"): "1",
+            },
+            "Descriptive main rubric blocks must be contiguous from slot 1",
+            id="descriptive-main-rubrics",
+        ),
+        pytest.param(
+            "descriptive",
+            {
+                ("question", "sub_question_2"): "State the second result.",
+                ("question", "sub_question_marks_2"): "1",
+                ("question", "sq2_answer_type_1"): "Phrases",
+                ("question", "sq2_weightage_1"): "1",
+                ("question", "sq2_keyword_1"): "[content]: second result",
+            },
+            "Descriptive subquestion blocks must be contiguous from slot 1",
+            id="descriptive-subquestions",
+        ),
+        pytest.param(
+            "descriptive",
+            {
+                ("question", "sub_question_1"): "State the result.",
+                ("question", "sub_question_marks_1"): "1",
+                ("question", "sq1_answer_type_2"): "Phrases",
+                ("question", "sq1_weightage_2"): "1",
+                ("question", "sq1_keyword_2"): "[content]: result",
+            },
+            "subquestion 1 keyword blocks must be contiguous from slot 1",
+            id="descriptive-keywords",
+        ),
+    ],
+)
+def test_sparse_positional_blocks_refuse_before_database_mutation(
+    client, db, tmp_path, kind, positional_cells, expected,
+):
+    layout = layouts.layout("canonical-current")
+    marker = expected.split()[0].replace("/", "")
+    label = f"09CBPH_Sparse{marker}_PL_T01_C01 Q01"
+    cells = {
+        ("chapter", "chapter_title"):
+            f"Sparse {marker} Chapter (09_Physics_CBSE_NCERT)",
+        ("topic", "topic_title"): f"Topic 01: Sparse {marker}",
+        ("topic", "pre_post_learning"): "Post",
+        ("concept", "concept_title"): f"Sparse {marker}",
+        ("concept", "concept_display_name"): f"Sparse {marker}",
+        ("group", "group_name"): "Basic Group 01",
+        ("group", "group_type"): "Basic",
+        ("question", "question_label"): label,
+        ("question", "question"): "Give the result.",
+        ("question", "question_text"): "Give the result.",
+        ("question", "marks"): "1",
+        ("question", "question_duration"): "1",
+        **positional_cells,
+    }
+    if kind != "objective":
+        cells[("question", "math_keyboard")] = "No"
+    path = _save(
+        _new_workbook_for(layout, {kind: [cells]}),
+        tmp_path,
+        f"sparse_{kind}_{marker}.xlsx",
+    )
+    before = db.query(models.Question).count()
+
+    response = _post(client, path)
+
+    assert response.status_code == 422, response.text
+    assert expected in response.json()["detail"]
+    db.expire_all()
+    assert db.query(models.Question).count() == before
+
+
 def test_type_only_second_block_does_not_satisfy_four_mark_rubric_shape(
     client, db, tmp_path,
 ):
@@ -845,11 +1610,12 @@ def test_type_only_second_block_does_not_satisfy_four_mark_rubric_shape(
         ("question", "question_text"): "Explain the method.",
         ("question", "marks"): "4",
         ("question", "answer_type_1"): "Phrases",
-        ("question", "answer_content_1"): "First rubric point.",
+        ("question", "answer_content_1"): "[content]: first rubric point.",
         ("question", "answer_weightage_1"): "2",
         ("question", "answer_type_2"): "Phrases",
         ("question", "answer_content_2"): "",
         ("question", "answer_weightage_2"): "2",
+        ("question", "math_keyboard"): "No",
     }
     path = _save(
         _new_workbook_for(layout, {"descriptive": [cells]}),
@@ -861,7 +1627,7 @@ def test_type_only_second_block_does_not_satisfy_four_mark_rubric_shape(
     response = _post(client, path)
 
     assert response.status_code == 422
-    assert "4-mark descriptive requires at least two" in (
+    assert "4-mark single-part descriptive requires at least two" in (
         response.json()["detail"]
     )
     db.expire_all()

@@ -715,6 +715,332 @@ def test_a_correct_concept_row_records_nothing(db):
     assert not any(str(value or "").strip() for value in row[group_start - 1:])
 
 
+def test_append_records_unrepresentable_question_without_aborting_run(
+    db, tmp_path,
+):
+    """Committed malformed JSON stays visible and the workbook stays valid."""
+
+    _concept, _topic, _group, question = _graph(db, "BadShape")
+    question.sub_questions = ["not-an-object"]
+    db.commit()
+    output = tmp_path / "capacity-defect.xlsx"
+
+    result = writer.append_questions(db, output, [question.id])
+
+    assert result["descriptive"] == 0
+    assert result["skipped"] == 1
+    capacity = [
+        issue for issue in result["issues"]
+        if issue["code"] == writer.WORKBOOK_CAPACITY_ERROR
+    ]
+    assert len(capacity) == 1
+    assert capacity[0]["question_id"] == question.id
+    assert "subquestion 1 must be an object" in capacity[0]["detail"]
+    assert capacity[0]["review_flag"] is True
+    assert output.exists()
+    assert question.question_label not in _all_question_labels(output)
+    question.sub_questions = []
+    db.commit()
+
+
+@pytest.mark.parametrize(
+    ("shape", "expected"),
+    [
+        ("answers-not-list", "answers must be a list of objects"),
+        ("answer-not-object", "answer 1 must be an object"),
+        ("answer-empty-object", "answer 1 has no workbook fields"),
+        ("answer-wrong-kind-field", "answer 1 has no workbook fields"),
+        ("subquestions-not-list", "subquestions must be a list of objects"),
+        ("subquestion-not-object", "subquestion 1 must be an object"),
+        ("subquestion-empty-object", "subquestion 1 has no workbook fields"),
+        ("keywords-not-list", "keywords must be a list of objects"),
+        ("keyword-not-object", "keyword 1 must be an object"),
+        ("keyword-empty-object", "keyword 1 has no workbook fields"),
+    ],
+)
+def test_question_export_refuses_each_malformed_json_shape(
+    db, shape, expected,
+):
+    _concept, _topic, _group, question = _graph(db, f"Shape{shape}")
+    if shape == "answers-not-list":
+        question.answers = {"answer_content": "not a list"}
+    elif shape == "answer-not-object":
+        question.answers = ["not an object"]
+    elif shape == "answer-empty-object":
+        question.answers = [{}, {
+            "answer_type": "Phrases",
+            "answer_content": "visible second slot",
+            "answer_weightage": "1",
+        }]
+    elif shape == "answer-wrong-kind-field":
+        question.answers = [{"answer": "subjective-only field"}]
+    elif shape == "subquestions-not-list":
+        question.sub_questions = {"text": "not a list"}
+    elif shape == "subquestion-not-object":
+        question.sub_questions = ["not an object"]
+    elif shape == "subquestion-empty-object":
+        question.sub_questions = [{}, {
+            "text": "Visible second part", "marks": "1", "keywords": [],
+        }]
+    elif shape == "keywords-not-list":
+        question.sub_questions = [{
+            "text": "Part", "marks": "1", "keywords": {"keyword": "x"},
+        }]
+    elif shape == "keyword-not-object":
+        question.sub_questions = [{
+            "text": "Part", "marks": "1", "keywords": ["not an object"],
+        }]
+    else:
+        question.sub_questions = [{
+            "text": "Part", "marks": "1",
+            "keywords": [{}, {
+                "answer_type": "Phrases", "weightage": "1",
+                "keyword": "[content]: visible second keyword",
+            }],
+        }]
+
+    with pytest.raises(writer.WorkbookCapacityError, match=expected):
+        writer._question_band_values(
+            question, writer._target_sheet("descriptive"),
+        )
+
+
+@pytest.mark.parametrize(
+    ("overflow", "expected"),
+    [
+        ("answers", "11 answer blocks"),
+        ("subquestions", "16 subquestions"),
+        ("keywords", "7 keyword rubrics"),
+    ],
+)
+def test_question_export_refuses_every_layout_capacity_overflow(
+    db, overflow, expected,
+):
+    _concept, _topic, _group, question = _graph(db, f"Overflow{overflow}")
+    if overflow == "answers":
+        question.answers = [{} for _ in range(11)]
+    elif overflow == "subquestions":
+        question.sub_questions = [
+            {"text": f"Part {n}", "marks": "1", "keywords": []}
+            for n in range(16)
+        ]
+    else:
+        question.sub_questions = [{
+            "text": "Part", "marks": "7",
+            "keywords": [{} for _ in range(7)],
+        }]
+
+    with pytest.raises(writer.WorkbookCapacityError, match=expected):
+        writer._question_band_values(
+            question, writer._target_sheet("descriptive"),
+        )
+
+
+@pytest.mark.parametrize(
+    "unsafe_number", [
+        "+1", "1e-10000", "1e1000000", "0.12345678901234567890",
+    ],
+)
+def test_unsafe_subquestion_numbers_never_clear_the_main_rubric(
+    db, unsafe_number,
+):
+    _concept, _topic, _group, question = _graph(
+        db, "Unsafe" + unsafe_number.replace("+", "plus").replace(".", "d"),
+    )
+    question.marks = "1"
+    question.answers = [{
+        "answer_type": "Phrases",
+        "answer_content": "[content]: retained fallback rubric",
+        "answer_weightage": "1",
+    }]
+    question.sub_questions = [{
+        "text": "State the independently scored result.",
+        "marks": unsafe_number,
+        "keywords": [{
+            "answer_type": "Phrases",
+            "keyword": "[content]: result",
+            "weightage": unsafe_number,
+        }],
+    }]
+
+    values = writer._question_band_values(
+        question, writer._target_sheet("descriptive"),
+    )
+
+    assert values["answer_content_1"] == (
+        "[content]: retained fallback rubric"
+    )
+
+
+@pytest.mark.parametrize(
+    "defect", [
+        "no-keywords", "keyword-subtotal", "part-total", "duplicate",
+        "duplicate-question-text",
+    ],
+)
+def test_incomplete_or_duplicated_part_scoring_keeps_main_rubric(db, defect):
+    _concept, _topic, _group, question = _graph(db, f"Scoring{defect}")
+    question.marks = "2"
+    question.answers = [{
+        "answer_type": "Phrases",
+        "answer_content": "[content]: retained fallback rubric",
+        "answer_weightage": "2",
+    }]
+    part_text = "State the scored result."
+    question.question = (
+        f"Explain. {part_text}" if defect == "duplicate" else "Explain."
+    )
+    question.question_text = (
+        f"Explain. {part_text}"
+        if defect == "duplicate-question-text"
+        else question.question
+    )
+    question.sub_questions = [{
+        "text": part_text,
+        "marks": "1" if defect == "part-total" else "2",
+        "keywords": [] if defect == "no-keywords" else [{
+            "answer_type": "Phrases",
+            "keyword": "[content]: result",
+            "weightage": "1" if defect == "keyword-subtotal" else (
+                "1" if defect == "part-total" else "2"
+            ),
+        }],
+    }]
+
+    values = writer._question_band_values(
+        question, writer._target_sheet("descriptive"),
+    )
+
+    assert values["answer_content_1"] == (
+        "[content]: retained fallback rubric"
+    )
+
+
+@pytest.mark.parametrize(
+    "defect", ["sparse-subquestion", "sparse-keyword", "question-text"],
+)
+def test_cell_migration_keeps_main_rubric_until_parts_are_terminal_valid(
+    defect,
+):
+    workbook = writer._new_workbook()
+    sheet_layout = writer._target_sheet("descriptive")
+    worksheet = workbook[sheet_layout.sheet_name]
+
+    def put(field, value):
+        column = sheet_layout.column("question", field)
+        assert column is not None, field
+        worksheet.cell(row=3, column=column + 1).value = value
+
+    put("question", "Explain the result.")
+    put("question_text", "Explain the result.")
+    put("marks", "1")
+    put("answer_type_1", "Phrases")
+    put("answer_content_1", "[content]: retained fallback rubric")
+    put("answer_weightage_1", "1")
+    part_number = 2 if defect == "sparse-subquestion" else 1
+    keyword_number = 2 if defect == "sparse-keyword" else 1
+    part_text = "State the independently scored result."
+    put(f"sub_question_{part_number}", part_text)
+    put(f"sub_question_marks_{part_number}", "1")
+    put(
+        f"sq{part_number}_answer_type_{keyword_number}", "Phrases",
+    )
+    put(f"sq{part_number}_weightage_{keyword_number}", "1")
+    put(
+        f"sq{part_number}_keyword_{keyword_number}", "[content]: result",
+    )
+    if defect == "question-text":
+        put("question_text", f"Explain the result. {part_text}")
+
+    writer._migrate_existing_question_cells(workbook)
+
+    content_column = sheet_layout.column(
+        "question", "answer_content_1",
+    )
+    assert worksheet.cell(
+        row=3, column=content_column + 1,
+    ).value == "[content]: retained fallback rubric"
+
+
+def test_cell_migration_literalizes_formula_typed_content_and_metadata():
+    workbook = writer._new_workbook()
+    sheet_layout = writer._target_sheet("objective")
+    worksheet = workbook[sheet_layout.sheet_name]
+
+    for field, value in (
+        ("question", "=learner text"),
+        ("answer_content_1", "=option text"),
+        ("marks", "=1"),
+    ):
+        column = sheet_layout.column("question", field)
+        cell = worksheet.cell(row=3, column=column + 1)
+        cell.value = value
+        assert cell.data_type == "f"
+
+    changed = writer._migrate_existing_question_cells(workbook)
+
+    assert changed >= 3
+    for field, value in (
+        ("question", "=learner text"),
+        ("answer_content_1", "=option text"),
+        ("marks", "=1"),
+    ):
+        column = sheet_layout.column("question", field)
+        cell = worksheet.cell(row=3, column=column + 1)
+        assert cell.value == value
+        assert cell.data_type == "s"
+
+
+def test_subjective_internal_answer_schema_maps_to_exact_wire_columns(db):
+    _concept, _topic, _group, question = _graph(db, "SubjectiveWire")
+    question.sheet_kind = "subjective"
+    question.answers = [{
+        "answer_type": "Phrases",
+        "answer_content": "the stored answer",
+        "answer_display": "the stored answer",
+        "answer_weightage": "1",
+        "placeholder": "a",
+    }]
+
+    values = writer._question_band_values(
+        question, writer._target_sheet("subjective"),
+    )
+
+    assert values["answer_1"] == "the stored answer"
+    assert values["weightage_1"] == "1"
+    assert "answer_content_1" not in values
+    assert "answer_weightage_1" not in values
+
+
+@pytest.mark.parametrize(
+    "answer", [
+        {"answer": 0, "answer_content": "zero"},
+        {"answer": "01", "answer_content": "1"},
+    ],
+)
+def test_subjective_dual_content_schema_conflicts_are_refused(db, answer):
+    suffix = "Zero" if answer["answer"] == 0 else "Lexical"
+    _concept, _topic, _group, question = _graph(
+        db, f"SubjectiveConflict{suffix}",
+    )
+    question.sheet_kind = "subjective"
+    question.answers = [{
+        "answer_type": "Phrases",
+        "answer_display": "answer",
+        "weightage": 1,
+        "answer_weightage": "1.0",
+        "placeholder": "a",
+        **answer,
+    }]
+
+    with pytest.raises(
+        writer.WorkbookCapacityError, match="conflicting 'answer'",
+    ):
+        writer._question_band_values(
+            question, writer._target_sheet("subjective"),
+        )
+
+
 # --------------------------------------------------------------------------- #
 # OD2 — the committed fixture and the writer move in ONE commit
 # --------------------------------------------------------------------------- #

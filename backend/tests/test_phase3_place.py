@@ -20,6 +20,7 @@ from app.services.phase3 import assemble as assemble_mod
 from app.services.phase3 import envelope as envelope_mod
 from app.services.phase3 import kernel
 from app.services.phase3 import place as place_mod
+from app.services.phase3 import prompts as phase3_prompts
 
 PINHOLE_URL = "https://cdn.example.com/figures/pinhole.jpg"
 BANNER_URL = "https://cdn.example.com/figures/banner.jpg"
@@ -279,6 +280,122 @@ def test_every_pooled_item_is_decided_and_dispositions_are_recorded():
     }
     # The disposition carries its recorded rationale — never a silent drop.
     assert "decorative banner" in result["rationales"]["BLK-0003"]
+
+
+def test_isolated_operator_guidance_does_not_override_meaningful_vision():
+    seen: dict[str, str] = {}
+
+    def capturing(request: dict) -> dict:
+        seen["rules"] = request["rules"]
+        return _good_provider(request)
+
+    place_mod.place(
+        _mini_envelope(), _settled_rows(), provider=capturing,
+        critic=_verified_critic, store=kernel.DecisionStore(),
+    )
+
+    assert "lone + sign" in phase3_prompts.PLACE_SYSTEM
+    assert "isolated typographic operator/glyph" in (
+        phase3_prompts.PLACE_CRITIC_SYSTEM
+    )
+    assert "keep the operator as text" in seen["rules"]
+
+    checker = place_mod._place_checker(
+        [{
+            "item_ref": "BLK-PLUS",
+            "pool_kind": "figure",
+            "caption": "+",
+            "images": [{"url": "https://cdn.example.com/plus.png"}],
+        }],
+        {"CONCEPT-0001"},
+    )
+    assert checker({
+        "placements": [{
+            "item_ref": "BLK-PLUS",
+            "concept_id": "CONCEPT-0001",
+            "disposition": "",
+            "rationale": (
+                "Vision shows an addition diagram beyond the caption glyph."
+            ),
+        }]
+    }) == []
+    assert checker({
+        "placements": [{
+            "item_ref": "BLK-PLUS",
+            "concept_id": "",
+            "disposition": place_mod.FIGURE_DISPOSITION,
+            "rationale": "The operator remains text.",
+        }]
+    }) == []
+
+
+def test_live_place_attaches_pooled_images_as_vision_inputs(monkeypatch):
+    captured = {}
+
+    def fake_openai(system, user, **kwargs):
+        captured.update(kwargs)
+        return {"placements": []}
+
+    from app.services import generation
+    monkeypatch.setattr(generation, "_openai_json", fake_openai)
+
+    place_mod._live_place({
+        "pool": [{
+            "item_ref": "FIG-1",
+            "images": [
+                {"url": "https://cdn.example.com/diagram.png"},
+                {"url": "https://cdn.example.com/diagram.png"},
+            ],
+        }],
+    })
+
+    assert captured["image_urls"] == [
+        "https://cdn.example.com/diagram.png",
+    ]
+
+
+def test_live_place_fixer_keeps_original_pool_images_as_vision(monkeypatch):
+    captured = {}
+
+    def fake_openai(system, user, **kwargs):
+        captured.update(kwargs)
+        return {"placements": []}
+
+    from app.services import generation
+    monkeypatch.setattr(generation, "_openai_json", fake_openai)
+
+    place_mod._live_fixer({
+        "fixer": True,
+        "original_payload": {
+            "pool": [{
+                "item_ref": "FIG-1",
+                "images": [{"url": "https://cdn.example.com/diagram.png"}],
+            }],
+        },
+    })
+
+    assert place_mod.POLICY_VERSION == "place-2"
+    assert captured["image_urls"] == [
+        "https://cdn.example.com/diagram.png",
+    ]
+
+
+def test_checker_rejects_a_figure_with_both_placement_outcomes():
+    checker = place_mod._place_checker(
+        [{"item_ref": "FIG-1", "pool_kind": "figure"}],
+        {"CONCEPT-0001"},
+    )
+
+    defects = checker({
+        "placements": [{
+            "item_ref": "FIG-1",
+            "concept_id": "CONCEPT-0001",
+            "disposition": place_mod.FIGURE_DISPOSITION,
+            "rationale": "Contradictory by construction.",
+        }],
+    })
+
+    assert any("both concept_id and disposition" in defect for defect in defects)
 
 
 def test_empty_pool_skips_the_pass_entirely():

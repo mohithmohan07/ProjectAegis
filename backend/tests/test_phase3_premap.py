@@ -1492,14 +1492,16 @@ def test_decide_once_replays_the_whole_map_for_free(golden_envelope):
 # the existing passes are untouched
 
 
-def test_no_existing_pass_moved_for_this_slice():
+def test_no_unrelated_existing_pass_moved_for_this_slice():
     from app.services import semantic_confidence_policy as confidence_policy
     from app.services.phase3 import analyse, place, prelearn
 
     assert confidence_policy.POLICY_VERSION == (
         "semantic-confidence-policy-3"
     )  # settle + host
-    assert place.POLICY_VERSION == "place-1"
+    # Place was intentionally re-keyed by the concept-mapping audit for
+    # image-aware Fixer input and exact-one placement outcomes.
+    assert place.POLICY_VERSION == "place-2"
     assert analyse.POLICY_VERSION == "analysis-1"
     assert prelearn.POLICY_VERSION == "prelearn-1"
     assert premap.POLICY_VERSION == "premap-1"

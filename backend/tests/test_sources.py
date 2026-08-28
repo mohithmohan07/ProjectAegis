@@ -5,7 +5,7 @@ import openpyxl
 
 from app import bulk_import as bi
 from app import config, models
-from app.bulk_import import layouts, writer
+from app.bulk_import import layouts, reader, writer
 
 
 def _use_specific_dry_learner_analysis(monkeypatch):
@@ -31,7 +31,7 @@ def test_vocab_exposes_book_sources(client):
     assert "Balbharati" in v["book_sources"]
 
 
-def test_legacy_workbook_without_concept_source_still_imports(client, db, tmp_path):
+def test_legacy_workbook_without_concept_source_still_imports(db, tmp_path):
     """Old-layout files (no concept_source column) must not mis-align bands.
 
     The header rows are built from the FROZEN registry entry, never from
@@ -70,9 +70,7 @@ def test_legacy_workbook_without_concept_source_still_imports(client, db, tmp_pa
     path = tmp_path / "legacy.xlsx"
     wb.save(path)
 
-    files = {"file": ("legacy.xlsx", io.BytesIO(path.read_bytes()),
-                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
-    counts = client.post("/data/import", files=files).json()
+    counts = reader.import_workbook(db, path)
     assert counts["questions"] == 1
 
     q = db.query(models.Question).filter_by(

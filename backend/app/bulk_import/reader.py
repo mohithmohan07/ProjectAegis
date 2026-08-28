@@ -13,7 +13,10 @@ carries text or a label.
 """
 from __future__ import annotations
 
+import math
 import re
+from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 import openpyxl
@@ -26,8 +29,11 @@ from . import (
     split_multi, strip_title_tag, strip_topic_title, to_plain_text,
 )
 from . import layouts
+from . import assessment_workbook as workbook_contract
 from .layouts import WorkbookLayoutError  # noqa: F401  (re-exported for api)
 from .. import models
+from ..services import assessment_profile
+from ..services import assessment_release as release_contract
 from ..services import directory, identity, katex_rules
 
 
@@ -139,7 +145,20 @@ def _group_sequence(machine_name: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-def _format_issues(label: str, *texts: str) -> list[str]:
+_STRICT_RICH_TEXT_CODES = frozenset({
+    "unsupported_table",
+    "unsupported_katex_command",
+    "raw_math_delimiter",
+    "literal_newline_escape",
+    "katex_row_spacing",
+})
+
+
+def _format_issues(
+    label: str,
+    *texts: str,
+    allowed_codes: frozenset[str] | None = None,
+) -> list[str]:
     """Content-format validation: katex/img/link rules (allowed CMS formats)."""
     issues: list[str] = []
     blob = "\n".join(t for t in texts if t)
@@ -154,8 +173,21 @@ def _format_issues(label: str, *texts: str) -> list[str]:
             "raw equation found — use [Katex]...[/Katex]"),
         "raw_latex": "raw LaTeX found outside a [Katex] tag",
         "unsupported_table": (
-            "KaTeX tabular/array markup is unsupported; use a source image "
-            "or row/column-labelled plain text"
+            "tabular/Markdown or noncanonical array markup is unsupported "
+            "(unsupported_table); "
+            "use a canonical [Katex] array, source image, or row/column-"
+            "labelled plain text"
+        ),
+        "unsupported_katex_command": (
+            "unsupported KaTeX command found; do not use \\mathrm, \\hspace, "
+            "\\phantom, or \\boxed"
+        ),
+        "katex_row_spacing": (
+            "KaTeX row breaks must not include an optional spacing argument"
+        ),
+        "literal_newline_escape": (
+            "literal \\n found before a list/option label — use a real line "
+            "break"
         ),
         "unbalanced_image": "unclosed [img] tag",
         "invalid_image_src": "[img] without a full HTTPS src URL",
@@ -168,10 +200,45 @@ def _format_issues(label: str, *texts: str) -> list[str]:
     for code in katex_rules.rich_text_issues(
         blob, require_canonical_case=False
     ):
+        if allowed_codes is not None and code not in allowed_codes:
+            continue
         message = messages.get(code)
         if message:
             issues.append(f"{label}: {message}")
     return issues
+
+
+def _rich_text_for_validation(
+    kind: str, answers: list[dict], *texts: str,
+) -> tuple[str, ...]:
+    """Return learner-facing text with Subjective placeholders masked.
+
+    ``$$a$$`` through ``$$t$$`` are canonical Subjective answer-slot tokens,
+    not raw-math delimiters.  Mask only tokens declared by an ordered answer
+    block; arbitrary ``$$...$$`` remains visible to the rich-text validator.
+    """
+
+    values = tuple(str(text or "") for text in texts)
+    if kind != "subjective":
+        return values
+    placeholders = {
+        str(answer.get("placeholder") or "")
+        for answer in answers
+        if isinstance(answer, dict)
+    }
+    tokens = tuple(
+        f"$${placeholder}$$"
+        for placeholder in sorted(placeholders)
+        if len(placeholder) == 1 and "a" <= placeholder <= "t"
+    )
+    if not tokens:
+        return values
+    masked: list[str] = []
+    for value in values:
+        for token in tokens:
+            value = value.replace(token, "")
+        masked.append(value)
+    return tuple(masked)
 
 
 def _answer_format_issues(
@@ -180,7 +247,17 @@ def _answer_format_issues(
     """Validate typed answer_content cells independently of rich text."""
 
     messages = {
-        "unsupported_table": "contains unsupported tabular/array markup",
+        "unsupported_table": (
+            "contains unsupported tabular/Markdown or noncanonical array "
+            "markup"
+        ),
+        "equation_unsupported_command": (
+            "Equation content must not use \\mathrm, \\hspace, \\phantom, "
+            "or \\boxed"
+        ),
+        "equation_row_spacing": (
+            "Equation array rows must not include a spacing argument"
+        ),
         "equation_katex_wrapper": (
             "Equation content must be raw LaTeX without [Katex]"
         ),
@@ -259,6 +336,236 @@ def _sheet_headers(wb) -> dict[str, tuple]:
     return headers
 
 
+def _row_chapter_meta(
+    sheet_layout: layouts.SheetLayout, row: tuple,
+) -> dict:
+    """Derive declared board/grade/subject from one tag-bearing row.
+
+    This deliberately uses the same probes as the mutating import path. The
+    result selects a declarative profile policy; it never guesses a category
+    or changes a row's authored values.
+    """
+
+    chapter = sheet_layout.block_values(row, "chapter")
+    topic = sheet_layout.block_values(row, "topic")
+    concept = sheet_layout.block_values(row, "concept")
+    return directory.derive_chapter_meta(
+        str(chapter.get("chapter_title") or ""),
+        str(chapter.get("chapter_display_name") or ""),
+        str(topic.get("topic_title") or ""),
+        str(topic.get("topic_display_name") or ""),
+        str(topic.get("topic_concept_labels") or ""),
+        str(topic.get("related_topics") or ""),
+        str(concept.get("concept_title") or ""),
+        str(concept.get("concept_display_name") or ""),
+        str(chapter.get("post_topics") or ""),
+        str(chapter.get("pre_topics") or ""),
+    )
+
+
+def _policy_decimal(value) -> Decimal | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        number = Decimal(str(value).strip())
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return number if number.is_finite() else None
+
+
+def _strict_assessment_policy_issues(
+    *,
+    sheet_layout: layouts.SheetLayout,
+    row: tuple,
+    kind: str,
+    question: Mapping,
+    answers: list[dict],
+    row_label: str,
+) -> list[str]:
+    """Validate a non-generic row policy before the first database write.
+
+    The row already declares its sheet, category, marks, difficulty, duration,
+    and answers. Policy validation only compares those values. For a
+    per-subpoint contract the represented count is derived exactly from
+    ``marks / marks_per_subpoint``; no missing basis is synthesized.
+    """
+
+    metadata = _row_chapter_meta(sheet_layout, row)
+    policy = assessment_profile.assessment_format_policy(metadata=metadata)
+    policy_id = str(policy.get("policy_id") or "")
+    if not policy_id or policy_id == "generic-cms":
+        return []
+    formats = policy.get("formats_by_sheet")
+    if not isinstance(formats, Mapping):
+        return [
+            f"{row_label}: assessment policy {policy_id!r} has no "
+            "formats_by_sheet mapping"
+        ]
+    category = str(question.get("question_category") or "").strip()
+    sheet_formats = formats.get(kind)
+    rule = (
+        sheet_formats.get(category)
+        if isinstance(sheet_formats, Mapping)
+        else None
+    )
+    if not isinstance(rule, Mapping):
+        return [
+            f"{row_label}: question_category {category!r} is not permitted "
+            f"for sheet_kind {kind!r} by assessment policy {policy_id!r}"
+        ]
+
+    issues: list[str] = []
+    marks = _policy_decimal(question.get("marks"))
+    represented_count: int | None = None
+    marks_rule = rule.get("marks")
+    if "marks" in rule and not isinstance(marks_rule, Mapping):
+        issues.append(
+            f"{row_label}: assessment policy {policy_id!r} has a non-object "
+            f"marks rule for {category!r}"
+        )
+    if marks is not None and marks > 0 and isinstance(marks_rule, Mapping):
+        marks_mode = str(marks_rule.get("mode") or "")
+        if not marks_mode:
+            issues.append(
+                f"{row_label}: assessment policy {policy_id!r} has a marks "
+                f"rule without a mode for {category!r}"
+            )
+        elif marks_mode == "fixed":
+            allowed = tuple(
+                value
+                for raw in marks_rule.get("allowed") or ()
+                if (value := _policy_decimal(raw)) is not None and value > 0
+            )
+            if not allowed:
+                issues.append(
+                    f"{row_label}: assessment policy {policy_id!r} has no "
+                    f"positive fixed marks for {category!r}"
+                )
+            elif marks not in set(allowed):
+                issues.append(
+                    f"{row_label}: marks {marks:g} must be one of "
+                    f"{tuple(str(value) for value in allowed)} for "
+                    f"question_category {category!r}"
+                )
+        elif marks_mode == "per_subpoint":
+            unit = _policy_decimal(marks_rule.get("marks_per_subpoint"))
+            raw_maximum = marks_rule.get("max_subpoints")
+            maximum = _policy_decimal(raw_maximum)
+            if "max_subpoints" in marks_rule and (
+                isinstance(raw_maximum, bool)
+                or not isinstance(raw_maximum, (int, float, Decimal))
+                or maximum is None
+                or maximum <= 0
+                or maximum != maximum.to_integral_value()
+            ):
+                issues.append(
+                    f"{row_label}: assessment policy {policy_id!r} has an "
+                    f"invalid max_subpoints for {category!r}; it must be a "
+                    "positive integer"
+                )
+            if unit is None or unit <= 0:
+                issues.append(
+                    f"{row_label}: assessment policy {policy_id!r} has an "
+                    f"invalid marks_per_subpoint for {category!r}"
+                )
+            else:
+                quotient = marks / unit
+                if quotient <= 0 or quotient != quotient.to_integral_value():
+                    issues.append(
+                        f"{row_label}: marks {marks:g} must represent a "
+                        "positive whole number of policy subpoints at "
+                        f"{unit:g} mark(s) each"
+                    )
+                else:
+                    represented_count = int(quotient)
+                    if (
+                        maximum is not None
+                        and quotient > maximum
+                    ):
+                        issues.append(
+                            f"{row_label}: represented subpoint count "
+                            f"{quotient:g} exceeds the wire maximum "
+                            f"{maximum:g} for {category!r}"
+                        )
+                    if kind == "subjective" and len(answers) != represented_count:
+                        issues.append(
+                            f"{row_label}: Subjective answer count "
+                            f"{len(answers)} does not match represented "
+                            f"subpoint count {represented_count}"
+                        )
+                    if kind == "subjective":
+                        for position, answer in enumerate(answers, start=1):
+                            weight = _policy_decimal(
+                                answer.get("weightage")
+                            )
+                            if weight != unit:
+                                issues.append(
+                                    f"{row_label}: Subjective answer "
+                                    f"{position} weight {weight!s} does not "
+                                    "equal policy marks_per_subpoint "
+                                    f"{unit:g}"
+                                )
+        elif marks_mode:
+            issues.append(
+                f"{row_label}: assessment policy {policy_id!r} has unknown "
+                f"marks mode {marks_mode!r} for {category!r}"
+            )
+
+    duration = _policy_decimal(question.get("question_duration"))
+    duration_rule = rule.get("duration")
+    if (
+        duration is None
+        or duration <= 0
+        or not isinstance(duration_rule, Mapping)
+        or not duration_rule
+    ):
+        # The general strict numeric gate reports an absent/non-positive
+        # duration. A category with no duration rule retains that gate only.
+        return issues
+    duration_mode = str(duration_rule.get("mode") or "")
+    expected_duration: Decimal | None = None
+    if duration_mode == "matrix":
+        difficulty = normalize_difficulty(
+            str(question.get("level_of_difficulty") or "")
+        )
+        minutes = duration_rule.get("minutes_by_difficulty")
+        expected_duration = (
+            _policy_decimal(minutes.get(difficulty))
+            if isinstance(minutes, Mapping)
+            else None
+        )
+        if expected_duration is None or expected_duration <= 0:
+            issues.append(
+                f"{row_label}: assessment policy {policy_id!r} has no "
+                f"positive matrix duration for difficulty {difficulty!r}"
+            )
+            expected_duration = None
+    elif duration_mode == "per_subpoint":
+        minutes_per_subpoint = _policy_decimal(
+            duration_rule.get("minutes_per_subpoint")
+        )
+        if minutes_per_subpoint is None or minutes_per_subpoint <= 0:
+            issues.append(
+                f"{row_label}: assessment policy {policy_id!r} has an "
+                f"invalid minutes_per_subpoint for {category!r}"
+            )
+        elif represented_count is not None:
+            expected_duration = minutes_per_subpoint * represented_count
+        # If marks could not establish a count, the marks defect above is the
+        # conclusive failure. Do not invent a duration basis for another one.
+    elif duration_mode:
+        issues.append(
+            f"{row_label}: assessment policy {policy_id!r} has unknown "
+            f"duration mode {duration_mode!r} for {category!r}"
+        )
+    if expected_duration is not None and duration != expected_duration:
+        issues.append(
+            f"{row_label}: question_duration {duration:g} does not match "
+            f"policy duration {expected_duration:g} for {category!r}"
+        )
+    return issues
+
+
 def _blocking_content_issues(wb, identified) -> list[str]:
     """Find mechanical content defects before the import mutates the DB."""
 
@@ -279,8 +586,23 @@ def _blocking_content_issues(wb, identified) -> list[str]:
             if row is None or not any(row):
                 continue
             question = sheet_layout.block_values(row, "question")
+            # A concept-catalogue tail row deliberately stops before the
+            # Question band. It is not a malformed zero-mark question, so
+            # question-only medium, rubric, and numeric checks do not apply.
+            if not any(
+                value is not None and str(value).strip()
+                for value in question.values()
+            ):
+                continue
             label = str(question.get("question_label") or "").strip()
             row_label = label or f"{sheet_name!r} row {row_number}"
+            if not label:
+                flag(
+                    f"{row_label}: populated Question band requires a "
+                    "non-blank question_label"
+                )
+            if not str(question.get("question") or "").strip():
+                flag(f"{row_label}: question must not be blank")
             answers, sub_questions = _parse_answers(
                 question, kind, sheet_layout,
             )
@@ -295,6 +617,15 @@ def _blocking_content_issues(wb, identified) -> list[str]:
                 }
                 for subquestion in sub_questions
             ]
+            for issue in _strict_assessment_policy_issues(
+                sheet_layout=sheet_layout,
+                row=row,
+                kind=kind,
+                question=question,
+                answers=normalized_answers,
+                row_label=row_label,
+            ):
+                flag(issue)
             for position, answer in enumerate(normalized_answers, start=1):
                 answer["answer_type"] = normalize_answer_type(
                     str(answer.get("answer_type") or "")
@@ -315,6 +646,26 @@ def _blocking_content_issues(wb, identified) -> list[str]:
                         str(answer.get("answer_type") or ""),
                         str(answer.get(content_field) or ""),
                     )
+                    content = answer.get(content_field)
+                    if (
+                        kind == "objective"
+                        and release_contract.option_content_has_label(content)
+                    ):
+                        flag(
+                            f"{row_label}: objective option {position} "
+                            "repeats its letter label"
+                        )
+                    if (
+                        kind == "descriptive"
+                        and release_contract.malformed_rubric_tag(
+                            content, answer.get("answer_type"),
+                        )
+                    ):
+                        flag(
+                            f"{row_label}: descriptive rubric {position} "
+                            "does not start with an allowed functional tag or "
+                            "is without its required colon"
+                        )
             for subquestion in normalized_sub_questions:
                 for keyword_position, keyword in enumerate(
                     subquestion.get("keywords") or [], start=1,
@@ -332,58 +683,104 @@ def _blocking_content_issues(wb, identified) -> list[str]:
                         str(keyword.get("answer_type") or ""),
                         str(keyword.get("keyword") or ""),
                     )
+                    if release_contract.malformed_rubric_tag(
+                        keyword.get("keyword"), keyword.get("answer_type"),
+                    ):
+                        flag(
+                            f"{row_label}: subquestion keyword "
+                            f"{keyword_position} does not start with an "
+                            "allowed functional tag or is without its "
+                            "required colon"
+                        )
             for field in (
                 "question", "question_text", "display_answer",
                 "answer_explanation",
             ):
-                if "unsupported_table" in katex_rules.rich_text_issues(
-                    str(question.get(field) or ""),
-                    require_canonical_case=False,
+                validation_text, = _rich_text_for_validation(
+                    kind, normalized_answers, str(question.get(field) or ""),
+                )
+                for issue in _format_issues(
+                    f"{row_label}: {field}", validation_text,
+                    allowed_codes=_STRICT_RICH_TEXT_CODES,
                 ):
-                    flag(
-                        f"{row_label}: {field} contains unsupported table "
-                        "markup (unsupported_table)"
-                    )
+                    flag(issue)
             for position, subquestion in enumerate(
                 sub_questions, start=1,
             ):
-                if "unsupported_table" in katex_rules.rich_text_issues(
+                for issue in _format_issues(
+                    f"{row_label}: sub_question_{position}",
                     str(subquestion.get("text") or ""),
-                    require_canonical_case=False,
+                    allowed_codes=_STRICT_RICH_TEXT_CODES,
                 ):
-                    flag(
-                        f"{row_label}: sub_question_{position} contains "
-                        "unsupported table markup (unsupported_table)"
-                    )
+                    flag(issue)
             for position, answer in enumerate(answers, start=1):
                 for field in ("answer_display",):
-                    if "unsupported_table" in katex_rules.rich_text_issues(
+                    for issue in _format_issues(
+                        f"{row_label}: {field}_{position}",
                         str(answer.get(field) or ""),
-                        require_canonical_case=False,
+                        allowed_codes=_STRICT_RICH_TEXT_CODES,
                     ):
-                        flag(
-                            f"{row_label}: {field}_{position} contains "
-                            "unsupported table markup (unsupported_table)"
-                        )
+                        flag(issue)
             for issue in _answer_format_issues(
                 row_label,
                 normalized_answers,
                 normalized_sub_questions,
             ):
                 flag(issue)
-            if kind == "descriptive":
-                try:
-                    marks = float(question.get("marks") or 0)
-                except (TypeError, ValueError):
-                    marks = 0.0
-                populated_rubrics = sum(
-                    bool(str(answer.get("answer_content") or "").strip())
-                    for answer in normalized_answers
+            marks = workbook_contract._readback_decimal(
+                question.get("marks")
+            )
+            marking_validator = {
+                "objective": workbook_contract._objective_marking_errors,
+                "subjective": workbook_contract._subjective_marking_errors,
+                "descriptive": workbook_contract._descriptive_marking_errors,
+            }[kind]
+            # Preserve the workbook's slot positions for contiguity checks,
+            # while applying the same documented legacy answer-type aliases
+            # that import will persist.  Passing the compact parsed lists
+            # would hide gaps; passing the entirely raw row would make an
+            # accepted alias such as ``Words`` fail the canonical enum gate.
+            marking_row = dict(question)
+            for number in sheet_layout.answer_block_numbers:
+                field = f"answer_type_{number}"
+                if field in marking_row:
+                    marking_row[field] = normalize_answer_type(
+                        str(marking_row.get(field) or "")
+                    )
+            for sub_number in sheet_layout.sub_question_numbers:
+                for keyword_number in (
+                    sheet_layout.sub_question_keyword_numbers(sub_number)
+                ):
+                    field = (
+                        f"sq{sub_number}_answer_type_{keyword_number}"
+                    )
+                    if field in marking_row:
+                        marking_row[field] = normalize_answer_type(
+                            str(marking_row.get(field) or "")
+                        )
+            for issue in marking_validator(
+                marking_row, label=row_label, marks=marks,
+            ):
+                flag(issue)
+            keyboard = str(question.get("math_keyboard") or "")
+            if kind == "objective" and keyboard:
+                flag(
+                    f"{row_label}: objective math_keyboard must be blank"
                 )
-                if marks == 4 and populated_rubrics < 2:
+            elif kind in {"subjective", "descriptive"} and keyboard not in {
+                "Yes", "No",
+            }:
+                flag(
+                    f"{row_label}: {kind} math_keyboard must be exactly "
+                    "Yes or No"
+                )
+            for numeric_field in ("marks", "question_duration"):
+                raw_numeric = question.get(numeric_field)
+                numeric = workbook_contract._readback_decimal(raw_numeric)
+                if numeric is None or numeric <= 0:
                     flag(
-                        f"{row_label}: 4-mark descriptive requires at "
-                        "least two answer/rubric blocks"
+                        f"{row_label}: {numeric_field} must be finite and "
+                        "positive"
                     )
             if kind == "objective":
                 option_text = str(
@@ -920,9 +1317,15 @@ def import_workbook(
                 _flag(f"{label or 'row ' + str(row_i)}: marks not numeric "
                       f"({qd.get('marks')!r})")
             try:
-                duration = float(qd.get("question_duration") or 1)
-            except ValueError:
-                duration = 1.0
+                duration = float(qd.get("question_duration"))
+                if not math.isfinite(duration) or duration <= 0:
+                    raise ValueError
+            except (TypeError, ValueError):
+                duration = 0.0
+                _flag(
+                    f"{label or 'row ' + str(row_i)}: question_duration "
+                    "must be finite and positive"
+                )
 
             # ---- Normalization to standard values ----
             skills = normalize_cognitive_skills(qd.get("cognitive_skills", ""))
@@ -947,6 +1350,27 @@ def import_workbook(
                         a.get("answer_type", ""),
                         a.get(content_field, ""),
                     )
+                    if (
+                        kind == "objective"
+                        and release_contract.option_content_has_label(
+                            a.get(content_field)
+                        )
+                    ):
+                        _flag(
+                            f"{label}: objective option repeats its letter "
+                            "label"
+                        )
+                    if (
+                        kind == "descriptive"
+                        and release_contract.malformed_rubric_tag(
+                            a.get(content_field), a.get("answer_type"),
+                        )
+                    ):
+                        _flag(
+                            f"{label}: descriptive rubric does not start "
+                            "with an allowed functional tag or is without "
+                            "its required colon"
+                        )
             for subquestion in sub_questions:
                 for keyword in subquestion.get("keywords") or []:
                     keyword["answer_type"] = normalize_answer_type(
@@ -964,25 +1388,56 @@ def import_workbook(
                         keyword.get("answer_type", ""),
                         keyword.get("keyword", ""),
                     )
+                    if (
+                        kind == "descriptive"
+                        and release_contract.malformed_rubric_tag(
+                            keyword.get("keyword"),
+                            keyword.get("answer_type"),
+                        )
+                    ):
+                        _flag(
+                            f"{label}: descriptive subquestion keyword does "
+                            "not start with an allowed functional tag or is "
+                            "without its required colon"
+                        )
 
             # ---- Validation: weightage sum vs marks; content formats ----
-            if kind in {"subjective", "descriptive"} and marks:
+            if (
+                kind in {"subjective", "descriptive"}
+                and marks
+                and not (kind == "descriptive" and sub_questions)
+            ):
                 total = _weightage_sum(answers, kind)
                 if total is not None and abs(total - marks) > 0.01:
                     _flag(f"{label}: answer weightage sum {total:g} != marks {marks:g}")
-            if kind == "descriptive" and marks == 4 and len(answers) < 2:
+            if kind == "descriptive" and answers and sub_questions:
+                _flag(
+                    f"{label}: multipart descriptive duplicates scoring in "
+                    "main answer/rubric blocks"
+                )
+            if (
+                kind == "descriptive"
+                and marks == 4
+                and not sub_questions
+                and len(answers) < 2
+            ):
                 _flag(
                     f"{label}: 4-mark descriptive requires at least two "
                     "answer/rubric blocks"
                 )
-            for issue in _format_issues(
-                label or f"row {row_i}",
+            rich_text_values = _rich_text_for_validation(
+                kind,
+                answers,
                 qd.get("question", ""),
                 qd.get("question_text", ""),
                 qd.get("display_answer", ""),
                 qd.get("answer_explanation", ""),
                 *(str(subquestion.get("text") or "")
                   for subquestion in sub_questions),
+            )
+            for issue in _format_issues(
+                label or f"row {row_i}",
+                *rich_text_values,
             ):
                 _flag(issue)
             for issue in _answer_format_issues(
@@ -1008,6 +1463,7 @@ def import_workbook(
                 # sourcing it from the profile would stamp one school's
                 # convention onto every other school's imported rows.
                 question_appears_in=appears or APPEARS_IN_ALL,
+                answer_restriction=qd.get("answer_restriction", ""),
                 level_of_difficulty=difficulty,
                 question=qd.get("question", ""),
                 question_text=question_text,

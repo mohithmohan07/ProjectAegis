@@ -972,7 +972,9 @@ def _validate(
         if block["kind"] not in {"paragraph", "list", "code"}:
             continue
         display = str(block.get("display_text") or "")
-        rich_issues = kr.rich_text_issues(display)
+        rich_issues = kr.rich_text_issues(
+            kr.legacy_export_rich_text(display)
+        )
         if rich_issues:
             issues.append(_issue(
                 "warning",

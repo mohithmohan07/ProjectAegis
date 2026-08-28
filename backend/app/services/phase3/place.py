@@ -29,7 +29,7 @@ from .. import progress
 
 _BATCH_SIZE = 8
 
-POLICY_VERSION = "place-1"
+POLICY_VERSION = "place-2"
 
 # The one recorded disposition a pooled FIGURE may carry (containers is
 # the vocabulary home; re-exported here for the pass's own callers).
@@ -137,7 +137,7 @@ def _place_checker(
     batch: list[dict[str, Any]],
     concept_ids: set[str],
 ) -> Callable[[Mapping[str, Any]], list[str]]:
-    expected = {row["item_ref"]: row["pool_kind"] for row in batch}
+    expected = {row["item_ref"]: row for row in batch}
 
     def check(response: Mapping[str, Any]) -> list[str]:
         defects: list[str] = []
@@ -159,7 +159,12 @@ def _place_checker(
             disposition = str(row.get("disposition") or "").strip()
             concept_id = str(row.get("concept_id") or "").strip()
             if disposition:
-                if expected[ref] != "figure":
+                if concept_id:
+                    defects.append(
+                        f"{ref} carries both concept_id and disposition; "
+                        "exactly one placement outcome is required"
+                    )
+                if expected[ref]["pool_kind"] != "figure":
                     defects.append(
                         f"{ref} is a hub item and must be placed on a "
                         "concept; hub items have no disposition"
@@ -192,6 +197,7 @@ def _live_place(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.PLACE_SYSTEM, prompts.render(payload),
         purpose="concept_mapping",
+        image_urls=_payload_image_urls(payload),
     )
 
 
@@ -202,7 +208,38 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.PLACE_CRITIC_SYSTEM, prompts.render(payload),
         purpose="concept_mapping",
+        image_urls=_payload_image_urls(payload),
     )
+
+
+def _live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
+    """Place-specific Fixer with the same source vision as author/critic."""
+
+    from . import fixer as fixer_mod
+    from . import prompts
+    from .. import generation
+
+    original = payload.get("original_payload")
+    vision_payload = original if isinstance(original, Mapping) else payload
+    return generation._openai_json(
+        prompts.FIXER_SYSTEM,
+        prompts.render(payload),
+        purpose="concept_validation",
+        model=fixer_mod.fixer_model(),
+        image_urls=_payload_image_urls(vision_payload),
+    )
+
+
+def _payload_image_urls(payload: Mapping[str, Any]) -> list[str]:
+    """Return each pooled source image once for actual vision input."""
+
+    return list(dict.fromkeys(
+        str(image.get("url") or "").strip()
+        for row in payload.get("pool") or []
+        if isinstance(row, Mapping)
+        for image in row.get("images") or []
+        if isinstance(image, Mapping) and str(image.get("url") or "").strip()
+    ))
 
 
 def place(
@@ -239,7 +276,7 @@ def place(
         envelope_mod.require_live_api()
         provider = _live_place
         critic = critic if critic is not None else _live_critic
-        fixer = fixer or fixer_mod.live_fixer
+        fixer = fixer or _live_fixer
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
     from . import prompts as prompts_mod
@@ -295,7 +332,12 @@ def place(
                 "placed on a concept; a figure may instead record the "
                 "disposition 'decorative_or_duplicate' only when it "
                 "genuinely illustrates no concept's teaching or "
-                "duplicates an image an item already carries. Prefer the "
+                "duplicates an image an item already carries. A crop that "
+                "contains only a typographic operator or glyph (such as a "
+                "lone + sign) has no visual teaching content: keep the "
+                "operator as text and record that figure as "
+                "decorative_or_duplicate unless the image adds meaning "
+                "beyond the glyph. Prefer the "
                 "normal concept whose teaching the item practices or "
                 "illustrates; a Culmination row only when the item "
                 "genuinely spans that topic's concepts." + rules_suffix

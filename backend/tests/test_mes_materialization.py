@@ -111,6 +111,26 @@ def _descriptive_response(request: dict, **changes) -> dict:
     return response
 
 
+def _subjective_response(request: dict, **changes) -> dict:
+    response = {
+        "candidate_id": request["candidate_id"],
+        "question": "Complete the sentence: I saw $$a$$ owl.",
+        "display_answer": "I saw an owl.",
+        "answers": [{
+            "answer_type": "Phrases",
+            "answer_content": "an",
+            "answer_display": "an",
+            "placeholder": "a",
+        }],
+        "sub_questions": [],
+        "answer_explanation": "Use an before a vowel sound.",
+        "requires_visual": False,
+        "rationale": "The source has one ordered response blank.",
+    }
+    response.update(changes)
+    return response
+
+
 def _verified(_request: dict) -> dict:
     return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
@@ -163,7 +183,7 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-9"
+        "assessment-materialize-11"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
@@ -309,6 +329,95 @@ def test_marking_fields_are_not_part_of_the_materialization_checker():
     )
     assert not any("weightage" in defect for defect in defects)
     assert not any("marks" in defect for defect in defects)
+
+
+def test_subjective_blank_materializes_with_ordered_placeholder_contract():
+    cell = _cell(
+        cell_id="CELL-SUBJ",
+        sheet_kind="subjective",
+        question_category="Fill in the Blanks",
+    )
+    atom = _atom(
+        source_qid="QINV-ARTICLE-1",
+        raw_text="I saw ___ owl.",
+        normalized_public_text="I saw ___ owl.",
+        source_answer="an",
+        options=[],
+        assets=[],
+    )
+
+    candidate = am.materialize_candidate(
+        atom,
+        cell,
+        meta=META,
+        context={"chapter": "Articles"},
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=_subjective_response,
+        critic=_verified,
+        store=kernel.DecisionStore(),
+        profile={
+            **am.assessment_profile.DEFAULT_PROFILE,
+            "sheet_kinds": ("objective", "descriptive", "subjective"),
+        },
+    )
+
+    assert candidate["sheet_kind"] == "subjective"
+    assert candidate["question"] == "Complete the sentence: I saw $$a$$ owl."
+    assert candidate["sub_questions"] == []
+    assert candidate["answers"] == [{
+        "answer_type": "Phrases",
+        "answer_content": "an",
+        "answer_display": "an",
+        "placeholder": "a",
+        "answer_weightage": "",
+    }]
+
+
+def test_multipart_descriptive_uses_only_subquestion_rubrics():
+    cell = _cell(
+        sheet_kind="descriptive", question_category="Long Answer", marks=4,
+    )
+    candidate_id = am._candidate_id(_atom(), cell)
+    subquestions = [{
+        "text": "a) Explain evaporation.",
+        "keywords": [{
+            "answer_type": "Phrases",
+            "keyword": "[content]: water changes into vapour",
+        }],
+    }]
+    valid = _descriptive_response(
+        {"candidate_id": candidate_id},
+        question="Use the water-cycle diagram.",
+        answers=[],
+        sub_questions=subquestions,
+    )
+
+    assert not am._proposal_defects(valid, cell, candidate_id)
+
+    duplicated_rubric = copy.deepcopy(valid)
+    duplicated_rubric["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": "[content]: water changes into vapour",
+    }]
+    assert any(
+        "duplicates" in defect or "main answers empty" in defect
+        for defect in am._proposal_defects(
+            duplicated_rubric, cell, candidate_id,
+        )
+    )
+
+    duplicated_text = copy.deepcopy(valid)
+    duplicated_text["question"] += " a) Explain evaporation."
+    assert any(
+        "text is duplicated" in defect
+        for defect in am._proposal_defects(duplicated_text, cell, candidate_id)
+    )
+
+
+def test_materialization_prompt_preserves_deliberately_open_source_values():
+    assert "source deliberately leaves a quantity" in am.MATERIALIZE_SYSTEM
+    assert "never invent convenient numbers" in am.MATERIALIZE_SYSTEM
+    assert "fabricated values" in am.MATERIALIZE_CRITIC_SYSTEM
 
 
 def test_extra_numeric_marking_never_engages_materialization_fixer():
@@ -496,7 +605,74 @@ def test_answer_medium_and_four_mark_rubric_shape_are_mechanical():
     assert any("at least two answer/rubric blocks" in defect for defect in defects)
 
 
-def test_materialization_refuses_katex_table_markup():
+def test_english_post_materialization_honors_thirty_answer_master_capacity():
+    meta = {
+        "board": "MSBSHSE",
+        "grade": "6",
+        "subject": "English",
+    }
+    cell = _cell(
+        sheet_kind="descriptive",
+        question_category="Long Answer",
+        marks=5.0,
+    )
+    seen = {}
+
+    def provider(request):
+        seen.update(copy.deepcopy(request))
+        return _descriptive_response(
+            request,
+            answers=[{
+                "answer_type": "Phrases",
+                "answer_content": f"[content]: criterion {number}",
+            } for number in range(1, 31)],
+            answer_explanation=(
+                "Evaporation, condensation and precipitation."
+            ),
+        )
+
+    candidate = am.materialize_candidate(
+        _atom(),
+        cell,
+        meta=meta,
+        learning_phase="Post",
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        critic=_verified,
+        store=kernel.DecisionStore(),
+    )
+
+    assert seen["workbook_capacities"] == {
+        "descriptive_answer_slots": 30,
+    }
+    assert len(candidate["answers"]) == 30
+    assert candidate["assessment_eligibility"] == "accepted"
+    assert candidate["authority"]["policy_version"] == (
+        "assessment-materialize-11"
+    )
+
+
+@pytest.mark.parametrize(
+    ("subject", "learning_phase", "expected"),
+    [
+        ("English", "Post", 30),
+        ("English", "Pre", 10),
+        ("Mathematics", "Post", 10),
+    ],
+)
+def test_descriptive_answer_capacity_is_profile_and_lane_aware(
+    subject, learning_phase, expected,
+):
+    meta = {"board": "MSBSHSE", "grade": "6", "subject": subject}
+    profile = am.assessment_profile.resolve_for_metadata(None, meta)
+
+    assert am._descriptive_answer_capacity(
+        profile,
+        learning_phase=learning_phase,
+    ) == expected
+
+
+def test_materialization_accepts_canonical_katex_array_markup():
     cell = _cell()
     candidate_id = am._candidate_id(_atom(), cell)
     response = _objective_response({"candidate_id": candidate_id})
@@ -504,9 +680,8 @@ def test_materialization_refuses_katex_table_markup():
         r"Study [Katex] \begin{array}{cc}A&B\\1&2\end{array} [/Katex]."
     )
 
-    assert any(
-        defect == "rich-text: unsupported_table"
-        for defect in am._proposal_defects(response, cell, candidate_id)
+    assert "rich-text: unsupported_table" not in am._proposal_defects(
+        response, cell, candidate_id,
     )
 
 

@@ -102,15 +102,15 @@ def test_rules_document_states_the_split_versus_new_concept_test():
     assert "it can stop the run outright" in text
 
 
-def test_rules_document_keeps_one_type_across_topics():
-    """Q2: a Type is a chapter-level identity; Cases place individually."""
+def test_rules_document_keeps_one_type_on_one_owner_concept():
+    """Q14: Case evidence is granular; the reusable Type has one owner."""
 
     text = _squash(RULES_DOC.read_text(encoding="utf-8"))
 
     assert "a type is a **chapter-level identity**" in text
-    assert "is never split to make its parts fit one" in text
-    # The worked example lands two Cases in one topic and one in another.
-    assert "one type, three cases, landing across two topics" in text
+    assert "one type therefore renders under one concept" in text
+    assert "places all three cases there" in text
+    assert "different numbering" in text
 
 
 def test_shared_placement_critic_exempts_every_non_necessary_edge():

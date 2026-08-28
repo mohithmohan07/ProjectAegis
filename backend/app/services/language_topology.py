@@ -45,6 +45,12 @@ LANGUAGE_ADAPTER_VERSION = "language-topology-1"
 PLAN_FILENAME = "source.language-plan.json"
 PLAN_SLOT_KEY = "language_topology_plan"
 
+THREADING_PLACEMENT_CONTEXTS = (
+    "opening_pre_reading",
+    "contextual_support",
+    "post_reading",
+)
+
 _MODES = ("poem", "prose")
 SEMANTIC_ROLES = (
     "ordinary",
@@ -56,6 +62,29 @@ SEMANTIC_ROLES = (
 _CACHE_DIR = config.DATA_DIR / "language-plan-cache"
 
 DETAILED_ANALYSIS_TEMPLATE = "Detailed Analysis of '{name}'"
+
+SOURCE_FAITHFUL_PROSE_ROUTING_POLICY = """\
+SOURCE-FAITHFUL PROSE ROUTING
+- For short prose, a new dialogue line, reaction, plan, or decision beat is not
+  by itself a Topic or concept boundary. Merge adjacent beats that form one
+  compact teaching arc. Split only at a substantial transition a teacher would
+  plan independently; do not fragment the work merely to label every event.
+- Preserve an opening Warm-up's source position and pre-reading purpose. Home
+  it in the opening/preparatory activity context or the earliest truthful
+  teaching concept. Never re-parent it to a later plot event merely because it
+  echoes the story's theme, moral, or final decision.
+- A separately headed instructional grammar block that directly teaches a
+  rule or pattern through a coherent progression of explanation, examples,
+  tables, or practice may remain its own source-aligned Topic or concept. Do
+  not force that mini-unit under story analysis or Language & Literary
+  Devices. Incidental usage notes and small language exercises without an
+  independent teaching progression remain threaded to their truthful home.
+- Every threaded support verdict must record placement_context. Use
+  opening_pre_reading for a separate opening Warm-up whose purpose precedes
+  the reading, contextual_support for material taught with its destination
+  concept, and post_reading for a source-owned follow-up whose after-reading
+  phase must remain visible. Destination alone must not erase that distinction.
+"""
 
 
 class LanguagePlanError(RuntimeError):
@@ -106,7 +135,7 @@ def _call_provider(
 # Prompts (frozen wording; hashed into the plan identity)
 # ---------------------------------------------------------------------------
 
-_AUTHOR_SYSTEM = """\
+_AUTHOR_SYSTEM = f"""\
 You are the language-chapter topology author for a school pipeline.
 
 The Architect has already selected the chapter's mode (poem or prose) —
@@ -126,7 +155,10 @@ PROSE mode: topics at the story's sizeable teaching breaks — coherent
 changes in scene, conflict, perspective, or development a teacher would
 plan separately. Within each topic, one concept per significant plot
 episode with a dramatic, source-grounded title and a rationale for why it
-is independently teachable.
+is independently teachable. A short source does not need a separate Topic
+or concept for each dialogue, reaction, plan, or decision beat.
+
+{SOURCE_FAITHFUL_PROSE_ROUTING_POLICY}
 
 BOTH modes: the final topic is the Detailed Analysis topic with its
 display name exactly as given in the request (detailed_analysis_title).
@@ -138,22 +170,24 @@ or a plot for a non-narrative work — record the work-appropriate
 interpretation under the analytical slot instead.
 
 Grammar, listening, and writing components printed in the chapter are
-threaded: for each such block, record the destination concept whose
-content is its best teaching home, the skill it teaches, and why.
+threaded when they are supporting occurrences: for each such block, record
+the destination concept whose content is its best teaching home, the skill
+it teaches, and why. Apply the separately headed grammar-mini-unit exception
+above when the source actually supplies an independent teaching progression.
 
 Every concept carries an achieving_mastery line: what it takes to master
 this concept. Every source block must be accounted for: inside a concept's
 source_block_ids, a topic's evidence_block_ids, threaded_components, or
 non_teaching_block_ids. Nothing is silently dropped."""
 
-_CORRECTION_SYSTEM = """\
+_CORRECTION_DIRECTIVE = """\
 You are correcting your previous language-topology plan. The listed
 defects are MECHANICAL contract violations (unaccounted blocks, unknown
 ids, missing roles or mastery lines, a wrong final-topic display name).
 Return the complete corrected plan. Do not change judgments the defects
 do not touch."""
 
-_FIXER_SYSTEM = """\
+_FIXER_DIRECTIVE = """\
 You are The Fixer for a language-chapter topology plan. The ordinary
 author pass could not produce a mechanically valid plan. Read the source
 blocks, the Architect's mode and rationale, the failed plan, and the
@@ -162,14 +196,31 @@ decision is recorded verbatim and flagged for human review; the run
 completes with it. Never drop a stanza, episode, component, task, or
 block — account for everything."""
 
+
+def _correction_system() -> str:
+    """Give correction the complete, currently installed author policy.
+
+    ``language_topology_grade_contract`` replaces ``_AUTHOR_SYSTEM`` at
+    runtime.  Composing here, instead of freezing a second copy at import,
+    keeps the bounded correction on the exact same live curriculum policy.
+    """
+    return f"{_AUTHOR_SYSTEM}\n\n{_CORRECTION_DIRECTIVE}"
+
+
+def _fixer_system() -> str:
+    """Give The Fixer the complete, currently installed author policy."""
+    return f"{_AUTHOR_SYSTEM}\n\n{_FIXER_DIRECTIVE}"
+
 _CRITIC_SYSTEM = """\
 You are the independent critic of a language-chapter topology plan.
 Review the plan against the source blocks: stanza/break boundaries that
 misread the work, meaning units that overlap or miss teaching, episode
 grain that is too fine or too coarse, threading that homes a component
-badly, analytical slots filled with invented content. Your dissent is an
-advisory review flag for a human reviewer — it blocks nothing — so
-dissent freely and precisely."""
+badly, a short prose source fragmented into one unit per minor beat, an
+opening Warm-up re-parented to a later plot event, a coherent separately
+headed grammar mini-unit buried in story analysis, or analytical slots
+filled with invented content. Your dissent is an advisory review flag for
+a human reviewer — it blocks nothing — so dissent freely and precisely."""
 
 
 # ---------------------------------------------------------------------------
@@ -256,11 +307,21 @@ def plan_schema() -> dict[str, Any]:
                         "additionalProperties": False,
                         "required": [
                             "block_id", "destination_plan_concept_id",
-                            "skill", "rationale",
+                            "placement_context", "skill", "rationale",
                         ],
                         "properties": {
                             "block_id": {"type": "string"},
                             "destination_plan_concept_id": {"type": "string"},
+                            "placement_context": {
+                                "type": "string",
+                                "enum": list(THREADING_PLACEMENT_CONTEXTS),
+                                "description": (
+                                    "The source-aligned learning phase of this "
+                                    "support occurrence. A separate opening "
+                                    "Warm-up is opening_pre_reading even though "
+                                    "it is transported to an opening concept."
+                                ),
+                            },
                             "skill": {"type": "string"},
                             "rationale": {"type": "string"},
                         },
@@ -307,8 +368,8 @@ def _prompt_identity_sha() -> str:
     material = "␟".join([
         LANGUAGE_ADAPTER_VERSION,
         _AUTHOR_SYSTEM,
-        _CORRECTION_SYSTEM,
-        _FIXER_SYSTEM,
+        _correction_system(),
+        _fixer_system(),
         _CRITIC_SYSTEM,
         json.dumps(plan_schema(), sort_keys=True),
         json.dumps(critic_schema(), sort_keys=True),
@@ -342,6 +403,7 @@ def plan_defects(
 
     seen_topic_ids: set[str] = set()
     seen_concept_ids: set[str] = set()
+    first_plan_concept_id = ""
     accounted: set[str] = set()
     roles_last_topic: list[str] = []
 
@@ -366,6 +428,8 @@ def plan_defects(
                     f"concept in topic {tid} has a missing/duplicate id"
                 )
             seen_concept_ids.add(cid)
+            if cid and not first_plan_concept_id:
+                first_plan_concept_id = cid
             role = str(concept.get("semantic_role") or "")
             if role not in SEMANTIC_ROLES:
                 defects.append(f"concept {cid} has invalid role {role!r}")
@@ -398,17 +462,40 @@ def plan_defects(
         )
 
     concept_ids = seen_concept_ids
+    seen_threaded_blocks: set[str] = set()
     for row in plan.get("threaded_components") or []:
         if not isinstance(row, Mapping):
             continue
         bid = str(row.get("block_id") or "")
         if bid not in block_ids:
             defects.append(f"threaded component names unknown block {bid}")
+        if bid in seen_threaded_blocks:
+            defects.append(
+                f"threaded component repeats source block {bid}; one source "
+                "occurrence requires exactly one threading verdict"
+            )
+        seen_threaded_blocks.add(bid)
         accounted.add(bid)
         dest = str(row.get("destination_plan_concept_id") or "")
         if dest not in concept_ids:
             defects.append(
                 f"threaded component {bid} routes to unknown concept {dest}"
+            )
+        placement = str(row.get("placement_context") or "")
+        if placement not in THREADING_PLACEMENT_CONTEXTS:
+            defects.append(
+                f"threaded component {bid} has invalid placement_context "
+                f"{placement!r}"
+            )
+        if (
+            placement == "opening_pre_reading"
+            and first_plan_concept_id
+            and dest != first_plan_concept_id
+        ):
+            defects.append(
+                f"threaded component {bid} is opening_pre_reading but routes "
+                f"to {dest!r}; opening support must route to the first plan "
+                f"concept {first_plan_concept_id!r}"
             )
     for bid in plan.get("non_teaching_block_ids") or []:
         if str(bid) not in block_ids:
@@ -557,10 +644,12 @@ def _author_request(
         "blocks": [
             {
                 "block_id": str(b.get("block_id") or ""),
+                "source_order": position,
+                "source_start": int(b.get("source_start") or 0),
                 "kind": str(b.get("kind") or ""),
                 "text": str(b.get("raw_text") or ""),
             }
-            for b in blocks
+            for position, b in enumerate(blocks, start=1)
         ],
         "tasks": list(tasks),
     }, ensure_ascii=False)
@@ -648,7 +737,7 @@ def author_language_plan(
         })
         try:
             plan = _call_provider(
-                system=_CORRECTION_SYSTEM,
+                system=_correction_system(),
                 prompt=json.dumps({
                     "defects": defects,
                     "previous_plan": plan,
@@ -673,7 +762,7 @@ def author_language_plan(
             from .phase3 import fixer as fixer_mod
 
             plan = _call_provider(
-                system=_FIXER_SYSTEM,
+                system=_fixer_system(),
                 prompt=json.dumps({
                     "defects": fixer_defects,
                     "failed_plan": plan,

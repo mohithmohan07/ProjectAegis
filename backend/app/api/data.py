@@ -25,10 +25,13 @@ router = APIRouter(prefix="/data", tags=["data"])
 
 
 def _lossless_xlsx_or_422(factory):
-    """Expose Excel's cell limit as an actionable client error."""
+    """Expose every known lossless-export boundary as a client error."""
     try:
         return factory()
-    except writer.ExcelCellLimitError as exc:
+    except (
+        writer.ExcelCellLimitError,
+        writer.WorkbookCapacityError,
+    ) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 

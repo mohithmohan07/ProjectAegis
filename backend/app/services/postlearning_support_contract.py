@@ -24,11 +24,12 @@ import importlib
 from functools import wraps
 from typing import Any, Mapping, Sequence
 
+from . import language_topology as topology
 from . import postlearning_formation_contract as post
 
 
-CONTRACT_VERSION = 2
-SUPPORT_VERSION = "post-language-support-2"
+CONTRACT_VERSION = 3
+SUPPORT_VERSION = "post-language-support-3"
 SUPPORT_FIELD = "_aegis_language_threaded_support"
 NON_TEACHING_FIELD = "_aegis_language_non_teaching_blocks"
 SUPPORT_AUDIT_FIELDS = frozenset({SUPPORT_FIELD, NON_TEACHING_FIELD})
@@ -80,6 +81,7 @@ def support_records(env: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
     known_concepts = {
         str(entry["plan_concept_id"]) for entry in entries
     }
+    first_plan_concept_id = str(entries[0]["plan_concept_id"])
     seen_blocks: dict[str, str] = {}
     grouped: dict[str, list[dict[str, Any]]] = {}
     for position, raw in enumerate(plan.get("threaded_components") or [], start=1):
@@ -88,6 +90,9 @@ def support_records(env: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
         block_id = str(raw.get("block_id") or "").strip()
         destination = str(
             raw.get("destination_plan_concept_id") or ""
+        ).strip()
+        placement_context = str(
+            raw.get("placement_context") or ""
         ).strip()
         if block_id not in blocks:
             raise ValueError(
@@ -102,22 +107,32 @@ def support_records(env: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
             raise ValueError(
                 f"threaded component {block_id} has no skill or rationale"
             )
-        prior = seen_blocks.get(block_id)
-        if prior is not None and prior != destination:
-            # The current plan schema has no explicit multi-placement verdict.
-            # One source occurrence therefore has one destination until that
-            # schema grows such a verdict (Step-11 residue R-S11c).
+        if placement_context not in topology.THREADING_PLACEMENT_CONTEXTS:
             raise ValueError(
-                f"threaded component {block_id} is routed to both {prior} and "
-                f"{destination} without an explicit multi-placement verdict"
+                f"threaded component {block_id} has invalid placement_context "
+                f"{placement_context!r}"
             )
+        if (
+            placement_context == "opening_pre_reading"
+            and destination != first_plan_concept_id
+        ):
+            raise ValueError(
+                f"threaded component {block_id} is opening_pre_reading but "
+                f"routes to {destination!r}; opening support must route to "
+                f"the first plan concept {first_plan_concept_id!r}"
+            )
+        prior = seen_blocks.get(block_id)
         if prior is not None:
-            continue
+            raise ValueError(
+                f"threaded component repeats source block {block_id}; one "
+                "source occurrence requires exactly one threading verdict"
+            )
         seen_blocks[block_id] = destination
         block = blocks[block_id]
         grouped.setdefault(destination, []).append({
             "block_id": block_id,
             "text": _block_text(block),
+            "placement_context": placement_context,
             "skill": _normal(raw.get("skill")),
             "rationale": _normal(raw.get("rationale")),
             "task_ids": _task_ids(block),
@@ -280,6 +295,7 @@ def attach_support(
         target[SUPPORT_FIELD] = [
             {
                 "block_id": record["block_id"],
+                "placement_context": record["placement_context"],
                 "skill": record["skill"],
                 "rationale": record["rationale"],
             }
