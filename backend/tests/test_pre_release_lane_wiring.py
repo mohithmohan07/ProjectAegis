@@ -2782,3 +2782,129 @@ def _raise_after_capture(captured):
         raise RuntimeError("generation failed after the deposit boundary")
 
     return _original
+
+
+def test_the_captured_pre_clear_envelope_saves_the_pre_lane(db, monkeypatch):
+    """The deposit-time captured envelope is a direct authority transport.
+
+    When the in-memory bundle is unavailable, no snapshot sidecar survives
+    (an ephemeral artifact dir), and the job row's envelope is empty —
+    whatever earlier steps did to it — the captured envelope alone must
+    stage the Pre lane, so staging never depends on the success path's
+    clear/restore ordering of ``job.generation_checkpoint``.
+    """
+
+    from app.services import generation, uploads
+
+    chapter = _chapter_with_concepts(db)
+    job = models.UploadJob(
+        owner_sub=OWNER, module="build_concepts", upload_type="textbook",
+        filename="ch.mmd", mmd_text="# Chapter", status="generated",
+        learning_kind="post", deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+        generation_checkpoint={},  # cleared by the success path
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    release.stage_release(
+        db, job, target_chapter_id=chapter.id, records=_post_records(),
+        reason="post",
+    )
+    # No snapshot sidecars anywhere near this job.
+    monkeypatch.setattr(
+        uploads, "source_artifact_directory",
+        lambda _job_id: "/nonexistent/aegis-test-artifacts",
+        raising=False,
+    )
+    envelope = {
+        "stage": "post_type_assignment",
+        generation.PHASE3_PRE_RELEASE_FIELD: (
+            generation.phase3_pre_release_bundle(_pre_map(), _pre_questions())
+        ),
+    }
+
+    staged = release.stage_pre_release_from_run(
+        db, job, target_chapter_id=chapter.id,
+        checkpoint_envelope=envelope,
+        reason="clean completion with captured envelope",
+    )
+    db.refresh(job)
+
+    assert staged is not None
+    payload = release.release_payload(job, lane="pre")
+    assert payload is not None
+    assert payload.get("records")
+
+    # Without the captured envelope the same state records WHY instead of
+    # staging silently — the pre-existing diagnostic stays intact.
+    bare = models.UploadJob(
+        owner_sub=OWNER, module="build_concepts", upload_type="textbook",
+        filename="ch2.mmd", mmd_text="# Chapter", status="generated",
+        learning_kind="post", deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+        generation_checkpoint={},
+    )
+    db.add(bare)
+    db.commit()
+    db.refresh(bare)
+    assert release.stage_pre_release_from_run(
+        db, bare, target_chapter_id=chapter.id, reason="no authority",
+    ) is None
+    db.refresh(bare)
+    record = release.pre_release_unavailable_record(bare)
+    assert record and "did not complete" in str(record)
+
+
+def test_a_failure_exit_release_is_marked_incomplete_not_done(
+    db, monkeypatch,
+):
+    """A run that dies mid-generation must never read as a clean finish.
+
+    The wrapper stages what the run already paid for ("finished work
+    always ships"), but the terminal result used to be indistinguishable
+    from a completed run's — the missing Pre lane hid behind a green
+    "Done" (owner report, 2026-08-28). The result now carries a
+    ``run_incomplete`` marker the console renders as an incomplete
+    end-state, and the log says the same in words.
+    """
+
+    from app.services import build_concepts
+    from app.services import build_concepts_release_contract as contract
+    from app.services import progress as progress_service
+
+    chapter = _chapter_with_concepts(db)
+    job = models.UploadJob(
+        owner_sub=OWNER, module="build_concepts", upload_type="textbook",
+        filename="ch.mmd", mmd_text="# Chapter", status="converted",
+        learning_kind="post", deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    def dies_mid_run(*_args, **_kwargs):
+        raise RuntimeError("provider down mid-run")
+
+    monkeypatch.setattr(
+        build_concepts, "generate_post_learning", dies_mid_run,
+    )
+    logs: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        progress_service, "log",
+        lambda message, level="info", **_k: logs.append((level, str(message))),
+    )
+
+    staged = contract.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=OWNER,
+    )
+
+    marker = staged.get("run_incomplete")
+    assert isinstance(marker, dict)
+    assert "provider down mid-run" in marker["error"]
+    assert "resume" in marker and marker["resume"]
+    assert any(
+        level == "error" and "did NOT complete" in message
+        for level, message in logs
+    )

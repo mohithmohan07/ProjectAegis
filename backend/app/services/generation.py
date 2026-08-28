@@ -2610,6 +2610,15 @@ def _metadata_block(meta: dict) -> str:
 # tests can adjust config.OPENAI_MAX_CONCURRENCY and reset the gate.
 _openai_gate: "threading.BoundedSemaphore | None" = None
 _openai_gate_lock = threading.Lock()
+# Monotonic timestamp of the most recent slot release, shared by every
+# waiter. It lets the queue-wait deadline distinguish a WEDGED gate (no
+# slot has moved for the whole timeout — raise) from a merely BUSY one
+# (slots keep turning over under parallel runs — keep waiting). Before
+# this, two concurrent chapter runs could exhaust the 900s wait while the
+# queue was flowing normally, and the resulting OpenAIQueueTimeoutError
+# silently became a Post-only release with no Pre lane (owner report,
+# 2026-08-28: recurring "run did not complete Phase 03").
+_openai_slot_last_release: float = 0.0
 
 
 def _get_openai_gate() -> "threading.BoundedSemaphore":
@@ -2618,6 +2627,16 @@ def _get_openai_gate() -> "threading.BoundedSemaphore":
         if _openai_gate is None:
             _openai_gate = threading.BoundedSemaphore(config.OPENAI_MAX_CONCURRENCY)
         return _openai_gate
+
+
+def _release_openai_slot(gate: "threading.BoundedSemaphore") -> None:
+    """Release a slot and stamp the movement for waiting requests."""
+    global _openai_slot_last_release
+    import time
+
+    with _openai_gate_lock:
+        _openai_slot_last_release = time.monotonic()
+    gate.release()
 
 
 def _retry_after_seconds(exc: Exception) -> float | None:
@@ -2736,14 +2755,52 @@ def _acquire_openai_slot(
         f"{purpose_label} slot.",
         level="warning",
     )
+    patience_noted = False
     while True:
-        elapsed = time.monotonic() - started
-        remaining = timeout - elapsed
+        now = time.monotonic()
+        # The deadline is anchored on the most recent QUEUE MOVEMENT, not
+        # on when this waiter arrived: a busy-but-flowing gate (parallel
+        # chapter runs sharing the slots) keeps every waiter alive, and
+        # only a truly wedged gate — no slot released for the whole
+        # configured window — turns into the resumable failure. Killing a
+        # healthy queued run cost its whole Pre lane (owner report,
+        # 2026-08-28).
+        with _openai_gate_lock:
+            last_release = _openai_slot_last_release
+        anchor = max(started, last_release)
+        remaining = timeout - (now - anchor)
+        # Semaphores are not FIFO: one waiter can keep losing the handoff
+        # race while churn re-anchors its deadline forever. The absolute
+        # cap bounds that starvation with the same clear, resumable
+        # failure — a slowdown, never a permanently hung run.
+        max_wait = config.OPENAI_SLOT_WAIT_MAX_SECONDS
+        if max_wait > 0:
+            remaining = min(remaining, max_wait - (now - started))
         if remaining <= 0:
+            if max_wait > 0 and now - started >= max_wait:
+                raise OpenAIQueueTimeoutError(
+                    "Timed out waiting for an available "
+                    f"{_provider_label()} generation slot: this request "
+                    f"waited {now - started:.0f}s total while the queue "
+                    "kept moving for other requests. If this run has a "
+                    "saved checkpoint, resume it after another generation "
+                    "finishes."
+                )
             raise OpenAIQueueTimeoutError(
-                "Timed out waiting for an available OpenAI generation slot. "
-                "If this run has a saved checkpoint, resume it after another "
-                "generation finishes."
+                "Timed out waiting for an available "
+                f"{_provider_label()} generation slot (no slot was "
+                f"released for {timeout:.0f}s — the gate looks wedged, "
+                "not busy). If this run has a saved checkpoint, resume it "
+                "after another generation finishes."
+            )
+        if not patience_noted and now - started > timeout:
+            patience_noted = True
+            progress.log(
+                f"{_provider_label()} capacity is still busy but the "
+                "queue is moving; continuing to wait for a free slot "
+                f"(parallel runs share {config.OPENAI_MAX_CONCURRENCY} "
+                "slots).",
+                level="warning",
             )
         wait_for = min(config.OPENAI_SLOT_WAIT_LOG_SECONDS, remaining)
         if gate.acquire(timeout=wait_for):
@@ -2995,7 +3052,7 @@ def _openai_json(
                     max_completion_tokens=limit,
                 )
             finally:
-                gate.release()
+                _release_openai_slot(gate)
             # Record before finish-reason/JSON validation: responses retried for
             # truncation or malformed JSON are still billable.
             try:

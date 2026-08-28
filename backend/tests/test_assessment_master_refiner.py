@@ -1116,12 +1116,11 @@ def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved():
 
     records, diff, flags = _refine(copy.deepcopy(original), provider)
     refined = records[0]
-    assert order == [
-        OBJECTIVE_ID,
-        DESCRIPTIVE_ID,
-        BASIC_GROUP,
-        INTERMEDIATE_GROUP,
-    ]
+    # Wave barrier only: candidates complete before groups start; order
+    # WITHIN a wave is pool scheduling, not contract (same reasoning as
+    # the provider-failure test above).
+    assert sorted(order[:2]) == sorted([OBJECTIVE_ID, DESCRIPTIVE_ID])
+    assert sorted(order[2:]) == sorted([BASIC_GROUP, INTERMEDIATE_GROUP])
     assert _unit(refined, OBJECTIVE_ID)["answers"][0]["answer_content"] == (
         original["candidates"][0]["answers"][0]["answer_content"]
     )

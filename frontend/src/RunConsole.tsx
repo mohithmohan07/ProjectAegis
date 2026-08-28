@@ -364,6 +364,24 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
                 progressLabel: "Paused for your decision",
               };
             }
+            const incomplete = incompleteRunResult(data);
+            if (incomplete) {
+              // The server staged what the run had already produced, but
+              // generation did NOT finish — this must never read as a
+              // clean "Done" (the missing Pre lane hid behind one).
+              return {
+                ...s,
+                active: false,
+                status: "error",
+                progressLabel: "Incomplete — resume to finish",
+                lines: [...s.lines, {
+                  level: "error" as const,
+                  message: incomplete.resume
+                    ?? "Generation did not complete; resume from the saved checkpoint to finish.",
+                  ts: Date.now() / 1000,
+                }],
+              };
+            }
             return {
               ...s,
               active: false,
@@ -510,10 +528,16 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       .then((outcome) => {
         if (runIdRef.current === runId) {
           if (outcome.kind === "result") {
-            setState((s) => ({
-              ...s, active: false, status: "done",
-              progress: 1, progressLabel: "Done",
-            }));
+            const incomplete = incompleteRunResult(outcome.data);
+            setState((s) => (incomplete
+              ? {
+                ...s, active: false, status: "error",
+                progressLabel: "Incomplete — resume to finish",
+              }
+              : {
+                ...s, active: false, status: "done",
+                progress: 1, progressLabel: "Done",
+              }));
           } else if (outcome.kind === "stopped") {
             setState((s) => ({ ...s, active: false, status: "paused" }));
           }
@@ -596,6 +620,17 @@ function presentedUsage(
 
 function numericUsage(value: number | null | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function incompleteRunResult(
+  data: unknown,
+): { message?: string; resume?: string } | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const marker = (data as Record<string, unknown>).run_incomplete;
+  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+    return null;
+  }
+  return marker as { message?: string; resume?: string };
 }
 
 function isAwaitingDecisionResult(data: unknown): boolean {

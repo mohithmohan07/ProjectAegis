@@ -3272,6 +3272,7 @@ def stage_pre_release_from_run(
     target_chapter_id: int | None = None,
     inventory: Mapping[str, Any] | None = None,
     phase3_pre_release: Mapping[str, Any] | None = None,
+    checkpoint_envelope: Mapping[str, Any] | None = None,
     terminal_checkpoint_proof: Mapping[str, Any] | None = None,
     reason: str = "",
     run_refiner: bool = True,
@@ -3309,12 +3310,23 @@ def stage_pre_release_from_run(
                 "the in-memory Phase 03 Pre release authority is malformed"
             )
     if authority is None:
-        for checkpoint in reversed(
-            generation._concept_checkpoint_entries(job.generation_checkpoint)
-        ):
-            candidate = checkpoint.get(generation.PHASE3_PRE_RELEASE_FIELD)
-            if generation.valid_phase3_pre_release_bundle(candidate):
-                authority = candidate
+        # The caller's captured deposit-time envelope first: it is the
+        # direct transport of the envelope as it stood when the rows were
+        # materialized, independent of what later steps did to the job row
+        # (the clean success path clears ``job.generation_checkpoint`` and
+        # the Post ``stage_release`` then restores a pending-stripped copy;
+        # this fallback must not depend on that restore ordering).
+        for envelope in (checkpoint_envelope, job.generation_checkpoint):
+            for checkpoint in reversed(
+                generation._concept_checkpoint_entries(envelope)
+            ):
+                candidate = checkpoint.get(
+                    generation.PHASE3_PRE_RELEASE_FIELD
+                )
+                if generation.valid_phase3_pre_release_bundle(candidate):
+                    authority = candidate
+                    break
+            if authority is not None:
                 break
 
     snapshot_write_warnings: list[str] = []
@@ -3336,13 +3348,15 @@ def stage_pre_release_from_run(
     else:
         pre_map, map_defect = _run_snapshot(job, PRE_MAP_SNAPSHOT)
         if pre_map is None and not map_defect and not authority_defects:
-            checkpoint_envelope = job.generation_checkpoint or {}
             terminal = any(
                 str(checkpoint.get("stage") or "") in {
                     "post_type_assignment", "final_content_ready",
                 }
+                for envelope in (
+                    checkpoint_envelope, job.generation_checkpoint or {},
+                )
                 for checkpoint in generation._concept_checkpoint_entries(
-                    checkpoint_envelope
+                    envelope
                 )
             ) or _normal(
                 (terminal_checkpoint_proof or {}).get("stage")

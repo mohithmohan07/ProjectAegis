@@ -684,7 +684,7 @@ def _openai_multimodal_json(
                     max_completion_tokens=max_tokens,
                 )
             finally:
-                gate.release()
+                generation._release_openai_slot(gate)
             try:
                 openai_usage.record_response(
                     response, requested_model=request_policy["model"]

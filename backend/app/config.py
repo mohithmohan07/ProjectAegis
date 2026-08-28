@@ -222,6 +222,16 @@ OPENAI_SLOT_WAIT_LOG_SECONDS = max(
     1.0,
     float(os.environ.get("AEGIS_OPENAI_SLOT_WAIT_LOG_SECONDS", "20")),
 )
+# Absolute ceiling on one request's total queue wait. The movement-anchored
+# deadline above keeps a busy-but-flowing gate from failing healthy runs,
+# but Python semaphores are not FIFO: under sustained load one waiter can
+# keep losing the handoff race while churn re-anchors its deadline forever.
+# This cap turns that starvation into the same clear, resumable failure —
+# a bounded slowdown, never a permanently hung run.
+OPENAI_SLOT_WAIT_MAX_SECONDS = max(
+    0.0,
+    float(os.environ.get("AEGIS_OPENAI_SLOT_WAIT_MAX_SECONDS", "3600")),
+)
 # At full concurrency a slot handoff routinely takes under a second; logging
 # every one buried a live run's console in busy/acquired pairs. A wait only
 # becomes console-worthy after this quiet grace. Log mechanics only — the
