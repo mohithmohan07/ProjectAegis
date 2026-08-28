@@ -591,12 +591,13 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert input_payload == original  # the caller's release is never mutated
     assert len(records) == 1
     refined = records[0]
-    assert calls == [
-        OBJECTIVE_ID,
-        DESCRIPTIVE_ID,
-        BASIC_GROUP,
-        INTERMEDIATE_GROUP,
-    ]
+    # Two waves with a barrier between them: every candidate decision
+    # completes before any group decision starts. WITHIN a wave the units
+    # run on the decision-worker pool, so their relative order is thread
+    # scheduling, not contract — asserting it made this test flake under
+    # full-suite load.
+    assert sorted(calls[:2]) == sorted([OBJECTIVE_ID, DESCRIPTIVE_ID])
+    assert sorted(calls[2:]) == sorted([BASIC_GROUP, INTERMEDIATE_GROUP])
     assert flags == []
     assert diff["policy_version"] == refiner.MASTER_REFINER_POLICY_VERSION
     assert diff["output_kind"] == "assessment_master"
@@ -864,12 +865,13 @@ def test_provider_failure_is_per_unit_nonblocking_and_keeps_authored_rows():
     refined = records[0]
     assert _without_refiner_bookkeeping(refined) == original
     assert diff["changes"] == []
-    assert calls == [
-        OBJECTIVE_ID,
-        DESCRIPTIVE_ID,
-        BASIC_GROUP,
-        INTERMEDIATE_GROUP,
-    ]
+    # Two waves with a barrier between them: every candidate decision
+    # completes before any group decision starts. WITHIN a wave the units
+    # run on the decision-worker pool, so their relative order is thread
+    # scheduling, not contract — asserting it made this test flake under
+    # full-suite load.
+    assert sorted(calls[:2]) == sorted([OBJECTIVE_ID, DESCRIPTIVE_ID])
+    assert sorted(calls[2:]) == sorted([BASIC_GROUP, INTERMEDIATE_GROUP])
     for record in [*refined["candidates"], *refined["groups"]]:
         assert refiner.WARNING in record["flags"]
         assert record[refiner.AUDIT_FIELD]["status"] == "unavailable"
