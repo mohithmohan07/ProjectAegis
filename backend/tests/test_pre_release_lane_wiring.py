@@ -2854,3 +2854,57 @@ def test_the_captured_pre_clear_envelope_saves_the_pre_lane(db, monkeypatch):
     db.refresh(bare)
     record = release.pre_release_unavailable_record(bare)
     assert record and "did not complete" in str(record)
+
+
+def test_a_failure_exit_release_is_marked_incomplete_not_done(
+    db, monkeypatch,
+):
+    """A run that dies mid-generation must never read as a clean finish.
+
+    The wrapper stages what the run already paid for ("finished work
+    always ships"), but the terminal result used to be indistinguishable
+    from a completed run's — the missing Pre lane hid behind a green
+    "Done" (owner report, 2026-08-28). The result now carries a
+    ``run_incomplete`` marker the console renders as an incomplete
+    end-state, and the log says the same in words.
+    """
+
+    from app.services import build_concepts
+    from app.services import build_concepts_release_contract as contract
+    from app.services import progress as progress_service
+
+    chapter = _chapter_with_concepts(db)
+    job = models.UploadJob(
+        owner_sub=OWNER, module="build_concepts", upload_type="textbook",
+        filename="ch.mmd", mmd_text="# Chapter", status="converted",
+        learning_kind="post", deposit_scope_type="chapter",
+        deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    def dies_mid_run(*_args, **_kwargs):
+        raise RuntimeError("provider down mid-run")
+
+    monkeypatch.setattr(
+        build_concepts, "generate_post_learning", dies_mid_run,
+    )
+    logs: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        progress_service, "log",
+        lambda message, level="info", **_k: logs.append((level, str(message))),
+    )
+
+    staged = contract.generate_post_learning(
+        db, job.id, chapter.id, owner_sub=OWNER,
+    )
+
+    marker = staged.get("run_incomplete")
+    assert isinstance(marker, dict)
+    assert "provider down mid-run" in marker["error"]
+    assert "resume" in marker and marker["resume"]
+    assert any(
+        level == "error" and "did NOT complete" in message
+        for level, message in logs
+    )

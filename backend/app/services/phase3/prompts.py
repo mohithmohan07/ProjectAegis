@@ -170,7 +170,14 @@ PRELEARN_CAPTURE_SYSTEM = _SHARED + (
     "request only. How many elements the evidence genuinely assumes is "
     "entirely your judgment — evidence may assume few or none; never "
     "invent one to fill space, and an empty prerequisites list is a "
-    "legitimate answer."
+    "legitimate answer. It is also a rare one (owner steer, 2026-08-28): "
+    "a school chapter beyond a course's true opening almost always "
+    "builds on earlier learning, so before answering empty, deliberately "
+    "check the places assumed knowledge hides — terms the evidence uses "
+    "without defining, operations performed without being taught, "
+    "references to earlier grades or chapters, and the skills its tasks "
+    "expect a learner to already exercise. Answer empty only when that "
+    "check genuinely comes back with nothing."
 )
 
 PRELEARN_MERGE_SYSTEM = _SHARED + (
@@ -293,7 +300,11 @@ PREMAP_EMPTY_CAPTURE_SYSTEM = _SHARED + (
     "for whether it holds together as a whole chapter and whether its "
     "own teaching leans on anything it never explains. An honest "
     "assumes_nothing is a legitimate and expected answer for an opening "
-    "chapter; never prefer one verdict because it is tidier. rationale "
+    "chapter; never prefer one verdict because it is tidier. It is also "
+    "rare (owner steer, 2026-08-28): a chapter beyond a course's true "
+    "opening almost always leans on earlier learning, so an "
+    "assumes_nothing verdict on a mid-book or higher-grade chapter must "
+    "point to what makes THIS chapter the exception. rationale "
     "names in one or two sentences what in the source decided it."
 )
 

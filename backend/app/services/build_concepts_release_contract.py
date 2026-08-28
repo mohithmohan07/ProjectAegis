@@ -762,6 +762,42 @@ def _run_generation_release(
     return result
 
 
+def _mark_run_incomplete(
+    staged: dict[str, Any], exc: Exception,
+) -> dict[str, Any]:
+    """Make a failure-exit release read as INCOMPLETE, never as a clean run.
+
+    "Finished work always ships": the wrapper stages whatever the run had
+    already paid for instead of returning nothing. But the terminal result
+    used to look identical to a completed run's, so a generation that died
+    mid-way (before Phase 3 sealed the Pre authority) was mistaken for a
+    finished chapter with a mysteriously missing Pre lane (owner report,
+    2026-08-28). The marker rides the result for the console to render as
+    an incomplete end-state, and the log says the same in words.
+    """
+
+    message = (
+        "Generation did NOT complete: "
+        f"{type(exc).__name__}: {exc}. The rows already produced were "
+        "staged so nothing paid for is lost, but this chapter's outputs "
+        "are incomplete — resume from the saved checkpoint to finish the "
+        "remaining outputs (the Pre-Learning lane included)."
+    )
+    progress.log(message, level="error")
+    return {
+        **staged,
+        "run_incomplete": {
+            "error": f"{type(exc).__name__}: {exc}",
+            "message": message,
+            "resume": (
+                "Re-run generation: it resumes from the saved checkpoint, "
+                "replays finished work from the decision store, and "
+                "completes the remaining outputs."
+            ),
+        },
+    }
+
+
 def _stage_generation_release(
     original: Callable[..., object],
     db,
@@ -832,7 +868,7 @@ def _stage_generation_release(
                         "the released rows."
                     ),
                 )
-                return staged
+                return _mark_run_incomplete(staged, exc)
             staged = release.stage_release(
                 db,
                 job,
@@ -855,7 +891,7 @@ def _stage_generation_release(
                     "recorded were staged beside the released rows."
                 ),
             )
-            return staged
+            return _mark_run_incomplete(staged, exc)
         captured = copy.deepcopy(_RELEASE_CAPTURE.get())
         return _release_after_result(
             db,
