@@ -86,8 +86,8 @@ def test_luna_pricing_matches_standard_text_token_rates():
     assert summary["estimated_cost_usd"] == pytest.approx(0.000378)
 
 
-def test_unpriced_model_reports_incomplete_pricing_not_zero_cost():
-    """An unrecognized model must be visible, never silently free."""
+def test_terra_pricing_covers_the_fixer_model():
+    """The Fixer's model prices per the owner-supplied 2026-08-28 rates."""
 
     with openai_usage.track():
         openai_usage.record_response(
@@ -102,7 +102,31 @@ def test_unpriced_model_reports_incomplete_pricing_not_zero_cost():
         )
         summary = openai_usage.current_summary()
 
+    # 400*$2.00/M + 400*$0.20/M + 200*$2.50/M + 200*$12.00/M = $0.00378.
     assert summary["model"] == "gpt-5.6-terra"
+    assert summary["request_count"] == 1
+    assert summary["total_tokens"] == 1_200
+    assert summary["pricing_complete"] is True
+    assert summary["estimated_cost_usd"] == pytest.approx(0.00378)
+
+
+def test_unpriced_model_reports_incomplete_pricing_not_zero_cost():
+    """An unrecognized model must be visible, never silently free."""
+
+    with openai_usage.track():
+        openai_usage.record_response(
+            _response(
+                model="gpt-7.0-imaginary",
+                input_tokens=1_000,
+                cached_tokens=400,
+                cache_write_tokens=200,
+                output_tokens=200,
+                reasoning_tokens=80,
+            )
+        )
+        summary = openai_usage.current_summary()
+
+    assert summary["model"] == "gpt-7.0-imaginary"
     assert summary["request_count"] == 1
     assert summary["total_tokens"] == 1_200
     assert summary["pricing_complete"] is False

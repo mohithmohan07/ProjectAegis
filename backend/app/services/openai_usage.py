@@ -17,7 +17,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
 
-PRICING_AS_OF = "2026-08-02"
+PRICING_AS_OF = "2026-08-28"
 DEFAULT_PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing"
 
 
@@ -56,6 +56,23 @@ _PRICING: tuple[tuple[str, Pricing], ...] = (
             Decimal("0.02"),
             Decimal("1.20"),
             "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+            cache_write_multiplier=Decimal("1.25"),
+            long_context_threshold=272_000,
+            long_input_multiplier=Decimal("2"),
+            long_output_multiplier=Decimal("1.5"),
+        ),
+    ),
+    # The Fixer's model (AEGIS_FIXER_OPENAI_MODEL default). Input/output are
+    # the owner-supplied rates (2026-08-28: $2 in, $12 out per MTok); the
+    # cached-input rate (10% of input) and the cache-write/long-context terms
+    # mirror the GPT-5.6 family's published structure, same as luna above.
+    (
+        "gpt-5.6-terra",
+        Pricing(
+            Decimal("2.00"),
+            Decimal("0.20"),
+            Decimal("12.00"),
+            "https://developers.openai.com/api/docs/models/gpt-5.6-terra",
             cache_write_multiplier=Decimal("1.25"),
             long_context_threshold=272_000,
             long_input_multiplier=Decimal("2"),
