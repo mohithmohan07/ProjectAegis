@@ -13,7 +13,194 @@ school is another profile, not another pipeline.
 """
 from __future__ import annotations
 
-from typing import Mapping
+import copy
+from typing import Any, Mapping
+
+
+_GENERIC_QUESTION_FORMATS: dict[str, dict[str, dict[str, Any]]] = {
+    "objective": {
+        "Multiple Choice Question": {},
+        "Assertion & Reasons": {},
+        "True/False": {},
+        "Fill in the Blanks": {},
+    },
+    "subjective": {
+        "Fill in the Blanks": {},
+        "Very Short Answer": {},
+        "Short Answer": {},
+        "Sentence Transformation": {},
+        "Error Correction": {},
+    },
+    "descriptive": {
+        "Long Answer": {},
+        "Case Based Questions": {},
+        "Passage Based Questions": {},
+        "Extract Based Questions": {},
+        "Composition Writing": {},
+    },
+}
+
+_MSBSHSE_BOARD_ALIASES = (
+    "mh",
+    "mh board",
+    "maharashtra",
+    "maharashtra (msbshse)",
+    "maharashtra board",
+    "maharashtra state board",
+    "maharashtra state board of secondary and higher secondary education",
+    "msbshse",
+)
+_GRADE_6_ALIASES = (
+    "6", "06", "class 6", "class 06", "grade 6", "grade 06",
+    "standard 6", "standard 06", "std 6", "std 06",
+)
+
+
+# The assessment-format policy supplied in the 2026-08-27 concept-mapping
+# audit for Maharashtra Board Class 6 Mathematics.  Category names are the
+# canonical spellings from the log's duration table.  A policy row describes
+# schema facts only: which sheet owns a category, its mark contract, and the
+# duration contract a later marking pass must apply.  It never classifies a
+# question locally.
+MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY: dict[str, Any] = {
+    "policy_id": "msbshse-grade-6-mathematics-2026-08-27",
+    "metadata_match": {
+        "board": _MSBSHSE_BOARD_ALIASES,
+        "grade": _GRADE_6_ALIASES,
+        "subject": ("math", "maths", "mathematics"),
+    },
+    "difficulty_labels": {
+        # Aegis's wire vocabulary -> the audit log's vocabulary.
+        "Less": "Easy",
+        "Moderate": "Medium",
+        "High": "Hard",
+    },
+    "formats_by_sheet": {
+        "objective": {
+            "Multiple Choice Question": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1,
+                        "Moderate": 1,
+                        "High": 1,
+                    },
+                },
+            },
+            "Match the Following": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+            "True or False": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+            # With options.  The same category on Subjective is the no-option
+            # form; the materialization stage owns that semantic distinction.
+            "Fill in the blanks": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+        },
+        "subjective": {
+            # Without options (audit rule 9).
+            "Fill in the blanks": {
+                "marks": {"mode": "per_subpoint", "marks_per_subpoint": 1},
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+        },
+        "descriptive": {
+            "Very Short Answer Questions": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1,
+                        "Moderate": 1,
+                        "High": 2,
+                    },
+                },
+            },
+            "Short Answer Type (2 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (2,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 2,
+                        "Moderate": 2,
+                        "High": 3,
+                    },
+                },
+            },
+            "Short Answer Type (3 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (3,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 4,
+                        "Moderate": 5,
+                        "High": 6,
+                    },
+                },
+            },
+            "Long Answer Type (4 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (4,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5,
+                        "Moderate": 6,
+                        "High": 7,
+                    },
+                },
+            },
+            "Long Answer Type (5 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (5,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5,
+                        "Moderate": 7,
+                        "High": 7,
+                    },
+                },
+            },
+        },
+    },
+}
+
+MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE: dict[str, Any] = {
+    "metadata_match": {
+        "board": _MSBSHSE_BOARD_ALIASES,
+        "grade": _GRADE_6_ALIASES,
+    },
+    "overrides": {
+        "sheet_kinds": ("objective", "descriptive", "subjective"),
+        "forced_blank_fields": ("question_disclaimer",),
+    },
+}
 
 DEFAULT_PROFILE: dict = {
     "name": "reference-1",
@@ -44,6 +231,22 @@ DEFAULT_PROFILE: dict = {
     # Automatic secondary QuestionTag placements are off; a future profile
     # may enable explicit, audited secondaries.
     "automatic_secondary_tags": False,
+    # The generic CMS vocabulary remains byte-for-byte the vocabulary used
+    # before format policies existed.  Metadata-matched overrides below can
+    # narrow it and attach mark/duration contracts without teaching the cell
+    # service board-specific prose.
+    "assessment_format": {
+        "policy_id": "generic-cms",
+        "formats_by_sheet": _GENERIC_QUESTION_FORMATS,
+    },
+    "assessment_format_overrides": (
+        MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY,
+    ),
+    # Program metadata can select a complete run-level widening without
+    # changing the pinned reference-1 defaults or reinterpreting historical
+    # partial profile records. The Grade-6 MSBSHSE source set uses the
+    # Subjective sheet and carries its authored chapter duration.
+    "run_profile_overrides": (MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE,),
 }
 
 _PROFILES: dict[str, dict] = {
@@ -53,20 +256,45 @@ _PROFILES: dict[str, dict] = {
 
 def get_profile(name: str | None = None) -> dict:
     if name is None:
-        return dict(DEFAULT_PROFILE)
+        return copy.deepcopy(DEFAULT_PROFILE)
     profile = _PROFILES.get(name)
     if profile is None:
         raise KeyError(f"unknown assessment profile {name!r}")
-    return dict(profile)
+    return copy.deepcopy(profile)
 
 
 def resolve(profile: Mapping | str | None) -> dict:
     """Accept a profile dict, a registered name, or None (default)."""
     if profile is None:
-        return dict(DEFAULT_PROFILE)
+        return copy.deepcopy(DEFAULT_PROFILE)
     if isinstance(profile, str):
         return get_profile(profile)
-    return dict(profile)
+    return copy.deepcopy(dict(profile))
+
+
+def resolve_for_metadata(
+    profile: Mapping | str | None,
+    metadata: Mapping[str, Any] | None,
+) -> dict:
+    """Resolve one run profile and apply only conclusive metadata overrides."""
+
+    resolved = resolve(profile)
+    run_metadata = metadata if isinstance(metadata, Mapping) else {}
+    run_overrides = resolved.get("run_profile_overrides")
+    if run_overrides is None:
+        run_overrides = DEFAULT_PROFILE["run_profile_overrides"]
+    for candidate in run_overrides or ():
+        if not isinstance(candidate, Mapping) or not _matches_metadata(
+            candidate, run_metadata,
+        ):
+            continue
+        overrides = candidate.get("overrides")
+        if isinstance(overrides, Mapping):
+            for key in ("sheet_kinds", "forced_blank_fields"):
+                if key in overrides:
+                    resolved[key] = copy.deepcopy(overrides[key])
+        break
+    return resolved
 
 
 def register(profile: Mapping) -> dict:
@@ -77,12 +305,12 @@ def register(profile: Mapping) -> dict:
     school.
     """
 
-    entry = dict(profile)
+    entry = copy.deepcopy(dict(profile))
     name = str(entry.get("name") or "").strip()
     if not name:
         raise KeyError("a registered assessment profile needs a name")
     _PROFILES[name] = entry
-    return dict(entry)
+    return copy.deepcopy(entry)
 
 
 # --------------------------------------------------------------------------- #
@@ -137,6 +365,201 @@ def appears_in(profile: Mapping | str | None = None) -> str:
     """The exact ``question_appears_in`` wire value."""
 
     return str(_value(profile, "appears_in"))
+
+
+def _metadata_token(value: Any) -> str:
+    """One comparison token for declarative profile metadata aliases.
+
+    Collapsing whitespace and case is wire normalization, not a semantic
+    classification.  In particular, this accessor never guesses a board,
+    grade, or subject from a title or filename.
+    """
+
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _matches_metadata(
+    policy: Mapping[str, Any], metadata: Mapping[str, Any],
+) -> bool:
+    match = policy.get("metadata_match")
+    if not isinstance(match, Mapping) or not match:
+        return False
+    for field, raw_aliases in match.items():
+        actual = _metadata_token(metadata.get(str(field)))
+        if not actual:
+            return False
+        if isinstance(raw_aliases, str):
+            aliases = (raw_aliases,)
+        else:
+            try:
+                aliases = tuple(raw_aliases)
+            except TypeError:
+                aliases = (raw_aliases,)
+        if actual not in {_metadata_token(alias) for alias in aliases}:
+            return False
+    return True
+
+
+def assessment_format_policy(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve the exact assessment-format policy for one run.
+
+    A metadata override replaces the generic format vocabulary; it does not
+    merge in categories that the matched board policy does not permit.  When
+    no override matches, the generic CMS policy is returned unchanged.
+    Matching is exact over the aliases declared by the profile.
+    """
+
+    selected = _value(profile, "assessment_format")
+    run_metadata = metadata if isinstance(metadata, Mapping) else {}
+    for candidate in _value(profile, "assessment_format_overrides") or ():
+        if isinstance(candidate, Mapping) and _matches_metadata(
+            candidate, run_metadata
+        ):
+            selected = candidate
+            break
+    if not isinstance(selected, Mapping):
+        return {}
+    policy = copy.deepcopy(dict(selected))
+    # The aliases select a policy; they are not part of the authoring
+    # contract and need not consume prompt tokens or invite reinterpretation.
+    policy.pop("metadata_match", None)
+    return policy
+
+
+def question_formats(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, dict[str, Any]]]:
+    """Return sheet -> exact category -> mark/duration rules."""
+
+    policy = assessment_format_policy(profile, metadata)
+    formats = policy.get("formats_by_sheet")
+    if not isinstance(formats, Mapping):
+        return {}
+    return copy.deepcopy(dict(formats))
+
+
+def question_categories(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> dict[str, tuple[str, ...]]:
+    """Return the ordered, exact category vocabulary for every sheet."""
+
+    return {
+        str(sheet_kind): tuple(str(category) for category in categories)
+        for sheet_kind, categories in question_formats(
+            profile, metadata
+        ).items()
+        if isinstance(categories, Mapping)
+    }
+
+
+def question_format_rule(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    *,
+    sheet_kind: str,
+    question_category: str,
+) -> dict[str, Any]:
+    """Return one category's declarative contract, or an empty mapping."""
+
+    formats = question_formats(profile, metadata)
+    sheet = formats.get(str(sheet_kind))
+    if not isinstance(sheet, Mapping):
+        return {}
+    rule = sheet.get(str(question_category))
+    return copy.deepcopy(dict(rule)) if isinstance(rule, Mapping) else {}
+
+
+def question_marks_rule(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    *,
+    sheet_kind: str,
+    question_category: str,
+) -> dict[str, Any]:
+    """Return one category's mark contract for cell validation."""
+
+    rule = question_format_rule(
+        profile,
+        metadata,
+        sheet_kind=sheet_kind,
+        question_category=question_category,
+    ).get("marks")
+    return copy.deepcopy(dict(rule)) if isinstance(rule, Mapping) else {}
+
+
+def question_duration_rule(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    *,
+    sheet_kind: str,
+    question_category: str,
+) -> dict[str, Any]:
+    """Return one category's duration contract for the marking stage."""
+
+    rule = question_format_rule(
+        profile,
+        metadata,
+        sheet_kind=sheet_kind,
+        question_category=question_category,
+    ).get("duration")
+    return copy.deepcopy(dict(rule)) if isinstance(rule, Mapping) else {}
+
+
+def question_duration_minutes(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    *,
+    sheet_kind: str,
+    question_category: str,
+    difficulty: str,
+    basis_count: int | None = None,
+) -> float | None:
+    """Resolve prescribed minutes without inventing a semantic basis count.
+
+    Matrix policies use the recorded difficulty.  Per-subpoint policies need
+    the caller to supply the independently authored, mechanically validated
+    subpoint count.  Generic categories deliberately return ``None`` because
+    the pre-policy behavior leaves duration to the marking verdict.
+    """
+
+    rule = question_duration_rule(
+        profile,
+        metadata,
+        sheet_kind=sheet_kind,
+        question_category=question_category,
+    )
+    mode = str(rule.get("mode") or "")
+    if mode == "matrix":
+        minutes = rule.get("minutes_by_difficulty")
+        if not isinstance(minutes, Mapping):
+            return None
+        value = minutes.get(str(difficulty))
+    elif mode == "per_subpoint":
+        if isinstance(basis_count, bool) or not isinstance(basis_count, int):
+            return None
+        if basis_count <= 0:
+            return None
+        per_subpoint = rule.get("minutes_per_subpoint")
+        if isinstance(per_subpoint, bool):
+            return None
+        try:
+            value = float(per_subpoint) * basis_count
+        except (TypeError, ValueError):
+            return None
+    else:
+        return None
+    if isinstance(value, bool):
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return numeric if numeric > 0 else None
 
 
 def automatic_secondary_tags(profile: Mapping | str | None = None) -> bool:

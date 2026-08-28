@@ -13,6 +13,7 @@ import pytest
 
 from app import bulk_import, config, models
 from app.bulk_import import assessment_workbook
+from app.services import assessment_profile
 from app.services import assessment_release_snapshot
 from app.services import assessment_release_service as release_service
 from app.services import build_concepts_release as release
@@ -45,6 +46,7 @@ def _small_thresholds(monkeypatch) -> None:
 _SHARED_CONCEPT_AUTHORITY_FIELDS = (
     "chapter_title",
     "chapter_display_name",
+    "chapter_duration",
     "pre_topics",
     "post_topics",
     "chapter_description",
@@ -63,14 +65,22 @@ _SHARED_CONCEPT_AUTHORITY_FIELDS = (
 )
 
 
-def _concept_authority(row: dict) -> dict[str, str]:
+def _concept_authority(
+    row: dict,
+    *,
+    profile: dict | str | None = None,
+) -> dict[str, str]:
     """Authored front-band values shared by Concept and Master formats.
 
     The reference Master deliberately formats ``topic_title`` without the
     Concept File's ``Topic NN:`` prefix, so the one reader-owned normalizer
-    compares their common identity. ``chapter_duration`` is profile-blanked
-    in the reference Master; group aggregates and concept-question labels are
-    assessment linkage, not preserved Concept authority.
+    compares their common identity. ``chapter_duration`` remains part of the
+    shared authority, but the run profile owns whether it ships blank: the
+    generic reference profile blanks it, while the Grade-6 MSBSHSE override
+    carries the authored value. Applying that same declarative projection to
+    the Concept side preserves strict equality without weakening the authority
+    invariant. Group aggregates and concept-question labels are assessment
+    linkage, not preserved Concept authority.
     """
 
     projected = {
@@ -80,15 +90,22 @@ def _concept_authority(row: dict) -> dict[str, str]:
     projected["topic_title"] = bulk_import.strip_topic_title(
         projected["topic_title"]
     )
+    for field in assessment_profile.forced_blank_fields(profile):
+        if field in projected:
+            projected[field] = ""
     return projected
 
 
-def _concept_authority_by_identity(workbook: bytes) -> dict[str, dict]:
+def _concept_authority_by_identity(
+    workbook: bytes,
+    *,
+    profile: dict | str | None = None,
+) -> dict[str, dict]:
     parsed = assessment_workbook.parse_workbook(workbook)
     authority: dict[str, dict] = {}
     for sheet in assessment_workbook.SHEET_ORDER:
         for row in parsed["sheets"][sheet]["rows"]:
-            projected = _concept_authority(row)
+            projected = _concept_authority(row, profile=profile)
             if not projected["concept_title"]:
                 continue
             key = identity.title_tag(projected["concept_title"])
@@ -387,10 +404,18 @@ def test_explicit_rebuild_preserves_the_lane_concept_authority_and_master_bands(
     seal_initial = assessment_release_snapshot.source_release_sha256(
         staged_initial
     )
+    initial_bridge = assessment_release_snapshot.build(
+        db, job, staged_initial,
+    )
+    run_profile = assessment_profile.resolve_for_metadata(
+        None, initial_bridge["metadata"],
+    )
     concept_before = release_files.build_release_bulk_import_workbook(
         db, job, lane=lane,
     )
-    concept_authority = _concept_authority_by_identity(concept_before)
+    concept_authority = _concept_authority_by_identity(
+        concept_before, profile=run_profile,
+    )
     assert concept_authority
 
     capacity_failure = storage_capacity.StorageCapacityError(
@@ -427,7 +452,8 @@ def test_explicit_rebuild_preserves_the_lane_concept_authority_and_master_bands(
     assert seal_before == seal_initial
     assert release.assessment_lane_issue(staged_before) is not None
     assert _concept_authority_by_identity(
-        release_files.build_release_bulk_import_workbook(db, job, lane=lane)
+        release_files.build_release_bulk_import_workbook(db, job, lane=lane),
+        profile=run_profile,
     ) == concept_authority
 
     from app.services import assessment_release_run
@@ -498,16 +524,25 @@ def test_explicit_rebuild_preserves_the_lane_concept_authority_and_master_bands(
     ) == seal_before
     assert runner_calls == [(job.id, lane)]
     assert _concept_authority_by_identity(
-        release_files.build_release_bulk_import_workbook(db, job, lane=lane)
+        release_files.build_release_bulk_import_workbook(db, job, lane=lane),
+        profile=run_profile,
     ) == concept_authority
 
     bridge = assessment_release_snapshot.build(db, job, staged_after)
+    rebuilt_profile = assessment_profile.resolve_for_metadata(
+        None, bridge["metadata"],
+    )
+    assert rebuilt_profile == run_profile
     master_snapshot = copy.deepcopy(bridge["snapshot"])
     master_snapshot["groups"] = []
     master_snapshot["candidates"] = []
-    master, issues = assessment_workbook.render_master_file(master_snapshot)
+    master, issues = assessment_workbook.render_master_file(
+        master_snapshot, rebuilt_profile,
+    )
     assert issues["unplaced"] == []
-    assert _concept_authority_by_identity(master) == concept_authority
+    assert _concept_authority_by_identity(
+        master, profile=rebuilt_profile,
+    ) == concept_authority
 
 
 @pytest.mark.parametrize(

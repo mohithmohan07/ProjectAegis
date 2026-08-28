@@ -189,7 +189,7 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
             for key, value in response.items()
             if key != "source_qid"
         }
-        assert cell["authority"]["policy_version"] == "assessment-cell-2"
+        assert cell["authority"]["policy_version"] == "assessment-cell-3"
 
     candidates = first["materialized"]["candidates"]
     for candidate, response in zip(
@@ -220,7 +220,7 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
         audit = candidate["_aegis_assessment_materialization"]
         assert audit["rationale"] == response["rationale"]
         assert audit["authority"]["policy_version"] == (
-            "assessment-materialize-9"
+            "assessment-materialize-10"
         )
 
     for placement, response in zip(

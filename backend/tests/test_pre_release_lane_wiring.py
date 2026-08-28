@@ -284,6 +284,115 @@ def _both_lanes_job(
     return job
 
 
+def test_pre_release_inherits_post_chapter_metadata_but_keeps_pre_topics(
+    db, monkeypatch,
+):
+    """The chapter is shared; the two lane-specific topic maps are not."""
+
+    def authored_meta(_db, _chapter_id, _rows, *, pre_post):
+        if pre_post == "Post":
+            return {
+                "chapter_description": "Shared Post chapter description.",
+                "chapter_duration_minutes": 362,
+                "topic_descriptions": {
+                    "Solids": "Post-only topic description.",
+                },
+            }
+        return {
+            "chapter_description": "Conflicting Pre chapter description.",
+            "chapter_duration_minutes": 480,
+            "topic_descriptions": {
+                "Counting": "Pre-only topic description.",
+            },
+        }
+
+    monkeypatch.setattr(release, "_chapter_meta_for_release", authored_meta)
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+
+    post_meta = release.release_payload(job, lane="post")["chapter_meta"]
+    pre_meta = release.release_payload(job, lane="pre")["chapter_meta"]
+
+    assert pre_meta["chapter_description"] == post_meta["chapter_description"]
+    assert pre_meta["chapter_description"] == "Shared Post chapter description."
+    assert pre_meta["chapter_duration_minutes"] == (
+        post_meta["chapter_duration_minutes"]
+    )
+    assert pre_meta["chapter_duration_minutes"] == 362
+    assert pre_meta["topic_descriptions"] == {
+        "Counting": "Pre-only topic description.",
+    }
+    assert "Solids" not in pre_meta["topic_descriptions"]
+
+
+@pytest.mark.parametrize(
+    ("post_meta", "missing_field"),
+    [
+        pytest.param(
+            {"chapter_description": "Only the Post description exists."},
+            "chapter_duration_minutes",
+            id="post-omits-duration",
+        ),
+        pytest.param(
+            {"chapter_duration_minutes": 362},
+            "chapter_description",
+            id="post-omits-description",
+        ),
+    ],
+)
+def test_pre_release_copies_post_chapter_metadata_absence_exactly(
+    db, monkeypatch, post_meta, missing_field,
+):
+    """A partial Post pass cannot leave an independent Pre chapter value."""
+
+    def authored_meta(_db, _chapter_id, _rows, *, pre_post):
+        if pre_post == "Post":
+            return {
+                **post_meta,
+                "topic_descriptions": {"Solids": "Post topic."},
+            }
+        return {
+            "chapter_description": "Pre-only chapter description.",
+            "chapter_duration_minutes": 480,
+            "topic_descriptions": {"Counting": "Pre topic."},
+        }
+
+    monkeypatch.setattr(release, "_chapter_meta_for_release", authored_meta)
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+
+    staged = release.release_payload(job, lane="pre")["chapter_meta"]
+    assert missing_field not in staged
+    for field, value in post_meta.items():
+        assert staged[field] == value
+    assert staged["topic_descriptions"] == {"Counting": "Pre topic."}
+
+
+def test_pre_chapter_metadata_falls_back_when_no_post_sibling(db):
+    """Legacy/direct Pre staging remains downloadable without a sibling."""
+
+    job = models.UploadJob(
+        owner_sub=OWNER,
+        module="build_concepts",
+        upload_type="textbook",
+        filename="pre-only.mmd",
+        mmd_text="# Chapter",
+        status="generated",
+        learning_kind="post",
+        question_inventory={"items": []},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    authored = {
+        "chapter_description": "Pre fallback description.",
+        "chapter_duration_minutes": 90,
+        "topic_descriptions": {"Counting": "Pre topic."},
+    }
+
+    assert release._pre_chapter_meta_from_staged_post(job, authored) == authored
+
+
 # --------------------------------------------------------------------------- #
 # 1. The barrier is bound to the SIBLING KEY, not to learning_kind
 # --------------------------------------------------------------------------- #

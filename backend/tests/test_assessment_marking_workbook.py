@@ -6,17 +6,90 @@ import copy
 import pytest
 
 from app.bulk_import import assessment_workbook as workbook
+from app.services import assessment_profile
 from app.services import assessment_release as rel
 from tests.test_mes_dual_output import _snapshot
 
 
-def _parsed_master():
+def _single_part_descriptive(snapshot: dict) -> None:
+    candidate = next(
+        row for row in snapshot["candidates"]
+        if row["sheet_kind"] == "descriptive"
+    )
+    candidate["answers"] = [
+        {
+            "answer_type": "Phrases",
+            "answer_content": "[content]: identifies two dimensions",
+            "answer_weightage": "2",
+        },
+        {
+            "answer_type": "Phrases",
+            "answer_content": "[content]: contrasts three dimensions",
+            "answer_weightage": "2",
+        },
+    ]
+    candidate["sub_questions"] = []
+
+
+def _add_subjective(snapshot: dict) -> None:
+    snapshot["candidates"].append({
+        "candidate_id": "CAND-3",
+        "question_label": "06MSMA_T01_TwoDim Q03",
+        "sheet_kind": "subjective",
+        "question_category": "Fill in the blanks",
+        "cognitive_skill": "Understand",
+        "difficulty": "Moderate",
+        "marks": 2.0,
+        "question_duration": 2.0,
+        "math_keyboard": "No",
+        "question_appears_in": "Pre/Post-Worksheet/Test",
+        "answer_restriction": "Specific",
+        "question": "A square is $$a$$ and a cube is $$b$$.",
+        "question_text": "A square is $$a$$ and a cube is $$b$$.",
+        "display_answer": "",
+        "answers": [
+            {
+                "answer_type": "Phrases",
+                "answer_content": "two-dimensional",
+                "answer_display": "two-dimensional",
+                "answer_weightage": "1",
+                "placeholder": "a",
+            },
+            {
+                "answer_type": "Phrases",
+                "answer_content": "three-dimensional",
+                "answer_display": "three-dimensional",
+                "answer_weightage": "1",
+                "placeholder": "b",
+            },
+        ],
+        "sub_questions": [],
+        "answer_explanation": "",
+        "concept_key": "C_A",
+        "group_key": "(06MSMA_T01_TwoDim) BG01",
+        "flags": [],
+    })
+
+
+def _parsed_master(*, multipart: bool = False, subjective: bool = False):
     snapshot = _snapshot()
-    data, issues = workbook.render_master_file(snapshot)
+    if not multipart:
+        _single_part_descriptive(snapshot)
+    if subjective:
+        _add_subjective(snapshot)
+    profile = None
+    if subjective:
+        profile = assessment_profile.resolve_for_metadata(None, {
+            "board": "MSBSHSE",
+            "grade": "6",
+            "subject": "Mathematics",
+        })
+    data, issues = workbook.render_master_file(snapshot, profile=profile)
     parsed = workbook.parse_workbook(data)
     assert workbook.validate_master_file(
         parsed,
         snapshot,
+        profile=profile,
         group_provenance=issues["group_provenance"],
     ) == []
     return parsed, snapshot, issues["group_provenance"]
@@ -264,6 +337,16 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
         ),
         pytest.param(
             "Descriptive",
+            lambda row: row.__setitem__(
+                "question_text",
+                str(row.get("question_text") or "")
+                + " Name the number of faces of a cube.",
+            ),
+            "subquestion 1 text is duplicated in the main question/question_text",
+            id="subquestion-duplicated-in-question-text",
+        ),
+        pytest.param(
+            "Descriptive",
             lambda row: (
                 row.__setitem__("sub_question_marks_1", -1),
                 row.__setitem__("sub_question_marks_2", 5),
@@ -315,7 +398,10 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
                 row.__setitem__("answer_content_2", ""),
                 row.__setitem__("answer_weightage_2", ""),
             ),
-            "4-mark descriptive requires at least two answer/rubric blocks",
+            (
+                "4-mark single-part descriptive requires at least two "
+                "answer/rubric blocks"
+            ),
             id="four-mark-single-rubric",
         ),
     ],
@@ -323,8 +409,135 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
 def test_readback_rejects_invalid_marking_arithmetic(
     sheet: str, mutate, expected: str,
 ) -> None:
-    parsed, snapshot, provenance = _parsed_master()
+    # Main-answer arithmetic belongs to a single-part Descriptive fixture;
+    # part/keyword arithmetic belongs to a separate multipart fixture whose
+    # main answer block is empty.  No test row carries both scoring systems.
+    multipart = expected.startswith(("subquestion", "keyword"))
+    parsed, snapshot, provenance = _parsed_master(multipart=multipart)
     row = _question_row(parsed, sheet)
+    mutate(row)
+
+    errors = workbook.validate_master_file(
+        parsed,
+        copy.deepcopy(snapshot),
+        group_provenance=provenance,
+    )
+
+    assert any(expected in error for error in errors), errors
+
+
+def test_single_and_multipart_descriptive_scoring_read_back_exclusively():
+    single, _single_snapshot, _single_provenance = _parsed_master()
+    single_row = _question_row(single, "Descriptive")
+    assert single_row["answer_content_1"].startswith("[content]:")
+    assert single_row["answer_weightage_1"] == "2"
+    assert single_row["sub_question_1"] == ""
+
+    multipart, _multipart_snapshot, _multipart_provenance = _parsed_master(
+        multipart=True,
+    )
+    multipart_row = _question_row(multipart, "Descriptive")
+    assert multipart_row["answer_content_1"] == ""
+    assert multipart_row["sub_question_1"] == (
+        "Name the number of faces of a cube."
+    )
+    assert multipart_row["sq1_keyword_1"] == "[content]: six faces"
+
+
+def test_readback_rejects_multipart_descriptive_main_rubric_duplication():
+    parsed, snapshot, provenance = _parsed_master(multipart=True)
+    row = _question_row(parsed, "Descriptive")
+    row["answer_type_1"] = "Phrases"
+    row["answer_content_1"] = "[content]: duplicated shared scoring"
+    row["answer_weightage_1"] = 1
+
+    errors = workbook.validate_master_file(
+        parsed,
+        copy.deepcopy(snapshot),
+        group_provenance=provenance,
+    )
+
+    assert any(
+        "multipart descriptive duplicates scoring" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize("multipart", [False, True])
+def test_readback_rejects_a_tag_without_rubric_content(multipart: bool):
+    parsed, snapshot, provenance = _parsed_master(multipart=multipart)
+    row = _question_row(parsed, "Descriptive")
+    field = "sq1_keyword_1" if multipart else "answer_content_1"
+    row[field] = "[content]:   "
+
+    errors = workbook.validate_master_file(
+        parsed,
+        copy.deepcopy(snapshot),
+        group_provenance=provenance,
+    )
+
+    assert any(
+        "allowed functional tag" in error for error in errors
+    ), errors
+
+
+def test_subjective_answers_render_and_read_back_without_options():
+    parsed, _snapshot_row, _provenance = _parsed_master(subjective=True)
+    row = _question_row(parsed, "Subjective")
+
+    assert row["question"] == "A square is $$a$$ and a cube is $$b$$."
+    assert row["answer_type_1"] == "Phrases"
+    assert row["answer_1"] == "two-dimensional"
+    assert row["answer_display_1"] == "two-dimensional"
+    assert row["weightage_1"] == "1"
+    assert row["placeholder_1"] == "a"
+    assert row["answer_2"] == "three-dimensional"
+    assert row["placeholder_2"] == "b"
+    assert row["math_keyboard"] == "No"
+    assert "correct_answer_1" not in row
+    assert "sub_question_1" not in row
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        pytest.param(
+            lambda row: row.__setitem__("answer_1", ""),
+            "subjective answer 1 has no content",
+            id="missing-answer",
+        ),
+        pytest.param(
+            lambda row: row.__setitem__("answer_display_1", ""),
+            "subjective answer 1 has no answer_display",
+            id="missing-answer-display",
+        ),
+        pytest.param(
+            lambda row: row.__setitem__("placeholder_1", "b"),
+            "subjective placeholder 1 'b' != 'a'",
+            id="out-of-order-placeholder",
+        ),
+        pytest.param(
+            lambda row: row.__setitem__(
+                "question", "A square is flat and a cube is $$b$$."
+            ),
+            "subjective question must contain '$$a$$' exactly once",
+            id="missing-placeholder-token",
+        ),
+        pytest.param(
+            lambda row: row.__setitem__("weightage_1", 2),
+            "subjective weights must sum exactly",
+            id="wrong-weight-sum",
+        ),
+        pytest.param(
+            lambda row: row.__setitem__("math_keyboard", ""),
+            "subjective math_keyboard must be exactly Yes or No",
+            id="blank-keyboard",
+        ),
+    ],
+)
+def test_subjective_readback_fails_closed(mutate, expected):
+    parsed, snapshot, provenance = _parsed_master(subjective=True)
+    row = _question_row(parsed, "Subjective")
     mutate(row)
 
     errors = workbook.validate_master_file(

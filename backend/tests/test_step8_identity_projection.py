@@ -217,6 +217,10 @@ _WIDENED = {
     "name": "widened-test",
     "sheet_kinds": ("objective", "descriptive", "subjective"),
 }
+_NARROWED = {
+    "name": "narrowed-test",
+    "sheet_kinds": ("objective", "descriptive"),
+}
 
 
 def test_strict_blueprint_validation_honors_the_run_profile():
@@ -231,11 +235,11 @@ def test_strict_blueprint_validation_honors_the_run_profile():
     assessment_blueprint.validate_cells(
         [dict(cell)], strict_profile=True, profile=_WIDENED,
     )
-    # …which the DEFAULT profile (the pre-fix behaviour) refuses BY NAME,
-    # in the module's own refusal class.
+    # …which an explicitly narrowed profile refuses BY NAME, in the module's
+    # own refusal class. The default profile now renders Subjective end to end.
     with pytest.raises(assessment_blueprint.BlueprintError, match="sheet_kind"):
         assessment_blueprint.validate_cells(
-            [dict(cell)], strict_profile=True,
+            [dict(cell)], strict_profile=True, profile=_NARROWED,
         )
 
 
@@ -249,7 +253,9 @@ def test_materialization_validation_honors_the_run_profile():
     with pytest.raises(
         assessment_materialization.MaterializationError, match="sheet_kind",
     ):
-        assessment_materialization._validate_obligation(None, cell, meta)
+        assessment_materialization._validate_obligation(
+            None, cell, meta, _NARROWED,
+        )
 
 
 def test_marking_validation_honors_the_run_profile():
@@ -275,9 +281,11 @@ def test_marking_validation_honors_the_run_profile():
         assert "sheet_kind" not in str(exc), (
             f"widened profile rejected its own sheet_kind: {exc}"
         )
-    # …which the DEFAULT profile (the pre-fix behaviour) refuses by name.
+    # …which an explicitly narrowed profile refuses by name.
     with pytest.raises(assessment_marking.MarkingError, match="sheet_kind"):
-        assessment_marking._prepare_pair((candidate, cell), 1)
+        assessment_marking._prepare_pair(
+            (candidate, cell), 1, _NARROWED,
+        )
 
 
 def test_the_run_profile_is_threaded_at_every_production_call_site():
@@ -328,9 +336,15 @@ def test_the_read_back_blanks_by_the_profile_not_by_two_hardcoded_names(db):
             "the renderer shipped the value; the read-back must accept it"
         )
         # The negative control: a parsed workbook CARRYING the value must
-        # still fail the DEFAULT profile's read-back.
+        # fail a profile that explicitly force-blanks chapter_duration.
         parsed = aw.parse_workbook(output["master_xlsx"])
-        errors = aw.validate_master_file(parsed, snapshot, None)
+        blanking_profile = {
+            "name": "blanked-test",
+            "forced_blank_fields": ("chapter_duration",),
+        }
+        errors = aw.validate_master_file(
+            parsed, snapshot, blanking_profile,
+        )
         assert any("chapter_duration must be blank" in e for e in errors)
     finally:
         _cleanup_chapter(db, "06CBSC_PROJECTIONID")

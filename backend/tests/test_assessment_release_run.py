@@ -9,6 +9,7 @@ for live use.
 from __future__ import annotations
 
 import copy
+import json
 from collections import Counter
 from pathlib import Path
 
@@ -158,7 +159,9 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "display_answer": "A cube occupies space in three dimensions.",
             "answers": [
                 {"answer_type": "Phrases", "answer_weightage": "3",
-                 "answer_content": "three dimensions named and justified"},
+                 "answer_content": (
+                     "[content]: three dimensions named and justified"
+                 )},
             ],
             "sub_questions": [],
             "answer_explanation": "",
@@ -222,6 +225,7 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "answers": answers,
             "sub_questions": sub_questions,
             "question_duration": duration,
+            "duration_basis_count": None,
             "math_keyboard": keyboard,
             "rationale": "The explicit cell owns the complete decomposition.",
         }
@@ -294,7 +298,7 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
                     "A cube occupies space in all three dimensions."
                 )
                 refined["answers"][0]["answer_content"] = (
-                    "Names and justifies all three dimensions."
+                    "[content]: names and justifies all three dimensions."
                 )
         else:
             refined["semantic_description"] = (
@@ -383,11 +387,12 @@ def test_full_pipeline_publishes_a_ready_release(db):
     )
     # Both questions carry the model-authored Advanced tier even though their
     # blueprint difficulties are Less and Moderate. Two authored variant
-    # families occupy that tier; the remaining required shells stay NA.
+    # families occupy that tier. Empty required shells remain internal and
+    # do not become visible workbook rows.
     group_rows = [
         r for r in master["sheets"]["Objective"]["rows"]
         if r.get("group_name") and not r.get("question_label")]
-    assert any(r["group_description"] == "NA" for r in group_rows)
+    assert group_rows == []
     assert q["group_description"].startswith(
         "Responding to a solid-shape question")
 
@@ -458,10 +463,10 @@ def test_full_pipeline_publishes_a_ready_release(db):
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
-        ] == "assessment-cell-2"
+        ] == "assessment-cell-3"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-9"
+        ] == "assessment-materialize-10"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
@@ -473,13 +478,13 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-6"
+        ] == "assessment-marking-7"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
         ]["decomposition_authority"] == "api_per_item_verdict"
         assert candidate["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-candidate-3"
+        ] == "assessment-master-refiner-candidate-4"
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
         ] == "assessment-route-2"
@@ -947,6 +952,14 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
     assert all(path.is_file() for path in snapshot_paths)
     snapshot_bytes = tuple(path.read_bytes() for path in snapshot_paths)
     assert b"created_at" not in b"".join(snapshot_bytes)
+    marking_snapshot = json.loads(snapshot_paths[3].read_text(encoding="utf-8"))
+    assert [
+        row["duration_basis_count"]
+        for row in marking_snapshot["markings"]
+    ] == [
+        candidate["duration_basis_count"]
+        for candidate in first.payload["candidates"]
+    ]
 
     second = run.run_release_for_job(
         db,
@@ -1032,7 +1045,7 @@ def test_master_refiner_delegate_failure_stages_unrefined_rows_with_warning(
         svc.RELEASED_WITH_WARNINGS
     )
     assert release.payload["refinements"]["policy_version"] == (
-        "assessment-master-refiner-3"
+        "assessment-master-refiner-4"
     )
     assert release.payload["refinements"]["changes"] == []
     for record in [
@@ -1171,12 +1184,12 @@ def test_zero_loss_across_the_whole_run(db):
     assert Counter(grouped_ids) == Counter(candidate_ids)
 
 
-def test_explicit_subjective_cell_is_rejected_before_materialization():
+def test_explicit_subjective_cell_binds_under_its_profile_contract():
     atom = {"source_qid": "QINV-0001"}
     subjective_cell = {
         "cell_id": "CELL-subjective",
         "sheet_kind": "subjective",
-        "question_category": "Short Answer",
+        "question_category": "Fill in the blanks",
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "marks": 2,
@@ -1184,14 +1197,42 @@ def test_explicit_subjective_cell_is_rejected_before_materialization():
         "appears_in": ["Pre/Post-Worksheet/Test"],
         "source_policy": "reuse",
     }
-
-    with pytest.raises(ValueError, match="sheet_kind"):
-        run._bind_explicit_cells(
-            [atom],
-            [subjective_cell],
-            profile={
-                "appears_in": "Pre/Post-Worksheet/Test",
-                "allow_subjective_rows": True,
+    profile = {
+        "name": "subjective-contract-test",
+        "appears_in": "Pre/Post-Worksheet/Test",
+        "sheet_kinds": ("subjective",),
+        "assessment_format": {
+            "policy_id": "subjective-contract-test",
+            "formats_by_sheet": {
+                "subjective": {
+                    "Fill in the blanks": {
+                        "marks": {
+                            "mode": "per_subpoint",
+                            "marks_per_subpoint": 1,
+                        },
+                        "duration": {
+                            "mode": "per_subpoint",
+                            "minutes_per_subpoint": 1,
+                        },
+                    }
+                }
             },
-            concept_keys=set(),
-        )
+        },
+        "assessment_format_overrides": (),
+    }
+
+    bound = run._bind_explicit_cells(
+        [atom],
+        [subjective_cell],
+        profile=profile,
+        concept_keys=set(),
+    )
+
+    assert len(bound) == 1
+    assert bound[0]["sheet_kind"] == "subjective"
+    assert bound[0]["question_category"] == "Fill in the blanks"
+    assert bound[0]["marks"] == 2
+    assert bound[0]["accepted_source_qids"] == ["QINV-0001"]
+    assert bound[0]["appears_in"] == ["Pre/Post-Worksheet/Test"]
+    assert bound[0]["source_policy"] == "reuse"
+    assert bound[0]["authority"]["policy_version"] == "assessment-cell-3"

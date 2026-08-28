@@ -111,7 +111,14 @@ def _valid_plan(canonical):
 
 
 def _script(canonical, *, plan=None, critic=None, fail_first=False):
-    calls = {"author": 0, "correction": 0, "fixer": 0, "critic": 0}
+    calls = {
+        "author": 0,
+        "correction": 0,
+        "fixer": 0,
+        "critic": 0,
+        "correction_systems": [],
+        "fixer_systems": [],
+    }
     good = plan or _valid_plan(canonical)
 
     def call(*, system, prompt, schema, purpose="source_adjudication",
@@ -119,11 +126,13 @@ def _script(canonical, *, plan=None, critic=None, fail_first=False):
         if system == lt._CRITIC_SYSTEM:
             calls["critic"] += 1
             return critic or {"verdict": "concur", "dissents": []}
-        if system == lt._FIXER_SYSTEM:
+        if system == lt._fixer_system():
             calls["fixer"] += 1
+            calls["fixer_systems"].append(system)
             return json.loads(json.dumps(good))
-        if system == lt._CORRECTION_SYSTEM:
+        if system == lt._correction_system():
             calls["correction"] += 1
+            calls["correction_systems"].append(system)
             if fail_first:
                 broken = json.loads(json.dumps(good))
                 broken["topics"][0]["concepts"][0]["achieving_mastery"] = ""
@@ -175,6 +184,11 @@ def test_invalid_plan_corrects_then_fixer_completes_flagged(
         canonical, instruction_set=_instruction_set(), work_name=WORK
     )
     assert calls["correction"] == 1 and calls["fixer"] == 1
+    assert calls["correction_systems"][0].startswith(lt._AUTHOR_SYSTEM)
+    assert calls["fixer_systems"][0].startswith(lt._AUTHOR_SYSTEM)
+    policy = " ".join(lt.SOURCE_FAITHFUL_PROSE_ROUTING_POLICY.split())
+    assert policy in " ".join(calls["correction_systems"][0].split())
+    assert policy in " ".join(calls["fixer_systems"][0].split())
     assert sealed["fixer_decision"] is not None
     assert any("Fixer" in flag for flag in sealed["review_flags"])
     assert sealed["correction_history"]
@@ -295,6 +309,128 @@ def test_plan_slot_rides_the_phase3_suffix():
             "grade_band_vocabulary": "",
         }},
     }) == ""
+
+
+def test_source_faithful_prose_routing_policy_reaches_every_decision_prompt():
+    policy = " ".join(lt.SOURCE_FAITHFUL_PROSE_ROUTING_POLICY.split())
+
+    assert "For short prose" in policy
+    assert "Never re-parent it to a later plot event" in policy
+    assert "may remain its own source-aligned Topic or concept" in policy
+    assert "opening_pre_reading" in policy
+    for system in (
+        lt._AUTHOR_SYSTEM,
+        lt._correction_system(),
+        lt._fixer_system(),
+    ):
+        assert policy in " ".join(system.split())
+
+
+def test_threaded_support_requires_an_explicit_placement_context():
+    canonical = _canonical()
+    plan = _valid_plan(canonical)
+    block_id = lt._content_blocks(canonical)[0]["block_id"]
+    plan["threaded_components"] = [{
+        "block_id": block_id,
+        "destination_plan_concept_id": "PC-1",
+        "skill": "prepare to read",
+        "rationale": "The opening prompt activates prior experience.",
+    }]
+
+    defects = lt.plan_defects(
+        plan,
+        lt._content_blocks(canonical),
+        lt._task_payloads(canonical),
+        work_name=WORK,
+    )
+    assert any("invalid placement_context ''" in defect for defect in defects)
+
+    plan["threaded_components"][0][
+        "placement_context"
+    ] = "opening_pre_reading"
+    defects = lt.plan_defects(
+        plan,
+        lt._content_blocks(canonical),
+        lt._task_payloads(canonical),
+        work_name=WORK,
+    )
+    assert not any("placement_context" in defect for defect in defects)
+
+    threaded_schema = lt.plan_schema()["schema"]["properties"][
+        "threaded_components"
+    ]["items"]
+    assert "placement_context" in threaded_schema["required"]
+    assert threaded_schema["properties"]["placement_context"]["enum"] == list(
+        lt.THREADING_PLACEMENT_CONTEXTS
+    )
+
+
+def test_opening_support_cannot_be_reparented_to_a_later_concept():
+    canonical = _canonical()
+    plan = _valid_plan(canonical)
+    block_id = lt._content_blocks(canonical)[0]["block_id"]
+    plan["threaded_components"] = [{
+        "block_id": block_id,
+        "destination_plan_concept_id": "PC-2",
+        "placement_context": "opening_pre_reading",
+        "skill": "activate prior experience",
+        "rationale": "A deliberately contradictory late destination.",
+    }]
+
+    defects = lt.plan_defects(
+        plan,
+        lt._content_blocks(canonical),
+        lt._task_payloads(canonical),
+        work_name=WORK,
+    )
+
+    assert any(
+        "opening support must route to the first plan concept" in defect
+        for defect in defects
+    ), defects
+
+
+def test_one_source_block_requires_exactly_one_threading_verdict():
+    canonical = _canonical()
+    plan = _valid_plan(canonical)
+    block_id = lt._content_blocks(canonical)[0]["block_id"]
+    row = {
+        "block_id": block_id,
+        "destination_plan_concept_id": "PC-1",
+        "placement_context": "contextual_support",
+        "skill": "retain source context",
+        "rationale": "The source occurrence stays whole.",
+    }
+    plan["threaded_components"] = [row, {**row, "skill": "conflicting copy"}]
+
+    defects = lt.plan_defects(
+        plan,
+        lt._content_blocks(canonical),
+        lt._task_payloads(canonical),
+        work_name=WORK,
+    )
+
+    assert any("repeats source block" in defect for defect in defects)
+
+
+def test_author_receives_ordered_source_positions_for_placement_judgment():
+    canonical = _canonical()
+    blocks = lt._content_blocks(canonical)
+    request = json.loads(lt._author_request(
+        blocks,
+        lt._task_payloads(canonical),
+        mode="prose",
+        rationale="The Architect recorded narrative prose.",
+        slots=_instruction_set(mode="prose")["slots"],
+        work_name=WORK,
+    ))
+
+    assert [row["source_order"] for row in request["blocks"]] == list(
+        range(1, len(blocks) + 1)
+    )
+    assert [row["source_start"] for row in request["blocks"]] == [
+        int(block.get("source_start") or 0) for block in blocks
+    ]
 
 
 # ---------------------------------------------------------------------------

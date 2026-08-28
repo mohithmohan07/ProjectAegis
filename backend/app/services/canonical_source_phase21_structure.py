@@ -151,21 +151,21 @@ def flatten_table_markup(value: object) -> str:
 
 
 def _katex_array_cell(cell: str) -> str:
-    """One tabular cell as valid KaTeX array content."""
+    """Project one source tabular cell into valid KaTeX array content.
+
+    Table cells often mix prose with Mathpix inline-math spans.  Converting
+    the whole cell to ``\\text{...}`` escapes the argument braces of commands
+    such as ``\\mathrm{m}``, leaving malformed ``\\mathrm\\{m\\}`` on the
+    public wire.  Reuse the rich-text-to-Equation projection so prose becomes
+    explicit text atoms while each inline formula retains its own TeX syntax.
+    The bounded legacy repair runs on this derived cell only; canonical source
+    bytes and their contract hash remain untouched.
+    """
     cell = re.sub(r"\s+", " ", str(cell or "")).strip()
     if not cell:
         return ""
-    # Unwrap inline math delimiters — inside the array everything is math.
-    cell = re.sub(r"\\\((.*?)\\\)", r"\1", cell)
-    cell = re.sub(r"(?<!\\)\$(.+?)(?<!\\)\$", r"\1", cell)
-    # Purely numeric/symbolic cells and TeX commands stay literal math;
-    # prose is wrapped so words render as words, not juxtaposed variables.
-    if re.fullmatch(r"[0-9.,:%/^*+\-=()\s]+", cell) or re.match(
-        r"^\\[A-Za-z]+", cell
-    ):
-        return cell
-    escaped = re.sub(r"([#%&_{}])", r"\\\1", cell)
-    return r"\text{" + escaped + "}"
+    rich = kr.legacy_export_rich_text(kr.canonicalize_rich_text(cell))
+    return kr.raw_equation_cell(rich)
 
 
 def normalize_task_table_markup(value: object) -> str:

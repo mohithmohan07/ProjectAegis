@@ -2882,6 +2882,7 @@ def _openai_json(
     prompt_cache_prefix: str = "",
     prompt_cache_key: str = "",
     model: str | None = None,
+    image_urls: list[str] | None = None,
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
@@ -2940,6 +2941,23 @@ def _openai_json(
         model=str(request_policy["model"]),
         provider=model_provider.active_provider(),
     )
+    if image_urls:
+        user_message = messages[-1]
+        current_content = user_message.get("content", "")
+        if isinstance(current_content, list):
+            multimodal_content = list(current_content)
+        else:
+            multimodal_content = [{
+                "type": "text", "text": str(current_content or ""),
+            }]
+        for image_url in dict.fromkeys(
+            str(url).strip() for url in image_urls if str(url).strip()
+        ):
+            multimodal_content.append({
+                "type": "image_url",
+                "image_url": {"url": image_url, "detail": "high"},
+            })
+        user_message["content"] = multimodal_content
     gate = _get_openai_gate()
     last_err: Exception | None = None
     attempt = 0  # hard failures (bad JSON, truncation, 4xx)
@@ -8716,10 +8734,12 @@ def _inventory_task_text(item: dict) -> str:
     task = _strip_leading_source_task_label(task)
     task = _strip_source_visual_markup(task)
     task = _public_task_without_latex_layout(task)
-    task = kr.canonicalize_rich_text(str(task)).strip()
+    task = kr.legacy_export_rich_text(
+        kr.canonicalize_rich_text(str(task))
+    ).strip()
     task = _PUBLIC_TASK_SECTION_REF_RE.sub("the earlier chapter discussion", task)
-    context = kr.canonicalize_rich_text(
-        str(item.get("shared_context") or "")).strip()
+    context = kr.legacy_export_rich_text(kr.canonicalize_rich_text(
+        str(item.get("shared_context") or ""))).strip()
     if context and item.get("requires_context") and context not in task:
         # A raw substring test misses the case where the context IS the
         # task's own table, flattened slightly differently (a label
@@ -8750,7 +8770,9 @@ def _inventory_task_text(item: dict) -> str:
             item, task, image_index, visual_captions.get(url, ""))
         if url not in task:
             task = f"{task} {kr.image(url, alt)}"
-    return kr.canonicalize_rich_text(task.strip())
+    return kr.legacy_export_rich_text(
+        kr.canonicalize_rich_text(task.strip())
+    )
 
 
 def _case_prompt_needs_source(prompt: str, source_text: str) -> bool:

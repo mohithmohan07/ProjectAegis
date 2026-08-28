@@ -19,8 +19,8 @@ from typing import Iterable, Mapping
 from . import assessment_profile
 from . import assessment_release as rel
 
-# Legacy Build-Assessments sheet kinds. A strict assessment profile (e.g.
-# the reference school's) may forbid Subjective rows — that restriction
+# Legacy Build-Assessments sheet kinds. A strict school-specific assessment
+# profile may forbid Subjective rows — that restriction
 # binds its blueprint cells, not legacy concept-mapping sessions, which may
 # still author all three.
 LEGACY_SHEET_KINDS = ("objective", "subjective", "descriptive")

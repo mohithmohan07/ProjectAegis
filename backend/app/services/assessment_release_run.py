@@ -608,6 +608,7 @@ def _snapshot_markings(
             "candidate_id": str(candidate.get("candidate_id") or ""),
             "marks": candidate.get("marks"),
             "question_duration": candidate.get("question_duration"),
+            "duration_basis_count": candidate.get("duration_basis_count"),
             "math_keyboard": str(candidate.get("math_keyboard") or ""),
             "answers": list(candidate.get("answers") or []),
             "sub_questions": list(candidate.get("sub_questions") or []),
@@ -714,6 +715,7 @@ def _bind_explicit_cells(
     *,
     profile: Mapping,
     concept_keys: set[str],
+    format_policy: Mapping | None = None,
 ) -> list[dict]:
     """Mechanically bind an explicit one-to-one blueprint without spend."""
 
@@ -731,6 +733,11 @@ def _bind_explicit_cells(
     # The profile answers this, through the one accessor (spec-step8
     # T12/M5b).
     allowed_kinds = assessment_profile.sheet_kinds(profile)
+    active_format_policy = (
+        format_policy
+        if isinstance(format_policy, Mapping)
+        else assessment_profile.assessment_format_policy(profile)
+    )
     defects: list[str] = []
     appears_in = str(profile.get("appears_in") or "").strip()
     if not appears_in:
@@ -750,6 +757,14 @@ def _bind_explicit_cells(
             defects.append(f"{cell_id}: unknown cognitive_skill")
         if cell.get("difficulty") not in bi.DIFFICULTY_LEVELS:
             defects.append(f"{cell_id}: unknown difficulty")
+        total_marks = marking._decimal(cell.get("marks"))
+        if total_marks is not None and total_marks > 0:
+            try:
+                marking._validate_cell_format_contract(
+                    cell, total_marks, active_format_policy,
+                )
+            except marking.MarkingError as exc:
+                defects.append(str(exc))
         accepted = [
             str(value) for value in cell.get("accepted_source_qids") or []
             if str(value).strip()
@@ -947,6 +962,7 @@ def _bind_generated_cells(
     *,
     profile: Mapping,
     concept_keys: set[str],
+    format_policy: Mapping | None = None,
 ) -> list[dict]:
     """Bind one blueprint cell to each GENERATED question, without spend.
 
@@ -970,6 +986,11 @@ def _bind_generated_cells(
     if not appears_in:
         defects.append("assessment profile has no appears_in value")
     allowed_kinds = assessment_profile.sheet_kinds(profile)
+    active_format_policy = (
+        format_policy
+        if isinstance(format_policy, Mapping)
+        else assessment_profile.assessment_format_policy(profile)
+    )
 
     cells: list[dict] = []
     seen_question_ids: set[str] = set()
@@ -1027,6 +1048,14 @@ def _bind_generated_cells(
             defects.append(f"{cell_id}: unknown cognitive_skill")
         if cell.get("difficulty") not in bi.DIFFICULTY_LEVELS:
             defects.append(f"{cell_id}: unknown difficulty")
+        total_marks = marking._decimal(cell.get("marks"))
+        if total_marks is not None and total_marks > 0:
+            try:
+                marking._validate_cell_format_contract(
+                    cell, total_marks, active_format_policy,
+                )
+            except marking.MarkingError as exc:
+                defects.append(str(exc))
         accepted = [
             str(value) for value in cell.get("accepted_source_qids") or []
             if str(value).strip()
@@ -1637,6 +1666,8 @@ def run_release_for_job(
         snapshot_directory = snapshot_directory / f"assessment-{staged_lane}"
 
     meta = dict(bridge["metadata"])
+    profile = assessment_profile.resolve_for_metadata(profile, meta)
+    format_policy = assessment_profile.assessment_format_policy(profile, meta)
     source_release_sha = str(
         bridge["source_concept_release_sha256"]
     )
@@ -1828,6 +1859,7 @@ def run_release_for_job(
             blueprint_cells,
             profile=profile,
             concept_keys=concept_keys,
+            format_policy=format_policy,
         )
     else:
         # Stage 1-2 — freeze the lossless source inventory.
@@ -1889,6 +1921,7 @@ def run_release_for_job(
                 blueprint_cells,
                 profile=profile,
                 concept_keys=concept_keys,
+                format_policy=format_policy,
             )
         else:
             _observe_stage(stage_progress, "cells")
@@ -2222,6 +2255,9 @@ def run_release_for_job(
         verdict = marking_by_candidate[candidate["candidate_id"]]
         candidate["marks"] = verdict.get("marks")
         candidate["question_duration"] = verdict.get("question_duration")
+        candidate["duration_basis_count"] = verdict.get(
+            "duration_basis_count"
+        )
         candidate["math_keyboard"] = str(
             verdict.get("math_keyboard") or ""
         )
@@ -2232,6 +2268,7 @@ def run_release_for_job(
         candidate[_MARKING_AUDIT_FIELD] = {
             "marks": candidate["marks"],
             "question_duration": candidate["question_duration"],
+            "duration_basis_count": candidate["duration_basis_count"],
             "math_keyboard": candidate["math_keyboard"],
             "rationale": str(verdict.get("rationale") or ""),
             "blueprint_authority": dict(
@@ -2642,6 +2679,12 @@ def run_release_for_job(
         "concept_snapshot_defects": list(bridge.get("defects") or []),
         "source_atoms": atoms,
         "blueprint_cells": cells,
+        # The exact resolved category/marks/duration wire contract joins the
+        # immutable release so freeze and later audits validate the same
+        # board-profile decision that the cell and marking passes received.
+        "assessment_format_policy": (
+            assessment_profile.assessment_format_policy(profile, meta)
+        ),
         "candidates": candidates,
         "groups": groups,
         "placements": placements,

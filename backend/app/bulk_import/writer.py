@@ -13,6 +13,8 @@ import json
 import logging
 import re
 from collections import defaultdict
+from collections.abc import Mapping
+from decimal import Decimal
 from pathlib import Path
 
 import openpyxl
@@ -21,15 +23,21 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from . import (
-    CHAPTER_FIELDS, TOPIC_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
+    ANSWER_TYPES, CHAPTER_FIELDS, TOPIC_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SECTION_BANDS, GROUP_FIELDS_BY_KIND,
     merge_sources, normalize_answer_type, normalize_question_text,
     strip_title_tag, strip_topic_title,
 )
 from . import layouts
+from . import assessment_workbook as workbook_contract
 from . import workbook_sync
 from .. import models
-from ..services import directory, identity, katex_rules
+from ..services import (
+    assessment_release as release_contract,
+    directory,
+    identity,
+    katex_rules,
+)
 
 _BAND_FILL = {
     "Chapter": "FCE4D6", "Topic": "FFF2CC", "Concept": "D9EAD3",
@@ -145,6 +153,7 @@ def _sheet_name_for(wb, index: "WorkbookIndex", kind: str) -> str:
 # --------------------------------------------------------------------------- #
 
 ROW_WIDTH_MISMATCH = "bulk_import_row_width_mismatch"
+WORKBOOK_CAPACITY_ERROR = "bulk_import_workbook_capacity_error"
 
 
 def _fixer_decision(kind: str, *, detail: str, context: dict) -> dict:
@@ -226,6 +235,10 @@ EXCEL_CELL_CHARACTER_LIMIT = 32_767
 
 class ExcelCellLimitError(ValueError):
     """A workbook value cannot be exported losslessly in one Excel cell."""
+
+
+class WorkbookCapacityError(ValueError):
+    """A question cannot be represented losslessly by the target layout."""
 
 
 def _safe_cell(value):
@@ -889,6 +902,127 @@ def _question_band_values(
     blocks and the target carries 20, so the old ``range(10)`` left blocks
     11-20 unwritten by construction (T6).
     """
+    raw_answers = q.answers
+    if raw_answers is None:
+        answers = []
+    elif not isinstance(raw_answers, list):
+        raise WorkbookCapacityError(
+            f"question {q.question_label!r} answers must be a list of "
+            "objects for lossless workbook export"
+        )
+    else:
+        answers = raw_answers
+    for position, answer in enumerate(answers, start=1):
+        if not isinstance(answer, Mapping):
+            raise WorkbookCapacityError(
+                f"question {q.question_label!r} answer {position} must be "
+                "an object for lossless workbook export"
+            )
+    if len(answers) > len(sheet_layout.answer_block_numbers):
+        raise WorkbookCapacityError(
+            f"question {q.question_label!r} has {len(answers)} answer blocks, "
+            f"but {sheet_layout.sheet_name!r} can represent only "
+            f"{len(sheet_layout.answer_block_numbers)}"
+        )
+
+    def _wire_populated(value) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, (list, tuple, Mapping)):
+            return bool(value)
+        return True
+
+    question_wire_fields = set(sheet_layout.block_fields("question"))
+    for position, answer in enumerate(answers, start=1):
+        projected_fields: dict[str, object] = {}
+        for field, value in answer.items():
+            projected_field = str(field)
+            if sheet_layout.kind == "subjective":
+                projected_field = {
+                    "answer_content": "answer",
+                    "answer_weightage": "weightage",
+                }.get(projected_field, projected_field)
+            projected_fields[projected_field] = value
+        if not any(
+            f"{field}_{position}" in question_wire_fields
+            and _wire_populated(value)
+            for field, value in projected_fields.items()
+        ):
+            raise WorkbookCapacityError(
+                f"question {q.question_label!r} answer {position} has no "
+                "workbook fields and would create an empty positional slot"
+            )
+    raw_sub_questions = q.sub_questions
+    if raw_sub_questions is None:
+        sub_questions = []
+    elif not isinstance(raw_sub_questions, list):
+        raise WorkbookCapacityError(
+            f"question {q.question_label!r} subquestions must be a list of "
+            "objects for lossless workbook export"
+        )
+    else:
+        sub_questions = raw_sub_questions
+    if len(sub_questions) > len(sheet_layout.sub_question_numbers):
+        raise WorkbookCapacityError(
+            f"question {q.question_label!r} has {len(sub_questions)} "
+            f"subquestions, but {sheet_layout.sheet_name!r} can represent "
+            f"only {len(sheet_layout.sub_question_numbers)}"
+        )
+    for position, subquestion in enumerate(sub_questions, start=1):
+        if not isinstance(subquestion, Mapping):
+            raise WorkbookCapacityError(
+                f"question {q.question_label!r} subquestion {position} must "
+                "be an object for lossless workbook export"
+            )
+        raw_keywords = subquestion.get("keywords")
+        if raw_keywords is None:
+            keywords = []
+        elif not isinstance(raw_keywords, list):
+            raise WorkbookCapacityError(
+                f"question {q.question_label!r} subquestion {position} "
+                "keywords must be a list of objects for lossless workbook "
+                "export"
+            )
+        else:
+            keywords = raw_keywords
+        for keyword_position, keyword in enumerate(keywords, start=1):
+            if not isinstance(keyword, Mapping):
+                raise WorkbookCapacityError(
+                    f"question {q.question_label!r} subquestion {position} "
+                    f"keyword {keyword_position} must be an object for "
+                    "lossless workbook export"
+                )
+        capacity = len(
+            sheet_layout.sub_question_keyword_numbers(position)
+        )
+        if len(keywords) > capacity:
+            raise WorkbookCapacityError(
+                f"question {q.question_label!r} subquestion {position} has "
+                f"{len(keywords)} keyword rubrics, but "
+                f"{sheet_layout.sheet_name!r} can represent only {capacity}"
+            )
+        if not any(
+            _wire_populated(subquestion.get(field))
+            for field in ("text", "marks", "keywords")
+        ):
+            raise WorkbookCapacityError(
+                f"question {q.question_label!r} subquestion {position} has "
+                "no workbook fields and would create an empty positional "
+                "slot"
+            )
+        for keyword_position, keyword in enumerate(keywords, start=1):
+            if not any(
+                _wire_populated(keyword.get(field))
+                for field in ("answer_type", "weightage", "keyword")
+            ):
+                raise WorkbookCapacityError(
+                    f"question {q.question_label!r} subquestion {position} "
+                    f"keyword {keyword_position} has no workbook fields and "
+                    "would create an empty positional slot"
+                )
+
     values: dict = {
         "question_label": q.question_label,
         "question_category": q.question_category,
@@ -898,6 +1032,7 @@ def _question_band_values(
         "question_duration": q.question_duration,
         "math_keyboard": q.math_keyboard,
         "question_appears_in": q.question_appears_in,
+        "answer_restriction": q.answer_restriction,
         "level_of_difficulty": q.level_of_difficulty,
         "question": q.question,
         "question_text": q.question_text,
@@ -909,7 +1044,7 @@ def _question_band_values(
         "question", "question_text", "display_answer",
         "answer_explanation",
     ):
-        values[field] = katex_rules.replace_unsupported_tables(
+        values[field] = katex_rules.legacy_export_rich_text(
             str(values.get(field) or "")
         )
     if sheet_layout.kind == "objective":
@@ -918,10 +1053,70 @@ def _question_band_values(
             values[field] = katex_rules.lowercase_objective_option_labels(
                 str(values.get(field) or ""), option_capacity,
             )
-    answers = q.answers or []
+    # A Descriptive item's subquestions own the complete scoring contract.
+    # Some historical ORM rows also retain the old shared main rubric; omit
+    # that residue from the workbook projection without mutating the JSON.
+    has_scoring_subquestions = (
+        sheet_layout.kind == "descriptive"
+        and len(sub_questions) <= len(sheet_layout.sub_question_numbers)
+        and all(
+            len(subquestion.get("keywords") or [])
+            <= len(sheet_layout.sub_question_keyword_numbers(position))
+            for position, subquestion in enumerate(
+                sub_questions, start=1,
+            )
+        )
+        and _complete_subquestion_scoring(
+            sub_questions, q.marks,
+            main_question=str(values.get("question") or ""),
+            main_question_text=str(values.get("question_text") or ""),
+        )
+    )
+    answers = [] if has_scoring_subquestions else answers
     for n in sheet_layout.answer_block_numbers:
         answer = answers[n - 1] if n - 1 < len(answers) else {}
         exported_answer = dict(answer or {})
+        if sheet_layout.kind == "subjective" and exported_answer:
+            def subjective_alias(wire_key: str, internal_key: str):
+                wire_value = exported_answer.get(wire_key)
+                internal_value = exported_answer.get(internal_key)
+                def populated(value) -> bool:
+                    return value is not None and (
+                        not isinstance(value, str) or bool(value.strip())
+                    )
+
+                wire_populated = populated(wire_value)
+                internal_populated = populated(internal_value)
+                if wire_populated and internal_populated:
+                    equivalent = str(wire_value).strip() == str(
+                        internal_value
+                    ).strip()
+                    if not equivalent and wire_key == "weightage":
+                        try:
+                            equivalent = Decimal(str(wire_value)) == Decimal(
+                                str(internal_value)
+                            )
+                        except Exception:  # lexical content, not both numbers
+                            equivalent = False
+                    if not equivalent:
+                        raise WorkbookCapacityError(
+                            f"question {q.question_label!r} subjective "
+                            f"answer {n} carries conflicting {wire_key!r} "
+                            f"and {internal_key!r} values"
+                        )
+                selected = (
+                    wire_value if wire_populated else internal_value
+                    if internal_populated else wire_value
+                )
+                exported_answer[wire_key] = selected
+                exported_answer.pop(internal_key, None)
+
+            # Release publication persists one internal answer schema across
+            # all kinds.  The Subjective XLSX wire deliberately names these
+            # two fields differently; translate explicitly and refuse an
+            # ambiguous object rather than dropping either value.
+            subjective_alias("answer", "answer_content")
+            subjective_alias("weightage", "answer_weightage")
         content_field = (
             "answer_content"
             if "answer_content" in exported_answer
@@ -940,7 +1135,7 @@ def _question_band_values(
             exported_answer[content_field] = exported_content
         if "answer_display" in exported_answer:
             exported_answer["answer_display"] = (
-                katex_rules.replace_unsupported_tables(
+                katex_rules.legacy_export_rich_text(
                     str(exported_answer.get("answer_display") or "")
                 )
             )
@@ -951,12 +1146,11 @@ def _question_band_values(
         # answer_weightage_N), so no per-kind translation table is needed.
         for key, value in exported_answer.items():
             values[f"{key}_{n}"] = value
-    sub_questions = q.sub_questions or []
     for n in sheet_layout.sub_question_numbers:
         sub = sub_questions[n - 1] if n - 1 < len(sub_questions) else {}
         sub = sub or {}
         values[f"sub_question_{n}"] = (
-            katex_rules.replace_unsupported_tables(
+            katex_rules.legacy_export_rich_text(
                 str(sub.get("text") or "")
             )
         )
@@ -977,6 +1171,152 @@ def _question_band_values(
             values[f"sq{n}_weightage_{m}"] = keyword.get("weightage", "")
             values[f"sq{n}_keyword_{m}"] = keyword_content
     return values
+
+
+def _positive_decimal(value) -> Decimal | None:
+    """Return one terminal-workbook-safe positive decimal, or ``None``.
+
+    The rubric-suppression decision must use the same numeric domain as final
+    workbook read-back.  Otherwise a value such as ``+1`` or a Decimal that
+    over/underflows Excel's float wire could cause export to discard the main
+    rubric and then fail validation of the remaining subquestion scoring.
+    """
+
+    number = workbook_contract._readback_decimal(value)
+    return number if number is not None and number > 0 else None
+
+
+def _complete_subquestion_scoring(
+    sub_questions, total_marks, *, main_question: str = "",
+    main_question_text: str = "",
+) -> bool:
+    """Whether multipart scoring can safely replace a legacy main rubric.
+
+    Export migration may remove duplicated main Descriptive rubrics, but only
+    after the subquestion contract independently accounts for every mark.
+    A stem alone is never scoring evidence: every active part needs positive
+    marks, at least one non-empty positive-weight keyword rubric, an exact
+    keyword subtotal, and the part totals must equal the question total.
+    """
+
+    if not isinstance(sub_questions, list) or not sub_questions:
+        return False
+    expected_total = _positive_decimal(total_marks)
+    if expected_total is None:
+        return False
+    part_marks: list[Decimal] = []
+    for subquestion in sub_questions:
+        if not isinstance(subquestion, dict):
+            return False
+        subquestion_text = katex_rules.legacy_export_rich_text(
+            str(subquestion.get("text") or "")
+        ).strip()
+        if not subquestion_text:
+            return False
+        if any(
+            subquestion_text in parent
+            for parent in (
+                str(main_question or ""), str(main_question_text or ""),
+            )
+        ):
+            return False
+        marks = _positive_decimal(subquestion.get("marks"))
+        if marks is None:
+            return False
+        keywords = subquestion.get("keywords")
+        if not isinstance(keywords, list) or not keywords:
+            return False
+        weights: list[Decimal] = []
+        for keyword in keywords:
+            if not isinstance(keyword, dict):
+                return False
+            answer_type, content = katex_rules.legacy_export_answer_cell(
+                normalize_answer_type(
+                    str(keyword.get("answer_type") or "")
+                ),
+                str(keyword.get("keyword") or ""),
+            )
+            if (
+                answer_type not in ANSWER_TYPES
+                or not content.strip()
+                or katex_rules.answer_cell_issues(answer_type, content)
+                or release_contract.malformed_rubric_tag(
+                    content, answer_type,
+                )
+            ):
+                return False
+            weight = _positive_decimal(keyword.get("weightage"))
+            if weight is None:
+                return False
+            weights.append(weight)
+        if sum(weights, Decimal(0)) != marks:
+            return False
+        part_marks.append(marks)
+    return sum(part_marks, Decimal(0)) == expected_total
+
+
+def _complete_row_subquestion_scoring(
+    worksheet, row_number: int, sheet_layout: layouts.SheetLayout,
+) -> bool:
+    """Workbook-cell form of :func:`_complete_subquestion_scoring`."""
+
+    def value(field: str):
+        column = sheet_layout.column("question", field)
+        return (
+            worksheet.cell(row=row_number, column=column + 1).value
+            if column is not None else ""
+        )
+
+    subquestions: list[dict] = []
+    populated_subquestion_numbers: list[int] = []
+    for number in sheet_layout.sub_question_numbers:
+        keywords: list[dict] = []
+        populated_keyword_numbers: list[int] = []
+        for keyword_number in (
+            sheet_layout.sub_question_keyword_numbers(number)
+        ):
+            keyword = {
+                "answer_type": value(
+                    f"sq{number}_answer_type_{keyword_number}"
+                ),
+                "weightage": value(
+                    f"sq{number}_weightage_{keyword_number}"
+                ),
+                "keyword": value(f"sq{number}_keyword_{keyword_number}"),
+            }
+            if any(str(item or "").strip() for item in keyword.values()):
+                keywords.append(keyword)
+                populated_keyword_numbers.append(keyword_number)
+        subquestion = {
+            "text": value(f"sub_question_{number}"),
+            "marks": value(f"sub_question_marks_{number}"),
+            "keywords": keywords,
+        }
+        if (
+            str(subquestion["text"] or "").strip()
+            or str(subquestion["marks"] or "").strip()
+            or keywords
+        ):
+            populated_subquestion_numbers.append(number)
+            if populated_keyword_numbers != list(
+                range(1, len(populated_keyword_numbers) + 1)
+            ):
+                return False
+            subquestions.append(subquestion)
+    if populated_subquestion_numbers != list(
+        range(1, len(populated_subquestion_numbers) + 1)
+    ):
+        return False
+    return _complete_subquestion_scoring(
+        subquestions,
+        value("marks"),
+        main_question=katex_rules.legacy_export_rich_text(
+            str(value("question") or "")
+        ),
+        main_question_text=katex_rules.legacy_export_rich_text(
+            str(value("question_text") or "")
+        ),
+    )
 
 
 def _migrate_existing_question_cells(workbook) -> int:
@@ -1004,7 +1344,13 @@ def _migrate_existing_question_cells(workbook) -> int:
 
     def update(cell, rendered: str) -> None:
         nonlocal changed
-        if rendered == text(cell.value):
+        formula_like = isinstance(rendered, str) and rendered.startswith(
+            _FORMULA_PREFIXES
+        )
+        if (
+            rendered == text(cell.value)
+            and (not formula_like or cell.data_type == "s")
+        ):
             return
         _set_cell_value(cell, rendered)
         changed += 1
@@ -1030,7 +1376,7 @@ def _migrate_existing_question_cells(workbook) -> int:
                 if column is None:
                     continue
                 cell = worksheet.cell(row=row_number, column=column + 1)
-                rendered = katex_rules.replace_unsupported_tables(
+                rendered = katex_rules.legacy_export_rich_text(
                     text(cell.value)
                 )
                 if (
@@ -1048,6 +1394,12 @@ def _migrate_existing_question_cells(workbook) -> int:
                 "answer" if sheet_layout.kind == "subjective"
                 else "answer_content"
             )
+            has_scoring_subquestions = (
+                sheet_layout.kind == "descriptive"
+                and _complete_row_subquestion_scoring(
+                    worksheet, row_number, sheet_layout,
+                )
+            )
             for number in sheet_layout.answer_block_numbers:
                 type_column = sheet_layout.column(
                     "question", f"answer_type_{number}",
@@ -1055,6 +1407,21 @@ def _migrate_existing_question_cells(workbook) -> int:
                 content_column = sheet_layout.column(
                     "question", f"{content_field}_{number}",
                 )
+                weightage_column = sheet_layout.column(
+                    "question", f"answer_weightage_{number}",
+                )
+                if has_scoring_subquestions:
+                    for column in (
+                        type_column, content_column, weightage_column,
+                    ):
+                        if column is not None:
+                            update(
+                                worksheet.cell(
+                                    row=row_number, column=column + 1,
+                                ),
+                                "",
+                            )
+                    continue
                 if type_column is not None and content_column is not None:
                     type_cell = worksheet.cell(
                         row=row_number, column=type_column + 1,
@@ -1082,7 +1449,7 @@ def _migrate_existing_question_cells(workbook) -> int:
                     )
                     update(
                         display_cell,
-                        katex_rules.replace_unsupported_tables(
+                        katex_rules.legacy_export_rich_text(
                             text(display_cell.value)
                         ),
                     )
@@ -1097,7 +1464,7 @@ def _migrate_existing_question_cells(workbook) -> int:
                     )
                     update(
                         sub_cell,
-                        katex_rules.replace_unsupported_tables(
+                        katex_rules.legacy_export_rich_text(
                             text(sub_cell.value)
                         ),
                     )
@@ -1130,6 +1497,21 @@ def _migrate_existing_question_cells(workbook) -> int:
                     )
                     update(type_cell, answer_type)
                     update(keyword_cell, keyword)
+
+            # A bulk-import workbook has no executable-formula contract.
+            # Historical files may nevertheless contain formula-typed cells
+            # whose visible token is learner text (or an attempted injection).
+            # ``data_only=True`` reads those as a stale cache or ``None``.
+            # Literalize every remaining formula cell through the same safe
+            # writer, including metadata/numeric/weight fields not visited by
+            # the lexical migrations above; strict import can then validate
+            # the literal value instead of silently losing it.
+            for column in range(1, len(sheet_layout.fields) + 1):
+                cell = worksheet.cell(row=row_number, column=column)
+                if cell.data_type != "f":
+                    continue
+                _set_cell_value(cell, text(cell.value))
+                changed += 1
 
     return changed
 
@@ -1897,8 +2279,6 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                         appended["sources_updated"] += 1
                 continue
             is_tag = q.question_label in index.labels
-            index.q_placements.add(key)
-            index.labels.add(q.question_label)
             sheet_name = _sheet_name_for(wb, index, q.sheet_kind)
             ws = wb[sheet_name]
             header = next(
@@ -1908,12 +2288,30 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                 mismatches=index.mismatches)
             concept_fields = list(sheet_layout.block_fields("concept"))
             target = ws.max_row + 1 if ws.max_row >= 2 else 3
-            for i, value in enumerate(
-                _question_to_row(
+            try:
+                row_values = _question_to_row(
                     q, q.sheet_kind, group, concept_fields=concept_fields,
-                    sheet_layout=sheet_layout, decisions=decisions),
-                start=1,
-            ):
+                    sheet_layout=sheet_layout, decisions=decisions,
+                )
+            except WorkbookCapacityError as exc:
+                decisions.append(_fixer_decision(
+                    WORKBOOK_CAPACITY_ERROR,
+                    detail=str(exc),
+                    context={
+                        "question_id": q.id,
+                        "question_label": q.question_label,
+                        "sheet_kind": q.sheet_kind,
+                        "group_id": group.id,
+                    },
+                ))
+                appended["skipped"] += 1
+                continue
+            # Do not reserve the placement until the row has proved it can be
+            # represented.  A recorded capacity defect must remain retryable
+            # after its stored JSON is corrected.
+            index.q_placements.add(key)
+            index.labels.add(q.question_label)
+            for i, value in enumerate(row_values, start=1):
                 _write_cell(ws, row=target, column=i, value=value)
             appended[q.sheet_kind] += 1
             if is_tag:
@@ -1927,7 +2325,9 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
     issues = [
         {"code": ROW_WIDTH_MISMATCH, **decision}
         for decision in decisions
-        if decision["code"] == ROW_WIDTH_MISMATCH
+        if decision["code"] in {
+            ROW_WIDTH_MISMATCH, WORKBOOK_CAPACITY_ERROR,
+        }
     ]
     if issues:
         appended["issues"] = issues

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
@@ -139,6 +140,10 @@ _CANDIDATE_REQUIRED = (
 # ``source_atom_ids``. Read here and in ``assessment_release_run``'s
 # generated lane from this single owner so the two can never drift.
 GENERATED_SOURCE_POLICY = "generate"
+RUBRIC_TAGS = (
+    "content", "method", "accuracy", "working", "language", "creative",
+    "evidence", "diagram",
+)
 _PLACEMENT_REQUIRED = (
     "candidate_id", "concept_id", "group_key", "evidence",
 )
@@ -155,6 +160,38 @@ def _missing(record: Mapping, required: Iterable[str]) -> list[str]:
         .strip() == ""
         and record.get(field) not in (0, 0.0)
     ]
+
+
+def option_content_has_label(value: Any) -> bool:
+    """Whether an option repeats the letter label supplied by the workbook."""
+
+    return re.match(
+        r"^(?:\([A-Za-z]\)|[A-Za-z][).:])",
+        str(value or "").lstrip(),
+    ) is not None
+
+
+def malformed_rubric_tag(
+    value: Any, answer_type: Any = "Phrases",
+) -> bool:
+    """Whether a Descriptive Phrases rubric lacks a usable tagged criterion.
+
+    The tag is metadata for a criterion, not the criterion itself.  Accepting
+    ``"[content]:   "`` used to let an empty scoring block satisfy both the
+    rubric count and weight arithmetic gates.  Keep the shared predicate as
+    the single owner so staging, refinement, rendering, and strict import all
+    reject that shape identically.
+    """
+
+    if str(answer_type or "") != "Phrases":
+        return False
+    text = str(value or "").lstrip()
+    lowered = text.casefold()
+    for tag in RUBRIC_TAGS:
+        prefix = f"[{tag}]:"
+        if lowered.startswith(prefix):
+            return not text[len(prefix):].strip()
+    return True
 
 
 def validate_source_atom(atom: Mapping) -> list[str]:
@@ -282,6 +319,19 @@ def validate_candidate(
             errors.append(
                 f"answer {position} violates declared medium: {issue}"
             )
+        if kind == "objective" and option_content_has_label(
+            answer.get("answer_content")
+        ):
+            errors.append(
+                f"objective option {position} repeats its letter label"
+            )
+        if kind == "descriptive" and malformed_rubric_tag(
+            answer.get("answer_content"), answer_type,
+        ):
+            errors.append(
+                f"descriptive rubric {position} does not start with an "
+                "allowed functional tag or is without its required colon"
+            )
     raw_subquestions = candidate.get("sub_questions")
     if not isinstance(raw_subquestions, list):
         errors.append("sub_questions must be an array")
@@ -298,10 +348,27 @@ def validate_candidate(
     for field in (
         "question", "question_text", "display_answer", "answer_explanation",
     ):
+        rich_value = str(candidate.get(field) or "")
+        if kind == "subjective" and field in {"question", "question_text"}:
+            for answer in answers:
+                placeholder = str(answer.get("placeholder") or "")
+                if len(placeholder) == 1 and "a" <= placeholder <= "t":
+                    rich_value = rich_value.replace(
+                        f"$${placeholder}$$", ""
+                    )
         for issue in katex_rules.rich_text_issues(
-            str(candidate.get(field) or "")
+            rich_value
         ):
             errors.append(f"{field} rich-text: {issue}")
+    if kind == "subjective":
+        for position, answer in enumerate(answers, start=1):
+            for issue in katex_rules.rich_text_issues(
+                str(answer.get("answer_display") or "")
+            ):
+                errors.append(
+                    f"subjective answer {position} answer_display rich-text: "
+                    f"{issue}"
+                )
     if kind == "objective":
         if keyboard != "":
             errors.append("objective math_keyboard must be exactly blank")
@@ -329,12 +396,58 @@ def validate_candidate(
                 )
         if subquestions:
             errors.append("objective candidate must not have subquestions")
+    elif kind == "subjective":
+        if keyboard not in {"Yes", "No"}:
+            errors.append("subjective math_keyboard must be exactly Yes or No")
+        if not answers:
+            errors.append("subjective candidate has no expected answers")
+        if subquestions:
+            errors.append("subjective candidate must not have subquestions")
+        weights: list[Decimal] = []
+        question = str(candidate.get("question") or "")
+        for position, answer in enumerate(answers, start=1):
+            expected_placeholder = chr(ord("a") + position - 1)
+            if answer.get("placeholder") != expected_placeholder:
+                errors.append(
+                    f"subjective answer {position} placeholder must be "
+                    f"{expected_placeholder!r}"
+                )
+            if not str(answer.get("answer_display") or "").strip():
+                errors.append(
+                    f"subjective answer {position} needs answer_display"
+                )
+            token = f"$${expected_placeholder}$$"
+            if question.count(token) != 1:
+                errors.append(
+                    f"subjective question must contain {token!r} exactly once"
+                )
+            weight = finite(answer.get("answer_weightage"))
+            if weight is None or weight <= 0:
+                errors.append(
+                    f"subjective answer {position} weightage must be finite "
+                    "and positive"
+                )
+            else:
+                weights.append(weight)
+        if (
+            len(weights) == len(answers)
+            and sum(weights, Decimal(0)) != marks
+        ):
+            errors.append(
+                f"subjective answer weightage sum "
+                f"{sum(weights, Decimal(0)):g} != marks {marks:g}"
+            )
     elif kind == "descriptive":
         if keyboard not in {"Yes", "No"}:
             errors.append("descriptive math_keyboard must be exactly Yes or No")
-        if not answers:
+        if not answers and not subquestions:
             errors.append("descriptive candidate has no rubric blocks")
-        if marks == Decimal(4) and len(answers) < 2:
+        if answers and subquestions:
+            errors.append(
+                "multipart descriptive candidate duplicates scoring in main "
+                "answer blocks"
+            )
+        if marks == Decimal(4) and not subquestions and len(answers) < 2:
             errors.append(
                 "4-mark descriptive candidate requires at least two "
                 "rubric blocks"
@@ -350,7 +463,11 @@ def validate_candidate(
             else:
                 weights.append(weight)
         weight_sum = sum(weights, Decimal(0))
-        if len(weights) == len(answers) and weight_sum != marks:
+        if (
+            not subquestions
+            and len(weights) == len(answers)
+            and weight_sum != marks
+        ):
             errors.append(
                 f"descriptive answer weightage sum {weight_sum:g} != "
                 f"marks {marks:g}"
@@ -358,8 +475,18 @@ def validate_candidate(
         if subquestions:
             sub_marks: list[Decimal] = []
             for position, subquestion in enumerate(subquestions, start=1):
+                subquestion_text = str(
+                    subquestion.get("text") or ""
+                ).strip()
+                if not subquestion_text:
+                    errors.append(f"subquestion {position} has no text")
+                elif subquestion_text in str(candidate.get("question") or ""):
+                    errors.append(
+                        f"subquestion {position} text is duplicated in the "
+                        "main question"
+                    )
                 for issue in katex_rules.rich_text_issues(
-                    str(subquestion.get("text") or "")
+                    subquestion_text
                 ):
                     errors.append(
                         f"subquestion {position} text rich-text: {issue}"
@@ -379,9 +506,10 @@ def validate_candidate(
                     )
                     continue
                 if not keywords:
-                    # Keyword slots are optional wire capacity.  When the
-                    # semantic rubric uses them, every weight is mandatory
-                    # and must sum to the subquestion marks below.
+                    errors.append(
+                        f"subquestion {position} needs at least one keyword "
+                        "rubric"
+                    )
                     continue
                 keyword_weights: list[Decimal] = []
                 for keyword_position, keyword in enumerate(
@@ -408,6 +536,15 @@ def validate_candidate(
                             f"subquestion {position} keyword "
                             f"{keyword_position} violates declared medium: "
                             f"{issue}"
+                        )
+                    if malformed_rubric_tag(
+                        keyword.get("keyword"), keyword_type,
+                    ):
+                        errors.append(
+                            f"subquestion {position} keyword "
+                            f"{keyword_position} does not start with an "
+                            "allowed functional tag or is without its "
+                            "required colon"
                         )
                     weight = finite(keyword.get("weightage"))
                     if weight is None or weight <= 0:
@@ -437,6 +574,278 @@ def validate_candidate(
                     "!= marks "
                     f"{marks:g}"
                 )
+    return errors
+
+
+def assessment_format_contract_errors(payload: Mapping) -> list[str]:
+    """Validate the resolved profile policy carried by a final payload.
+
+    The model chooses the category, difficulty, and represented subpoints;
+    this gate checks only their already-recorded wire contract. Legacy payloads
+    that predate format policies carry no policy and retain their historical
+    validation path.
+    """
+
+    policy = payload.get("assessment_format_policy")
+    if policy is None:
+        return []
+    if not isinstance(policy, Mapping):
+        return ["assessment_format_policy must be an object"]
+    formats = policy.get("formats_by_sheet")
+    if not isinstance(formats, Mapping):
+        return [
+            "assessment_format_policy.formats_by_sheet must be an object"
+        ]
+
+    def finite(value: Any) -> Decimal | None:
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            number = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError):
+            return None
+        return number if number.is_finite() else None
+
+    errors: list[str] = []
+    cells_by_id: dict[str, Mapping] = {}
+    for cell in payload.get("blueprint_cells") or []:
+        if not isinstance(cell, Mapping):
+            continue
+        cell_id = str(cell.get("cell_id") or "")
+        if not cell_id:
+            continue
+        if cell_id in cells_by_id:
+            errors.append(f"duplicate blueprint cell_id {cell_id!r}")
+            continue
+        cells_by_id[cell_id] = cell
+        kind = str(cell.get("sheet_kind") or "")
+        category = str(cell.get("question_category") or "")
+        sheet_formats = formats.get(kind)
+        rule = (
+            sheet_formats.get(category)
+            if isinstance(sheet_formats, Mapping)
+            else None
+        )
+        if not isinstance(rule, Mapping):
+            errors.append(
+                f"{cell_id}: category {category!r} is not permitted for "
+                f"sheet_kind {kind!r} by the resolved assessment policy"
+            )
+            continue
+        marks = finite(cell.get("marks"))
+        marks_rule = rule.get("marks")
+        if "marks" not in rule:
+            continue
+        if not isinstance(marks_rule, Mapping):
+            errors.append(f"{cell_id}: marks policy must be an object")
+            continue
+        if marks is None:
+            continue
+        mode = str(marks_rule.get("mode") or "")
+        if not mode:
+            errors.append(f"{cell_id}: marks policy has no mode")
+        elif mode == "fixed":
+            allowed = {
+                value
+                for raw in marks_rule.get("allowed") or ()
+                if (value := finite(raw)) is not None
+            }
+            if marks not in allowed:
+                errors.append(
+                    f"{cell_id}: marks {marks:g} are outside the category "
+                    f"contract {tuple(sorted(allowed))}"
+                )
+        elif mode == "per_subpoint":
+            unit = finite(marks_rule.get("marks_per_subpoint"))
+            raw_maximum = marks_rule.get("max_subpoints")
+            maximum = finite(raw_maximum)
+            if "max_subpoints" in marks_rule and (
+                isinstance(raw_maximum, bool)
+                or not isinstance(raw_maximum, (int, float, Decimal))
+                or maximum is None
+                or maximum <= 0
+                or maximum != maximum.to_integral_value()
+            ):
+                errors.append(
+                    f"{cell_id}: max_subpoints must be a positive integer"
+                )
+            if unit is None or unit <= 0 or marks <= 0 or marks % unit != 0:
+                errors.append(
+                    f"{cell_id}: marks do not represent a positive whole "
+                    "number of policy subpoints"
+                )
+            else:
+                represented = marks / unit
+                if (
+                    maximum is not None
+                    and represented > maximum
+                ):
+                    errors.append(
+                        f"{cell_id}: represented subpoint count "
+                        f"{represented:g} exceeds the wire maximum "
+                        f"{maximum:g}"
+                    )
+        elif mode:
+            errors.append(
+                f"{cell_id}: unknown marks policy mode {mode!r}"
+            )
+
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_id = str(candidate.get("candidate_id") or "")
+        cell_id = str(candidate.get("blueprint_cell_id") or "")
+        cell = cells_by_id.get(cell_id)
+        if cell is None:
+            errors.append(
+                f"{candidate_id}: blueprint_cell_id {cell_id!r} is not in "
+                "the release blueprint"
+            )
+            continue
+        for field in (
+            "sheet_kind", "question_category", "cognitive_skill",
+            "difficulty", "marks",
+        ):
+            if candidate.get(field) != cell.get(field):
+                errors.append(
+                    f"{candidate_id}: {field} does not match blueprint "
+                    f"cell {cell_id!r}"
+                )
+        kind = str(cell.get("sheet_kind") or "")
+        category = str(cell.get("question_category") or "")
+        sheet_formats = formats.get(kind)
+        rule = (
+            sheet_formats.get(category)
+            if isinstance(sheet_formats, Mapping)
+            else None
+        )
+        if not isinstance(rule, Mapping):
+            continue
+        marks_rule = rule.get("marks")
+        if (
+            kind == "subjective"
+            and isinstance(marks_rule, Mapping)
+            and str(marks_rule.get("mode") or "") == "per_subpoint"
+        ):
+            marks_unit = finite(marks_rule.get("marks_per_subpoint"))
+            if marks_unit is not None and marks_unit > 0:
+                for position, answer in enumerate(
+                    candidate.get("answers") or [], start=1,
+                ):
+                    weight = (
+                        finite(answer.get("answer_weightage"))
+                        if isinstance(answer, Mapping) else None
+                    )
+                    if weight != marks_unit:
+                        errors.append(
+                            f"{candidate_id}: Subjective answer {position} "
+                            f"weight {weight!s} != marks-per-subpoint "
+                            f"{marks_unit:g}"
+                        )
+        duration_rule = rule.get("duration")
+        if not isinstance(duration_rule, Mapping) or not duration_rule:
+            continue
+        duration = finite(candidate.get("question_duration"))
+        mode = str(duration_rule.get("mode") or "")
+        expected: Decimal | None = None
+        if mode == "matrix":
+            minutes = duration_rule.get("minutes_by_difficulty")
+            if isinstance(minutes, Mapping):
+                expected = finite(
+                    minutes.get(str(candidate.get("difficulty") or ""))
+                )
+            if candidate.get("duration_basis_count") is not None:
+                errors.append(
+                    f"{candidate_id}: matrix duration must not carry a "
+                    "duration_basis_count"
+                )
+        elif mode == "per_subpoint":
+            basis = finite(candidate.get("duration_basis_count"))
+            marks_unit = (
+                finite(marks_rule.get("marks_per_subpoint"))
+                if isinstance(marks_rule, Mapping)
+                else None
+            )
+            marks = finite(candidate.get("marks"))
+            expected_basis = (
+                marks / marks_unit
+                if marks is not None
+                and marks_unit is not None
+                and marks_unit > 0
+                and marks % marks_unit == 0
+                else None
+            )
+            if (
+                basis is None
+                or basis <= 0
+                or basis != basis.to_integral_value()
+            ):
+                errors.append(
+                    f"{candidate_id}: per-subpoint duration requires a "
+                    "positive integer duration_basis_count"
+                )
+            elif expected_basis is not None and basis != expected_basis:
+                errors.append(
+                    f"{candidate_id}: duration_basis_count {basis:g} != "
+                    f"represented subpoint count {expected_basis:g}"
+                )
+            per_subpoint = finite(
+                duration_rule.get("minutes_per_subpoint")
+            )
+            if basis is not None and per_subpoint is not None:
+                expected = basis * per_subpoint
+            if (
+                kind == "subjective"
+                and expected_basis is not None
+                and len(candidate.get("answers") or [])
+                != int(expected_basis)
+            ):
+                errors.append(
+                    f"{candidate_id}: Subjective answer count does not "
+                    "match represented subpoint count"
+                )
+        if expected is None or expected <= 0:
+            errors.append(
+                f"{candidate_id}: resolved duration policy has no positive "
+                "value"
+            )
+        elif duration != expected:
+            errors.append(
+                f"{candidate_id}: question_duration {candidate.get('question_duration')!r} "
+                f"!= policy duration {expected:g}"
+            )
+    return errors
+
+
+def parent_child_candidate_errors(payload: Mapping) -> list[str]:
+    """Reject a compound parent and its split child as separate questions."""
+
+    candidates_by_atom: dict[str, set[str]] = {}
+    for candidate in payload.get("candidates") or []:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_id = str(candidate.get("candidate_id") or "")
+        for atom_id in candidate.get("source_atom_ids") or []:
+            candidates_by_atom.setdefault(str(atom_id), set()).add(
+                candidate_id
+            )
+    errors: list[str] = []
+    for atom in payload.get("source_atoms") or []:
+        if not isinstance(atom, Mapping):
+            continue
+        child = str(atom.get("source_qid") or "")
+        parent = str(atom.get("parent_qid") or "")
+        if not child or not parent:
+            continue
+        parent_candidates = candidates_by_atom.get(parent, set())
+        child_candidates = candidates_by_atom.get(child, set())
+        if parent_candidates and child_candidates and (
+            parent_candidates != child_candidates
+        ):
+            errors.append(
+                f"compound source {parent!r} and subpart {child!r} are "
+                "materialized as separate questions"
+            )
     return errors
 
 
@@ -799,9 +1208,23 @@ def unresolved_question_homes(
     profile_name = assessment_profile.name(profile)
     caps = (
         ("answers", workbook.MAX_OBJECTIVE_OPTIONS, ("objective",)),
+        ("answers", workbook.MAX_SUBJECTIVE_ANSWERS, ("subjective",)),
         ("answers", workbook.MAX_DESCRIPTIVE_ANSWERS, ("descriptive",)),
         ("sub_questions", workbook.MAX_SUBQUESTIONS, ("descriptive",)),
     )
+
+    def _mapping_array(value: Any) -> list[Mapping]:
+        """Read a generated array without reopening a projection crash.
+
+        ``validate_candidate`` owns the user-facing shape finding.  This
+        audit pass must remain total long enough for that blocked release to
+        be persisted, so a malformed container contributes no renderable
+        members here instead of being iterated or measured as an array.
+        """
+
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, Mapping)]
 
     for candidate in snapshot.get("candidates") or []:
         candidate_id = str(candidate.get("candidate_id") or "")
@@ -827,10 +1250,7 @@ def unresolved_question_homes(
         for field, cap, kinds in caps:
             if kind not in kinds:
                 continue
-            actual = len([
-                item for item in candidate.get(field) or []
-                if isinstance(item, Mapping)
-            ])
+            actual = len(_mapping_array(candidate.get(field)))
             if actual > cap:
                 findings.append(_finding(
                     RENDER_SHAPE_OVERFLOW,
@@ -846,13 +1266,10 @@ def unresolved_question_homes(
                 candidate_id=candidate_id, question_label=label,
             ))
         if kind == "descriptive":
-            for n, sub in enumerate(candidate.get("sub_questions") or [], 1):
-                if not isinstance(sub, Mapping):
-                    continue
-                actual = len([
-                    k for k in sub.get("keywords") or []
-                    if isinstance(k, Mapping)
-                ])
+            for n, sub in enumerate(
+                _mapping_array(candidate.get("sub_questions")), 1,
+            ):
+                actual = len(_mapping_array(sub.get("keywords")))
                 if actual > workbook.MAX_SUBQUESTION_KEYWORDS:
                     findings.append(_finding(
                         RENDER_SHAPE_OVERFLOW,
@@ -963,6 +1380,8 @@ def freeze_payload(
         errors.extend(validate_blueprint_cell(cell, profile))
     for candidate in payload.get("candidates") or []:
         errors.extend(validate_candidate(candidate, profile))
+    errors.extend(assessment_format_contract_errors(payload))
+    errors.extend(parent_child_candidate_errors(payload))
     for group in payload.get("groups") or []:
         errors.extend(validate_group(group))
     for placement in payload.get("placements") or []:

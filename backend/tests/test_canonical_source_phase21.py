@@ -11,6 +11,7 @@ from app.services import canonical_source_phase21 as phase21
 from app.services import canonical_source_phase21_render as phase21_render
 from app.services import canonical_source_phase21_structure as phase21_structure
 from app.services import generation
+from app.services import katex_rules as kr
 
 DATA = Path(__file__).parents[1] / "data" / "Testing"
 
@@ -34,6 +35,23 @@ def _task(canonical: dict, needle: str) -> dict:
     ]
     assert len(matches) == 1, (needle, len(matches))
     return matches[0]
+
+
+def test_table_projection_preserves_mixed_prose_and_legacy_roman_math():
+    source = (
+        r"\begin{tabular}{|l|l|}"
+        r"Material & Resistivity ( \(\Omega \mathrm{m}\) ) \\ "
+        r"Alloy & Manganin (alloy of \(\mathrm{Cu}, \mathrm{Mn}\)) \\ "
+        r"\end{tabular}"
+    )
+
+    rendered = phase21_structure.normalize_task_table_markup(source)
+
+    assert rendered.startswith(r"[Katex] \begin{array}{|l|l|}")
+    assert r"\mathrm" not in rendered
+    assert r"\Omega \text{m}" in rendered
+    assert r"\text{Cu}, \text{Mn}" in rendered
+    assert kr.rich_text_issues(rendered) == []
 
 
 def test_complete_rne_is_phase21_ready_with_six_sections_and_26_tasks():

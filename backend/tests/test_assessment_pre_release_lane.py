@@ -124,7 +124,7 @@ def _cells(count: int, concept_key: str) -> list[dict]:
     return [
         {
             "sheet_kind": "descriptive",
-            "question_category": "Short Answer",
+            "question_category": "Long Answer",
             "cognitive_skill": "Remember",
             "difficulty": "Less",
             "marks": 2,
@@ -162,7 +162,7 @@ def _generated_authorities(*, calls=None, critic=None, materialize=None):
             "answers": [
                 {
                     "answer_type": "Phrases",
-                    "answer_content": generated["answer"],
+                    "answer_content": f"[content]: {generated['answer']}",
                     "answer_weightage": "2",
                 },
             ],

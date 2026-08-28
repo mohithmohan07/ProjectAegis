@@ -13,6 +13,7 @@ from app import bulk_import as bi
 from app import models
 from app.bulk_import import reader, writer
 from app.services import assessment_release as rel
+from app.services import assessment_profile
 
 
 # --------------------------------------------------------------------------- #
@@ -39,6 +40,116 @@ def test_release_hashes_are_stable_across_key_order():
     b = {"nested": {"a": [1, 2], "b": 2}, "x": 1}
     assert rel.sha256_json(a) == rel.sha256_json(b)
     assert rel.sha256_json(a) != rel.sha256_json({"x": 2})
+
+
+def test_final_payload_rechecks_exact_matrix_and_subpoint_durations():
+    policy = assessment_profile.assessment_format_policy(
+        metadata={
+            "board": "MSBSHSE",
+            "grade": "6",
+            "subject": "Mathematics",
+        }
+    )
+    cells = [{
+        "cell_id": "CELL-MATRIX",
+        "sheet_kind": "descriptive",
+        "question_category": "Short Answer Type (2 Marks)",
+        "cognitive_skill": "Apply",
+        "difficulty": "High",
+        "marks": 2,
+    }, {
+        "cell_id": "CELL-SUBJECTIVE",
+        "sheet_kind": "subjective",
+        "question_category": "Fill in the blanks",
+        "cognitive_skill": "Remember",
+        "difficulty": "Less",
+        "marks": 2,
+    }]
+    candidates = [{
+        **cells[0],
+        "candidate_id": "C-MATRIX",
+        "blueprint_cell_id": "CELL-MATRIX",
+        "question_duration": 2,
+        "duration_basis_count": None,
+    }, {
+        **cells[1],
+        "candidate_id": "C-SUBJECTIVE",
+        "blueprint_cell_id": "CELL-SUBJECTIVE",
+        "question_duration": 3,
+        "duration_basis_count": 3,
+        "answers": [{}],
+    }]
+
+    errors = rel.assessment_format_contract_errors({
+        "assessment_format_policy": policy,
+        "blueprint_cells": cells,
+        "candidates": candidates,
+    })
+
+    assert any("policy duration 3" in error for error in errors)
+    assert any("represented subpoint count 2" in error for error in errors)
+    assert any("Subjective answer count" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    "malformed_maximum",
+    [
+        pytest.param("one", id="nonnumeric"),
+        pytest.param(True, id="bool"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param(1.5, id="fractional"),
+    ],
+)
+def test_final_policy_fails_closed_on_malformed_max_subpoints(
+    malformed_maximum,
+):
+    errors = rel.assessment_format_contract_errors({
+        "assessment_format_policy": {
+            "policy_id": "malformed-maximum-test",
+            "formats_by_sheet": {
+                "objective": {
+                    "Match the Following": {
+                        "marks": {
+                            "mode": "per_subpoint",
+                            "marks_per_subpoint": 1,
+                            "max_subpoints": malformed_maximum,
+                        },
+                    },
+                },
+            },
+        },
+        "blueprint_cells": [{
+            "cell_id": "CELL-BAD-MAX",
+            "sheet_kind": "objective",
+            "question_category": "Match the Following",
+            "marks": 1,
+        }],
+        "candidates": [],
+    })
+
+    assert any(
+        "max_subpoints must be a positive integer" in error
+        for error in errors
+    ), errors
+
+
+def test_compound_parent_and_split_child_cannot_be_separate_questions():
+    errors = rel.parent_child_candidate_errors({
+        "source_atoms": [
+            {"source_qid": "QINV-1", "parent_qid": None},
+            {"source_qid": "QINV-1.1", "parent_qid": "QINV-1"},
+        ],
+        "candidates": [
+            {"candidate_id": "C-PARENT", "source_atom_ids": ["QINV-1"]},
+            {"candidate_id": "C-CHILD", "source_atom_ids": ["QINV-1.1"]},
+        ],
+    })
+
+    assert errors == [
+        "compound source 'QINV-1' and subpart 'QINV-1.1' are materialized "
+        "as separate questions"
+    ]
 
 
 def test_zero_loss_invariant_names_every_break():
@@ -215,6 +326,195 @@ def test_release_refuses_mixed_answer_media_and_one_four_mark_rubric():
     assert any("equation_katex_wrapper" in error for error in errors)
     assert any("requires at least two rubric blocks" in error for error in errors)
     assert "question_text rich-text: unsupported_table" in errors
+
+
+@pytest.mark.parametrize(
+    "prefixed_option", [
+        "a) Circle", "A) Circle", "(a) Circle", "a. Circle", "A: Circle",
+    ],
+)
+def test_release_refuses_prefixed_options_and_malformed_rubric_tags(
+    prefixed_option,
+):
+    objective = {
+        "candidate_id": "C-OPTION",
+        "source_atom_ids": ["QINV-OPTION"],
+        "blueprint_cell_id": "CELL-OPTION",
+        "question": "Choose the correct shape.",
+        "question_text": "Choose the correct shape.",
+        "sheet_kind": "objective",
+        "question_category": "Multiple Choice Question",
+        "cognitive_skill": "Remember",
+        "difficulty": "Less",
+        "marks": 1,
+        "question_duration": 1,
+        "math_keyboard": "",
+        "answer_restriction": "Specific",
+        "restriction_reason": "One option is correct.",
+        "answers": [{
+            "answer_type": "Phrases",
+            "answer_content": prefixed_option,
+            "correct_answer": "1",
+            "answer_weightage": 1,
+        }, {
+            "answer_type": "Phrases",
+            "answer_content": "Sphere",
+            "correct_answer": "0",
+            "answer_weightage": 0,
+        }],
+        "sub_questions": [],
+    }
+    descriptive = {
+        **objective,
+        "candidate_id": "C-RUBRIC",
+        "source_atom_ids": ["QINV-RUBRIC"],
+        "blueprint_cell_id": "CELL-RUBRIC",
+        "sheet_kind": "descriptive",
+        "question_category": "Long Answer",
+        "marks": 2,
+        "question_duration": 2,
+        "math_keyboard": "No",
+        "answer_restriction": "Open",
+        "restriction_reason": "Equivalent explanations are accepted.",
+        "display_answer": "A valid explanation.",
+        "answers": [{
+            "answer_type": "Phrases",
+            "answer_content": "[content] missing colon",
+            "answer_weightage": 2,
+        }],
+    }
+
+    assert any(
+        "repeats its letter label" in error
+        for error in rel.validate_candidate(objective)
+    )
+    assert any(
+        "without its required colon" in error
+        for error in rel.validate_candidate(descriptive)
+    )
+
+    descriptive["answers"][0]["answer_content"] = "[content]:   "
+    assert any(
+        "allowed functional tag" in error
+        for error in rel.validate_candidate(descriptive)
+    )
+
+
+def test_release_accepts_canonical_subjective_placeholders():
+    prompt = "Complete $$a$$, then complete $$b$$."
+    candidate = {
+        "candidate_id": "C-SUBJ",
+        "source_atom_ids": ["QINV-SUBJ"],
+        "blueprint_cell_id": "CELL-SUBJ",
+        "question": prompt,
+        "question_text": prompt,
+        "sheet_kind": "subjective",
+        "question_category": "Fill in the Blanks",
+        "cognitive_skill": "Apply",
+        "difficulty": "Less",
+        "marks": 2,
+        "question_duration": 2,
+        "math_keyboard": "No",
+        "answer_restriction": "Specific",
+        "restriction_reason": "The source fixes both missing words.",
+        "answers": [
+            {
+                "answer_type": "Phrases",
+                "answer_content": "first",
+                "answer_display": "first",
+                "answer_weightage": 1,
+                "placeholder": "a",
+            },
+            {
+                "answer_type": "Phrases",
+                "answer_content": "second",
+                "answer_display": "second",
+                "answer_weightage": 1,
+                "placeholder": "b",
+            },
+        ],
+        "sub_questions": [],
+    }
+
+    wide_profile = {
+        **assessment_profile.DEFAULT_PROFILE,
+        "sheet_kinds": ("objective", "descriptive", "subjective"),
+    }
+    assert rel.validate_candidate(candidate, wide_profile) == []
+
+    undeclared = {
+        **candidate,
+        "question": prompt + " Do not hide $$x$$.",
+        "question_text": prompt + " Do not hide $$x$$.",
+    }
+    assert any(
+        "raw_math_delimiter" in error
+        for error in rel.validate_candidate(undeclared, wide_profile)
+    )
+
+
+def test_release_accepts_exclusive_multipart_descriptive_scoring():
+    candidate = {
+        "candidate_id": "C-MULTIPART",
+        "source_atom_ids": ["QINV-MULTIPART"],
+        "blueprint_cell_id": "CELL-MULTIPART",
+        "question": "Answer both parts.",
+        "question_text": "Answer both parts.",
+        "sheet_kind": "descriptive",
+        "question_category": "Long Answer",
+        "cognitive_skill": "Apply",
+        "difficulty": "Moderate",
+        "marks": 4,
+        "question_duration": 5,
+        "math_keyboard": "No",
+        "answer_restriction": "Specific",
+        "restriction_reason": "Each source part fixes its own result.",
+        "display_answer": "First result; second result.",
+        "answer_explanation": "Apply the stated method to each part.",
+        "answers": [],
+        "sub_questions": [
+            {
+                "text": "State the first result.",
+                "marks": 2,
+                "keywords": [
+                    {
+                        "answer_type": "Phrases",
+                        "keyword": "[content]: first result",
+                        "weightage": 2,
+                    },
+                ],
+            },
+            {
+                "text": "Explain the second result.",
+                "marks": 2,
+                "keywords": [
+                    {
+                        "answer_type": "Phrases",
+                        "keyword": "[method]: second result",
+                        "weightage": 2,
+                    },
+                ],
+            },
+        ],
+    }
+
+    assert rel.validate_candidate(candidate) == []
+
+    duplicated_scoring = {
+        **candidate,
+        "answers": [
+            {
+                "answer_type": "Phrases",
+                "answer_content": "Duplicated shared rubric.",
+                "answer_weightage": 4,
+            },
+        ],
+    }
+    errors = rel.validate_candidate(duplicated_scoring)
+    assert any("duplicates scoring" in error for error in errors)
+    assert not any(
+        "requires at least two rubric blocks" in error for error in errors
+    )
 
 
 def test_release_model_persists_with_hashes(db):

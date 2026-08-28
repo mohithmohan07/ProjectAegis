@@ -27,6 +27,7 @@ import re
 
 from .. import config, models
 from ..bulk_import import assessment_workbook
+from . import assessment_profile
 from . import assessment_grouping as grouping
 from . import assessment_release as rel
 from . import identity
@@ -945,6 +946,10 @@ def upload_master_to_database(
             "issues and publish a new version")
 
     snapshot = release.concept_snapshot
+    run_profile = assessment_profile.resolve(
+        _run_profile(release.provider_identity)
+    )
+    forced_blank = set(assessment_profile.forced_blank_fields(run_profile))
     concept_ids = _resolve_snapshot_concept_ids(db, snapshot)
     try:
         groups_by_key: dict[str, models.Group] = {}
@@ -1095,6 +1100,14 @@ def upload_master_to_database(
                 question_category=str(
                     candidate.get("question_category") or ""),
                 cognitive_skills=str(candidate.get("cognitive_skill") or ""),
+                question_source=str(candidate.get(
+                    "question_source",
+                    assessment_profile.question_source(run_profile),
+                ) or ""),
+                question_disclaimer=(
+                    "" if "question_disclaimer" in forced_blank
+                    else str(candidate.get("question_disclaimer") or "")
+                ),
                 question_appears_in=str(
                     candidate.get("question_appears_in") or ""),
                 level_of_difficulty=str(candidate.get("difficulty") or ""),

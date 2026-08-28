@@ -19,7 +19,7 @@ META = {
 PROFILE = {
     "name": "reference-test",
     "appears_in": "Pre/Post-Worksheet/Test",
-    "allow_subjective_rows": False,
+    "sheet_kinds": ("objective", "descriptive"),
 }
 
 
@@ -151,7 +151,7 @@ def test_cell_decision_carries_complete_content_without_print_position(
     assert cell["accepted_source_qids"] == ["QINV-0001"]
     assert cell["flags"] == []
     authority = cell["authority"]
-    assert authority["policy_version"] == "assessment-cell-2"
+    assert authority["policy_version"] == "assessment-cell-3"
     assert authority["review_flags"] == []
     assert "created_at" not in authority
     assert "provider" not in authority
@@ -340,7 +340,7 @@ def test_mechanical_exhaustion_routes_to_recorded_fixer(monkeypatch) -> None:
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.cell",
         "unit_id": "QINV-0001",
-        "policy_version": "assessment-cell-2",
+        "policy_version": "assessment-cell-3",
     }
     assert cell["sheet_kind"] == "descriptive"
     assert cell["authority"]["fixer"] is True
@@ -420,7 +420,7 @@ def test_cell_input_identity_and_profile_fail_before_provider_calls() -> None:
         cells.decide_cells(
             [_atom()],
             meta=META,
-            profile={"allow_subjective_rows": False},
+            profile={"sheet_kinds": ("objective", "descriptive")},
             envelope_sha256=ENVELOPE_SHA256,
             provider=provider,
         )
@@ -436,9 +436,9 @@ def test_a_widened_profile_widens_the_cells_wire_contract(monkeypatch) -> None:
     green test whose name has stopped being true is worse than a red one.
 
     The plumbing genuinely widening the cells wire is the whole point of
-    M5-M6; the refusal moves DOWNSTREAM to the named
-    ``sheet_kind_not_renderable`` defect (T7.5/B3), which is where B3 puts
-    it and where all four downloads survive it.
+    M5-M6. Subjective is now renderable end to end; this test keeps the
+    profile-boundary assertion by contrasting an explicit two-sheet profile
+    with an explicit three-sheet profile.
     """
     monkeypatch.setattr(cells.config, "phase3_decision_workers", lambda: 1)
     widened = {
@@ -483,3 +483,155 @@ def test_a_widened_profile_widens_the_cells_wire_contract(monkeypatch) -> None:
     assert requests[-1]["profile"]["allowed_sheet_kinds"] == [
         "objective", "descriptive",
     ]
+
+
+def test_cell_prompt_gets_profile_categories_and_marks_contract(monkeypatch) -> None:
+    monkeypatch.setattr(cells.config, "phase3_decision_workers", lambda: 1)
+    math_meta = {
+        "board": "MSBSHSE",
+        "grade": "6",
+        "subject": "Mathematics",
+    }
+    requests = []
+
+    def provider(request: dict) -> dict:
+        requests.append(copy.deepcopy(request))
+        attempt = len(requests)
+        if attempt == 1:
+            return _valid_response(
+                request, question_category="Long Answer", marks=3,
+            )
+        if attempt == 2:
+            return _valid_response(
+                request,
+                question_category="Short Answer Type (2 Marks)",
+                marks=3,
+            )
+        return _valid_response(
+            request,
+            question_category="Short Answer Type (2 Marks)",
+            marks=2,
+        )
+
+    cell = cells.decide_cells(
+        [_atom()],
+        meta=math_meta,
+        profile=cells.assessment_profile.DEFAULT_PROFILE,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        store=kernel.DecisionStore(),
+    )[0]
+
+    assert len(requests) == 3
+    policy = requests[0]["profile"]["assessment_format_policy"]
+    assert policy["policy_id"] == (
+        "msbshse-grade-6-mathematics-2026-08-27"
+    )
+    assert tuple(policy["formats_by_sheet"]["descriptive"]) == (
+        "Very Short Answer Questions",
+        "Short Answer Type (2 Marks)",
+        "Short Answer Type (3 Marks)",
+        "Long Answer Type (4 Marks)",
+        "Long Answer Type (5 Marks)",
+    )
+    assert any(
+        "question_category must be one of" in defect
+        for defect in requests[1]["response_contract_feedback"]
+    )
+    assert any(
+        "marks must be one of (2,)" in defect
+        for defect in requests[2]["response_contract_feedback"]
+    )
+    assert cell["question_category"] == "Short Answer Type (2 Marks)"
+    assert cell["marks"] == 2.0
+
+
+def test_cell_systems_do_not_pin_category_literals() -> None:
+    for literal in (
+        "Multiple Choice Question",
+        "Assertion & Reasons",
+        "Case Based Questions",
+    ):
+        assert literal not in cells.CELL_SYSTEM
+        assert literal not in cells.GENERATED_CELL_SYSTEM
+
+
+def test_per_subpoint_marks_reject_fractional_basis(monkeypatch) -> None:
+    monkeypatch.setattr(cells.config, "phase3_decision_workers", lambda: 1)
+    math_meta = {
+        "board": "Maharashtra",
+        "grade": "Class 6",
+        "subject": "Maths",
+    }
+    requests = []
+
+    def provider(request: dict) -> dict:
+        requests.append(copy.deepcopy(request))
+        return _valid_response(
+            request,
+            sheet_kind="subjective",
+            question_category="Fill in the blanks",
+            marks=1.5 if len(requests) == 1 else 2,
+        )
+
+    cell = cells.decide_cells(
+        [_atom()],
+        meta=math_meta,
+        profile=cells.assessment_profile.DEFAULT_PROFILE,
+        envelope_sha256=ENVELOPE_SHA256,
+        provider=provider,
+        store=kernel.DecisionStore(),
+    )[0]
+
+    assert any(
+        "positive whole-number multiple" in defect
+        for defect in requests[1]["response_contract_feedback"]
+    )
+    assert cell["sheet_kind"] == "subjective"
+    assert cell["marks"] == 2.0
+
+
+@pytest.mark.parametrize(
+    "malformed_maximum",
+    [
+        pytest.param("one", id="nonnumeric"),
+        pytest.param(True, id="bool"),
+        pytest.param(0, id="zero"),
+        pytest.param(-1, id="negative"),
+        pytest.param(1.5, id="fractional"),
+    ],
+)
+def test_cell_checker_fails_closed_on_malformed_max_subpoints(
+    malformed_maximum,
+) -> None:
+    policy = {
+        "policy_id": "malformed-maximum-test",
+        "formats_by_sheet": {
+            "objective": {
+                "Match the Following": {
+                    "marks": {
+                        "mode": "per_subpoint",
+                        "marks_per_subpoint": 1,
+                        "max_subpoints": malformed_maximum,
+                    },
+                },
+            },
+        },
+    }
+    checker = cells._cell_checker(
+        "QINV-MAX", ("objective",), policy,
+    )
+
+    defects = checker({
+        "source_qid": "QINV-MAX",
+        "sheet_kind": "objective",
+        "question_category": "Match the Following",
+        "cognitive_skill": "Remember",
+        "difficulty": "Less",
+        "marks": 1,
+        "rationale": "One represented match is within the wire shape.",
+    })
+
+    assert any(
+        "invalid max_subpoints policy" in defect for defect in defects
+    ), defects

@@ -37,12 +37,14 @@ def _plan(*, overlap: bool = False) -> dict:
         {
             "block_id": "BLK-WARM",
             "destination_plan_concept_id": "PC-1",
+            "placement_context": "opening_pre_reading",
             "skill": "personal response before reading",
             "rationale": "The cue activates the opening stanza's new-start idea.",
         },
         {
             "block_id": "BLK-DEVICE",
             "destination_plan_concept_id": "PC-1",
+            "placement_context": "contextual_support",
             "skill": "noticing the quoted sound example in context",
             "rationale": (
                 "The sourcebook quotation comes from the opening stanza and "
@@ -54,6 +56,7 @@ def _plan(*, overlap: bool = False) -> dict:
         threaded.append({
             "block_id": "BLK-TEACHER",
             "destination_plan_concept_id": "PC-3",
+            "placement_context": "contextual_support",
             "skill": "teacher guidance",
             "rationale": "Deliberate invalid overlap for the regression.",
         })
@@ -268,6 +271,9 @@ def test_attach_support_carries_whole_blocks_to_the_decided_concept_once():
     assert [
         row["block_id"] for row in opening[support.SUPPORT_FIELD]
     ] == ["BLK-WARM", "BLK-DEVICE"]
+    assert [
+        row["placement_context"] for row in opening[support.SUPPORT_FIELD]
+    ] == ["opening_pre_reading", "contextual_support"]
 
     whole = _row_by_plan_id(first, "PC-4")
     assert whole[support.NON_TEACHING_FIELD] == [{
@@ -279,6 +285,58 @@ def test_attach_support_carries_whole_blocks_to_the_decided_concept_once():
 def test_one_source_occurrence_cannot_be_threaded_and_non_teaching():
     with pytest.raises(ValueError, match="both threaded support and non-teaching"):
         support.prepare_envelope(_raw_env(overlap=True))
+
+
+def test_support_rejects_a_missing_or_unknown_placement_context():
+    missing = _raw_env()
+    missing_plan = json.loads(missing["metadata"]["language_topology_plan"])
+    del missing_plan["threaded_components"][0]["placement_context"]
+    missing["metadata"]["language_topology_plan"] = json.dumps(missing_plan)
+    missing["graph"]["metadata"]["language_topology_plan"] = json.dumps(
+        missing_plan
+    )
+    missing["envelope_sha256"] = envelope.seal_sha256(missing)
+    with pytest.raises(ValueError, match="invalid placement_context"):
+        support.prepare_envelope(missing)
+
+    unknown = _raw_env()
+    unknown_plan = json.loads(unknown["metadata"]["language_topology_plan"])
+    unknown_plan["threaded_components"][0]["placement_context"] = "opening"
+    unknown["metadata"]["language_topology_plan"] = json.dumps(unknown_plan)
+    unknown["graph"]["metadata"]["language_topology_plan"] = json.dumps(
+        unknown_plan
+    )
+    unknown["envelope_sha256"] = envelope.seal_sha256(unknown)
+    with pytest.raises(ValueError, match="invalid placement_context"):
+        support.prepare_envelope(unknown)
+
+
+def test_support_rejects_late_opening_and_duplicate_block_verdicts():
+    late = _raw_env()
+    late_plan = json.loads(late["metadata"]["language_topology_plan"])
+    late_plan["threaded_components"][0][
+        "destination_plan_concept_id"
+    ] = "PC-3"
+    for owner in (late["metadata"], late["graph"]["metadata"]):
+        owner["language_topology_plan"] = json.dumps(late_plan)
+    late["envelope_sha256"] = envelope.seal_sha256(late)
+    with pytest.raises(ValueError, match="opening support must route"):
+        support.prepare_envelope(late)
+
+    duplicate = _raw_env()
+    duplicate_plan = json.loads(
+        duplicate["metadata"]["language_topology_plan"]
+    )
+    duplicate_plan["threaded_components"].append(copy.deepcopy(
+        duplicate_plan["threaded_components"][0]
+    ))
+    for owner in (
+        duplicate["metadata"], duplicate["graph"]["metadata"],
+    ):
+        owner["language_topology_plan"] = json.dumps(duplicate_plan)
+    duplicate["envelope_sha256"] = envelope.seal_sha256(duplicate)
+    with pytest.raises(ValueError, match="repeats source block"):
+        support.prepare_envelope(duplicate)
 
 
 def test_install_wraps_build_run_and_polish_once_and_keeps_audit_private():

@@ -32,8 +32,8 @@ from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-3"
-CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-3"
+MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-4"
+CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-4"
 GROUP_POLICY_VERSION = "assessment-master-refiner-group-1"
 CANDIDATE_KIND = "assessment.master_refiner.candidate"
 GROUP_KIND = "assessment.master_refiner.group"
@@ -107,8 +107,14 @@ CANDIDATE_SYSTEM = (
     "type. Preserve each typed answer_content/keyword medium exactly: "
     "Equation is one full raw-LaTeX cell without [Katex] and with any words "
     "inside \\text{...}; Phrases is wholly plain text without TeX. Never "
-    "introduce tabular/array "
-    "markup or collapse a 4-mark Descriptive rubric to one block. If no "
+    "introduce tabular, Markdown-table, or noncanonical array markup; a "
+    "text-only table may use one complete canonical "
+    "\\begin{array}{column-spec}...\\end{array}. For a multipart "
+    "Descriptive candidate, "
+    "main answer blocks stay empty and scoring stays exclusively in the "
+    "subquestion keyword rubrics. Only a single-part 4-mark Descriptive "
+    "candidate requires at least two main rubric blocks. Subjective question "
+    "placeholders such as $$a$$ are immutable CMS tokens, not raw math. If no "
     "polish is warranted, echo the record unchanged. Return only "
     "strict JSON with record_kind='candidate', the exact row_ref, the complete "
     "record, and a non-empty rationale."
@@ -379,6 +385,22 @@ def _response_checker(
                         f"answer {answer_index} violates declared medium: "
                         f"{issue}"
                     )
+                sheet_kind = str(record.get("sheet_kind") or "")
+                if sheet_kind == "objective" and rel.option_content_has_label(
+                    answer.get("answer_content")
+                ):
+                    defects.append(
+                        f"objective option {answer_index} repeats its letter "
+                        "label"
+                    )
+                if sheet_kind == "descriptive" and rel.malformed_rubric_tag(
+                    answer.get("answer_content"), answer.get("answer_type"),
+                ):
+                    defects.append(
+                        f"descriptive rubric {answer_index} does not start "
+                        "with an allowed functional tag or is without its "
+                        "required colon"
+                    )
             for sub_index, subquestion in enumerate(
                 record.get("sub_questions") or [], start=1
             ):
@@ -398,14 +420,32 @@ def _response_checker(
                             f"{keyword_index} violates declared medium: "
                             f"{issue}"
                         )
+                    if rel.malformed_rubric_tag(
+                        keyword.get("keyword"), keyword.get("answer_type"),
+                    ):
+                        defects.append(
+                            f"subquestion {sub_index} keyword "
+                            f"{keyword_index} does not start with an allowed "
+                            "functional tag or is without its required colon"
+                        )
             if (
                 str(record.get("sheet_kind") or "") == "descriptive"
                 and _is_four_marks(record.get("marks"))
+                and not list(record.get("sub_questions") or [])
                 and len(record.get("answers") or []) < 2
             ):
                 defects.append(
-                    "4-mark descriptive candidate requires at least two "
-                    "rubric blocks"
+                    "single-part 4-mark descriptive candidate requires at "
+                    "least two rubric blocks"
+                )
+            if (
+                str(record.get("sheet_kind") or "") == "descriptive"
+                and list(record.get("sub_questions") or [])
+                and list(record.get("answers") or [])
+            ):
+                defects.append(
+                    "multipart descriptive scoring must use subquestion "
+                    "keyword rubrics exclusively"
                 )
             for field in ("answer_explanation", "display_answer"):
                 if field == "display_answer" and str(
@@ -725,8 +765,15 @@ def _validation_state(
         ]
         if str(candidate.get("sheet_kind") or "") == "descriptive":
             expected.append(("display_answer", candidate.get("display_answer")))
+        answer_field = (
+            "answer"
+            if str(candidate.get("sheet_kind") or "") == "subjective"
+            else "answer_content"
+        )
         for index, answer in enumerate(candidate.get("answers") or [], start=1):
-            expected.append((f"answer_content_{index}", answer.get("answer_content")))
+            expected.append((
+                f"{answer_field}_{index}", answer.get("answer_content")
+            ))
         for sub_index, subquestion in enumerate(
             candidate.get("sub_questions") or [], start=1
         ):
@@ -747,53 +794,82 @@ def _validation_state(
         str(group.get("group_key") or ""): group
         for group in payload.get("groups") or []
     }
-    # The SECOND read-back enforcing "every group has a rendered Master
-    # row", scoped exactly like ``validate_master_file``'s
-    # ``expected_group_keys`` and in the same change (OWNER RULING OD5 /
-    # spec-step8 T16). A concept with zero placed question rows gets one
-    # tail row stopping at the concept columns and NO Group row, so an
-    # unscoped read-back would turn every questionless concept into an
-    # error. It is NOT "a group with no questions" — that would stop
-    # catching a genuinely missing catalogue row on a concept that does
-    # have questions.
-    #
-    # Scoped through the SAME decision the renderer takes, not a looser
-    # restatement of it: ``rel.candidate_home_finding`` is what decides
-    # whether a candidate reaches a data row, and the renderable set is
-    # ``sheet_for_kind()`` — the module constant INTERSECTED with the
-    # layout's sheet-name map — not the constant alone. The former version
-    # required only a label and a renderable kind, so on an already-defective
-    # release it reported extra "has no rendered Master row" errors the
-    # renderer legitimately caused.
+    # Empty BG/IG/AG shells remain in the immutable payload as the editing
+    # surface, but the Master renderer intentionally omits them. Reuse the
+    # renderer's one mechanical home decision here: a group is occupied for
+    # workbook purposes only when a candidate has a resolved home in it.
+    # This avoids a second, membership-based definition drifting from the
+    # renderer while the payload's own membership is checked by freeze.
+    snapshot_groups = [
+        group for group in snapshot.get("groups") or []
+        if isinstance(group, Mapping)
+    ]
     snapshot_concept_keys = {
         str(concept.get("concept_key") or "")
         for topic in snapshot.get("topics") or []
         for concept in topic.get("concepts") or []
     }
-    snapshot_groups_by_key: dict[str, Any] = {}
-    for group in snapshot.get("groups") or []:
-        key = str(group.get("group_key") or "")
-        if key and key not in snapshot_groups_by_key:
-            snapshot_groups_by_key[key] = group
+    snapshot_groups_by_key: dict[str, Mapping[str, Any]] = {}
+    renderable_group_keys: list[str] = []
+    for group in snapshot_groups:
+        group_key = str(group.get("group_key") or "")
+        if not group_key or group_key in snapshot_groups_by_key:
+            continue
+        snapshot_groups_by_key[group_key] = group
+        if str(group.get("concept_key") or "") in snapshot_concept_keys:
+            renderable_group_keys.append(group_key)
+
     renderable = tuple(assessment_workbook.sheet_for_kind())
-    placed_concepts = {
-        str(candidate.get("concept_key") or "")
-        for candidate in snapshot.get("candidates") or []
-        if rel.candidate_home_finding(
-            candidate, snapshot_concept_keys, snapshot_groups_by_key,
-            renderable) is None
-    }
-    concept_key_by_group = {
-        str(group.get("group_key") or ""): str(group.get("concept_key") or "")
-        for group in snapshot.get("groups") or []
-    }
+    profile_name = assessment_profile.name(profile)
+    home_resolved_group_keys: set[str] = set()
+    row_expected_group_keys: set[str] = set()
+    for candidate in snapshot.get("candidates") or []:
+        if not isinstance(candidate, Mapping):
+            continue
+        finding = rel.candidate_home_finding(
+            candidate,
+            snapshot_concept_keys,
+            snapshot_groups_by_key,
+            renderable,
+            profile_name,
+        )
+        if finding is None or finding.get("code") == rel.SHEET_KIND_NOT_RENDERABLE:
+            group_key = str(candidate.get("group_key") or "")
+            home_resolved_group_keys.add(group_key)
+            if finding is None:
+                row_expected_group_keys.add(group_key)
+
+    expected_omitted_shells = [
+        group_key
+        for group_key in renderable_group_keys
+        if group_key not in home_resolved_group_keys
+    ]
+    actual_omitted_shells = [
+        str(group_key)
+        for group_key in (
+            manifest.get("issues", {}).get("omitted_empty_group_shells") or []
+        )
+    ]
+    if actual_omitted_shells != expected_omitted_shells:
+        errors.append(
+            "refiner-readback: omitted empty group shell ledger "
+            f"{actual_omitted_shells!r} != expected "
+            f"{expected_omitted_shells!r}"
+        )
     for group_key, group in groups_by_key.items():
         rows = group_rows.get(group_key, [])
+        occupied = group_key in row_expected_group_keys
+        if not occupied:
+            if rows:
+                errors.append(
+                    f"refiner-readback: empty group shell {group_key!r} "
+                    "unexpectedly has a rendered Master row"
+                )
+            continue
         if not rows:
-            if concept_key_by_group.get(group_key, "") not in placed_concepts:
-                continue
             errors.append(
-                f"refiner-readback: group {group_key!r} has no rendered Master row"
+                f"refiner-readback: occupied group {group_key!r} has no "
+                "rendered Master row"
             )
             continue
         expected = _wire_text(group.get("semantic_description"))
@@ -956,8 +1032,9 @@ def refine_master(
         envelope_sha = str(envelope_sha256 or "").strip()
         if not envelope_sha:
             raise MasterRefinerError("a sealed envelope hash is required")
-        profile = assessment_profile.resolve(
-            metadata.get("assessment_profile") or metadata.get("profile")
+        profile = assessment_profile.resolve_for_metadata(
+            metadata.get("assessment_profile") or metadata.get("profile"),
+            metadata,
         )
         baseline = _validation_state(original, profile)
         if baseline["errors"]:

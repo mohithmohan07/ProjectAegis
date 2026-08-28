@@ -2725,6 +2725,44 @@ def _chapter_meta_for_release(
         return {}
 
 
+def _pre_chapter_meta_from_staged_post(
+    job: models.UploadJob,
+    pre_meta: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Use one chapter description and duration across both release lanes.
+
+    The Pre metadata pass still authors its own ``topic_descriptions`` from
+    the prerequisite topology.  Chapter-level meaning, however, belongs to
+    the shared source chapter, so the already-staged Post sibling is the
+    authority for the two chapter-level fields consumed by the workbook
+    projections.  Copy only those fields: importing the Post sibling's whole
+    metadata object would overwrite the Pre lane's distinct topic prose.
+
+    A direct/legacy Pre staging call can have no Post sibling.  In that case
+    keep the Pre pass's result rather than turning an otherwise downloadable
+    diagnostic release into an exception.
+    """
+
+    merged = copy.deepcopy(dict(pre_meta or {}))
+    post_payload = release_payload(job, lane=LANE_POST)
+    post_meta = (
+        post_payload.get("chapter_meta")
+        if isinstance(post_payload, Mapping)
+        else None
+    )
+    if not isinstance(post_meta, Mapping):
+        return merged
+    for field in ("chapter_description", "chapter_duration_minutes"):
+        if field in post_meta:
+            merged[field] = copy.deepcopy(post_meta[field])
+        else:
+            # Absence is part of the Post authority too.  Retaining a Pre
+            # value here would let the shared chapter diverge merely because
+            # one independently-authored Post field was omitted.
+            merged.pop(field, None)
+    return merged
+
+
 def _directory_metadata_for_release(
     db: Session, target_chapter_id: int,
 ) -> dict[str, Any]:
@@ -3906,8 +3944,11 @@ def stage_pre_release(
     source_document_hash = "sha256:" + hashlib.sha256(
         str(job.mmd_text or "").encode("utf-8")
     ).hexdigest()
-    chapter_meta = _chapter_meta_for_release(
-        db, target, annotated, pre_post="Pre",
+    chapter_meta = _pre_chapter_meta_from_staged_post(
+        job,
+        _chapter_meta_for_release(
+            db, target, annotated, pre_post="Pre",
+        ),
     )
     payload = {
         "version": RELEASE_VERSION,

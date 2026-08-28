@@ -37,6 +37,7 @@ fault in one lane would come to cost the other one its publication.
 """
 from __future__ import annotations
 
+import copy
 from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
@@ -258,6 +259,11 @@ def run_context(
         "lane": resolved,
         "layout_id": str(layout_id or layouts.REFERENCE_LAYOUT_ID),
         "profile": str((profile or {}).get("name") or ""),
+        # Keep the exact run-resolved mapping as well as the historical name.
+        # Metadata-selected sheet/blanking overrides are part of the immutable
+        # run contract and cannot be reconstructed from ``reference-1`` alone
+        # at the later create/publish seams.
+        "assessment_profile": copy.deepcopy(dict(profile or {})),
     }
     if job is not None:
         context["job_id"] = int(job.id)

@@ -43,7 +43,7 @@ REFERENCE_2 = assessment_profile.register({
     **assessment_profile.DEFAULT_PROFILE,
     "name": "reference-2",
     "sheet_kinds": ("objective", "descriptive", "subjective"),
-    "forced_blank_fields": ("question_disclaimer",),
+    "forced_blank_fields": ("chapter_duration", "question_disclaimer"),
 })
 
 
@@ -245,34 +245,42 @@ def test_the_questionless_shells_stay_in_the_payload_and_the_difference_is_recor
     assert set(recorded["shell_group_keys"]) == shells
     assert recorded["concept_title"] == (
         "Three-dimensional shape (06MSMA_T01_ThreeDim)")
+    assert shells <= set(issues["omitted_empty_group_shells"])
 
 
-def test_a_concept_with_questions_still_emits_its_unrepresented_group_rows():
-    """The negative control that pins where the line is."""
+def test_a_concept_with_questions_omits_unused_shells_and_rolls_up_occupied_groups():
+    """Only occupied groups become rows or concept-level rollups."""
 
     snapshot = _snapshot()
-    master, _ = mp.render_master_file(snapshot)
+    master, issues = mp.render_master_file(snapshot)
     rows = _objective_rows(master)
     catalogue = [
         row for row in rows
         if not row.get("question_label")
         and str(row.get("concept_title") or "").startswith("Two-dimensional")
     ]
-    assert [row["group_type"] for row in catalogue] == ["Advanced"]
+    assert catalogue == []
+    assert "(06MSMA_T01_TwoDim) AG01" in (
+        issues["omitted_empty_group_shells"]
+    )
+    assert "(06MSMA_T01_TwoDim) AG01" not in {
+        row["group_key"] for row in issues["group_provenance"]
+    }
+    objective = next(row for row in rows if row.get("question_label"))
+    assert objective["basic_groups"] == "(06MSMA_T01_TwoDim) BG01"
+    assert objective["intermediate_groups"] == (
+        "(06MSMA_T01_TwoDim) IG01"
+    )
+    assert objective["advanced_groups"] == ""
 
 
-def test_the_master_refiner_readback_still_fires_for_a_missing_catalogue_row(
+def test_the_master_refiner_readback_still_fires_for_a_missing_occupied_row(
     monkeypatch,
 ):
-    """The negative control for OD5's scoping of the SECOND read-back.
+    """The negative control for occupied-only group read-back.
 
-    Scoping ``placed_concepts`` is what stops every questionless concept
-    becoming a "refiner-readback: group … has no rendered Master row"
-    error. A scoping that went one step further — "a group with no
-    questions" — would ALSO stop catching a genuinely missing catalogue
-    row on a concept that does have questions, and the read-back would
-    stay green while proving nothing. This drops one provenance entry for
-    such a group and asserts the error still arrives.
+    Empty shells intentionally have no row. This drops the provenance for a
+    genuinely occupied group and proves that omission still fails closed.
     """
 
     from tests.test_assessment_master_refiner import _payload
@@ -389,16 +397,30 @@ def test_every_profile_key_has_a_named_reader():
         "group_status": (
             "app/bulk_import/assessment_workbook.py", "_group_record_fields"),
         "automatic_secondary_tags": (
-            "app/services/assessment_release.py", "validate_placement"),
+            "app/services/assessment_release.py", "validate_placement",
+            "automatic_secondary_tags"),
+        "assessment_format": (
+            "app/services/assessment_cells.py", "_profile_payload",
+            "assessment_format_policy"),
+        "assessment_format_overrides": (
+            "app/services/assessment_cells.py", "_profile_payload",
+            "assessment_format_policy"),
+        "run_profile_overrides": (
+            "app/services/assessment_release_run.py",
+            "run_release_for_job", "resolve_for_metadata"),
+    }
+    readers = {
+        key: value if len(value) == 3 else (*value, key)
+        for key, value in readers.items()
     }
     assert set(readers) == set(assessment_profile.DEFAULT_PROFILE)
-    for key, (path, function) in readers.items():
+    for key, (path, function, accessor) in readers.items():
         # No escape clause: every named reader is OUTSIDE
         # ``assessment_profile`` and goes through the accessor.
         assert not path.endswith("assessment_profile.py"), (key, path)
         source = Path(path).read_text(encoding="utf-8")
         assert f"def {function}(" in source, (key, path, function)
-        assert f"assessment_profile.{key}(" in source, (key, path)
+        assert f"assessment_profile.{accessor}(" in source, (key, path)
 
     # …and no module outside ``assessment_profile`` indexes ANY profile key
     # directly. A direct index skips the per-key DEFAULT_PROFILE fallback,
@@ -425,30 +447,41 @@ def test_forced_blank_fields_is_read_at_all_three_sites():
     ):
         assert '"chapter_duration"' in Path(path).read_text(encoding="utf-8")
 
-    # And the lever actually moves: reference-2 un-blanks chapter_duration.
+    # reference-1 stays pinned to a blank chapter duration. Conclusive
+    # Grade-6 MSBSHSE metadata selects the program override that carries the
+    # authored source value, proving the same profile lever remains live.
     snapshot = copy.deepcopy(_snapshot())
     snapshot["chapter"]["chapter_duration"] = "45 minutes"
     default_rows = _objective_rows(mp.render_master_file(snapshot)[0])
-    widened_rows = _objective_rows(
-        mp.render_master_file(snapshot, REFERENCE_2)[0])
+    msbshse_profile = assessment_profile.resolve_for_metadata(
+        assessment_profile.DEFAULT_PROFILE,
+        {"board": "MSBSHSE", "grade": "6", "subject": "English"},
+    )
+    carried_rows = _objective_rows(
+        mp.render_master_file(snapshot, msbshse_profile)[0])
     assert all(
-        not str(row.get("chapter_duration") or "") for row in default_rows)
+        not str(row.get("chapter_duration") or "")
+        for row in default_rows)
     assert all(
         str(row.get("chapter_duration") or "") == "45 minutes"
-        for row in widened_rows)
+        for row in carried_rows)
 
 
 def test_renderable_sheet_kinds_is_a_module_constant_not_the_profile():
     """T7.5/B3 — a profile-derived map has no ``None`` branch to take."""
 
-    assert mp.RENDERABLE_SHEET_KINDS == ("objective", "descriptive")
+    assert mp.RENDERABLE_SHEET_KINDS == (
+        "objective", "descriptive", "subjective")
     assert mp.sheet_for_kind() == {
-        "objective": "Objective", "descriptive": "Descriptive"}
-    # The layout carries Subjective; the RENDERER does not.
+        "objective": "Objective",
+        "descriptive": "Descriptive",
+        "subjective": "Subjective",
+    }
+    # All three layout answer styles have an explicit renderer branch.
     from app.bulk_import import layouts
     assert "subjective" in layouts.layout(
         layouts.REFERENCE_LAYOUT_ID).sheet_name_by_kind()
-    assert "subjective" not in mp.sheet_for_kind()
+    assert mp.sheet_for_kind()["subjective"] == "Subjective"
     workbook = Path(
         "app/bulk_import/assessment_workbook.py").read_text(encoding="utf-8")
     assert "MES" not in workbook.split("_MANIFEST_PATH")[1]
@@ -456,11 +489,40 @@ def test_renderable_sheet_kinds_is_a_module_constant_not_the_profile():
 
 def _subjective_snapshot() -> dict:
     snapshot = copy.deepcopy(_snapshot())
-    snapshot["candidates"][0]["sheet_kind"] = "subjective"
+    snapshot["candidates"][0].update({
+        "sheet_kind": "subjective",
+        "question_category": "Fill in the blanks",
+        "marks": 2.0,
+        "question_duration": 2.0,
+        "math_keyboard": "No",
+        "question": (
+            "A square has $$a$$ equal sides and $$b$$ right angles."
+        ),
+        "question_text": (
+            "A square has $$a$$ equal sides and $$b$$ right angles."
+        ),
+        "answers": [{
+            "answer_type": "Phrases",
+            "answer_content": "four",
+            "answer_display": "four",
+            "answer_weightage": 1,
+            "placeholder": "a",
+        }, {
+            "answer_type": "Phrases",
+            "answer_content": "four",
+            "answer_display": "four",
+            "answer_weightage": 1,
+            "placeholder": "b",
+        }],
+        "sub_questions": [],
+        "answer_explanation": (
+            "A square has four equal sides and four right angles."
+        ),
+    })
     return snapshot
 
 
-def test_a_subjective_candidate_a_widened_profile_allows_is_a_named_defect_not_a_render_error():
+def test_subjective_candidate_renders_and_reads_back_end_to_end():
     snapshot = _subjective_snapshot()
     candidate = {
         **snapshot["candidates"][0],
@@ -468,89 +530,30 @@ def test_a_subjective_candidate_a_widened_profile_allows_is_a_named_defect_not_a
         "restriction_reason": "bounded",
         "source_atom_ids": ["QINV-1"],
     }
-    # (i) it PASSES validate_candidate under the widened profile — the
-    #     plumbing working, and what fails today.
     assert rel.validate_candidate(candidate, REFERENCE_2) == []
-    # (ii) and yields a NAMED sheet_kind_not_renderable defect.
-    findings = rel.unresolved_question_homes(snapshot, REFERENCE_2)
-    named = [
-        f for f in findings if f["code"] == rel.SHEET_KIND_NOT_RENDERABLE]
-    assert len(named) == 1
-    assert named[0]["sheet_kind"] == "subjective"
-    assert named[0]["profile"] == "reference-2"
-    assert named[0]["renderable_sheet_kinds"] == ["objective", "descriptive"]
-    # (iii)/(iv) both workbooks are written, and no Subjective data row.
+    assert rel.unresolved_question_homes(snapshot) == []
+
     output = mp.build_dual_output(snapshot, REFERENCE_2)
     assert output["concepts_xlsx"][:2] == b"PK"
     assert output["master_xlsx"][:2] == b"PK"
+    assert output["valid"], output["manifest"]["read_back"]
+    assert output["manifest"]["issues"]["unplaced"] == []
     parsed = mp.parse_workbook(output["master_xlsx"])
-    assert parsed["sheets"]["Subjective"]["rows"] == []
-    # (v) no reason string anywhere names a school.
-    for item in output["manifest"]["issues"]["unplaced"]:
-        assert "MES" not in item["reason"]
-    for finding in findings:
-        assert "MES" not in finding["message"]
-
-
-def test_a_widened_profiles_subjective_candidate_blocks_the_upload_and_still_downloads(
-    db, client,
-):
-    """Spec S8 clauses (iii)/(iv), end to end rather than in the renderer.
-
-    The byte-string half above proves the workbooks exist. This proves the
-    consequence: ``_readiness`` BLOCKED, the database write refused, and
-    every artifact still served 200 — the fact that distinguishes a named
-    defect from the raise it replaced, which cost all four outputs.
-    """
-
-    from app.services import assessment_release_service as svc
-    from tests.test_mes_release_lifecycle import _fresh_release, OWNER
-
-    def widen(payload):
-        payload["candidates"][0]["sheet_kind"] = "subjective"
-        for cell in payload.get("blueprint_cells") or []:
-            cell["sheet_kind"] = "subjective"
-
-    release, _payload, label = _fresh_release(
-        db, mutate=widen,
-        provider_identity={"profile": "reference-2"})
-    assert any(
-        error.startswith(rel.SHEET_KIND_NOT_RENDERABLE)
-        for error in release.diagnostics["payload_errors"]
-    ), release.diagnostics["payload_errors"]
-
-    published = svc.publish_release(db, release)
-    assert published.diagnostics["readiness"] == svc.BLOCKED
-    with pytest.raises(svc.UploadRefused, match="blocked"):
-        svc.upload_master_to_database(db, published, owner_sub=OWNER)
-    for filename in ("master.xlsx", "concepts.xlsx"):
-        response = client.get(
-            f"/build-assessments/releases/{published.id}/{filename}")
-        assert response.status_code == 200, filename
-        assert response.content[:2] == b"PK"
-    # And the label reaches no data row of either workbook.
-    master = client.get(
-        f"/build-assessments/releases/{published.id}/master.xlsx").content
-    for sheet in mp.parse_workbook(master)["sheets"].values():
-        assert all(
-            str(row.get("question_label") or "") != label
-            for row in sheet["rows"])
-
-
-def test_the_reference_profile_still_refuses_a_subjective_candidate_at_freeze():
-    """The negative control: the two codes must not double-report."""
-
-    snapshot = _subjective_snapshot()
-    candidate = {
-        **snapshot["candidates"][0],
-        "blueprint_cell_id": "CELL-1",
-        "restriction_reason": "bounded",
-        "source_atom_ids": ["QINV-1"],
-    }
-    errors = rel.validate_candidate(candidate)
-    assert any("sheet_kind must be one of" in error for error in errors)
-    assert rel.SHEET_KIND_NOT_RENDERABLE not in {
-        f["code"] for f in rel.unresolved_question_homes(snapshot)}
+    subjective_rows = parsed["sheets"]["Subjective"]["rows"]
+    assert len(subjective_rows) == 1
+    row = subjective_rows[0]
+    assert row["question_label"] == "06MSMA_T01_TwoDim Q01"
+    assert row["question"] == candidate["question"]
+    assert row["question_text"] == candidate["question_text"]
+    assert row["math_keyboard"] == "No"
+    assert row["answer_type_1"] == "Phrases"
+    assert row["answer_1"] == "four"
+    assert row["answer_display_1"] == "four"
+    assert row["weightage_1"] == 1
+    assert row["placeholder_1"] == "a"
+    assert row["answer_2"] == "four"
+    assert row["placeholder_2"] == "b"
+    assert "correct_answer_1" not in mp.FIELDS["Subjective"]
 
 
 # --------------------------------------------------------------------------- #
@@ -857,24 +860,22 @@ def test_the_sealed_concept_projection_keeps_the_same_shape():
         )
 
 
-def test_the_reference_profile_cells_payload_is_byte_identical_before_and_after_threading():
-    """T12/M5's cost check: zero decisions re-key.
-
-    ``kernel.decision_key`` is computed over the request payload, and the
-    profile evidence is part of it. For the DEFAULT profile the derived
-    tuple is identical to the constant it replaced, so the payload stays
-    byte-identical and no recorded decision moves.
-    """
+def test_the_reference_profile_cells_payload_names_all_renderable_formats():
+    """The cell author receives the same three-sheet contract as rendering."""
 
     from app.services import assessment_cells as cells
 
     assert cells._allowed_sheet_kinds(
-        assessment_profile.DEFAULT_PROFILE) == ("objective", "descriptive")
-    assert cells._profile_payload(assessment_profile.DEFAULT_PROFILE) == {
-        "name": "reference-1",
-        "allowed_sheet_kinds": ["objective", "descriptive"],
-        "appears_in": "Pre/Post-Worksheet/Test",
-    }
+        assessment_profile.DEFAULT_PROFILE) == (
+            "objective", "descriptive")
+    payload = cells._profile_payload(assessment_profile.DEFAULT_PROFILE)
+    assert payload["name"] == "reference-1"
+    assert payload["allowed_sheet_kinds"] == [
+        "objective", "descriptive"]
+    assert payload["appears_in"] == "Pre/Post-Worksheet/Test"
+    assert tuple(
+        payload["assessment_format_policy"]["formats_by_sheet"]
+    ) == ("objective", "subjective", "descriptive")
 
 
 def test_the_group_home_verdict_is_the_same_four_inputs_the_renderer_reads():
@@ -896,9 +897,8 @@ def test_the_master_refiner_readback_accepts_a_real_questionless_group(db=None):
     real payload group whose concept ends with ZERO placed question rows now
     legitimately has none — the concept gets one tail row instead — so
     leaving this read-back unscoped turns every affected concept into an
-    error. It takes the SAME scoping as ``validate_master_file``, and it is
-    NOT "a group with no questions", which would stop catching a genuinely
-    missing catalogue row on a concept that does have questions.
+    error. The occupied groups still receive exact read-back validation,
+    while empty shells are represented only in the internal snapshot.
     """
 
     from tests.test_assessment_master_refiner import (

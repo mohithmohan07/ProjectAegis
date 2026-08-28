@@ -14,11 +14,10 @@ independently teachable, where a support block belongs, and how the grade and
 board should shape the writing. Deterministic code validates only the plan's
 IDs, role vocabulary and exact accounting.
 
-Version 4 deliberately re-keys the content-addressed plan cache. It retains the
-sourcebook-faithful literary grain introduced by version 3 and makes every
-support block's transport verdict explicit, so a plan cannot describe the
-right stanza/episode topology while leaving Word Baskets, device boxes,
-performance cues or threaded language components stranded in the plan text.
+Version 5 deliberately re-keys the content-addressed plan cache. It retains the
+sourcebook-faithful literary grain and explicit support transport introduced by
+version 4, while preserving opening Warm-ups, coherent separately headed
+grammar mini-units and the teachable grain of short prose.
 """
 from __future__ import annotations
 
@@ -28,8 +27,8 @@ import sys
 from . import language_topology as topology
 
 
-CONTRACT_VERSION = 4
-LANGUAGE_ADAPTER_VERSION = "language-topology-4"
+CONTRACT_VERSION = 5
+LANGUAGE_ADAPTER_VERSION = "language-topology-5"
 SEMANTIC_ROLES = (
     "ordinary",
     "stanza_culmination",
@@ -38,7 +37,7 @@ SEMANTIC_ROLES = (
     "chapter_culmination",
 )
 
-AUTHOR_SYSTEM = """\
+AUTHOR_SYSTEM = f"""\
 You are the language-chapter topology author for a school pipeline.
 
 The Architect has already selected the chapter's mode (poem or prose) — you
@@ -76,16 +75,22 @@ PROSE MODE — INCLUDING FABLES, STORIES AND PLAYS
 2. Inside each Topic create one ordinary concept for every significant,
    independently teachable episode or turn. Give it a dramatic,
    source-grounded title; do not collapse distinct turns whose difference
-   carries the work's argument.
-3. End every local prose Topic with exactly one topic_culmination concept that
-   teaches the episode pattern or development as a whole, never a name list.
+   carries the work's argument. A minor dialogue, reaction, plan or decision
+   beat is not independently teachable merely because it changes the action.
+3. End every local narrative prose Topic with exactly one topic_culmination
+   concept that teaches the episode pattern or development as a whole, never a
+   name list. This culmination rule does not turn a separately headed language
+   mini-unit into a story episode.
+
+{topology.SOURCE_FAITHFUL_PROSE_ROUTING_POLICY}
 
 SUPPORTING PRINTED BLOCKS — BOTH MODES
-Only the poem/story/play and its taught literary/linguistic content become
-concepts. A Warm-up, think/write cue, read/recite direction, comprehension
-instruction, discussion cue, diagram, project, Word Basket, vocabulary box,
-Poetic Device box, facilitator/teacher note or exercise heading does not become
-a concept merely because it is printed as a block.
+The poem/story/play, its taught literary/linguistic content, and a coherent
+separately headed instructional language mini-unit may become concepts. A
+Warm-up, think/write cue, read/recite direction, comprehension instruction,
+discussion cue, diagram, project, Word Basket, vocabulary box, Poetic Device
+box, facilitator/teacher note or exercise heading does not become a concept
+merely because it is printed as a block.
 
 Home each support occurrence by meaning and record the transport verdict in the
 plan, not merely in prose:
@@ -105,13 +110,16 @@ plan, not merely in prose:
   facilitator-only guidance that should be recorded for audit but not shown as
   learner teaching. Do not place the same source occurrence in both
   threaded_components and non_teaching_block_ids.
-- Grammar, listening, speaking, phonics and writing are threaded to the
-  literary concepts where they are observed; they are never promoted to
-  standalone Topics solely because they are printed at the end.
+- Grammar, listening, speaking, phonics and writing support occurrences are
+  threaded to the literary concepts where they are observed. Printing position
+  alone never creates a Topic, but a separately headed block with its own
+  explanation-and-practice progression may retain the standalone source-aligned
+  home described above.
 
 DETAILED ANALYSIS — BOTH MODES
-After all stanza/story Topics, create the final Topic with display_name exactly
-matching detailed_analysis_title. Its concepts appear in this order:
+After all stanza/story Topics and any source-aligned instructional mini-unit
+Topics, create the final Topic with display_name exactly matching
+detailed_analysis_title. Its concepts appear in this order:
 1. Theme / Central Idea
 2. Plot / Development of Ideas
 3. Characterisation / Speaker
@@ -153,19 +161,24 @@ last with the six required whole-work lenses.
 
 For prose or a play, verify that sizeable story/scene breaks became Topics,
 semantically distinct episodes remain distinct concepts with dramatic titles,
-and every local Topic closes with a substantive culmination.
+every local narrative Topic closes with a substantive culmination, and short
+prose has not been split into one unit per minor dialogue, reaction, plan or
+decision beat.
 
-For both modes, detect Warm-up, recitation directions, exercises, diagrams,
-Word Baskets, device boxes, facilitator notes, grammar or phonics promoted into
-standalone concepts/Topics when they should be placed or threaded; a support
-block named only in prose but missing its threaded_components or explicit
-non_teaching verdict; one support occurrence routed to several concepts without
-an explicit multi-placement authority; sourcebook content dropped or
-summarized when it must be carried whole; descriptions that would merely retell
-instead of teach; duplicated mastery capabilities; and any source task or block
-left without a truthful home. Never audit by a preferred count or by physical
-line arithmetic. Your dissent is advisory and must be precise; it never blocks
-or rewrites the author's plan."""
+For both modes, detect an opening Warm-up re-parented to a later plot event; a
+coherent separately headed grammar mini-unit buried in story analysis or
+Language & Literary Devices; or a support-only grammar/phonics occurrence
+promoted into a standalone concept merely because it is printed separately.
+Also detect recitation directions, exercises, diagrams, Word Baskets, device
+boxes or facilitator notes promoted when they should be placed or threaded; a
+support block named only in prose but missing its threaded_components or
+explicit non_teaching verdict; one support occurrence routed to several
+concepts without an explicit multi-placement authority; sourcebook content
+dropped or summarized when it must be carried whole; descriptions that would
+merely retell instead of teach; duplicated mastery capabilities; and any source
+task or block left without a truthful home. Never audit by a preferred count or
+by physical line arithmetic. Your dissent is advisory and must be precise; it
+never blocks or rewrites the author's plan."""
 
 
 def _current_topology_modules():

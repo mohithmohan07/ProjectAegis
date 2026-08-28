@@ -35,6 +35,28 @@ def test_export_cell_limit_is_an_actionable_422(
     )
 
 
+@pytest.mark.parametrize(
+    "path", ["/data/export?scope=all", "/data/export/questions?ids=1"],
+)
+def test_export_capacity_defect_is_an_actionable_422(
+    client, monkeypatch, path,
+):
+    from app.api import data as data_api
+
+    def malformed_shape(*_args, **_kwargs):
+        raise data_api.writer.WorkbookCapacityError(
+            "question 'Q1' subquestion 1 must be an object for lossless "
+            "workbook export"
+        )
+
+    monkeypatch.setattr(data_api.writer, "write_workbook", malformed_shape)
+
+    response = client.get(path)
+
+    assert response.status_code == 422
+    assert "lossless workbook export" in response.json()["detail"]
+
+
 def test_health(client):
     response = client.get("/health")
     assert response.status_code == 200
@@ -167,35 +189,236 @@ def test_export_concepts_selection(client, first_chapter, db):
     assert ws.max_row == 2 + len(concept_ids)
 
 
-def test_import_workbook_roundtrip(client, db):
-    """Export the DB then re-import it: append-only means no new questions land."""
+def test_import_workbook_roundtrip(client, db, request):
+    """A valid three-sheet selection round-trips without field loss."""
     from app import models
+    from app.bulk_import import layouts
 
+    chapter = models.Chapter(
+        chapter_code="09CBPH-ROUNDTRIP",
+        board="CBSE", grade="9", subject="Physics", unit="Roundtrip",
+        chapter_title="Roundtrip Chapter",
+        chapter_display_name="Roundtrip Chapter",
+        chapter_duration="45",
+        chapter_description="A deliberately strict-safe roundtrip fixture.",
+    )
+    topic = models.Topic(
+        chapter=chapter,
+        topic_title="Roundtrip Topic",
+        topic_display_name="Roundtrip Topic",
+        pre_post_learning="Post",
+        topic_description="Carries all three assessment sheets.",
+    )
+    concept = models.Concept(
+        topic=topic,
+        concept_title="Roundtrip Concept",
+        concept_display_name="Roundtrip Concept",
+        concept_details="Description: strict-safe export and import.",
+        keywords="roundtrip, workbook",
+        sources="UpSchool DB",
+    )
+    group = models.Group(
+        concept=concept,
+        group_type="Basic",
+        group_name="Roundtrip Basic",
+        group_display_name="Roundtrip Basic",
+        group_status="Active",
+    )
+    common = {
+        "group": group,
+        "cognitive_skills": "Understand",
+        "question_source": "UpSchool DB",
+        "question_disclaimer": "Roundtrip disclaimer.",
+        "question_appears_in": bi.APPEARS_IN_ALL,
+        "level_of_difficulty": "Moderate",
+        "origin": "seed",
+    }
+    objective = models.Question(
+        **common,
+        sheet_kind="objective",
+        question_label="09CBPH_Roundtrip_PL_T01_C01 Q01",
+        question_category="Multiple Choice Question",
+        question="Which expression names pH?",
+        question_text="Which expression names pH?",
+        marks=1, question_duration=1, math_keyboard="",
+        answer_restriction="Specific",
+        answers=[
+            {
+                "answer_type": "Equation",
+                "answer_content": r"\text{pH}",
+                "correct_answer": "1",
+                "answer_weightage": "1",
+            },
+            {
+                "answer_type": "Phrases",
+                "answer_content": "temperature",
+                "correct_answer": "0",
+                "answer_weightage": "0",
+            },
+        ],
+        sub_questions=[],
+        answer_explanation="pH is the named quantity.",
+    )
+    descriptive = models.Question(
+        **common,
+        sheet_kind="descriptive",
+        question_label="09CBPH_Roundtrip_PL_T01_C01 Q02",
+        question_category="Short Answer",
+        question="Explain the result.",
+        question_text="Explain the result.",
+        marks=2, question_duration=2, math_keyboard="No",
+        answer_restriction="Open",
+        answers=[],
+        sub_questions=[{
+            "text": "State the independently scored result.",
+            "marks": "2",
+            "keywords": [{
+                "answer_type": "Phrases",
+                "weightage": "2",
+                "keyword": "[content]: states and explains the result",
+            }],
+        }],
+        display_answer="A complete explanation of the result.",
+        answer_explanation="",
+    )
+    subjective = models.Question(
+        **common,
+        sheet_kind="subjective",
+        question_label="09CBPH_Roundtrip_PL_T01_C01 Q03",
+        question_category="Fill in the Blanks",
+        question="The recorded value is $$a$$.",
+        question_text="The recorded value is $$a$$.",
+        marks=1, question_duration=1, math_keyboard="No",
+        answer_restriction="Specific",
+        answers=[{
+            "answer_type": "Phrases",
+            "answer_content": "one",
+            "answer_display": "one",
+            "answer_weightage": "1",
+            "placeholder": "a",
+        }],
+        sub_questions=[],
+        answer_explanation="The blank is one.",
+    )
+    db.add_all([
+        chapter, topic, concept, group, objective, descriptive, subjective,
+    ])
+    db.commit()
+    chapter_id = chapter.id
+
+    def cleanup_roundtrip_graph():
+        db.rollback()
+        persisted = db.get(models.Chapter, chapter_id)
+        if persisted is not None:
+            db.delete(persisted)
+            db.commit()
+
+    request.addfinalizer(cleanup_roundtrip_graph)
+    selected = [objective, descriptive, subjective]
+    selected_ids = [question.id for question in selected]
     before_export = {
         question.id: (
+            question.question,
+            question.question_text,
+            question.display_answer,
+            question.answer_explanation,
+            question.answer_restriction,
+            question.question_source,
+            question.question_disclaimer,
             copy.deepcopy(question.answers),
             copy.deepcopy(question.sub_questions),
         )
-        for question in db.query(models.Question).all()
+        for question in selected
     }
-    export = client.get("/data/export?scope=all")
-    assert export.status_code == 200
+    export = client.get(
+        "/data/export/questions",
+        params={"ids": ",".join(str(value) for value in selected_ids)},
+    )
+    assert export.status_code == 200, export.text
     db.expire_all()
     after_export = {
         question.id: (
+            question.question,
+            question.question_text,
+            question.display_answer,
+            question.answer_explanation,
+            question.answer_restriction,
+            question.question_source,
+            question.question_disclaimer,
             copy.deepcopy(question.answers),
             copy.deepcopy(question.sub_questions),
         )
-        for question in db.query(models.Question).all()
+        for question in db.query(models.Question).filter(
+            models.Question.id.in_(selected_ids)
+        )
     }
     assert after_export == before_export
-    files = {"file": ("roundtrip.xlsx", io.BytesIO(export.content),
-                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}
-    response = client.post("/data/import", files=files)
+    workbook = openpyxl.load_workbook(io.BytesIO(export.content))
+    descriptive_layout = layouts.sheet(
+        layouts.REFERENCE_LAYOUT_ID, "descriptive",
+    )
+    descriptive_sheet = workbook[descriptive_layout.sheet_name]
+    multipart_rows = 0
+    exported_text = []
+    for worksheet in workbook.worksheets:
+        exported_text.extend(
+            str(cell.value)
+            for row in worksheet.iter_rows(min_row=3)
+            for cell in row
+            if cell.value is not None
+        )
+    for row_number in range(3, descriptive_sheet.max_row + 1):
+        has_subquestion = any(
+            descriptive_sheet.cell(
+                row=row_number,
+                column=descriptive_layout.column(
+                    "question", f"sub_question_{number}",
+                ) + 1,
+            ).value
+            for number in descriptive_layout.sub_question_numbers
+        )
+        if not has_subquestion:
+            continue
+        multipart_rows += 1
+        for number in descriptive_layout.answer_block_numbers:
+            for field in (
+                f"answer_type_{number}",
+                f"answer_content_{number}",
+                f"answer_weightage_{number}",
+            ):
+                assert descriptive_sheet.cell(
+                    row=row_number,
+                    column=descriptive_layout.column("question", field) + 1,
+                ).value in (None, "")
+    subjective_layout = layouts.sheet(
+        layouts.REFERENCE_LAYOUT_ID, "subjective",
+    )
+    subjective_sheet = workbook[subjective_layout.sheet_name]
+    subjective_row = next(
+        row for row in subjective_sheet.iter_rows(min_row=3, values_only=True)
+        if any(value is not None for value in row)
+    )
+    assert subjective_row[
+        subjective_layout.column("question", "answer_1")
+    ] == "one"
+    assert str(subjective_row[
+        subjective_layout.column("question", "weightage_1")
+    ]) == "1"
+    workbook.close()
+    assert multipart_rows == 1
+    assert not any(r"\mathrm" in value for value in exported_text)
+    assert any(r"\text{pH}" in value for value in exported_text)
+
+    response = client.post("/data/import", files={
+        "file": (
+            "roundtrip.xlsx",
+            io.BytesIO(export.content),
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet",
+        ),
+    })
     assert response.status_code == 200, response.text
-    counts = response.json()
-    # Labels already present -> questions not re-created.
-    assert counts["questions"] == 0
+    assert response.json()["questions"] == 0
 
 
 @pytest.mark.parametrize("append_kind", ["concepts", "questions"])
@@ -244,11 +467,14 @@ def test_append_migrates_historical_cells_before_strict_reimport(
     )
     put(objective, objective_layout, "question", "marks", "1")
     put(
+        objective, objective_layout, "question", "question_duration", "1",
+    )
+    put(
         objective, objective_layout, "question", "answer_type_1", "Phrases",
     )
     put(
         objective, objective_layout, "question", "answer_content_1",
-        "[Katex] x+1 [/Katex]",
+        r"[Katex] \mathrm{x}+1 [/Katex]",
     )
     put(
         objective, objective_layout, "question", "correct_answer_1", "1",
@@ -273,6 +499,14 @@ def test_append_migrates_historical_cells_before_strict_reimport(
         "Explain the supplied relationship.",
     )
     put(descriptive, descriptive_layout, "question", "marks", "1")
+    put(
+        descriptive, descriptive_layout, "question", "math_keyboard",
+        "No",
+    )
+    put(
+        descriptive, descriptive_layout, "question", "question_duration",
+        "1",
+    )
     put(
         descriptive, descriptive_layout, "question", "answer_type_1",
         "Phrases",
@@ -337,6 +571,8 @@ def test_append_migrates_historical_cells_before_strict_reimport(
     ).value
     assert objective_type == "Equation"
     assert "[Katex]" not in objective_content
+    assert r"\mathrm" not in objective_content
+    assert r"\text{x}" in objective_content
     assert katex_rules.answer_cell_issues(
         objective_type, objective_content,
     ) == []
@@ -373,12 +609,28 @@ def test_append_migrates_historical_cells_before_strict_reimport(
         row=3,
         column=descriptive_layout.column("question", "sq1_keyword_1") + 1,
     ).value
+    main_rubric = {
+        field: descriptive.cell(
+            row=3,
+            column=descriptive_layout.column("question", field) + 1,
+        ).value
+        for field in (
+            "answer_type_1", "answer_content_1", "answer_weightage_1",
+        )
+    }
     migrated.close()
-    assert "Table row 1, column 1: Name" in answer_display
-    assert "Table row 1, column 1: Name" in sub_question
+    assert answer_display == table
+    assert sub_question == table
+    assert katex_rules.rich_text_issues(answer_display) == []
+    assert katex_rules.rich_text_issues(sub_question) == []
     assert keyword_type == "Equation"
     assert "[Katex]" not in keyword
     assert katex_rules.answer_cell_issues(keyword_type, keyword) == []
+    assert main_rubric == {
+        "answer_type_1": None,
+        "answer_content_1": None,
+        "answer_weightage_1": None,
+    }
 
     # The exact workbook the append path published now clears the same strict
     # preflight used by POST /data/import.
@@ -412,7 +664,9 @@ def test_fresh_export_lowercases_legacy_objective_labels_on_the_copy(
     label = question.question_label
 
     try:
-        exported = client.get("/data/export?scope=all")
+        exported = client.get(
+            "/data/export/questions", params={"ids": str(question.id)},
+        )
         assert exported.status_code == 200, exported.text
         db.expire_all()
         stored = db.get(models.Question, question.id)
