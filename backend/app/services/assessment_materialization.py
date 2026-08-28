@@ -32,7 +32,12 @@ from .phase3 import kernel
 # use the dedicated sub-question rubric columns rather than scoring the same
 # parts twice. ``-11`` binds the selected Master-workbook Descriptive answer
 # capacity into both the authored decision and its mechanical checker.
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-11"
+# ``-12`` bans book-referencing stems and carried source enumerators, and
+# makes source figures travel: every image the item depends on is carried
+# into the question or its Image-typed answer/rubric cells rather than
+# silently dropped (owner audit 2026-08-27: self-contained wording; images
+# absent from Assessments and Rubrics).
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-12"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -88,7 +93,15 @@ MATERIALIZE_SYSTEM = (
     "cell. The cell's sheet kind, category, cognitive skill, difficulty, and "
     "marks are fixed and are not yours to change. There is no quota.\n"
     "For a standalone or exercise source, write a clear, complete, "
-    "self-contained item while preserving its meaning and answer space. For "
+    "self-contained item while preserving its meaning and answer space. "
+    "Self-contained means the learner never needs the book in hand: never "
+    "keep wording that references the book or its apparatus — 'According "
+    "to the passage about zero', \"According to 'At a Glance' in the "
+    "book\", 'as given in your textbook' — state the needed context "
+    "inside the item instead (owner audit, 2026-08-27). A leading "
+    "enumerator the book printed before the ask ('6.', 'Q3.', '(iii)') "
+    "is page apparatus and never opens the stem; sub-part labels inside "
+    "a multipart item stay. For "
     "an activity, checkpoint, or experiment, preserve its procedure, "
     "materials, sequence, context, and required assets. With no source atom, "
     "stay strictly inside the supplied curricular evidence. Never invent "
@@ -163,7 +176,17 @@ MATERIALIZE_SYSTEM = (
     "the wrapper. If "
     "the supplied source atom already associates an image with a table, "
     "preserve that full table as one source image rather than a partial array "
-    "or separate cell screenshots. Use meaningful, neutral alt text for every "
+    "or separate cell screenshots. Every source figure, diagram, or picture "
+    "the item depends on travels with it (owner audit, 2026-08-27: source "
+    "images were silently absent from Assessments and Rubrics): reference it "
+    "with its exact canonical [img src=\"...\" alt=\"...\"] tag from the "
+    "supplied assets — in the question when the learner must read it, and in "
+    "the answer/rubric evidence when the marked response IS a figure (an "
+    "answers[] entry or keyword whose answer_type is Image carries that "
+    "image's canonical tag or its URL, never a prose description alone). "
+    "Never declare answer_type Image without an image source in the cell, "
+    "and never invent an image URL the supplied assets do not carry. "
+    "Use meaningful, neutral alt text for every "
     "image. If the source deliberately leaves a quantity, table cell, or "
     "learner choice blank, preserve that openness or express the solution "
     "symbolically; never invent convenient numbers merely to manufacture one "
@@ -195,7 +218,9 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "with the display answer), literary over-quoting (a whole poem "
     "or passage quoted where only the asked-about lines belong), "
     "lowercase paper-option order with no label duplicated inside option "
-    "content, declared answer-cell medium purity, table/image integrity, "
+    "content, declared answer-cell medium purity, table/image integrity "
+    "(a source figure the item depends on that no field carries, or an "
+    "Image-typed cell holding no image source), "
     "fabricated values where the source intentionally leaves inputs open, "
     "Subjective placeholder/answer alignment, multipart content or rubrics "
     "duplicated between main fields and sub-question fields, malformed "

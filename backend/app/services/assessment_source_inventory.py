@@ -245,3 +245,72 @@ def build_source_atoms(
         "ledger": ledger,
         "sha256": rel.sha256_json(atoms),
     }
+
+
+def partition_compound_parents(
+    atoms: list[Mapping],
+) -> tuple[list[dict], list[dict]]:
+    """Fold subpart atoms into the compound parent atom they belong to.
+
+    Mechanics over RECORDED identity only: the extraction model minted
+    each subpart item carrying ``parent_qid`` naming its compound parent,
+    so "this atom is a subpart of that one" is a recorded decision, never
+    a judgment made here — no text is compared and nothing is inferred.
+
+    The 2026-08-27 audit (owner items 1/6/10) measured a compound
+    question shipping once whole AND once per subpart, and ruled which
+    form survives: sub-questions "are supposed to come only in sub
+    questions columns" — ONE multipart question, whose materialization
+    contract already ships ``answers=[]`` with all scoring evidence in
+    ``sub_questions[]``. So when a compound parent atom is present, its
+    recorded subpart atoms leave the set as a recorded disposition and
+    the PARENT — which carries the complete compound text the subparts
+    were minted from — is the one question materialized.
+    ``assessment_release.parent_child_candidate_errors`` already refuses
+    a both-materialized release after the spend; this partition makes the
+    same identity fact effective BEFORE any cell verdict is paid for. A
+    subpart whose parent atom is absent keeps its place (there the
+    subparts ARE the only representation).
+
+    Returns ``(kept_atoms, folded_records)`` — one record per compound
+    parent naming the subpart qids it represents; never silent loss (R4).
+    """
+
+    parent_qids = {
+        str(atom.get("source_qid") or "").strip()
+        for atom in atoms
+        if str(atom.get("source_qid") or "").strip()
+    }
+    folded_by_parent: dict[str, list[str]] = {}
+    kept: list[dict] = []
+    for atom in atoms:
+        parent = str(atom.get("parent_qid") or "").strip()
+        if parent and parent in parent_qids:
+            folded_by_parent.setdefault(parent, []).append(
+                str(atom.get("source_qid") or "")
+            )
+            continue
+        kept.append(dict(atom))
+    if not folded_by_parent:
+        return kept, []
+    labels = {
+        str(atom.get("source_qid") or ""): str(
+            atom.get("source_paper_number") or ""
+        )
+        for atom in atoms
+    }
+    folded = [
+        {
+            "source_qid": parent,
+            "source_label": labels.get(parent, ""),
+            "subpart_qids": list(children),
+            "reason": (
+                f"{len(children)} recorded subpart question(s) fold into "
+                "this compound parent, which ships as ONE multipart "
+                "question with its scoring in the sub-question columns "
+                "(owner audit 2026-08-27, items 1/6/10)"
+            ),
+        }
+        for parent, children in folded_by_parent.items()
+    ]
+    return kept, folded

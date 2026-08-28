@@ -21,9 +21,14 @@ what a concept *is*; the positions it counts come from stored ``source_order``
 and creation ids, and the tag alphabet comes from the workbook's own
 round-trip regex.
 
-THE SHAPE (spec-step8 T4, D1/Q14)::
+THE SHAPE (spec-step8 T4, D1/Q14; hash retired by owner decision,
+2026-08-27 concept-mapping audit)::
 
-    chapter_key        = f"{code_prefix}_{slug12(chapter_title) or 'X'}_{h8}"
+    chapter_key        = f"{code_prefix}_{slug12(chapter_title)}"
+                         — or, when the slug collapses to ``"X"``,
+                         f"{code_prefix}_X_ch{chapter_id}"
+                         — or, when an earlier chapter row mints the same
+                         base, f"{code_prefix}_{slug12}_ch{chapter_id}"
     topic.machine_id   = f"{chapter_key}_{lane}_T{n:02d}"    lane in {PL, PrL}
     concept.machine_id = f"{topic.machine_id}_C{m:02d}"
     question_label     = f"{concept.machine_id} Q{k:02d}"    (space, D2/Q15)
@@ -32,12 +37,20 @@ The readable name is NOT inside the id — it rides beside it in the cell as
 §6:522's "name + (machine ID)" pair — because ``_underscore_slug`` collapses
 to ``"X"`` for any non-Latin script (two different Marathi chapters minted an
 identical concept tag) and because a name-bearing label overruns
-``models.Question.question_label``'s ``String(128)``. ``h8`` carries the
-uniqueness when the slug collapses.
+``models.Question.question_label``'s ``String(128)``. The retired ``h8``
+carried the uniqueness in every case; both audit correctors removed it from
+every id, so a title that yields a real slug now mints hashless and accepts
+the (reviewed) residual risk of two same-family titles sharing their first
+twelve alphanumerics — the publication duplicate scan and the reader's
+cross-row claim gate are the loud detectors. A collapsed slug keeps a
+disambiguator, because there the collision is not residual risk but a
+certainty across a whole non-Latin catalogue: the readable ``ch<id>``
+segment carries what the slug cannot. Persisted ids are never re-minted
+(P-C1 below), so pre-decision hashed ids coexist with the new shape and
+every parser here reads only the tail grammar.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -54,7 +67,6 @@ from . import directory
 _ALNUM_RUN = re.compile(r"[A-Za-z0-9]+")
 
 _CHAPTER_SLUG_LENGTH = 12
-_HASH_LENGTH = 8
 
 LANE_POST_TOKEN = "PL"
 LANE_PRE_TOKEN = "PrL"
@@ -105,7 +117,12 @@ def alnum_token(text: str) -> str:
 
 
 def chapter_slug(chapter_title: str) -> str:
-    """The readable-but-lossy chapter segment. ``h8`` carries the uniqueness."""
+    """The readable-but-lossy chapter segment.
+
+    Since the audit decision retired ``h8``, this slug is the identity's
+    title-bearing segment; ``chapter_key`` appends a ``ch<id>``
+    disambiguator only when it collapses to ``"X"`` (no ASCII run).
+    """
     return alnum_token(chapter_title)[:_CHAPTER_SLUG_LENGTH] or "X"
 
 
@@ -184,32 +201,104 @@ def title_tag(text: str) -> str:
 # The chapter key
 # --------------------------------------------------------------------------- #
 
-def chapter_key(chapter, *, chapter_id: int | None = None) -> str:
-    """``<code_prefix>_<slug12>_<h8>`` for one chapter row.
+def _earlier_chapter_claims_base(session, base: str, resolved_id: int) -> bool:
+    """Whether an EARLIER chapter row mints this same hashless base.
 
-    ``chapter_id`` overrides the object's own id for the one caller that needs
-    it: ``build_concepts_release_files.transient_release_hierarchy`` builds a
-    NEVER-persisted ``models.Chapter`` with ``id = -1`` standing in for the
-    real target chapter, and a staged id that did not match the published one
-    would re-key every concept at publication.
+    Pure identity accounting over persisted rows: each earlier chapter's
+    base is recomputed with the same mint used here and compared as a
+    string — no content is read for meaning. "Earlier" (smaller id) is the
+    deterministic tie-break: the first row in the family keeps the clean
+    ``<prefix>_<slug12>`` shape whatever order mints happen in, and every
+    later same-base row carries its readable ``ch<id>`` disambiguator.
     """
-    board = str(getattr(chapter, "board", "") or "")
-    subject = str(getattr(chapter, "subject", "") or "")
+    from .. import models
+
+    try:
+        rows = session.query(
+            models.Chapter.id,
+            models.Chapter.board,
+            models.Chapter.grade,
+            models.Chapter.subject,
+            models.Chapter.chapter_title,
+        ).filter(models.Chapter.id < resolved_id).all()
+    except SQLAlchemyError:
+        return False
+    for row in rows:
+        sibling_title = str(row.chapter_title or "")
+        sibling_slug = chapter_slug(sibling_title)
+        if sibling_slug == "X" and not alnum_token(sibling_title):
+            continue  # that row mints the X_ch<id> shape, never this base
+        sibling_prefix = directory.code_prefix(
+            str(row.board or ""), row.grade, str(row.subject or ""),
+        )
+        if f"{alnum_token(sibling_prefix) or 'X'}_{sibling_slug}" == base:
+            return True
+    return False
+
+
+def chapter_key(chapter, *, chapter_id: int | None = None, session=None) -> str:
+    """``<code_prefix>_<slug12>`` for one chapter row (hashless).
+
+    The 8-hex digest this used to append was retired by the owner's
+    2026-08-27 concept-mapping-audit decision: both reviewer-corrected
+    corpora removed it from every identifier, so a chapter whose title
+    yields a real slug mints without it.
+
+    The digest also carried real uniqueness, so its retirement keeps two
+    readable disambiguators for the cases where the slug alone provably
+    collides — [measured] the S10 publication refused a run outright
+    ("group_key already belongs to a different database group") when two
+    same-family chapters shared their first twelve alphanumerics:
+
+    * a title with no ASCII-alphanumeric run collapses to the ``"X"``
+      slug; without a second segment EVERY such chapter in a
+      board/grade/subject family — a whole non-Latin catalogue — would
+      share one identity. Those chapters mint ``<code_prefix>_X_ch<id>``.
+    * a chapter whose base an EARLIER persisted chapter row also mints
+      (same family, same first-twelve slug) takes
+      ``<code_prefix>_<slug12>_ch<id>``: the earliest row keeps the clean
+      audit shape, later colliders stay unique and readable, and the
+      choice is deterministic whatever order the mints happen in. The
+      check needs a database to look in: ``session`` (or the chapter's
+      own bound session) provides it, and with neither the clean base is
+      returned — session-less callers are shape renderers, not minters.
+
+    Ids already persisted under the old hashed shape stay as they are
+    (P-C1 below); every parser in this module reads only the tail
+    grammar, so all shapes coexist.
+
+    ``chapter_id`` overrides the object's own id for the one caller that
+    needs it: ``build_concepts_release_files.transient_release_hierarchy``
+    builds a NEVER-persisted ``models.Chapter`` with ``id = -1`` standing
+    in for the real target chapter, and a staged id that did not match the
+    published one would re-key every concept at publication. That caller
+    passes ``session`` explicitly for the same reason: the staged
+    collision answer must be the publication's answer.
+    """
     title = str(getattr(chapter, "chapter_title", "") or "")
-    grade_token, _fallback = directory.normalized_grade(
-        getattr(chapter, "grade", "")
-    )
+    subject = str(getattr(chapter, "subject", "") or "")
     resolved_id = (
         int(chapter_id)
         if chapter_id is not None
         else int(getattr(chapter, "id", 0) or 0)
     )
-    prefix = directory.code_prefix(board, getattr(chapter, "grade", ""), subject)
-    digest = hashlib.sha256(
-        "\x1f".join([board, grade_token, subject, title, str(resolved_id)])
-        .encode("utf-8")
-    ).hexdigest()[:_HASH_LENGTH]
-    return f"{alnum_token(prefix) or 'X'}_{chapter_slug(title)}_{digest}"
+    prefix = directory.code_prefix(
+        str(getattr(chapter, "board", "") or ""),
+        getattr(chapter, "grade", ""),
+        subject,
+    )
+    slug = chapter_slug(title)
+    if slug == "X" and not alnum_token(title):
+        return f"{alnum_token(prefix) or 'X'}_X_ch{resolved_id}"
+    base = f"{alnum_token(prefix) or 'X'}_{slug}"
+    resolved_session = (
+        session if session is not None else _session_of(chapter)
+    )
+    if resolved_session is not None and _earlier_chapter_claims_base(
+        resolved_session, base, resolved_id
+    ):
+        return f"{base}_ch{resolved_id}"
+    return base
 
 
 def grade_review_flag(chapter) -> str:

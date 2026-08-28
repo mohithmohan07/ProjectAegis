@@ -1683,6 +1683,7 @@ def run_release_for_job(
     pre_blocked_generated: list[dict] = []
     duplicates_removed: list[dict] = []
     pre_learning_claimed: list[dict] = []
+    compound_parents_represented: list[dict] = []
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
         # is built and none is classified: both of those stages hard-assume
@@ -1914,6 +1915,39 @@ def run_release_for_job(
                     f"Assessment release: {len(pre_learning_claimed)} "
                     "recap question(s) claimed by pre-learning; "
                     f"{len(atoms)} chapter-teaching question(s) continue.",
+                    level="warning",
+                )
+
+        if blueprint_cells is None and atoms:
+            # Owner audit (2026-08-27, items 1/6/10): a compound question
+            # must ship exactly once — as ONE multipart question whose
+            # scoring lives in the sub-question columns — never once
+            # whole plus once per subpart. Pure identity accounting over
+            # the extraction model's own recorded ``parent_qid`` linkage,
+            # applied BEFORE any cell verdict is paid for: subpart atoms
+            # fold into their present compound parent, the fold rides the
+            # payload as a reviewable disposition, and the post-spend
+            # gate (``parent_child_candidate_errors``) stays as defence
+            # in depth. The explicit ``blueprint_cells`` path keeps its
+            # 1:1 zero-spend bind, exactly as it does for Q18 above.
+            atoms, compound_parents_represented = (
+                source_inventory.partition_compound_parents(atoms)
+            )
+            if compound_parents_represented:
+                for record in compound_parents_represented:
+                    progress.log(
+                        "Master file: compound source "
+                        f"{record.get('source_qid')!r} ships as ONE "
+                        "multipart question; its recorded subpart(s) "
+                        f"({', '.join(record.get('subpart_qids') or [])}) "
+                        "fold into its sub-question columns.",
+                        level="warning",
+                    )
+                progress.log(
+                    "Assessment release: "
+                    f"{len(compound_parents_represented)} compound "
+                    "question(s) consolidated to one multipart row each; "
+                    f"{len(atoms)} question(s) continue.",
                     level="warning",
                 )
 
@@ -2708,6 +2742,11 @@ def run_release_for_job(
         # Post Master — prerequisite-recap material, each with its reason.
         # A recorded disposition, not loss, and reviewable the same way.
         "pre_learning_claimed": pre_learning_claimed,
+        # Owner audit 2026-08-27 (items 1/6): compound parents whose
+        # recorded subpart atoms represent them. Each names its subpart
+        # qids — coverage moved, never lost — and is reviewable the same
+        # way as the two dispositions above.
+        "compound_parents_represented": compound_parents_represented,
     }
     if staged_lane == build_concepts_release.LANE_PRE:
         # Which lane this Master belongs to, stated rather than inferred —

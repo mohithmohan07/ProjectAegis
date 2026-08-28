@@ -4482,6 +4482,25 @@ def generate_post_learning(
         f"({instruction_set.get('slots_source')}); its hash joins every "
         "decision identity for this run."
     )
+    # A3/A4 (owner audit 2026-08-27): the workbook's source identity is
+    # the PUBLICATION ("Balbharati"), never the uploaded PDF's filename.
+    # When the upload names no source_book, the Architect's run-start read
+    # of the source captures the publication identity its own front matter
+    # evidences — a recorded model decision, not a filename shape. Filled
+    # once here, before any fingerprint or checkpoint identity is
+    # computed, so every downstream seam (concept sources, release
+    # payloads, chapter tags, assessments) reads one authority.
+    if not str(job.source_book or "").strip():
+        captured_publication = str(
+            instruction_slots.get("publication_label") or ""
+        ).strip()
+        if captured_publication:
+            job.source_book = captured_publication[:128]
+            progress.log(
+                "Source publication captured from the source itself: "
+                f"'{job.source_book}' fills the upload's blank "
+                "source_book (Architect slot publication_label)."
+            )
     # Step 11 (docs/aegis-restructure.md Q9): when the Architect selected a
     # literary mode, author (or replay) the language topology plan BEFORE
     # any generation identity is computed. The plan rides the slot

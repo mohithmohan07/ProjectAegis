@@ -351,3 +351,64 @@ def test_the_generation_loop_no_longer_uses_itertools_product():
     assert "% len(concepts)" not in source
     assert "dry_fixture" not in source
     assert "assessment_routing.route_candidates" in source
+
+
+# --------------------------------------------------------------------------- #
+# Compound parents (owner audit 2026-08-27, items 1/6)
+
+
+def test_subpart_atoms_fold_into_their_present_compound_parent():
+    """One multipart question, never once whole plus once per subpart.
+
+    Owner audit items 1/6/10: the parent — carrying the complete compound
+    text — is the one question materialized (its scoring lives in the
+    sub-question columns); the recorded subpart atoms fold into it as a
+    reviewable disposition. Pure identity accounting over the extraction
+    model's own ``parent_qid`` linkage.
+    """
+
+    atoms = [
+        {"source_qid": "QINV-0001", "parent_qid": None,
+         "source_paper_number": "Practice set 3.1 Q1"},
+        {"source_qid": "QINV-0001.1", "parent_qid": "QINV-0001",
+         "source_paper_number": "Practice set 3.1 Q1 (a)"},
+        {"source_qid": "QINV-0001.2", "parent_qid": "QINV-0001",
+         "source_paper_number": "Practice set 3.1 Q1 (b)"},
+        {"source_qid": "QINV-0002", "parent_qid": None,
+         "source_paper_number": "Practice set 3.1 Q2"},
+    ]
+    kept, folded = si.partition_compound_parents(atoms)
+
+    assert [atom["source_qid"] for atom in kept] == [
+        "QINV-0001", "QINV-0002",
+    ]
+    assert len(folded) == 1
+    record = folded[0]
+    assert record["source_qid"] == "QINV-0001"
+    assert record["subpart_qids"] == ["QINV-0001.1", "QINV-0001.2"]
+    assert "ONE multipart question" in record["reason"]
+
+
+def test_orphan_subparts_keep_their_place():
+    """A subpart whose parent atom is absent IS the representation."""
+
+    atoms = [
+        {"source_qid": "QINV-0003.1", "parent_qid": "QINV-0003"},
+        {"source_qid": "QINV-0003.2", "parent_qid": "QINV-0003"},
+        {"source_qid": "QINV-0002", "parent_qid": None},
+    ]
+    kept, folded = si.partition_compound_parents(atoms)
+    assert [atom["source_qid"] for atom in kept] == [
+        "QINV-0003.1", "QINV-0003.2", "QINV-0002",
+    ]
+    assert folded == []
+
+
+def test_partition_without_subparts_changes_nothing():
+    atoms = [
+        {"source_qid": "QINV-0001", "parent_qid": None},
+        {"source_qid": "QINV-0002", "parent_qid": None},
+    ]
+    kept, folded = si.partition_compound_parents(atoms)
+    assert [atom["source_qid"] for atom in kept] == ["QINV-0001", "QINV-0002"]
+    assert folded == []

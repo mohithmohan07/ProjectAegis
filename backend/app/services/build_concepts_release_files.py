@@ -649,7 +649,9 @@ def transient_release_hierarchy(
     chapter.id = -1
     topics_by_key: dict[str, models.Topic] = {}
     concepts: list[models.Concept] = []
-    chapter_key = identity.chapter_key(chapter, chapter_id=target_chapter_id)
+    chapter_key = identity.chapter_key(
+        chapter, chapter_id=target_chapter_id, session=db,
+    )
     # T4-5: ``source_order`` is reconciled to PER-TOPIC here. It was the
     # chapter-wide record index in this export while
     # ``build_concepts_release_publication`` used the per-topic position, so

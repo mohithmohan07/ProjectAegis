@@ -84,6 +84,7 @@ def test_offline_defaults_are_deterministic_and_empty_slotted():
         "grade_band_vocabulary": "",
         "language_mode": {"mode": "", "rationale": ""},
         "board_publication_conventions": "",
+        "publication_label": "",
         "chapter_cautions": [],
     }
     assert first["review_flags"] == []
@@ -602,3 +603,35 @@ def test_settle_and_host_rules_suffix_comes_from_envelope_metadata():
             "grade_band_vocabulary": "",
         }}}
     ) == ""
+
+
+def test_publication_label_slot_is_captured_and_optional(monkeypatch):
+    # A3/A4 (owner audit 2026-08-27): the publication identity the source
+    # itself evidences rides the instruction set so a blank upload
+    # source_book fills from the book, never from the PDF filename.
+    _live(monkeypatch)
+
+    def api(system, user, **kwargs):
+        assert "publication_label" in system
+        return {**_authored_slots(), "publication_label": "  Balbharati "}
+
+    result = architect.assemble_instruction_set(
+        metadata={**SAMPLE_METADATA, "source_book": ""},
+        source_text="Maharashtra State Bureau of Textbook Production "
+                    "(Balbharati), Pune.",
+        api_call=api,
+        critic=lambda payload: {"verdict": "verified", "confidence": 0.9,
+                                "issues": []},
+    )
+    assert result["slots"]["publication_label"] == "Balbharati"
+
+    # A response omitting the slot means "no publication named" — the
+    # documented empty answer, never a pre-spend failure.
+    absent = architect.assemble_instruction_set(
+        metadata={**SAMPLE_METADATA, "source_book": ""},
+        source_text="body",
+        api_call=lambda system, user, **kwargs: _authored_slots(),
+        critic=lambda payload: {"verdict": "verified", "confidence": 0.9,
+                                "issues": []},
+    )
+    assert absent["slots"]["publication_label"] == ""

@@ -1102,6 +1102,33 @@ def answer_cell_issues(answer_type: str, content: str) -> list[str]:
             or _BARE_URL_RE.search(value)
         ):
             issues.append("phrases_markup")
+    elif kind == "image":
+        # An Image cell's whole contract is carrying a retrievable source
+        # visual onto the CMS wire (``raw_answer_cell`` reduces a lone
+        # canonical tag to its src URL).  Both checks are syntax, not
+        # meaning: a cell that declares the Image medium yet names no image
+        # source at all cannot render anywhere downstream — the 2026-08-27
+        # owner audit measured exactly this as source figures silently
+        # absent from Assessments and Rubrics.  Which image belongs stays
+        # the model's call; this only refuses a sourceless Image cell.
+        if not (
+            _CANONICAL_IMAGE_TAG_RE.search(value)
+            or _MARKDOWN_IMAGE_RE.search(value)
+            or _BARE_URL_RE.search(value)
+        ):
+            issues.append("image_missing_source")
+        # Equation markup cannot ride in an Image cell.  Image sources are
+        # masked first so URL paths with underscores or backslash-free tags
+        # never read as TeX.
+        caption = _CANONICAL_IMAGE_TAG_RE.sub(" ", value)
+        caption = _MARKDOWN_IMAGE_RE.sub(" ", caption)
+        caption = _BARE_URL_RE.sub(" ", caption)
+        if (
+            _KATEX_TOKEN_RE.search(caption)
+            or _KATEX_LIKE_TAG_RE.search(caption)
+            or re.search(r"\\[A-Za-z]+", caption)
+        ):
+            issues.append("image_katex_markup")
     return list(dict.fromkeys(issues))
 
 

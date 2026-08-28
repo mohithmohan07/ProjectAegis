@@ -14,6 +14,11 @@ Phase 3 module constants. The Architect authors ONLY the variable slots:
   (selection only; the poem/prose topology adapter is a later build step);
 * ``board_publication_conventions`` — seeded from the board metadata and
   the upload's ``source_book`` publication label when present;
+* ``publication_label`` — the publication identity the source's own
+  cover/imprint/front-matter text evidences (e.g. ``Balbharati``), captured
+  so a blank upload ``source_book`` can be filled from the source itself
+  rather than from the uploaded PDF's filename (owner audit 2026-08-27,
+  A3/A4);
 * ``chapter_cautions`` — chapter-specific hazards read from the source.
 
 Governance: the assembled set is versioned and ``instruction_set_sha256``
@@ -46,7 +51,9 @@ from typing import Any, Callable, Mapping
 from .. import config
 from . import prompts
 
-ARCHITECT_VERSION = "architect-1"
+# ``architect-2`` adds the ``publication_label`` slot (owner audit
+# 2026-08-27, A3/A4: source identity is the publication, never a filename).
+ARCHITECT_VERSION = "architect-2"
 
 INSTRUCTION_SET_FILENAME = "source.instruction-set.json"
 
@@ -162,7 +169,8 @@ ARCHITECT_SYSTEM = prompts.register(
         "nothing else, exactly this schema: {\"subject_topology_guidance\": "
         "\"...\", \"grade_band_vocabulary\": \"...\", \"language_mode\": "
         "{\"mode\": \"poem|prose|expository\", \"rationale\": \"...\"}, "
-        "\"board_publication_conventions\": \"...\", \"chapter_cautions\": "
+        "\"board_publication_conventions\": \"...\", "
+        "\"publication_label\": \"...\", \"chapter_cautions\": "
         "[\"...\"]}. Author each slot as a short, concrete text block "
         "grounded ONLY on the metadata and source text in the request — "
         "never invent facts about the board, publication, or chapter that "
@@ -182,7 +190,14 @@ ARCHITECT_SYSTEM = prompts.register(
         "implemented elsewhere. board_publication_conventions: "
         "terminology, notation, and exercise-structure conventions of this "
         "board and publication that the metadata and source actually "
-        "evidence. chapter_cautions: chapter-specific hazards you can "
+        "evidence. publication_label: the short publication/publisher "
+        "identity the source's own cover, imprint, or front-matter text "
+        "names (e.g. 'Balbharati', 'NCERT') — the label a teacher would "
+        "cite as the book's source. Use the metadata's source_book when it "
+        "already names one; otherwise read it from the source text itself. "
+        "Never derive it from a filename, and empty string when neither "
+        "the metadata nor the source names a publication. "
+        "chapter_cautions: chapter-specific hazards you can "
         "point to in the source (figure-dependent tasks, unusual "
         "numbering, mixed languages, scanned-table artifacts, and the "
         "like), one short caution per entry. Decide every slot; never "
@@ -255,6 +270,7 @@ def _empty_slots() -> dict[str, Any]:
         "grade_band_vocabulary": "",
         "language_mode": {"mode": "", "rationale": ""},
         "board_publication_conventions": "",
+        "publication_label": "",
         "chapter_cautions": [],
     }
 
@@ -318,6 +334,10 @@ def _slot_defects(value: Any) -> list[str]:
     ):
         if not isinstance(value.get(key), str):
             defects.append(f"{key} must be a string")
+    # Absent means "the source names no publication" — the documented
+    # empty answer — so only a present, non-string value is a defect.
+    if not isinstance(value.get("publication_label", ""), str):
+        defects.append("publication_label must be a string when present")
     mode = value.get("language_mode")
     if not isinstance(mode, Mapping):
         defects.append("language_mode must be an object")
@@ -352,6 +372,9 @@ def _normalized_slots(response: Mapping[str, Any]) -> dict[str, Any]:
         },
         "board_publication_conventions": str(
             response.get("board_publication_conventions") or ""
+        ).strip(),
+        "publication_label": str(
+            response.get("publication_label") or ""
         ).strip(),
         "chapter_cautions": [
             str(row).strip()
