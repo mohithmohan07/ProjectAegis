@@ -123,6 +123,69 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     generation._openai_gate = None
 
 
+def test_live_place_images_cross_installed_openai_adapter(monkeypatch):
+    """Place images survive the installed wrapper and reach the SDK."""
+
+    import openai
+    from app.services.phase3 import place as place_mod
+
+    _CapturingClient.completions = _CapturingCompletions()
+    monkeypatch.setattr(openai, "OpenAI", _CapturingClient)
+    monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-5.6-luna")
+    monkeypatch.setattr(generation, "_openai_gate", None)
+    payload = {
+        "pool": [
+            {
+                "item_ref": "FIG-1",
+                "images": [
+                    {"url": "https://example.test/one.png"},
+                    {"url": "https://example.test/two.png"},
+                    {"url": "https://example.test/one.png"},
+                ],
+            },
+            {
+                "item_ref": "FIG-2",
+                "images": [
+                    {"url": "https://example.test/three.png"},
+                ],
+            },
+        ],
+    }
+
+    result = place_mod._live_place(payload)
+
+    assert result == {"ok": True}
+    assert len(_CapturingClient.completions.calls) == 1
+    call = _CapturingClient.completions.calls[0]
+    content = call["messages"][1]["content"]
+    assert json.loads(content[0]["text"]) == payload
+    assert content[1:] == [
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://example.test/one.png",
+                "detail": "high",
+            },
+        },
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://example.test/two.png",
+                "detail": "high",
+            },
+        },
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://example.test/three.png",
+                "detail": "high",
+            },
+        },
+    ]
+    assert call["response_format"] == {"type": "json_object"}
+    assert "image_urls" not in call
+
+
 def test_json_prompt_cache_parts_reorders_without_losing_payload():
     payload = {
         "stage": "assessment.materialize",
