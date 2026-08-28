@@ -153,15 +153,18 @@ class ModelUsage:
 
 @dataclass
 class StageUsage:
-    """Per-(stage, lane) usage for the run console's time/cost table.
+    """Per-(stage, lane) usage for the run's time/cost table.
 
     ``stage`` is the last ``progress.step`` label seen by the context that
     made the call (worker pools inherit the stage that spawned them —
     the stage that paid for them); ``lane`` is the composed worker-label
     scope, which is how the parallel tracks (the early inventory track,
     the Phase-3 lanes, the two Masters) show up as separate rails.
-    Run-scoped by design: baselines merged from persisted history carry
-    no stage attribution, so the table always describes THIS run.
+    Stage rows are part of every summary and are merged cumulatively
+    across run segments (parse + each generation attempt) by
+    ``merge_summaries``, so the live console, the terminal event, and the
+    persisted job record all describe the SAME ledger (owner request,
+    2026-08-28: before-parsing and after-parsing numbers must agree).
     """
 
     stage: str
@@ -191,6 +194,46 @@ class UsageAccumulator:
         repr=False,
     )
     visible_persistence_key: str = field(default="", repr=False)
+    # Wall-clock for this run segment: the accumulator opens when the
+    # streamed run's worker starts, so ``elapsed_seconds`` is the segment's
+    # duration so far; cumulative time across segments comes from
+    # ``merge_summaries`` summing the persisted values.
+    started_monotonic: float = field(default_factory=time.monotonic, repr=False)
+    # Per-STAGE wall-clock windows fed by ``mark_stage`` at each
+    # ``progress.step`` boundary: accumulated closed seconds per stage
+    # label, plus the currently open stage. Lanes within one stage share
+    # the stage's window — they run inside its wall time.
+    stage_windows: dict[str, float] = field(default_factory=dict, repr=False)
+    open_stage: str = field(default="", repr=False)
+    open_stage_started: float = field(default=0.0, repr=False)
+
+    def _close_open_stage_locked(self) -> None:
+        if self.open_stage_started:
+            self.stage_windows[self.open_stage] = (
+                self.stage_windows.get(self.open_stage, 0.0)
+                + (time.monotonic() - self.open_stage_started)
+            )
+            self.open_stage_started = 0.0
+
+    def mark_stage(self, stage: str) -> None:
+        """Record a stage boundary: close the open window, open the next."""
+        with _MUTATION_LOCK:
+            self._close_open_stage_locked()
+            self.open_stage = str(stage)
+            self.open_stage_started = time.monotonic()
+
+    def _stage_elapsed(self, row: StageUsage) -> float:
+        elapsed = self.stage_windows.get(row.stage)
+        extra = (
+            time.monotonic() - self.open_stage_started
+            if self.open_stage == row.stage and self.open_stage_started
+            else 0.0
+        )
+        if elapsed is None and not extra:
+            # Never marked (a caller without step events): the billable
+            # window is the honest fallback.
+            return round(max(row.last_ts - row.first_ts, 0.0), 3)
+        return round((elapsed or 0.0) + extra, 3)
 
     def add(
         self,
@@ -287,6 +330,7 @@ class UsageAccumulator:
                 "pricing_complete": row.pricing_complete,
                 "first_ts": row.first_ts,
                 "last_ts": row.last_ts,
+                "elapsed_seconds": self._stage_elapsed(row),
             }
             for row in self.stages.values()
         ]
@@ -331,6 +375,18 @@ class UsageAccumulator:
             "pricing_complete": pricing_complete,
             "pricing_as_of": PRICING_AS_OF,
             "pricing_source": _pricing_source(model_rows),
+            # Wall-clock of this run segment; cumulative across segments
+            # once merged. Stage rows carry the same ledger stage-wise —
+            # persisted with the summary so before/after-parsing views and
+            # the durable record all agree (owner request, 2026-08-28).
+            # A segment that made no model call contributes no time: a free
+            # repeated request must leave the durable record unchanged.
+            "elapsed_seconds": (
+                round(time.monotonic() - self.started_monotonic, 3)
+                if self.models
+                else 0.0
+            ),
+            "stages": self.stage_rows(),
         }
 
 
@@ -424,22 +480,31 @@ def visible_summary() -> dict[str, Any]:
     return accumulator.summary()
 
 
-def console_summary() -> dict[str, Any]:
-    """``visible_summary`` plus the run-scoped per-(stage, lane) table.
+def mark_stage(stage: str) -> None:
+    """Record a stage boundary on the active accumulator, if tracking.
 
-    The console's LIVE usage events are the only carrier of the stage
-    table, deliberately: persisted summaries (checkpoint bundles,
-    ``job.openai_usage``, pending-decision ``cumulative_usage``) keep
-    their exact historical shape — a strict checkpoint schema refuses
-    unknown fields, and a free repeated request must not change the
-    durable record. Run-scoped attribution describes THIS run's console
-    view and nothing else.
+    Called by ``progress.step`` so every stage owns a wall-clock window;
+    the per-stage ``elapsed_seconds`` in stage rows comes from these
+    windows (billable-response window as the fallback for callers that
+    never emit steps).
     """
-    summary = visible_summary()
     accumulator = _active.get()
     if accumulator is not None:
-        summary["stages"] = accumulator.stage_rows()
-    return summary
+        accumulator.mark_stage(stage)
+
+
+def console_summary() -> dict[str, Any]:
+    """The cumulative summary shown on the live console.
+
+    One ledger everywhere (owner request, 2026-08-28): the summary — stage
+    table and elapsed time included — is the same cumulative object the
+    terminal event carries and ``job.openai_usage`` persists, so the
+    numbers shown during parsing, during generation, and after completion
+    always agree. ``visible_summary`` already merges the persisted
+    baseline (earlier segments: the parse run, prior attempts) with this
+    run's accumulator, stage rows and elapsed included.
+    """
+    return visible_summary()
 
 
 def record_response(response: Any, *, requested_model: str = "") -> dict[str, Any]:
@@ -490,7 +555,8 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
 
     # Local import avoids a module cycle. Outside streamed requests this is a
     # cheap no-op, while the web UI receives updated aggregate usage live —
-    # console_summary so the stage/lane table rides the live event only.
+    # the cumulative summary (baseline + this run, stages and elapsed
+    # included), identical in shape to what the job record persists.
     try:
         from . import progress
 
@@ -500,6 +566,64 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     return summary
 
 
+def _merge_stage_rows(
+    summaries: tuple[dict[str, Any] | None, ...],
+) -> list[dict[str, Any]]:
+    """Cumulative per-(stage, lane) rows across run segments, in first-seen
+    order (earlier segments first, so a parse stage precedes generation)."""
+    merged: dict[tuple[str, str], dict[str, Any]] = {}
+    counters = (
+        "request_count", "input_tokens", "cached_input_tokens",
+        "cache_write_tokens", "output_tokens", "reasoning_tokens",
+        "total_tokens",
+    )
+    for summary in summaries:
+        if not isinstance(summary, dict):
+            continue
+        for row in summary.get("stages") or []:
+            if not isinstance(row, dict):
+                continue
+            key = (str(row.get("stage") or ""), str(row.get("lane") or ""))
+            target = merged.setdefault(key, {
+                "stage": key[0],
+                "lane": key[1],
+                **{name: 0 for name in counters},
+                "estimated_cost_usd": 0.0,
+                "pricing_complete": True,
+                "first_ts": 0.0,
+                "last_ts": 0.0,
+                "elapsed_seconds": 0.0,
+            })
+            for name in counters:
+                target[name] += _int(row.get(name))
+            cost = row.get("estimated_cost_usd")
+            if cost is None or row.get("pricing_complete") is False:
+                target["pricing_complete"] = False
+                target["estimated_cost_usd"] = None
+            elif target["pricing_complete"]:
+                try:
+                    target["estimated_cost_usd"] = round(
+                        target["estimated_cost_usd"] + float(cost), 6
+                    )
+                except (TypeError, ValueError):
+                    target["pricing_complete"] = False
+                    target["estimated_cost_usd"] = None
+            first = _float(row.get("first_ts"))
+            if first and (
+                not target["first_ts"] or first < target["first_ts"]
+            ):
+                target["first_ts"] = first
+            target["last_ts"] = max(
+                target["last_ts"], _float(row.get("last_ts"))
+            )
+            target["elapsed_seconds"] = round(
+                target["elapsed_seconds"]
+                + max(0.0, _float(row.get("elapsed_seconds"))),
+                3,
+            )
+    return list(merged.values())
+
+
 def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
     """Merge persisted/run summaries without repricing historical usage."""
     accumulator = UsageAccumulator()
@@ -507,9 +631,11 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
     pricing_complete = True
     saw_usage = False
     pricing_dates: set[str] = set()
+    elapsed_total = 0.0
     for summary in summaries:
         if not isinstance(summary, dict):
             continue
+        elapsed_total += max(0.0, _float(summary.get("elapsed_seconds")))
         if _int(summary.get("request_count")) > 0:
             saw_usage = True
             value = summary.get("estimated_cost_usd")
@@ -555,6 +681,10 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
             merged["pricing_as_of"] = next(iter(pricing_dates))
         elif len(pricing_dates) > 1:
             merged["pricing_as_of"] = "multiple"
+    # The fresh accumulator above knows nothing of the inputs' wall-clock
+    # or stage attribution — carry both cumulatively.
+    merged["elapsed_seconds"] = round(elapsed_total, 3)
+    merged["stages"] = _merge_stage_rows(summaries)
     return merged
 
 
@@ -641,3 +771,10 @@ def _int(value: Any) -> int:
         return max(0, int(value or 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _float(value: Any) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0

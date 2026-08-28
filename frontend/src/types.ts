@@ -85,7 +85,8 @@ export interface Stats {
  * subset of `input_tokens`, not an additional count.
  */
 /** Per-(stage, lane) usage attribution for the run console's stage cards.
-    Run-scoped: describes the current run only, never persisted history. */
+    Cumulative: merged across run segments (the parse run and every
+    generation attempt), persisted with the summary. */
 export interface StageUsageRow {
   stage: string;
   lane: string;
@@ -100,6 +101,8 @@ export interface StageUsageRow {
   pricing_complete: boolean;
   first_ts: number;
   last_ts: number;
+  /** Wall-clock seconds this stage ran, cumulative across segments. */
+  elapsed_seconds?: number;
 }
 
 export interface OpenAIUsage {
@@ -130,6 +133,9 @@ export interface OpenAIUsage {
   pricing_source?: string;
   pricing_as_of?: string;
   pricing_complete?: boolean;
+  /** Cumulative wall-clock seconds across the parse run and every
+      generation attempt. */
+  elapsed_seconds?: number;
 }
 
 export type SemanticDecisionChoice =

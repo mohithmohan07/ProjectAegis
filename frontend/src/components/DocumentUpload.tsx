@@ -400,7 +400,9 @@ export default function DocumentUpload({
         `Converting ${job.filename} to MMD`,
         path,
         {},
-        undefined,
+        // The parse run reads and extends the SAME cumulative ledger the
+        // generation run continues — label it the same way.
+        { cumulative: true, filename: job.filename },
         {
           module,
           jobId: job.id,

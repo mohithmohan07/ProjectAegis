@@ -832,6 +832,30 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .api-usage-cost { border-color: var(--green); }
 .api-usage-cost dd { color: var(--green); }
 .api-usage-note { color: var(--muted); font-size: 10.5px; line-height: 1.5; margin-top: 10px; }
+.api-usage-stages { margin-top: 10px; overflow-x: auto; }
+.api-usage-stages table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.api-usage-stages th {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.api-usage-stages td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.api-usage-stages td small { display: block; color: var(--muted); font-family: inherit; }
 
 /* ============================== Run outputs ============================= */
 /* The four deliverables (01 Pre Concept · 02 Pre Master · 03 Post Concept ·

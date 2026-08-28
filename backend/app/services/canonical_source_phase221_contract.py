@@ -54,6 +54,10 @@ def install() -> None:
             "will render the accepted structure deterministically.",
             level="info",
         )
+        # A named stage, so the parse run's tokens, cost, and wall-clock
+        # land in the same cumulative stage ledger the generation run
+        # continues — one set of numbers before and after parsing.
+        progress.step("Parse source document")
         persistence_key = f"upload-job:{int(job.id)}"
         persisted = (
             job.openai_usage if isinstance(job.openai_usage, dict) else {}
