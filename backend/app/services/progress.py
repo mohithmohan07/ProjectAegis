@@ -114,13 +114,15 @@ def step(label: str, *, value: float | None = None) -> None:
     _emit({"type": "step", "label": str(label)})
     if value is not None:
         set_progress(value, label=label)
-    # A stage boundary is the natural moment to refresh the console's
-    # time/cost table. Lazy import mirrors stream(); a run with no
-    # recorded usage emits nothing extra. console_summary carries the
-    # stage table on the LIVE event only — never a persisted summary.
+    # A stage boundary is the natural moment to (a) open the new stage's
+    # wall-clock window so per-stage elapsed time is real stage duration,
+    # and (b) refresh the console's time/cost table. Lazy import mirrors
+    # stream(); a run with no recorded usage emits nothing extra. The
+    # summary is the same cumulative ledger the job record persists.
     from . import openai_usage
 
     if openai_usage.is_tracking():
+        openai_usage.mark_stage(str(label))
         summary = openai_usage.console_summary()
         if summary.get("request_count"):
             usage(summary)

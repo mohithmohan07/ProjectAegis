@@ -37,12 +37,13 @@ def test_calls_attribute_to_the_active_stage_and_lane():
         progress.step("Stage Two")
         openai_usage.record_response(_Response())
         summary = openai_usage.console_summary()
-        # Persisted-shape summaries stay EXACTLY as they were: the stage
-        # table rides the live console summary only, never a summary a
-        # checkpoint bundle or job record stores (strict schemas refuse
-        # unknown fields, and free repeats must not move the record).
-        assert "stages" not in openai_usage.current_summary()
-        assert "stages" not in openai_usage.visible_summary()
+        # One ledger everywhere (owner request, 2026-08-28): every summary
+        # shape — live console, terminal event, persisted job record —
+        # carries the SAME cumulative stage table and elapsed wall-clock,
+        # so before-parsing and after-parsing numbers always agree.
+        assert "stages" in openai_usage.current_summary()
+        assert "stages" in openai_usage.visible_summary()
+        assert openai_usage.current_summary()["elapsed_seconds"] >= 0.0
 
     rows = {(row["stage"], row["lane"]): row for row in summary["stages"]}
     assert set(rows) == {
@@ -91,3 +92,48 @@ def test_log_events_carry_their_lane_as_a_structured_field():
     assert "lane" not in events[0]
     assert events[1]["lane"] == "Master · Output 02 (Pre)"
     assert events[1]["message"].startswith("[Master · Output 02 (Pre)]")
+
+
+def test_summaries_merge_stage_rows_and_elapsed_cumulatively():
+    """Parse-run rows and generation-run rows join into one ledger."""
+
+    with openai_usage.track():
+        progress.step("Parse source document")
+        openai_usage.record_response(_Response(prompt=200, completion=50,
+                                               reasoning=10))
+        parse_run = openai_usage.current_summary()
+    with openai_usage.track():
+        progress.step("Extraction")
+        openai_usage.record_response(_Response())
+        merged = openai_usage.cumulative_summary(
+            parse_run, persistence_key="upload-job:test")
+
+    stages = [row["stage"] for row in merged["stages"]]
+    # Earlier segments first: the parse stage precedes generation.
+    assert stages == ["Parse source document", "Extraction"]
+    parse_row = merged["stages"][0]
+    assert parse_row["total_tokens"] == 250
+    assert parse_row["elapsed_seconds"] >= 0.0
+    assert merged["elapsed_seconds"] >= parse_run["elapsed_seconds"]
+    assert merged["request_count"] == 2
+
+    # Re-merging the SAME persisted summary twice must not double stages.
+    doubled = openai_usage.merge_summaries(merged, {})
+    assert [row["stage"] for row in doubled["stages"]] == stages
+    assert doubled["stages"][0]["total_tokens"] == 250
+
+
+def test_legacy_summaries_without_time_or_stages_still_merge():
+    legacy = {
+        "model": "gpt-5.6-luna",
+        "request_count": 1,
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "total_tokens": 110,
+        "estimated_cost_usd": 0.5,
+        "pricing_complete": True,
+    }
+    merged = openai_usage.merge_summaries(legacy, {})
+    assert merged["elapsed_seconds"] == 0.0
+    assert merged["stages"] == []
+    assert merged["request_count"] == 1

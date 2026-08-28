@@ -19,6 +19,19 @@ export function formatTokenCount(value: number | null | undefined): string {
     : "—";
 }
 
+export function formatElapsedSeconds(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return "\u2014";
+  }
+  const total = Math.round(value);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
 export function formatEstimatedCost(value: number | null | undefined): string {
   if (typeof value !== "number" || !Number.isFinite(value)) return "Unavailable";
   const digits = Math.abs(value) < 0.01 ? 6 : 4;
@@ -97,7 +110,48 @@ export default function ApiUsageSummary({
           value={formatEstimatedCost(usage.estimated_cost_usd)}
           emphasized={costAvailable}
         />
+        {typeof usage.elapsed_seconds === "number" && usage.elapsed_seconds > 0 && (
+          <UsageMetric
+            label="Time taken"
+            value={formatElapsedSeconds(usage.elapsed_seconds)}
+            hint={cumulative ? "Across parsing and every attempt" : undefined}
+          />
+        )}
       </dl>
+
+      {!compact && (usage.stages?.length ?? 0) > 0 && (
+        <div className="api-usage-stages">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Stage</th>
+                <th scope="col">Requests</th>
+                <th scope="col">Tokens</th>
+                <th scope="col">Est. cost</th>
+                <th scope="col">Time</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(usage.stages ?? []).map((row, index) => (
+                <tr key={`${row.stage}\u0000${row.lane}\u0000${index}`}>
+                  <td>
+                    {row.stage || "(unattributed)"}
+                    {row.lane ? <small> {row.lane}</small> : null}
+                  </td>
+                  <td>{formatTokenCount(row.request_count)}</td>
+                  <td>{formatTokenCount(row.total_tokens)}</td>
+                  <td>
+                    {row.pricing_complete
+                      ? formatEstimatedCost(row.estimated_cost_usd)
+                      : "\u2014"}
+                  </td>
+                  <td>{formatElapsedSeconds(row.elapsed_seconds)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {!compact && (
         <div className="api-usage-note">
@@ -107,8 +161,9 @@ export default function ApiUsageSummary({
                 {resumed
                   ? "Resumed from a saved checkpoint. "
                   : ""}
-                Totals are cumulative for this file across the original
-                attempt and every retry; retrying does not reset them.{" "}
+                Totals are cumulative for this file across parsing, the
+                original attempt, and every retry; retrying does not reset
+                them.{" "}
                 {costAvailable
                   ? "The estimate uses the active model's published rates, including cache-write charges and long-context multipliers where they apply; cached input and cache writes are already included in input tokens."
                   : "A cost estimate is unavailable because pricing is not configured for every model used."}

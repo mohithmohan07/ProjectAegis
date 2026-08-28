@@ -190,10 +190,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       lines: [],
       progress: 0,
       startedAt: Date.now() / 1000,
-      // Per-stage rows describe one live server attempt only. A manually
-      // resumed run may start with durable cumulative totals, but it must not
-      // present the previous attempt's stage table as current.
-      usage: withoutStageRows(initialUsage),
+      // The server's ledger is cumulative across run segments (parse +
+      // every attempt), stage rows included, so durable initial usage is
+      // shown as-is — the first live event carries the same merged table.
+      usage: initialUsage,
       usagePresentation: usagePresentation ? presentation : null,
       progressLabel: "Starting…", status: "running",
     });
@@ -341,10 +341,9 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             // forever, and the terminal event could never finish the
             // run — the client kept polling and re-POSTing instead.
             lastSeq = 0;
-            // The new stream is also a new usage-attribution attempt. Keep
-            // the durable cumulative headline, but remove the old run-scoped
-            // stage table before any events from the resumed stream arrive.
-            setState((s) => ({ ...s, usage: withoutStageRows(s.usage) }));
+            // Stage rows are cumulative across attempts now, so the
+            // resumed stream's first usage event carries the same merged
+            // table — nothing to strip here.
             note("Resuming the run from its saved checkpoint…", "info");
             break;
           }
@@ -587,18 +586,12 @@ function presentedUsage(
     return state.usage;
   }
   if (!incoming.stages && state.usage?.stages) {
-    // Only live usage events carry the per-stage table (persisted-shape
-    // summaries on result/error events never do); keep the last table so
-    // the stage cards hold their cost chips through "Done".
+    // Every summary now carries the cumulative stage table; this guard
+    // only protects against a legacy event without one, keeping the
+    // stage cards' cost chips through "Done".
     return { ...incoming, stages: state.usage.stages };
   }
   return incoming;
-}
-
-function withoutStageRows(usage: OpenAIUsage | null): OpenAIUsage | null {
-  if (!usage?.stages) return usage;
-  const { stages: _previousAttemptStages, ...durableTotals } = usage;
-  return durableTotals;
 }
 
 function numericUsage(value: number | null | undefined): number {

@@ -98,11 +98,27 @@ _USAGE_INTS = {
 _USAGE_TOP_KEYS = {
     "model", "models", *_USAGE_INTS, "estimated_cost_usd", "currency",
     "pricing_complete", "pricing_as_of", "pricing_source",
+    # Cumulative run wall-clock and the per-(stage, lane) ledger — added
+    # 2026-08-28 (owner request: one cumulative cost + time record, stage
+    # wise). Optional, so pre-existing bundles stay valid.
+    "elapsed_seconds", "stages",
 }
 _USAGE_MODEL_KEYS = {
     "model", *_USAGE_INTS, "estimated_cost_usd",
     "pricing_complete", "pricing_source",
 }
+_USAGE_STAGE_INTS = {
+    key: maximum
+    for key, maximum in _USAGE_INTS.items()
+    if key != "uncached_input_tokens"
+}
+_USAGE_STAGE_KEYS = {
+    "stage", "lane", *_USAGE_STAGE_INTS, "estimated_cost_usd",
+    "pricing_complete", "first_ts", "last_ts", "elapsed_seconds",
+}
+# A generous ceiling for run wall-clock (one year) and epoch timestamps.
+MAX_ELAPSED_SECONDS = 366 * 24 * 60 * 60
+MAX_EPOCH_TS = 10**11
 
 
 def _json_bytes(value: Any, *, pretty: bool = False) -> bytes:
@@ -1475,8 +1491,53 @@ def _validate_usage_row(
         raise ValueError(f"{path}.reasoning_tokens exceeds output_tokens")
 
 
+def _validate_stage_row(value: Any, path: str) -> None:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be an object")
+    _exact_keys(value, _USAGE_STAGE_KEYS, path, required=set())
+    for name in ("stage", "lane"):
+        if name in value:
+            _string(value[name], f"{path}.{name}", 512, nonempty=False)
+    for name, maximum in _USAGE_STAGE_INTS.items():
+        if name in value:
+            _integer(value[name], f"{path}.{name}", maximum)
+    if (
+        "estimated_cost_usd" in value
+        and value["estimated_cost_usd"] is not None
+    ):
+        _number(
+            value["estimated_cost_usd"],
+            f"{path}.estimated_cost_usd",
+            MAX_ESTIMATED_COST_USD,
+        )
+    if "pricing_complete" in value and not isinstance(
+        value["pricing_complete"], bool
+    ):
+        raise ValueError(f"{path}.pricing_complete must be a boolean")
+    for name in ("first_ts", "last_ts"):
+        if name in value:
+            _number(value[name], f"{path}.{name}", MAX_EPOCH_TS)
+    if "elapsed_seconds" in value:
+        _number(
+            value["elapsed_seconds"],
+            f"{path}.elapsed_seconds",
+            MAX_ELAPSED_SECONDS,
+        )
+
+
 def _validate_usage(value: Any, path: str) -> None:
     _validate_usage_row(value, path, model_row=False)
+    if "elapsed_seconds" in value:
+        _number(
+            value["elapsed_seconds"],
+            f"{path}.elapsed_seconds",
+            MAX_ELAPSED_SECONDS,
+        )
+    stages = value.get("stages")
+    if stages is not None:
+        stage_rows = _object_list(stages, f"{path}.stages", 512)
+        for index, row in enumerate(stage_rows):
+            _validate_stage_row(row, f"{path}.stages[{index}]")
     models = value.get("models")
     if models is None:
         return

@@ -146,7 +146,11 @@ test("a checkpoint retry starts from and preserves the cumulative file total", (
 
   fireEvent.click(screen.getByText("Retry"));
   expect(screen.getByTestId("usage").textContent).toBe("500");
-  expect(screen.getByTestId("usage-stages").textContent).toBe("");
+  // Stage rows are cumulative across attempts (one ledger, owner request
+  // 2026-08-28): durable initial usage keeps its stage table.
+  expect(screen.getByTestId("usage-stages").textContent).toBe(
+    "Previous attempt",
+  );
   expect(screen.getByTestId("usage-context").textContent).toBe(
     "cumulative resumed",
   );
@@ -490,7 +494,12 @@ test("a checkpoint re-POST resets the seq cursor so the resumed run's events app
     expect(screen.getByTestId("lines").textContent).toContain(
       "Resuming the run from its saved checkpoint",
     );
-    expect(screen.getByTestId("usage-stages").textContent).toBe("");
+    // The cumulative ledger keeps the dead attempt's stage rows; the
+    // resumed stream's first usage event replaces them with the merged
+    // server table.
+    expect(screen.getByTestId("usage-stages").textContent).toBe(
+      "Dead attempt",
+    );
 
     // The re-POSTed stream is a NEW journal: seq restarts at 1. Before
     // the cursor reset, every resumed event was <= the dead run's
