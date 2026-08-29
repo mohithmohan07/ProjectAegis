@@ -61,6 +61,14 @@ RETIRED_PROMPT_KEYS: frozenset[str] = frozenset({
     # Retired with ``generation._ensure_misconceptions_via_api``: the
     # phase 3 analyse pass now authors learner analysis.
     "concepts.misconceptions.system",
+    # Retired 2026-08-29 with owner decisions D1/P10 (KaTeX support list +
+    # canonical table house style): a stored Admin override of the old key
+    # would keep injecting the superseded rules — \hspace/\phantom/\boxed
+    # forbidden, "no spacing option", labelled-prose tables — into every
+    # generation prompt, silently undoing the decisions. The preamble now
+    # registers under ``content.katex_rules.v2``; the old override text is
+    # archived, never resurrected.
+    "content.katex_rules",
 })
 
 

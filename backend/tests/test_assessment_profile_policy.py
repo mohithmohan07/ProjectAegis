@@ -106,10 +106,15 @@ def test_msbshse_grade_6_mathematics_policy_is_exact_and_narrow() -> None:
     assert "Case Based Questions" not in str(policy)
 
 
-def test_msbshse_grade_6_english_policy_is_exact_taxonomy_only() -> None:
+def test_msbshse_grade_6_english_policy_is_exact_taxonomy_with_contracts(
+) -> None:
+    """The Grade-6 taxonomy stays the audit's closed set; since the owner's
+    Question Duration Matrix (2026-08-29) every category also carries its
+    marks and duration contract instead of an empty rule."""
+
     policy = profile.assessment_format_policy(metadata=ENGLISH_META)
 
-    assert policy["policy_id"] == "msbshse-grade-6-english-2026-08-27"
+    assert policy["policy_id"] == "msbshse-grade-6-english-2026-08-29"
     assert "metadata_match" not in policy
     assert profile.question_categories(metadata=ENGLISH_META) == {
         "objective": ("Multiple Choice Question",),
@@ -124,26 +129,39 @@ def test_msbshse_grade_6_english_policy_is_exact_taxonomy_only() -> None:
     }
     for sheet_kind, categories in policy["formats_by_sheet"].items():
         for category, rule in categories.items():
-            assert rule == {}, (sheet_kind, category)
+            assert set(rule) == {"marks", "duration"}, (sheet_kind, category)
+    # The board-wide English additions stay OUT of Grade 6 (scope ruling
+    # 2026-08-29: grade-scoped policies layer over the matrix).
+    assert "Reading Comprehension" not in str(policy)
+    assert "Extract Based Question" not in str(policy)
 
 
-def test_msbshse_grade_6_english_does_not_inherit_math_constraints() -> None:
+def test_msbshse_grade_6_english_carries_the_english_matrix_contract() -> None:
     assert profile.question_marks_rule(
         metadata=ENGLISH_META,
         sheet_kind="descriptive",
         question_category="Long Answer Type (4 Marks)",
-    ) == {}
-    assert profile.question_duration_rule(
-        metadata=ENGLISH_META,
-        sheet_kind="descriptive",
-        question_category="Long Answer Type (4 Marks)",
-    ) == {}
+    ) == {"mode": "fixed", "allowed": (4,)}
     assert profile.question_duration_minutes(
         metadata=ENGLISH_META,
         sheet_kind="descriptive",
         question_category="Long Answer Type (4 Marks)",
         difficulty="High",
-    ) is None
+    ) == 7.0
+    # Marks-tiered categories resolve through the mark tier.
+    assert profile.question_duration_minutes(
+        metadata=ENGLISH_META,
+        sheet_kind="descriptive",
+        question_category="Composition Writing",
+        difficulty="Moderate",
+        marks=10,
+    ) == 10.0
+    # A Mathematics-only category never leaks into the English taxonomy.
+    assert profile.question_format_rule(
+        metadata=ENGLISH_META,
+        sheet_kind="descriptive",
+        question_category="Long Answer Type (5 Marks)",
+    ) == {}
 
 
 @pytest.mark.parametrize(
@@ -156,7 +174,7 @@ def test_msbshse_grade_6_english_does_not_inherit_math_constraints() -> None:
         ),
         pytest.param(
             ENGLISH_META,
-            "msbshse-grade-6-english-2026-08-27",
+            "msbshse-grade-6-english-2026-08-29",
             id="english",
         ),
     ],
@@ -176,7 +194,7 @@ def test_explicit_format_policy_metadata_is_authoritative() -> None:
 
     assert profile.assessment_format_policy(
         math_profile, ENGLISH_META,
-    )["policy_id"] == "msbshse-grade-6-english-2026-08-27"
+    )["policy_id"] == "msbshse-grade-6-english-2026-08-29"
     assert profile.assessment_format_policy(
         math_profile, {},
     )["policy_id"] == "generic-cms"
@@ -192,7 +210,7 @@ def test_reresolving_persisted_profile_preserves_carried_metadata(
 
     assert rerun["_resolved_metadata"] == ENGLISH_META
     assert profile.assessment_format_policy(rerun)["policy_id"] == (
-        "msbshse-grade-6-english-2026-08-27"
+        "msbshse-grade-6-english-2026-08-29"
     )
     assert profile.master_workbook_contract(
         rerun, learning_phase="Post",
@@ -258,7 +276,7 @@ def test_blank_first_resolution_leaves_selectors_unknown_then_fillable() -> None
 
     assert resolved["_resolved_metadata"] == ENGLISH_META
     assert profile.assessment_format_policy(resolved)["policy_id"] == (
-        "msbshse-grade-6-english-2026-08-27"
+        "msbshse-grade-6-english-2026-08-29"
     )
     assert profile.master_workbook_contract(
         resolved, learning_phase="Post",
@@ -468,20 +486,26 @@ def test_board_grade_partial_metadata_keeps_the_pinned_run_profile(
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    ("metadata", "policy_id"),
     [
         pytest.param(
             {"board": "MSBSHSE", "subject": "Mathematics"},
+            # Board + subject are conclusive for the FORMAT policy since the
+            # owner's Question Duration Matrix (2026-08-29) binds every MH
+            # Board grade per subject; only the grade-scoped run-profile
+            # facts (sheet kinds, workbook geometry) stay pinned below.
+            "msbshse-mathematics-physics-2026-08-29",
             id="missing-grade",
         ),
         pytest.param(
             {"grade": "06", "subject": "Mathematics"},
+            "generic-cms",
             id="missing-board",
         ),
     ],
 )
 def test_inconclusive_partial_metadata_keeps_the_pinned_profile(
-    metadata,
+    metadata, policy_id,
 ) -> None:
     run_profile = profile.resolve_for_metadata(None, metadata)
 
@@ -491,4 +515,4 @@ def test_inconclusive_partial_metadata_keeps_the_pinned_profile(
     )
     assert profile.assessment_format_policy(
         run_profile, metadata,
-    )["policy_id"] == "generic-cms"
+    )["policy_id"] == policy_id

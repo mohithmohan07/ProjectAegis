@@ -37,8 +37,10 @@ from tests.test_pre_release_lane_wiring import (
                     "06CBSE_Ch_PL_T01_C01"
                 ),
             },
-            "06CBSE_Ch_PL_T01_C01",
-            id="present-resolved-id-wins",
+            # Owner decision D4 (2026-08-29): even a legacy marker still
+            # carrying resolved Post ids publishes EMPTY.
+            "",
+            id="present-legacy-resolved-id-clears-anyway",
         ),
         pytest.param(
             {"related_concepts": "authored public relation"},

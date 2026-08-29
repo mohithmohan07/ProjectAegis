@@ -71,3 +71,54 @@ def test_master_refiner_critic_example_is_strict_json():
     assert "strict JSON" in prompt
     assert '{"verdict":"verified|dissent"' in prompt
     assert "{verdict:'" not in prompt
+
+
+def test_table_house_style_is_pinned_on_every_prompt_surface():
+    """P10 (owner-corrected reference + decision D1, 2026-08-29): the
+    canonical table style — one [Katex] wrapper, \\text prose,
+    \\\\[0.12 cm] spacing, pipe columns, \\hline every row, sized
+    \\phantom placeholders — must reach the model on all three prompt
+    surfaces, and coordinate-labelled prose must be named a transport
+    encoding, never a shippable rendering."""
+
+    from app.services import katex_rules
+
+    preamble = katex_rules.PROMPT_PREAMBLE
+    materialization = assessment_materialization.MATERIALIZE_SYSTEM
+    refiner = assessment_master_refiner.CANDIDATE_SYSTEM
+
+    for prompt in (preamble, materialization, refiner):
+        assert "{|c|c|c|}" in prompt
+        assert r"\\[0.12 cm]" in prompt
+        assert r"\phantom{7}" in prompt
+        assert r"\phantom{n}" in prompt  # named only to forbid the literal
+        assert r"\hline" in prompt
+
+    assert "Never verbalise a table" in preamble
+    assert "transport encoding" in preamble
+    for prompt in (materialization, refiner):
+        assert "Table row 1, column 2: 8611" in prompt
+        assert "re-rendered" in prompt
+
+    # D1: the support list flipped — only \mathrm stays banned; the
+    # preamble must say the supported trio and row spacing are allowed.
+    assert "Supported and encouraged" in preamble
+    assert r"\mathrm" in preamble
+    for supported in (r"\hspace", r"\phantom", r"\boxed"):
+        assert supported in preamble
+
+
+def test_the_katex_rules_prompt_key_was_re_minted_for_d1_p10():
+    """A stored Admin override of the pre-D1 key must never resurrect the
+    superseded rules: the old key is retired (its override text archived)
+    and every consumer resolves the new key."""
+
+    from app.services import katex_rules, prompts
+
+    assert "content.katex_rules" in prompts.RETIRED_PROMPT_KEYS
+    assert prompts.get_text("content.katex_rules.v2") == (
+        katex_rules._PROMPT_PREAMBLE_DEFAULT
+    )
+    assert katex_rules.PROMPT_PREAMBLE == (
+        prompts.get_text("content.katex_rules.v2")
+    )

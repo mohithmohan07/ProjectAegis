@@ -256,6 +256,8 @@ export const api = {
     `${BASE}/build-concepts/uploads/${jobId}/inventory.csv`,
   checkpointUrl: (jobId: number) =>
     `${BASE}/build-concepts/uploads/${jobId}/checkpoint`,
+  runDiagnosticsUrl: (jobId: number) =>
+    `${BASE}/build-concepts/uploads/${jobId}/diagnostics.zip`,
   createWorkbookUrl: (subject: string, board: string, grade: string, mode: "blank" | "content") =>
     `${BASE}/data/workbook/new?${new URLSearchParams({ subject, board, grade, mode })}`,
   importWorkbook: (file: File) => {

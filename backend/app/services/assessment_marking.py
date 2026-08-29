@@ -64,7 +64,8 @@ MARKING_SYSTEM = (
     "or No. Obey the supplied assessment_format_policy duration table. For "
     "a per-subpoint rule, author duration_basis_count from the represented "
     "subpoints and make duration its exact prescribed multiple; otherwise "
-    "return duration_basis_count as null.\n"
+    "return duration_basis_count as null. For a marks-matrix rule, read the "
+    "minutes under the cell's mark tier and then its difficulty.\n"
     "For Objective, exactly one correct option receives the cell's total "
     "marks and every wrong option receives exact zero. For Subjective, every "
     "expected-answer weight is positive and their exact sum is the cell "
@@ -875,6 +876,33 @@ def _checker(
                 defects.append(
                     "active duration matrix has no positive value for the "
                     "candidate difficulty"
+                )
+        elif duration_mode == "marks_matrix":
+            # Owner's Question Duration Matrix (2026-08-29): minutes depend
+            # on the mark tier as well as difficulty (e.g. Composition
+            # Writing at 5/10/20 marks).
+            if basis_count is not None:
+                defects.append(
+                    "duration_basis_count must be null for a marks-matrix "
+                    "duration"
+                )
+            tiers = duration_rule.get("minutes_by_marks")
+            tier = None
+            if (
+                isinstance(tiers, Mapping)
+                and total_marks == total_marks.to_integral_value()
+            ):
+                tier = tiers.get(
+                    int(total_marks), tiers.get(str(int(total_marks)))
+                )
+            if isinstance(tier, Mapping):
+                expected_duration = _decimal(
+                    tier.get(str(candidate.get("difficulty") or ""))
+                )
+            if expected_duration is None or expected_duration <= 0:
+                defects.append(
+                    "active marks-matrix duration has no positive value for "
+                    "the candidate marks and difficulty"
                 )
         elif duration_mode == "per_subpoint":
             per_subpoint = _decimal(

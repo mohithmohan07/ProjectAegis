@@ -723,7 +723,7 @@ def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> 
     return prompts.render(
         "identify.system",
         intent=intent, type_block=type_block,
-        content_format=prompts.get_text("content.katex_rules"),
+        content_format=prompts.get_text("content.katex_rules.v2"),
         output=prompts.get_text("assessment.output"),
     )
 

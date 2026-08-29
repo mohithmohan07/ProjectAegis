@@ -1783,7 +1783,12 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
     "math_post_master.xlsx": {
-        "digest": "13566d6a2834a3ad5e3d807e9c06b38ce207bbb3eccda4184a17fce1ec50c865",
+        # Descriptive digest re-pinned 2026-08-29 (owner decision D1):
+        # dimension row spacing (``\\[0.12 cm]``) is supported, so the
+        # legacy export no longer rewrites the gold file's 7 spaced cells
+        # to bare ``\\`` — the rendered master now matches the corrected
+        # workbook's own bytes in those cells.
+        "digest": "6ece2da8aaca6300bd62c1ba60d0aeecd32acbffd816c46e6e6d041253d0f875",
         "sheets": {
             "Objective": (
                 47, 72, 3384,
@@ -1791,7 +1796,7 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
             ),
             "Descriptive": (
                 24, 380, 9120,
-                "3909c2100034c46a2b8dc663b6f06b4d73e69a5011c3d87603ca8e421e69f124",
+                "86899d0dd709c51ad889748e0e3b822a6e00b0a5244fa609fba4619c0ebf5a79",
             ),
             "Subjective": (
                 4, 149, 596,

@@ -87,7 +87,11 @@ _FROZEN_CORE_PROMPT_KEYS = (
     "concepts.type_mining.system",
     "concepts.type_mining_delta.system",
     "concepts.type_semantic_consolidation.system",
-    "content.katex_rules",
+    # Re-keyed 2026-08-29 (owner decisions D1/P10): the preamble moved to a
+    # fresh registry key so a stale Admin override cannot resurrect the
+    # superseded rules; the key change re-hashes the instruction set, which
+    # correctly invalidates verdicts cached under the old rules.
+    "content.katex_rules.v2",
 )
 
 # Phase 3 system prompts are module constants (no registry backing yet); they
@@ -238,7 +242,7 @@ def _frozen_core_entries() -> list[dict[str, str]]:
     registration_modules = (
         chapter_reading,  # registers chapter_reading.normalize.system
         generation,  # registers the concepts.* keys
-        katex_rules,  # registers content.katex_rules
+        katex_rules,  # registers content.katex_rules.v2
         question_polishing,  # registers concepts.question_polishing.system
     )
     assert all(registration_modules)

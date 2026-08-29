@@ -17,6 +17,7 @@ const apiMock = vi.hoisted(() => ({
   getUploadJob: vi.fn(),
   importConceptCheckpoint: vi.fn(),
   checkpointUrl: vi.fn((id: number) => `/checkpoint/${id}`),
+  runDiagnosticsUrl: vi.fn((id: number) => `/diagnostics/${id}`),
   clearConceptCheckpoint: vi.fn(),
   postLearningUpload: vi.fn(),
   authConfig: vi.fn(),

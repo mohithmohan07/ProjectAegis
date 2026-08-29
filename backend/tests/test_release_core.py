@@ -122,8 +122,8 @@ def _audit_post_authorities(db, chapter, *, mathematics: bool):
         return result
 
     authorities["cells"] = (audit_cell_author, cell_critic)
+    marking_author, marking_critic = authorities["marking"]
     if mathematics:
-        marking_author, marking_critic = authorities["marking"]
 
         def audit_marking_author(payload):
             result = marking_author(payload)
@@ -131,9 +131,33 @@ def _audit_post_authorities(db, chapter, *, mathematics: bool):
                 result["question_duration"] = 1
             return result
 
-        authorities["marking"] = (
-            audit_marking_author, marking_critic,
-        )
+    else:
+        # Since the owner's Question Duration Matrix (2026-08-29) the
+        # Grade-6 English policy prescribes exact minutes too, so the stub
+        # author reads the prescribed value off the profile contract.
+        from app.services import assessment_profile
+
+        english_meta = {
+            "board": "MSBSHSE", "grade": "6", "subject": "English",
+        }
+
+        def audit_marking_author(payload):
+            result = marking_author(payload)
+            cell = payload["blueprint_evidence"]["explicit_blueprint_cell"]
+            prescribed = assessment_profile.question_duration_minutes(
+                None,
+                english_meta,
+                sheet_kind=str(cell.get("sheet_kind") or ""),
+                question_category=str(cell.get("question_category") or ""),
+                difficulty=str(cell.get("difficulty") or ""),
+                marks=cell.get("marks"),
+            )
+            if prescribed is not None:
+                result["question_duration"] = prescribed
+                result["duration_basis_count"] = None
+            return result
+
+    authorities["marking"] = (audit_marking_author, marking_critic)
     return authorities
 
 

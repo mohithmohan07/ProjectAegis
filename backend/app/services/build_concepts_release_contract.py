@@ -1023,7 +1023,18 @@ def _install_manifest_extension() -> None:
             for row in entries
             if str(row.get("kind") or "") not in existing
         )
-        payload = release.release_payload(job) or {}
+        payload = release.release_payload(job)
+        if payload is None:
+            # Entries without a release exist (the run-diagnostics
+            # export). They ride the manifest, but neither a
+            # ``release_output`` block nor ``available`` is touched:
+            # "available" states that CANONICAL SOURCE artifacts exist
+            # (test_source_artifact_flow pins that a replaced source
+            # reads False), and the diagnostics export neither needs nor
+            # implies them — its first-class download lives on the
+            # checkpoint card, not behind this manifest's gate.
+            manifest.update({"files": files})
+            return manifest
         summary = copy.deepcopy(manifest.get("summary") or {})
         release_summary = copy.deepcopy(payload.get("summary") or {})
         summary["release_rows"] = int(release_summary.get("row_count") or 0)

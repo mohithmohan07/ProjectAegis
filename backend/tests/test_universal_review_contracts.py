@@ -365,28 +365,39 @@ def test_noncanonical_array_variants_remain_visible_defects(source):
     assert "unsupported_table" in kr.rich_text_issues(rendered)
 
 
-@pytest.mark.parametrize(
-    "command",
-    [r"\mathrm{m}", r"x\hspace{1em}y", r"\phantom{0}", r"\boxed{2}"],
-)
-def test_unsupported_katex_commands_are_rejected_in_both_media(command):
-    rich = f"[Katex] {command} [/Katex]"
+def test_mathrm_is_the_only_unsupported_command_in_both_media():
+    """Owner decision D1 (2026-08-29): \\hspace, \\phantom, \\boxed and
+    dimension row spacing all render on the platform — the audit's corrected
+    Mathematics tables use them — so only \\mathrm stays refused."""
 
+    rich = r"[Katex] \mathrm{m} [/Katex]"
     assert "unsupported_katex_command" in kr.rich_text_issues(rich)
     assert "equation_unsupported_command" in kr.answer_cell_issues(
-        "Equation", command,
+        "Equation", r"\mathrm{m}",
     )
 
+    for command in (r"x\hspace{1em}y", r"\phantom{0}", r"\boxed{2}"):
+        assert "unsupported_katex_command" not in kr.rich_text_issues(
+            f"[Katex] {command} [/Katex]"
+        ), command
+        assert "equation_unsupported_command" not in kr.answer_cell_issues(
+            "Equation", command,
+        ), command
 
-def test_array_row_spacing_and_nested_raw_delimiters_are_rejected():
-    spaced = r"\begin{array}{c}1\\[0.12 cm]2\end{array}"
 
-    assert "katex_row_spacing" in kr.rich_text_issues(
-        f"[Katex] {spaced} [/Katex]"
+def test_the_corrected_house_table_style_passes_both_media():
+    """The owner-corrected magic-square cell (2026-08-29) is the canonical
+    table shape: one wrapper, \\text prose, \\\\[0.12 cm] spacing, pipe
+    columns, \\hline every row, \\phantom placeholders. It must validate
+    clean — and row spacing must never be misread as display math."""
+
+    spaced = (
+        r"\text{Fill the box.}\\[0.12 cm]"
+        r"\begin{array}{|c|c|c|}\hline 8 & 1 & 6 \\ \hline"
+        r" 3 & 5 & \phantom{7} \\ \hline \end{array}"
     )
-    assert "equation_row_spacing" in kr.answer_cell_issues(
-        "Equation", spaced,
-    )
+    assert kr.rich_text_issues(f"[Katex]{spaced}[/Katex]") == []
+    assert kr.answer_cell_issues("Equation", spaced) == []
     assert "raw_math_delimiter" in kr.rich_text_issues(
         r"[Katex] \[x+1\] [/Katex]"
     )

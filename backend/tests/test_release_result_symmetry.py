@@ -227,18 +227,21 @@ def _emits_a_manifest_entry(node: ast.AST) -> bool:
 
 
 # Entry BUILDERS: functions that return ONE entry and are CALLED by the
-# blocks rather than being one. ``release_files.master_entry`` is the
-# only one — it is the "one owner, no twin" resolution that REMOVES a
-# place the two manifests can disagree, so counting it as a fifth block
-# would demand it be listed in ``_MANIFEST_BLOCKS`` and called as though
-# it returned a list, which it does not.
+# blocks rather than being one. Each is a "one owner, no twin"
+# resolution that REMOVES a place the two manifests can disagree, so
+# counting one as a fifth block would demand it be listed in
+# ``_MANIFEST_BLOCKS`` and called as though it returned a list, which it
+# does not. ``master_entry`` owns the two Master rows;
+# ``run_diagnostics_entry`` owns the no-release diagnostics export both
+# twins offer for a run that never staged a release.
 #
-# It is excluded by NAME rather than by narrowing the scan above, and the
-# difference is the whole point: an exclusion is one named function that
-# the test below proves still exists, where a narrowed predicate silently
-# stops seeing a whole SHAPE of block for ever after.
+# They are excluded by NAME rather than by narrowing the scan above, and
+# the difference is the whole point: an exclusion is one named function
+# that the test below proves still exists, where a narrowed predicate
+# silently stops seeing a whole SHAPE of block for ever after.
 _ENTRY_BUILDERS = {
     (release_files.__name__, "master_entry"),
+    (release_files.__name__, "run_diagnostics_entry"),
 }
 
 
@@ -300,6 +303,11 @@ def test_the_excluded_builders_return_one_entry_and_not_a_block(db):
         entry = release_files.master_entry(job, lane=lane)
         assert isinstance(entry, dict), lane
         assert entry.get("kind"), lane
+
+    for sizes in (False, True):
+        entry = release_files.run_diagnostics_entry(job, sizes=sizes)
+        assert isinstance(entry, dict), sizes
+        assert entry.get("kind"), sizes
 
 
 @pytest.mark.parametrize(
