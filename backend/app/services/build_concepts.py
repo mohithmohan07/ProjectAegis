@@ -3058,6 +3058,35 @@ def _apply_last_resort_safe_continuation(
     safe_option = autonomous_resolution.safe_continuation_option(pending)
     if safe_option is None:
         return None
+    if (
+        safe_option["choice"] == autonomous_resolution.CARRY_FORWARD_CHOICE
+        and str(pending.get("kind") or "") == "phase3_source_graph_review"
+        and str((pending.get("item") or {}).get("type_id") or "")
+        == "semantic_source_rich_text"
+    ):
+        # Carrying a non-canonical rich-text block forward is a PROVEN dead
+        # end, not a safe continuation: the semantic-graph integrity gate
+        # downstream refuses the graph ("not safe for concept generation"),
+        # the run ends incomplete, and every resume re-applies the same
+        # carry_forward into the same refusal ([measured] job 'Electricity',
+        # Class 10 Ch 5, 2026-08-29: unsupported_katex_command on
+        # BLK-00595). Source review is one of the sanctioned pre-spend
+        # pauses (CLAUDE.md Rule 1), and the routes that would actually fix
+        # the block (apply the suggested source patch, replace the source)
+        # are exactly the ones no automation may take — so the honest
+        # continuation IS the pause: keep the decision for the user.
+        progress.log(
+            "Aegis kept the source-review pause instead of continuing by "
+            "best judgement: the saved decision for "
+            + _decision_identity_text(pending)
+            + " concerns non-canonical rich text, and carrying it forward "
+            "is refused by the semantic-graph integrity gate downstream. "
+            "Resolve the pending source decision (for example, apply its "
+            "suggested correction) and generation completes from the saved "
+            "checkpoint.",
+            level="warning",
+        )
+        return None
     review = pending.get("agent_review")
     declined_reason = (
         str(review.get("reason") or "").strip()

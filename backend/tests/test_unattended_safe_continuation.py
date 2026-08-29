@@ -921,3 +921,60 @@ def test_rejection_batch_settles_every_decision_on_one_replay(
         row["decision_id"] for row in ledger["resolutions"]
     }
     assert recorded_ids >= set(settled)
+
+
+def test_rich_text_carry_forward_keeps_the_source_review_pause(monkeypatch):
+    """A dead-end settlement is not a safe continuation.
+
+    [measured] job 'Electricity' (Class 10 Ch 5, 2026-08-29): carrying a
+    non-canonical rich-text block forward is refused downstream by the
+    semantic-graph integrity gate ("not safe for concept generation"), so
+    the best-judgement carry_forward ended every resume incomplete at the
+    same point. Source review is a sanctioned pre-spend pause (CLAUDE.md
+    Rule 1); when the only automatable settlement for such an issue is
+    carry_forward, the pause is kept for the user instead.
+    """
+    from app.services import build_concepts
+
+    monkeypatch.setattr(
+        autonomous_resolution, "unattended_completion_enabled", lambda: True,
+    )
+    logs: list[str] = []
+    monkeypatch.setattr(
+        build_concepts.progress, "log",
+        lambda message, **_k: logs.append(str(message)),
+    )
+    pending = {
+        "decision_id": "DEC-1",
+        "kind": "phase3_source_graph_review",
+        "item": {"type_id": "semantic_source_rich_text"},
+        # Only user-only routes were offered: best judgement resolves to
+        # carry_forward, which the guard must refuse to settle with.
+        "options": [
+            {"choice": "replace_source", "recommended": True},
+        ],
+        "candidates": [],
+    }
+    assert autonomous_resolution.safe_continuation_option(pending) == (
+        autonomous_resolution.carry_forward_option()
+    )
+
+    result = build_concepts._apply_last_resort_safe_continuation(
+        None, None, pending, owner_sub=None,
+    )
+
+    assert result is None
+    assert any("kept the source-review pause" in m for m in logs)
+    # A NON-rich-text pending with the same shape still carries forward
+    # through the normal path (it reaches the recorder, which needs a real
+    # db/job — reaching it at all proves the guard is scoped).
+    other = {**pending, "item": {"type_id": "duplicate_type"}}
+    try:
+        build_concepts._apply_last_resort_safe_continuation(
+            None, None, other, owner_sub=None,
+        )
+    except Exception:
+        pass  # recorder rejects the stub db; the guard did not intercept
+    assert not any(
+        "kept the source-review pause" in m for m in logs[1:]
+    ) or len([m for m in logs if "kept the source-review pause" in m]) == 1
