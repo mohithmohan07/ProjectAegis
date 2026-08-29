@@ -1400,3 +1400,29 @@ def test_a_candidate_with_no_resolved_home_is_a_named_defect_not_a_silent_warnin
                     None if cell is None else str(cell) for cell in row
                 ], (name, sheet.title)
         book.close()
+
+
+def test_terminal_diagnosis_names_the_failing_predicate():
+    """A 'non-terminal checkpoint' refusal must say WHY ([measured] job
+    'Patterns', 2026-08-29: a completed run's saved terminal checkpoint
+    was refused with no reason anywhere)."""
+
+    from app.services import generation
+
+    assert "no checkpoint entries" in (
+        generation.concept_checkpoint_terminal_diagnosis({})
+    )
+    early_only = {"stage": "question_inventory"}
+    assert "no terminal-stage entry" in (
+        generation.concept_checkpoint_terminal_diagnosis(early_only)
+    )
+    broken_terminal = {
+        "schema_version": generation._CONCEPT_CHECKPOINT_SCHEMA,
+        "stage": "final_content_ready",
+        "stage_schema_version": 1,
+    }
+    diagnosis = generation.concept_checkpoint_terminal_diagnosis(
+        broken_terminal
+    )
+    assert "rejected" in diagnosis
+    assert "stage_schema_version" in diagnosis or "bundle" in diagnosis

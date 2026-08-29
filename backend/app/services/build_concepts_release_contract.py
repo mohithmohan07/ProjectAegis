@@ -356,9 +356,18 @@ def _lane_master_eligibility(
                 post_payload
             )
         ):
+            # Name the failing predicate, not only the verdict: [measured]
+            # job 'Patterns' (2026-08-29), a fresh fully-completed run
+            # saved its terminal checkpoint and this gate still refused,
+            # with nothing anywhere saying why.
+            from . import generation
+
+            diagnosis = generation.concept_checkpoint_terminal_diagnosis(
+                job.generation_checkpoint
+            )
             return False, (
                 "the Concept run comes from a non-terminal generation "
-                "checkpoint"
+                f"checkpoint — {diagnosis}"
             )
         payload = release.release_payload(job, lane=lane)
         if payload is None:
