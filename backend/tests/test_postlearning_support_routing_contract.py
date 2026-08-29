@@ -156,7 +156,21 @@ def test_a_double_claimed_hub_qid_goes_to_the_fixer_not_down(monkeypatch):
         for flag in result["review_flags"]["Q-WARM"]
     )
 
-    # Without the Fixer seam the block still raises exactly as before.
+    # The PRODUCTION shape ([measured] 2026-08-29, second occurrence):
+    # callers pass fixer=None — the runner's providers dict is test-only
+    # injection — and the wrapper must resolve the deployment's own
+    # Fixer instead of taking the fail-closed raise on a live run.
+    monkeypatch.setattr(
+        "app.services.phase3.fixer.default_provider", lambda: fixer,
+    )
+    live_result = routing.enforce_place_result(env, rows, original)
+    assert live_result["hub_placements"]["Q-WARM"] == opening_id
+    assert len(fixer_requests) == 2
+
+    # A dry/test deployment (no live Fixer) still raises exactly as before.
+    monkeypatch.setattr(
+        "app.services.phase3.fixer.default_provider", lambda: None,
+    )
     with pytest.raises(ValueError, match="one activity identity"):
         routing.enforce_place_result(env, rows, original)
     with pytest.raises(ValueError, match="one activity identity"):

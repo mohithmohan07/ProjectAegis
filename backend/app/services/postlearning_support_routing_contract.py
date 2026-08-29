@@ -146,11 +146,29 @@ def enforce_place_result(
     destinations, conflicts, evidence = _planned_hub_destination_claims(env)
     conflict_flags: dict[str, str] = {}
     if conflicts:
+        from . import progress
+        from .phase3 import fixer as fixer_mod
+        from .phase3 import kernel
+
+        if fixer is None:
+            # Production reaches this wrapper with fixer=None — the
+            # runner's providers dict is test-only injection, and each
+            # stage resolves its own live Fixer internally (place.py's
+            # ``fixer = fixer or _live_fixer``). Resolve the deployment's
+            # Fixer the same way; dry/test runs still get None and keep
+            # the fail-closed raise. [measured] 2026-08-29: without this,
+            # the live poem run raised through the fallback even though
+            # a live Fixer existed one frame below.
+            fixer = fixer_mod.default_provider()
+        if fixer is not None and store is None:
+            # A recorded decision needs a store; without a durable one
+            # (no artifact dir), an ephemeral store still records the
+            # decision onto the release flags — re-asked on a later
+            # resume rather than lost, never a run-stopping raise.
+            store = kernel.DecisionStore()
         if fixer is None or store is None:
             for qid, plans in sorted(conflicts.items()):
                 raise _conflict_error(qid, plans)
-        from . import progress
-        from .phase3 import kernel
 
         for qid, plans in sorted(conflicts.items()):
             payload = {
