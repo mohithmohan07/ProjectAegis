@@ -11,7 +11,9 @@ Three things land here and each is atomic (spec-step8 S8):
    and ``validate_master_file`` reading the new key.
 
 Plus the two owner rulings: OD5 (a questionless concept is ONE tail row)
-and OD3 (``keywords`` and ``related_concepts`` ship filled).
+and OD3 (``keywords`` ship filled — its ``related_concepts`` half was
+superseded by owner decision D4, 2026-08-29: Pre rows ship that column
+EMPTY, and Post rows stay blank until a relations pass exists).
 """
 from __future__ import annotations
 
@@ -569,16 +571,18 @@ def test_subjective_candidate_renders_and_reads_back_end_to_end():
 def test_keywords_ship_filled_on_all_four_outputs():
     """OD3: the gold leaving them blank is fill practice, not a rule.
 
-    OD3 names BOTH columns, so both are asserted: a change that blanked
-    ``related_concepts`` "for parity with the gold" used to pass here.
-    The two renderers are the two projections every one of the four
-    outputs is rendered by — Outputs 01/02 are the Pre lane's pair and
-    03/04 the Post lane's, same functions, different snapshot.
+    OD3 originally named BOTH columns; owner decision D4 (2026-08-29)
+    superseded its ``related_concepts`` half for PRE rows (that column
+    now ships empty on the Pre lane — pinned elsewhere). What survives
+    here: ``keywords`` ship filled everywhere, and on a POST snapshot an
+    AUTHORED ``related_concepts`` value is never blanked by the renderer
+    or the profile. The two renderers are the two projections every one
+    of the four outputs is rendered by.
     """
 
     snapshot = copy.deepcopy(_snapshot())
     # The fixture is a POST snapshot, whose ``related_concepts`` is blank
-    # until a relations pass exists (T3.3); what OD3 forbids is the
+    # until a relations pass exists (T3.3); what this pin forbids is the
     # renderer or the profile BLANKING an authored value, so an authored
     # value is what is asserted here.
     snapshot["topics"][0]["concepts"][0]["related_concepts"] = (

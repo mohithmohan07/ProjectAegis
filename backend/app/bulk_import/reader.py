@@ -145,13 +145,15 @@ def _group_sequence(machine_name: str) -> int:
     return int(match.group(1)) if match else 0
 
 
-# "katex_row_spacing" retired 2026-08-29 (owner decision D1: dimension row
-# spacing is supported); rich_text_issues no longer emits it.
+# "katex_row_spacing" narrowed 2026-08-29 (owner decision D1): dimension
+# row spacing (``\\[0.12 cm]``) is supported; the code now flags only a
+# NON-dimension bracket argument, which the CMS parser rejects at render.
 _STRICT_RICH_TEXT_CODES = frozenset({
     "unsupported_table",
     "unsupported_katex_command",
     "raw_math_delimiter",
     "literal_newline_escape",
+    "katex_row_spacing",
 })
 
 
@@ -176,12 +178,18 @@ def _format_issues(
         "unsupported_table": (
             "tabular/Markdown or noncanonical array markup is unsupported "
             "(unsupported_table); "
-            "use a canonical [Katex] array, source image, or row/column-"
-            "labelled plain text"
+            "use a canonical [Katex] array in the house style, or the "
+            "complete source-table image when the table contains one; "
+            "row/column-labelled plain text is a transport encoding for "
+            "cells that cannot be read, not a shippable rendering"
         ),
         "unsupported_katex_command": (
             "unsupported KaTeX command found; do not use \\mathrm — write "
             "upright words and units with \\text{...}"
+        ),
+        "katex_row_spacing": (
+            "row-break spacing argument must be a TeX dimension such as "
+            "\\\\[0.12 cm]"
         ),
         "literal_newline_escape": (
             "literal \\n found before a list/option label — use a real line "
@@ -252,6 +260,10 @@ def _answer_format_issues(
         "equation_unsupported_command": (
             "Equation content must not use \\mathrm — write upright words "
             "and units with \\text{...}"
+        ),
+        "equation_row_spacing": (
+            "Equation row-break spacing argument must be a TeX dimension "
+            "such as \\\\[0.12 cm]"
         ),
         "equation_katex_wrapper": (
             "Equation content must be raw LaTeX without [Katex]"

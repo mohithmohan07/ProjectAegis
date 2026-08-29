@@ -1219,6 +1219,38 @@ ruling alone: purposes formerly at `max` move down one rung while purposes
 formerly at `high`, `medium`, or `low` move up. The same-PDF live acceptance
 must measure the net effect before any production claim.
 
+### Q23 · Decided — the 2026-08-29 audit-round owner decisions (D1–D4, P10, the Question Duration Matrix)
+
+Owner rulings, 29 Aug 2026, from the Concept Mapping Audit review round:
+
+* **D1 — KaTeX support list.** The CMS platform renders `\hspace`, `\phantom`,
+  `\boxed`, and dimension row spacing (`\\[0.12 cm]`); only `\mathrm` remains
+  unsupported (rewritten to `\text{...}` where the body is plain, refused
+  otherwise). A NON-dimension row-break bracket argument stays a defect. The
+  shared KaTeX rules prompt re-registered under `content.katex_rules.v2` so a
+  stale Admin override cannot resurrect the old bans.
+* **P10 — table house style.** The owner-corrected canonical array shape —
+  one `[Katex]` wrapper per cell, `\text{...}` prose, `\\[0.12 cm]`
+  prose/array spacing, pipe columns (`{|c|c|c|}`), `\hline` around every row,
+  `\phantom` placeholders sized like a plausible real entry — is mandatory on
+  every prompt surface; coordinate-labelled table prose is a transport
+  encoding, never a shippable rendering.
+* **D2 — durations.** The owner's uploaded Question Duration Matrix is the
+  authority (it matches the earlier written table; the corrector's
+  duration-equals-marks practice on SA-3/LA rows is overruled). Scope ruling:
+  the matrix binds MH Board (MSBSHSE) at EVERY grade, per subject
+  (Math+Physics, English, Social Science policies); grade-scoped policies
+  layer on top, so Class 6 keeps its audited closed sets — the ban on Case
+  Based / Assertion & Reasons included — and Mathematics keeps Match the
+  Following / True or False / Fill in the blanks at 1 minute per sub-point.
+* **D3 — `is_update_*` polarity.** "No" on populated bands of every output;
+  the Mathematics corrector's "Yes" is rejected.
+* **D4 — Pre `related_concepts` ships EMPTY** (supersedes OD3's fill half and
+  T3.3/T3.3b's populated column; lane- and marker-keyed so legacy payloads
+  publish empty too). Needed-for links are still resolved at staging and an
+  unresolvable link stays a recorded review flag. Post rows remain blank
+  until a relations pass exists. `keywords` still ships filled per OD3.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

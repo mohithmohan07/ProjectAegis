@@ -69,7 +69,10 @@ gone) — stated precisely, because §1 previously overclaimed it and T3.3 does 
 what "both ship filled" implies: `keywords` ships wherever the record carries one
 ([measured] 47 of 53 golden records do); `related_concepts` ships **filled on Pre rows**
 from the Post `machine_id`s resolved at Pre staging, and **blank on Post rows** until a
-concept↔concept relations pass exists, which is a later step with its own kind and critic
+concept↔concept relations pass exists, which is a later step with its own kind and critic.
+*Superseded 2026-08-29 by owner decision D4 (aegis-restructure §12/Q23): Pre rows now ship
+`related_concepts` EMPTY; needed-for links are still resolved at staging as review-flag
+audit only. The T3.3/T3.3b text below records the pre-D4 build history*
 (T3.3, and the test `test_post_related_concepts_is_blank_until_a_relations_pass_exists`
 that fails when that changes). Neither column is ever a `_FORCED_BLANK`, and
 `forced_blank_fields` (T12/M4) is the one-line lever if the reference school's importer
@@ -296,7 +299,10 @@ the record and `render_concept_file` already emits it once the column exists (pr
 T1's render above). No new pass, no new decision kind. Pure gain.
 
 **T3.3 — `related_concepts` ships FILLED on Pre rows, resolved at STAGING, not at
-render.** Both reviewers refuted Cluster B's version of this and both were right about the
+render.** *(Superseded 2026-08-29 by owner decision D4 — Pre rows ship the column EMPTY;
+see aegis-restructure §12/Q23. The staging-time resolution machinery this item built
+survives as the needed-for audit trail.)* Both reviewers refuted Cluster B's version of
+this and both were right about the
 mechanism; they were wrong that it is not implementable in step 8.
 
 * Refuted, correctly: Pre and Post are **two payloads and two snapshots**, not one.
@@ -4210,7 +4216,7 @@ carry owner rulings and are folded into §2 as DECISIONS:
 |---|---|---|
 | **OR1** — does "One action: Build Concepts" build Outputs 02/04 in the run, or on a second click? | **OD1: the run builds all four.** §7:541 and Q3 taken literally. Every chapter pays the assessment-lane spend, including discarded ones. | **T15**, and S6 (the fallback bullet is deleted) |
 | **OR2** — migrate `bulk_import_database.xlsx` in place, or freeze it and start a new file? | **OD2: the question's premise was false.** Nothing appends to that file; it is the committed CI-regenerated fixture. The migration subject is `config.BULK_IMPORT_OUTPUT`, gitignored runtime state. No ruling was needed and no fallback is built. | **T7.6a**, T12/M9, S7, D3/Q16 |
-| **OR3** — does the reference school's importer accept `keywords` / `related_concepts`, or require them blank? | **OD3: fill them.** The gold leaving them blank is fill practice, not a rule. `forced_blank_fields` stays as the one-line lever. | **T3.3** (the OD3 paragraph), T3.2, T12/M4 |
+| **OR3** — does the reference school's importer accept `keywords` / `related_concepts`, or require them blank? | **OD3: fill them.** The gold leaving them blank is fill practice, not a rule. `forced_blank_fields` stays as the one-line lever. *`related_concepts` half superseded 2026-08-29 by D4 (aegis-restructure §12/Q23): Pre rows ship it EMPTY; `keywords` still ships filled.* | **T3.3** (the OD3 paragraph), T3.2, T12/M4 |
 
 Two further owner rulings arrived with them and are also decisions, not questions:
 **OD4** the output numbering (**D9/Q22** in §6, swept through §1-§6 and §9), **OD5**
@@ -4489,7 +4495,11 @@ earlier one, the earlier entry says so and points forward.
 * **C7 · The Pre `related_concepts` value never survived publication.** → **T3.3b**:
   publication lifts the resolved marker into an explicit key BEFORE
   `_strip_release_fields`, and both create and merge paths persist `related_concepts` and
-  `digicards`.
+  `digicards`. *(The ORDERING survives; the VALUE was superseded 2026-08-29 by D4 — the
+  lift now stamps the Pre column empty. Tests renamed accordingly:
+  `test_pre_related_concepts_carries_the_resolved_post_machine_ids` →
+  `..._ships_empty_while_links_stay_resolved`;
+  `test_pre_related_concepts_survives_publication` → `..._stays_empty_through_publication`.)*
 * **C8 · The reader merges a Pre and a Post topic that share a title.** → **T6.4**, S2.
 * **C9 · The final artifact set is now named.** → **T14** and **D8/Q21**; `concepts_xlsx` is
   aliased, not retired; the composition and roster are SHARED, not moved.

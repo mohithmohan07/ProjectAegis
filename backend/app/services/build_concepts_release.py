@@ -160,20 +160,19 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # phase3/premap.py): the captured prerequisites a pre-concept teaches,
     # and its explicit needed-for links to the Post concepts that require
     # it. Both ride the release for the reviewer's audit and are stripped
-    # before DB upload. CORRECTED (spec-step8 T3.3): only ONE of the two
-    # has ``related_concepts`` as its column home. ``_aegis_needed_for``
-    # does — resolved to persisted Post ``machine_id``s at Pre staging and
-    # carried on ``PRE_ROW_RELATED_CONCEPTS_FIELD`` below.
-    # ``_aegis_pre_prerequisites`` does NOT: it is
-    # ``{prerequisite_id, text}``, copied provenance prose rather than a
-    # label, and putting prose in a join column would corrupt the join.
+    # before DB upload. ``_aegis_needed_for`` is still RESOLVED against
+    # the staged Post release at Pre staging (a broken link stays a
+    # recorded review flag), but under owner decision D4 (2026-08-29,
+    # superseding spec-step8 T3.3) the resolved ids no longer ship in
+    # ``related_concepts`` — the Pre column publishes EMPTY.
+    # ``_aegis_pre_prerequisites`` is ``{prerequisite_id, text}``, copied
+    # provenance prose rather than a label.
     "_aegis_pre_prerequisites",
     "_aegis_needed_for",
-    # The RESOLVED form of ``_aegis_needed_for``: the persisted Post
-    # ``machine_id``s this Pre concept is needed for, newline-joined
-    # (concept titles legitimately contain commas). Publication LIFTS it
-    # into an explicit ``related_concepts`` key before this frozenset is
-    # applied — see ``_lift_resolved_related_concepts`` — because
+    # The staging-time marker for the Pre ``related_concepts`` column.
+    # Under D4 its value is always the empty string; its PRESENCE (or a
+    # Pre lane stamp) is what makes publication stamp the column empty —
+    # see ``_lift_resolved_related_concepts`` — because
     # ``_strip_release_fields`` drops every key here by construction.
     "_aegis_pre_related_concepts",
     "_aegis_pre_related_concepts_unresolved",
@@ -3835,7 +3834,15 @@ def _lift_resolved_related_concepts(row: Mapping[str, Any]) -> dict[str, Any]:
     """
 
     lifted = dict(row)
-    if PRE_ROW_RELATED_CONCEPTS_FIELD in lifted:
+    # Lane-keyed as well as marker-keyed (review finding on D4): a legacy
+    # Pre payload staged before the marker existed must also publish the
+    # column empty, and the staged lane stamp is the older of the two
+    # signals.
+    is_pre_row = (
+        str(lifted.get(RELEASE_ROW_LANE_FIELD) or "").strip().casefold()
+        == LANE_PRE
+    )
+    if is_pre_row or PRE_ROW_RELATED_CONCEPTS_FIELD in lifted:
         lifted["related_concepts"] = ""
     return lifted
 

@@ -211,11 +211,29 @@ _UNSUPPORTED_KATEX_COMMAND_RE = re.compile(
 )
 # TeX permits an optional vertical-space argument immediately after a row
 # break (for example ``\\[0.12 cm]``).  Supported on the platform (owner
-# decision D1); this pattern remains ONLY so delimiter checks can mask the
-# ``[...]`` argument before scanning for raw ``\[ ... \]`` display math.
+# decision D1) — but ONLY the dimension-shaped form: D1 sanctioned
+# ``\\[0.12 cm]``, not an arbitrary bracket, and a non-dimension argument
+# (``\\[2, 3]`` — a bracketed array cell mistaken for spacing — or a typo)
+# makes the CMS KaTeX parser throw at render.  The general pattern masks
+# the argument out of delimiter scans; the dimension pattern below is the
+# accepted shape, and anything else stays a defect.
 _RAW_ROW_SPACING_RE = re.compile(
     r"(?<!\\)\\\\\s*\[[^\]\r\n]*\]",
 )
+_DIMENSION_ROW_SPACING_RE = re.compile(
+    r"(?<!\\)\\\\\s*\[\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*"
+    r"(?:pt|pc|in|bp|cm|mm|dd|cc|sp|ex|em)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def _nondimension_row_spacing(value: str) -> bool:
+    """True when a row-break bracket argument is not a TeX dimension."""
+
+    return any(
+        not _DIMENSION_ROW_SPACING_RE.fullmatch(match.group(0))
+        for match in _RAW_ROW_SPACING_RE.finditer(value)
+    )
 _LITERAL_NEWLINE_BEFORE_LIST_ITEM_RE = re.compile(
     r"\\n(?=[ \t]*(?:\([A-Za-z]\)|[A-Za-z][.)]"
     r"|\([ivxlcdmIVXLCDM]+\)|\d+[.)]|[-*•]))",
@@ -1045,6 +1063,12 @@ def _equation_has_loose_prose(value: str) -> bool:
     # decision D1 2026-08-29) is structural LaTeX; without masking, its unit
     # ("cm") reads as a two-letter word of prose.
     lexical = _RAW_ROW_SPACING_RE.sub(" ", lexical)
+    # Likewise \hspace's braced dimension ("{1em}") and \phantom's sizing
+    # template ("{ab}") are structural arguments, not prose — the generic
+    # command mask below strips only the command name and would leave their
+    # unit/template letters behind as false "loose prose", escaping a valid
+    # owner-sanctioned equation into literal text (review finding on D1).
+    lexical = re.sub(r"\\(?:hspace|phantom)\s*\{[^{}]*\}", " ", lexical)
     # The canonical array column declaration is structural LaTeX, not prose.
     # Mask it as one token before the generic environment-name pass; otherwise
     # a declaration such as ``{cc}`` is misread as a two-letter word and the
@@ -1076,9 +1100,13 @@ def answer_cell_issues(answer_type: str, content: str) -> list[str]:
     if kind == "equation":
         if _UNSUPPORTED_KATEX_COMMAND_RE.search(value):
             issues.append("equation_unsupported_command")
-        # Row spacing (``\\[0.12 cm]``) is supported (owner decision D1,
-        # 2026-08-29) — it is masked below only so it cannot be mistaken
-        # for a raw ``\[ ... \]`` display-math delimiter.
+        # Dimension row spacing (``\\[0.12 cm]``) is supported (owner
+        # decision D1, 2026-08-29) and masked below so it cannot be
+        # mistaken for a raw ``\[ ... \]`` display-math delimiter.  A
+        # NON-dimension bracket argument stays a defect: the CMS parser
+        # throws on it at render.
+        if _nondimension_row_spacing(value):
+            issues.append("equation_row_spacing")
         if _KATEX_TOKEN_RE.search(value) or _KATEX_LIKE_TAG_RE.search(value):
             issues.append("equation_katex_wrapper")
         delimiter_value = _RAW_ROW_SPACING_RE.sub("", value)
@@ -1586,9 +1614,13 @@ def rich_text_issues(
         issues.append("unsupported_table")
     if _UNSUPPORTED_KATEX_COMMAND_RE.search(value):
         issues.append("unsupported_katex_command")
-    # Row spacing (``\\[0.12 cm]``) is supported (owner decision D1,
-    # 2026-08-29); the delimiter checks below still mask it so it is not
-    # misread as a raw ``\[ ... \]`` display-math delimiter.
+    # Dimension row spacing (``\\[0.12 cm]``) is supported (owner decision
+    # D1, 2026-08-29); the delimiter checks below mask it so it is not
+    # misread as a raw ``\[ ... \]`` display-math delimiter.  A
+    # NON-dimension bracket argument stays a defect — the CMS parser
+    # throws on it at render.
+    if _nondimension_row_spacing(value):
+        issues.append("katex_row_spacing")
     tokens = list(_KATEX_TOKEN_RE.finditer(value))
     depth = 0
     malformed_order = False
@@ -1661,6 +1693,11 @@ def rich_text_issues(
         issues.append("raw_math_delimiter")
     if (
         _RAW_LATEX_RE.search(math_masked)
+        # A row-spacing token OUTSIDE any [Katex] wrapper is raw LaTeX the
+        # learner would see verbatim — the prompts encourage ``\\[0.12 cm]``
+        # inside a wrapper, so the misplaced form must stay detectable
+        # (review finding on owner decision D1, 2026-08-29).
+        or _RAW_ROW_SPACING_RE.search(math_masked)
         or _RAW_SCRIPT_TAIL_RE.search(math_masked)
     ):
         issues.append("raw_latex")
@@ -1722,8 +1759,10 @@ columns:
     Keep the ENTIRE cell inside one [Katex] wrapper; prose goes in
     \\text{...}; separate prose from the array with \\\\[0.12 cm]; use a
     pipe column spec such as {|c|c|c|}; rule every row with \\hline above
-    and below; hold empty cells open with \\phantom{n} sized like a real
-    entry. Never verbalise a table as "Table row 1, column 1: ..." prose.
+    and below; hold empty cells open with a \\phantom placeholder sized
+    like a plausible real entry (for example \\phantom{7} in a digit
+    cell — never a literal \\phantom{n}). Never verbalise a table as
+    "Table row 1, column 1: ..." prose.
   - Images: [img src="https://..." alt="..."]. Use double quotes only;
     src must be a full public HTTPS URL and must come before alt. No other
     attributes are allowed.
@@ -1759,8 +1798,14 @@ them: \\hspace, \\phantom, \\boxed, and dimension row spacing such as
 \\\\[0.12 cm] (owner decision, 2026-08-29).
 """
 
+# Registered under a NEW key on 2026-08-29 (owner decisions D1/P10): the
+# rules changed direction — \hspace/\phantom/\boxed and dimension row
+# spacing became supported, the table house style became mandatory — and a
+# stored Admin override of the old ``content.katex_rules`` key would have
+# kept serving the superseded text over this default forever. The old key
+# is in ``prompts.RETIRED_PROMPT_KEYS``; its override text is archived.
 _prompts.register(
-    "content.katex_rules",
+    "content.katex_rules.v2",
     label="Rich-text / KaTeX formatting rules",
     category="Shared formatting",
     description="Injected into every assessment-generation prompt so questions "
@@ -1772,5 +1817,5 @@ _prompts.register(
 def __getattr__(name: str) -> str:
     # Resolve PROMPT_PREAMBLE lazily so Admin edits apply on the next run.
     if name == "PROMPT_PREAMBLE":
-        return _prompts.get_text("content.katex_rules")
+        return _prompts.get_text("content.katex_rules.v2")
     raise AttributeError(name)

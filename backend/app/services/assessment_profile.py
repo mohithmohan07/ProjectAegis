@@ -60,6 +60,17 @@ _MATHEMATICS_SUBJECT_ALIASES = (
 _ENGLISH_SUBJECT_ALIASES = (
     "english", "english language", "english literature",
 )
+# The owner's Question Duration Matrix (2026-08-29) shares one sheet
+# between Mathematics and Physics; Physics is its own alias set so plain
+# "Science" never silently inherits a physics contract.
+_PHYSICS_SUBJECT_ALIASES = (
+    "physics",
+)
+_SOCIAL_SCIENCE_SUBJECT_ALIASES = (
+    "social science", "social sciences", "social studies", "sst",
+    "history", "geography", "civics", "history and civics",
+    "history-civics", "political science", "economics",
+)
 
 
 # Workbook geometry is a run-profile fact, just like the set of enabled
@@ -241,30 +252,498 @@ MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY: dict[str, Any] = {
 }
 
 
-# The English audit supplies only its exact authoring taxonomy.  Empty rule
-# mappings are deliberate: unlike Mathematics, the evidence does not define
-# an English marks or duration contract, so later stages remain free to use
-# their existing authored/marking values without inventing restrictions.
+# The Grade-6 English taxonomy stays the audit's exact authoring set (the
+# corrected files' closed list; owner scope ruling 2026-08-29: Class-6
+# restrictions layer on top of the board-wide matrix below).  What changed
+# on 2026-08-29 is that the owner's Question Duration Matrix now supplies
+# the marks and duration contracts for these categories, so English marking
+# obeys the same prescribed table Mathematics already did.
 MSBSHSE_GRADE_6_ENGLISH_FORMAT_POLICY: dict[str, Any] = {
-    "policy_id": "msbshse-grade-6-english-2026-08-27",
+    "policy_id": "msbshse-grade-6-english-2026-08-29",
     "metadata_match": {
         "board": _MSBSHSE_BOARD_ALIASES,
         "grade": _GRADE_6_ALIASES,
         "subject": _ENGLISH_SUBJECT_ALIASES,
     },
+    "difficulty_labels": {
+        "Less": "Easy",
+        "Moderate": "Medium",
+        "High": "Hard",
+    },
     "formats_by_sheet": {
         "objective": {
-            "Multiple Choice Question": {},
+            "Multiple Choice Question": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 1,
+                    },
+                },
+            },
         },
         "subjective": {
-            "Fill in the Blanks": {},
+            "Fill in the Blanks": {
+                "marks": {"mode": "fixed", "allowed": (1, 4)},
+                "duration": {
+                    "mode": "marks_matrix",
+                    "minutes_by_marks": {
+                        1: {"Less": 1, "Moderate": 1, "High": 1},
+                        4: {"Less": 4, "Moderate": 5, "High": 5},
+                    },
+                },
+            },
         },
         "descriptive": {
-            "Very Short Answer Questions": {},
-            "Short Answer Type (2 Marks)": {},
-            "Short Answer Type (3 Marks)": {},
-            "Long Answer Type (4 Marks)": {},
-            "Composition Writing": {},
+            "Very Short Answer Questions": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 2,
+                    },
+                },
+            },
+            "Short Answer Type (2 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (2,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 2, "Moderate": 2, "High": 3,
+                    },
+                },
+            },
+            "Short Answer Type (3 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (3,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 4, "Moderate": 5, "High": 6,
+                    },
+                },
+            },
+            "Long Answer Type (4 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (4,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5, "Moderate": 6, "High": 7,
+                    },
+                },
+            },
+            "Composition Writing": {
+                "marks": {"mode": "fixed", "allowed": (5, 10, 20)},
+                "duration": {
+                    "mode": "marks_matrix",
+                    "minutes_by_marks": {
+                        5: {"Less": 7, "Moderate": 8, "High": 10},
+                        10: {"Less": 10, "Moderate": 10, "High": 15},
+                        20: {"Less": 15, "Moderate": 15, "High": 20},
+                    },
+                },
+            },
+        },
+    },
+}
+
+
+# ---------------------------------------------------------------------------
+# Board-wide format policies from the owner's Question Duration Matrix
+# (uploaded 2026-08-29).  Scope ruling: the matrix binds MH Board (MSBSHSE)
+# at EVERY grade, per subject; grade-specific policies above are listed
+# first in ``assessment_format_overrides`` and therefore win for their
+# grades (Class-6 keeps its ban on Case Based / Assertion & Reasons and its
+# audited closed sets).  Category names are the matrix's exact spellings.
+# ---------------------------------------------------------------------------
+
+MSBSHSE_MATHEMATICS_PHYSICS_FORMAT_POLICY: dict[str, Any] = {
+    # The matrix's "Math and Physics" sheet. Match the Following, True or
+    # False, and Fill in the blanks are not matrix rows — the owner ruled
+    # (2026-08-29) they stay allowed at 1 minute per sub-point, as in the
+    # audited Class-6 Mathematics contract.
+    "policy_id": "msbshse-mathematics-physics-2026-08-29",
+    "metadata_match": {
+        "board": _MSBSHSE_BOARD_ALIASES,
+        "subject": _MATHEMATICS_SUBJECT_ALIASES + _PHYSICS_SUBJECT_ALIASES,
+    },
+    "difficulty_labels": {
+        "Less": "Easy",
+        "Moderate": "Medium",
+        "High": "Hard",
+    },
+    "formats_by_sheet": {
+        "objective": {
+            "Multiple Choice Question": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 1,
+                    },
+                },
+            },
+            "Assertion & Reasons Type": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 1,
+                    },
+                },
+            },
+            "Match the Following": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+            "True or False": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+            "Fill in the blanks": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+        },
+        "subjective": {
+            "Fill in the blanks": {
+                "marks": {"mode": "per_subpoint", "marks_per_subpoint": 1},
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+        },
+        "descriptive": {
+            "Very Short Answer Questions": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 2,
+                    },
+                },
+            },
+            "Short Answer Type (2 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (2,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 2, "Moderate": 2, "High": 3,
+                    },
+                },
+            },
+            "Short Answer Type (3 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (3,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 4, "Moderate": 5, "High": 6,
+                    },
+                },
+            },
+            "Long Answer Type (4 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (4,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5, "Moderate": 6, "High": 7,
+                    },
+                },
+            },
+            "Long Answer Type (5 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (5,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5, "Moderate": 7, "High": 7,
+                    },
+                },
+            },
+            "Case Based Questions": {
+                "marks": {"mode": "fixed", "allowed": (4,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 4, "Moderate": 5, "High": 6,
+                    },
+                },
+            },
+        },
+    },
+}
+
+MSBSHSE_ENGLISH_FORMAT_POLICY: dict[str, Any] = {
+    # The matrix's "English" sheet, complete — the wider taxonomy (Extract
+    # Based, Reading Comprehension, Sentence Transformation, Error
+    # Correction, 6-mark Long Answer) applies board-wide; Grade 6 keeps its
+    # audited closed set via the policy above.
+    "policy_id": "msbshse-english-2026-08-29",
+    "metadata_match": {
+        "board": _MSBSHSE_BOARD_ALIASES,
+        "subject": _ENGLISH_SUBJECT_ALIASES,
+    },
+    "difficulty_labels": {
+        "Less": "Easy",
+        "Moderate": "Medium",
+        "High": "Hard",
+    },
+    "formats_by_sheet": {
+        "objective": {
+            "Multiple Choice Question": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 1,
+                    },
+                },
+            },
+        },
+        "subjective": {
+            "Fill in the Blanks": {
+                "marks": {"mode": "fixed", "allowed": (1, 4)},
+                "duration": {
+                    "mode": "marks_matrix",
+                    "minutes_by_marks": {
+                        1: {"Less": 1, "Moderate": 1, "High": 1},
+                        4: {"Less": 4, "Moderate": 5, "High": 5},
+                    },
+                },
+            },
+        },
+        "descriptive": {
+            "Very Short Answer Questions": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 2,
+                    },
+                },
+            },
+            "Sentence Transformation": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 2,
+                    },
+                },
+            },
+            "Error Correction": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 2,
+                    },
+                },
+            },
+            "Short Answer Type (2 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (2,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 2, "Moderate": 2, "High": 3,
+                    },
+                },
+            },
+            "Short Answer Type (3 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (3,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 4, "Moderate": 5, "High": 6,
+                    },
+                },
+            },
+            "Long Answer Type (4 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (4,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5, "Moderate": 6, "High": 7,
+                    },
+                },
+            },
+            "Long Answer Type (6 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (6,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 8, "Moderate": 9, "High": 10,
+                    },
+                },
+            },
+            "Extract Based Question": {
+                "marks": {"mode": "fixed", "allowed": (5, 16)},
+                "duration": {
+                    "mode": "marks_matrix",
+                    "minutes_by_marks": {
+                        5: {"Less": 6, "Moderate": 7, "High": 8},
+                        16: {"Less": 15, "Moderate": 15, "High": 20},
+                    },
+                },
+            },
+            "Reading Comprehension": {
+                "marks": {"mode": "fixed", "allowed": (10, 20)},
+                "duration": {
+                    "mode": "marks_matrix",
+                    "minutes_by_marks": {
+                        10: {"Less": 12, "Moderate": 14, "High": 16},
+                        20: {"Less": 15, "Moderate": 15, "High": 20},
+                    },
+                },
+            },
+            "Composition Writing": {
+                "marks": {"mode": "fixed", "allowed": (5, 10, 20)},
+                "duration": {
+                    "mode": "marks_matrix",
+                    "minutes_by_marks": {
+                        5: {"Less": 7, "Moderate": 8, "High": 10},
+                        10: {"Less": 10, "Moderate": 10, "High": 15},
+                        20: {"Less": 15, "Moderate": 15, "High": 20},
+                    },
+                },
+            },
+        },
+    },
+}
+
+MSBSHSE_SOCIAL_SCIENCE_FORMAT_POLICY: dict[str, Any] = {
+    # The matrix's "Social Science" sheet.
+    "policy_id": "msbshse-social-science-2026-08-29",
+    "metadata_match": {
+        "board": _MSBSHSE_BOARD_ALIASES,
+        "subject": _SOCIAL_SCIENCE_SUBJECT_ALIASES,
+    },
+    "difficulty_labels": {
+        "Less": "Easy",
+        "Moderate": "Medium",
+        "High": "Hard",
+    },
+    "formats_by_sheet": {
+        "objective": {
+            "Multiple Choice Question": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 1,
+                    },
+                },
+            },
+            "Assertion & Reasons Type": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 1,
+                    },
+                },
+            },
+        },
+        "descriptive": {
+            "Very Short Answer Questions": {
+                "marks": {"mode": "fixed", "allowed": (1,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 1, "Moderate": 1, "High": 2,
+                    },
+                },
+            },
+            "Short Answer Type (2 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (2,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 2, "Moderate": 2, "High": 3,
+                    },
+                },
+            },
+            "Short Answer Type (3 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (3,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 4, "Moderate": 5, "High": 6,
+                    },
+                },
+            },
+            "Long Answer Type (4 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (4,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5, "Moderate": 6, "High": 7,
+                    },
+                },
+            },
+            "Long Answer Type (5 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (5,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 5, "Moderate": 7, "High": 7,
+                    },
+                },
+            },
+            "Long Answer Type (6 Marks)": {
+                "marks": {"mode": "fixed", "allowed": (6,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 8, "Moderate": 9, "High": 10,
+                    },
+                },
+            },
+            "Case Based Questions": {
+                "marks": {"mode": "fixed", "allowed": (4,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 4, "Moderate": 5, "High": 6,
+                    },
+                },
+            },
+            "Extract based on Map Survey": {
+                "marks": {"mode": "fixed", "allowed": (10,)},
+                "duration": {
+                    "mode": "matrix",
+                    "minutes_by_difficulty": {
+                        "Less": 8, "Moderate": 8, "High": 10,
+                    },
+                },
+            },
+            "Locating and Plotting on Map": {
+                "marks": {"mode": "fixed", "allowed": (3, 10)},
+                "duration": {
+                    "mode": "marks_matrix",
+                    "minutes_by_marks": {
+                        3: {"Less": 4, "Moderate": 4, "High": 4},
+                        10: {"Less": 9, "Moderate": 9, "High": 9},
+                    },
+                },
+            },
         },
     },
 }
@@ -341,9 +820,17 @@ DEFAULT_PROFILE: dict = {
         "policy_id": "generic-cms",
         "formats_by_sheet": _GENERIC_QUESTION_FORMATS,
     },
+    # First match wins: grade-scoped policies come before the board-wide
+    # Question Duration Matrix policies (owner scope ruling 2026-08-29), so
+    # Class 6 keeps its audited closed sets — including the ban on Case
+    # Based / Assertion & Reasons — while every other MH Board grade gets
+    # the matrix's subject contract.
     "assessment_format_overrides": (
         MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY,
         MSBSHSE_GRADE_6_ENGLISH_FORMAT_POLICY,
+        MSBSHSE_MATHEMATICS_PHYSICS_FORMAT_POLICY,
+        MSBSHSE_ENGLISH_FORMAT_POLICY,
+        MSBSHSE_SOCIAL_SCIENCE_FORMAT_POLICY,
     ),
     # Conclusive program metadata can select a complete run-level widening
     # without changing the pinned reference-1 defaults or reinterpreting
@@ -787,10 +1274,14 @@ def question_duration_minutes(
     question_category: str,
     difficulty: str,
     basis_count: int | None = None,
+    marks: int | float | None = None,
 ) -> float | None:
     """Resolve prescribed minutes without inventing a semantic basis count.
 
-    Matrix policies use the recorded difficulty.  Per-subpoint policies need
+    Matrix policies use the recorded difficulty.  Marks-matrix policies (the
+    owner's 2026-08-29 Question Duration Matrix carries categories whose
+    minutes depend on the mark tier, e.g. Composition Writing at 5/10/20
+    marks) additionally need the recorded marks.  Per-subpoint policies need
     the caller to supply the independently authored, mechanically validated
     subpoint count.  Generic categories deliberately return ``None`` because
     the pre-policy behavior leaves duration to the marking verdict.
@@ -808,6 +1299,18 @@ def question_duration_minutes(
         if not isinstance(minutes, Mapping):
             return None
         value = minutes.get(str(difficulty))
+    elif mode == "marks_matrix":
+        tiers = rule.get("minutes_by_marks")
+        if isinstance(marks, bool) or not isinstance(marks, (int, float)):
+            return None
+        if not isinstance(tiers, Mapping) or float(marks) != int(marks):
+            return None
+        # A policy authored in Python keys tiers by int; one that crossed a
+        # JSON boundary keys them by string.  Same table either way.
+        tier = tiers.get(int(marks), tiers.get(str(int(marks))))
+        if not isinstance(tier, Mapping):
+            return None
+        value = tier.get(str(difficulty))
     elif mode == "per_subpoint":
         if isinstance(basis_count, bool) or not isinstance(basis_count, int):
             return None

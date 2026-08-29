@@ -742,18 +742,21 @@ def transient_release_hierarchy(
             keywords=str(record.get("keywords") or ""),
             # Owner decision D4 (2026-08-29, concept-mapping audit,
             # superseding OD3's fill for this column): a PRE row ships
-            # ``related_concepts`` EMPTY — both audit correctors cleared
-            # the cross-phase Post links. Presence of the staged Pre
-            # marker is the authoritative "managed at staging" signal, so
-            # a marker-carrying row renders empty even when a legacy
-            # payload's marker still holds resolved ids or the record
-            # carries a stale imported relation. Rows without the marker
-            # (Post or legacy releases) continue to use their public
-            # column, which stays blank until a relations pass exists.
-            # ``keywords`` still ships FILLED per OD3.
+            # ``related_concepts`` EMPTY — the ruling is "clear it". The
+            # clearing is LANE-keyed, not marker-keyed (review finding on
+            # D4): a legacy Pre payload staged before the marker existed
+            # must not publish a stale cross-phase value just because the
+            # marker is absent. The marker's presence still clears a row
+            # whose lane cannot be resolved. Post and legacy lane-less
+            # rows keep their public column, which stays blank until a
+            # relations pass exists. ``keywords`` still ships FILLED per
+            # OD3.
             related_concepts=(
                 ""
-                if PRE_ROW_RELATED_CONCEPTS_FIELD in record
+                if (
+                    lane == identity.LANE_PRE_TOKEN
+                    or PRE_ROW_RELATED_CONCEPTS_FIELD in record
+                )
                 else str(record.get("related_concepts") or "")
             ),
             digicards=str(record.get("digicards") or ""),

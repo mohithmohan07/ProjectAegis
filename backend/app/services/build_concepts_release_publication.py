@@ -210,12 +210,13 @@ def upload_release_to_database(
     chapter = db.get(models.Chapter, chapter_id)
     if chapter is None:
         raise ValueError("the release target chapter no longer exists")
-    # T3.3b: the resolved Post ``machine_id``s ride a registered
-    # ``_aegis_*`` marker, and ``_strip_release_fields`` drops every
-    # ``_RELEASE_AUDIT_FIELDS`` key BY CONSTRUCTION — so the marker cannot
-    # reach ``_add_concept``'s ``rec`` at all unless it is lifted here,
-    # first. The registry stays the transport; the DB column is the
-    # destination.
+    # T3.3b ordering with D4 semantics (owner decision 2026-08-29): the
+    # ``_aegis_*`` marker rides the staged rows and ``_strip_release_fields``
+    # drops every ``_RELEASE_AUDIT_FIELDS`` key BY CONSTRUCTION — so the
+    # staging decision about ``related_concepts`` must be stamped onto the
+    # public key here, first. Under D4 that decision is always EMPTY for a
+    # Pre row (lane- or marker-keyed), never the resolved Post ids the
+    # pre-D4 lift used to carry.
     #
     # S10: no row is dropped in silence on the DB-write path. This used to
     # be a filter that ate any row without a topic or a concept title —

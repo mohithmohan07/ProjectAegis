@@ -18,7 +18,7 @@ def _clean_overrides():
 
 def test_registry_has_core_prompts():
     keys = {s.key for s in prompts.specs()}
-    for key in ("assessment.base", "assessment.output", "content.katex_rules",
+    for key in ("assessment.base", "assessment.output", "content.katex_rules.v2",
                 "concepts.system", "identify.system",
                 "concepts.skeleton.system"):
         assert key in keys

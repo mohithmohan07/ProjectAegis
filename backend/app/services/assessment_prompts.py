@@ -449,7 +449,7 @@ def build_prompt(
     parts += [
         prompts.get_text("assessment.rubric"),
         prompts.get_text("assessment.variety"),
-        prompts.get_text("content.katex_rules"),
+        prompts.get_text("content.katex_rules.v2"),
         prompts.get_text("assessment.output"),
         prompts.render(
             "assessment.context_footer",
