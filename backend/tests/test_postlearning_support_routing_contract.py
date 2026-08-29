@@ -74,3 +74,90 @@ def test_install_wraps_place_and_post_support_polish_once():
     assert polish.polish is polish_once
     assert getattr(place.place, "_aegis_postlearning_support_route", False)
     assert getattr(polish.polish, "_aegis_postlearning_support_dedupe", False)
+
+
+def test_a_double_claimed_hub_qid_goes_to_the_fixer_not_down(monkeypatch):
+    """§8.2/Q13: a decidable mid-run block gets ONE recorded decision.
+
+    [measured] job "The School Bell Rings Again..." (owner report,
+    2026-08-29): two threading verdicts claimed the same task-bearing
+    support occurrence and the unconditional raise ended the run
+    incomplete at Place — Outputs 02/04 unbuildable. With a Fixer and
+    store in scope the conflict is now resolved by one recorded,
+    flagged decision and the run continues; without them the block
+    still raises exactly as before.
+    """
+    import pytest
+
+    from app.services.phase3 import kernel
+
+    env = support.prepare_envelope(fixtures._raw_env())
+    rows = env["skeleton_rows"]
+
+    # The production shape: two DIFFERENT threaded blocks, two different
+    # destinations, one shared task id — one Hub QID claimed twice.
+    def conflicted_records(_env):
+        return {
+            "PC-1": [{
+                "block_id": "BLK-WARM",
+                "text": "Think and write.",
+                "placement_context": "opening_pre_reading",
+                "skill": "personal response",
+                "rationale": "opening claim",
+                "task_ids": ["TASK-WARM"],
+            }],
+            "PC-3": [{
+                "block_id": "BLK-QUESTION",
+                "text": "Find more examples of Alliteration from the poem.",
+                "placement_context": "contextual_support",
+                "skill": "device practice",
+                "rationale": "second claim",
+                "task_ids": ["TASK-WARM"],
+            }],
+        }
+
+    monkeypatch.setattr(support, "support_records", conflicted_records)
+    fixer_requests = []
+
+    def fixer(request):
+        fixer_requests.append(request)
+        candidates = [
+            row["plan_concept_id"] for row in request["candidates"]
+        ]
+        assert candidates == ["PC-1", "PC-3"]
+        return {
+            "destination_plan_id": "PC-1",
+            "rationale": "The warm-up belongs with the opening stanza.",
+        }
+
+    original = {
+        "hub_placements": {"Q-WARM": "SOME-OTHER-CONCEPT"},
+        "figure_placements": {},
+        "rationales": {"Q-WARM": "ordinary Place draft"},
+        "review_flags": {},
+    }
+    result = routing.enforce_place_result(
+        env, rows, original,
+        store=kernel.DecisionStore(), fixer=fixer,
+    )
+
+    assert len(fixer_requests) == 1
+    concept_ids = place.mint_concept_ids(rows)
+    opening_id = next(
+        concept_id for concept_id, row in zip(concept_ids, rows)
+        if (
+            (row.get(post.PLAN_IDENTITY_FIELD) or {}).get("plan_concept_id")
+            == "PC-1"
+        )
+    )
+    assert result["hub_placements"]["Q-WARM"] == opening_id
+    assert any(
+        "hub-route-conflict" in flag
+        for flag in result["review_flags"]["Q-WARM"]
+    )
+
+    # Without the Fixer seam the block still raises exactly as before.
+    with pytest.raises(ValueError, match="one activity identity"):
+        routing.enforce_place_result(env, rows, original)
+    with pytest.raises(ValueError, match="one activity identity"):
+        routing.planned_hub_qids(env)

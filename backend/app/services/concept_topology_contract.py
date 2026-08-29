@@ -205,6 +205,25 @@ def restored_pre_release() -> tuple[dict[str, Any] | None, list[str]]:
     }, []
 
 
+
+def _inventory_qid_set(inventory: object) -> tuple[str, ...]:
+    """The sorted QID identity of one Question/Task Inventory.
+
+    Pure identity mechanics: which QIDs exist, nothing about what they
+    mean. Two inventories with the same QID set may differ byte-wise
+    (resume refreshes rewrite text/anchors) and still share sealed
+    Phase 3 decisions; a different SET can never be covered by them.
+    """
+    items = (
+        inventory.get("items") if isinstance(inventory, dict) else None
+    ) or []
+    return tuple(sorted({
+        str(item.get("qid") or "").strip()
+        for item in items
+        if isinstance(item, dict) and str(item.get("qid") or "").strip()
+    }))
+
+
 def _run_rewritten_phase3(
     generation: ModuleType,
     out: list[dict],
@@ -259,7 +278,11 @@ def _run_rewritten_phase3(
             stored = p3_envelope.validate(wrapper.get("envelope") or {})
             from . import grounding_certificate as _gc
 
-            if (
+            sealed_qids = _inventory_qid_set(stored.get("inventory"))
+            current_qids = _inventory_qid_set(
+                kwargs.get("question_task_inventory")
+            )
+            identity_matches = (
                 str(wrapper.get("boundary_skeleton_sha256") or "")
                 == skeleton_sha
                 and str(stored.get("source_contract_hash") or "")
@@ -287,7 +310,33 @@ def _run_rewritten_phase3(
                         "instruction_set_sha256"
                     ) or ""
                 )
-            ):
+            )
+            if identity_matches and sealed_qids != current_qids:
+                # [measured] job "Patterns" (owner report, 2026-08-29):
+                # the resume-time inventory refresh yielded a different
+                # QID set than the sealed envelope's, but the seal was
+                # reused anyway. Host then replayed certifications for
+                # the OLD set only, so the placement-certification
+                # completeness rule (exact set equality) rejected every
+                # terminal checkpoint the run wrote — the release staged
+                # non-terminal, the Master gate refused Outputs 02/04,
+                # and each further Resume repeated the same near-free
+                # loop forever. A changed QID set can never be covered
+                # by the sealed decisions: re-key Phase 3 once, pay for
+                # the delta, and converge.
+                added = len(set(current_qids) - set(sealed_qids))
+                removed = len(set(sealed_qids) - set(current_qids))
+                generation.progress.log(
+                    "The refreshed Question/Task Inventory's QID set "
+                    f"differs from the sealed Phase 3 envelope's ({added} "
+                    f"added, {removed} removed): the sealed decisions "
+                    "cannot certify the current inventory, so Phase 3 "
+                    "re-runs under a new envelope instead of looping on a "
+                    "non-terminal checkpoint. Unchanged decisions that "
+                    "share content may still replay from the store.",
+                    level="warning",
+                )
+            elif identity_matches:
                 env = stored
                 generation.progress.log(
                     "Reusing the sealed Phase 3 envelope "
