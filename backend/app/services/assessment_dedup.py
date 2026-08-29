@@ -6,8 +6,16 @@ pre-learning questions to be the same question — a paraphrase, a number
 or a name swapped — one survivor ships and the others are REMOVED from
 the Master, recorded on the release under ``duplicates_removed`` with
 the reason, reviewable, never silent. This amends the flag-only doctrine
-for exactly this case and nothing else; source questions are untouched
-(their exactly-once accounting is Rule C's, not this pass's).
+for exactly this case.
+
+P3 (owner audit + approval, 2026-08-29) extends the same recorded-verdict
+mechanics to SOURCE questions: both audit correctors deleted source items
+the pipeline shipped twice in different guises (a verbatim double-ship
+under two labels; an umbrella whose parts were already standalone rows).
+``decide_source_duplicates`` below folds those before spend as a recorded
+``source_duplicates_represented`` disposition — coverage moves to the
+survivor, never lost — keeping Rule C's exactly-once accounting through
+the disposition record rather than through a second physical row.
 
 The verdict runs per pre-learning concept group BEFORE the cell
 verdicts, so a removed question costs nothing downstream. String
@@ -77,7 +85,12 @@ def _live_dedup_critic(payload: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _dedup_checker(question_ids: set[str]) -> kernel.Checker:
+def _dedup_checker(
+    question_ids: set[str],
+    *,
+    survivor_field: str = "survivor_pre_question_id",
+    removed_field: str = "pre_question_id",
+) -> kernel.Checker:
     def check(response: Mapping[str, Any]) -> list[str]:
         if not isinstance(response, Mapping):
             return ["response is not an object"]
@@ -90,11 +103,11 @@ def _dedup_checker(question_ids: set[str]) -> kernel.Checker:
             if not isinstance(entry, Mapping):
                 defects.append(f"duplicate set {position} is not an object")
                 continue
-            survivor = str(entry.get("survivor_pre_question_id") or "")
+            survivor = str(entry.get(survivor_field) or "")
             if survivor not in question_ids:
                 defects.append(
                     f"duplicate set {position}: survivor "
-                    f"{survivor!r} is not one of this concept's questions"
+                    f"{survivor!r} is not one of the supplied questions"
                 )
             removed = entry.get("removed")
             if not isinstance(removed, list) or not removed:
@@ -111,11 +124,11 @@ def _dedup_checker(question_ids: set[str]) -> kernel.Checker:
                         "not an object"
                     )
                     continue
-                removed_id = str(row.get("pre_question_id") or "")
+                removed_id = str(row.get(removed_field) or "")
                 if removed_id not in question_ids:
                     defects.append(
                         f"duplicate set {position}: removed id "
-                        f"{removed_id!r} is not one of this concept's "
+                        f"{removed_id!r} is not one of the supplied "
                         "questions"
                     )
                 if removed_id == survivor:
@@ -237,3 +250,176 @@ def decide_generated_duplicates(
         ) not in removed_ids
     ]
     return survivors, removed_records
+
+
+# --------------------------------------------------------------------------- #
+# Source-lane duplicate coverage (P3, owner audit 2026-08-29)
+# --------------------------------------------------------------------------- #
+
+SOURCE_DEDUP_POLICY_VERSION = "assessment-source-dedup-1"
+
+SOURCE_DEDUP_SYSTEM = (
+    "You are the Aegis duplicate-question judge for one Post-Learning "
+    "Master. You are given EVERY chapter-teaching source question headed "
+    "into this Master file, after compound sub-parts have already folded "
+    "into their parents. Identify sets that ship the same assessment more "
+    "than once: the same question shipped under two labels (verbatim or "
+    "trivially reworded), the same ask with the same answer in another "
+    "guise, or an umbrella item whose every part already ships as a "
+    "standalone question in this set — the audited Master shipped "
+    "'Is 5-5=0 a natural number?' twice under two labels, and a "
+    "discuss-in-pairs umbrella whose two parts were already standalone "
+    "rows (owner audit, 2026-08-29). For each set choose the ONE survivor "
+    "that asks it best. Questions that merely share a topic, a method, "
+    "numbers, or a context are NOT duplicates: they must ask the same "
+    "thing with the same answer. Members of one recorded alternative set "
+    "(an either/or choice the source paper itself offers) are a "
+    "deliberate pair, never duplicates. When nothing duplicates, return "
+    "an empty duplicate_sets array — removal is never a goal and there "
+    "is no quota. Respond with a single JSON object and nothing else:\n"
+    '{"duplicate_sets":[{"survivor_source_qid":"",'
+    '"removed":[{"source_qid":"","reason":"why it ships the same '
+    'assessment as the survivor"}]}],"confidence":0.0,'
+    '"rationale":"evidence-bound reason"}'
+)
+
+SOURCE_DEDUP_CRITIC_SYSTEM = (
+    "You are the independent advisory critic for one Aegis source-lane "
+    "duplicate decision. Audit the proposed duplicate sets against the "
+    "actual question texts and answers: is any removed question genuinely "
+    "a DIFFERENT ask (different answer, different skill) mislabelled as a "
+    "duplicate, is a recorded alternative-set pair being wrongly removed, "
+    "and is any obvious double-ship missed? Dissent must name the "
+    'source_qid(s). Respond with a single JSON object: '
+    '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}'
+)
+
+
+def _live_source_dedup(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+    from .phase3 import prompts
+
+    return generation._openai_json(
+        SOURCE_DEDUP_SYSTEM, prompts.render(payload),
+        purpose="concept_mapping",
+    )
+
+
+def _live_source_dedup_critic(payload: dict[str, Any]) -> dict[str, Any]:
+    from . import generation
+    from .phase3 import prompts
+
+    return generation._openai_json(
+        SOURCE_DEDUP_CRITIC_SYSTEM, prompts.render(payload),
+        purpose="concept_validation",
+    )
+
+
+def decide_source_duplicates(
+    atoms: list[Mapping],
+    *,
+    meta: Mapping,
+    envelope_sha256: str,
+    provider: kernel.Provider | None = None,
+    critic: kernel.Critic | None = None,
+    store: kernel.DecisionStore | None = None,
+    fixer: kernel.Provider | None = None,
+) -> tuple[list[Mapping], list[dict[str, Any]]]:
+    """One recorded duplicate verdict across the whole source-question set.
+
+    P3 (owner audit 2026-08-29): both audit correctors deleted source
+    questions the pipeline shipped twice in different guises — a verdict
+    the compound fold's recorded-identity mechanics cannot make, so the
+    model makes it here, once, BEFORE any cell verdict is paid for, with
+    the advisory critic and one recorded decision per run. Returns
+    ``(kept_atoms, represented_records)`` — kept atoms in input order;
+    each record names the removed qid, its survivor, and the reason, so
+    the removal is a reviewable disposition, never silent loss (R4).
+    Fewer than two atoms costs nothing and removes nothing.
+    """
+
+    rows = [a for a in atoms if isinstance(a, Mapping)]
+    by_id = {
+        str(a.get("source_qid") or ""): a
+        for a in rows
+        if str(a.get("source_qid") or "")
+    }
+    if len(by_id) < 2:
+        return list(atoms), []
+
+    if provider is None:
+        provider = _live_source_dedup
+        critic = critic if critic is not None else _live_source_dedup_critic
+    store = store or kernel.DecisionStore()
+
+    payload = {
+        "stage": "assessment.source_dedup",
+        "rules": SOURCE_DEDUP_SYSTEM,
+        "metadata": copy.deepcopy(dict(meta)),
+        "questions": [
+            {
+                "source_qid": str(a.get("source_qid") or ""),
+                "source_label": str(a.get("source_paper_number") or ""),
+                "source_kind": str(a.get("source_kind") or ""),
+                "question": str(
+                    a.get("normalized_public_text")
+                    or a.get("raw_text")
+                    or ""
+                ),
+                "answer": str(a.get("source_answer") or ""),
+                "shared_context": str(a.get("shared_context") or "")[:600],
+                "alternative_set_id": str(
+                    a.get("alternative_set_id") or ""
+                ),
+            }
+            for a in rows
+            if str(a.get("source_qid") or "")
+        ],
+    }
+    decision = kernel.decide(
+        kind="assessment.source_dedup",
+        unit_id="post-master-source-set",
+        envelope_sha256=envelope_sha256,
+        payload=payload,
+        provider=provider,
+        checker=_dedup_checker(
+            set(by_id),
+            survivor_field="survivor_source_qid",
+            removed_field="source_qid",
+        ),
+        critic=critic,
+        store=store,
+        policy_version=SOURCE_DEDUP_POLICY_VERSION,
+        fixer=fixer,
+    )
+    response = decision["response"]
+    decision_flags = list(decision.get("review_flags") or [])
+
+    represented: list[dict[str, Any]] = []
+    removed_ids: set[str] = set()
+    for entry in response.get("duplicate_sets") or []:
+        survivor = str(entry.get("survivor_source_qid") or "")
+        for row in entry.get("removed") or []:
+            removed_id = str(row.get("source_qid") or "")
+            removed_ids.add(removed_id)
+            removed_atom = by_id.get(removed_id) or {}
+            represented.append({
+                "source_qid": removed_id,
+                "source_label": str(
+                    removed_atom.get("source_paper_number") or ""
+                ),
+                "duplicate_of": survivor,
+                "reason": str(row.get("reason") or ""),
+                "flags": [
+                    "duplicate source question represented by its "
+                    f"survivor (P3): {survivor!r}; "
+                    + str(row.get("reason") or "")
+                ] + decision_flags,
+            })
+    kept = [
+        a for a in atoms
+        if str(
+            (a or {}).get("source_qid") if isinstance(a, Mapping) else ""
+        ) not in removed_ids
+    ]
+    return kept, represented

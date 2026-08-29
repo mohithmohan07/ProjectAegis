@@ -934,7 +934,11 @@ prompts.register(
    what constraint or context) — never "Definition of …", never a raw question,
    and never a textbook Activity / discussion-case title. Activities,
    experiments, and classroom discussion cases belong in Activity/Info Hub, not
-   as Cases.
+   as Cases. Case and Type titles are AUTHORED wording: never paste a stem
+   fragment, an enumerator, or a bare numeral run torn from an Example into a
+   template sentence (the audited failure shipped "writing number in words i
+   49 38 67 under its stated conditions" as four identical Case titles —
+   owner audit, 2026-08-29).
    Every concrete source question goes on its own numbered "Example 01:" line
    under the Case it instantiates, copied in FULL without truncation. Restart
    Example numbering at 01 for each Case. Include EVERY source
@@ -1958,6 +1962,12 @@ Rules:
 - Merge Types when their verb/action, assessed object, required method,
   representation, constraints, and expected output describe the same reusable
   assessment pattern, even when their titles are paraphrases.
+- That merge duty spans the WHOLE supplied set: two Types mined separately —
+  for different concepts, different topics, or in different mining passes —
+  still merge when they are one task family, and their Cases move intact
+  under the one survivor (each Case keeps its own route). The audited
+  failure (owner audit, 2026-08-29): "Interpreting Integers in Real-Life
+  Situations" shipped as two differently numbered Types under two concepts.
 - Keep different methods or learning objectives separate. Shared notation,
   formula, difficulty, context, person, country, or surface wording alone does
   not prove equivalence.
