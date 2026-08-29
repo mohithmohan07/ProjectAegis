@@ -19727,6 +19727,128 @@ def _type_case_checkpoint_placement_ledger_valid(checkpoint: dict) -> bool:
     return True
 
 
+def concept_checkpoint_terminal_diagnosis(checkpoint: dict | None) -> str:
+    """Explain, in words, why the newest TERMINAL entry is unusable.
+
+    Diagnostic only: the gate stays :func:`_compatible_concept_checkpoint_entry`.
+    This mirror re-runs its checks piecewise so a "non-terminal generation
+    checkpoint" refusal can NAME the failing predicate — [measured] job
+    'Patterns' (2026-08-29): a fresh, fully completed run saved its 98%
+    terminal checkpoint and the Master gate still judged it non-terminal,
+    with nothing anywhere saying why. Divergence between this mirror and
+    the gate mislabels a message, never a decision.
+    """
+
+    entries = _concept_checkpoint_entries(checkpoint)
+    if not entries:
+        return "the envelope holds no checkpoint entries"
+    stages = [str(entry.get("stage") or "?") for entry in entries]
+    terminal = [
+        entry for entry in entries
+        if str(entry.get("stage") or "")
+        in {"post_type_assignment", "final_content_ready"}
+    ]
+    if not terminal:
+        return (
+            "no terminal-stage entry exists in the envelope "
+            f"(stages present: {', '.join(stages)})"
+        )
+    entry = terminal[-1]
+    stage = str(entry.get("stage") or "")
+    if _compatible_concept_checkpoint_entry(entry):
+        return (
+            f"the newest terminal entry ('{stage}') IS compatible here — "
+            "the refusing caller evaluated a different envelope or context "
+            f"(stages present: {', '.join(stages)})"
+        )
+    reasons: list[str] = []
+    schema = entry.get("schema_version")
+    if schema != _CONCEPT_CHECKPOINT_SCHEMA:
+        reasons.append(
+            f"schema_version={schema!r} (deployment expects "
+            f"{_CONCEPT_CHECKPOINT_SCHEMA!r})"
+        )
+    spec = _CONCEPT_CHECKPOINT_STAGES.get(stage) or {}
+    if entry.get("stage_schema_version", 1) != spec.get("version"):
+        reasons.append(
+            f"stage_schema_version={entry.get('stage_schema_version', 1)!r} "
+            f"(deployment expects {spec.get('version')!r})"
+        )
+    if not valid_phase3_pre_release_bundle(
+        entry.get(PHASE3_PRE_RELEASE_FIELD)
+    ):
+        reasons.append("the Phase 03 pre-release bundle is missing or invalid")
+    if not _checkpoint_has_fields(entry, ("records", list)):
+        reasons.append("records are missing")
+    elif cr.split_type_host_violations(entry.get("records") or []):
+        reasons.append("records carry split-Type host violations")
+    if not _checkpoint_has_fields(entry, ("method_row_snapshot", list)):
+        reasons.append("method_row_snapshot is missing")
+    if not _checkpoint_has_fields(
+        entry, ("question_task_inventory", dict)
+    ):
+        reasons.append("question_task_inventory is missing")
+    elif _invalid_inventory_items(entry.get("question_task_inventory")):
+        reasons.append(
+            "the inventory holds invalid item(s) (empty or duplicate qid)"
+        )
+    if not _checkpoint_has_fields(entry, ("mined_types", dict)):
+        reasons.append("mined_types is missing")
+    elif not _placement_certification_contract_complete(
+        entry.get("mined_types"), entry.get("question_task_inventory"),
+    ):
+        reasons.append(
+            "placement certifications do not cover the inventory's exact "
+            "QID set"
+        )
+    if not _type_granularity_replay_seal_valid(entry):
+        reasons.append("the Type-granularity replay seal is invalid")
+    if not _type_case_checkpoint_placement_ledger_valid(entry):
+        reasons.append("the Type/Case QID placement ledger is invalid")
+    if stage == "final_content_ready":
+        from . import canonical_source_phase3 as phase3
+
+        if entry.get("grounding_certificate_required") is False:
+            if isinstance(phase3.active_graph(), dict):
+                reasons.append(
+                    "an uncertified standalone snapshot cannot publish "
+                    "while a live Phase 3 graph is active"
+                )
+        else:
+            try:
+                active = phase3.active_graph()
+                grounding_certificate.verify_final_certificate(
+                    entry.get("records") or [],
+                    entry.get(
+                        grounding_certificate.FINAL_CERTIFICATE_FIELD
+                    ),
+                    semantic_graph=(
+                        active if isinstance(active, dict) else None
+                    ),
+                    type_case_qid_placement_ledger=(
+                        _resolved_type_case_qid_placement_ledger(
+                            entry.get("question_task_inventory"),
+                            entry.get("mined_types"),
+                        )
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - the reason IS the point
+                reasons.append(
+                    "final grounding certificate re-verification failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
+    if not reasons:
+        reasons.append(
+            "no focused check reproduced the rejection (diagnostic/gate "
+            "drift — report this log line)"
+        )
+    return (
+        f"the newest terminal entry ('{stage}') was rejected: "
+        + "; ".join(reasons)
+        + f" (envelope stages present: {', '.join(stages)})"
+    )
+
+
 def _compatible_concept_checkpoint_entry(
     checkpoint: dict | None,
     *,
