@@ -150,6 +150,27 @@ def test_the_sealed_envelope_is_reused_across_resumes(
     assert sealed[0] == sealed[1]
     assert (tmp_path / "source.phase3-envelope.json").exists()
 
+        # A refresh that CHANGES THE QID SET is not equivalent: the sealed
+        # Host certifications can never cover it, and reusing the seal
+        # trapped the run in a permanent non-terminal loop ([measured]
+        # job "Patterns", owner report 2026-08-29). The envelope must
+        # re-key so Phase 3 certifies the current set.
+    with phase3.activate_session(session), phase3.activate(
+        _graph_from(fixture_env)
+    ):
+        qid_drifted = copy.deepcopy(fixture_env["inventory"])
+        items = qid_drifted.get("items") or []
+        assert items, "fixture inventory must carry items"
+        items[0] = {**items[0], "qid": "QINV-QID-DRIFTED"}
+        generation._prepare_final_concept_content(
+            copy.deepcopy(fixture_env["skeleton_rows"]),
+            question_task_inventory=qid_drifted,
+            **common,
+        )
+
+    assert len(sealed) == 3
+    assert sealed[2] != sealed[0]
+
 
 def test_materialized_envelope_keeps_raw_resume_boundary(
     monkeypatch, tmp_path, fixture_env,
