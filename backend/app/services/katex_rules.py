@@ -971,6 +971,20 @@ def _normalize_legacy_roman_atoms(value: str) -> str:
     return "".join(parts)
 
 
+def normalize_supported_text_atoms(value: str) -> str:
+    """Deterministically rewrite plain ``\\mathrm{...}`` atoms as ``\\text``.
+
+    The public seam for INGESTION-time canonicalization: model transcription
+    (GPT PDF reading, like Mathpix before it) writes physics units in LaTeX
+    house style (``\\mathrm{V}``), which the CMS KaTeX subset bans. Plain
+    letter/digit/space bodies render identically as ``\\text`` atoms, so the
+    rewrite is meaning-preserving; any other body is left byte-for-byte for
+    the strict validator and source review to judge.
+    """
+
+    return _normalize_legacy_roman_atoms(str(value or ""))
+
+
 def legacy_export_rich_text(text: str) -> str:
     """Project known historical rich text onto the current strict wire.
 
