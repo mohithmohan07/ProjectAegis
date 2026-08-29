@@ -691,7 +691,12 @@ def test_the_master_renderer_records_a_group_it_cannot_place():
 # T3.3 / T3.3b — the Pre lane's resolved ``related_concepts``
 # --------------------------------------------------------------------------- #
 
-def test_pre_related_concepts_carries_the_resolved_post_machine_ids(db):
+def test_pre_related_concepts_ships_empty_while_links_stay_resolved(db):
+    """Owner decision D4 (2026-08-29, concept-mapping audit): both audit
+    correctors cleared the cross-phase Post links on every Pre row, so the
+    wire column ships EMPTY — while needed-for resolution still runs and a
+    broken link keeps its recorded review flag."""
+
     from app.services import build_concepts_release as release
     from app.services import build_concepts_release_files as release_files
     from tests.test_assessment_release_run import _chapter_with_concepts
@@ -703,18 +708,19 @@ def test_pre_related_concepts_carries_the_resolved_post_machine_ids(db):
     post = release.release_payload(job, lane=release.LANE_POST)
     _c, post_concepts, _r, _d = release_files.transient_release_hierarchy(
         db, job, payload=post)
-    expected = post_concepts[0].machine_id
-    assert expected
+    post_machine_id = post_concepts[0].machine_id
+    assert post_machine_id
 
     pre = release.release_payload(job, lane=release.LANE_PRE)
     row = pre["records"][0]
-    assert row[release.PRE_ROW_RELATED_CONCEPTS_FIELD] == expected
+    assert row[release.PRE_ROW_RELATED_CONCEPTS_FIELD] == ""
+    # The fixture's needed-for link resolves cleanly — no review flag.
     assert row[release.PRE_ROW_RELATED_UNRESOLVED_FIELD] == []
 
-    # And it reaches the rendered Pre Concept File.
+    # And the rendered Pre Concept File carries no cross-phase link.
     _c, pre_concepts, _r, _d = release_files.transient_release_hierarchy(
         db, job, payload=pre)
-    assert pre_concepts[0].related_concepts == expected
+    assert pre_concepts[0].related_concepts == ""
     # No opaque phase-3 token survives anywhere in the rendered bytes.
     data = release_files.build_release_bulk_import_workbook(
         db, job, lane=release.LANE_PRE)
@@ -774,8 +780,11 @@ def test_an_unresolvable_needed_for_link_is_a_review_flag_not_a_blank(db):
     assert "staged at this position" in unresolved[0]["reason"]
 
 
-def test_the_publication_lifts_the_resolved_marker_before_the_strip():
-    """T3.3b — the column must not empty when the reviewer clicks Upload."""
+def test_the_publication_stamps_the_marker_decision_before_the_strip():
+    """T3.3b ordering with D4 semantics (owner decision, 2026-08-29): the
+    marker's presence survives the strip AS the empty wire value — even a
+    legacy payload whose marker still carries resolved ids publishes
+    ``related_concepts`` empty."""
 
     from app.services import build_concepts_release as release
 
@@ -784,11 +793,12 @@ def test_the_publication_lifts_the_resolved_marker_before_the_strip():
         release.PRE_ROW_RELATED_CONCEPTS_FIELD: "10CBMA_Ch_PL_T01_C01",
     }
     lifted = release._lift_resolved_related_concepts(row)
-    assert lifted["related_concepts"] == "10CBMA_Ch_PL_T01_C01"
+    assert lifted["related_concepts"] == ""
     stripped = release._strip_release_fields(lifted)
-    assert stripped["related_concepts"] == "10CBMA_Ch_PL_T01_C01"
+    assert stripped["related_concepts"] == ""
     assert release.PRE_ROW_RELATED_CONCEPTS_FIELD not in stripped
-    # …and without the lift it would be gone, which is the whole point.
+    # …and without the stamp the key would be gone entirely, losing the
+    # staging decision at the moment of publication.
     assert "related_concepts" not in release._strip_release_fields(row)
 
 

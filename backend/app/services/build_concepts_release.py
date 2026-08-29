@@ -114,12 +114,14 @@ RELEASE_ROW_ROUTES_FIELD = "_aegis_release_type_case_routes"
 RELEASE_ROW_REFINED_FIELD = "_aegis_release_refined"
 RELEASE_ROW_LANE_FIELD = "_aegis_release_lane"
 PRE_ROW_GENERATED_QUESTIONS_FIELD = "_aegis_pre_generated_questions"
-# OD3/T3.3: the Pre row's ``related_concepts`` CONTENT — the resolved,
-# persisted Post ``machine_id``s this pre-concept is needed for. Resolved
-# at STAGING (there is no durable Post identity to join on at render time,
-# and a title join is forbidden by T11.2), stamped here, read by the
-# renderer, and lifted onto the DB column at publication so the column does
-# not empty the moment a reviewer clicks Upload (T3.3b).
+# Owner decision D4 (2026-08-29, concept-mapping audit): a Pre row ships
+# ``related_concepts`` EMPTY — both audit correctors cleared the
+# cross-phase Post links, superseding OD3/T3.3's populated column. The
+# marker stays: its PRESENCE is the authoritative "this lane's column is
+# managed at staging" signal that clears any stale imported value at the
+# renderer and at publication (T3.3b's lift ordering is unchanged); its
+# VALUE is now always the empty string. Needed-for links are still
+# RESOLVED at staging so a broken link keeps its recorded review flag.
 PRE_ROW_RELATED_CONCEPTS_FIELD = "_aegis_pre_related_concepts"
 # A link that does not resolve is a RECORDED REVIEW FLAG on the row, never
 # a blank and never a block (T3.3).
@@ -3820,21 +3822,21 @@ def _resolve_needed_for(
 
 
 def _lift_resolved_related_concepts(row: Mapping[str, Any]) -> dict[str, Any]:
-    """Lift the resolved marker onto an explicit ``related_concepts`` key.
+    """Stamp the managed ``related_concepts`` key from the marker's presence.
 
     Called at publication, BEFORE ``_strip_release_fields`` (T3.3b): the
     marker is a registered audit field, so the strip drops it by
-    construction and the column would empty at exactly the moment the
-    reviewer publishes.  Presence is authoritative: an explicitly empty
-    marker means staging resolved no legitimate Post links and must clear
-    any stale source value rather than falling back to it.
+    construction, and without this stamp the column's staging-time
+    decision would be lost at exactly the moment the reviewer publishes.
+    Presence is authoritative, and under owner decision D4 (2026-08-29)
+    the decision is always EMPTY: a Pre row never publishes cross-phase
+    Post links, including a legacy payload staged before D4 whose marker
+    still carries resolved ids.
     """
 
     lifted = dict(row)
     if PRE_ROW_RELATED_CONCEPTS_FIELD in lifted:
-        lifted["related_concepts"] = str(
-            lifted.get(PRE_ROW_RELATED_CONCEPTS_FIELD) or ""
-        )
+        lifted["related_concepts"] = ""
     return lifted
 
 
@@ -3920,8 +3922,12 @@ def stage_pre_release(
         row[PRE_ROW_GENERATED_QUESTIONS_FIELD] = [
             _normal(entry.get("pre_question_id")) for entry in authored
         ]
-        resolved, unresolved = _resolve_needed_for(row, post_ids)
-        row[PRE_ROW_RELATED_CONCEPTS_FIELD] = "\n".join(resolved)
+        # Owner decision D4 (2026-08-29): the wire column ships EMPTY.
+        # Resolution still runs — an unresolvable needed-for link is
+        # genuine Phase 03 map corruption and keeps its recorded review
+        # flag — but the resolved Post ids no longer ship on any Pre row.
+        _resolved, unresolved = _resolve_needed_for(row, post_ids)
+        row[PRE_ROW_RELATED_CONCEPTS_FIELD] = ""
         row[PRE_ROW_RELATED_UNRESOLVED_FIELD] = unresolved
         generated.extend(copy.deepcopy(entry) for entry in authored)
 

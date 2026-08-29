@@ -145,12 +145,13 @@ def _group_sequence(machine_name: str) -> int:
     return int(match.group(1)) if match else 0
 
 
+# "katex_row_spacing" retired 2026-08-29 (owner decision D1: dimension row
+# spacing is supported); rich_text_issues no longer emits it.
 _STRICT_RICH_TEXT_CODES = frozenset({
     "unsupported_table",
     "unsupported_katex_command",
     "raw_math_delimiter",
     "literal_newline_escape",
-    "katex_row_spacing",
 })
 
 
@@ -179,11 +180,8 @@ def _format_issues(
             "labelled plain text"
         ),
         "unsupported_katex_command": (
-            "unsupported KaTeX command found; do not use \\mathrm, \\hspace, "
-            "\\phantom, or \\boxed"
-        ),
-        "katex_row_spacing": (
-            "KaTeX row breaks must not include an optional spacing argument"
+            "unsupported KaTeX command found; do not use \\mathrm — write "
+            "upright words and units with \\text{...}"
         ),
         "literal_newline_escape": (
             "literal \\n found before a list/option label — use a real line "
@@ -252,11 +250,8 @@ def _answer_format_issues(
             "markup"
         ),
         "equation_unsupported_command": (
-            "Equation content must not use \\mathrm, \\hspace, \\phantom, "
-            "or \\boxed"
-        ),
-        "equation_row_spacing": (
-            "Equation array rows must not include a spacing argument"
+            "Equation content must not use \\mathrm — write upright words "
+            "and units with \\text{...}"
         ),
         "equation_katex_wrapper": (
             "Equation content must be raw LaTeX without [Katex]"

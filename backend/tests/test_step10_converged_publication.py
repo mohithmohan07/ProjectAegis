@@ -656,30 +656,33 @@ def test_an_empty_pre_release_still_exports_and_still_publishes_zero_rows(
 # 7/8. What the reviewer approved is what the published file reads back
 # --------------------------------------------------------------------------- #
 
-def test_pre_related_concepts_survives_publication(db, client):
-    """T3.3b end to end: after the Pre upload, Output 01 regenerates from
-    DB rows through the published-concept shortcut — the resolved Post
-    ``machine_id``s must read identically before and after. PIN of the S8
-    follow-up persistence, proven live by neutralising the two persist
-    sites; S10's loop rewrites must not reopen it.
-    """
+def test_pre_related_concepts_stays_empty_through_publication(db, client):
+    """T3.3b end to end under owner decision D4 (2026-08-29): the Pre
+    lane's ``related_concepts`` ships EMPTY, and stays empty identically
+    before and after the upload — including through the published-concept
+    shortcut. The Post machine_id must not leak into the Pre workbook at
+    any stage."""
     chapter = _chapter(db, "06CBSC_S10PreRel")
     job = _both_lanes_job(db, chapter)
 
     pre = release.release_payload(job, lane=release.LANE_PRE)
-    expected = str(
-        pre["records"][0][release.PRE_ROW_RELATED_CONCEPTS_FIELD] or "")
-    assert expected, "the fixture stages a resolved needed-for marker"
+    assert pre["records"][0][release.PRE_ROW_RELATED_CONCEPTS_FIELD] == ""
+
+    post = release.release_payload(job, lane=release.LANE_POST)
+    _c, post_concepts, _r, _d = release_files.transient_release_hierarchy(
+        db, job, payload=post)
+    post_machine_id = post_concepts[0].machine_id
+    assert post_machine_id
 
     before = _workbook_text(release_files.build_release_bulk_import_workbook(
         db, job, lane=release.LANE_PRE))
-    assert expected in before
+    assert post_machine_id not in before
 
     result = publication.upload_release_to_database(
         db, job.id, owner_sub=OWNER, lane="pre")
     assert result["created_concept_ids"]
     row = db.get(models.Concept, result["created_concept_ids"][0])
-    assert row.related_concepts == expected
+    assert row.related_concepts == ""
 
     # Through the published-concept shortcut this time.
     db.refresh(job)
@@ -687,7 +690,7 @@ def test_pre_related_concepts_survives_publication(db, client):
     assert payload["summary"]["database_uploaded"] is True
     after = _workbook_text(release_files.build_release_bulk_import_workbook(
         db, job, lane=release.LANE_PRE))
-    assert expected in after
+    assert post_machine_id not in after
 
 
 def test_digicards_survive_publication(db):

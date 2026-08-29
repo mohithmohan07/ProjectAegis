@@ -740,30 +740,21 @@ def transient_release_hierarchy(
                 or ""
             ),
             keywords=str(record.get("keywords") or ""),
-            # OWNER RULING OD3: ``keywords`` and ``related_concepts`` ship
-            # FILLED. The reference workbook leaving them blank is that
-            # school's fill practice, not a rule of the format — the
-            # committed format workbook carries both columns and no data
-            # rows at all, so the format asserts nothing about them. The
-            # ``forced_blank_fields`` profile key stays as the one-line
-            # lever if that ever changes.
-            #
-            # On a PRE row the value is the resolved marker T3.3 stamps at
-            # staging (persisted Post ``machine_id``s, newline-joined —
-            # concept titles legitimately contain commas). On a POST row
-            # nothing authors a concept↔concept relation yet, so it is
-            # whatever the record carries, which is blank.
-            # Presence of the staged Pre marker is authoritative, including
-            # the empty string: no resolved Post ids means a stale imported
-            # relation must be cleared.  Rows without the marker (for example
-            # Post or legacy releases) continue to use their public column.
-            related_concepts=str(
-                (
-                    record.get(PRE_ROW_RELATED_CONCEPTS_FIELD)
-                    if PRE_ROW_RELATED_CONCEPTS_FIELD in record
-                    else record.get("related_concepts")
-                )
-                or ""
+            # Owner decision D4 (2026-08-29, concept-mapping audit,
+            # superseding OD3's fill for this column): a PRE row ships
+            # ``related_concepts`` EMPTY — both audit correctors cleared
+            # the cross-phase Post links. Presence of the staged Pre
+            # marker is the authoritative "managed at staging" signal, so
+            # a marker-carrying row renders empty even when a legacy
+            # payload's marker still holds resolved ids or the record
+            # carries a stale imported relation. Rows without the marker
+            # (Post or legacy releases) continue to use their public
+            # column, which stays blank until a relations pass exists.
+            # ``keywords`` still ships FILLED per OD3.
+            related_concepts=(
+                ""
+                if PRE_ROW_RELATED_CONCEPTS_FIELD in record
+                else str(record.get("related_concepts") or "")
             ),
             digicards=str(record.get("digicards") or ""),
             sources=str(

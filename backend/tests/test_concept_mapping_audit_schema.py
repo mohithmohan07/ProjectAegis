@@ -272,6 +272,10 @@ def test_manifest_records_each_projection_layout_and_contract(
 
 
 def test_update_flags_follow_only_populated_entity_bands() -> None:
+    """Owner decision D3 (2026-08-29): is_update_* defaults to "No" on
+    every populated band of every output — the Mathematics corrector's
+    "Yes" polarity in the audit corpus is explicitly rejected. Unpopulated
+    bands keep their flags blank (the English corrector's convention)."""
     profile = _profile("Mathematics")
     snapshot = _snapshot("Post")
     data, issues = workbook.render_master_file(snapshot, profile)

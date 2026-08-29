@@ -201,12 +201,18 @@ _CANONICAL_ARRAY_ENV_RE = re.compile(
     r"(?P<body>.*?)\\end\{array\}",
     re.DOTALL,
 )
+# Owner decision D1 (2026-08-29, concept-mapping audit): the CMS KaTeX
+# platform renders \hspace, \phantom, \boxed, and dimension row spacing
+# (``\\[0.12 cm]``) — the audit's corrected Mathematics tables use all of
+# them — so only \mathrm remains unsupported (rewritten to \text where the
+# body is plain, refused otherwise).
 _UNSUPPORTED_KATEX_COMMAND_RE = re.compile(
-    r"\\(?:mathrm|hspace|phantom|boxed)\b", re.IGNORECASE,
+    r"\\mathrm\b", re.IGNORECASE,
 )
 # TeX permits an optional vertical-space argument immediately after a row
-# break (for example ``\\[0.4cm]``).  That form is not in the CMS KaTeX
-# subset: authors must use an ordinary ``\\`` row break instead.
+# break (for example ``\\[0.12 cm]``).  Supported on the platform (owner
+# decision D1); this pattern remains ONLY so delimiter checks can mask the
+# ``[...]`` argument before scanning for raw ``\[ ... \]`` display math.
 _RAW_ROW_SPACING_RE = re.compile(
     r"(?<!\\)\\\\\s*\[[^\]\r\n]*\]",
 )
@@ -216,14 +222,6 @@ _LITERAL_NEWLINE_BEFORE_LIST_ITEM_RE = re.compile(
 )
 _LEGACY_ROMAN_ATOM_RE = re.compile(
     r"\\mathrm\s*\{",
-)
-# Only a dimension-shaped optional row gap can be removed without risking
-# that a bracketed array cell (for example ``[1, 2]``) is mistaken for
-# presentation-only spacing.
-_LEGACY_SAFE_ROW_SPACING_RE = re.compile(
-    r"(?<!\\)\\\\\s*\[\s*[+-]?(?:\d+(?:\.\d*)?|\.\d+)\s*"
-    r"(?:pt|pc|in|bp|cm|mm|dd|cc|sp|ex|em)\s*\]",
-    re.IGNORECASE,
 )
 _TABLE_ROW_RE = re.compile(r"(?<!\\)\\\\(?:\[[^\]]*\])?")
 _TABLE_COLUMN_RE = re.compile(r"(?<!\\)&")
@@ -490,6 +488,11 @@ _TEX_COMMAND_GROUPS = {
     "bar": 1,
     "vec": 1,
     "hat": 1,
+    # Supported on the platform (owner decision D1, 2026-08-29); each takes
+    # one braced argument.
+    "hspace": 1,
+    "phantom": 1,
+    "boxed": 1,
 }
 
 
@@ -991,17 +994,17 @@ def legacy_export_rich_text(text: str) -> str:
     This helper belongs only at public workbook serialization seams.  It
     performs deterministic, meaning-preserving repairs on the exported copy:
     unsupported table dialects are labelled by coordinates, plain balanced
-    ``\\mathrm`` atoms become ``\\text`` atoms, presentation-only row gaps
-    become ordinary row breaks, and a complete raw canonical array gains its
-    required ``[Katex]`` wrapper.  A literal ``\\n`` immediately before a list
-    label becomes the real line break it represented.  Other forbidden
-    commands, malformed groups, and ambiguous row-spacing syntax remain
-    untouched and therefore continue to fail strict validation.
+    ``\\mathrm`` atoms become ``\\text`` atoms, and a complete raw canonical
+    array gains its required ``[Katex]`` wrapper.  A literal ``\\n``
+    immediately before a list label becomes the real line break it
+    represented.  Dimension row gaps (``\\[0.12 cm]``) are supported and
+    pass through unchanged (owner decision D1, 2026-08-29).  Other
+    forbidden commands and malformed groups remain untouched and therefore
+    continue to fail strict validation.
     """
 
     value = replace_unsupported_tables(str(text or ""))
     value = _normalize_legacy_roman_atoms(value)
-    value = _LEGACY_SAFE_ROW_SPACING_RE.sub(lambda _match: r"\\", value)
     value = _LITERAL_NEWLINE_BEFORE_LIST_ITEM_RE.sub(
         lambda _match: "\n", value,
     )
@@ -1038,6 +1041,10 @@ def _mask_tex_text_groups(value: str) -> str:
 
 def _equation_has_loose_prose(value: str) -> bool:
     lexical = _mask_tex_text_groups(value)
+    # A dimension row-spacing argument (``\\[0.12 cm]``, supported per owner
+    # decision D1 2026-08-29) is structural LaTeX; without masking, its unit
+    # ("cm") reads as a two-letter word of prose.
+    lexical = _RAW_ROW_SPACING_RE.sub(" ", lexical)
     # The canonical array column declaration is structural LaTeX, not prose.
     # Mask it as one token before the generic environment-name pass; otherwise
     # a declaration such as ``{cc}`` is misread as a two-letter word and the
@@ -1069,8 +1076,9 @@ def answer_cell_issues(answer_type: str, content: str) -> list[str]:
     if kind == "equation":
         if _UNSUPPORTED_KATEX_COMMAND_RE.search(value):
             issues.append("equation_unsupported_command")
-        if _RAW_ROW_SPACING_RE.search(value):
-            issues.append("equation_row_spacing")
+        # Row spacing (``\\[0.12 cm]``) is supported (owner decision D1,
+        # 2026-08-29) — it is masked below only so it cannot be mistaken
+        # for a raw ``\[ ... \]`` display-math delimiter.
         if _KATEX_TOKEN_RE.search(value) or _KATEX_LIKE_TAG_RE.search(value):
             issues.append("equation_katex_wrapper")
         delimiter_value = _RAW_ROW_SPACING_RE.sub("", value)
@@ -1578,8 +1586,9 @@ def rich_text_issues(
         issues.append("unsupported_table")
     if _UNSUPPORTED_KATEX_COMMAND_RE.search(value):
         issues.append("unsupported_katex_command")
-    if _RAW_ROW_SPACING_RE.search(value):
-        issues.append("katex_row_spacing")
+    # Row spacing (``\\[0.12 cm]``) is supported (owner decision D1,
+    # 2026-08-29); the delimiter checks below still mask it so it is not
+    # misread as a raw ``\[ ... \]`` display-math delimiter.
     tokens = list(_KATEX_TOKEN_RE.finditer(value))
     depth = 0
     malformed_order = False
@@ -1698,9 +1707,23 @@ columns:
     \\(...\\), or \\[...\\] delimiters.
     Inline vs. block mode is auto-detected from the content (presence of
     \\begin, \\array, \\frac, \\sum, \\int, \\prod, or \\oint triggers block).
-  - A textual table may use the canonical form
-    [Katex] \\begin{array}{...}...\\end{array} [/Katex]. Keep the entire array
-    inside one wrapper and use ordinary \\\\ row breaks with no spacing option.
+  - A textual table uses the canonical house style, exactly this shape
+    (owner-corrected reference, 2026-08-29):
+    [Katex]
+    \\text{One sentence of context in a text atom, when the cell needs it.}\\\\[0.12 cm]
+    \\begin{array}{|c|c|c|}
+    \\hline
+    8 & 1 & 6 \\\\
+    \\hline
+    3 & 5 & \\phantom{7} \\\\
+    \\hline
+    \\end{array}
+    [/Katex]
+    Keep the ENTIRE cell inside one [Katex] wrapper; prose goes in
+    \\text{...}; separate prose from the array with \\\\[0.12 cm]; use a
+    pipe column spec such as {|c|c|c|}; rule every row with \\hline above
+    and below; hold empty cells open with \\phantom{n} sized like a real
+    entry. Never verbalise a table as "Table row 1, column 1: ..." prose.
   - Images: [img src="https://..." alt="..."]. Use double quotes only;
     src must be a full public HTTPS URL and must come before alt. No other
     attributes are allowed.
@@ -1720,15 +1743,20 @@ Type-declared answer_content and keyword cells use exactly ONE medium:
 Canonical KaTeX arrays are supported as described above. LaTeX tabular and
 Markdown pipe tables remain unsupported. When the source already supplies a
 table containing an image, preserve the complete source-table image rather
-than fragment screenshots. Otherwise retain every cell as mechanically
-labelled plain text (for example, "Table row 1, column 2: 8611"); never emit
-tabular markup or reconstruct missing meaning.
+than fragment screenshots. A text-only source table — including one that
+reaches you as mechanically labelled cells ("Table row 1, column 2: 8611")
+with every cell present — is re-rendered as the canonical array in the
+house style above; coordinate-labelled prose is a transport encoding, not
+a shippable rendering. Only when cells are genuinely missing or illegible
+do you keep the labelled plain text rather than reconstruct meaning.
 
 Forbidden: raw math delimiters, nested [Katex], single-quoted img attrs,
 empty [Katex] tags, raw LaTeX outside a [Katex] tag, Markdown images,
-raw tabular/footnote commands, noncanonical or unterminated arrays, the
-unsupported commands \\mathrm, \\hspace, \\phantom, and \\boxed, and optional
-row spacing such as \\\\[0.4cm]. Use \\text{...} for words in mathematics.
+raw tabular/footnote commands, noncanonical or unterminated arrays, and the
+unsupported command \\mathrm (write upright words and units with
+\\text{...}). Supported and encouraged where the house style calls for
+them: \\hspace, \\phantom, \\boxed, and dimension row spacing such as
+\\\\[0.12 cm] (owner decision, 2026-08-29).
 """
 
 _prompts.register(
