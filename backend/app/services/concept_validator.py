@@ -1678,12 +1678,21 @@ def validate_concept_rows(
                     _add(errors, i, "concept_title", "repeated_sibling_opener",
                          f"repeated leading phrase: {repeated['phrase']}")
         if require_culmination and topic:
-            # A culmination consolidates several concepts, so only a topic
-            # teaching more than one requires it. A topic teaching exactly
-            # one has nothing to consolidate — generation omits the row —
-            # but an existing single-concept culmination (legacy chapters,
-            # hand-authored rows) is tolerated here rather than failing a
-            # whole revalidation. Either way, at most one, and it goes last.
+            # Owner decision D8 (2026-08-29): a culmination exists ONLY for
+            # a topic teaching two or more concepts — one concept has
+            # nothing to consolidate. A topic with more that ships without
+            # one is flagged; a single-concept topic that carries one
+            # (legacy chapters, hand-authored rows) is flagged too rather
+            # than failing a whole revalidation — a warning records the
+            # rule without deleting anybody's row from code. Either way,
+            # at most one, and it goes last.
+            if len(normal) == 1 and culms:
+                _add(errors, culms[0][0], "concept_title",
+                     "culmination_single_concept",
+                     "this topic teaches a single concept and must not "
+                     "carry a culmination row (owner decision D8, "
+                     "2026-08-29); flagged for review",
+                     severity="warning")
             if len(normal) > 1 and not culms:
                 # A topic the model left without a culmination ships
                 # without one — the row is never invented from code — and

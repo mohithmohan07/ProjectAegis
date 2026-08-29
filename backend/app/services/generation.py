@@ -1061,8 +1061,11 @@ OUTPUT CONTRACT for concept_description (ONE string, sections joined by " // "):
 - Do NOT mention groups, group columns, or assessment labels — not required here.
 
 TOPIC CULMINATION:
-- The LAST concept of every topic is exactly one culmination row that integrates
-  that section's ideas (named "Culmination - ..."). Its Description will be set to
+- The LAST concept of every topic WITH TWO OR MORE normal concepts is exactly
+  one culmination row that integrates that section's ideas (named
+  "Culmination - ..."). A topic teaching a single concept gets NO culmination
+  row — one concept has nothing to consolidate (owner decision D8,
+  2026-08-29). Its Description will be set to
   "Recap". Culmination Types are ONLY mixed multi-concept application, revision,
   and synthesis questions — NEVER full textbook activities, experiment write-ups,
   or discussion-case dumps (those belong in Activity/Info Hub on the relevant
@@ -1145,8 +1148,10 @@ Your job (apply ALL of these intelligently — do not rely on downstream code):
    Only omit Types for concepts that are purely definitional with zero assessable
    formats. If the draft omitted Types where they belong, ADD them.
 
-5. **Culmination.** Every topic ends with exactly one "Culmination - ..." row
-   that integrates that topic's ideas. Place it last within its topic.
+5. **Culmination.** Every topic with two or more normal concepts ends with
+   exactly one "Culmination - ..." row that integrates that topic's ideas,
+   placed last within its topic. A single-concept topic gets none — one
+   concept has nothing to consolidate (owner decision D8, 2026-08-29).
 
 6. **Preserve order.** Keep textbook reading order for topics and concepts.
 
@@ -2241,7 +2246,10 @@ Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"Culmination","concept":"","concept_description":"","keywords":""}]}.
 
 Rules:
-- Return ONLY the culmination rows — exactly one per topic, nothing else.
+- Return ONLY the culmination rows — exactly one per topic that carries TWO
+  OR MORE normal concepts, nothing else. A topic teaching a single concept
+  gets NO culmination row: one concept has nothing to consolidate (owner
+  decision D8, 2026-08-29).
   The normal concept rows are merged back programmatically; NEVER restate,
   rewrite, drop, or return them.
 - Name: "Culmination - <A>, <B> and <C>".
@@ -18498,6 +18506,13 @@ def _ensure_terminal_culmination_contract(
         "culmination_count",
         "culmination_order",
     }
+    # Owner decision D8 (2026-08-29) is enforced at AUTHORING time (the
+    # culmination prompts and ``_merge_culmination_rows`` never mint a
+    # single-concept culmination). A LEGACY row that reaches this terminal
+    # contract — a pre-D8 saved checkpoint whose grounding certificate
+    # already attested it — ships FLAGGED (``culmination_single_concept``
+    # warning) rather than dropped: dropping an attested row here breaks
+    # certificate lineage and refuses finished work, which R4 forbids.
     if any(
         error.get("severity") == "error"
         and error.get("code") in culmination_codes
@@ -18516,7 +18531,9 @@ def _build_culminations_via_api(records: list[dict], *, meta: dict) -> list[dict
     payload = _json.dumps({"rows": _records_to_api_rows(records)}, ensure_ascii=False)
     user = (
         _metadata_block(meta)
-        + "\nFinal normal concept map — return ONLY one culmination row per topic:\n"
+        + "\nFinal normal concept map — return ONLY one culmination row per "
+        "topic with two or more concepts (a single-concept topic gets "
+        "none):\n"
         + payload
     )
     progress.log("Building topic culmination rows.")
@@ -18559,7 +18576,17 @@ def _merge_culmination_rows(records: list[dict], culms: list[dict]) -> list[dict
         topic_records = topics[topic]
         out.extend(topic_records)
         authored = culm_by_topic.get(topic.strip().lower())
-        if authored:
+        if authored and len(topic_records) < 2:
+            # Owner decision D8 (2026-08-29): a single-concept topic never
+            # carries a culmination — one concept has nothing to
+            # consolidate. Declining the authored row is count mechanics,
+            # not a content judgment, and it is recorded, never silent.
+            progress.log(
+                f"Topic '{topic}' teaches a single concept; the authored "
+                "culmination row is not inserted (owner decision D8).",
+                level="warning",
+            )
+        elif authored:
             authored = dict(authored)
             authored["topic"] = topic
             authored["parent_concept"] = "Culmination"

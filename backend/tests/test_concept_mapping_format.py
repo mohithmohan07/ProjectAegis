@@ -108,6 +108,19 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
              "believe adding integers always increases the value.; Error "
              "Analysis: Students may ignore the sign of a negative addend "
              "and add only its magnitude."), "keywords": ""},
+        # D8 (owner decision, 2026-08-29): a culmination exists only for a
+        # topic with two or more concepts, so each topic here carries a
+        # second (Types-free) concept — the continuous Type numbering is
+        # unaffected because numbering advances only on rows with Types.
+        {"topic": "operations on numbers", "concept_title": "subtraction of integers",
+         "parent_concept": "integer operations",
+         "concept_details": (
+             "Description: s\nAchieving Mastery: Subtracting signed "
+             "integers by adding the opposite. // "
+             "Misconception/ Error Analysis: Misconceptions: Students may "
+             "believe subtraction always decreases the value.; Error "
+             "Analysis: Students may drop the sign when adding the "
+             "opposite."), "keywords": ""},
         {"topic": "operations on numbers", "concept_title": "Culmination - Operations On Numbers",
          "parent_concept": "Culmination",
          "concept_details": ("Description: a long synthesis paragraph // "
@@ -127,6 +140,15 @@ def test_deposit_applies_numbering_recap_titlecase_and_topic_columns(db):
              "think squaring a number means doubling it.; Error Analysis: "
              "Students may multiply the base by two instead of multiplying "
              "it by itself."), "keywords": ""},
+        {"topic": "powers and roots", "concept_title": "square roots of numbers",
+         "parent_concept": "powers",
+         "concept_details": (
+             "Description: r\nAchieving Mastery: Finding a square root as "
+             "the inverse of squaring. // "
+             "Misconception/ Error Analysis: Misconceptions: Students may "
+             "believe a root is half of the number.; Error Analysis: "
+             "Students may divide by two instead of finding the root."),
+         "keywords": ""},
         {"topic": "powers and roots", "concept_title": "Culmination - Powers and Roots",
          "parent_concept": "Culmination",
          "concept_details": (
@@ -204,6 +226,21 @@ def test_post_deposit_keeps_math_recap_rich_text_canonical(db):
                 "Error Analysis: Misconceptions: Students may believe the "
                 "factor n can be omitted.; Error Analysis: Students may "
                 "use the common difference instead of the last term."
+            ),
+            "keywords": "",
+        },
+        {
+            # D8: a second concept legitimizes the topic's culmination.
+            "topic": "Sequences",
+            "concept_title": "Identify the Common Difference",
+            "parent_concept": "Finite Sums",
+            "concept_details": (
+                "Description: The common difference links consecutive "
+                "terms of an arithmetic progression.\nAchieving Mastery: "
+                "Reading the common difference off consecutive terms. // "
+                "Misconception/ Error Analysis: Misconceptions: Students "
+                "may believe the difference changes between terms.; Error "
+                "Analysis: Students may subtract in the wrong order."
             ),
             "keywords": "",
         },
@@ -458,6 +495,22 @@ def test_post_deposit_preserves_inventory_example_and_image_in_export(db):
             "keywords": "",
         },
         {
+            # D8: a second concept legitimizes the topic's culmination.
+            "topic": "Circuit Diagrams",
+            "concept_title": "Naming Circuit Components",
+            "parent_concept": "Electric Circuits",
+            "concept_details": (
+                "Description: Standard symbols name each component in a "
+                "circuit diagram.\nAchieving Mastery: Matching each "
+                "standard symbol to its component. // "
+                "Misconception/ Error Analysis: Misconceptions: Students "
+                "may believe the symbol's size shows its power.; Error "
+                "Analysis: Students may confuse the cell and battery "
+                "symbols."
+            ),
+            "keywords": "",
+        },
+        {
             "topic": "Circuit Diagrams",
             "concept_title": "Culmination - Circuit Diagrams",
             "parent_concept": "Culmination",
@@ -477,7 +530,7 @@ def test_post_deposit_preserves_inventory_example_and_image_in_export(db):
         source_text=item["raw_task"],
     )
     assert not merged
-    assert len(created) == 2
+    assert len(created) == 3
     concept = next(
         concept
         for topic in chapter.topics
@@ -546,6 +599,22 @@ def test_post_deposit_refreshes_existing_concept_with_current_contract(db):
             "keywords": "sovereignty, citizens",
         },
         {
+            # D8: a second concept legitimizes the topic's culmination.
+            "topic": "Nationalism",
+            "concept_title": "Civic Participation",
+            "parent_concept": "Democratic Nationhood",
+            "concept_details": (
+                "Description: Citizens exercise authority through "
+                "participation in public institutions.\nAchieving Mastery: "
+                "Naming the ways citizens participate in public "
+                "institutions. // "
+                "Misconception/ Error Analysis: Misconceptions: Students "
+                "may believe participation means only voting.; Error "
+                "Analysis: Students may omit non-electoral participation."
+            ),
+            "keywords": "",
+        },
+        {
             "topic": "Nationalism",
             "concept_title": "Culmination - Nationalism",
             "parent_concept": "Culmination",
@@ -558,7 +627,7 @@ def test_post_deposit_refreshes_existing_concept_with_current_contract(db):
         db, chapter, _mark_allotted(records), "Post", "NCERT")
 
     assert legacy_id in merged
-    assert len(created) == 1
+    assert len(created) == 2
     db.flush()
     refreshed = db.get(models.Concept, legacy_id)
     assert refreshed is not None
@@ -596,6 +665,21 @@ def test_post_deposit_repairs_missing_inventory_question_before_writes(db):
         ),
         "keywords": "",
     }, {
+        # D8: a second concept legitimizes the topic's culmination.
+        "topic": "Nationalism",
+        "concept_title": "Civic Institutions",
+        "parent_concept": "Nation States",
+        "concept_details": (
+            "Description: Civic institutions carry the people's authority "
+            "into public decisions.\nAchieving Mastery: Naming the civic "
+            "institutions that carry public authority. // "
+            "Misconception/ Error Analysis: Misconceptions: Students may "
+            "believe institutions replace citizens' authority.; Error "
+            "Analysis: Students may treat institutions as independent of "
+            "the people."
+        ),
+        "keywords": "",
+    }, {
         "topic": "Nationalism",
         "concept_title": "Culmination - Nationalism",
         "parent_concept": "Culmination",
@@ -618,7 +702,7 @@ def test_post_deposit_repairs_missing_inventory_question_before_writes(db):
         inventory=inventory,
     )
 
-    assert len(created) == 2
+    assert len(created) == 3
     assert not merged
     normal = next(
         concept

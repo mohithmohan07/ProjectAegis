@@ -1250,6 +1250,14 @@ Owner rulings, 29 Aug 2026, from the Concept Mapping Audit review round:
   publish empty too). Needed-for links are still resolved at staging and an
   unresolvable link stays a recorded review flag. Post rows remain blank
   until a relations pass exists. `keywords` still ships filled per OD3.
+* **D8 — a Culmination concept exists only for a topic with two or more
+  concepts.** A single-concept topic never carries one — one concept has
+  nothing to consolidate. Enforced at AUTHORING time (the culmination
+  prompts and the merge pass never mint a single-concept culmination) and
+  flagged by the validator (`culmination_single_concept`, warning). A
+  legacy row from a pre-D8 checkpoint whose grounding certificate already
+  attested it ships flagged, never dropped — dropping an attested row
+  breaks certificate lineage and refuses finished work (R4).
 
 ---
 
