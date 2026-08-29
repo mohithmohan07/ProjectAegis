@@ -1653,6 +1653,41 @@ def validate_page_extraction(
                 raw["source_label"] = scrubbed_label
                 if isinstance(raw.get("table_rows"), list):
                     raw["table_rows"] = scrubbed_rows
+            # GPT transcribes physics units in LaTeX house style
+            # (``\mathrm{V}``), which the CMS KaTeX subset bans. Apply the
+            # deterministic ``\mathrm``->``\text`` atom rewrite AT
+            # INGESTION so the banned command never enters the canonical
+            # source ([measured] job 'Electricity', Class 10 Ch 5,
+            # 2026-08-29: an unsupported_katex_command minted here paused
+            # the run at source review and refused the semantic graph).
+            # Non-plain bodies stay byte-for-byte for the strict validator
+            # and source review to judge — same policy as legacy export.
+            canonical_latex = kr.normalize_supported_text_atoms(latex)
+            canonical_text = kr.normalize_supported_text_atoms(text)
+            canonical_rows = [
+                [
+                    kr.normalize_supported_text_atoms(str(cell or ""))
+                    for cell in table_row
+                ]
+                if isinstance(table_row, list) else table_row
+                for table_row in rows_value
+            ] if isinstance(rows_value, list) else rows_value
+            if (
+                canonical_latex != latex
+                or canonical_text != text
+                or canonical_rows != rows_value
+            ):
+                flags.append(
+                    f"block {order}: normalized \mathrm unit atom(s) to "
+                    "supported \text"
+                )
+                latex = canonical_latex
+                text = canonical_text
+                rows_value = canonical_rows
+                raw["latex"] = canonical_latex
+                raw["text"] = canonical_text
+                if isinstance(raw.get("table_rows"), list):
+                    raw["table_rows"] = canonical_rows
             if kind not in {"figure", "math", "table", "source"} and not text:
                 flags.append(f"dropped empty {kind} block {order}")
                 continue

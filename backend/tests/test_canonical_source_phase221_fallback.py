@@ -1018,3 +1018,61 @@ def test_pdf_lane_rendered_mmd_compiles_exempt_from_qx(monkeypatch, tmp_path):
         for issue in phase2.phase2_inventory_issues(canonical)
     }
     assert "task_membership_unadjudicated" not in codes
+
+
+def test_ingestion_normalizes_plain_mathrm_atoms_to_supported_text():
+    """The CMS KaTeX subset bans ``\\mathrm``; GPT (like Mathpix before it)
+    transcribes physics units with it. [measured] job 'Electricity'
+    (Class 10 Ch 5, 2026-08-29): a ``\\mathrm`` minted at PDF-read time
+    paused the run at source review and the semantic graph was refused
+    downstream. Plain unit atoms are now canonicalized AT INGESTION with
+    the same deterministic rewrite legacy export uses; non-plain bodies
+    stay byte-for-byte for source review to judge.
+    """
+
+    page = fallback.PdfPage(
+        page_id="P-1", page_number=1, text="Electric power",
+        image_data_url="data:image/png;base64,AAAA", width=1000, height=1000,
+    )
+    candidate = {
+        "pages": [{
+            "page_id": "P-1",
+            "confidence": 0.99,
+            "blocks": [
+                {
+                    "kind": "math", "reading_order": 1,
+                    "bbox": [10, 10, 400, 60], "confidence": 0.99,
+                    "latex": r"P = V \times I\ \mathrm{~W}",
+                },
+                {
+                    "kind": "paragraph", "reading_order": 2,
+                    "bbox": [10, 70, 400, 120], "confidence": 0.99,
+                    "text": (
+                        "One volt is [Katex]1\\ \\mathrm{V}[/Katex] of "
+                        "potential."
+                    ),
+                },
+                {
+                    "kind": "math", "reading_order": 3,
+                    "bbox": [10, 130, 400, 180], "confidence": 0.99,
+                    # A body with a nested command has mathematical
+                    # semantics: it must remain untouched for review.
+                    "latex": r"R = 5\ \mathrm{\Omega}",
+                },
+            ],
+        }],
+    }
+
+    normalized, reason = fallback.validate_page_extraction([page], candidate)
+
+    assert reason == ""
+    blocks = {
+        int(block["reading_order"]): block
+        for block in normalized["pages"][0]["blocks"]
+    }
+    assert blocks[1]["latex"] == r"P = V \times I\ \text{ W}"
+    assert "\\mathrm" not in blocks[2]["text"]
+    assert "\\text{V}" in blocks[2]["text"]
+    assert blocks[3]["latex"] == r"R = 5\ \mathrm{\Omega}"
+    flags = normalized["pages"][0].get("review_flags") or []
+    assert any("normalized \\mathrm unit atom" in flag for flag in flags)
