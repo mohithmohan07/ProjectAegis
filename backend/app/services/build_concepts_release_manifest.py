@@ -44,7 +44,11 @@ _XLSX_MEDIA_TYPE = release_files._XLSX_MEDIA_TYPE
 def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
     payload = release_payload(job)
     if payload is None:
-        return []
+        # No release yet — the diagnostics export is still offered (owner
+        # request, 2026-08-29), through the same shared builder as the
+        # eager twin. ``sizes=False`` is this module's contract: no
+        # archive is generated during job serialization.
+        return [release_files.run_diagnostics_entry(job, sizes=False)]
     stem = _safe_filename(job.filename, "concepts")
     uploaded = bool((payload.get("summary") or {}).get("database_uploaded"))
     return in_owner_order([

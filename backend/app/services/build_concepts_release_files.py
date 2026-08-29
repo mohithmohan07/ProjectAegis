@@ -1219,14 +1219,141 @@ def _original_source(job: models.UploadJob) -> Path | None:
     return path if path.is_file() else None
 
 
+def _run_state_report(job: models.UploadJob, *, lane: str) -> dict[str, Any]:
+    """Where the run stands, transcribed — for an export with no release.
+
+    Every value is copied from state the run itself recorded: the job's
+    status and detail, the durable checkpoint's own stage/progress/
+    saved_at, the stages its entries name, and log events selected by the
+    level THEY recorded. Nothing is classified or judged here (Rule 1:
+    mechanics only).
+    """
+    log = [row for row in job.generation_log or [] if isinstance(row, dict)]
+    flagged = [
+        {
+            "log_index": index,
+            "level": str(row.get("level") or ""),
+            "message": str(row.get("message") or ""),
+        }
+        for index, row in enumerate(log)
+        if str(row.get("type") or "") == "log"
+        and str(row.get("level") or "") in ("error", "warn", "warning")
+    ]
+    checkpoint = (
+        job.generation_checkpoint
+        if isinstance(job.generation_checkpoint, dict) else {}
+    )
+    stages = [
+        str(row.get("stage") or "")
+        for row in checkpoint.get("checkpoints") or []
+        if isinstance(row, dict)
+    ]
+    return {
+        "version": "aegis-run-state-report-1",
+        "release_lane": str(lane or "post"),
+        "release_staged": False,
+        "job_id": job.id,
+        "status": str(job.status or ""),
+        "detail": str(job.detail or ""),
+        "checkpoint_stage": str(checkpoint.get("stage") or ""),
+        "checkpoint_progress": checkpoint.get("progress"),
+        "checkpoint_saved_at": str(checkpoint.get("saved_at") or ""),
+        "checkpoint_stages_present": stages,
+        "log_event_count": len(log),
+        "logged_errors_and_warnings": flagged,
+    }
+
+
+def _render_run_state(report: Mapping[str, Any]) -> str:
+    """Render the run-state facts as the first thing a human opens."""
+    stages = [str(s) for s in report.get("checkpoint_stages_present") or []]
+    lines = [
+        "Project Aegis run-state export (no staged release)",
+        "",
+        f"Lane       : {report.get('release_lane')}",
+        f"Status     : {report.get('status')}",
+        f"Stage      : {report.get('checkpoint_stage') or '(none saved)'}"
+        f" (progress {report.get('checkpoint_progress')})",
+        f"Saved at   : {report.get('checkpoint_saved_at') or '(never)'}",
+        "Checkpoint stages present: "
+        + (", ".join(stages) if stages else "(none)"),
+        "",
+        "OUTCOME",
+        "  This run has not staged a release for this lane. The archive",
+        "  still carries everything the run saved: the complete generation",
+        "  log, the durable generation checkpoint (every stage entry), the",
+        "  Question/Task Inventory, the converted source, the original",
+        "  upload, and the canonical per-stage artifacts.",
+    ]
+    detail = str(report.get("detail") or "")
+    if detail:
+        lines += ["", "DETAIL", f"  {detail}"]
+    flagged = [
+        row for row in report.get("logged_errors_and_warnings") or []
+        if isinstance(row, Mapping)
+    ]
+    if flagged:
+        lines += [
+            "",
+            f"SAVED ERROR/WARNING LOG EVENTS ({len(flagged)} total; each is "
+            "listed verbatim, newest last):",
+        ]
+        shown = flagged[-60:]
+        if len(flagged) > len(shown):
+            lines.append(
+                f"  … {len(flagged) - len(shown)} earlier event(s) in "
+                "context/generation_log.json"
+            )
+        for row in shown:
+            lines.append(
+                f"  [{row.get('log_index')}] {row.get('level')}: "
+                f"{row.get('message')}"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def run_diagnostics_entry(
+    job: models.UploadJob, *, sizes: bool,
+) -> dict[str, Any]:
+    """The always-available diagnostics export for a job with NO release.
+
+    One builder for both manifest twins — the same rule as
+    ``master_entry``: two implementations of the entry are two answers
+    waiting to disagree, and the lazy twin's contract (``size_bytes`` 0,
+    no archive generated during serialization) rides the ``sizes`` flag.
+    """
+    stem = _safe_filename(job.filename, "concepts")
+    return {
+        "kind": "release_diagnostics",
+        "label": "Export run diagnostics (no release staged yet)",
+        "filename": f"{stem}_diagnostics.zip",
+        "media_type": "application/zip",
+        "size_bytes": len(build_diagnostics_zip(job)) if sizes else 0,
+        "download_url": f"/build-concepts/uploads/{job.id}/diagnostics.zip",
+        "action": "download",
+    }
+
+
 def build_diagnostics_zip(
     job: models.UploadJob, *, lane: object = LANE_POST,
 ) -> bytes:
     resolved = normalize_lane(lane)
     payload = release_payload(job, lane=resolved)
-    if payload is None:
-        raise ValueError("this upload has no staged release")
-    release_workbook = build_release_workbook(job, lane=resolved)
+    # A missing release no longer refuses the export (owner request,
+    # 2026-08-29): the run whose evidence matters most is exactly the one
+    # that never staged a release, and it used to be the one run that
+    # could not be exported. The archive is now buildable at any point in
+    # a job's life — after a failure, between resumes, or after
+    # completion — carrying every saved checkpoint stage, the complete
+    # generation log, and the canonical per-stage artifacts. Members whose
+    # source state does not exist yet are omitted, never invented, and
+    # nothing here judges content (Rule 1: mechanics only).
+    payload_view: dict[str, Any] = dict(payload) if payload else {}
+    release_workbook = (
+        build_release_workbook(job, lane=resolved)
+        if payload is not None else None
+    )
     source_manifest = (
         uploads.source_artifact_manifest(job)
         if callable(getattr(uploads, "source_artifact_manifest", None))
@@ -1234,7 +1361,7 @@ def build_diagnostics_zip(
     )
     blocks: dict[str, dict[str, Any]] = {}
     for source in (
-        payload,
+        payload_view,
         job.generation_checkpoint or {},
         job.question_inventory or {},
         source_manifest,
@@ -1243,7 +1370,7 @@ def build_diagnostics_zip(
             block_id = str(block.get("block_id") or "")
             if block_id:
                 blocks.setdefault(block_id, block)
-    _index_string_block_references(blocks, payload)
+    _index_string_block_references(blocks, payload_view)
 
     # The persisted container projections and Phase 2.2 placement snapshot
     # (when the artifact directory holds them) let the ledger account every
@@ -1291,7 +1418,7 @@ def build_diagnostics_zip(
     coverage = coverage_ledger.build_coverage_ledger(
         question_inventory=job.question_inventory or {},
         records=[
-            row for row in payload.get("records") or []
+            row for row in payload_view.get("records") or []
             if isinstance(row, Mapping)
         ],
         chapter_reading=(job.question_inventory or {}).get("chapter_reading"),
@@ -1303,45 +1430,60 @@ def build_diagnostics_zip(
         pre_questions_snapshot=pre_questions_snapshot,
         pre_release_payload=pre_release,
     )
-    run_report = concept_run_report.build_run_report(
-        payload,
-        generation_log=job.generation_log or [],
-        generation_checkpoint=job.generation_checkpoint or {},
-        dropped_furniture=coverage.get("dropped_furniture"),
-        pre_map=pre_map_snapshot,
-        coverage=coverage,
-        release_lane=resolved,
-    )
+    if payload is not None:
+        run_report: dict[str, Any] = concept_run_report.build_run_report(
+            payload,
+            generation_log=job.generation_log or [],
+            generation_checkpoint=job.generation_checkpoint or {},
+            dropped_furniture=coverage.get("dropped_furniture"),
+            pre_map=pre_map_snapshot,
+            coverage=coverage,
+            release_lane=resolved,
+        )
+        report_text = concept_run_report.render_run_report(run_report)
+    else:
+        # ``concept_run_report`` explains how a RELEASE came to be; with no
+        # release its "completed" wording would misstate an unfinished run.
+        # This report instead transcribes the run's own saved state.
+        run_report = _run_state_report(job, lane=resolved)
+        report_text = _render_run_state(run_report)
 
+    readme = (
+        "Project Aegis diagnostic context export\n\n"
+        "Start with RUN_REPORT.txt: it states what stopped the run, "
+        "why the orchestration boundary did or did not recover from "
+        "it, which rows the failure implicates, and whether the same "
+        "failure repeated across resumes. context/run_report.json "
+        "carries the same facts with exact log indexes.\n\n"
+        "Its COVERAGE section accounts for every question, hub, "
+        "figure and question fragment (placed or unaccounted, with "
+        "review flags) and names every released row missing its "
+        "Achieving Mastery line or Misconception/ Error Analysis "
+        "section. context/coverage_ledger.json carries the full "
+        "per-item accounting.\n\n"
+        "The rest of the archive keeps the released workbook beside "
+        "the complete saved generation log, checkpoint, source "
+        "evidence, BLK index, Question/Task Inventory, Type/Case "
+        "routing, original upload, and canonical-source artifacts. "
+        "The release is not proof that every highlighted row is "
+        "error-free. See Release Issues.\n"
+    )
+    if payload is None:
+        readme += (
+            "\nThis export was taken before the run staged a release for "
+            "this lane, so the release/ members are absent. Everything the "
+            "run has saved so far is still here: the complete generation "
+            "log, the durable generation checkpoint with every stage entry, "
+            "the Question/Task Inventory, the converted source, the "
+            "original upload, and the canonical per-stage artifacts.\n"
+        )
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr(
-            "README.txt",
-            (
-                "Project Aegis diagnostic context export\n\n"
-                "Start with RUN_REPORT.txt: it states what stopped the run, "
-                "why the orchestration boundary did or did not recover from "
-                "it, which rows the failure implicates, and whether the same "
-                "failure repeated across resumes. context/run_report.json "
-                "carries the same facts with exact log indexes.\n\n"
-                "Its COVERAGE section accounts for every question, hub, "
-                "figure and question fragment (placed or unaccounted, with "
-                "review flags) and names every released row missing its "
-                "Achieving Mastery line or Misconception/ Error Analysis "
-                "section. context/coverage_ledger.json carries the full "
-                "per-item accounting.\n\n"
-                "The rest of the archive keeps the released workbook beside "
-                "the complete saved generation log, checkpoint, source "
-                "evidence, BLK index, Question/Task Inventory, Type/Case "
-                "routing, original upload, and canonical-source artifacts. "
-                "The release is not proof that every highlighted row is "
-                "error-free. See Release Issues.\n"
-            ),
-        )
+        archive.writestr("README.txt", readme)
         archive.writestr(
             "RUN_REPORT.txt",
             (
-                concept_run_report.render_run_report(run_report)
+                report_text
                 + coverage_ledger.render_coverage(coverage)
             ).encode("utf-8"),
         )
@@ -1367,8 +1509,11 @@ def build_diagnostics_zip(
                 "release/pre_release_payload.json",
                 _json_bytes(pre_release),
             )
-        archive.writestr("release/released_concepts.xlsx", release_workbook)
-        archive.writestr("release/release_payload.json", _json_bytes(payload))
+        if release_workbook is not None:
+            archive.writestr("release/released_concepts.xlsx", release_workbook)
+        if payload is not None:
+            archive.writestr(
+                "release/release_payload.json", _json_bytes(payload))
         archive.writestr(
             "context/generation_log.json",
             _json_bytes(job.generation_log or []),
@@ -1392,9 +1537,10 @@ def build_diagnostics_zip(
         archive.writestr(
             "context/source_evidence.json",
             _json_bytes({
-                "pending_decision": payload.get("pending_decision_snapshot") or {},
-                "issues": payload.get("issues") or [],
-                "type_case_rows": payload.get("type_case_rows") or [],
+                "pending_decision":
+                    payload_view.get("pending_decision_snapshot") or {},
+                "issues": payload_view.get("issues") or [],
+                "type_case_rows": payload_view.get("type_case_rows") or [],
             }),
         )
         archive.writestr(
@@ -1563,7 +1709,10 @@ def _pre_release_entries(
 def release_artifact_entries(job: models.UploadJob) -> list[dict[str, Any]]:
     payload = release_payload(job)
     if payload is None:
-        return []
+        # No release yet — the diagnostics export is still offered (owner
+        # request, 2026-08-29): a failed or interrupted run must be
+        # downloadable and shareable without waiting for a release.
+        return [run_diagnostics_entry(job, sizes=True)]
     workbook = build_release_workbook(job)
     diagnostics = build_diagnostics_zip(job)
     raw_payload = release_payload_bytes(job)

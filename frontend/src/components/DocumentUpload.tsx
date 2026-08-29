@@ -723,6 +723,16 @@ export default function DocumentUpload({
             >
               Download checkpoint
             </a>
+            <a
+              className="button-link ghost"
+              href={api.runDiagnosticsUrl(job.id)}
+              download
+              title={"Everything this run saved — every checkpoint stage, "
+                + "the full generation log, and per-stage artifacts — in "
+                + "one shareable zip, whether or not the run finished."}
+            >
+              Download run diagnostics
+            </a>
             {DRIVE_BACKUP_FOLDER_URL && (
               <a
                 className="button-link ghost"
