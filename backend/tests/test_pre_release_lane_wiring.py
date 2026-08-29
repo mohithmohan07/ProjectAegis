@@ -37,6 +37,7 @@ from app.services import build_concepts_release as release
 from app.services import build_concepts_release_files as release_files
 from app.services import build_concepts_release_manifest as release_manifest
 from app.services import build_concepts_release_publication as publication
+from app.services import build_concepts_terminal_release_contract as terminal
 from app.services import coverage_ledger
 from app.services import uploads
 
@@ -852,6 +853,12 @@ _POST_PAYLOAD_KEYS = {
     "type_case_rows", "question_task_inventory", "extraction_provenance",
     "mined_types", "pending_decision_snapshot", "final_grounding_certificate",
     "chapter_meta", "instruction_set", "summary",
+    # Restructure A (2026-08-29): the run's terminal verdict, decided once
+    # at staging and recorded explicitly so no later consumer re-derives it
+    # from checkpoint echoes. Deliberately OUTSIDE the Master seal's key
+    # allowlist (``source_release_sha256``), so recording it can never
+    # read as an in-place edit.
+    "terminal_generation_complete",
 }
 
 
@@ -876,6 +883,10 @@ def test_the_post_release_payload_keeps_its_recorded_shape(db):
     sub-map, which is the shape this test exists to refuse.
     """
 
+    # The shape pinned here is the one production stages: main.py installs
+    # the terminal contract (which records the Restructure-A verdict at
+    # staging) before any release is staged.
+    terminal.install()
     chapter = _chapter_with_concepts(db)
     job = _both_lanes_job(db, chapter)
     payload = release.release_payload(job)
@@ -888,6 +899,7 @@ def test_the_post_release_payload_keeps_its_recorded_shape(db):
     assert set(payload["summary"]) == {
         "row_count", "affected_row_count", "issue_count", "error_count",
         "warning_count", "database_uploaded",
+        "terminal_generation_complete",
     }
     assert not [
         key for key in payload["records"][0]

@@ -38,9 +38,11 @@ def test_failed_checkpoint_stays_resumable_and_database_closed(db):
 
     payload = release.release_payload(job)
     assert payload is not None
-    # Terminal authority is derived from the release's existing checkpoint and
-    # issue fields; the frozen Post payload shape is not extended by this fix.
-    assert terminal.TERMINAL_GENERATION_FIELD not in payload
+    # Restructure A: the verdict is decided once at staging and recorded
+    # explicitly on the payload (and its summary), so later consumers read
+    # the fact instead of re-deriving it from checkpoint echoes.
+    assert payload[terminal.TERMINAL_GENERATION_FIELD] is False
+    assert payload["summary"][terminal.TERMINAL_GENERATION_FIELD] is False
     assert terminal.payload_terminal_generation_complete(payload) is False
     assert job.status == terminal.PARTIAL_RELEASE_STATUS
     assert job.checkpoint_available is True
@@ -108,7 +110,9 @@ def test_final_content_ready_release_keeps_normal_released_lifecycle(db):
 
     payload = release.release_payload(job)
     assert payload is not None
-    assert terminal.TERMINAL_GENERATION_FIELD not in payload
+    # Restructure A: a clean terminal exit records its verdict explicitly.
+    assert payload[terminal.TERMINAL_GENERATION_FIELD] is True
+    assert payload["summary"][terminal.TERMINAL_GENERATION_FIELD] is True
     assert terminal.payload_terminal_generation_complete(payload) is True
     assert job.status == release.RELEASE_STATUS
     assert job.checkpoint_available is False

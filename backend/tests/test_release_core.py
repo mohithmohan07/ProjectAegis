@@ -44,6 +44,9 @@ from app.services import assessment_release_service as svc
 from app.services import build_concepts_release as release
 from app.services import build_concepts_release_contract as release_contract
 from app.services import build_concepts_release_files as release_files
+from app.services import (
+    build_concepts_terminal_release_contract as terminal_release,
+)
 from app.services import build_concepts_release_manifest as release_manifest
 from app.services import progress
 from app.services import release_core
@@ -768,6 +771,14 @@ def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
     assert sessions[release.LANE_PRE] is not sessions[release.LANE_POST]
 
 
+def _record_nonterminal_verdict(payload: dict) -> None:
+    """Record the explicit staged verdict a non-terminal exit writes."""
+    payload[terminal_release.TERMINAL_GENERATION_FIELD] = False
+    summary = dict(payload.get("summary") or {})
+    summary[terminal_release.TERMINAL_GENERATION_FIELD] = False
+    payload["summary"] = summary
+
+
 def test_nonterminal_concept_checkpoint_skips_all_master_spend(
     db, monkeypatch,
 ):
@@ -784,11 +795,16 @@ def test_nonterminal_concept_checkpoint_skips_all_master_spend(
         "severity": "error",
         "message": "provider rejected the JSON-mode request",
     })
+    # Restructure A: a run that exits non-terminally records that verdict
+    # at staging; the gate reads the recorded fact, so the simulation must
+    # record it too (checkpoint echoes alone no longer decide).
+    _record_nonterminal_verdict(post)
     pre = inventory[release.release_key_for_lane(release.LANE_PRE)]
     pre.setdefault("snapshot_defects", []).append(
         "terminal_generation_incomplete: Post stopped at "
         "pre_type_assignment"
     )
+    _record_nonterminal_verdict(pre)
     job.question_inventory = inventory
     flag_modified(job, "question_inventory")
     db.commit()
@@ -825,6 +841,7 @@ def test_explicit_master_rebuild_rejects_nonterminal_concept_pre_spend(
     inventory = copy.deepcopy(job.question_inventory)
     post = inventory[release.release_key_for_lane(release.LANE_POST)]
     post["checkpoint_stage"] = "pre_type_assignment"
+    _record_nonterminal_verdict(post)
     job.question_inventory = inventory
     flag_modified(job, "question_inventory")
     db.commit()
@@ -844,6 +861,88 @@ def test_explicit_master_rebuild_rejects_nonterminal_concept_pre_spend(
             owner_sub=OWNER,
         )
     assert called == []
+
+
+def test_staging_records_the_verdict_and_checkpoint_drift_cannot_block(db):
+    """Restructure A: the verdict is decided once, at staging.
+
+    [measured] job 'Patterns' (2026-08-29): a fully completed run had both
+    Concept files staged and healthy, yet every Master click was refused
+    because eligibility re-derived terminality from checkpoint echoes.
+    After staging records the verdict, a live checkpoint that later
+    drifts, is cleared, or re-validates differently can never re-open
+    the question.
+    """
+    terminal_release.install()
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+
+    for lane in release.RELEASE_LANES:
+        payload = release.release_payload(job, lane=lane)
+        assert payload[terminal_release.TERMINAL_GENERATION_FIELD] is True, lane
+        summary = payload.get("summary") or {}
+        assert summary[terminal_release.TERMINAL_GENERATION_FIELD] is True, lane
+
+    # Drift the live checkpoint to a mid-run stage AND clear it entirely:
+    # neither may block a Master built from the staged release.
+    for drifted in ({"stage": "pre_type_assignment"}, None):
+        job.generation_checkpoint = drifted
+        flag_modified(job, "generation_checkpoint")
+        db.commit()
+        for lane in release.RELEASE_LANES:
+            eligible, reason = release_contract._lane_master_eligibility(
+                db, job.id, lane, owner_sub=OWNER,
+            )
+            assert eligible is True, (lane, drifted, reason)
+
+
+def test_legacy_payload_with_live_terminal_checkpoint_backfills_true(db):
+    """The 'Patterns' staging-order race, retroactively unblocked.
+
+    A payload staged before Restructure A carries no explicit verdict and
+    can echo a mid-run ``checkpoint_stage`` (the final checkpoint write
+    landed after the release was staged). When the LIVE checkpoint says
+    ``final_content_ready``, the one-time backfill records True and the
+    Masters build.
+    """
+    terminal_release.install()
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+
+    inventory = copy.deepcopy(job.question_inventory)
+    for lane in release.RELEASE_LANES:
+        payload = inventory[release.release_key_for_lane(lane)]
+        payload.pop(terminal_release.TERMINAL_GENERATION_FIELD, None)
+        summary = dict(payload.get("summary") or {})
+        summary.pop(terminal_release.TERMINAL_GENERATION_FIELD, None)
+        payload["summary"] = summary
+        payload["checkpoint_stage"] = "pre_type_assignment"
+    job.question_inventory = inventory
+    flag_modified(job, "question_inventory")
+    job.generation_checkpoint = {"stage": "final_content_ready"}
+    flag_modified(job, "generation_checkpoint")
+    db.commit()
+
+    for lane in release.RELEASE_LANES:
+        eligible, reason = release_contract._lane_master_eligibility(
+            db, job.id, lane, owner_sub=OWNER,
+        )
+        assert eligible is True, (lane, reason)
+
+    # The backfill stamped the fact durably: clearing the live checkpoint
+    # afterwards no longer matters.
+    db.refresh(job)
+    for lane in release.RELEASE_LANES:
+        payload = release.release_payload(job, lane=lane)
+        assert payload[terminal_release.TERMINAL_GENERATION_FIELD] is True, lane
+    job.generation_checkpoint = None
+    flag_modified(job, "generation_checkpoint")
+    db.commit()
+    for lane in release.RELEASE_LANES:
+        eligible, reason = release_contract._lane_master_eligibility(
+            db, job.id, lane, owner_sub=OWNER,
+        )
+        assert eligible is True, (lane, reason)
 
 
 def _stub_release(db, chapter, lane):
@@ -1427,9 +1526,13 @@ def test_a_candidate_with_no_resolved_home_is_a_named_defect_not_a_silent_warnin
 
 
 def test_terminal_diagnosis_names_the_failing_predicate():
-    """A 'non-terminal checkpoint' refusal must say WHY ([measured] job
-    'Patterns', 2026-08-29: a completed run's saved terminal checkpoint
-    was refused with no reason anywhere)."""
+    """The checkpoint diagnosis helper must say WHY, per predicate.
+
+    Restructure A (2026-08-29) removed this from Master eligibility —
+    the gate now reads the verdict recorded at staging instead of
+    re-deriving from the live checkpoint — but the helper remains the
+    named-predicate diagnostic for checkpoint troubleshooting, and its
+    per-predicate wording stays pinned."""
 
     from app.services import generation
 

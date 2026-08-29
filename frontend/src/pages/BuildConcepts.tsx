@@ -240,6 +240,13 @@ function PostLearningFlow({
   const { run } = useRunConsole();
   const [job, setJob] = useState<UploadJob | null>(initialJob);
   const [scope, setScope] = useState<Scope | null>(null);
+  // The one-shot chain (upload → convert → generate) reads the scope when
+  // conversion FINISHES, not when the upload was clicked — a ref avoids a
+  // stale closure over the render that started the chain.
+  const scopeRef = useRef<Scope | null>(null);
+  useEffect(() => {
+    scopeRef.current = scope;
+  }, [scope]);
   const [busy, setBusy] = useState(false);
   const [modelProvider, setModelProviderInfo] =
     useState<ModelProviderInfo | null>(null);
@@ -293,9 +300,11 @@ function PostLearningFlow({
     setResult(null);
   }, []);
 
-  async function generate() {
-    if (!job || !scope) return;
-    const resumedFromCheckpoint = Boolean(job.checkpoint_available);
+  async function generate(target?: UploadJob) {
+    const runJob = target ?? job;
+    const runScope = scopeRef.current;
+    if (!runJob || !runScope) return;
+    const resumedFromCheckpoint = Boolean(runJob.checkpoint_available);
     setBusy(true);
     setError(null);
     setResult(null);
@@ -304,22 +313,22 @@ function PostLearningFlow({
     try {
       const data = await run<Record<string, unknown>>(
         "Post Learning — generating concepts",
-        api.paths.postLearningGenerate(job.id),
-        { body: JSON.stringify({ target_chapter_id: scope.ids[0] }) },
+        api.paths.postLearningGenerate(runJob.id),
+        { body: JSON.stringify({ target_chapter_id: runScope.ids[0] }) },
         {
           cumulative: true,
           resumed: resumedFromCheckpoint,
-          filename: job.filename,
+          filename: runJob.filename,
           fileLabel: "Source file",
-          initialUsage: job.openai_usage,
+          initialUsage: runJob.openai_usage,
         },
         {
           module: "concepts",
-          jobId: job.id,
+          jobId: runJob.id,
           // The run finished while the connection was down: rebuild the
           // fields the result panel reads from the completed job itself.
           recoverResult: async () => {
-            const finished = await api.getUploadJob("concepts", job.id);
+            const finished = await api.getUploadJob("concepts", runJob.id);
             return {
               status: "generated",
               reattached: true,
@@ -332,7 +341,7 @@ function PostLearningFlow({
       );
       let refreshedJob: UploadJob | null = null;
       try {
-        refreshedJob = await api.getUploadJob("concepts", job.id);
+        refreshedJob = await api.getUploadJob("concepts", runJob.id);
         setJob(refreshedJob);
       } catch {
         // The result remains usable even if refreshing the completed job fails.
@@ -346,7 +355,7 @@ function PostLearningFlow({
     } catch (e) {
       let refreshedJob: UploadJob | null = null;
       try {
-        refreshedJob = await api.getUploadJob("concepts", job.id);
+        refreshedJob = await api.getUploadJob("concepts", runJob.id);
         setJob(refreshedJob);
       } catch {
         // Keep the generation error visible if refreshing job state also fails.
@@ -358,36 +367,27 @@ function PostLearningFlow({
     }
   }
 
+  // Every run parameter is chosen up front (owner request, 2026-08-29):
+  // chapter target, model provider, source book, and the file sit in one
+  // view before anything is uploaded, and one action runs the whole
+  // upload → parse → generate chain. The panel stays visible for a
+  // converted-but-ungenerated job (a restored run, or an upload made
+  // without a chapter picked), where its explicit Generate button remains
+  // the fallback path.
+  const parameterPanelOpen = !job || job.status === "converted";
+  const oneShotReady = !job && Boolean(scope);
+
   return (
     <>
-      <div className="section-title">1 · Upload document</div>
-      <DocumentUpload
-        module="concepts"
-        conceptKind="post"
-        bookSources={bookSources}
-        externalJob={job}
-        disabled={busy}
-        onJob={handleJob}
-      />
-      {!result && (
-        <ApiUsageSummary
-          usage={job?.openai_usage}
-          filename={job?.filename}
-          fileLabel="Source file"
-          cumulative
-          resumed={Boolean(job?.checkpoint_available)}
-        />
-      )}
-
-      {job && job.status === "converted" && (
+      {parameterPanelOpen && (
         <>
-          <div className="section-title">2 · Deposit concepts under a chapter</div>
+          <div className="section-title">1 · Choose the run parameters</div>
           <div className="card">
             <DirectoryPicker
               onScope={setScope}
               chapterOnly
               reloadSignal={treeReload}
-              initialChapterIdentity={checkpointTargetIdentity(job)}
+              initialChapterIdentity={job ? checkpointTargetIdentity(job) : undefined}
             />
             <SyllabusUploader disabled={busy} onLoaded={() => setTreeReload((n) => n + 1)} />
             {modelProvider && (
@@ -421,18 +421,57 @@ function PostLearningFlow({
               <div className="error-box mb-12">{modelProviderError}</div>
             )}
             <div className="row mt-16">
-              <span className="muted">{scope ? `Chapter: ${scope.label}` : "Pick a chapter"}</span>
+              <span className="muted">
+                {scope ? `Chapter: ${scope.label}` : "Pick a chapter"}
+              </span>
               <div className="spacer" />
-              <button className="primary" disabled={!scope || busy} onClick={generate}>
-                {job.checkpoint_available
-                  ? `Resume from ${Math.round(
-                    (job.checkpoint_progress ?? 0) * 100,
-                  )}% checkpoint`
-                  : "Parse & generate concepts"}
-              </button>
+              {job && job.status === "converted" && (
+                <button
+                  className="primary"
+                  disabled={!scope || busy}
+                  onClick={() => void generate()}
+                >
+                  {job.checkpoint_available
+                    ? `Resume from ${Math.round(
+                      (job.checkpoint_progress ?? 0) * 100,
+                    )}% checkpoint`
+                    : "Parse & generate concepts"}
+                </button>
+              )}
             </div>
           </div>
         </>
+      )}
+
+      <div className="section-title">2 · Upload document</div>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        bookSources={bookSources}
+        externalJob={job}
+        disabled={busy}
+        onJob={handleJob}
+        uploadLabel={oneShotReady ? "Upload, parse & generate" : undefined}
+        uploadHint={oneShotReady
+          ? "One action runs the whole chain: the file is stored, converted "
+            + "to MMD, and generation starts against the chapter you picked "
+            + "above. Watch the Console for live progress."
+          : "Uploading stores the file and starts its conversion right away "
+            + "— watch the Console for parse progress. Pick a chapter above "
+            + "first to run upload, parse, and generation in one go."}
+        onConverted={(convertedJob) => {
+          // Continue the chain only when a chapter was chosen up front.
+          if (scopeRef.current) void generate(convertedJob);
+        }}
+      />
+      {!result && (
+        <ApiUsageSummary
+          usage={job?.openai_usage}
+          filename={job?.filename}
+          fileLabel="Source file"
+          cumulative
+          resumed={Boolean(job?.checkpoint_available)}
+        />
       )}
 
       {carriedIssue && (
