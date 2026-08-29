@@ -1,0 +1,31 @@
+name: Deploy
+
+# Merged and live must never drift apart (owner request, 2026-08-29): two
+# production runs executed against a build that predated the fixes merged
+# minutes earlier, because deployment was manual. Every push to main now
+# deploys to Fly automatically. PRs already carry their own CI, and plain
+# pushes to main deliberately do not re-run it (owner rulings, 21/26 Aug
+# 2026), so this workflow deploys exactly what was merged.
+#
+# Requires the FLY_API_TOKEN repository secret (Settings → Secrets and
+# variables → Actions): create one with `fly tokens create deploy -x 999999h`.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  # One deploy at a time; a newer merge supersedes an in-flight older one.
+  group: fly-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
