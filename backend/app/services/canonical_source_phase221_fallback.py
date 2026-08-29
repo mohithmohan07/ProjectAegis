@@ -84,6 +84,14 @@ OPTIONAL_ARTIFACT_SPECS: dict[str, dict[str, str]] = {
         "media_type": "application/json; charset=utf-8",
         "label": "GPT page-level ACSD extraction",
     },
+    # Restructure C1 shadow record: the block-first compiler's canonical and
+    # its machine diff against the authoritative render-then-reparse result.
+    # Advisory only — recorded divergences never gate a conversion.
+    "block_first_shadow": {
+        "filename": "source.block-first-shadow.json",
+        "media_type": "application/json; charset=utf-8",
+        "label": "Block-first shadow compiler diff (Restructure C1)",
+    },
 }
 
 _ALLOWED_KINDS = (
@@ -2588,13 +2596,18 @@ def _attach_chapter_outline(
     canonical["chapter_outline"] = copy.deepcopy(outline)
 
 
-def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
-    """Render verified page objects to deterministic, parser-safe MMD.
+def _render_page_acsd_parts(
+    page_acsd: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any] | None]]:
+    """Emit the deterministic MMD parts together with their block origins.
 
-    Every block is emitted exactly once in page reading order. Task-to-visual
-    ownership is restored on the compiled ACSD object by
-    :func:`apply_page_acsd_relationships`; the renderer never moves a Figure to
-    make a parser heuristic happy.
+    One emitter serves both projections of the verified page ledger: the flat
+    MMD text (the parts joined, exactly as always) and the block-first shadow
+    compiler, which needs to know WHICH page block produced each emitted part
+    without re-parsing the text. ``origins[i]`` describes the page block
+    behind ``parts[i]`` — page identity, reading order, native kind, and the
+    structural role of this particular part — or is ``None`` for parts that
+    belong to no page block (the MMD header stamps and blank separators).
     """
     _scrub_page_acsd_escape_artifacts(page_acsd)
     outline = page_acsd.get("chapter_outline") or {}
@@ -2619,11 +2632,24 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
         f"<!-- source_reader: {source_reader_version()} -->",
         "",
     ]
+    origins: list[dict[str, Any] | None] = [
+        {"role": "mmd_header"},
+        {"role": "mmd_header"},
+        {"role": "mmd_header"},
+        None,
+    ]
+
+    def emit(part: str, origin: dict[str, Any] | None = None) -> None:
+        parts.append(part)
+        origins.append(origin)
+
+    topic_sequence = 0
     for page in page_acsd.get("pages") or []:
         # Page provenance lives in ``source.gpt-page-acsd.json``. Avoid adding
         # synthetic page-marker prose to the semantic source consumed by the
         # concept extractor.
         page_id = str(page.get("page_id") or "")
+        page_number = int(page.get("page_number") or 0)
         blocks = sorted(
             [block for block in page.get("blocks") or [] if isinstance(block, dict)],
             key=lambda block: int(block.get("reading_order") or 0),
@@ -2631,23 +2657,38 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
         for block in blocks:
             kind = str(block.get("kind") or "other")
             text = str(block.get("text") or "").strip()
-            topic = topic_by_start.get(
-                (page_id, int(block.get("reading_order") or 0))
-            )
+            reading_order = int(block.get("reading_order") or 0)
+            ref = {
+                "page_id": page_id,
+                "page_number": page_number,
+                "reading_order": reading_order,
+                "page_kind": kind,
+            }
+            topic = topic_by_start.get((page_id, reading_order))
             if topic is not None and topic.get("kind") == "content":
                 # The outline judged this block to open a chapter topic. The
                 # topic heading IS the structure; the block itself is skipped
                 # only when it was that same heading.
-                parts.append(_markdown_heading(1, str(topic.get("title") or text)))
-                parts.append("")
+                topic_sequence += 1
+                emit(
+                    _markdown_heading(1, str(topic.get("title") or text)),
+                    {
+                        **ref,
+                        "role": "topic_heading",
+                        "topic_sequence": topic_sequence,
+                        "opened_on_heading": kind == "heading",
+                    },
+                )
+                emit("")
                 if kind == "heading":
                     continue
             if kind == "figure":
                 url = str(block.get("asset_url") or "").strip()
                 if url:
-                    parts.append(_markdown_image(
-                        url, str(block.get("caption") or "")
-                    ))
+                    emit(
+                        _markdown_image(url, str(block.get("caption") or "")),
+                        {**ref, "role": "body"},
+                    )
             elif kind == "heading":
                 if outline_active:
                     # Under a decided outline, every other heading is a
@@ -2655,11 +2696,14 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
                     # without the structural weight that minted a section per
                     # banner ("Understand", "Do it.", 50 sections a chapter).
                     if text:
-                        parts.append(f"**{text}**")
+                        emit(f"**{text}**", {**ref, "role": "body"})
                 else:
-                    parts.append(_markdown_heading(
-                        int(block.get("heading_level") or 1), text
-                    ))
+                    emit(
+                        _markdown_heading(
+                            int(block.get("heading_level") or 1), text
+                        ),
+                        {**ref, "role": "native_heading"},
+                    )
             elif kind == "source":
                 label = str(block.get("source_label") or "").strip()
                 label_key = _normal(label)
@@ -2671,9 +2715,12 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
                     )
                 )
                 if label and not text_already_contains_label:
-                    parts.append(_markdown_heading(1, label))
+                    emit(
+                        _markdown_heading(1, label),
+                        {**ref, "role": "source_label"},
+                    )
                 if text:
-                    parts.append(text)
+                    emit(text, {**ref, "role": "body"})
             elif kind == "task":
                 # The exact publisher/language cue remains in page ACSD and is
                 # restored on the canonical task. The derived MMD uses a stable
@@ -2690,20 +2737,73 @@ def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
                     # A sub-level heading keeps tasks discoverable without
                     # minting a topic: topics come from level-1 sections, and
                     # the outline already decided those.
-                    parts.append(_markdown_heading(_TASK_CUE_HEADING_LEVEL, cue))
+                    emit(
+                        _markdown_heading(_TASK_CUE_HEADING_LEVEL, cue),
+                        {**ref, "role": "task_cue"},
+                    )
                 else:
-                    parts.append(_markdown_heading(1, cue))
-                parts.append(text)
+                    emit(
+                        _markdown_heading(1, cue),
+                        {**ref, "role": "task_cue"},
+                    )
+                emit(text, {**ref, "role": "body"})
             elif kind == "table":
-                parts.append(_render_table(list(block.get("table_rows") or [])))
+                emit(
+                    _render_table(list(block.get("table_rows") or [])),
+                    {**ref, "role": "body"},
+                )
             elif kind == "math":
                 latex = str(block.get("latex") or "").strip()
                 if latex:
-                    parts.append(f"[Katex] {latex} [/Katex]")
+                    emit(f"[Katex] {latex} [/Katex]", {**ref, "role": "body"})
             elif text:
-                parts.append(text)
-            parts.append("")
+                emit(text, {**ref, "role": "body"})
+            emit("")
+    return parts, origins
+
+
+def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
+    """Render verified page objects to deterministic, parser-safe MMD.
+
+    Every block is emitted exactly once in page reading order. Task-to-visual
+    ownership is restored on the compiled ACSD object by
+    :func:`apply_page_acsd_relationships`; the renderer never moves a Figure to
+    make a parser heuristic happy.
+    """
+    parts, _origins = _render_page_acsd_parts(page_acsd)
     return "\n".join(parts).strip() + "\n"
+
+
+def render_page_acsd_to_mmd_with_spans(
+    page_acsd: dict[str, Any],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Render the MMD projection plus the char span each page block emitted.
+
+    Returns the byte-identical text of :func:`render_page_acsd_to_mmd` and a
+    list of span records ``{page_id, page_number, reading_order, page_kind,
+    role, start, end}`` in emission order, one per emitted part that carries a
+    page-block (or header) origin. ``text[start:end]`` is exactly the emitted
+    part. Blank separators carry no span; the gaps between spans are therefore
+    pure structural whitespace plus the joining newlines.
+    """
+    parts, origins = _render_page_acsd_parts(page_acsd)
+    joined = "\n".join(parts)
+    lead = len(joined) - len(joined.lstrip())
+    text = joined.strip() + "\n"
+    spans: list[dict[str, Any]] = []
+    cursor = 0
+    for part, origin in zip(parts, origins):
+        start = cursor - lead
+        end = start + len(part)
+        cursor += len(part) + 1
+        if origin is None:
+            continue
+        spans.append({
+            **origin,
+            "start": max(0, min(len(text), start)),
+            "end": max(0, min(len(text), end)),
+        })
+    return text, spans
 
 
 # TEXT-COMPARISON MECHANICS (§3 purge, item 4D): strips a renderer-emitted
@@ -2860,6 +2960,168 @@ def _page_context_text(block: dict[str, Any]) -> str:
         return text or label
     return str(block.get("text") or "").strip()
 
+def _outline_task_partitions(
+    outline: dict[str, Any],
+) -> dict[tuple[str, int], list[dict[str, Any]]]:
+    """The outline judge's per-task independent-part rulings, by task ref."""
+    return {
+        (
+            str(partition.get("page_id") or ""),
+            int(partition.get("reading_order") or 0),
+        ): [
+            part for part in partition.get("independent_parts") or []
+            if isinstance(part, dict)
+        ]
+        for partition in outline.get("task_partitions") or []
+        if isinstance(partition, dict)
+    }
+
+
+def _outline_ruled_task_kinds(
+    outline: dict[str, Any],
+) -> dict[tuple[str, int], str]:
+    """The outline judge's per-task kind rulings (chapter-outline-8): the
+    model's verdict on whether a whole task is a question, an activity, or an
+    info hub. This is the ONLY kind authority in this lane."""
+    return {
+        (str(row[0]), int(row[1])): str(row[2])
+        for row in outline.get("ruled_task_kinds") or []
+        if isinstance(row, (list, tuple)) and len(row) == 3
+        and str(row[2]) in {"question", "activity", "info_hub"}
+    }
+
+
+def _outline_assessment_ruler(
+    page_acsd: dict[str, Any],
+) -> tuple[
+    list[tuple[int, int, str]],
+    Callable[[tuple[str, int]], bool],
+]:
+    """One owner for the outline's span-scope rule (mechanics, §3 item 4D).
+
+    Returns the sorted outline topic starts and a predicate answering whether
+    a ``(page_id, reading_order)`` reference falls inside a span the outline
+    judge ruled ``assessment``. Shared by the authoritative relationships pass
+    and the block-first shadow compiler so the scope ruling can never drift
+    between them.
+    """
+    outline = page_acsd.get("chapter_outline") or {}
+    page_number_by_id = {
+        str(page.get("page_id") or ""): int(page.get("page_number") or 0)
+        for page in page_acsd.get("pages") or []
+        if isinstance(page, dict)
+    }
+    outline_starts = sorted(
+        (
+            (
+                page_number_by_id.get(str(t.get("start_page_id") or ""), 0),
+                int(t.get("start_reading_order") or 0),
+                str(t.get("kind") or "content"),
+            )
+            for t in outline.get("topics") or []
+            if isinstance(t, dict)
+        ),
+    )
+
+    def in_assessment_span(ref: tuple[str, int]) -> bool:
+        position = (page_number_by_id.get(ref[0], 0), ref[1])
+        latest_kind = ""
+        for start_page, start_order, kind in outline_starts:
+            if (start_page, start_order) <= position:
+                latest_kind = kind
+            else:
+                break
+        return latest_kind == "assessment"
+
+    return outline_starts, in_assessment_span
+
+
+def _ruled_source_kind(ruled_kind: str, label: str) -> tuple[str, bool, str]:
+    """Map the outline judge's per-task ruling to the shipped source kind.
+
+    Returns ``(source_kind, activity_origin, kind_ruling)``. The ruling is the
+    model's verdict (chapter-outline-8); the worked-example/exercise label
+    mapping below is the pre-existing neutral-path presentation mechanics,
+    applied only when the model ruled "question" or never ruled. One owner so
+    the authoritative pass and the block-first shadow can never disagree.
+    """
+    activity = ruled_kind == "activity"
+    worked = bool(re.fullmatch(
+        r"(?:solved\s+)?examples?\s*\d*", _normal(label)
+    ))
+    if activity:
+        source_kind = "activity"
+    elif ruled_kind == "info_hub":
+        source_kind = "info_hub"
+    else:
+        source_kind = (
+            "worked_example" if worked else (
+                "exercise"
+                if _normal(label) in {
+                    "write in brief", "questions", "exercises",
+                }
+                else "checkpoint_question"
+            )
+        )
+    kind_ruling = (
+        "chapter_outline_task_kind" if ruled_kind else "not_model_ruled_flagged"
+    )
+    return source_kind, activity, kind_ruling
+
+
+def _attach_task_figure(
+    figures_by_id: dict[str, dict[str, Any]],
+    ownership: dict[str, list[str]],
+    figure_id: str,
+    task_id: str,
+    linked_urls: list[str],
+    linked_figure_ids: list[str],
+    captions: dict[str, str],
+    *,
+    preferred_caption: str = "",
+) -> None:
+    """One owner for attaching a Figure to a task's visual payload.
+
+    Caption precedence (preferred > canonical > existing > neutral), URL and
+    id dedup, and ownership recording — shared by the authoritative
+    relationships pass and the block-first shadow so the policy cannot drift.
+    """
+    figure = figures_by_id.get(str(figure_id), {})
+    urls = [str(value) for value in figure.get("image_urls") or [] if value]
+    canonical_caption = str(figure.get("caption_raw") or "").strip()
+    for url in urls:
+        if url and url not in linked_urls:
+            linked_urls.append(url)
+        if url:
+            captions[url] = (
+                preferred_caption.strip()
+                or canonical_caption
+                or captions.get(url)
+                or "Source visual"
+            )
+    if figure_id and figure_id not in linked_figure_ids:
+        linked_figure_ids.append(figure_id)
+    if figure_id:
+        ownership.setdefault(figure_id, []).append(task_id)
+
+
+def _compose_task_display_prompt(
+    verified_prompt: str,
+    fallback_urls: set[str],
+    display_urls: list[str],
+    display_captions: dict[str, str],
+) -> str:
+    """Compose the canonical public task wording: body text plus image tags."""
+    body = _without_asset_tags(verified_prompt, fallback_urls)
+    tags = []
+    for url in display_urls:
+        try:
+            tags.append(kr.image(url, display_captions[url]))
+        except ValueError:
+            continue
+    return kr.canonicalize_rich_text(" ".join([body, *tags]).strip()).strip()
+
+
 def apply_page_acsd_relationships(
     canonical: dict[str, Any],
     page_acsd: dict[str, Any],
@@ -2940,52 +3202,9 @@ def apply_page_acsd_relationships(
     )
 
     outline = page_acsd.get("chapter_outline") or {}
-    outline_partitions: dict[tuple[str, int], list[dict[str, Any]]] = {
-        (
-            str(partition.get("page_id") or ""),
-            int(partition.get("reading_order") or 0),
-        ): [
-            part for part in partition.get("independent_parts") or []
-            if isinstance(part, dict)
-        ]
-        for partition in outline.get("task_partitions") or []
-        if isinstance(partition, dict)
-    }
-    # The outline judge's per-task kind rulings (chapter-outline-8): the
-    # model's verdict on whether a whole task is a question, an activity,
-    # or an info hub. This is the ONLY kind authority in this lane.
-    outline_task_kinds: dict[tuple[str, int], str] = {
-        (str(row[0]), int(row[1])): str(row[2])
-        for row in outline.get("ruled_task_kinds") or []
-        if isinstance(row, (list, tuple)) and len(row) == 3
-        and str(row[2]) in {"question", "activity", "info_hub"}
-    }
-    page_number_by_id = {
-        str(page.get("page_id") or ""): int(page.get("page_number") or 0)
-        for page in page_acsd.get("pages") or []
-        if isinstance(page, dict)
-    }
-    outline_starts = sorted(
-        (
-            (
-                page_number_by_id.get(str(t.get("start_page_id") or ""), 0),
-                int(t.get("start_reading_order") or 0),
-                str(t.get("kind") or "content"),
-            )
-            for t in outline.get("topics") or []
-            if isinstance(t, dict)
-        ),
-    )
-
-    def _in_assessment_span(ref: tuple[str, int]) -> bool:
-        position = (page_number_by_id.get(ref[0], 0), ref[1])
-        latest_kind = ""
-        for start_page, start_order, kind in outline_starts:
-            if (start_page, start_order) <= position:
-                latest_kind = kind
-            else:
-                break
-        return latest_kind == "assessment"
+    outline_partitions = _outline_task_partitions(outline)
+    outline_task_kinds = _outline_ruled_task_kinds(outline)
+    outline_starts, _in_assessment_span = _outline_assessment_ruler(page_acsd)
 
     def add_figure(
         figure_id: str,
@@ -2996,23 +3215,11 @@ def apply_page_acsd_relationships(
         *,
         preferred_caption: str = "",
     ) -> None:
-        figure = figures_by_id.get(str(figure_id), {})
-        urls = [str(value) for value in figure.get("image_urls") or [] if value]
-        canonical_caption = str(figure.get("caption_raw") or "").strip()
-        for url in urls:
-            if url and url not in linked_urls:
-                linked_urls.append(url)
-            if url:
-                captions[url] = (
-                    preferred_caption.strip()
-                    or canonical_caption
-                    or captions.get(url)
-                    or "Source visual"
-                )
-        if figure_id and figure_id not in linked_figure_ids:
-            linked_figure_ids.append(figure_id)
-        if figure_id:
-            ownership.setdefault(figure_id, []).append(task_id)
+        _attach_task_figure(
+            figures_by_id, ownership,
+            figure_id, task_id, linked_urls, linked_figure_ids, captions,
+            preferred_caption=preferred_caption,
+        )
 
     for page in page_acsd.get("pages") or []:
         blocks = sorted(
@@ -3141,30 +3348,11 @@ def apply_page_acsd_relationships(
                 str(page.get("page_id") or ""),
                 int(block.get("reading_order") or 0),
             ), "")
-            activity = ruled_kind == "activity"
-            task["activity_origin"] = activity
-            worked = bool(re.fullmatch(
-                r"(?:solved\s+)?examples?\s*\d*", _normal(label)
-            ))
-            if activity:
-                task["source_kind"] = "activity"
-            elif ruled_kind == "info_hub":
-                task["source_kind"] = "info_hub"
-            else:
-                task["source_kind"] = (
-                    "worked_example" if worked else (
-                        "exercise"
-                        if _normal(label) in {
-                            "write in brief", "questions", "exercises",
-                        }
-                        else "checkpoint_question"
-                    )
-                )
-            task["kind_ruling"] = (
-                "chapter_outline_task_kind"
-                if ruled_kind
-                else "not_model_ruled_flagged"
-            )
+            (
+                task["source_kind"],
+                task["activity_origin"],
+                task["kind_ruling"],
+            ) = _ruled_source_kind(ruled_kind, label)
 
             prompt_block_id = str(prompt_source_block.get("block_id") or "")
             used_prompt_block_ids.add(prompt_block_id)
@@ -3377,16 +3565,9 @@ def apply_page_acsd_relationships(
                 task["scope_ruling"] = "not_model_ruled_flagged"
             if parser_chapter_wide != bool(task.get("chapter_wide")):
                 task["gpt_pdf_acsd_parser_chapter_wide"] = parser_chapter_wide
-            body = _without_asset_tags(verified_prompt, fallback_urls)
-            tags = []
-            for url in display_urls:
-                try:
-                    tags.append(kr.image(url, display_captions[url]))
-                except ValueError:
-                    continue
-            task["display_prompt"] = kr.canonicalize_rich_text(
-                " ".join([body, *tags]).strip()
-            ).strip()
+            task["display_prompt"] = _compose_task_display_prompt(
+                verified_prompt, fallback_urls, display_urls, display_captions
+            )
             mapped += 1
 
     if mapped != expected_page_tasks:
@@ -3655,6 +3836,55 @@ def rehydrate_verified_fallback(
     return canonical, report
 
 
+def _run_block_first_shadow(
+    *,
+    page_acsd: dict[str, Any],
+    mmd_text: str,
+    canonical: dict[str, Any],
+    staging: Path,
+    source_filename: str,
+) -> dict[str, Any]:
+    """Run the C1 block-first shadow compiler beside the authoritative path.
+
+    Advisory only: whatever happens here — a clean match, recorded
+    divergences, or an outright failure — the conversion ships exactly what
+    the authoritative compiler produced. Divergences are defect flags in the
+    reconstruction manifest plus a full diff artifact; they never gate.
+    """
+    from . import canonical_source_block_first as block_first
+
+    try:
+        payload, summary = block_first.run_shadow(
+            page_acsd=copy.deepcopy(page_acsd),
+            mmd_text=mmd_text,
+            authoritative_canonical=canonical,
+            source_filename=source_filename,
+        )
+        canonical_source._atomic_write(
+            staging / OPTIONAL_ARTIFACT_SPECS["block_first_shadow"]["filename"],
+            canonical_source._json_text(payload),
+        )
+        if summary.get("status") == "diverged":
+            progress.log(
+                "Block-first shadow compiler recorded "
+                f"{summary.get('divergences')} divergence(s) from the "
+                "authoritative canonical (advisory record for Restructure C1; "
+                "the conversion is unaffected).",
+                level="warning",
+            )
+        return summary
+    except Exception as exc:
+        _LOGGER.warning(
+            "block-first shadow compiler failed; the conversion is "
+            "unaffected (%s)",
+            exc,
+        )
+        return {
+            "status": "error",
+            "error": f"{type(exc).__name__}: {exc}"[:500],
+        }
+
+
 def reconstruct_pdf_to_acsd(
     path: Path,
     *,
@@ -3695,6 +3925,18 @@ def reconstruct_pdf_to_acsd(
             fallback_reason=fallback_reason,
         )
         reconstruction["derived_mmd_sha256"] = _sha256_text(mmd_text)
+        # Restructure C1 shadow: run the block-first compiler beside this
+        # result and record every divergence. Advisory only — the summary
+        # rides the reconstruction manifest, the full diff rides the
+        # ``source.block-first-shadow.json`` artifact, and nothing above or
+        # below this line changes because of it.
+        reconstruction["block_first_shadow"] = _run_block_first_shadow(
+            page_acsd=page_acsd,
+            mmd_text=mmd_text,
+            canonical=canonical,
+            staging=staging,
+            source_filename=path.name,
+        )
         _attach_reconstruction_metadata(
             canonical,
             report,

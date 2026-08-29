@@ -84,6 +84,7 @@ def install() -> None:
     original_canonicalize = fallback._canonicalize_source_cue_block
     original_validate = fallback.validate_page_extraction
     original_render = fallback.render_page_acsd_to_mmd
+    original_render_spans = fallback.render_page_acsd_to_mmd_with_spans
 
     if _NAVIGATION_KIND not in fallback._ALLOWED_KINDS:
         fallback._ALLOWED_KINDS = (*fallback._ALLOWED_KINDS, _NAVIGATION_KIND)
@@ -252,7 +253,7 @@ after all semantic blocks. Never introduce kind=sidebar or reading_order=0.
             )
         return original_validate(pages, normalized_candidate)
 
-    def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
+    def _semantic_only(page_acsd: dict[str, Any]) -> dict[str, Any]:
         semantic = copy.deepcopy(page_acsd)
         for page in semantic.get("pages") or []:
             if not isinstance(page, dict):
@@ -264,7 +265,16 @@ after all semantic blocks. Never introduce kind=sidebar or reading_order=0.
                     and block.get("kind") == _NAVIGATION_KIND
                 )
             ]
-        return original_render(semantic)
+        return semantic
+
+    def render_page_acsd_to_mmd(page_acsd: dict[str, Any]) -> str:
+        return original_render(_semantic_only(page_acsd))
+
+    def render_page_acsd_to_mmd_with_spans(page_acsd: dict[str, Any]):
+        # The block-first shadow's span projection must see exactly the
+        # semantic ledger the flat projection sees, or the two renderings
+        # of the same page ACSD would legitimately differ.
+        return original_render_spans(_semantic_only(page_acsd))
 
     fallback._extraction_system_prompt = extraction_prompt
     fallback._verification_system_prompt = verification_prompt
@@ -272,4 +282,5 @@ after all semantic blocks. Never introduce kind=sidebar or reading_order=0.
     fallback._canonicalize_source_cue_block = canonicalize_navigation_block
     fallback.validate_page_extraction = validate_page_extraction
     fallback.render_page_acsd_to_mmd = render_page_acsd_to_mmd
+    fallback.render_page_acsd_to_mmd_with_spans = render_page_acsd_to_mmd_with_spans
     fallback._PHASE222_NAVIGATION_CONTRACT_VERSION = _CONTRACT_VERSION
