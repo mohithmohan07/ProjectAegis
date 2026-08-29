@@ -229,7 +229,13 @@ def release_state(release: models.AssessmentRelease | None) -> str:
         if isinstance(group, Mapping)
     ) or bool(payload.get("materialization_blocked")) or bool(
         payload.get("duplicates_removed")
-    ) or bool(payload.get("pre_learning_claimed"))
+    ) or bool(payload.get("pre_learning_claimed")) or bool(
+        # P3 (owner audit + approval, 2026-08-29): a source question folded
+        # into its duplicate survivor is a model judgment — the release
+        # says Ready-with-flags so every fold is reviewed, exactly like
+        # the generated-lane removals above.
+        payload.get("source_duplicates_represented")
+    )
     return READY_WITH_FLAGS if flagged else READY
 
 

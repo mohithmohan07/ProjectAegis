@@ -324,8 +324,19 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
         record("critic", payload)
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
+    def dedup_author(payload):
+        # Serves BOTH duplicate verdicts (generated Q15 and source P3):
+        # the scripted fixtures ship no duplicates, so nothing folds.
+        record("dedup", payload)
+        return {
+            "duplicate_sets": [],
+            "confidence": 1.0,
+            "rationale": "the scripted questions are all distinct asks",
+        }
+
     return {
         "pre_claim": (pre_claim_author, verified_critic),
+        "dedup": (dedup_author, verified_critic),
         "cells": (cell_author, verified_critic),
         "materialize": (materialize_author, verified_critic),
         "answer_restriction": (
@@ -917,7 +928,9 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
         "describe": 2,
         "qa": 2,
         "refiner": 4,
-        "critic": 22,
+        # P3 (2026-08-29): one whole-set source duplicate verdict per run.
+        "dedup": 1,
+        "critic": 23,
     }
     assert {key: len(calls.get(key, [])) for key in expected_counts} == (
         expected_counts

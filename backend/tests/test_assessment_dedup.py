@@ -198,7 +198,7 @@ def test_the_checker_refuses_impossible_citations():
         ],
     })
     text = "\n".join(defects)
-    assert "'Z' is not one of this concept's questions" in text
+    assert "'Z' is not one of the supplied questions" in text
     assert "carries no reason" in text
     assert "cannot also be removed" in text
     assert "appear twice" in text

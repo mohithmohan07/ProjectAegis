@@ -542,11 +542,16 @@ PLACE_SYSTEM = _SHARED + (
     "why. A crop containing only a typographic operator or glyph (for "
     "example a lone + sign) carries no visual teaching content: record it "
     "as decorative_or_duplicate and leave the operator in text, unless the "
-    "image itself adds source meaning beyond that glyph. Prefer the normal "
+    "image itself adds source meaning beyond that glyph. One figure earns "
+    "at most ONE placement: a figure whose image is already carried by a "
+    "placed item, or already placed on the same concept, is a duplicate — "
+    "the audited failure shipped one screenshot eleven times under a "
+    "single concept (owner audit, 2026-08-29). Prefer the normal "
     "concept whose teaching the item practices or "
     "illustrates; a Culmination row only when the item genuinely spans "
     "that topic's concepts. rationale: one sentence naming the "
-    "content-to-teaching basis of the placement."
+    "content-to-teaching basis of the placement — say what the figure "
+    "SHOWS, never a generic label such as 'Source visual'."
 )
 
 PLACE_CRITIC_SYSTEM = _SHARED + (

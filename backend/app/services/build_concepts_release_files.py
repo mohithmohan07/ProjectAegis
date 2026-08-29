@@ -816,6 +816,39 @@ def transient_release_hierarchy(
         active_concept_ids=None,
         pre_post=pre_post,
     )
+
+    # Entity-ID uniqueness gate (P6, owner audit 2026-08-29): the audit's
+    # hand-corrected English files collapsed every topic onto ONE display
+    # id (and Pre concepts onto their topic id), which merges entities
+    # silently on import. Aegis mints unique ids by construction; this
+    # defect entry is the mechanical proof that stays true — a duplicate
+    # is a named defect on the manifest, never a silent merge. Rule 1:
+    # detection only, no judgment about content.
+    distinct_topics = {
+        id(c.topic): c.topic for c in concepts if c.topic is not None
+    }
+    for kind_label, entity_ids in (
+        ("topic", [t.machine_id for t in distinct_topics.values()]),
+        ("concept", [c.machine_id for c in concepts]),
+    ):
+        counted: dict[str, int] = {}
+        for entity_id in entity_ids:
+            key = str(entity_id or "").strip()
+            if key:
+                counted[key] = counted.get(key, 0) + 1
+        for entity_id, count in counted.items():
+            if count > 1:
+                defects.append({
+                    "code": "duplicate_entity_machine_id",
+                    "message": (
+                        f"{count} {kind_label}s in this projection share "
+                        f"the machine id {entity_id!r}; an importer would "
+                        "silently merge them (owner audit 2026-08-29: the "
+                        "hand-corrected files' id collapse is the failure "
+                        "this gate names)"
+                    ),
+                })
+
     return chapter, concepts, records, defects
 
 

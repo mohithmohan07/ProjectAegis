@@ -85,7 +85,13 @@ MARKING_SYSTEM = (
     "Enumerate every represented subquestion exactly to match the stem, and "
     "award no marks for redundant steps. Allocate marks in fair, logical "
     "increments consistent with the represented scoring evidence; never "
-    "use token slivers such as 0.1 merely to force a sum.\n"
+    "use token slivers such as 0.1 merely to force a sum. Default every "
+    "Descriptive rubric criterion to a uniform 1.0 weight, so marks equal "
+    "the number of criteria satisfied (0.5 only where the scoring "
+    "evidence genuinely awards half-steps); a non-uniform split such as "
+    "1.5/2.5 must name its scoring evidence in the rationale — the "
+    "audited failure put all 4 marks on one criterion (owner audit, "
+    "2026-08-29).\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","question":"","question_text":"",'
     '"answers":[],"sub_questions":[],"question_duration":1,'

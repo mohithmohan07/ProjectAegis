@@ -337,7 +337,9 @@ def place(
                 "lone + sign) has no visual teaching content: keep the "
                 "operator as text and record that figure as "
                 "decorative_or_duplicate unless the image adds meaning "
-                "beyond the glyph. Prefer the "
+                "beyond the glyph. One figure earns at most one placement "
+                "— an image already carried by a placed item, or already "
+                "placed on the same concept, is a duplicate. Prefer the "
                 "normal concept whose teaching the item practices or "
                 "illustrates; a Culmination row only when the item "
                 "genuinely spans that topic's concepts." + rules_suffix

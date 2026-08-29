@@ -1789,6 +1789,11 @@ house style above; coordinate-labelled prose is a transport encoding, not
 a shippable rendering. Only when cells are genuinely missing or illegible
 do you keep the labelled plain text rather than reconstruct meaning.
 
+[Katex] wraps only genuine mathematical notation. A plain numeral, a
+digit-grouped number (49,38,67,521), or a currency amount (₹87,000)
+standing in prose stays plain text — wrapping it adds nothing and breaks
+the corrected house style (owner audit, 2026-08-29).
+
 Forbidden: raw math delimiters, nested [Katex], single-quoted img attrs,
 empty [Katex] tags, raw LaTeX outside a [Katex] tag, Markdown images,
 raw tabular/footnote commands, noncanonical or unterminated arrays, and the

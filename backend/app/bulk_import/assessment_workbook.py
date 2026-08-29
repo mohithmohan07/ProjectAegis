@@ -494,6 +494,18 @@ def _row_values(
     return row
 
 
+# A11 (owner audit, 2026-08-29): the numeric fields whose cells display
+# one decimal place. chapter_duration is deliberately excluded — the
+# corrected files carry it plain.
+_ONE_DECIMAL_FIELD_RE = re.compile(
+    r"^(?:marks|question_duration"
+    r"|answer_weightage_\d+"
+    r"|weightage_\d+"
+    r"|sub_question_marks_\d+"
+    r"|sq\d+_weightage_\d+)$"
+)
+
+
 def _append_record(
     ws, sheet: str, record: Mapping[str, Any],
     forced_blank: tuple[str, ...] = (),
@@ -513,9 +525,20 @@ def _append_record(
     )
     ws.append(values)
     row_number = ws.max_row
+    active_fields = (schema or output_schema("concept"))["fields"][sheet]
     for column, value in enumerate(values, start=1):
         if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"}:
             ws.cell(row=row_number, column=column).data_type = "s"
+        elif (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and column <= len(active_fields)
+            and _ONE_DECIMAL_FIELD_RE.match(active_fields[column - 1])
+        ):
+            # A11 (owner audit): marks, durations, and weightages display
+            # with one decimal ("1.0"), matching the corrected files. The
+            # stored value stays numeric — this is presentation only.
+            ws.cell(row=row_number, column=column).number_format = "0.0"
 
 
 def _write_headers(

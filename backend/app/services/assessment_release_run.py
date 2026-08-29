@@ -1685,6 +1685,7 @@ def run_release_for_job(
     pre_learning_claimed: list[dict] = []
     source_context_dispositions: list[dict] = []
     compound_parents_represented: list[dict] = []
+    source_duplicates_represented: list[dict] = []
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
         # is built and none is classified: both of those stages hard-assume
@@ -1957,6 +1958,49 @@ def run_release_for_job(
                     "Assessment release: "
                     f"{len(compound_parents_represented)} compound "
                     "question(s) consolidated to one multipart row each; "
+                    f"{len(atoms)} question(s) continue.",
+                    level="warning",
+                )
+
+        if blueprint_cells is None and len(atoms) > 1:
+            # P3 (owner audit + approval, 2026-08-29): one recorded model
+            # verdict over the WHOLE remaining source set, before any
+            # cell spend. The compound fold above works recorded identity;
+            # this catches what identity cannot — the same assessment
+            # shipped twice in different guises (a verbatim double-ship
+            # under two labels; an umbrella whose parts already ship
+            # standalone). Every removal is a reviewable disposition on
+            # the payload, never silent loss; the advisory critic rides
+            # the decision (Q10).
+            dedup_provider, dedup_critic = _authority_pair(
+                authorities, "dedup"
+            )
+            atoms, source_duplicates_represented = (
+                assessment_dedup.decide_source_duplicates(
+                    atoms,
+                    meta=meta,
+                    envelope_sha256=envelope_sha,
+                    provider=dedup_provider,
+                    critic=dedup_critic,
+                    store=store,
+                    fixer=fixer,
+                )
+            )
+            for record in source_duplicates_represented:
+                progress.log(
+                    "Master file: source question "
+                    f"{record.get('source_qid')!r} ships ONCE — it is "
+                    "represented by its duplicate survivor "
+                    f"{record.get('duplicate_of')!r} (P3) and recorded "
+                    "on the release for review: "
+                    + str(record.get("reason") or ""),
+                    level="warning",
+                )
+            if source_duplicates_represented:
+                progress.log(
+                    "Assessment release: "
+                    f"{len(source_duplicates_represented)} duplicated "
+                    "source question(s) consolidated to their survivors; "
                     f"{len(atoms)} question(s) continue.",
                     level="warning",
                 )
@@ -2757,6 +2801,11 @@ def run_release_for_job(
         # qids — coverage moved, never lost — and is reviewable the same
         # way as the two dispositions above.
         "compound_parents_represented": compound_parents_represented,
+        # P3 (owner audit + approval, 2026-08-29): source questions the
+        # duplicate verdict folded into their survivors, each naming the
+        # survivor and the reason — coverage moved, never lost, and
+        # reviewable the same way as the dispositions above.
+        "source_duplicates_represented": source_duplicates_represented,
     }
     if source_context_dispositions:
         # An auditable zero-loss disposition: the source row survives in each
