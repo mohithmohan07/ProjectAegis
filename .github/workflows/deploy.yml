@@ -25,7 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # Pinned to a commit SHA, not the mutable master ref: this job holds
+      # FLY_API_TOKEN, so the action it runs must be immutable (a compromised
+      # upstream branch on the next push to main could exfiltrate the token).
+      # Update the pin deliberately, by choosing a new reviewed commit.
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1 # master / v1, 2026-08-29
       - run: flyctl deploy --remote-only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

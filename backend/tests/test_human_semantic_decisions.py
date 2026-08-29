@@ -1809,6 +1809,63 @@ def test_agent_recorder_rejects_user_only_actions_and_instructions(
     assert recorded["resolved_decision"]["instruction"].startswith("Refine")
 
 
+def test_agent_recorder_refuses_the_dead_end_rich_text_carry_forward(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """Q24 choke point: every automated settlement passes through the
+    recorder, so even a door with no guard of its own (the exhausted-scope
+    and exhausted-ceiling settlements included) cannot settle a rich-text
+    source pending with the measured dead-end carry_forward. A human's
+    explicit choice on the sanctioned source-review pause stays recordable.
+    """
+    job, chapter = _job_at_81_percent(db, first_chapter)
+    packet = _phase31_topology_pending_packet()
+    packet["kind"] = "phase3_source_graph_review"
+    packet["item"]["type_id"] = "semantic_source_rich_text"
+    pending = build_concepts._persist_pending_human_decision(
+        db,
+        job,
+        packet,
+        fingerprint=job.generation_checkpoint["fingerprint"],
+        target_chapter_id=chapter.id,
+        owner_sub=auth.LOCAL_OWNER_SUB,
+    )
+    monkeypatch.setattr(
+        build_concepts.drive_checkpoints,
+        "schedule_checkpoint_backup",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(build_concepts.UnattendedDecisionUnavailable):
+        build_concepts._record_human_semantic_decision_locked(
+            db,
+            job,
+            pending["decision_id"],
+            choice=autonomous_resolution.CARRY_FORWARD_CHOICE,
+            instruction="",
+            target_id="",
+            target_concept_id="",
+            resolved_by="agent",
+            resolution_status="consumed",
+        )
+
+    recorded = build_concepts._record_human_semantic_decision_locked(
+        db,
+        job,
+        pending["decision_id"],
+        choice=autonomous_resolution.CARRY_FORWARD_CHOICE,
+        instruction="",
+        target_id="",
+        target_concept_id="",
+        resolved_by="human",
+    )
+    assert recorded["resolved_decision"]["choice"] == (
+        autonomous_resolution.CARRY_FORWARD_CHOICE
+    )
+
+
 def test_early_blueprint_pending_replay_and_save_are_api_free(
     client,
     db,

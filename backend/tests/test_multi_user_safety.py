@@ -351,10 +351,14 @@ def test_culminations_are_enforced_mechanically():
     # A topic the model left without a culmination ships WITHOUT one — the
     # validator report flags it; no row is invented.
     assert b_culms == []
-    # A topic teaching one concept gets no culmination, and a stray one is
-    # dropped rather than kept.
+    # A topic teaching one concept authors no culmination going forward, but
+    # this normalizer runs only from the TERMINAL contract over attested
+    # rows: an existing single-concept culmination ships FLAGGED
+    # (culmination_single_concept), never dropped (owner decision D8 / R4 —
+    # dropping an attested row breaks certificate lineage).
     assert [r["concept_title"] for r in c_rows] == ["Concept C1"]
-    assert [r["concept_title"] for r in d_rows] == ["Concept D1"]
+    assert [r["concept_title"] for r in d_rows] == [
+        "Concept D1", "Culmination - D"]
     # Normal rows all survive.
     assert [r["concept_title"] for r in a_rows[:-1]] == [
         "Concept A1", "Concept A2"]

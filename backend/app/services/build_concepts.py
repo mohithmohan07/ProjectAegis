@@ -2704,6 +2704,14 @@ def _autonomously_resolve_pending_decision(
 
     def _forced_safe_result(guard_reason: str) -> "autonomous_resolution.ResolutionResult":
         assert safe_option is not None
+        if (
+            safe_option["choice"]
+            == autonomous_resolution.CARRY_FORWARD_CHOICE
+            and _is_dead_end_rich_text_pending(pending)
+        ):
+            # The loop-detection and safety-cap guards must not force the
+            # measured dead end either (owner ruling 2026-08-29, Q24).
+            _raise_dead_end_rich_text_settlement(pending)
         return autonomous_resolution.ResolutionResult(
             status="resolved",
             reason=(
@@ -3032,6 +3040,47 @@ def _autonomously_resolve_pending_decision(
     return decision_id
 
 
+def _is_dead_end_rich_text_pending(pending: dict) -> bool:
+    """A source-review pending over non-canonical rich text.
+
+    Settling one with ``carry_forward`` is a PROVEN dead end: the
+    semantic-graph integrity gate downstream refuses the graph ("not safe
+    for concept generation") and every resume replays the same refusal
+    ([measured] job 'Electricity', Class 10 Ch 5, 2026-08-29).
+    """
+    return (
+        str(pending.get("kind") or "") == "phase3_source_graph_review"
+        and str((pending.get("item") or {}).get("type_id") or "")
+        == "semantic_source_rich_text"
+    )
+
+
+def _raise_dead_end_rich_text_settlement(pending: dict) -> None:
+    """End the run fast instead of settling into the measured dead end.
+
+    Owner ruling, 2026-08-29 (§12 register, Q24): an unattended run that
+    can settle a rich-text source pending only with ``carry_forward`` fails
+    NOW with the named remedy, rather than spending its way into the
+    downstream integrity-gate refusal or looping through resumes. This
+    narrowly amends the Q13 always-complete posture for exactly this
+    settlement: the run cannot complete usefully, and the honest fast
+    failure names the cure.
+    """
+    message = (
+        "Unattended generation stopped instead of settling "
+        + _decision_identity_text(pending)
+        + " with carry_forward: carrying non-canonical rich text forward is "
+        "a proven dead end — the semantic-graph integrity gate downstream "
+        "refuses the graph and every resume replays the same refusal. "
+        "Convert the PDF again as a new upload: sources converted before "
+        "\\mathrm ingestion canonicalization are cured by reconversion. If "
+        "the same pause returns on a fresh conversion, the named block "
+        "genuinely needs a corrected source document."
+    )
+    progress.log(message, level="error")
+    raise UnattendedDecisionUnavailable(message)
+
+
 def _apply_last_resort_safe_continuation(
     db: Session,
     job: models.UploadJob,
@@ -3060,33 +3109,12 @@ def _apply_last_resort_safe_continuation(
         return None
     if (
         safe_option["choice"] == autonomous_resolution.CARRY_FORWARD_CHOICE
-        and str(pending.get("kind") or "") == "phase3_source_graph_review"
-        and str((pending.get("item") or {}).get("type_id") or "")
-        == "semantic_source_rich_text"
+        and _is_dead_end_rich_text_pending(pending)
     ):
-        # Carrying a non-canonical rich-text block forward is a PROVEN dead
-        # end, not a safe continuation: the semantic-graph integrity gate
-        # downstream refuses the graph ("not safe for concept generation"),
-        # the run ends incomplete, and every resume re-applies the same
-        # carry_forward into the same refusal ([measured] job 'Electricity',
-        # Class 10 Ch 5, 2026-08-29: unsupported_katex_command on
-        # BLK-00595). Source review is one of the sanctioned pre-spend
-        # pauses (CLAUDE.md Rule 1), and the routes that would actually fix
-        # the block (apply the suggested source patch, replace the source)
-        # are exactly the ones no automation may take — so the honest
-        # continuation IS the pause: keep the decision for the user.
-        progress.log(
-            "Aegis kept the source-review pause instead of continuing by "
-            "best judgement: the saved decision for "
-            + _decision_identity_text(pending)
-            + " concerns non-canonical rich text, and carrying it forward "
-            "is refused by the semantic-graph integrity gate downstream. "
-            "Resolve the pending source decision (for example, apply its "
-            "suggested correction) and generation completes from the saved "
-            "checkpoint.",
-            level="warning",
-        )
-        return None
+        # There is no pause to keep — unattended runs have none (Q13) — and
+        # continuing with carry_forward is the measured dead end. Fail fast
+        # with the named remedy instead (owner ruling 2026-08-29, Q24).
+        _raise_dead_end_rich_text_settlement(pending)
     review = pending.get("agent_review")
     declined_reason = (
         str(review.get("reason") or "").strip()
@@ -3479,6 +3507,17 @@ def _apply_fixer_resolution_choice(
         (set(offered) | {autonomous_resolution.CARRY_FORWARD_CHOICE})
         - {"replace_source"}
     )
+    if _is_dead_end_rich_text_pending(pending):
+        # The Fixer may not settle a rich-text source pending with the
+        # measured dead end either; when nothing else is applicable, fail
+        # fast with the named remedy before spending a Fixer call (owner
+        # ruling 2026-08-29, Q24).
+        allowed = [
+            value for value in allowed
+            if value != autonomous_resolution.CARRY_FORWARD_CHOICE
+        ]
+        if not allowed:
+            _raise_dead_end_rich_text_settlement(pending)
     payload = {
         "fixer": True,
         "blocked_check": [
@@ -3491,8 +3530,16 @@ def _apply_fixer_resolution_choice(
             "kind": "fixer.resolution_choice",
             "rule": (
                 "pick exactly ONE applicable route: one of the offered "
-                "choices, or carry_forward (settle the decision by "
-                "changing nothing). replace_source is never applicable "
+                "choices"
+                + (
+                    ". carry_forward is NOT applicable to this decision: "
+                    "carrying non-canonical rich text forward is a proven "
+                    "dead end refused downstream"
+                    if _is_dead_end_rich_text_pending(pending)
+                    else ", or carry_forward (settle the decision by "
+                    "changing nothing)"
+                )
+                + ". replace_source is never applicable "
                 "— no automation may synthesize a replacement document. "
                 "custom_instruction requires you to write the exact "
                 "instruction. Response schema: {\"choice\", "
@@ -4306,6 +4353,19 @@ def _record_human_semantic_decision_locked(
     ):
         raise HumanDecisionConflictError(
             "the semantic decision context is stale; reopen the current job")
+
+    if (
+        resolved_by == "agent"
+        and choice == autonomous_resolution.CARRY_FORWARD_CHOICE
+        and _is_dead_end_rich_text_pending(pending)
+    ):
+        # Q24 choke point: recording is the one door every automated
+        # settlement pathway — present or future — must pass through, so
+        # the dead-end rich-text carry_forward is refused HERE, not just at
+        # the individual doors that happen to be guarded. A HUMAN's explicit
+        # carry_forward on the sanctioned source-review pause remains that
+        # person's call and is untouched.
+        _raise_dead_end_rich_text_settlement(pending)
 
     offered: dict[str, dict] = {
         str(option.get("choice") or ""): option

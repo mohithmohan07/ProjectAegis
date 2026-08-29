@@ -1259,6 +1259,35 @@ Owner rulings, 29 Aug 2026, from the Concept Mapping Audit review round:
   attested it ships flagged, never dropped — dropping an attested row
   breaks certificate lineage and refuses finished work (R4).
 
+### Q24 · Decided — a rich-text source pending whose only settlement is the measured dead end fails the run fast, with the remedy named
+
+Owner ruling, 29 Aug 2026 ("b2 fail", answering the PR #267 review finding
+that the "keep the pause" guard delivered nothing on the unattended path).
+When an unattended run reaches a `phase3_source_graph_review` pending of
+type `semantic_source_rich_text` and the only recordable settlement is
+`carry_forward` — the [measured] dead end the semantic-graph integrity gate
+refuses downstream (job 'Electricity', Class 10 Ch 5) — the run ends NOW
+with the named remedy: convert the PDF again as a new upload (sources
+converted before the `\mathrm` ingestion canonicalization of PR #267 are
+cured by reconversion; a pause that returns on a fresh conversion means the
+block genuinely needs a corrected source). Enforced at the ONE choke point
+every automated settlement passes through — the decision recorder
+(`_record_human_semantic_decision_locked`) refuses an agent-recorded
+`carry_forward` for this pending shape — with earlier guards at the doors
+for better failure locality and to avoid wasted spend: the last-resort safe
+continuation, the loop-detection/safety-cap forced-safe branches, and the
+Fixer's choice set (which loses `carry_forward` for this shape, is told so
+in its contract text, and fails fast without spending the Fixer call when
+nothing else is applicable). A HUMAN's explicit `carry_forward` on the
+sanctioned source-review pause remains that person's call.
+
+This narrowly amends Q13's always-complete posture for exactly this
+settlement — completing was an illusion here: the run either failed later
+at the integrity gate after spending, or looped through resumes. Fresh
+conversions cannot reach this state; the ruling is a legacy-source
+condition with a legitimate cure, in the spirit of Q13's "genuine
+impossibility" (the source, as converted, is unusable).
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the
