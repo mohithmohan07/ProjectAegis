@@ -7,10 +7,14 @@ defects. A run such as job 78 could therefore keep a durable 55% checkpoint
 while the UI hid Resume, and publication safety depended on some unrelated
 Type/QID defect happening to be present.
 
-The release payload already records the two facts needed to decide terminality:
-``checkpoint_stage`` and the generation issue ledger. This contract deliberately
-uses those existing fields rather than adding another top-level payload key —
-the Post payload shape is a frozen release contract. It provides four guarantees:
+Restructure A (owner approval, 2026-08-29): "is this run finished" is decided
+ONCE, at staging, and recorded on the staged payload as the explicit
+``terminal_generation_complete`` field (mirrored into its summary). Every
+later consumer — Master eligibility, publication — reads that recorded fact.
+Payloads staged before the field existed are backfilled once from durable
+evidence (``ensure_explicit_terminal_verdict``); the checkpoint/issue
+derivation in ``payload_terminal_generation_complete`` remains only as that
+legacy-read fallback. The contract provides four guarantees:
 
 * a recorded non-terminal checkpoint with a generation failure remains
   downloadable and returns to the converted/unpublished lifecycle so Resume is
@@ -41,9 +45,10 @@ from . import generation
 
 
 CONTRACT_VERSION = 2
-# Read compatibility only. An earlier draft of this repair wrote the field;
-# production v2 derives authority from the payload's existing checkpoint/issues
-# fields and therefore does not alter the frozen top-level payload shape.
+# Restructure A (2026-08-29): the run's terminal verdict, written once at
+# staging by ``record_terminal_verdict`` onto the payload and its summary.
+# Consumers read this recorded fact; the checkpoint/issues derivation below
+# survives only to read (and backfill) payloads staged before the field.
 TERMINAL_GENERATION_FIELD = "terminal_generation_complete"
 TERMINAL_GENERATION_DEFECT = "terminal_generation_incomplete"
 PARTIAL_RELEASE_STATUS = "converted"
@@ -87,7 +92,7 @@ def _payload_has_generation_error(payload: Mapping[str, Any]) -> bool:
 
 
 def _explicit_terminal_value(payload: Mapping[str, Any]) -> bool | None:
-    """Read either draft-era explicit location without writing either one."""
+    """Read the recorded verdict from the payload or its summary mirror."""
     if TERMINAL_GENERATION_FIELD in payload:
         return payload.get(TERMINAL_GENERATION_FIELD) is True
     summary = payload.get("summary")
@@ -170,6 +175,82 @@ def _restore_resumable_status(db, job: models.UploadJob) -> None:
     db.refresh(job)
 
 
+def record_terminal_verdict(
+    db,
+    job: models.UploadJob,
+    *,
+    lane: object,
+    complete: bool,
+) -> None:
+    """Stamp the run's terminal verdict ONTO the staged payload, once.
+
+    Restructure A (owner approval, 2026-08-29): "is this run finished" is
+    a fact the run itself decides at staging — recorded here as the
+    explicit ``terminal_generation_complete`` field — and every later
+    consumer (Master eligibility, publication) READS that recorded fact
+    instead of re-deriving it from checkpoint echoes. [measured] job
+    'Patterns': a fully completed run whose payload echoed a mid-run
+    stage flunked the derived check on every Master click while both
+    Concept files sat staged and healthy.
+    """
+    key = release.release_key_for_lane(lane)
+    durable = copy.deepcopy(dict(job.question_inventory or {}))
+    payload = durable.get(key)
+    if not isinstance(payload, Mapping):
+        return
+    marked = copy.deepcopy(dict(payload))
+    marked[TERMINAL_GENERATION_FIELD] = bool(complete)
+    summary = dict(marked.get("summary") or {})
+    summary[TERMINAL_GENERATION_FIELD] = bool(complete)
+    marked["summary"] = summary
+    durable[key] = marked
+    job.question_inventory = durable
+    db.commit()
+    db.refresh(job)
+
+
+def ensure_explicit_terminal_verdict(
+    db,
+    job: models.UploadJob,
+    *,
+    lane: object,
+) -> bool | None:
+    """Return the lane payload's terminal verdict, backfilling a legacy one.
+
+    A payload staged before restructure A carries no explicit verdict.
+    This migrates the fact ONCE from durable evidence — the payload's own
+    recorded error/defect state plus the checkpoint stage, accepting the
+    LIVE checkpoint's ``final_content_ready`` where the payload's echoed
+    stage lags behind it (the staging-order race job 'Patterns' hit: the
+    final checkpoint write landed after the release was staged, so the
+    echo said mid-run forever). Mechanics over recorded state; nothing
+    here judges content. Returns ``None`` when the lane has no payload.
+    """
+    payload = release.release_payload(job, lane=lane)
+    if payload is None:
+        return None
+    explicit = _explicit_terminal_value(payload)
+    if explicit is not None:
+        return explicit
+    live = (
+        job.generation_checkpoint
+        if isinstance(job.generation_checkpoint, Mapping)
+        else {}
+    )
+    recorded_stage = str(payload.get("checkpoint_stage") or "").strip()
+    live_stage = _checkpoint_stage(live)
+    complete = (
+        not _has_terminal_snapshot_defect(payload)
+        and not _payload_has_generation_error(payload)
+        and (
+            recorded_stage in {"", "final_content_ready"}
+            or live_stage == "final_content_ready"
+        )
+    )
+    record_terminal_verdict(db, job, lane=lane, complete=complete)
+    return complete
+
+
 def _record_pre_run_authority(
     db,
     job: models.UploadJob,
@@ -224,6 +305,14 @@ def install() -> None:
         if job is None or db is None:
             return result
         complete = _post_terminal_from_call(job, kwargs)
+        # Restructure A (owner approval, 2026-08-29): the verdict is
+        # DECIDED HERE, once, and stamped onto the staged payload. Every
+        # later consumer reads the recorded fact; a checkpoint that
+        # drifts, re-validates differently, or is cleared afterwards can
+        # never re-open the question.
+        record_terminal_verdict(
+            db, job, lane=release.LANE_POST, complete=complete,
+        )
         # Only a real partial checkpoint earns Resume. Quota/provider death
         # before any checkpoint remains a released diagnostic rather than a
         # converted job that can only restart from zero.
@@ -239,11 +328,14 @@ def install() -> None:
         if job is None or db is None or result is None:
             return result
         post_payload = release.release_payload(job, lane=release.LANE_POST)
-        _record_pre_run_authority(
-            db,
-            job,
-            complete=payload_terminal_generation_complete(post_payload),
+        complete = payload_terminal_generation_complete(post_payload)
+        # Restructure A: Pre is a sibling projection of the same Concept
+        # run, so it carries the Post run's verdict — recorded explicitly
+        # here, at staging, exactly as the Post payload records its own.
+        record_terminal_verdict(
+            db, job, lane=release.LANE_PRE, complete=complete,
         )
+        _record_pre_run_authority(db, job, complete=complete)
         # Preserve stage_pre_release's established lane-specific return shape.
         return result
 

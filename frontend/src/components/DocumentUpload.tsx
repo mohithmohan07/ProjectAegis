@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { useOptionalAuth } from "../Auth";
 import { useRunConsole } from "../RunConsole";
 import type { UploadJob } from "../types";
+import MmdViewer from "./MmdViewer";
 import SourceBookInput from "./SourceBookInput";
 
 type Module = "assessments" | "concepts";
@@ -129,7 +130,10 @@ function safeStorageRemoveItem(key: string): void {
  *   1. Choose a file (staged locally — change it freely)
  *   2. Upload → the file is stored AND converted to MMD immediately
  *      (status "converted"); the Console streams the parse live
- *   3. Pick the deposit target, then start generation
+ *   3. Pick the deposit target, then start generation — or, when the
+ *      parent chose every parameter up front, the converted job flows
+ *      straight into generation via ``onConverted`` (owner request,
+ *      2026-08-29: one action runs the whole chain).
  * Replacing the file stays manual: a replacement is stored without
  * parsing until Convert is pressed, so a wrong pick costs nothing.
  */
@@ -141,6 +145,9 @@ export default function DocumentUpload({
   externalJob,
   disabled = false,
   onJob,
+  uploadLabel,
+  uploadHint,
+  onConverted,
 }: {
   module: Module;
   conceptKind?: "post" | "pre";
@@ -149,6 +156,18 @@ export default function DocumentUpload({
   externalJob?: UploadJob | null;
   disabled?: boolean;
   onJob: (job: UploadJob | null) => void;
+  /** Overrides the Upload button text (one-shot flows name the whole run). */
+  uploadLabel?: string;
+  /** Overrides the pre-upload hint copy beneath the file row. */
+  uploadHint?: string;
+  /**
+   * Called after a FRESH upload finishes converting (owner request,
+   * 2026-08-29: parameters are chosen up front and one action runs the
+   * whole chain). Deliberately not called for a manual Convert of a
+   * replaced file or for a restored saved run — those keep their
+   * explicit, separate steps.
+   */
+  onConverted?: (job: UploadJob) => void;
 }) {
   const { run } = useRunConsole();
   const auth = useOptionalAuth();
@@ -361,11 +380,12 @@ export default function DocumentUpload({
       if (inputRef.current) inputRef.current.value = "";
       emit(created);
       // Parsing starts in one go with the upload (owner request,
-      // 2026-08-28): the file converts immediately, then the deposit
-      // scope is chosen and generation started as separate steps.
-      // Replacing the file stays manual, so a wrong pick is still free
-      // to swap before its replacement is parsed.
-      await convertJob(created);
+      // 2026-08-28), and when the parent chose its parameters up front
+      // the converted job continues straight into generation through
+      // ``onConverted`` (owner request, 2026-08-29). Replacing the file
+      // stays manual, so a wrong pick is still free to swap before its
+      // replacement is parsed.
+      await convertJob(created, { continueRun: true });
     } catch (e) {
       setError(String(e));
     } finally {
@@ -389,7 +409,10 @@ export default function DocumentUpload({
     }
   }
 
-  async function convertJob(target: UploadJob) {
+  async function convertJob(
+    target: UploadJob,
+    options?: { continueRun?: boolean },
+  ) {
     if (disabled) return;
     invalidateSavedJobRestore();
     const requestGeneration = savedJobRequestGenerationRef.current;
@@ -430,13 +453,15 @@ export default function DocumentUpload({
         },
       );
       if (savedJobRequestGenerationRef.current !== requestGeneration) return;
-      emit({
+      const convertedJob: UploadJob = {
         ...target,
         status: "converted",
         mmd_text: result.mmd_text,
         source_artifacts: result.source_artifacts,
         openai_usage: result.openai_usage ?? target.openai_usage,
-      });
+      };
+      emit(convertedJob);
+      if (options?.continueRun) onConverted?.(convertedJob);
     } catch (e) {
       if (savedJobRequestGenerationRef.current === requestGeneration) {
         setError(String(e));
@@ -519,14 +544,15 @@ export default function DocumentUpload({
           <button disabled={!file || controlsDisabled} onClick={upload}>
             {busy
               ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
-              : "Upload"}
+              : uploadLabel || "Upload"}
           </button>
           {file && <span className="muted mono">{file.name}</span>}
         </div>
         <div className="hint mt-8">
-          Uploading stores the file and starts its conversion right away —
-          watch the Console for parse progress. You pick where to deposit
-          before anything is generated.
+          {uploadHint
+            || "Uploading stores the file and starts its conversion right "
+            + "away — watch the Console for parse progress. You pick where "
+            + "to deposit before anything is generated."}
         </div>
         {restoringSavedJob && (
           <div className="muted mt-8" role="status">
@@ -659,7 +685,7 @@ export default function DocumentUpload({
       )}
 
       {converted && job.mmd_text && (
-        <pre className="mmd-preview">{job.mmd_text.slice(0, 800)}</pre>
+        <MmdViewer text={job.mmd_text} filename={job.filename} />
       )}
       {converted && (
         <SourceArtifactsCard

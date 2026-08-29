@@ -345,37 +345,38 @@ def _lane_master_eligibility(
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=owner_sub, module="build_concepts")
+        # Restructure A (owner approval, 2026-08-29): "is this run
+        # finished" was decided ONCE, at staging, and recorded on the
+        # payload as its explicit terminal verdict. This gate READS that
+        # recorded fact; it never re-derives it from the live generation
+        # checkpoint. [measured] job 'Patterns': a fully completed run
+        # whose staged payload echoed a mid-run stage flunked the derived
+        # check on every Master click while both Concept files sat staged
+        # and healthy. Legacy payloads staged before the verdict existed
+        # are backfilled once from durable evidence by
+        # ``ensure_explicit_terminal_verdict``.
+        #
         # Pre is a sibling projection of the same Concept run and has no
         # independent generation lifecycle. A non-terminal Post authority
-        # therefore blocks both Master lanes even if an older/partial Pre slot
-        # happens to look complete in isolation.
-        post_payload = release.release_payload(job, lane=release.LANE_POST)
-        if (
-            post_payload is not None
-            and not terminal_release.payload_terminal_generation_complete(
-                post_payload
-            )
-        ):
-            # Name the failing predicate, not only the verdict: [measured]
-            # job 'Patterns' (2026-08-29), a fresh fully-completed run
-            # saved its terminal checkpoint and this gate still refused,
-            # with nothing anywhere saying why.
-            from . import generation
-
-            diagnosis = generation.concept_checkpoint_terminal_diagnosis(
-                job.generation_checkpoint
-            )
+        # therefore blocks both Master lanes even if an older/partial Pre
+        # slot happens to look complete in isolation.
+        post_verdict = terminal_release.ensure_explicit_terminal_verdict(
+            db, job, lane=release.LANE_POST
+        )
+        if post_verdict is False:
             return False, (
-                "the Concept run comes from a non-terminal generation "
-                f"checkpoint — {diagnosis}"
+                "the staged Concept release records a non-terminal "
+                "generation run"
             )
-        payload = release.release_payload(job, lane=lane)
-        if payload is None:
+        lane_verdict = terminal_release.ensure_explicit_terminal_verdict(
+            db, job, lane=lane
+        )
+        if lane_verdict is None:
             return False, "no staged Concept release"
-        if not terminal_release.payload_terminal_generation_complete(payload):
+        if lane_verdict is False:
             return False, (
-                "the staged Concept release comes from a non-terminal "
-                "generation checkpoint"
+                "the staged Concept release records a non-terminal "
+                "generation run"
             )
         return True, ""
     except Exception:

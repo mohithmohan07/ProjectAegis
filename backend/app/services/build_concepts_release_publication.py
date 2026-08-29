@@ -162,6 +162,17 @@ def upload_release_to_database(
         module="build_concepts",
     )
     release_key = release_key_for_lane(resolved)
+    # Restructure A: publication judges the verdict RECORDED at staging.
+    # A legacy payload staged before the explicit field existed is
+    # backfilled once from durable evidence here, so a checkpoint echo
+    # that lags the finished run ([measured] job 'Patterns') cannot
+    # refuse a healthy release's database upload. Local import: the
+    # terminal contract module imports this one.
+    from . import build_concepts_terminal_release_contract as terminal_release
+
+    terminal_release.ensure_explicit_terminal_verdict(
+        db, job, lane=resolved,
+    )
     payload = release_payload(job, lane=resolved)
     if payload is None:
         raise ReleaseUnavailableError("this upload has no staged release")
