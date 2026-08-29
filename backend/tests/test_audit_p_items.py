@@ -289,3 +289,90 @@ def test_descriptive_rubric_weights_default_to_uniform_one():
     prompt = assessment_marking.MARKING_SYSTEM
     assert "uniform 1.0 weight" in prompt
     assert "number of criteria satisfied" in prompt
+
+
+# --------------------------------------------------------------------------- #
+# D8 — a Culmination exists only for a topic with two or more concepts
+# --------------------------------------------------------------------------- #
+
+def _concept_row(topic: str, title: str) -> dict:
+    return {
+        "topic": topic,
+        "concept_title": title,
+        "parent_concept": "P",
+        "concept_details": "Description: d",
+        "keywords": "k",
+    }
+
+
+def test_an_authored_culmination_never_lands_on_a_single_concept_topic():
+    from app.services import generation
+
+    records = [
+        _concept_row("Topic One", "Only Concept"),
+        _concept_row("Topic Two", "Concept A"),
+        _concept_row("Topic Two", "Concept B"),
+    ]
+    authored = [
+        {
+            "topic": "Topic One",
+            "concept_title": "Culmination - Only Concept",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+        {
+            "topic": "Topic Two",
+            "concept_title": "Culmination - Concept A and Concept B",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+    ]
+    merged = generation._merge_culmination_rows(records, authored)
+    titles_by_topic: dict[str, list[str]] = {}
+    for row in merged:
+        titles_by_topic.setdefault(row["topic"], []).append(
+            row["concept_title"]
+        )
+    # Topic One (single concept) got NO culmination (owner decision D8);
+    # Topic Two got its authored one, last.
+    assert titles_by_topic["Topic One"] == ["Only Concept"]
+    assert titles_by_topic["Topic Two"][-1] == (
+        "Culmination - Concept A and Concept B"
+    )
+
+
+def test_the_terminal_contract_keeps_a_legacy_single_concept_culmination():
+    """D8 is enforced at authoring; a legacy row that reaches the terminal
+    contract (a pre-D8 checkpoint whose grounding certificate already
+    attested it) ships FLAGGED, never dropped — dropping an attested row
+    breaks certificate lineage and refuses finished work (R4)."""
+
+    from app.services import concept_validator as cv
+    from app.services import generation
+
+    rows = [
+        _concept_row("Topic One", "Only Concept"),
+        {
+            "topic": "Topic One",
+            "concept_title": "Culmination - Only Concept",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+    ]
+    out = generation._ensure_terminal_culmination_contract(rows)
+    assert [r["concept_title"] for r in out] == [
+        "Only Concept", "Culmination - Only Concept",
+    ]
+    report = cv.validate_concept_rows(rows, require_culmination=True)
+    assert any(
+        e["code"] == "culmination_single_concept" for e in report["errors"]
+    )
+
+
+def test_the_culmination_prompts_carry_the_two_concept_floor():
+    from app.services import prompts
+
+    culmination = prompts.get_text("concepts.culmination.system")
+    assert "TWO OR MORE" in culmination.replace("\n  ", " ")
+    assert "single concept" in culmination
+    assert "D8" in culmination

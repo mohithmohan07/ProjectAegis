@@ -1806,13 +1806,24 @@ def test_reusable_type_identity_preserves_mathematical_operators():
 
 
 def test_merged_culmination_keeps_authored_title_and_sheds_types():
-    normal = {
-        "topic": "Opening Patterns",
-        "parent_concept": "Patterns",
-        "concept_title": "Recognising Fixed Changes",
-        "concept_details": "Description: Identify a constant change.",
-        "keywords": "",
-    }
+    # Two normal concepts: under owner decision D8 (2026-08-29) a
+    # culmination merges only into a topic with two or more concepts.
+    normals = [
+        {
+            "topic": "Opening Patterns",
+            "parent_concept": "Patterns",
+            "concept_title": "Recognising Fixed Changes",
+            "concept_details": "Description: Identify a constant change.",
+            "keywords": "",
+        },
+        {
+            "topic": "Opening Patterns",
+            "parent_concept": "Patterns",
+            "concept_title": "Extending a Pattern",
+            "concept_details": "Description: Continue a constant change.",
+            "keywords": "",
+        },
+    ]
     authored = {
         "topic": "Opening Patterns",
         "parent_concept": "Culmination",
@@ -1823,7 +1834,7 @@ def test_merged_culmination_keeps_authored_title_and_sheds_types():
         ),
         "keywords": "",
     }
-    result = g._merge_culmination_rows([normal], [authored])
+    result = g._merge_culmination_rows(normals, [authored])
     culmination = result[-1]
     # The model-authored title survives — no deterministic rebuild — while
     # Types on the fresh culmination are still stripped (mechanics: Types

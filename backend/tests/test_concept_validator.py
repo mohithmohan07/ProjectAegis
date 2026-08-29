@@ -1336,3 +1336,27 @@ def test_multi_concept_topic_still_requires_its_culmination():
         _rec("Skill B"),
     ], require_culmination=True)
     assert any(e["code"] == "culmination_count" for e in report["errors"])
+
+
+def test_a_single_concept_topic_carrying_a_culmination_is_flagged():
+    """Owner decision D8 (2026-08-29): a culmination exists ONLY for a
+    topic with two or more concepts — a single-concept culmination is a
+    recorded warning (never a silent tolerance, never a hard failure that
+    would refuse a legacy chapter's revalidation)."""
+
+    culm = _rec("Culmination - Skill A")
+    culm["parent_concept"] = "Culmination"
+    report = cv.validate_concept_rows(
+        [_rec("Skill A"), culm], require_culmination=True)
+    flagged = [
+        e for e in report["errors"]
+        if e["code"] == "culmination_single_concept"
+    ]
+    assert flagged and flagged[0]["severity"] == "warning"
+    assert "single concept" in flagged[0]["message"]
+    # A warning, not an error: the report stays ok-able on this alone.
+    assert not any(
+        e["code"] == "culmination_single_concept"
+        and e["severity"] == "error"
+        for e in report["errors"]
+    )
