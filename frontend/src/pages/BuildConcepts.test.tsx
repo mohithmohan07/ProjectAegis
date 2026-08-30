@@ -35,10 +35,6 @@ const apiMock = vi.hoisted(() => ({
   getUploadJob: vi.fn(),
   getRunEvents: vi.fn(),
   submitConceptDecision: vi.fn(),
-  conceptReleaseUrl: vi.fn((id: number) => `/release/${id}.xlsx`),
-  conceptReleaseBulkImportUrl: vi.fn(
-    (id: number) => `/release/${id}-bulk-import.xlsx`,
-  ),
   inventoryCsvUrl: vi.fn((id: number) => `/inventory/${id}.csv`),
   listConceptRevisions: vi.fn(),
   submitConceptRevision: vi.fn(),

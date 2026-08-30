@@ -42,6 +42,7 @@ from . import build_concepts_release_files as release_files
 from . import build_concepts_release_manifest as release_manifest
 from . import build_concepts_release_publication as publication
 from . import generation
+from . import progress
 
 
 CONTRACT_VERSION = 2
@@ -66,6 +67,65 @@ def _db_from_call(args, kwargs):
 
 
 def _checkpoint_stage(checkpoint: object) -> str:
+    """The newest stage this checkpoint durably RECORDED — a raw read.
+
+    Deliberately not ``_newest_compatible_concept_checkpoint``: strict
+    resume-compatibility (seals, live-graph certificate re-verification)
+    answers "can this entry be resumed NOW", which legitimately changes
+    over time — exactly what a stamped-once terminal verdict must not
+    depend on. It also inverted severity: a checkpoint whose entries were
+    ALL incompatible fell through to an absent top-level stage and read
+    as terminal, while one whose terminal entry alone failed a strict
+    check read as mid-run ([measured] 2026-08-30: a completed run froze
+    complete=False onto both payloads and lost both Master outputs).
+    What stage the run reached is a recorded fact; this reads it as one.
+    """
+    if not isinstance(checkpoint, Mapping):
+        return ""
+    try:
+        entries = [
+            entry
+            for entry in generation._concept_checkpoint_entries(
+                dict(checkpoint)
+            )
+            if isinstance(entry, Mapping)
+            and str(entry.get("stage") or "").strip()
+        ]
+    except Exception:
+        entries = []
+    if entries:
+        newest = max(
+            enumerate(entries),
+            key=lambda indexed: (
+                generation._checkpoint_order(
+                    str(indexed[1].get("stage") or "")
+                ),
+                indexed[0],
+            ),
+        )[1]
+        return str(newest.get("stage") or "").strip()
+    if (
+        str(checkpoint.get("checkpoint_format") or "")
+        and isinstance(checkpoint.get("checkpoints"), list)
+        and checkpoint.get("checkpoints")
+    ):
+        # A stage-history envelope whose entries this build cannot read
+        # (an unrecognized schema version, malformed entries) records a
+        # run state we cannot call terminal — falling through to the
+        # absent top-level stage would resurrect the severity inversion
+        # through the schema gate.
+        return "unreadable_checkpoint_envelope"
+    return str(checkpoint.get("stage") or "").strip()
+
+
+def _resumable_checkpoint_stage(checkpoint: object) -> str:
+    """The stage RESUME would actually accept — strictly filtered.
+
+    "Resumable" is a promise about the resume machinery, so here the strict
+    compatibility filter is exactly right: labelling a job resumable on a
+    checkpoint resume will reject produces the converted-job-that-restarts-
+    from-zero shape the diagnostic-release lifecycle exists to prevent.
+    """
     if not isinstance(checkpoint, Mapping):
         return ""
     try:
@@ -76,6 +136,10 @@ def _checkpoint_stage(checkpoint: object) -> str:
         newest = None
     if isinstance(newest, Mapping):
         return str(newest.get("stage") or "").strip()
+    # Legacy single-entry checkpoints keep their top-level stage as the
+    # resumable signal (resume itself falls back the same way); a v3
+    # envelope has no top-level stage, so strictly-unusable entries
+    # correctly read as not resumable.
     return str(checkpoint.get("stage") or "").strip()
 
 
@@ -148,6 +212,13 @@ def _post_terminal_from_call(
 ) -> bool:
     if kwargs.get("error") is not None:
         return False
+    # The run's own first-hand fact outranks every checkpoint reading: a
+    # staging that carries a captured terminal deposit IS a completed
+    # generation — the deposit interceptor only fires when the run reached
+    # its final deposit ([measured] 2026-08-30: deriving this from the
+    # checkpoint snapshot instead froze complete=False onto a clean run).
+    if release.TERMINAL_DEPOSIT_STAGING.get():
+        return True
     # A pending semantic decision is a review flag under the established
     # release-first contract; it is not, by itself, proof of a resumable run.
     # Only a recorded partial checkpoint can establish that lifecycle state.
@@ -159,7 +230,7 @@ def _has_resumable_checkpoint(
     job: models.UploadJob,
     kwargs: Mapping[str, Any],
 ) -> bool:
-    stage = _checkpoint_stage(_checkpoint_from_call(job, kwargs))
+    stage = _resumable_checkpoint_stage(_checkpoint_from_call(job, kwargs))
     return bool(stage and stage != "final_content_ready")
 
 
@@ -209,6 +280,92 @@ def record_terminal_verdict(
     db.refresh(job)
 
 
+# The exact staging sentences ONLY the clean-capture path writes
+# (``_release_after_result`` and its ``_stage_pre_sibling`` call in the
+# release contract). A payload carrying one of these was staged because
+# generation finished and delivered its deposit; a False verdict on it can
+# only be the strict-filter mis-derivation this file's fix retired.
+_CLEAN_CAPTURE_REASONS = frozenset({
+    "Generation completed. The output was staged and was not uploaded to "
+    "the database.",
+    "Generation completed. The Phase 03 Pre-Learning outputs were staged "
+    "and were not uploaded to the database.",
+})
+
+
+def _repair_misrecorded_terminal_verdict(
+    db,
+    job: models.UploadJob,
+    *,
+    lane: object,
+    payload: Mapping[str, Any],
+) -> bool:
+    """Correct a provably mis-derived False verdict on a clean-capture payload.
+
+    Before 2026-08-30 the verdict stamped at staging was derived from the
+    deposit-time checkpoint through the strict resume-compatibility filter;
+    a terminal entry that flunked one strict check (while an earlier stage
+    passed) froze ``complete=False`` onto a genuinely completed run — both
+    Master outputs skipped, the explicit rebuild routes refusing, no path
+    back. This repairs exactly that record and nothing else: the payload
+    must carry the clean-capture staging sentence only the completed-run
+    path writes, no recorded generation error, and (Post) captured records.
+    Correcting a mis-recorded fact from the payload's own recorded evidence
+    — never a re-litigation of a genuine failure verdict, which keeps its
+    different staging sentence and its recorded error.
+    """
+    reason = str(payload.get("release_reason") or "").strip()
+    if reason not in _CLEAN_CAPTURE_REASONS:
+        return False
+    if _payload_has_generation_error(payload):
+        return False
+    pre_key = release.release_key_for_lane(release.LANE_PRE)
+    is_pre = release.release_key_for_lane(lane) == pre_key
+    if is_pre:
+        # Pre carries the Post run's verdict; only a repaired/true Post
+        # authority can carry Pre with it. The bug itself wrote Pre's
+        # terminal snapshot defect, so that line does not block the
+        # repair — it is removed with the corrected record below.
+        if ensure_explicit_terminal_verdict(
+            db, job, lane=release.LANE_POST,
+        ) is not True:
+            return False
+        record_terminal_verdict(
+            db, job, lane=release.LANE_PRE, complete=True,
+        )
+        _record_pre_run_authority(db, job, complete=True)
+    else:
+        if _has_terminal_snapshot_defect(payload):
+            return False
+        if not payload.get("records"):
+            return False
+        record_terminal_verdict(
+            db, job, lane=release.LANE_POST, complete=True,
+        )
+        if str(job.status or "") == PARTIAL_RELEASE_STATUS:
+            # The same bug flipped the finished run back to a "resumable"
+            # converted lifecycle. Restore the released state the clean
+            # staging had already established, with an honest detail.
+            job.status = release.RELEASE_STATUS
+            job.result_ids = []
+            job.detail = (
+                "Repaired: this run completed and its release is staged "
+                "for review. The earlier 'resumable' state came from a "
+                "mis-recorded terminal verdict; nothing has been uploaded "
+                "to the database."
+            )
+            db.commit()
+            db.refresh(job)
+    progress.log(
+        "Repaired a mis-recorded terminal verdict: this lane's staged "
+        "release carries the completed-run staging record, but the "
+        "pre-2026-08-30 verdict derivation had frozen it as non-terminal. "
+        "The recorded verdict now matches the recorded run.",
+        level="warning",
+    )
+    return True
+
+
 def ensure_explicit_terminal_verdict(
     db,
     job: models.UploadJob,
@@ -230,6 +387,10 @@ def ensure_explicit_terminal_verdict(
     if payload is None:
         return None
     explicit = _explicit_terminal_value(payload)
+    if explicit is False and _repair_misrecorded_terminal_verdict(
+        db, job, lane=lane, payload=payload,
+    ):
+        return True
     if explicit is not None:
         return explicit
     live = (

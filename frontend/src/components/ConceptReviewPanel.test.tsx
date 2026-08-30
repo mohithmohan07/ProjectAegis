@@ -5,10 +5,6 @@ import { beforeEach, expect, test, vi } from "vitest";
 import type { ConceptRevision } from "../types";
 
 const apiMock = vi.hoisted(() => ({
-  conceptReleaseUrl: vi.fn((id: number) => `/release/${id}.xlsx`),
-  conceptReleaseBulkImportUrl: vi.fn(
-    (id: number) => `/release/${id}-bulk-import.xlsx`,
-  ),
   inventoryCsvUrl: vi.fn((id: number) => `/inventory/${id}.csv`),
   listConceptRevisions: vi.fn(),
   submitConceptRevision: vi.fn(),
