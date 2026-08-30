@@ -1,6 +1,8 @@
 # Restructure C — block JSON as the single authority (phased plan)
 
-Status: **plan approved for drafting; implementation NOT yet started.**
+Status: **C1 shadow mode in progress** (began with PR #273 — the block-first
+compiler runs beside the render-then-reparse path and records divergences;
+cutover awaits the owner's review of the shadow diff). C2–C4 not started.
 Owner directive (2026-08-29): discuss first, then implement phase by phase,
 without losing any recorded decision. Restructures A (terminal verdict decided
 once at staging, PR #272) and B (one-shot upload panel + full converted-text
