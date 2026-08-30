@@ -26,6 +26,7 @@ import copy
 import io
 import json
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy.orm import Session
@@ -1692,6 +1693,52 @@ def test_master_siblings_build_concurrently_on_their_own_sessions(
     assert seen[release.LANE_PRE] is not db
     assert seen[release.LANE_POST] is not db
     assert seen[release.LANE_PRE] is not seen[release.LANE_POST]
+
+
+def test_master_sibling_provider_calls_join_the_parent_usage_ledger(
+    db, monkeypatch,
+):
+    """Both concurrent Master lanes remain part of the run's final cost."""
+
+    from app.services import build_concepts_release_contract as contract
+    from app.services import openai_usage
+
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter, questions=2)
+
+    class _Stub:
+        def __init__(self, lane):
+            self.id = f"REL-{lane}"
+
+    def _fake_rebuild(
+        lane_db, job_id, lane, *, owner_sub=None, stage_progress=None,
+    ):
+        input_tokens = 100 if lane == release.LANE_PRE else 200
+        openai_usage.record_response(SimpleNamespace(
+            model="gpt-5.4-mini-2026-03-17",
+            usage=SimpleNamespace(
+                prompt_tokens=input_tokens,
+                completion_tokens=10,
+                total_tokens=input_tokens + 10,
+            ),
+        ))
+        return _Stub(lane)
+
+    monkeypatch.setattr(contract, "rebuild_lane_master", _fake_rebuild)
+    with openai_usage.track():
+        contract._build_master_siblings(
+            db, job.id, chapter.id, owner_sub=OWNER,
+        )
+        summary = openai_usage.current_summary()
+
+    assert summary["request_count"] == 2
+    assert summary["input_tokens"] == 300
+    assert summary["output_tokens"] == 20
+    assert summary["total_tokens"] == 320
+    assert {row["lane"] for row in summary["stages"]} == {
+        "Master · Output 02 (Pre)",
+        "Master · Output 04 (Post)",
+    }
 
 
 def test_one_master_lane_fault_does_not_cost_the_sibling(db, monkeypatch):

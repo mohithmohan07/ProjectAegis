@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { vi } from "vitest";
 import type { StreamEvent } from "./api/client";
 import { RunConsoleProvider, useRunConsole } from "./RunConsole";
+import RunConsolePanel from "./components/RunConsolePanel";
 import type { OpenAIUsage } from "./types";
 
 const pending = vi.hoisted(() => [] as Array<{
@@ -413,6 +414,67 @@ test("100% is reserved for the explicit all-four-outputs verdict", async () => {
   expect(screen.getByTestId("progress-label").textContent).toBe(
     "Done — all four outputs ready",
   );
+});
+
+test("the terminal result replaces a stale live subtotal with final Master usage", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  act(() => pending[0].onEvent({ type: "usage", data: usage(600) }));
+  expect(screen.getByTestId("usage").textContent).toBe("600");
+
+  // Recovery after a frozen mobile tab can resolve directly from the job;
+  // there need not be a separate final stream event for the client to apply.
+  await act(async () => {
+    pending[0].resolve({
+      status: "released",
+      openai_usage: usage(900),
+      output_completion: {
+        ready_count: 4,
+        total_count: 4,
+        all_ready: true,
+        missing: [],
+      },
+    });
+  });
+
+  expect(screen.getByTestId("usage").textContent).toBe("900");
+  expect(screen.getByTestId("status").textContent).toBe("done");
+});
+
+test("the usage summary says when cost is live and when it is final", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+      <RunConsolePanel />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  act(() => pending[0].onEvent({ type: "usage", data: usage(600) }));
+  expect(screen.getByText(/Model usage \(live — still accumulating\)/)).toBeTruthy();
+
+  await act(async () => {
+    pending[0].resolve({
+      status: "released",
+      openai_usage: usage(900),
+      output_completion: {
+        ready_count: 4,
+        total_count: 4,
+        all_ready: true,
+        missing: [],
+      },
+    });
+  });
+
+  expect(screen.getByText(/Model usage \(final for this run\)/)).toBeTruthy();
+  expect(screen.getByText(/900 tokens/)).toBeTruthy();
 });
 
 
