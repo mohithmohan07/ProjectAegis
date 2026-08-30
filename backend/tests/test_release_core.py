@@ -797,6 +797,8 @@ def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
             max_active = max(max_active, active)
         try:
             barrier.wait(timeout=5)
+            assert stage_progress is not None
+            stage_progress("done")
             return _Stub(lane)
         finally:
             with lock:
@@ -804,9 +806,14 @@ def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
 
     monkeypatch.setattr(release_contract, "rebuild_lane_master", rebuild)
 
-    built = release_contract._build_master_siblings(
-        db, job.id, chapter.id, owner_sub=OWNER,
-    )
+    events: list[dict] = []
+    sink_token = progress._sink.set(events.append)
+    try:
+        built = release_contract._build_master_siblings(
+            db, job.id, chapter.id, owner_sub=OWNER,
+        )
+    finally:
+        progress._sink.reset(sink_token)
 
     assert max_active == 2
     assert built == {
@@ -817,6 +824,17 @@ def test_master_sibling_builds_overlap_on_separate_sessions(db, monkeypatch):
     assert sessions[release.LANE_PRE] is not db
     assert sessions[release.LANE_POST] is not db
     assert sessions[release.LANE_PRE] is not sessions[release.LANE_POST]
+    master_progress = [
+        float(event["value"])
+        for event in events
+        if event.get("type") == "progress"
+    ]
+    assert master_progress
+    assert max(master_progress) == 0.99
+    assert round(max(master_progress) * 100) == 99, (
+        "the live Master stage must never render as 100%; only the terminal "
+        "four-files-ready verdict owns 100%"
+    )
 
 
 def _record_nonterminal_verdict(payload: dict) -> None:

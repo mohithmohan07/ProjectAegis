@@ -650,14 +650,17 @@ def _build_master_siblings(
                 "Building Master files (Outputs 02/04)",
                 value=0.955,
             )
-            # The Master builds own 0.955 → 0.995 of the bar and fill it
+            # The Master builds own 0.955 → 0.990 of the bar and fill it
             # as their stages (and the long fan-outs' units) finish, so
             # the console no longer freezes on one value for the entire
             # build — the "97% for hours" report. One shared span, one
             # equal-weight tracker per lane; emission is monotone, so the
-            # two concurrent lanes cannot walk the bar backward.
+            # two concurrent lanes cannot walk the bar backward. Keep the
+            # ceiling at 0.990, not 0.995: the phone UI rounds to a whole
+            # percentage, and 99.5% rendered as the same misleading 100% as
+            # a genuinely complete four-output set.
             span = progress.Span(
-                0.955, 0.995, label="Building Master files (Outputs 02/04)"
+                0.955, 0.990, label="Building Master files (Outputs 02/04)"
             )
             stage_index = {
                 name: position
@@ -798,8 +801,9 @@ def _run_generation_release(
         original, db, job_id, target_chapter_id, *args, **kwargs)
     # HONEST PROGRESS (owner report, 2026-08-21: "after 100% it is still
     # running" — and paying). ``_build_master_siblings`` opens the real
-    # stage boundary after it confirms at least one lane exists; only the
-    # true end says Done, with the observed lane outcomes rather than a promise.
+    # stage boundary after it confirms at least one lane exists; only a true
+    # four-file end says Done, while a terminal lane failure stays at 99% and
+    # names the observed missing output rather than presenting a promise.
     master_builds = _build_master_siblings(
         db, job_id, target_chapter_id, owner_sub=kwargs.get("owner_sub"))
     master_outputs = {
@@ -814,6 +818,29 @@ def _run_generation_release(
         for lane in (release.LANE_PRE, release.LANE_POST)
     )
     incomplete = staged.get("run_incomplete")
+    missing_lanes = [
+        lane
+        for lane in (release.LANE_PRE, release.LANE_POST)
+        if not master_outputs[lane]["ready"]
+    ]
+    ready_output_count = 4 - len(missing_lanes)
+    output_completion = {
+        "ready_count": ready_output_count,
+        "total_count": 4,
+        "all_ready": all_four_ready,
+        "missing": [
+            {
+                "number": "02" if lane == release.LANE_PRE else "04",
+                "lane": lane,
+                "label": (
+                    "Pre-Learning Master File"
+                    if lane == release.LANE_PRE
+                    else "Post-Learning Master File"
+                ),
+            }
+            for lane in missing_lanes
+        ],
+    }
     if isinstance(incomplete, Mapping):
         if incomplete.get("resume_allowed") is False:
             done_label = "Incomplete — new upload and conversion required"
@@ -823,17 +850,12 @@ def _run_generation_release(
         done_label = "Done — all four outputs ready"
     else:
         missing = ", ".join(
-            "Pre" if lane == release.LANE_PRE else "Post"
-            for lane in (release.LANE_PRE, release.LANE_POST)
-            if not master_outputs[lane]["ready"]
-        )
-        ready_count = sum(
-            int(bool(master_outputs[lane]["ready"]))
-            for lane in (release.LANE_PRE, release.LANE_POST)
+            "Pre Master" if lane == release.LANE_PRE else "Post Master"
+            for lane in missing_lanes
         )
         done_label = (
-            "Done — Concept stage complete; Master files ready "
-            f"{ready_count}/2 (unavailable: {missing})"
+            f"Incomplete — {ready_output_count}/4 outputs ready "
+            f"(unavailable: {missing})"
         )
     if isinstance(incomplete, Mapping):
         try:
@@ -848,12 +870,24 @@ def _run_generation_release(
             )
         except Exception:  # pragma: no cover - the marker remains authoritative
             final_progress = 0.0
-    else:
+    elif all_four_ready:
         final_progress = 1.0
+    else:
+        # A terminal Master-lane failure is recoverable from the frozen
+        # Concept release, but it is not 100% complete. Leave the bar at the
+        # same 99% ceiling used by the Master span; the explicit lane rebuild
+        # is the act that can turn this run into a four-file completion.
+        final_progress = 0.99
     progress.set_progress(final_progress, label=done_label)
     result = dict(staged)
     result["master_outputs"] = master_outputs
     result["all_four_outputs_ready"] = all_four_ready
+    if not isinstance(incomplete, Mapping):
+        # A non-terminal generation exit may not have both Concept lanes, so
+        # its own ``run_incomplete`` checkpoint contract remains the only
+        # completion authority. The 2+Master count is valid only after the
+        # terminal Concept staging path has made Outputs 01/03 durable.
+        result["output_completion"] = output_completion
     return result
 
 

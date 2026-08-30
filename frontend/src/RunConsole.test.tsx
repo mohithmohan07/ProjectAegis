@@ -337,6 +337,84 @@ test("an ordinary incomplete result retains the checkpoint-resume action", async
   );
 });
 
+test("a missing Master corrects a premature 100% to an explicit 3/4 result", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  act(() => pending[0].onEvent({
+    type: "progress",
+    value: 1,
+    label: "Done",
+  }));
+  await act(async () => {
+    pending[0].resolve({
+      status: "released",
+      all_four_outputs_ready: false,
+      master_outputs: {
+        pre: { ready: true },
+        post: { ready: false },
+      },
+      output_completion: {
+        ready_count: 3,
+        total_count: 4,
+        all_ready: false,
+        missing: [{
+          number: "04",
+          lane: "post",
+          label: "Post-Learning Master File",
+        }],
+      },
+    });
+  });
+
+  expect(screen.getByTestId("status").textContent).toBe("error");
+  expect(screen.getByTestId("progress").textContent).toBe("0.99");
+  expect(screen.getByTestId("progress-label").textContent).toBe(
+    "Incomplete — 3/4 outputs ready (Post-Learning Master File unavailable)",
+  );
+  expect(screen.getByTestId("console-lines").textContent).toContain(
+    "do not rerun Concept generation",
+  );
+});
+
+test("100% is reserved for the explicit all-four-outputs verdict", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  await act(async () => {
+    pending[0].resolve({
+      status: "released",
+      all_four_outputs_ready: true,
+      master_outputs: {
+        pre: { ready: true },
+        post: { ready: true },
+      },
+      output_completion: {
+        ready_count: 4,
+        total_count: 4,
+        all_ready: true,
+        missing: [],
+      },
+    });
+  });
+
+  expect(screen.getByTestId("status").textContent).toBe("done");
+  expect(screen.getByTestId("progress").textContent).toBe("1");
+  expect(screen.getByTestId("progress-label").textContent).toBe(
+    "Done — all four outputs ready",
+  );
+});
+
 
 test("a mid-run drop tails the journal silently and resumes only if the worker died", async () => {
   vi.useFakeTimers();

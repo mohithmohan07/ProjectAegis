@@ -591,7 +591,10 @@ def test_explicit_rebuild_route_maps_job_overlap_to_409(client, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("builds", "expected_all", "label_fragment"),
+    (
+        "builds", "expected_all", "expected_progress",
+        "expected_ready_count", "label_fragment",
+    ),
     [
         (
             {
@@ -599,6 +602,8 @@ def test_explicit_rebuild_route_maps_job_overlap_to_409(client, monkeypatch):
                 release.LANE_POST: {"release_id": "REL-post"},
             },
             True,
+            1.0,
+            4,
             "all four outputs ready",
         ),
         (
@@ -607,12 +612,15 @@ def test_explicit_rebuild_route_maps_job_overlap_to_409(client, monkeypatch):
                 release.LANE_POST: {"release_id": "REL-post"},
             },
             False,
-            "Master files ready 1/2 (unavailable: Pre)",
+            0.99,
+            3,
+            "Incomplete — 3/4 outputs ready (unavailable: Pre Master)",
         ),
     ],
 )
 def test_generation_result_and_done_label_report_actual_master_outcomes(
-    monkeypatch, builds, expected_all, label_fragment,
+    monkeypatch, builds, expected_all, expected_progress,
+    expected_ready_count, label_fragment,
 ):
     monkeypatch.setattr(
         release_contract,
@@ -624,11 +632,11 @@ def test_generation_result_and_done_label_report_actual_master_outcomes(
         "_build_master_siblings",
         lambda *_args, **_kwargs: builds,
     )
-    labels: list[str] = []
+    progress_events: list[tuple[float, str]] = []
     monkeypatch.setattr(
         release_contract.progress,
         "set_progress",
-        lambda _value, *, label="": labels.append(label),
+        lambda value, *, label="": progress_events.append((value, label)),
     )
 
     result = release_contract._run_generation_release(
@@ -646,10 +654,14 @@ def test_generation_result_and_done_label_report_actual_master_outcomes(
     assert result["master_outputs"][release.LANE_POST]["ready"] is (
         builds[release.LANE_POST] is not None
     )
-    assert len(labels) == 1
-    assert label_fragment in labels[0]
+    assert result["output_completion"]["ready_count"] == expected_ready_count
+    assert result["output_completion"]["total_count"] == 4
+    assert result["output_completion"]["all_ready"] is expected_all
+    assert len(progress_events) == 1
+    assert progress_events[0][0] == expected_progress
+    assert label_fragment in progress_events[0][1]
     if not expected_all:
-        assert "all four outputs ready" not in labels[0]
+        assert "all four outputs ready" not in progress_events[0][1]
 
 
 def test_storage_issue_carries_retry_and_capacity_evidence(db):

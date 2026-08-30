@@ -5,6 +5,10 @@ import {
   streamNdjson,
   type StreamEvent,
 } from "./api/client";
+import {
+  fourOutputCompletionFromResult,
+  incompleteFourOutputLabel,
+} from "./fourOutputCompletion";
 import type { GenerationRecovery, OpenAIUsage } from "./types";
 
 export interface RunLine {
@@ -372,30 +376,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
                 progressLabel: "Paused for your decision",
               };
             }
-            const incomplete = incompleteRunResult(data);
-            if (incomplete) {
-              // The server staged what the run had already produced, but
-              // generation did NOT finish — this must never read as a
-              // clean "Done" (the missing Pre lane hid behind one).
-              return {
-                ...s,
-                active: false,
-                status: "error",
-                progressLabel: incompleteProgressLabel(incomplete),
-                lines: [...s.lines, {
-                  level: "error" as const,
-                  message: incompleteRecoveryMessage(incomplete),
-                  ts: Date.now() / 1000,
-                }],
-              };
-            }
-            return {
-              ...s,
-              active: false,
-              status: "done",
-              progress: 1,
-              progressLabel: "Done",
-            };
+            return terminalResultState(s, data);
           });
         }
         return data;
@@ -546,21 +527,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       .then((outcome) => {
         if (runIdRef.current === runId) {
           if (outcome.kind === "result") {
-            const incomplete = incompleteRunResult(outcome.data);
-            setState((s) => (incomplete
-              ? {
-                ...s, active: false, status: "error",
-                progressLabel: incompleteProgressLabel(incomplete),
-                lines: [...s.lines, {
-                  level: "error" as const,
-                  message: incompleteRecoveryMessage(incomplete),
-                  ts: Date.now() / 1000,
-                }],
-              }
-              : {
-                ...s, active: false, status: "done",
-                progress: 1, progressLabel: "Done",
-              }));
+            setState((s) => terminalResultState(s, outcome.data));
           } else if (outcome.kind === "stopped") {
             setState((s) => ({ ...s, active: false, status: "paused" }));
           }
@@ -654,6 +621,60 @@ function incompleteRunResult(
     return null;
   }
   return marker as IncompleteRun;
+}
+
+function terminalResultState(state: RunState, data: unknown): RunState {
+  const incomplete = incompleteRunResult(data);
+  if (incomplete) {
+    // The server staged what the run had already produced, but generation did
+    // NOT finish. Preserve the real checkpoint percentage and recovery act;
+    // never promote a partial Concept run to a clean 100% "Done".
+    return {
+      ...state,
+      active: false,
+      status: "error",
+      progressLabel: incompleteProgressLabel(incomplete),
+      lines: [...state.lines, {
+        level: "error",
+        message: incompleteRecoveryMessage(incomplete),
+        ts: Date.now() / 1000,
+      }],
+    };
+  }
+
+  const outputs = fourOutputCompletionFromResult(data);
+  if (outputs && !outputs.allReady) {
+    const label = incompleteFourOutputLabel(outputs);
+    const recovery = `${label}. Rebuild only the unavailable Master File from `
+      + "its preserved Concept File; do not rerun Concept generation.";
+    return {
+      ...state,
+      active: false,
+      status: "error",
+      // The backend's Master band has the same ceiling. Explicitly correct a
+      // legacy/premature 1.0 event so the rendered whole-number percentage
+      // cannot say 100 while a card is unavailable.
+      progress: 0.99,
+      progressLabel: label,
+      lines: state.lines.some((line) => line.message === recovery)
+        ? state.lines
+        : [...state.lines, {
+          level: "error",
+          message: recovery,
+          ts: Date.now() / 1000,
+        }],
+    };
+  }
+
+  return {
+    ...state,
+    active: false,
+    status: "done",
+    progress: 1,
+    progressLabel: outputs?.allReady
+      ? "Done — all four outputs ready"
+      : "Done",
+  };
 }
 
 interface IncompleteRun {

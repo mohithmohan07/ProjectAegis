@@ -14,6 +14,11 @@ import DocumentUpload, {
 import SyllabusUploader from "../components/SyllabusUploader";
 import { ConceptReviewPanel } from "../components/ConceptReviewPanel";
 import ApiUsageSummary from "../components/ApiUsageSummary";
+import {
+  fourOutputCompletionFromManifest,
+  fourOutputCompletionFromResult,
+  fourOutputResultFields,
+} from "../fourOutputCompletion";
 import type {
   GenerationRecovery,
   OpenAIUsage,
@@ -297,11 +302,25 @@ function PostLearningFlow({
   }, [initialJob]);
 
   const handleJob = useCallback((nextJob: UploadJob | null) => {
+    const sameRunRefresh = Boolean(
+      job
+      && nextJob
+      && job.id === nextJob.id
+      && job.module === nextJob.module
+      && job.filename === nextJob.filename
+      && job.created_at === nextJob.created_at,
+    );
     setJob(nextJob);
     setCarriedIssue(nextJob?.pending_decision ?? null);
-    setError(null);
-    setResult(null);
-  }, []);
+    // Polling refreshes this SAME job every three seconds while its Master
+    // lanes commit. Such a refresh must not erase a terminal stream result
+    // that arrived at the same moment. A new/replaced upload still clears the
+    // old result and error exactly as before.
+    if (!sameRunRefresh) {
+      setError(null);
+      setResult(null);
+    }
+  }, [job]);
 
   async function generate(target?: UploadJob) {
     const runJob = target ?? job;
@@ -333,12 +352,16 @@ function PostLearningFlow({
           recoverResult: async () => {
             const finished = await api.getUploadJob("concepts", runJob.id);
             const recovery = finished.generation_recovery;
+            const outputCompletion = fourOutputCompletionFromManifest(
+              finished.source_artifacts,
+            );
             return {
               status: finished.status,
               reattached: true,
               job_id: finished.id,
               openai_usage: finished.openai_usage,
               pending_decision: finished.pending_decision,
+              ...fourOutputResultFields(outputCompletion),
               ...(recovery?.resume_allowed === false
                 ? { run_incomplete: recovery }
                 : {}),
@@ -841,16 +864,31 @@ function ConceptResult({
   const rowCount = typeof result.row_count === "number" ? result.row_count : null;
   const issueCount = typeof result.issue_count === "number" ? result.issue_count : null;
   const incomplete = incompleteGenerationRecovery(result);
+  const outputCompletion = fourOutputCompletionFromResult(result);
+  const outputSetIncomplete = Boolean(
+    !incomplete && outputCompletion && !outputCompletion.allReady,
+  );
+  const success = !incomplete && !outputSetIncomplete;
   return (
-    <div className={`card mt-16 ${incomplete ? "" : "success-card"}`}>
+    <div className={`card mt-16 ${success ? "success-card" : ""}`}>
       <div className="row">
         <strong>
           {incomplete
             ? "Generation incomplete — the four-output set was not created"
-            : "Concepts written to the Bulk Import workbook (append-only)"}
+            : outputSetIncomplete && outputCompletion
+              ? `Output set incomplete — ${outputCompletion.readyCount}/4 files ready`
+              : outputCompletion?.allReady
+                ? "All four run outputs are ready"
+                : "Concepts written to the Bulk Import workbook (append-only)"}
         </strong>
         {incomplete
           ? <span className="badge red">incomplete</span>
+          : outputSetIncomplete && outputCompletion
+            ? (
+              <span className="badge yellow">
+                {outputCompletion.readyCount}/4 ready
+              </span>
+            )
           : status && <span className="badge green">{status}</span>}
       </div>
       {incomplete && (
@@ -858,6 +896,15 @@ function ConceptResult({
           {incomplete.recovery
             || incomplete.message
             || "This generation run did not complete."}
+        </div>
+      )}
+      {outputSetIncomplete && outputCompletion && (
+        <div className="error-box mt-12" role="alert">
+          Concept generation completed, but {outputCompletion.missingLabels.join(
+            " and ",
+          ) || "a Master File"} did not finish. The completed files are safe;
+          rebuild only the unavailable Master File from the Run outputs section.
+          Do not rerun Concept generation.
         </div>
       )}
       {(rowCount !== null || issueCount !== null) && (
@@ -881,7 +928,7 @@ function ConceptResult({
         cumulative={jobId != null || Boolean(filename)}
         resumed={resumed}
       />
-      {!incomplete && (
+      {!incomplete && !outputSetIncomplete && (
         <div className="muted mt-12">
           The four run outputs (Concept and Master Files for both lanes)
           download from the{" "}

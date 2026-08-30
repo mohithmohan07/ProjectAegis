@@ -526,6 +526,43 @@ test("a restored running rebuild refreshes itself and unlocks the finished lane"
   }).hasAttribute("disabled")).toBe(false);
 });
 
+test("an active parent run reveals committed outputs without a page reload", async () => {
+  vi.useFakeTimers();
+  const initiallyStale = failedMastersJob();
+  initiallyStale.generation_running = false;
+  const preReady = rebuiltMasterJob("pre");
+  preReady.generation_running = true;
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob.mockResolvedValue(preReady);
+  const onJob = vi.fn();
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={initiallyStale}
+        disabled
+        onJob={onJob}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.queryByRole("link", {
+    name: "Download the Pre-Learning Master File",
+  })).toBeNull();
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3000);
+  });
+
+  expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 81);
+  expect(onJob).toHaveBeenCalledWith(preReady);
+  expect(screen.getByRole("link", {
+    name: "Download the Pre-Learning Master File",
+  })).toBeDefined();
+});
+
 // --------------------------------------------------------------------------- #
 // Owner report 2026-08-21: both Pre files downloaded EMPTY with the recorded
 // reason nowhere on the page. An enabled output that will be empty now carries
