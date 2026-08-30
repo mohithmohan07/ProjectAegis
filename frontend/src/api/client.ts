@@ -369,12 +369,6 @@ export const api = {
     }),
   listConceptRevisions: (jobId: number) =>
     http<ConceptRevisionList>(`/build-concepts/uploads/${jobId}/revisions`),
-  /** Absolute URL of the released workbook, for a plain browser download. */
-  conceptReleaseUrl: (jobId: number) =>
-    `${BASE}/build-concepts/uploads/${jobId}/release.xlsx`,
-  /** Released rows in the canonical Bulk Import workbook format. */
-  conceptReleaseBulkImportUrl: (jobId: number) =>
-    `${BASE}/build-concepts/uploads/${jobId}/release-bulk-import.xlsx`,
   /**
    * Publish ONE staged release lane to the database (Rule G: a separate,
    * explicit, authenticated act).

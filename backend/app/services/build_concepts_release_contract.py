@@ -250,24 +250,35 @@ def _release_after_result(
             target_chapter_id,
             captured,
         )
-        staged = release.stage_release(
-            db,
-            job,
-            target_chapter_id=target_chapter_id,
-            records=refined_records,
-            inventory=captured.get("inventory") or {},
-            mined_types=captured.get("mined_types") or {},
-            final_grounding_certificate=(
-                captured.get("final_grounding_certificate") or {}
-            ),
-            checkpoint=captured.get("checkpoint") or job.generation_checkpoint,
-            pending_decision=pending,
-            reason=(
-                "Generation completed. The output was staged and was not "
-                "uploaded to the database."
-            ),
-            refinements=refinements,
-        )
+        # The run's own completion fact, handed to the terminal contract:
+        # this staging comes from a CAPTURED TERMINAL DEPOSIT (generation
+        # finished and delivered its final rows through the deposit
+        # interceptor). The recorded verdict must come from that first-hand
+        # fact — never from how the checkpoint snapshot happens to
+        # re-validate under the strict resume filter.
+        deposit_token = release.TERMINAL_DEPOSIT_STAGING.set(True)
+        try:
+            staged = release.stage_release(
+                db,
+                job,
+                target_chapter_id=target_chapter_id,
+                records=refined_records,
+                inventory=captured.get("inventory") or {},
+                mined_types=captured.get("mined_types") or {},
+                final_grounding_certificate=(
+                    captured.get("final_grounding_certificate") or {}
+                ),
+                checkpoint=captured.get("checkpoint")
+                or job.generation_checkpoint,
+                pending_decision=pending,
+                reason=(
+                    "Generation completed. The output was staged and was not "
+                    "uploaded to the database."
+                ),
+                refinements=refinements,
+            )
+        finally:
+            release.TERMINAL_DEPOSIT_STAGING.reset(deposit_token)
         # Outputs 03/04 (§5, spec T3): the SIBLING slot on this same job.
         # One run produces all four outputs (Q3), so the Pre release is
         # staged here beside the Post one rather than on a job of its own

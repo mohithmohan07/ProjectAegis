@@ -811,3 +811,37 @@ test("does not offer a Pre Master rebuild when no Pre Concept was staged", () =>
     name: "Rebuild Post-Learning Master File",
   })).toBeDefined();
 });
+
+test("the four outputs are their own page section with a refresh control", async () => {
+  // Owner report 2026-08-30: the deliverables were folded into the upload
+  // card and invisible after a run. They are now the page's own numbered
+  // section, and a stale grid recovers with one click instead of a page
+  // reload (the post-run job refresh can fail silently).
+  const onJob = vi.fn();
+  const fresh = bothLanesJob();
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob.mockResolvedValue(fresh);
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={bothLanesJob()}
+        onJob={onJob}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByText("3 · Run outputs")).toBeDefined();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh outputs" }));
+
+  await vi.waitFor(() =>
+    expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 81),
+  );
+  await vi.waitFor(() =>
+    expect(onJob).toHaveBeenCalledWith(
+      expect.objectContaining({ id: fresh.id }),
+    ),
+  );
+});

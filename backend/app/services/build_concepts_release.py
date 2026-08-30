@@ -38,6 +38,7 @@ import hashlib
 import json
 import re
 import unicodedata
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -106,6 +107,18 @@ ASSESSMENT_LANE_UNAVAILABLE = "assessment_lane_unavailable"
 # staging, and read by both manifest twins as Output 01's stated reason.
 PRE_RELEASE_UNAVAILABLE_KEY = "_aegis_pre_release_unavailable"
 RELEASE_STATUS = "released"
+# Set (via ContextVar) by the release wrapper around a ``stage_release``
+# call that stages a CAPTURED TERMINAL DEPOSIT — the run finished
+# generation and handed its final rows through the deposit interceptor.
+# The terminal contract reads it as the run's own first-hand completion
+# fact, so the recorded terminal verdict can never depend on how a
+# checkpoint snapshot happens to re-validate ([measured] 2026-08-30: a
+# completed run's terminal entry flunked the strict resume-compatibility
+# filter while an earlier stage passed, freezing complete=False onto both
+# payloads and disabling both Master outputs with no recovery path).
+TERMINAL_DEPOSIT_STAGING: ContextVar[bool] = ContextVar(
+    "aegis_terminal_deposit_staging", default=False,
+)
 RELEASE_ROW_STATUS_FIELD = "_aegis_release_status"
 RELEASE_ROW_ERRORS_FIELD = "_aegis_release_errors"
 RELEASE_ROW_QIDS_FIELD = "_aegis_release_qids"

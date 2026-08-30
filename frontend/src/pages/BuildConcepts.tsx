@@ -493,6 +493,7 @@ function PostLearningFlow({
           result={result}
           filename={job?.filename}
           resumed={resultResumed}
+          outputsVisible={Boolean(job?.source_artifacts?.available)}
         />
       )}
     </>
@@ -780,10 +781,12 @@ function ConceptResult({
   result,
   filename,
   resumed = false,
+  outputsVisible = false,
 }: {
   result: Record<string, unknown>;
   filename?: string;
   resumed?: boolean;
+  outputsVisible?: boolean;
 }) {
   const jobId = result.job_id as number | undefined;
   const usage = result.openai_usage as OpenAIUsage | undefined;
@@ -819,8 +822,11 @@ function ConceptResult({
       />
       <div className="muted mt-12">
         The four run outputs (Concept and Master Files for both lanes)
-        download from the Run outputs section above; review and publishing
-        stay separate, explicit acts.
+        download from the{" "}
+        {outputsVisible
+          ? <a href="#run-outputs">3 · Run outputs section</a>
+          : "Run outputs section (use Refresh outputs if it has not appeared)"}
+        ; review and publishing stay separate, explicit acts.
       </div>
       <details className="mt-12">
         <summary>Raw result JSON</summary>

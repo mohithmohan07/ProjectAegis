@@ -630,9 +630,12 @@ export default function DocumentUpload({
     || job.checkpoint_available
   );
 
-  // Step 3 — uploaded (and maybe converted).
+  // Step 3 — uploaded (and maybe converted). The run-outputs and
+  // source-details cards render as SIBLINGS of the upload card: the four
+  // deliverables are their own page section, not upload minutiae.
   return (
-    <div className="card">
+    <>
+      <div className="card">
       <div className="row">
         <span className={`badge ${converted ? "green" : "accent"}`}>
           {generated
@@ -688,15 +691,6 @@ export default function DocumentUpload({
       {converted && job.mmd_text && (
         <MmdViewer text={job.mmd_text} filename={job.filename} />
       )}
-      {converted && (
-        <SourceArtifactsCard
-          actionsDisabled={controlsDisabled}
-          manifest={job.source_artifacts}
-          jobId={job.id}
-          jobRunning={Boolean(job.generation_running)}
-          onPublished={(freshJob) => emit(freshJob)}
-        />
-      )}
       {module === "concepts" && converted && (
         <div className={`checkpoint-card ${
           job.checkpoint_available ? "checkpoint-ready" : ""
@@ -713,7 +707,7 @@ export default function DocumentUpload({
             </strong>
             <div className="muted">
               {released
-                ? "Download the workbook or full diagnostic context. Database publication is a separate explicit action."
+                ? "The four run outputs download from the Run outputs section below. Database publication is a separate explicit action."
                 : job.checkpoint_available
                   ? `Stage: ${formatCheckpointStage(
                     job.checkpoint_stage,
@@ -784,7 +778,18 @@ export default function DocumentUpload({
         </div>
       )}
       {error && <div className="error-box mt-8">{error}</div>}
-    </div>
+      </div>
+
+      {converted && (
+        <SourceArtifactsCard
+          actionsDisabled={controlsDisabled}
+          manifest={job.source_artifacts}
+          jobId={job.id}
+          jobRunning={Boolean(job.generation_running)}
+          onPublished={(freshJob) => emit(freshJob)}
+        />
+      )}
+    </>
   );
 }
 
@@ -812,6 +817,8 @@ function SourceArtifactsCard({
   const [masterNotices, setMasterNotices] = useState<
     Partial<Record<MasterLane, string>>
   >({});
+  const [refreshingOutputs, setRefreshingOutputs] = useState(false);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   if (!manifest?.available) return null;
   const anyMasterRebuilding = rebuildingMaster.pre || rebuildingMaster.post;
   const summary = manifest.summary ?? {};
@@ -963,6 +970,26 @@ function SourceArtifactsCard({
     return Boolean(concept && !concept.disabled && concept.download_url);
   }
 
+  async function refreshOutputs() {
+    // The one recovery a stale grid needs: re-read the job. Covers the
+    // post-run refresh that failed silently, a rebuild whose refresh
+    // dropped, and a finished run reattached from another tab.
+    if (
+      actionsDisabled || actionBusy || anyMasterRebuilding || refreshingOutputs
+    ) return;
+    setRefreshingOutputs(true);
+    setRefreshError(null);
+    try {
+      onPublished(await api.getUploadJob("concepts", jobId));
+    } catch (e) {
+      setRefreshError(
+        `Could not refresh the run outputs: ${readableError(e)}`,
+      );
+    } finally {
+      setRefreshingOutputs(false);
+    }
+  }
+
   async function rebuildMasterLane(lane: MasterLane) {
     // The backend serializes explicit Master rebuilds for one job. Keep the
     // sibling control visible but disabled so a second lane cannot predictably
@@ -1037,38 +1064,45 @@ function SourceArtifactsCard({
   }
 
   return (
-    <div className="checkpoint-card">
-      <div>
-        <div className="row">
-          <strong>{title}</strong>
-          <span className={`badge ${statusClass}`}>
-            {statusLabel}
-          </span>
-          <span className={`badge ${phase2 ? "green" : "accent"}`}>
-            {usageBadge}
-          </span>
-          {reconstructionBadge && (
-            <span className={`badge ${reconstructionVerified ? "green" : "accent"}`}>
-              {reconstructionBadge}
-            </span>
-          )}
-          {adjudicationBadge && (
-            <span className={`badge ${adjudicationStatus === "verified" ? "green" : "accent"}`}>
-              {adjudicationBadge}
-            </span>
-          )}
-        </div>
-        {counts && <div className="muted mono mt-8">{counts}</div>}
-        {actionMessage && (
-          <div className="muted mt-8" role="status">
-            {actionMessage}
-          </div>
-        )}
-      </div>
-
-      {outputs.length > 0 && (
+    <>
+      {(outputs.length > 0 || publishActions.length > 0) && (
         <div>
-          <div className="section-title">Run outputs</div>
+          {/* The four deliverables are the page's own third step — a
+              first-class section beside "1 · parameters" and "2 · upload",
+              not a detail folded into the upload card (owner report,
+              2026-08-30: the outputs were invisible after a run). */}
+          <div className="section-title" id="run-outputs">
+            3 · Run outputs
+          </div>
+          <div className="card">
+          <div className="row">
+            <span className="muted">
+              The four files this run produced. Download them here; database
+              publication stays a separate, explicit act.
+            </span>
+            <div className="spacer" />
+            <button
+              className="ghost"
+              disabled={actionsDisabled || actionBusy || anyMasterRebuilding}
+              onClick={() => void refreshOutputs()}
+              title={
+                "Re-read this run's output state from the server — use it "
+                + "when a card looks stale after a finished run."
+              }
+            >
+              {refreshingOutputs
+                ? <><span className="spinner" aria-hidden="true" /> Refreshing…</>
+                : "Refresh outputs"}
+            </button>
+          </div>
+          {refreshError && (
+            <div className="error-box mt-8" role="alert">{refreshError}</div>
+          )}
+          {actionMessage && (
+            <div className="muted mt-8" role="status">
+              {actionMessage}
+            </div>
+          )}
           <div className="outputs-grid">
             {outputs.map((artifact) => {
               const meta = OUTPUT_META[artifact.kind];
@@ -1162,11 +1196,8 @@ function SourceArtifactsCard({
               );
             })}
           </div>
-        </div>
-      )}
-
-      {publishActions.length > 0 && (
-        <div className="row">
+          {publishActions.length > 0 && (
+            <div className="row">
           {publishActions.map((artifact) => {
             const lane = artifactLane(artifact);
             const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
@@ -1209,10 +1240,36 @@ function SourceArtifactsCard({
               </span>
             );
           })}
+            </div>
+          )}
+          </div>
         </div>
       )}
 
-      <details className="artifact-evidence">
+      <div className="checkpoint-card">
+        <div>
+          <div className="row">
+            <strong>{title}</strong>
+            <span className={`badge ${statusClass}`}>
+              {statusLabel}
+            </span>
+            <span className={`badge ${phase2 ? "green" : "accent"}`}>
+              {usageBadge}
+            </span>
+            {reconstructionBadge && (
+              <span className={`badge ${reconstructionVerified ? "green" : "accent"}`}>
+                {reconstructionBadge}
+              </span>
+            )}
+            {adjudicationBadge && (
+              <span className={`badge ${adjudicationStatus === "verified" ? "green" : "accent"}`}>
+                {adjudicationBadge}
+              </span>
+            )}
+          </div>
+          {counts && <div className="muted mono mt-8">{counts}</div>}
+        </div>
+        <details className="artifact-evidence">
         <summary>Source pipeline details &amp; evidence files</summary>
         <div className="muted mt-8">
           {description}
@@ -1236,8 +1293,9 @@ function SourceArtifactsCard({
             </a>
           ))}
         </div>
-      </details>
-    </div>
+        </details>
+      </div>
+    </>
   );
 }
 
