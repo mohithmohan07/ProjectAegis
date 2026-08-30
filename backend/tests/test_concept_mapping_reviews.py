@@ -2245,6 +2245,71 @@ def test_terminal_coverage_repair_realigns_an_exact_activity_example():
     assert not g._activity_example_hub_alignment_violations(out, inventory)
 
 
+def test_q14_route_keeps_activity_hub_with_type_owner_without_fallback_type():
+    """Job 100: terminal Hub normalization cannot undo TYPE-0006's owner."""
+
+    prompt = "Measure the currents in each branch of the parallel circuit."
+    qid = "QINV-0029"
+    item = {
+        "qid": qid,
+        "source_kind": "activity",
+        "source_label": "Activity 11.6",
+        "raw_task": prompt,
+        "topic_hint": "RESISTANCE OF A SYSTEM OF RESISTORS",
+        "_activity_origin": True,
+    }
+    inventory = {"items": [item]}
+    records = [
+        {
+            "topic": "FACTORS ON WHICH THE RESISTANCE OF A CONDUCTOR DEPENDS",
+            "parent_concept": "Resistance",
+            "concept_title": (
+                "Experimental investigation of factors affecting resistance"
+            ),
+            "concept_details": (
+                "Description: Controlled circuit investigations compare "
+                "measurements. // Types: Type 06: Conducting Circuit "
+                "Investigations Case 20: Measuring branch current "
+                f"Example: {prompt}"
+            ),
+            "_aegis_release_qids": [qid],
+            "_aegis_release_type_case_routes": [
+                "TYPE-0006::CASE-0020-ROUTE-01",
+            ],
+        },
+        {
+            "topic": "RESISTANCE OF A SYSTEM OF RESISTORS",
+            "parent_concept": "Parallel circuits",
+            "concept_title": (
+                "Measuring total and branch quantities in parallel circuits"
+            ),
+            "concept_details": (
+                "Description: Parallel branches carry separate currents. // "
+                f"Activity/Info Hub: Activity 11.6: {prompt}"
+            ),
+            # The earlier Place verdict is preserved as evidence, but Q14's
+            # final route above has explicit precedence.
+            "_aegis_hub_placements": [qid],
+        },
+    ]
+
+    out = g._normalize_activity_hubs_from_inventory(
+        records, inventory, mined_types={"types": []}
+    )
+
+    assert g._rendered_inventory_example_locations(out, item) == [0]
+    assert g._activity_hub_locations(out, item) == [0]
+    assert not g._activity_example_hub_alignment_violations(out, inventory)
+    assert cr.split_type_host_violations(out) == []
+    assert "Completing a Source Activity" not in " ".join(
+        str(row.get("concept_details") or "") for row in out
+    )
+    assert any(
+        "Q14 final Type ownership kept this Activity/Info Hub" in flag
+        for flag in out[0].get("review_flags") or []
+    )
+
+
 def test_certified_split_type_is_rejected_without_cosmetic_case_rename():
     type_title = "Converting Geological Ages from Years to Seconds"
     case_title = (

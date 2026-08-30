@@ -50,6 +50,101 @@ def mint_concept_ids(rows: list[Mapping[str, Any]]) -> list[str]:
     return [f"CONCEPT-{index:04d}" for index in range(1, len(rows) + 1)]
 
 
+def project_type_owner_hub_placements(
+    rows: list[Mapping[str, Any]],
+    host_result: Mapping[str, Any],
+    placements: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Project Q14's final QID owner onto Container-02 Hub routing.
+
+    Place's model verdict remains recorded evidence.  Rule B/Q14 is the
+    explicit precedence rule, however: every member QID follows the single
+    Type owner, so a later per-item Hub destination cannot move an Activity
+    Example back off that owner.  This helper performs only the mechanical
+    identity projection from the already-decided ``qid_map``; it makes no
+    semantic choice, records every changed destination, and leaves figures
+    untouched.
+    """
+
+    out = dict(placements)
+    hub_placements = {
+        str(qid): str(concept_id)
+        for qid, concept_id in (
+            placements.get("hub_placements") or {}
+        ).items()
+    }
+    review_flags = {
+        str(ref): [str(flag) for flag in flags]
+        for ref, flags in (placements.get("review_flags") or {}).items()
+        if isinstance(flags, list)
+    }
+    overrides = {
+        str(qid): dict(value)
+        for qid, value in (
+            placements.get("type_owner_overrides") or {}
+        ).items()
+        if isinstance(value, Mapping)
+    }
+
+    concept_id_by_host: dict[tuple[str, str], str] = {}
+    for concept_id, row in zip(mint_concept_ids(rows), rows):
+        key = (
+            str(row.get("_semantic_topic_id") or ""),
+            _normal(row.get("concept_title")).casefold(),
+        )
+        if key in concept_id_by_host:
+            raise RuntimeError(
+                "Q14 Hub projection cannot resolve duplicate settled "
+                f"concept identity {key!r}"
+            )
+        concept_id_by_host[key] = concept_id
+
+    for qid, original_concept_id in list(hub_placements.items()):
+        owner = (host_result.get("qid_map") or {}).get(qid)
+        if not isinstance(owner, Mapping):
+            continue
+        owner_key = (
+            str(owner.get("topic_id") or ""),
+            _normal(owner.get("concept_title")).casefold(),
+        )
+        owner_concept_id = concept_id_by_host.get(owner_key)
+        if owner_concept_id is None:
+            raise RuntimeError(
+                "Q14 Hub projection names a final Type owner that is not "
+                "in the settled concept set: "
+                f"{_normal(owner.get('concept_title'))!r}"
+            )
+        if owner_concept_id == original_concept_id:
+            continue
+        hub_placements[qid] = owner_concept_id
+        overrides[qid] = {
+            "from_concept_id": original_concept_id,
+            "to_concept_id": owner_concept_id,
+            "owner_topic_id": str(owner.get("topic_id") or ""),
+            "owner_concept_title": _normal(owner.get("concept_title")),
+        }
+        flag = (
+            f"{qid}: Q14 Type ownership moved this Activity/Info Hub "
+            f"from {original_concept_id} to {owner_concept_id}; the "
+            "original Place verdict remains recorded, while the Type owner "
+            "outranks per-question routing"
+        )
+        if flag not in review_flags.setdefault(qid, []):
+            review_flags[qid].append(flag)
+
+    if overrides:
+        progress.log(
+            "Place: Q14 projected the final Type owner onto "
+            f"{len(overrides)} Activity/Info Hub placement(s); original "
+            "Place verdicts remain recorded and every override is flagged.",
+            level="success",
+        )
+    out["hub_placements"] = hub_placements
+    out["review_flags"] = review_flags
+    out["type_owner_overrides"] = overrides
+    return out
+
+
 def _description_of(details: object) -> str:
     match = re.search(
         r"Description:\s*(.*?)(?=\n[A-Z][A-Za-z ]{2,24}:|//|$)",

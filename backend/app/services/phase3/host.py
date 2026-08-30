@@ -857,6 +857,7 @@ def consolidate_type_ownership(
         )
 
     moved_types = 0
+    projected_qids = 0
     for type_id, type_units in units_by_type.items():
         hosted = [
             (unit, host_map.get(str(unit["unit_id"])))
@@ -866,106 +867,127 @@ def consolidate_type_ownership(
         destinations: dict[tuple[str, str], Mapping[str, Any]] = {}
         for _, entry in hosted:
             destinations.setdefault(_destination_key(entry), entry)
-        if len(destinations) <= 1:
+        if not destinations:
             continue
-
-        mined = types_by_id.get(type_id) or {}
-        candidates = list(destinations.values())
-        payload = {
-            "stage": "host.type_owner",
-            "rules": (
-                "One concept owns this Type (Q14). Choose "
-                "owner_concept_title as the EXACT concept_title of one "
-                "candidate below — the concepts its Cases were certified "
-                "onto — judging which concept's teaching the Type as a "
-                "whole most genuinely exercises. Never the first Case's "
-                "host, the most common host, or position arithmetic; a "
-                "candidate left with no Types is a legitimate outcome "
-                "and coverage balance must not influence the choice."
-                + rules_suffix
-            ),
-            "type": {
-                "type_id": type_id,
-                "type_title": _normal(mined.get("type_title")),
-                "type_description": _normal(mined.get("type_description")),
-            },
-            "cases": [
-                {
-                    "unit_id": str(unit["unit_id"]),
-                    "case_id": str(unit["case_id"]),
-                    "task": unit["task"],
-                    "qids": list(unit["qids"]),
-                    "questions": [
-                        {
-                            "qid": qid,
-                            "question": question_text_by_qid.get(qid, ""),
-                        }
-                        for qid in unit["qids"]
-                        if question_text_by_qid.get(qid)
-                    ],
-                    "certified_host": {
+        decision_flags: list[str] = []
+        if len(destinations) == 1:
+            # Every Case already certified the same semantic owner.  No
+            # additional judgment or provider call is needed, but the QID
+            # map can still contain an earlier per-question destination.
+            # Q14 says Type ownership outranks that route, so the projection
+            # below must run for single-host Types too (job 100 / TYPE-0009).
+            owner_entry = next(iter(destinations.values()))
+        else:
+            mined = types_by_id.get(type_id) or {}
+            candidates = list(destinations.values())
+            payload = {
+                "stage": "host.type_owner",
+                "rules": (
+                    "One concept owns this Type (Q14). Choose "
+                    "owner_concept_title as the EXACT concept_title of one "
+                    "candidate below — the concepts its Cases were certified "
+                    "onto — judging which concept's teaching the Type as a "
+                    "whole most genuinely exercises. Never the first Case's "
+                    "host, the most common host, or position arithmetic; a "
+                    "candidate left with no Types is a legitimate outcome "
+                    "and coverage balance must not influence the choice."
+                    + rules_suffix
+                ),
+                "type": {
+                    "type_id": type_id,
+                    "type_title": _normal(mined.get("type_title")),
+                    "type_description": _normal(
+                        mined.get("type_description")
+                    ),
+                },
+                "cases": [
+                    {
+                        "unit_id": str(unit["unit_id"]),
+                        "case_id": str(unit["case_id"]),
+                        "task": unit["task"],
+                        "qids": list(unit["qids"]),
+                        "questions": [
+                            {
+                                "qid": qid,
+                                "question": question_text_by_qid.get(
+                                    qid, ""
+                                ),
+                            }
+                            for qid in unit["qids"]
+                            if question_text_by_qid.get(qid)
+                        ],
+                        "certified_host": {
+                            "concept_title": _normal(
+                                entry.get("concept_title")
+                            ),
+                            "topic": _normal(entry.get("topic")),
+                            "confidence": entry.get("confidence"),
+                        },
+                    }
+                    for unit, entry in hosted
+                ],
+                "candidate_concepts": [
+                    {
                         "concept_title": _normal(
                             entry.get("concept_title")
                         ),
+                        "parent_concept": _normal(
+                            entry.get("parent_concept")
+                        ),
                         "topic": _normal(entry.get("topic")),
-                        "confidence": entry.get("confidence"),
-                    },
-                }
-                for unit, entry in hosted
-            ],
-            "candidate_concepts": [
-                {
-                    "concept_title": _normal(entry.get("concept_title")),
-                    "parent_concept": _normal(entry.get("parent_concept")),
-                    "topic": _normal(entry.get("topic")),
-                    "topic_id": str(entry.get("topic_id") or ""),
-                }
+                        "topic_id": str(entry.get("topic_id") or ""),
+                    }
+                    for entry in candidates
+                ],
+            }
+            candidate_titles = {
+                _normal(entry.get("concept_title")).casefold(): entry
                 for entry in candidates
-            ],
-        }
-        candidate_titles = {
-            _normal(entry.get("concept_title")).casefold(): entry
-            for entry in candidates
-        }
+            }
 
-        def _owner_checker(response: Mapping[str, Any]) -> list[str]:
-            if not isinstance(response, Mapping):
-                return ["response is not an object"]
-            defects: list[str] = []
-            if str(response.get("type_id") or "") != type_id:
-                defects.append(f"type_id must echo {type_id!r}")
-            owner = _normal(response.get("owner_concept_title")).casefold()
-            if owner not in candidate_titles:
-                defects.append(
-                    "owner_concept_title must be the exact concept_title "
-                    "of one candidate host concept (got "
-                    f"{response.get('owner_concept_title')!r})"
-                )
-            try:
-                float(response.get("confidence") or 0.0)
-            except (TypeError, ValueError):
-                defects.append("confidence must be numeric")
-            return defects
+            def _owner_checker(
+                response: Mapping[str, Any],
+            ) -> list[str]:
+                if not isinstance(response, Mapping):
+                    return ["response is not an object"]
+                defects: list[str] = []
+                if str(response.get("type_id") or "") != type_id:
+                    defects.append(f"type_id must echo {type_id!r}")
+                owner = _normal(
+                    response.get("owner_concept_title")
+                ).casefold()
+                if owner not in candidate_titles:
+                    defects.append(
+                        "owner_concept_title must be the exact "
+                        "concept_title of one candidate host concept (got "
+                        f"{response.get('owner_concept_title')!r})"
+                    )
+                try:
+                    float(response.get("confidence") or 0.0)
+                except (TypeError, ValueError):
+                    defects.append("confidence must be numeric")
+                return defects
 
-        decision = kernel.decide(
-            kind="host.type_owner",
-            unit_id=type_id,
-            envelope_sha256=envelope_sha,
-            payload=payload,
-            provider=provider,
-            checker=_owner_checker,
-            critic=critic,
-            store=store,
-            policy_version=policy,
-            fixer=fixer,
-        )
-        response = decision["response"]
-        owner_entry = candidate_titles[
-            _normal(response.get("owner_concept_title")).casefold()
-        ]
+            decision = kernel.decide(
+                kind="host.type_owner",
+                unit_id=type_id,
+                envelope_sha256=envelope_sha,
+                payload=payload,
+                provider=provider,
+                checker=_owner_checker,
+                critic=critic,
+                store=store,
+                policy_version=policy,
+                fixer=fixer,
+            )
+            response = decision["response"]
+            owner_entry = candidate_titles[
+                _normal(response.get("owner_concept_title")).casefold()
+            ]
+            decision_flags = list(decision.get("review_flags") or [])
+            moved_types += 1
+
         owner_title = _normal(owner_entry.get("concept_title"))
-        decision_flags = list(decision.get("review_flags") or [])
-        moved_types += 1
 
         type_qids = {
             qid for unit in type_units for qid in unit["qids"]
@@ -1009,6 +1031,7 @@ def consolidate_type_ownership(
                     f"'{owner_title[:60]}'"
                 )
                 qid_map[qid] = entry
+                projected_qids += 1
         if decision_flags:
             # The ownership decision is ABOUT the whole Type, so its
             # flags (critic dissent, Fixer notes) land on every unit of
@@ -1029,6 +1052,13 @@ def consolidate_type_ownership(
         progress.log(
             f"Host: {moved_types} split Type(s) consolidated onto one "
             "owning concept each (Q14); every move is flagged for review.",
+            level="success",
+        )
+    if projected_qids:
+        progress.log(
+            "Host: Q14 projected the certified Type owner onto "
+            f"{projected_qids} per-question destination(s); every move "
+            "is flagged for review.",
             level="success",
         )
     return {

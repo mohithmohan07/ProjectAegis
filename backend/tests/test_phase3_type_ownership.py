@@ -19,6 +19,7 @@ from app.services.phase3 import assemble
 from app.services.phase3 import envelope as envelope_mod
 from app.services.phase3 import host as host_mod
 from app.services.phase3 import kernel
+from app.services.phase3 import place as place_mod
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -181,6 +182,105 @@ def test_a_type_on_one_concept_costs_nothing(env, settled_rows):
         store=kernel.DecisionStore(),
     )
     assert out["host_map"] == hosts["host_map"]
+
+
+def test_single_case_owner_still_overrides_a_split_qid_route(
+    env, settled_rows,
+):
+    """Job 100 / TYPE-0009: Q14 also projects the sole Case owner.
+
+    Both Cases can agree on one host while one earlier per-question verdict
+    still names another concept.  That is not a new semantic choice: the
+    certified single Type owner mechanically outranks the QID route.
+    """
+
+    _type_id, units = _split_type(env)
+    owner = settled_rows[0]
+    other = next(
+        row for row in settled_rows[1:]
+        if (
+            str(row.get("_semantic_topic_id") or ""),
+            str(row.get("concept_title") or "").casefold(),
+        ) != (
+            str(owner.get("_semantic_topic_id") or ""),
+            str(owner.get("concept_title") or "").casefold(),
+        )
+    )
+    all_qids = [qid for unit in units for qid in unit["qids"]]
+    assert all_qids
+    drifted_qid = all_qids[0]
+    hosts = {
+        "host_map": {
+            str(unit["unit_id"]): _entry(owner) for unit in units
+        },
+        "qid_map": {
+            qid: {
+                **_entry(other if qid == drifted_qid else owner),
+                "decision": "api_placement",
+            }
+            for qid in all_qids
+        },
+        "new_concepts": [],
+    }
+
+    out = host_mod.consolidate_type_ownership(
+        env,
+        hosts,
+        provider=lambda request: (_ for _ in ()).throw(
+            AssertionError("one certified Case owner costs no provider call")
+        ),
+        critic=None,
+        store=kernel.DecisionStore(),
+    )
+
+    moved = out["qid_map"][drifted_qid]
+    assert moved["concept_title"] == owner["concept_title"]
+    assert moved["topic_id"] == owner["_semantic_topic_id"]
+    assert any(
+        "Q14 Type ownership moved this question" in flag
+        for flag in moved.get("review_flags") or []
+    )
+    assert out["host_map"] == hosts["host_map"]
+
+
+def test_q14_owner_overrides_later_activity_hub_placement(settled_rows):
+    """Job 100 / TYPE-0006: Place cannot undo the final Type owner."""
+
+    owner = settled_rows[0]
+    other = settled_rows[1]
+    qid = "QINV-JOB100-ACTIVITY"
+    owner_id, other_id = place_mod.mint_concept_ids([owner, other])
+    place_result = {
+        "hub_placements": {qid: other_id},
+        "figure_placements": {"BLK-0001": owner_id},
+        "figure_pool": {},
+        "rationales": {qid: "the per-item Place verdict"},
+        "review_flags": {},
+    }
+    hosts = {
+        "qid_map": {qid: _entry(owner)},
+        "host_map": {},
+        "new_concepts": [],
+    }
+
+    out = place_mod.project_type_owner_hub_placements(
+        [owner, other], hosts, place_result
+    )
+
+    assert place_result["hub_placements"][qid] == other_id
+    assert out["hub_placements"][qid] == owner_id
+    assert out["figure_placements"] == place_result["figure_placements"]
+    assert out["rationales"] == place_result["rationales"]
+    assert out["type_owner_overrides"][qid] == {
+        "from_concept_id": other_id,
+        "to_concept_id": owner_id,
+        "owner_topic_id": owner["_semantic_topic_id"],
+        "owner_concept_title": owner["concept_title"],
+    }
+    assert any(
+        "Q14 Type ownership moved this Activity/Info Hub" in flag
+        for flag in out["review_flags"][qid]
+    )
 
 
 def test_an_owner_outside_the_candidates_is_refused_to_the_fixer(
