@@ -47,30 +47,23 @@ has):
 """
 from __future__ import annotations
 
-import os
-from typing import Any, Final
+from typing import Any
+
+from ... import config
 
 # Stamped as the decision-store policy version on every Fixer decision so
 # a future charter change mints new keys instead of replaying old verdicts.
 FIXER_POLICY_VERSION = "fixer-1"
 
-# The Fixer runs on its OWN model (owner direction, 2026-08-27: "Use the
-# Terra for the Fixer"): its one recorded decision per blocked point is
-# the highest-stakes call in the run — everything else already spent —
-# so it is not tied to the deployment's general-purpose model. Same
-# override pattern as AEGIS_AUTONOMOUS_RESOLUTION_MODEL: the env names a
-# different model for this seam only, and the transport clamps to the
-# documented capacity of the model actually requested.
-DEFAULT_FIXER_MODEL: Final = "gpt-5.6-terra"
-FIXER_MODEL_ENV: Final = "AEGIS_FIXER_OPENAI_MODEL"
-
-
 def fixer_model() -> str:
-    """The model every live Fixer decision is requested from."""
+    """Use the same active model as every other live Aegis decision.
 
-    return (
-        os.environ.get(FIXER_MODEL_ENV, "").strip() or DEFAULT_FIXER_MODEL
-    )
+    The Fixer deliberately has no private model or environment override: when
+    OpenAI is active this is GPT-5.6 Luna, and a provider switch remains one
+    process-wide choice instead of creating a hidden mixed-model run.
+    """
+
+    return str(config.OPENAI_MODEL)
 
 
 def live_fixer(payload: dict[str, Any]) -> dict[str, Any]:

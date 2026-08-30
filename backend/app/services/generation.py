@@ -2979,11 +2979,11 @@ def _openai_json(
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
-    ``model`` overrides the deployment's configured model for THIS call
-    only (the Fixer's dedicated model, ``phase3.fixer.fixer_model``). It
-    rides the same request policy, effort negotiation, retry loop and
-    usage accounting as the configured model; ``None`` keeps
-    ``config.OPENAI_MODEL`` for every ordinary caller.
+    ``model`` overrides the deployment's configured model for THIS call only.
+    The Fixer passes ``phase3.fixer.fixer_model()``, which is deliberately the
+    same active model as ``config.OPENAI_MODEL``; ``None`` keeps that model for
+    every ordinary caller. All requests ride the same policy, effort
+    negotiation, retry loop and usage accounting.
 
     Concurrency-safe for multiple simultaneous users on one shared API key:
     calls queue on a process-wide gate (never stampede the API), and

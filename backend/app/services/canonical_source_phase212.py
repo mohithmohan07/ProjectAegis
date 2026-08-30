@@ -95,9 +95,9 @@ def _call_provider(
 ) -> dict[str, Any]:
     """One bounded strict-schema text call through the shared Aegis controls.
 
-    ``model`` overrides the configured model for THIS call only — the
-    Fixer's dedicated model (``phase3.fixer.fixer_model``); ``None``
-    keeps the deployment's configured model.
+    ``model`` overrides the configured model for THIS call only. The Fixer
+    supplies ``phase3.fixer.fixer_model()``, which shares the deployment's
+    active model; ``None`` keeps that configured model.
     """
     from . import canonical_source_phase22 as phase22
 
@@ -1242,8 +1242,7 @@ def _fixer_decide(
         system=_FIXER_SYSTEM,
         prompt=prompt,
         schema=fixer_schema(block_id),
-        # The Fixer's decisions run on its own model at every stage that
-        # invokes one (owner direction, 2026-08-27).
+        # The Fixer follows the same active model as the rest of this run.
         model=fixer_mod.fixer_model(),
     )
     decision_sha = canonical_source._sha256_text(

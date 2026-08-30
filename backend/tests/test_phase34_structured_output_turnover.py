@@ -72,7 +72,7 @@ def test_unsupported_reasoning_effort_downgrades_immediately(monkeypatch):
         openai_policy,
         "chat_request_policy",
         lambda purpose, model=None: {
-            "model": model or "gpt-5.6-terra",
+            "model": model or "gpt-5.6-luna",
             "reasoning_effort": "max",
         },
     )
@@ -86,7 +86,7 @@ def test_unsupported_reasoning_effort_downgrades_immediately(monkeypatch):
         response_schema=_simple_schema(),
         purpose="semantic_resolution",
         max_tokens=128_000,
-        model="gpt-5.6-terra",
+        model="gpt-5.6-luna",
     )
 
     assert result == {"ok": True}
@@ -190,7 +190,7 @@ def test_each_unsupported_reasoning_effort_is_tried_once(monkeypatch):
         openai_policy,
         "chat_request_policy",
         lambda purpose, model=None: {
-            "model": model or "gpt-5.6-terra",
+            "model": model or "gpt-5.6-luna",
             "reasoning_effort": "max",
         },
     )
@@ -204,7 +204,7 @@ def test_each_unsupported_reasoning_effort_is_tried_once(monkeypatch):
         response_schema=_simple_schema(),
         purpose="semantic_resolution",
         max_tokens=128_000,
-        model="gpt-5.6-terra",
+        model="gpt-5.6-luna",
     )
 
     assert result == {"ok": True}
@@ -263,7 +263,7 @@ def test_capability_downgrade_then_truncation_uses_lower_effort(monkeypatch):
         openai_policy,
         "chat_request_policy",
         lambda purpose, model=None: {
-            "model": model or "gpt-5.6-terra",
+            "model": model or "gpt-5.6-luna",
             "reasoning_effort": "xhigh",
         },
     )
@@ -276,7 +276,7 @@ def test_capability_downgrade_then_truncation_uses_lower_effort(monkeypatch):
         response_schema=_simple_schema(),
         purpose="semantic_resolution",
         max_tokens=128_000,
-        model="gpt-5.6-terra",
+        model="gpt-5.6-luna",
     )
 
     assert result == {"ok": True}
@@ -326,7 +326,7 @@ def test_unrelated_definitive_400_is_not_replayed(monkeypatch):
             response_schema=_simple_schema(),
             purpose="semantic_resolution",
             max_tokens=128_000,
-            model="gpt-5.6-terra",
+            model="gpt-5.6-luna",
         )
 
     assert calls == 1
@@ -387,7 +387,7 @@ def test_single_attempt_does_not_negotiate_reasoning_effort(monkeypatch):
             response_schema=_simple_schema(),
             purpose="semantic_resolution",
             max_tokens=128_000,
-            model="gpt-5.6-terra",
+            model="gpt-5.6-luna",
             single_attempt=True,
         )
 
@@ -522,7 +522,7 @@ def test_incomplete_object_at_provider_max_retries_same_allowance(monkeypatch):
         response_schema=_simple_schema(),
         purpose="concept_mapping",
         max_tokens=128_000,
-        model="gpt-5.6-terra",
+        model="gpt-5.6-luna",
     )
 
     assert result == {"ok": True}
@@ -530,7 +530,7 @@ def test_incomplete_object_at_provider_max_retries_same_allowance(monkeypatch):
         128_000,
         128_000,
     ]
-    assert all(call["model"] == "gpt-5.6-terra" for call in calls)
+    assert all(call["model"] == "gpt-5.6-luna" for call in calls)
     assert "STRUCTURED OUTPUT RECOVERY" in (
         calls[1]["messages"][0]["content"]
     )
