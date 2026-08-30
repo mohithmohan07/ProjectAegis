@@ -14,13 +14,13 @@ from sqlalchemy.orm import Session
 
 from .. import schemas
 from ..db import SessionLocal, get_db
-from . import auth, drive_checkpoints, progress, uploads
+from . import auth, drive_checkpoints, generation_recovery, progress, uploads
 from . import build_concepts as svc
 from . import build_concepts_release as release_svc
 from . import build_concepts_release_contract as release_contract
 
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 
 
 def _replace_route(router, path: str, method: str, endpoint) -> None:
@@ -49,6 +49,9 @@ def _decision_endpoint(
             owner_sub=user.sub,
             module="build_concepts",
         )
+        generation_recovery.require_mutation_allowed(
+            job, operation="resolve this run's semantic decision"
+        )
         if release_svc.release_available(job) or job.status == release_svc.RELEASE_STATUS:
             raise HTTPException(
                 409,
@@ -72,6 +75,8 @@ def _decision_endpoint(
         raise HTTPException(404, str(exc))
     except svc.HumanDecisionConflictError as exc:
         raise HTTPException(409, str(exc))
+    except generation_recovery.NonResumableRunError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -92,6 +97,12 @@ def _post_generate_endpoint(
         )
     except uploads.UploadJobNotFound as exc:
         raise HTTPException(404, str(exc))
+    try:
+        generation_recovery.require_mutation_allowed(
+            job, operation="generate from this checkpoint"
+        )
+    except generation_recovery.NonResumableRunError as exc:
+        raise HTTPException(409, str(exc)) from exc
     if job.status in {"generated", release_svc.RELEASE_STATUS}:
         raise HTTPException(
             409,

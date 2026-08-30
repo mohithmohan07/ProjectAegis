@@ -116,6 +116,7 @@ class UploadJobOut(BaseModel):
     checkpoint_saved_at: str = ""
     checkpoint_progress: float = 0.0
     checkpoint_target_identity: dict = Field(default_factory=dict)
+    generation_recovery: dict = Field(default_factory=dict)
     awaiting_decision: bool = False
     pending_decision: dict | None = None
     generation_running: bool = False

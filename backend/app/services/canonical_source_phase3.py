@@ -5918,6 +5918,8 @@ def load_page_evidence(
             and cached.get("compiler_version") == page_acsd.FALLBACK_COMPILER
             and cached.get("schema_version")
             == page_acsd.PAGE_ACSD_SCHEMA_VERSION
+            and cached.get("ingestion_contract_version")
+            == page_acsd.INGESTION_CONTRACT_VERSION
         ):
             return cached
         return None

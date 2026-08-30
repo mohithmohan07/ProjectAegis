@@ -15,7 +15,7 @@ from functools import wraps
 from typing import Any, Callable, Mapping
 
 from .. import models
-from . import build_concepts, uploads
+from . import build_concepts, generation_recovery, uploads
 from . import build_concepts_release as release
 from . import build_concepts_terminal_release_contract as terminal_release
 from . import progress
@@ -456,6 +456,16 @@ def rebuild_lane_master(
     )
 
     def _require_terminal_concept_release() -> None:
+        job = uploads.get_job(
+            db,
+            job_id,
+            owner_sub=owner_sub,
+            module="build_concepts",
+        )
+        db.refresh(job)
+        generation_recovery.require_mutation_allowed(
+            job, operation=f"rebuild the {lane} Master file"
+        )
         eligible, reason = _lane_master_eligibility(
             db,
             job_id,
@@ -803,7 +813,13 @@ def _run_generation_release(
         bool(master_outputs[lane]["ready"])
         for lane in (release.LANE_PRE, release.LANE_POST)
     )
-    if all_four_ready:
+    incomplete = staged.get("run_incomplete")
+    if isinstance(incomplete, Mapping):
+        if incomplete.get("resume_allowed") is False:
+            done_label = "Incomplete — new upload and conversion required"
+        else:
+            done_label = "Incomplete — resume from the saved checkpoint"
+    elif all_four_ready:
         done_label = "Done — all four outputs ready"
     else:
         missing = ", ".join(
@@ -819,7 +835,22 @@ def _run_generation_release(
             "Done — Concept stage complete; Master files ready "
             f"{ready_count}/2 (unavailable: {missing})"
         )
-    progress.set_progress(1.0, label=done_label)
+    if isinstance(incomplete, Mapping):
+        try:
+            current_job = uploads.get_job(
+                db,
+                job_id,
+                owner_sub=kwargs.get("owner_sub"),
+                module="build_concepts",
+            )
+            final_progress = min(
+                0.99, max(0.0, float(current_job.checkpoint_progress))
+            )
+        except Exception:  # pragma: no cover - the marker remains authoritative
+            final_progress = 0.0
+    else:
+        final_progress = 1.0
+    progress.set_progress(final_progress, label=done_label)
     result = dict(staged)
     result["master_outputs"] = master_outputs
     result["all_four_outputs_ready"] = all_four_ready
@@ -840,25 +871,51 @@ def _mark_run_incomplete(
     an incomplete end-state, and the log says the same in words.
     """
 
-    message = (
+    resume_allowed = getattr(exc, "resume_allowed", True) is not False
+    recovery_action = str(
+        getattr(exc, "recovery_action", "resume_checkpoint") or ""
+    )
+    recovery_message = str(getattr(exc, "recovery_message", "") or "")
+    prefix = (
         "Generation did NOT complete: "
         f"{type(exc).__name__}: {exc}. The rows already produced were "
         "staged so nothing paid for is lost, but this chapter's outputs "
-        "are incomplete — resume from the saved checkpoint to finish the "
-        "remaining outputs (the Pre-Learning lane included)."
+        "are incomplete. "
     )
+    if resume_allowed:
+        message = (
+            prefix
+            + "Resume from the saved checkpoint to finish the remaining "
+            "outputs (the Pre-Learning lane included)."
+        )
+        resume_message = (
+            "Re-run generation: it resumes from the saved checkpoint, "
+            "replays finished work from the decision store, and completes "
+            "the remaining outputs."
+        )
+        recovery_message = recovery_message or resume_message
+    else:
+        recovery_message = recovery_message or (
+            "This saved checkpoint cannot complete by resuming. Start a new "
+            "upload and conversion before generation."
+        )
+        message = prefix + recovery_message
     progress.log(message, level="error")
+    marker = {
+        "error": f"{type(exc).__name__}: {exc}",
+        "message": message,
+        "resume_allowed": resume_allowed,
+        "recovery_action": recovery_action,
+        "recovery": recovery_message,
+    }
+    if resume_allowed:
+        # Compatibility for existing clients, deliberately absent from a
+        # non-resumable result so no generic renderer can offer the dead-end
+        # action by merely checking that this string exists.
+        marker["resume"] = resume_message
     return {
         **staged,
-        "run_incomplete": {
-            "error": f"{type(exc).__name__}: {exc}",
-            "message": message,
-            "resume": (
-                "Re-run generation: it resumes from the saved checkpoint, "
-                "replays finished work from the decision store, and "
-                "completes the remaining outputs."
-            ),
-        },
+        "run_incomplete": marker,
     }
 
 
@@ -978,6 +1035,16 @@ def generate_post_learning(
     *args,
     **kwargs,
 ) -> dict[str, Any]:
+    job = uploads.get_job(
+        db,
+        job_id,
+        owner_sub=kwargs.get("owner_sub"),
+        module="build_concepts",
+    )
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="generate from this checkpoint"
+    )
     return _run_generation_release(
         build_concepts.generate_post_learning,
         db,

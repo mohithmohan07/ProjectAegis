@@ -45,7 +45,7 @@ from . import generation
 from . import progress
 
 
-CONTRACT_VERSION = 2
+CONTRACT_VERSION = 3
 # Restructure A (2026-08-29): the run's terminal verdict, written once at
 # staging by ``record_terminal_verdict`` onto the payload and its summary.
 # Consumers read this recorded fact; the checkpoint/issues derivation below
@@ -53,6 +53,7 @@ CONTRACT_VERSION = 2
 TERMINAL_GENERATION_FIELD = "terminal_generation_complete"
 TERMINAL_GENERATION_DEFECT = "terminal_generation_incomplete"
 PARTIAL_RELEASE_STATUS = "converted"
+RUN_RECOVERY_FIELD = "generation_recovery"
 
 
 def _job_from_call(args, kwargs) -> models.UploadJob | None:
@@ -232,6 +233,76 @@ def _has_resumable_checkpoint(
 ) -> bool:
     stage = _resumable_checkpoint_stage(_checkpoint_from_call(job, kwargs))
     return bool(stage and stage != "final_content_ready")
+
+
+def _failure_allows_resume(error: object) -> bool:
+    """Read an exception's explicit recovery contract, defaulting compatibly."""
+
+    return getattr(error, "resume_allowed", True) is not False
+
+
+def _record_non_resumable_recovery(
+    db,
+    job: models.UploadJob,
+    error: Exception,
+) -> None:
+    """Persist a Q24-style recovery route without deleting paid evidence.
+
+    The marker is stored both as job-level lifecycle metadata (for checkpoint
+    discovery and ``UploadJobOut`` after a reload) and on the Post diagnostic
+    release (for later release readers).  It records mechanics only: the raise
+    site already decided that this exact checkpoint cannot advance.
+    """
+
+    recovery_message = str(getattr(error, "recovery_message", "") or "") or (
+        "This saved checkpoint cannot complete by resuming. Start a new "
+        "upload and conversion before generation."
+    )
+    marker = {
+        "error": f"{type(error).__name__}: {error}",
+        "message": (
+            "Generation did not complete and this checkpoint is not "
+            "resumable. " + recovery_message
+        ),
+        "resume_allowed": False,
+        "recovery_action": str(
+            getattr(error, "recovery_action", "reconvert_new_upload") or ""
+        ),
+        "recovery": recovery_message,
+    }
+    durable = copy.deepcopy(dict(job.question_inventory or {}))
+    durable[models.GENERATION_RECOVERY_INVENTORY_KEY] = copy.deepcopy(marker)
+    post = durable.get(release.RELEASE_KEY)
+    if isinstance(post, Mapping):
+        marked_post = copy.deepcopy(dict(post))
+        marked_post[RUN_RECOVERY_FIELD] = copy.deepcopy(marker)
+        durable[release.RELEASE_KEY] = marked_post
+    job.question_inventory = durable
+    # ``original_stage_release`` just set ``released``. Keep that diagnostic
+    # lifecycle: unlike an ordinary partial failure, this checkpoint must not
+    # be flipped back to ``converted`` and rediscovered as resumable.
+    job.status = release.RELEASE_STATUS
+    job.result_ids = []
+    job.detail = marker["message"]
+    db.commit()
+    db.refresh(job)
+
+
+def _clear_non_resumable_recovery(db, job: models.UploadJob) -> None:
+    """Remove a stale recovery marker after a later non-Q24 staging."""
+
+    durable = copy.deepcopy(dict(job.question_inventory or {}))
+    if models.GENERATION_RECOVERY_INVENTORY_KEY not in durable:
+        return
+    durable.pop(models.GENERATION_RECOVERY_INVENTORY_KEY, None)
+    post = durable.get(release.RELEASE_KEY)
+    if isinstance(post, Mapping):
+        marked_post = copy.deepcopy(dict(post))
+        marked_post.pop(RUN_RECOVERY_FIELD, None)
+        durable[release.RELEASE_KEY] = marked_post
+    job.question_inventory = durable
+    db.commit()
+    db.refresh(job)
 
 
 def _restore_resumable_status(db, job: models.UploadJob) -> None:
@@ -474,10 +545,28 @@ def install() -> None:
         record_terminal_verdict(
             db, job, lane=release.LANE_POST, complete=complete,
         )
+        error = kwargs.get("error")
+        if (
+            isinstance(error, Exception)
+            and not _failure_allows_resume(error)
+        ):
+            _record_non_resumable_recovery(db, job, error)
+        elif complete or error is not None:
+            # A completed new run, or a new ordinary failure, supersedes an
+            # older recovery verdict.  A no-error staging of the SAME partial
+            # checkpoint (the explicit force-release route) does not: clearing
+            # resume_allowed=False there would turn a diagnostic download into
+            # a back door that re-opens provider-backed generation.
+            _clear_non_resumable_recovery(db, job)
         # Only a real partial checkpoint earns Resume. Quota/provider death
         # before any checkpoint remains a released diagnostic rather than a
         # converted job that can only restart from zero.
-        if not complete and _has_resumable_checkpoint(job, kwargs):
+        if (
+            not complete
+            and _failure_allows_resume(error)
+            and job.generation_recovery.get("resume_allowed") is not False
+            and _has_resumable_checkpoint(job, kwargs)
+        ):
             _restore_resumable_status(db, job)
         return release.release_result(job)
 
@@ -510,9 +599,16 @@ def install() -> None:
             message = (
                 f"{TERMINAL_GENERATION_DEFECT}: the staged Concept release "
                 "comes from a non-terminal generation checkpoint or recorded "
-                "generation failure; it may be downloaded for diagnosis (and "
-                "resumed when a checkpoint exists), but it cannot be published "
-                "to the database"
+                "generation failure; it may be downloaded for diagnosis"
+                + (
+                    ", but its recorded recovery contract forbids resuming "
+                    "this checkpoint"
+                    if isinstance(payload.get(RUN_RECOVERY_FIELD), Mapping)
+                    and payload[RUN_RECOVERY_FIELD].get("resume_allowed")
+                    is False
+                    else " (and resumed when a checkpoint exists)"
+                )
+                + ", and it cannot be published to the database"
             )
             if message not in defects:
                 defects.append(message)

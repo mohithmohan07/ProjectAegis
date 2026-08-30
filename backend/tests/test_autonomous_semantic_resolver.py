@@ -516,6 +516,90 @@ def test_invented_target_is_rejected_locally():
     assert "not a supplied candidate" in result.reason
 
 
+def _selector_pending_and_candidate() -> tuple[dict, dict]:
+    candidate = resolver.early_semantic_gate.bind_candidate({
+        "target_id": "TARGET-EXACT-0001",
+        "concept_id": "CONCEPT-0001",
+        "action": "refine",
+        "title": "Use the exact supplied candidate",
+        "coverage": "The supplied evidence supports this bounded candidate.",
+    })
+    pending = _pending(
+        kind="type_granularity_review",
+        options=[{
+            "choice": "select_candidate",
+            "label": "Select one exact candidate",
+            "recommended": True,
+        }],
+        candidates=[candidate],
+    )
+    return pending, candidate
+
+
+def test_select_candidate_accepts_exact_target_concept_alias():
+    pending, candidate = _selector_pending_and_candidate()
+    evidence_refs = {
+        "PENDING-EVIDENCE-001",
+        candidate["binding_hash"],
+    }
+
+    result = resolver._validate_response(
+        _response(
+            choice="select_candidate",
+            target_id="",
+            target_concept_id=candidate["target_id"],
+            confidence=0.99,
+            evidence_refs=list(evidence_refs),
+        ),
+        pending=pending,
+        evidence_refs=evidence_refs,
+    )
+
+    assert result.resolved is True
+    assert result.target_id == candidate["target_id"]
+    assert result.target_concept_id == candidate["target_id"]
+
+
+def test_select_candidate_rejects_conflicting_target_alias():
+    pending, candidate = _selector_pending_and_candidate()
+    evidence_refs = {"PENDING-EVIDENCE-001"}
+
+    result = resolver._validate_response(
+        _response(
+            choice="select_candidate",
+            target_id=candidate["target_id"],
+            target_concept_id="TARGET-DIFFERENT-0002",
+            confidence=0.99,
+            evidence_refs=list(evidence_refs),
+        ),
+        pending=pending,
+        evidence_refs=evidence_refs,
+    )
+
+    assert result.status == "escalated"
+    assert "target fields conflict" in result.reason
+
+
+def test_select_candidate_rejects_a_targetless_directive():
+    pending, _candidate = _selector_pending_and_candidate()
+    evidence_refs = {"PENDING-EVIDENCE-001"}
+
+    result = resolver._validate_response(
+        _response(
+            choice="select_candidate",
+            target_id="",
+            target_concept_id="",
+            confidence=0.99,
+            evidence_refs=list(evidence_refs),
+        ),
+        pending=pending,
+        evidence_refs=evidence_refs,
+    )
+
+    assert result.status == "escalated"
+    assert "not a supplied candidate" in result.reason
+
+
 @pytest.mark.parametrize(
     ("choice", "instruction"),
     [

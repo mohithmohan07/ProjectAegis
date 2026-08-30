@@ -44,6 +44,7 @@ from . import (
     concept_validator,
     drive_checkpoints,
     generation,
+    generation_recovery,
     grounding_certificate,
     identity,
     instruction_architect,
@@ -74,6 +75,24 @@ class UnattendedDecisionUnavailable(RuntimeError):
     wording deliberately avoids the semantic-failure vocabulary so bounded
     semantic recovery classifies it as non-semantic and does not retry it.
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        resume_allowed: bool = True,
+        recovery_action: str = "resume_checkpoint",
+        recovery_message: str = "",
+    ) -> None:
+        super().__init__(message)
+        # Mechanical recovery metadata only.  Release/UI consumers must not
+        # infer whether a saved checkpoint can advance from prose in an error
+        # string.  Most unattended stops retain the established resume path;
+        # Q24's proven rich-text dead end opts out explicitly at its raise
+        # site below.
+        self.resume_allowed = bool(resume_allowed)
+        self.recovery_action = str(recovery_action or "")
+        self.recovery_message = str(recovery_message or "")
 
 
 _HUMAN_DECISIONS_KEY = "human_decisions"
@@ -2920,6 +2939,16 @@ def _autonomously_resolve_pending_decision(
         # exists. Unattended completion applies it — with the original
         # escalation verdict preserved verbatim in the audited reason —
         # instead of pausing the run for a manual review click.
+        if (
+            safe_option["choice"]
+            == autonomous_resolution.CARRY_FORWARD_CHOICE
+            and _is_dead_end_rich_text_pending(pending)
+        ):
+            # This is the same Q24 choke point as the last-resort and Fixer
+            # paths.  In particular, do it BEFORE emitting the generic
+            # "generation completes" line: the carry-forward is known not to
+            # complete this source graph.
+            _raise_dead_end_rich_text_settlement(pending)
         continuation_reason = (
             f"Safe continuation after escalation: {result.reason} "
             "Aegis applied the safest server-offered bounded action "
@@ -3066,19 +3095,28 @@ def _raise_dead_end_rich_text_settlement(pending: dict) -> None:
     settlement: the run cannot complete usefully, and the honest fast
     failure names the cure.
     """
+    recovery_message = (
+        "Do not resume this saved checkpoint; it will replay the same source "
+        "graph refusal. Start a new upload with the PDF and let Aegis convert "
+        "it again before generation. If the same pause returns after that "
+        "fresh conversion, correct the named block in the source document "
+        "and upload the corrected document."
+    )
     message = (
         "Unattended generation stopped instead of settling "
         + _decision_identity_text(pending)
         + " with carry_forward: carrying non-canonical rich text forward is "
         "a proven dead end — the semantic-graph integrity gate downstream "
         "refuses the graph and every resume replays the same refusal. "
-        "Convert the PDF again as a new upload: sources converted before "
-        "\\mathrm ingestion canonicalization are cured by reconversion. If "
-        "the same pause returns on a fresh conversion, the named block "
-        "genuinely needs a corrected source document."
+        + recovery_message
     )
     progress.log(message, level="error")
-    raise UnattendedDecisionUnavailable(message)
+    raise UnattendedDecisionUnavailable(
+        message,
+        resume_allowed=False,
+        recovery_action="reconvert_new_upload",
+        recovery_message=recovery_message,
+    )
 
 
 def _apply_last_resort_safe_continuation(
@@ -4222,6 +4260,9 @@ def record_human_semantic_decision(
     try:
         with uploads.exclusive_job_operation(job_id):
             db.refresh(job)
+            generation_recovery.require_mutation_allowed(
+                job, operation="resolve this run's semantic decision"
+            )
             return _record_human_semantic_decision_locked(
                 db,
                 job,
@@ -4519,6 +4560,28 @@ def generate_post_learning(
         module="build_concepts",
         learning_kind="post",
     )
+    recovery = generation_recovery.blocked_recovery(job)
+    if recovery is not None:
+        # Defense in depth beneath the HTTP contract: a background/internal
+        # caller must not bypass the durable recovery verdict and reach the
+        # Architect or any later provider. Re-raise the same typed lifecycle
+        # contract so release/result consumers retain the non-resumable route.
+        recovery_message = str(
+            recovery.get("recovery")
+            or recovery.get("message")
+            or (
+                "This saved checkpoint cannot complete by resuming. Start a "
+                "new upload and conversion before generation."
+            )
+        )
+        raise UnattendedDecisionUnavailable(
+            str(recovery.get("message") or recovery_message),
+            resume_allowed=False,
+            recovery_action=str(
+                recovery.get("recovery_action") or "reconvert_new_upload"
+            ),
+            recovery_message=recovery_message,
+        )
     if job.status != "converted":
         if job.status == "generated":
             raise ValueError(

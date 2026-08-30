@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { RunConsoleProvider } from "../RunConsole";
 import type { UploadJob } from "../types";
-import DocumentUpload from "./DocumentUpload";
+import DocumentUpload, { hasRunOutputEntries } from "./DocumentUpload";
 
 const streamNdjsonMock = vi.hoisted(() => vi.fn());
 const apiMock = vi.hoisted(() => ({
@@ -143,6 +143,27 @@ test("shows the Phase 2 source-critical cutover without overstating semantic use
     .toBeDefined();
   expect(screen.getByRole("link", { name: "Source validation report" }))
     .toBeDefined();
+});
+
+test("assessment intake keeps source evidence without concept OD4 controls", () => {
+  const job = convertedJob();
+  job.module = "build_assessments";
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="assessments"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByText("Phase 2 canonical-source inventory")).toBeDefined();
+  expect(screen.getByRole("link", { name: "Immutable raw MMD" })).toBeDefined();
+  expect(screen.queryByText("3 · Run outputs")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Refresh outputs" })).toBeNull();
+  expect(screen.queryByText(/No output entries are available/i)).toBeNull();
 });
 
 test("shows bounded Phase 2.2 source adjudication before generation", () => {
@@ -812,13 +833,60 @@ test("does not offer a Pre Master rebuild when no Pre Concept was staged", () =>
   })).toBeDefined();
 });
 
-test("the four outputs are their own page section with a refresh control", async () => {
+test("a non-resumable run keeps downloads and Refresh but exposes no write actions", () => {
+  const job = failedMastersJob();
+  job.generation_recovery = {
+    resume_allowed: false,
+    recovery_action: "reconvert_new_upload",
+    recovery: "Start a new upload and conversion.",
+  };
+  job.source_artifacts?.files.push({
+    kind: "database_upload",
+    label: "Upload released output to database",
+    filename: "",
+    media_type: "application/json",
+    size_bytes: 0,
+    download_url: "/build-concepts/uploads/81/upload-release?lane=post",
+    action: "post",
+    requires_confirmation: true,
+  });
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByRole("link", {
+    name: "Download the Pre-Learning Concept File",
+  })).toBeDefined();
+  expect(screen.getByRole("link", {
+    name: "Download the Post-Learning Concept File",
+  })).toBeDefined();
+  expect(screen.getByRole("button", { name: "Refresh outputs" })).toBeDefined();
+  expect(screen.queryByRole("button", {
+    name: /Rebuild .* Master File/,
+  })).toBeNull();
+  expect(screen.queryByRole("button", {
+    name: /Upload edited .* Excel to CMS/,
+  })).toBeNull();
+});
+
+test("a stale zero-output manifest still exposes Run outputs recovery", async () => {
   // Owner report 2026-08-30: the deliverables were folded into the upload
   // card and invisible after a run. They are now the page's own numbered
   // section, and a stale grid recovers with one click instead of a page
   // reload (the post-run job refresh can fail silently).
   const onJob = vi.fn();
-  const fresh = bothLanesJob();
+  const stale = convertedJob();
+  const fresh = failedMastersJob();
+  expect(hasRunOutputEntries(stale.source_artifacts)).toBe(false);
+  expect(hasRunOutputEntries(fresh.source_artifacts)).toBe(true);
   apiMock.getUploadJob.mockReset();
   apiMock.getUploadJob.mockResolvedValue(fresh);
 
@@ -827,13 +895,14 @@ test("the four outputs are their own page section with a refresh control", async
       <DocumentUpload
         module="concepts"
         conceptKind="post"
-        externalJob={bothLanesJob()}
+        externalJob={stale}
         onJob={onJob}
       />
     </RunConsoleProvider>,
   );
 
   expect(screen.getByText("3 · Run outputs")).toBeDefined();
+  expect(screen.getByText(/No output entries are available/i)).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Refresh outputs" }));
 
   await vi.waitFor(() =>
@@ -844,4 +913,40 @@ test("the four outputs are their own page section with a refresh control", async
       expect.objectContaining({ id: fresh.id }),
     ),
   );
+});
+
+test("a delayed outputs refresh cannot resurrect a run after Start over", async () => {
+  let finishRefresh: ((job: UploadJob) => void) | undefined;
+  apiMock.getUploadJob.mockReset();
+  apiMock.getUploadJob.mockImplementation(() =>
+    new Promise<UploadJob>((resolve) => { finishRefresh = resolve; }));
+  const onJob = vi.fn();
+
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={convertedJob()}
+        onJob={onJob}
+      />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: "Refresh outputs" }));
+  await vi.waitFor(() =>
+    expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 81),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Start over" }));
+  expect(onJob).toHaveBeenLastCalledWith(null);
+  expect(screen.queryByText("3 · Run outputs")).toBeNull();
+
+  await act(async () => {
+    finishRefresh?.(failedMastersJob());
+    await Promise.resolve();
+  });
+
+  expect(onJob).toHaveBeenLastCalledWith(null);
+  expect(onJob).toHaveBeenCalledTimes(1);
+  expect(screen.queryByText("3 · Run outputs")).toBeNull();
 });

@@ -5,7 +5,7 @@ import {
   streamNdjson,
   type StreamEvent,
 } from "./api/client";
-import type { OpenAIUsage } from "./types";
+import type { GenerationRecovery, OpenAIUsage } from "./types";
 
 export interface RunLine {
   level: string;
@@ -321,6 +321,14 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
               continue;
             }
             if (job.generation_running) continue;
+            const blockedRecovery = nonResumableJobRecovery(job);
+            if (blockedRecovery) {
+              note(incompleteRecoveryMessage(blockedRecovery), "error");
+              const recovered = reattach.recoverResult
+                ? await reattach.recoverResult()
+                : null;
+              return resultWithIncompleteRecovery(recovered, blockedRecovery);
+            }
             if (job.status === "generated") {
               note("The run finished while the connection was down.", "info");
               if (reattach.recoverResult) return await reattach.recoverResult();
@@ -373,11 +381,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
                 ...s,
                 active: false,
                 status: "error",
-                progressLabel: "Incomplete — resume to finish",
+                progressLabel: incompleteProgressLabel(incomplete),
                 lines: [...s.lines, {
                   level: "error" as const,
-                  message: incomplete.resume
-                    ?? "Generation did not complete; resume from the saved checkpoint to finish.",
+                  message: incompleteRecoveryMessage(incomplete),
                   ts: Date.now() / 1000,
                 }],
               };
@@ -507,6 +514,17 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
           await visibilitySleep(delay);
           continue;
         }
+        const blockedRecovery = nonResumableJobRecovery(job);
+        if (blockedRecovery) {
+          note(incompleteRecoveryMessage(blockedRecovery), "error");
+          const recovered = reattach.recoverResult
+            ? await reattach.recoverResult()
+            : null;
+          return {
+            kind: "result",
+            data: resultWithIncompleteRecovery(recovered, blockedRecovery),
+          };
+        }
         if (job.status === "generated") {
           note("The run finished.", "info");
           if (reattach.recoverResult) {
@@ -532,7 +550,12 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             setState((s) => (incomplete
               ? {
                 ...s, active: false, status: "error",
-                progressLabel: "Incomplete — resume to finish",
+                progressLabel: incompleteProgressLabel(incomplete),
+                lines: [...s.lines, {
+                  level: "error" as const,
+                  message: incompleteRecoveryMessage(incomplete),
+                  ts: Date.now() / 1000,
+                }],
               }
               : {
                 ...s, active: false, status: "done",
@@ -624,13 +647,65 @@ function numericUsage(value: number | null | undefined): number {
 
 function incompleteRunResult(
   data: unknown,
-): { message?: string; resume?: string } | null {
+): IncompleteRun | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const marker = (data as Record<string, unknown>).run_incomplete;
   if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
     return null;
   }
-  return marker as { message?: string; resume?: string };
+  return marker as IncompleteRun;
+}
+
+interface IncompleteRun {
+  error?: string;
+  message?: string;
+  resume_allowed?: boolean;
+  recovery_action?: string;
+  recovery?: string;
+  resume?: string;
+}
+
+function incompleteProgressLabel(incomplete: IncompleteRun): string {
+  return incomplete.resume_allowed === false
+    ? "Incomplete — new upload and conversion required"
+    : "Incomplete — resume to finish";
+}
+
+function incompleteRecoveryMessage(incomplete: IncompleteRun): string {
+  if (incomplete.resume_allowed === false) {
+    return incomplete.recovery
+      ?? incomplete.message
+      ?? "This checkpoint cannot complete by resuming; start a new upload and conversion.";
+  }
+  return incomplete.resume
+    ?? incomplete.recovery
+    ?? "Generation did not complete; resume from the saved checkpoint to finish.";
+}
+
+function nonResumableJobRecovery(data: unknown): GenerationRecovery | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const recovery = (data as Record<string, unknown>).generation_recovery;
+  if (
+    !recovery
+    || typeof recovery !== "object"
+    || Array.isArray(recovery)
+    || (recovery as Record<string, unknown>).resume_allowed !== false
+  ) {
+    return null;
+  }
+  return recovery as GenerationRecovery;
+}
+
+function resultWithIncompleteRecovery<T>(
+  data: T | null,
+  recovery: GenerationRecovery,
+): T {
+  const base = (
+    data && typeof data === "object" && !Array.isArray(data)
+      ? data as Record<string, unknown>
+      : {}
+  );
+  return { ...base, run_incomplete: recovery } as T;
 }
 
 function isAwaitingDecisionResult(data: unknown): boolean {

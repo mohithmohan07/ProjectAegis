@@ -35,7 +35,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .. import models
-from . import openai_usage, progress
+from . import generation_recovery, openai_usage, progress
 
 # Fields of an existing concept a reviewer may redirect or reword.
 EDITABLE_FIELDS = (
@@ -183,6 +183,10 @@ def record_instruction(
     research artifact and must not be lost with the attempt that used them.
     """
 
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="record a Concept revision"
+    )
     text = str(instruction or "").strip()
     if not text:
         raise RevisionError("A revision instruction cannot be empty.")
@@ -357,6 +361,10 @@ def apply_instruction(
     afterwards, so a round that changes nothing produces an identical file.
     """
 
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="apply a Concept revision"
+    )
     rows = _concept_rows(db, job)
     if not rows:
         return _finish(

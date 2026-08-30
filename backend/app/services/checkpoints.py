@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from pydantic import ValidationError
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -1922,6 +1922,10 @@ def clear_checkpoint(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     with uploads.exclusive_job_operation(job.id):
         db.refresh(job)
+        from . import generation_recovery
+        generation_recovery.require_mutation_allowed(
+            job, operation="clear this run's saved checkpoint"
+        )
         job.generation_checkpoint = {}
         job.detail = "Saved generation checkpoint cleared."
         try:
@@ -1934,6 +1938,70 @@ def clear_checkpoint(
         from . import drive_checkpoints
         drive_checkpoints.schedule_checkpoint_backup(job.id)
     return job
+
+
+def _backfill_legacy_non_resumable_recoveries(
+    db: Session,
+    *,
+    owner_sub: str | None,
+    learning_kind: str,
+) -> set[int]:
+    """Persist typed recovery for exact pre-marker Q24 journal records.
+
+    Job 97 already carried Q24's full structured identity in its durable error
+    log but predates ``_aegis_generation_recovery``.  Reading that exact
+    fingerprint is mechanical compatibility.  The returned ids also let this
+    request exclude the jobs if a persistence failure rolls the backfill back.
+    """
+
+    candidates = (
+        db.query(models.UploadJob)
+        .filter(
+            models.UploadJob.owner_sub
+            == uploads.normalize_owner_sub(owner_sub),
+            models.UploadJob.module == "build_concepts",
+            models.UploadJob.learning_kind == learning_kind,
+            models.UploadJob.status.notin_(("released", "generated")),
+        )
+        .all()
+    )
+    legacy_ids: set[int] = set()
+    changed = False
+    for job in candidates:
+        if (
+            not isinstance(job.generation_checkpoint, dict)
+            or not job.generation_checkpoint.get("stage")
+        ):
+            continue
+        inventory = dict(job.question_inventory or {})
+        if isinstance(
+            inventory.get(models.GENERATION_RECOVERY_INVENTORY_KEY), dict,
+        ):
+            continue
+        recovery = job.generation_recovery
+        if recovery.get("resume_allowed") is not False:
+            continue
+        legacy_ids.add(int(job.id))
+        inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = copy.deepcopy(
+            recovery
+        )
+        # Mirror the current writer so a later release/manifest reader sees
+        # the same recovery contract as the job endpoint.
+        from . import build_concepts_release as release
+
+        post = inventory.get(release.RELEASE_KEY)
+        if isinstance(post, dict):
+            marked_post = copy.deepcopy(post)
+            marked_post["generation_recovery"] = copy.deepcopy(recovery)
+            inventory[release.RELEASE_KEY] = marked_post
+        job.question_inventory = inventory
+        changed = True
+    if changed:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+    return legacy_ids
 
 
 def resumable_jobs(
@@ -1964,11 +2032,20 @@ def resumable_jobs(
     kind = str(learning_kind or "").strip().lower()
     if kind not in {"post", "pre"}:
         raise ValueError("learning_kind must be post or pre")
+    legacy_non_resumable_ids = _backfill_legacy_non_resumable_recoveries(
+        db,
+        owner_sub=owner_sub,
+        learning_kind=kind,
+    )
     checkpoint = models.UploadJob.generation_checkpoint
     stage = checkpoint["stage"].as_string()
     saved_at = checkpoint["saved_at"].as_string()
     progress_value = checkpoint["progress"].as_float()
     target_identity = checkpoint["target_identity"]
+    recovery = models.UploadJob.question_inventory[
+        models.GENERATION_RECOVERY_INVENTORY_KEY
+    ]
+    recovery_resume_allowed = recovery["resume_allowed"].as_boolean()
     filters = (
         models.UploadJob.owner_sub == uploads.normalize_owner_sub(owner_sub),
         models.UploadJob.module == "build_concepts",
@@ -1980,6 +2057,19 @@ def resumable_jobs(
         # made the UI re-prompt "Resume this run?" forever after completion.
         # SQL twin of ``models.UploadJob.checkpoint_available``.
         models.UploadJob.status.notin_(("released", "generated")),
+        # Q24 preserves the paid checkpoint for diagnosis/export but records
+        # that replaying it is a proven dead end. Missing legacy metadata
+        # keeps the established resumable behavior; only an explicit false
+        # removes the row from discovery.
+        or_(
+            recovery_resume_allowed.is_(None),
+            recovery_resume_allowed.is_(True),
+        ),
+        *(
+            (models.UploadJob.id.notin_(legacy_non_resumable_ids),)
+            if legacy_non_resumable_ids
+            else ()
+        ),
     )
     total = int(
         db.query(func.count(models.UploadJob.id)).filter(*filters).scalar() or 0

@@ -13,12 +13,16 @@ publication like every other release-audit field.
 from __future__ import annotations
 
 import copy
+import io
+from pathlib import Path
 
 import pytest
 
 from app import models
 from app.services import build_concepts_release as release
+from app.services import generation_recovery
 from app.services import release_review as review
+from app.services import release_workbook_edits
 
 
 def _chapter(db):
@@ -92,6 +96,19 @@ def _version_rows(db, job):
         .order_by(models.ConceptReleaseVersion.id.asc())
         .all()
     )
+
+
+def _mark_non_resumable(db, job):
+    inventory = dict(job.question_inventory or {})
+    inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = {
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": "Start a new upload and conversion.",
+    }
+    job.question_inventory = inventory
+    job.generation_checkpoint = {"stage": "source_graph_review"}
+    db.commit()
+    db.refresh(job)
 
 
 # --------------------------------------------------------------------------- #
@@ -557,3 +574,127 @@ def test_the_review_routes_answer_404_when_nothing_is_staged(client, db):
     assert resp.status_code == 404
     missing = client.get("/build-concepts/uploads/99999/release-review")
     assert missing.status_code == 404
+
+
+def test_non_resumable_release_stays_readable_but_cannot_be_edited_or_uploaded(
+    client, db, monkeypatch,
+):
+    job = _staged_job(db)
+    _mark_non_resumable(db, job)
+    original_payload = copy.deepcopy(_slot(job))
+    original_versions = len(_version_rows(db, job))
+    uid = _uid(job)
+
+    # Diagnostic review remains a read-only surface.
+    viewed = client.get(
+        f"/build-concepts/uploads/{job.id}/release-review",
+        params={"lane": "post"},
+    )
+    assert viewed.status_code == 200, viewed.text
+    assert viewed.json()["staged_release_uid"] == uid
+
+    def forbidden_provider(*_args, **_kwargs):
+        raise AssertionError("blocked instruction reached the provider")
+
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        review.apply_instruction_round(
+            db,
+            job,
+            lane="post",
+            staged_release_uid=uid,
+            instruction="Change the first row.",
+            provider=forbidden_provider,
+        )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        review.apply_manual_edits(
+            db,
+            job,
+            lane="post",
+            staged_release_uid=uid,
+            edits=[{
+                "record_index": 0,
+                "field": "keywords",
+                "before": "alpha",
+                "after": "changed",
+            }],
+        )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        release_workbook_edits.apply_workbook_and_publish(
+            db,
+            job,
+            lane="post",
+            workbook_path=Path("file-must-not-be-read.xlsx"),
+        )
+
+    def forbidden_manual(*_args, **_kwargs):
+        raise AssertionError("blocked manual edit called the service")
+
+    def forbidden_instruction(*_args, **_kwargs):
+        raise AssertionError("blocked instruction recorded a review round")
+
+    monkeypatch.setattr(review, "apply_manual_edits", forbidden_manual)
+    monkeypatch.setattr(review, "apply_instruction_round", forbidden_instruction)
+    manual = client.post(
+        f"/build-concepts/uploads/{job.id}/release-review/manual-edit",
+        json={
+            "lane": "post",
+            "staged_release_uid": uid,
+            "edits": [{
+                "record_index": 0,
+                "field": "keywords",
+                "before": "alpha",
+                "after": "changed",
+            }],
+        },
+    )
+    assert manual.status_code == 409
+    instruction = client.post(
+        f"/build-concepts/uploads/{job.id}/release-review/apply-instruction",
+        json={
+            "lane": "post",
+            "staged_release_uid": uid,
+            "instruction": "Change the first row.",
+        },
+    )
+    assert instruction.status_code == 409
+
+    async def forbidden_read(*_args, **_kwargs):
+        raise AssertionError("blocked workbook upload read the request body")
+
+    monkeypatch.setattr(
+        "app.api.build_concepts.read_limited_upload", forbidden_read
+    )
+    workbook = client.post(
+        f"/build-concepts/uploads/{job.id}/upload-edited-workbook",
+        params={"lane": "post"},
+        files={"file": ("edited.xlsx", io.BytesIO(b"not read"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert workbook.status_code == 409
+
+    db.refresh(job)
+    assert _slot(job) == original_payload
+    assert len(_version_rows(db, job)) == original_versions
+    assert job.generation_recovery["resume_allowed"] is False
+
+
+def test_ordinary_edited_workbook_route_still_reads_and_dispatches(
+    client, db, monkeypatch,
+):
+    job = _staged_job(db)
+    dispatched: list[tuple[int, str]] = []
+
+    def capture(_db, received_job, *, lane, workbook_path, owner_sub):
+        assert workbook_path.read_bytes() == b"ordinary workbook"
+        dispatched.append((received_job.id, lane))
+        return {"job_id": received_job.id, "publication": "staged"}
+
+    monkeypatch.setattr(
+        release_workbook_edits, "apply_workbook_and_publish", capture
+    )
+    response = client.post(
+        f"/build-concepts/uploads/{job.id}/upload-edited-workbook",
+        params={"lane": "post"},
+        files={"file": ("edited.xlsx", io.BytesIO(b"ordinary workbook"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert response.status_code == 200, response.text
+    assert dispatched == [(job.id, "post")]

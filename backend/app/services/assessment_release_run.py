@@ -53,6 +53,7 @@ from . import assessment_source_inventory as source_inventory
 from . import assessment_profile
 from . import build_concepts_release
 from . import identity
+from . import generation_recovery
 from . import progress, uploads
 from . import question_image_grid
 from . import release_core
@@ -1434,6 +1435,10 @@ def run_pre_release_for_job(
 
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="build the pre Master file"
+    )
     questions = build_concepts_release.staged_generated_questions(job)
     if questions is None:
         # OD4 numbering: the Pre concept file is Output 01, its Master 02.
@@ -1503,11 +1508,15 @@ def run_release_for_job(
     purpose only — as the set of identities the leak barrier accounts
     against — and never as a source of items.
     """
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts")
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="build a Master file"
+    )
     authorities = dict(authorities or {})
     generate_lane = generated_questions is not None
     profile = assessment_profile.resolve(profile)
-    job = uploads.get_job(
-        db, job_id, owner_sub=owner_sub, module="build_concepts")
     # WHICH SLOT this release routes against, and therefore which lane it
     # is. ``staged_lane`` is decided by the KEY the payload came out of —
     # see the barrier below for why that binding, and not any field, is

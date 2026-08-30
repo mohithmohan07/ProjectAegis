@@ -185,10 +185,32 @@ def pre_not_staged_reason(job: models.UploadJob) -> str:
 
     recorded = pre_release_unavailable_record(job)
     reason = str((recorded or {}).get("reason") or "").strip()
+    recovery = job.generation_recovery
+    non_resumable = recovery.get("resume_allowed") is False
+    recovery_message = str(recovery.get("recovery") or "").strip()
     if not reason:
+        if non_resumable:
+            return (
+                "This run staged no Pre-Learning release, so there is no Pre "
+                "Concept File to download. "
+                + (
+                    recovery_message
+                    or "This checkpoint is not resumable; start a new upload "
+                    "and conversion."
+                )
+            )
         return PRE_NOT_STAGED
     if not reason.endswith("."):
         reason += "."
+    if non_resumable:
+        return (
+            "This run staged no Pre-Learning release: " + reason + " "
+            + (
+                recovery_message
+                or "This checkpoint is not resumable; start a new upload "
+                "and conversion."
+            )
+        )
     return (
         "This run staged no Pre-Learning release: " + reason
         + " Re-running generation stages the Pre lane."

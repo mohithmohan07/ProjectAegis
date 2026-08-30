@@ -336,7 +336,11 @@ def test_explicit_rebuild_claims_job_lock_but_in_run_sibling_does_not(
 ):
     job_id = 880003
     calls: list[int] = []
-    fake_db = SimpleNamespace(rollback=lambda: None)
+    fake_db = SimpleNamespace(
+        rollback=lambda: None,
+        refresh=lambda _job: None,
+    )
+    fake_job = SimpleNamespace(id=job_id, generation_recovery={})
     capacity = storage_capacity.CapacitySnapshot(
         path=str(config.DATA_DIR),
         available_bytes=10_000,
@@ -345,7 +349,7 @@ def test_explicit_rebuild_claims_job_lock_but_in_run_sibling_does_not(
     monkeypatch.setattr(
         uploads,
         "get_job",
-        lambda *_args, **_kwargs: SimpleNamespace(id=job_id),
+        lambda *_args, **_kwargs: fake_job,
     )
     monkeypatch.setattr(
         storage_capacity,

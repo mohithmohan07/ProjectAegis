@@ -14,6 +14,7 @@ from ..services import (
     release_review as review_svc,
     checkpoints,
     drive_checkpoints,
+    generation_recovery,
     progress,
     uploads,
 )
@@ -111,6 +112,17 @@ def _tag(value: str) -> str:
     return "pre_" if _lane(value) == release_svc.LANE_PRE else ""
 
 
+def _require_recovery_mutation(job, *, operation: str) -> None:
+    """HTTP 409 twin of the exact service-layer recovery gate."""
+
+    try:
+        generation_recovery.require_mutation_allowed(
+            job, operation=operation,
+        )
+    except generation_recovery.NonResumableRunError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
 # --------------------------------------------------------------------------- #
 # Model provider selection (OpenAI / Gemini) — applies to the next run
 # --------------------------------------------------------------------------- #
@@ -200,7 +212,16 @@ def record_human_semantic_decision(
     The complete unresolved decision remains available in the diagnostic export,
     and the newest durable rows are released with their errors attached.
     """
-    del job_id, decision_id, req, db, user
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts"
+        )
+    except uploads.UploadJobNotFound as exc:
+        raise HTTPException(404, str(exc)) from exc
+    _require_recovery_mutation(
+        job, operation="resolve this run's semantic decision"
+    )
+    del decision_id, req
     raise HTTPException(
         409,
         "Build Concepts is unattended. Manual semantic selection is disabled; "
@@ -214,6 +235,10 @@ async def replace_upload_file(
     user: auth.Principal = Depends(auth.require_user),
 ):
     try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts"
+        )
+        _require_recovery_mutation(job, operation="replace this upload's file")
         raw_bytes = await read_limited_upload(file)
         return uploads.replace_file(
             db, job_id, filename=file.filename or "document.txt",
@@ -222,6 +247,8 @@ async def replace_upload_file(
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
     except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except generation_recovery.NonResumableRunError as e:
         raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -319,6 +346,8 @@ def clear_checkpoint(
         raise HTTPException(404, str(e))
     except uploads.JobAlreadyRunningError as e:
         raise HTTPException(409, str(e))
+    except generation_recovery.NonResumableRunError as e:
+        raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -360,6 +389,9 @@ def release_latest_output(
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
+        _require_recovery_mutation(
+            job, operation="stage another release from this run"
+        )
         if release_svc.release_available(job):
             release_svc.backfill_missing_pre_release(
                 db,
@@ -544,6 +576,8 @@ def upload_released_output_to_database(
         raise HTTPException(404, str(e))
     except uploads.JobAlreadyRunningError as e:
         raise HTTPException(409, str(e))
+    except generation_recovery.NonResumableRunError as e:
+        raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -578,6 +612,9 @@ async def upload_edited_workbook_to_cms(
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts"
         )
+        _require_recovery_mutation(
+            job, operation="upload and publish an edited workbook"
+        )
         raw_bytes = await read_limited_upload(
             file, description="edited Concept workbook"
         )
@@ -606,6 +643,8 @@ async def upload_edited_workbook_to_cms(
     except release_svc.ReleaseUnavailableError as e:
         raise HTTPException(404, str(e))
     except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except generation_recovery.NonResumableRunError as e:
         raise HTTPException(409, str(e))
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -637,6 +676,10 @@ def submit_concept_revision(
             db, job_id, owner_sub=user.sub, module="build_concepts")
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
+    # A revision is a provider-backed post-run mutation. Refuse before even
+    # recording a round, so no durable reviewer action falsely appears to have
+    # been attempted and no provider can be called.
+    _require_recovery_mutation(job, operation="request a Concept revision")
 
     try:
         revision = revisions_svc.record_instruction(
@@ -730,6 +773,7 @@ def apply_release_manual_edit(
     """Apply the reviewer's verbatim field edits as one recorded round."""
 
     job = _review_job(db, job_id, user.sub)
+    _require_recovery_mutation(job, operation="edit the staged release")
     try:
         return review_svc.apply_manual_edits(
             db, job,
@@ -744,6 +788,8 @@ def apply_release_manual_edit(
         raise HTTPException(409, str(e))
     except review_svc.ReviewEditError as e:
         raise HTTPException(422, str(e))
+    except generation_recovery.NonResumableRunError as e:
+        raise HTTPException(409, str(e))
 
 
 @router.post(
@@ -764,6 +810,9 @@ def apply_release_instruction(
     """
 
     job = _review_job(db, job_id, user.sub)
+    _require_recovery_mutation(
+        job, operation="apply an instruction to the staged release"
+    )
     try:
         return review_svc.apply_instruction_round(
             db, job,
@@ -780,6 +829,8 @@ def apply_release_instruction(
         raise HTTPException(422, str(e))
     except review_svc.InstructionRoundFailed as e:
         raise HTTPException(502, str(e))
+    except generation_recovery.NonResumableRunError as e:
+        raise HTTPException(409, str(e))
 
 
 @router.post("/uploads/{job_id}/convert")
@@ -794,6 +845,7 @@ def convert_upload(
             db, job_id, owner_sub=user.sub, module="build_concepts")
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
+    _require_recovery_mutation(job, operation="convert this upload")
     if job.status in {"generated", release_svc.RELEASE_STATUS}:
         raise HTTPException(
             409,

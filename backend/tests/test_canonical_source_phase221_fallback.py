@@ -1082,3 +1082,79 @@ def test_ingestion_normalizes_plain_mathrm_atoms_to_supported_text():
         for flag in flags
     )
     assert not any("\t" in flag for flag in flags)
+
+
+def test_ingestion_normalizes_electricity_spacing_and_slash_unit_atoms():
+    """The exact upright-unit shapes in NCERT Electricity are mechanical.
+
+    Spacing controls and literal unit slashes do not turn plain text atoms into
+    semantic LaTeX. Nested commands and operators remain outside the grammar
+    and therefore stay visible for source review.
+    """
+    page = fallback.PdfPage(
+        page_id="P-1", page_number=1, text="Electric power",
+        image_data_url="data:image/png;base64,AAAA", width=1000, height=1000,
+    )
+    source_values = [
+        r"1\ \mathrm{W}=1\ \text{volt}\times1\ \text{ampere}"
+        r"=1\ \mathrm{V\ A}\qquad(11.23)",
+        r"1\ \mathrm{kW\ h}",
+        r"1\ \mathrm{J/s}",
+        r"1\ \mathrm{hour/day}",
+        r"1\ \mathrm{W\,h}",
+        r"1\ \mathrm{kW\,h}",
+        r"6.50\ \mathrm{per\ kW\,h}",
+        r"y=\mathrm{x/y}",
+        r"R=5\ \mathrm{\Omega}",
+        r"y=\mathrm{x+1}",
+    ]
+    candidate = {
+        "pages": [{
+            "page_id": "P-1",
+            "confidence": 0.99,
+            "blocks": [
+                {
+                    "kind": "math",
+                    "reading_order": index,
+                    "bbox": [10, index * 50, 900, index * 50 + 40],
+                    "confidence": 0.99,
+                    "latex": value,
+                }
+                for index, value in enumerate(source_values, start=1)
+            ],
+        }],
+    }
+
+    normalized, reason = fallback.validate_page_extraction([page], candidate)
+
+    assert reason == ""
+    values = [
+        block["latex"] for block in normalized["pages"][0]["blocks"]
+    ]
+    assert values[:7] == [
+        r"1\ \text{W}=1\ \text{volt}\times1\ \text{ampere}"
+        r"=1\ \text{V A}\qquad(11.23)",
+        r"1\ \text{kW h}",
+        r"1\ \text{J}/\text{s}",
+        r"1\ \text{hour}/\text{day}",
+        r"1\ \text{W h}",
+        r"1\ \text{kW h}",
+        r"6.50\ \text{per kW h}",
+    ]
+    # A slash remains a mathematical operator even when the roman runs on
+    # either side are projected to the supported text-atom vocabulary. This
+    # is syntax transport, never a local guess that ``x/y`` is prose or a
+    # particular kind of ratio.
+    assert values[7] == r"y=\text{x}/\text{y}"
+    assert r"\text{x/y}" not in values[7]
+    assert values[8:] == [
+        r"R=5\ \mathrm{\Omega}",
+        r"y=\mathrm{x+1}",
+    ]
+    assert [
+        fallback.kr.normalize_supported_text_atoms(value) for value in values
+    ] == values
+    for value in values[8:]:
+        assert "unsupported_katex_command" in fallback.kr.rich_text_issues(
+            f"[Katex] {value} [/Katex]"
+        )

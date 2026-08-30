@@ -72,6 +72,37 @@ def _verified_batch_result() -> dict:
     }
 
 
+def _identified_verified_batch_result() -> dict:
+    return {
+        "status": "verified",
+        "pages": [
+            {
+                "page_id": "PDF-PAGE-0001",
+                "page_number": 1,
+                "blocks": [],
+            },
+            {
+                "page_id": "PDF-PAGE-0002",
+                "page_number": 2,
+                "blocks": [],
+            },
+        ],
+    }
+
+
+def _minimal_legacy_bundle(pdf_sha256: str) -> dict:
+    return {
+        "schema_name": "Aegis GPT Page ACSD",
+        "schema_version": "1.1.0",
+        "compiler_version": fallback.FALLBACK_COMPILER,
+        "source_origin": fallback.FALLBACK_ORIGIN,
+        "model": fallback.config.OPENAI_MODEL,
+        "pdf_sha256": pdf_sha256,
+        "pages": copy.deepcopy(_identified_verified_batch_result()["pages"]),
+        "batches": [],
+    }
+
+
 def test_unchanged_source_replays_lane_zero_times(lane, tmp_path):
     provider_calls = 0
 
@@ -96,6 +127,467 @@ def test_unchanged_source_replays_lane_zero_times(lane, tmp_path):
     assert second == first
     assert not any("will inspect" in message for message in lane["logs"])
     assert any("Reusing the sealed verified" in m for m in lane["logs"])
+
+
+def test_legacy_sealed_bundle_is_upgraded_without_provider_spend(
+    lane,
+    tmp_path,
+    monkeypatch,
+):
+    """A verified 2.4.0 seal migrates to the supported-text contract in place.
+
+    Job 97 was a new upload but reused this exact stale-cache shape. The old
+    seal remains evidence only after its original page digest verifies; its
+    page render carriers and duplicated outline boundary text are then
+    mechanically upgraded and resealed under the new identity.
+    """
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-fake")
+    legacy_bundle = {
+        "schema_name": "Aegis GPT Page ACSD",
+        "schema_version": "1.1.0",
+        "compiler_version": fallback.FALLBACK_COMPILER,
+        "source_origin": fallback.FALLBACK_ORIGIN,
+        "model": fallback.config.OPENAI_MODEL,
+        "pdf_sha256": lane["sha"],
+        "pages": [
+            {
+                "page_id": "PDF-PAGE-0001",
+                "page_number": 1,
+                "blocks": [{
+                    "reading_order": 7,
+                    "kind": "math",
+                    "text": "",
+                    "latex": (
+                        r"1\ \mathrm{W}=1\ \text{volt}\times1\ \text{ampere}"
+                        r"=1\ \mathrm{V\ A}\qquad(11.23)"
+                    ),
+                    "table_rows": [[
+                        r"1\ \mathrm{kW\,h}",
+                        r"1\ \mathrm{J/s}",
+                        r"y=\mathrm{x/y}",
+                    ]],
+                }],
+            },
+            {
+                "page_id": "PDF-PAGE-0002",
+                "page_number": 2,
+                "blocks": [{
+                    "reading_order": 1,
+                    "kind": "math",
+                    "text": "",
+                    "latex": r"R=5\ \mathrm{\Omega}",
+                    "table_rows": [],
+                }],
+            },
+        ],
+        "batches": [],
+        "chapter_outline": {
+            "version": fallback.OUTLINE_VERSION,
+            # Semantic titles are not render copies and must stay untouched.
+            "topics": [{"title": r"\mathrm{Electricity}"}],
+            "task_partitions": [{
+                "page_id": "PDF-PAGE-0001",
+                "reading_order": 7,
+                "independent_parts": [{
+                    "label": "(a)",
+                    "stem": r"Use 1\ \mathrm{kW\ h} for the calculation.",
+                    "text": r"Find energy in \mathrm{kW\,h}.",
+                }],
+            }],
+        },
+    }
+    legacy_key = fallback._legacy_bundle_cache_keys(lane["sha"])[0]
+    fallback._write_verified_batch_cache(legacy_key, {
+        "version": "2.4.0",
+        "status": "verified",
+        "model": fallback.config.OPENAI_MODEL,
+        "pdf_sha256": lane["sha"],
+        "result_sha256": fallback._bundle_pages_sha256(legacy_bundle),
+        "result": copy.deepcopy(legacy_bundle),
+    })
+
+    def provider(_batch):
+        pytest.fail("a verified legacy seal must not replay the provider")
+
+    upgraded = fallback.extract_pdf_to_page_acsd(
+        source_path, provider=provider,
+    )
+
+    assert upgraded["schema_version"] == fallback.PAGE_ACSD_SCHEMA_VERSION
+    assert upgraded["ingestion_contract_version"] == (
+        fallback.INGESTION_CONTRACT_VERSION
+    )
+    first = upgraded["pages"][0]["blocks"][0]
+    assert first["latex"] == (
+        r"1\ \text{W}=1\ \text{volt}\times1\ \text{ampere}"
+        r"=1\ \text{V A}\qquad(11.23)"
+    )
+    assert first["table_rows"] == [[
+        r"1\ \text{kW h}",
+        r"1\ \text{J}/\text{s}",
+        r"y=\text{x}/\text{y}",
+    ]]
+    assert r"\text{x/y}" not in first["table_rows"][0][2]
+    parts = upgraded["chapter_outline"]["task_partitions"][0][
+        "independent_parts"
+    ]
+    assert parts == [{
+        "label": "(a)",
+        "stem": r"Use 1\ \text{kW h} for the calculation.",
+        "text": r"Find energy in \text{kW h}.",
+    }]
+
+    # Recursively inspect every source-rendering carrier. Only the deliberately
+    # unsupported nested semantic command remains for downstream review.
+    carriers = [
+        value
+        for page in upgraded["pages"]
+        for block in page["blocks"]
+        for value in (
+            block.get("text"),
+            block.get("latex"),
+            *(cell for row in block.get("table_rows") or [] for cell in row),
+        )
+        if isinstance(value, str)
+    ] + [
+        str(part.get(field) or "")
+        for partition in upgraded["chapter_outline"]["task_partitions"]
+        for part in partition["independent_parts"]
+        for field in ("stem", "text")
+    ]
+    assert [value for value in carriers if r"\mathrm" in value] == [
+        r"R=5\ \mathrm{\Omega}",
+    ]
+    assert upgraded["chapter_outline"]["topics"][0]["title"] == (
+        r"\mathrm{Electricity}"
+    )
+
+    current_seal = fallback._read_verified_batch_cache(
+        fallback._bundle_cache_key(lane["sha"])
+    )
+    assert current_seal is not None
+    assert current_seal["version"] == fallback.FALLBACK_VERSION
+    assert current_seal["ingestion_contract_version"] == (
+        fallback.INGESTION_CONTRACT_VERSION
+    )
+    assert current_seal["result_sha256"] == (
+        fallback._bundle_pages_sha256(upgraded)
+    )
+    assert any("Upgraded the sealed verified" in m for m in lane["logs"])
+
+
+@pytest.mark.parametrize(
+    ("target", "field", "wrong_value"),
+    [
+        ("envelope", "version", "2.3.0"),
+        ("envelope", "model", "wrong-model"),
+        ("result", "schema_version", "0.0.0"),
+        ("result", "compiler_version", "wrong-compiler"),
+        ("result", "source_origin", "wrong-origin"),
+        ("result", "model", "wrong-model"),
+    ],
+)
+def test_wrong_identity_legacy_seal_falls_through_as_a_miss(
+    lane,
+    tmp_path,
+    monkeypatch,
+    target,
+    field,
+    wrong_value,
+):
+    """A legacy filename cannot promote mismatched JSON as current evidence."""
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(fallback, "derive_chapter_outline", lambda _bundle: None)
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-fake")
+    legacy_bundle = _minimal_legacy_bundle(lane["sha"])
+    legacy_envelope = {
+        "version": "2.4.0",
+        "status": "verified",
+        "model": fallback.config.OPENAI_MODEL,
+        "pdf_sha256": lane["sha"],
+        "result_sha256": fallback._bundle_pages_sha256(legacy_bundle),
+        "result": legacy_bundle,
+    }
+    if target == "envelope":
+        legacy_envelope[field] = wrong_value
+    else:
+        legacy_bundle[field] = wrong_value
+        legacy_envelope["result_sha256"] = fallback._bundle_pages_sha256(
+            legacy_bundle
+        )
+    fallback._write_verified_batch_cache(
+        fallback._legacy_bundle_cache_keys(lane["sha"])[0],
+        legacy_envelope,
+    )
+    provider_calls = 0
+
+    def provider(_batch):
+        nonlocal provider_calls
+        provider_calls += 1
+        return copy.deepcopy(_identified_verified_batch_result())
+
+    result = fallback.extract_pdf_to_page_acsd(source_path, provider=provider)
+
+    assert provider_calls == 1
+    assert result["batches"][0]["cache"] == "miss"
+    assert not any("Upgraded the sealed verified" in m for m in lane["logs"])
+
+
+@pytest.mark.parametrize(
+    "tampered_identity",
+    ["envelope_page_id", "result_page_id", "result_page_number"],
+)
+def test_wrong_page_identity_in_legacy_batch_falls_through_as_a_miss(
+    lane,
+    tmp_path,
+    monkeypatch,
+    tampered_identity,
+):
+    """Both the batch key receipt and its result must name the exact pages."""
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(fallback, "derive_chapter_outline", lambda _bundle: None)
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-fake")
+    batch = _fake_pages(1, 2)
+    legacy_result = _identified_verified_batch_result()
+    legacy_envelope = {
+        "version": "2.4.0",
+        "status": "verified",
+        "model": fallback.config.OPENAI_MODEL,
+        "pdf_sha256": lane["sha"],
+        "page_ids": [page.page_id for page in batch],
+        "result": legacy_result,
+    }
+    if tampered_identity == "envelope_page_id":
+        legacy_envelope["page_ids"][0] = "PDF-PAGE-9999"
+    elif tampered_identity == "result_page_id":
+        legacy_result["pages"][0]["page_id"] = "PDF-PAGE-9999"
+    else:
+        legacy_result["pages"][0]["page_number"] = "oops"
+    fallback._write_verified_batch_cache(
+        fallback._legacy_batch_cache_keys(lane["sha"], batch)[0],
+        legacy_envelope,
+    )
+    provider_calls = 0
+
+    def provider(_batch):
+        nonlocal provider_calls
+        provider_calls += 1
+        return copy.deepcopy(_identified_verified_batch_result())
+
+    result = fallback.extract_pdf_to_page_acsd(source_path, provider=provider)
+
+    assert provider_calls == 1
+    assert result["batches"][0]["cache"] == "miss"
+
+
+def test_wrong_model_legacy_outline_falls_through_as_a_miss(
+    lane,
+    tmp_path,
+    monkeypatch,
+):
+    """A wrong-model outline is re-authored, not relabelled as current."""
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    page_acsd = {
+        "pdf_sha256": lane["sha"],
+        "pages": [{
+            "page_id": "PDF-PAGE-0001",
+            "page_number": 1,
+            "blocks": [
+                {
+                    "kind": "heading",
+                    "reading_order": 1,
+                    "heading_level": 1,
+                    "text": "Electricity",
+                },
+                {
+                    "kind": "task",
+                    "reading_order": 2,
+                    "source_label": "Question",
+                    "text": "State the unit of electric power.",
+                },
+            ],
+        }],
+    }
+    legacy_outline = {
+        "version": fallback.OUTLINE_VERSION,
+        "chapter_title": "Stale title",
+        "topics": [],
+        "task_partitions": [],
+        "ruled_task_kinds": [
+            ["PDF-PAGE-0001", 2, "question"],
+        ],
+        "unruled_task_refs": [],
+        "notes": [],
+        "review_flags": [],
+    }
+    fallback._write_verified_batch_cache(
+        fallback._legacy_outline_cache_keys(lane["sha"])[0],
+        {
+            "version": "2.4.0",
+            "status": "verified",
+            "model": "wrong-model",
+            "pdf_sha256": lane["sha"],
+            "result": legacy_outline,
+        },
+    )
+    model_calls = 0
+
+    def model_outline(*_args, **_kwargs):
+        nonlocal model_calls
+        model_calls += 1
+        return {
+            "chapter_title": "Electricity",
+            "topics": [{
+                "title": "Electricity",
+                "kind": "content",
+                "start_page_id": "PDF-PAGE-0001",
+                "start_reading_order": 1,
+            }],
+            "task_partitions": [],
+            "whole_tasks": [{
+                "page_id": "PDF-PAGE-0001",
+                "reading_order": 2,
+                "task_kind": "question",
+            }],
+            "notes": [],
+        }
+
+    monkeypatch.setattr(
+        fallback.phase22,
+        "_openai_multimodal_json",
+        model_outline,
+    )
+
+    outline = fallback.derive_chapter_outline(page_acsd)
+
+    assert model_calls == 1
+    assert outline is not None
+    assert outline["chapter_title"] == "Electricity"
+
+
+def test_legacy_batch_and_outline_caches_upgrade_without_model_replay(
+    lane,
+    tmp_path,
+    monkeypatch,
+):
+    """A missing seal may reuse both paid 2.4 caches under the new contract."""
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-fake")
+    batch = _fake_pages(1, 2)
+    legacy_batch_result = {
+        "status": "verified",
+        "pages": [
+            {
+                "page_id": "PDF-PAGE-0001",
+                "page_number": 1,
+                "blocks": [{
+                    "reading_order": 1,
+                    "kind": "task",
+                    "text": r"Find energy in 1\ \mathrm{kW\,h}.",
+                    "latex": "",
+                    "table_rows": [],
+                }],
+            },
+            {
+                "page_id": "PDF-PAGE-0002",
+                "page_number": 2,
+                "blocks": [],
+            },
+        ],
+    }
+    legacy_batch_key = fallback._legacy_batch_cache_keys(
+        lane["sha"], batch,
+    )[0]
+    fallback._write_verified_batch_cache(legacy_batch_key, {
+        "version": "2.4.0",
+        "status": "verified",
+        "model": fallback.config.OPENAI_MODEL,
+        "pdf_sha256": lane["sha"],
+        "page_ids": [page.page_id for page in batch],
+        "result": legacy_batch_result,
+    })
+    legacy_outline = {
+        "version": fallback.OUTLINE_VERSION,
+        "chapter_title": "Electricity",
+        "topics": [],
+        "task_partitions": [{
+            "page_id": "PDF-PAGE-0001",
+            "reading_order": 1,
+            "independent_parts": [
+                {
+                    "label": "(a)",
+                    "stem": r"Use 1\ \mathrm{kW\ h}.",
+                    "text": r"Find energy in 1\ \mathrm{kW\,h}.",
+                },
+                {
+                    "label": "(b)",
+                    "stem": "",
+                    "text": r"State the answer in \mathrm{J/s}.",
+                },
+            ],
+        }],
+        "ruled_task_kinds": [["PDF-PAGE-0001", 1, "question"]],
+        "unruled_task_refs": [],
+        "notes": [],
+        "review_flags": [],
+    }
+    fallback._write_verified_batch_cache(
+        fallback._legacy_outline_cache_keys(lane["sha"])[0],
+        {
+            "version": "2.4.0",
+            "status": "verified",
+            "model": fallback.config.OPENAI_MODEL,
+            "pdf_sha256": lane["sha"],
+            "result": legacy_outline,
+        },
+    )
+    monkeypatch.setattr(
+        fallback.phase22,
+        "_openai_multimodal_json",
+        lambda *_args, **_kwargs: pytest.fail(
+            "a verified legacy outline must not be re-billed"
+        ),
+    )
+
+    result = fallback.extract_pdf_to_page_acsd(
+        source_path,
+        provider=lambda _batch: pytest.fail(
+            "a verified legacy page batch must not be re-billed"
+        ),
+    )
+
+    assert result["batches"][0]["cache"] == "upgraded"
+    assert result["pages"][0]["blocks"][0]["text"] == (
+        r"Find energy in 1\ \text{kW h}."
+    )
+    outline = result["chapter_outline"]
+    assert outline["ingestion_contract_version"] == (
+        fallback.INGESTION_CONTRACT_VERSION
+    )
+    assert outline["task_partitions"][0]["independent_parts"] == [
+        {
+            "label": "(a)",
+            "stem": r"Use 1\ \text{kW h}.",
+            "text": r"Find energy in 1\ \text{kW h}.",
+        },
+        {
+            "label": "(b)",
+            "stem": "",
+            "text": r"State the answer in \text{J}/\text{s}.",
+        },
+    ]
+    current_outline_cache = fallback._read_verified_batch_cache(
+        fallback._outline_cache_key(lane["sha"])
+    )
+    assert current_outline_cache is not None
+    assert current_outline_cache["ingestion_contract_version"] == (
+        fallback.INGESTION_CONTRACT_VERSION
+    )
 
 
 def test_changed_source_hash_re_materializes(lane, tmp_path, monkeypatch):
@@ -182,6 +674,7 @@ def test_stale_schema_artifact_is_re_extracted_once(
         "schema_name": "Aegis GPT Page ACSD",
         "schema_version": fallback.PAGE_ACSD_SCHEMA_VERSION,
         "compiler_version": fallback.FALLBACK_COMPILER,
+        "ingestion_contract_version": fallback.INGESTION_CONTRACT_VERSION,
         "pdf_sha256": lane["sha"],
         "pages": [],
     }
@@ -201,6 +694,50 @@ def test_stale_schema_artifact_is_re_extracted_once(
             "the refreshed artifact must be reused"),
     )
     assert phase3.load_page_evidence(source_path, artifact_dir) == sentinel
+
+
+def test_stale_ingestion_identity_is_re_extracted_once(
+    lane,
+    tmp_path,
+    monkeypatch,
+):
+    """Schema+compiler alone cannot authorize pre-canonicalization evidence."""
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-fake")
+    artifact_dir = tmp_path / "artifacts"
+    artifact_dir.mkdir()
+    stale = {
+        "schema_name": "Aegis GPT Page ACSD",
+        "schema_version": fallback.PAGE_ACSD_SCHEMA_VERSION,
+        "compiler_version": fallback.FALLBACK_COMPILER,
+        "pdf_sha256": lane["sha"],
+        "pages": [],
+    }
+    artifact = artifact_dir / phase3.VISION_ACSD_FILENAME
+    artifact.write_text(json.dumps(stale), encoding="utf-8")
+    current = {
+        **stale,
+        "ingestion_contract_version": fallback.INGESTION_CONTRACT_VERSION,
+    }
+    calls: list[str] = []
+    monkeypatch.setattr(phase3, "vision_enabled", lambda: True)
+    monkeypatch.setattr(
+        phase3.page_acsd,
+        "extract_pdf_to_page_acsd",
+        lambda *_args, **_kwargs: calls.append("extract")
+        or copy.deepcopy(current),
+    )
+
+    assert phase3.load_page_evidence(source_path, artifact_dir) == current
+    assert calls == ["extract"]
+    monkeypatch.setattr(
+        phase3.page_acsd,
+        "extract_pdf_to_page_acsd",
+        lambda *_args, **_kwargs: pytest.fail(
+            "current ingestion evidence must be reused"
+        ),
+    )
+    assert phase3.load_page_evidence(source_path, artifact_dir) == current
 
 
 def test_reasoning_effort_negotiation_is_logged_once(monkeypatch):

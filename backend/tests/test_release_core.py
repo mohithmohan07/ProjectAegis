@@ -655,6 +655,54 @@ def test_the_master_entries_are_served_by_the_route_they_advertise(db, client):
                 "application/vnd.openxmlformats")
 
 
+def test_a_healthy_job_advertises_four_readable_canonical_xlsx_outputs(
+    db, client,
+):
+    """Every enabled OD4 URL in the public manifest is a real workbook."""
+
+    import io
+
+    release_contract.install()
+    chapter = _chapter_with_concepts(db)
+    job = _both_lanes_job(db, chapter)
+    _run_both_lanes(db, job, chapter)
+
+    response = client.get(f"/build-concepts/uploads/{job.id}")
+    assert response.status_code == 200
+    files = response.json()["source_artifacts"]["files"]
+    outputs = [row for row in files if row["kind"] in _OUTPUT_ORDER]
+    assert [row["kind"] for row in outputs] == _OUTPUT_ORDER
+
+    for output in outputs:
+        assert not output.get("disabled"), output
+        assert output["download_url"], output
+        downloaded = client.get(output["download_url"])
+        assert downloaded.status_code == 200, output["kind"]
+        assert downloaded.headers["content-type"].startswith(
+            "application/vnd.openxmlformats"
+        ), output["kind"]
+        workbook = openpyxl.load_workbook(
+            io.BytesIO(downloaded.content), data_only=True, read_only=True,
+        )
+        try:
+            headers = {
+                name: next(
+                    workbook[name].iter_rows(
+                        min_row=2, max_row=2, values_only=True,
+                    ),
+                    (),
+                )
+                for name in workbook.sheetnames
+            }
+            identified = layouts.identify_workbook(headers)
+            assert identified.layout_id, output["kind"]
+            assert {sheet.kind for sheet in identified.sheets} == {
+                "objective", "descriptive", "subjective",
+            }, output["kind"]
+        finally:
+            workbook.close()
+
+
 # --------------------------------------------------------------------------- #
 # 5. OD1 — one run, four outputs — and T15-2's containment
 # --------------------------------------------------------------------------- #

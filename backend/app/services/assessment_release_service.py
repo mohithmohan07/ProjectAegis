@@ -30,6 +30,7 @@ from ..bulk_import import assessment_workbook
 from . import assessment_profile
 from . import assessment_grouping as grouping
 from . import assessment_release as rel
+from . import generation_recovery
 from . import identity
 from . import storage_capacity
 
@@ -901,6 +902,17 @@ def upload_master_to_database(
     """
     if release.owner_sub != owner_sub:
         raise ReleaseNotFound("release not found")
+
+    job = (
+        db.get(models.UploadJob, release.job_id)
+        if release.job_id is not None
+        else None
+    )
+    if job is not None:
+        db.refresh(job)
+        generation_recovery.require_mutation_allowed(
+            job, operation="publish the linked Master release"
+        )
 
     # Idempotency first: repeating a completed upload of this exact release
     # version + master hash returns the prior result and touches nothing.
