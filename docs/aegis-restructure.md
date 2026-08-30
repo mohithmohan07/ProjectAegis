@@ -1288,6 +1288,38 @@ conversions cannot reach this state; the ruling is a legacy-source
 condition with a legitimate cure, in the spirit of Q13's "genuine
 impossibility" (the source, as converted, is unusable).
 
+### Q25 · Decided — the 2026-08-29 restructure approvals: A (terminal verdict at staging), B (one-shot upload + full text), C as a phased plan
+
+Owner approvals, 29 Aug 2026 ("A - Yes, B - Yes, C - Yes"), after the owner
+directed a restructure of the Master-blocking check rather than another spot
+fix, plus the upload-UX and MMD-visibility complaints:
+
+* **A — the terminal verdict is decided ONCE, at staging** (shipped, PR
+  #272). `stage_release`/`stage_pre_release` record an explicit
+  `terminal_generation_complete` on the staged payload and its summary; the
+  Pre sibling carries the Post run's verdict. Master eligibility and the
+  database-publication act READ the recorded fact and never re-derive it
+  from live checkpoint state. Legacy payloads are backfilled once from
+  durable evidence, accepting the LIVE `final_content_ready` checkpoint
+  where the payload's echoed stage lags it — the measured 'Patterns'
+  staging-order race — so completed pre-A runs unblock retroactively. The
+  field sits outside the Master seal's key allowlist by design.
+  `concept_checkpoint_terminal_diagnosis` remains a troubleshooting helper
+  only.
+* **B — every run parameter is chosen before upload** (shipped, PR #272).
+  Chapter target, model provider, and source book sit in one view; with a
+  chapter picked, one action runs upload → convert → generate (explicit
+  steps remain the fallback). The 800-character MMD preview is replaced by
+  a full converted-text viewer (expand, whole-text search with counts and
+  highlighting, `.mmd` download) — the stored text was always complete.
+* **C — block JSON becomes the single source authority; MMD demoted to a
+  generated view.** Approved as a PHASED plan, recorded in
+  `docs/aegis-restructure-c-plan.md`: C1 compile-from-blocks (shadow mode
+  first — the owner sees the shadow diff before cutover; shadow
+  implementation began with PR #273), C2 page identity end-to-end, C3
+  block-sequence chunking, C4 non-PDF parity (needs its own go/no-go with
+  cost). Each phase validates against the audit corpus.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the
