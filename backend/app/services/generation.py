@@ -4431,15 +4431,16 @@ def _normalize_activity_hubs_from_inventory(
     duplicated full activity instructions.  Private qid markers make the
     compact notes auditable even when two activities have similar labels.
 
-    Binding authority (doc §4 Phase 2.2): the placement pass's verdict —
-    passed explicitly as ``placements`` ({qid: row placement}) by Assemble
-    or riding the rows as ``_aegis_hub_placements`` markers — places the
-    hub note; a hub qid the pass never ruled falls back to the question's
-    own ``_aegis_release_qids`` route (the Host pass's placement of the
-    Type-riding activity qid). A hub item that ends bound by NEITHER
-    authority is a defect: hub items have no disposition escape, so this
-    fails closed instead of silently dropping a learner's material
-    (upstream, the placement pass with its Fixer prevents this).
+    Binding authority (doc §4 Phase 2.2 and Rule B/Q14): an exact-one
+    ``_aegis_release_qids`` route is the final owner for a Type-riding
+    activity QID, because the single Type owner outranks per-question
+    routing. Otherwise the placement pass's verdict — passed explicitly
+    as ``placements`` ({qid: row placement}) by Assemble or riding the rows
+    as ``_aegis_hub_placements`` markers — places the hub note. A hub item
+    that ends bound by NEITHER authority is a defect: hub items have no
+    disposition escape, so this fails closed instead of silently dropping
+    a learner's material (upstream, the placement pass with its Fixer
+    prevents this).
     Placed figures recorded in ``_aegis_figure_placements`` are re-rendered
     as canonical Figure notes the same way, keeping the deposit pipeline a
     fixpoint over them.
@@ -4470,27 +4471,31 @@ def _normalize_activity_hubs_from_inventory(
             placed_by_qid.setdefault(qid, target)
 
     target_by_qid: dict[str, int] = {}
+    q14_hub_overrides: dict[str, tuple[int, int]] = {}
     for item in items:
         qid = str(item.get("qid") or "").strip()
-        if qid in placed_by_qid:
-            # The pooled placement pass ruled this item; its verdict is
-            # the hub's authority ("never where the printer put it").
-            target_by_qid[qid] = placed_by_qid[qid]
-            continue
-        # Fallback: the Host pass's API placement of the question — the
-        # released rows record every question's destination in
-        # _aegis_release_qids (a Culmination row included, when the house
-        # routing rules put it there).
-        bound = next(
-            (
-                index
-                for index, record in enumerate(records)
-                if qid in (record.get("_aegis_release_qids") or [])
-            ),
-            -1,
-        )
-        if bound >= 0:
+        # Q14 is the explicit precedence rule: a reusable Type's final QID
+        # owner outranks per-question routing.  After Phase 3 Host projects
+        # that owner into ``_aegis_release_qids``, a later Hub normalization
+        # may not move the Activity Example away again.  Use the route only
+        # when it is exact-one; duplicate routes remain a fail-closed defect
+        # instead of this mechanical boundary choosing among them.
+        bound_locations = [
+            index
+            for index, record in enumerate(records)
+            if qid in (record.get("_aegis_release_qids") or [])
+        ]
+        if len(bound_locations) == 1:
+            bound = bound_locations[0]
             target_by_qid[qid] = bound
+            placed = placed_by_qid.get(qid)
+            if placed is not None and placed != bound:
+                q14_hub_overrides[qid] = (placed, bound)
+            continue
+        if qid in placed_by_qid:
+            # No exact final Type/QID route is available.  The pooled Place
+            # verdict remains the Hub's authority (never printer position).
+            target_by_qid[qid] = placed_by_qid[qid]
 
     unbound = [
         str(item.get("qid") or "").strip()
@@ -4525,6 +4530,17 @@ def _normalize_activity_hubs_from_inventory(
     for item in items:
         qid = str(item.get("qid") or "").strip()
         target = target_by_qid[qid]
+        override = q14_hub_overrides.get(qid)
+        if override is not None:
+            placed, owner = override
+            flag = (
+                f"{qid}: Q14 final Type ownership kept this Activity/Info "
+                f"Hub on row {owner + 1} instead of the earlier Place row "
+                f"{placed + 1}; the Type owner outranks per-question routing"
+            )
+            flags = list(out[target].get("review_flags") or [])
+            if flag not in flags:
+                out[target]["review_flags"] = [*flags, flag]
         note = _compact_activity_hub_note(item)
         out[target]["concept_details"] = _append_activity_hub(
             out[target].get("concept_details") or "", note)
@@ -4575,10 +4591,10 @@ def _hub_inventory_contract_violations(
                 "locations": locations,
             })
             continue
-        # Under the rewritten Phase 3 a hub legitimately lives wherever
-        # the API placed its question — a Culmination row or a later
-        # topic included, per the house routing rules — so host-locality
-        # opinions are retired; presence/duplication checks remain.
+        # Under the rewritten Phase 3 a hub legitimately lives at its final
+        # routed destination — including Q14's Type owner, a Culmination,
+        # or a later topic under the house rules — so host-locality opinions
+        # are retired; presence/duplication checks remain.
 
     known_qids = set(items_by_qid)
     for index, record in enumerate(records):
@@ -14986,21 +15002,38 @@ def _dedupe_rendered_inventory_examples(
 def _align_activity_examples_with_hubs(
     records: list[dict], inventory: dict | None,
 ) -> list[dict]:
-    """Move each assessable Activity Example to its exact GPT-selected Hub row."""
+    """Move each assessable Activity Example to its final Hub owner row."""
     out = [dict(record) for record in records]
     moved = 0
     for item in (inventory or {}).get("items") or []:
         if not isinstance(item, dict) or not item.get("_activity_origin"):
             continue
+        qid = str(item.get("qid") or "").strip()
         text = _inventory_task_text(item)
         key = _inventory_coverage_key(text)
-        if not text or not key:
+        if not qid or not text or not key:
             continue
         example_locations = _rendered_inventory_example_locations(out, item)
         hub_locations = _activity_hub_locations(out, item)
         if len(hub_locations) != 1 or not example_locations:
             continue
         target = hub_locations[0]
+        release_owner_locations = [
+            index
+            for index, record in enumerate(out)
+            if qid in (record.get("_aegis_release_qids") or [])
+        ]
+        if (
+            len(release_owner_locations) == 1
+            and target != release_owner_locations[0]
+        ):
+            # A stale/legacy Hub marker may disagree with Q14.  Never repair
+            # that conflict by moving the Example or minting the generic
+            # fallback Type on the Hub row: Type ownership explicitly
+            # outranks per-question routing.  The Hub normalizer above moves
+            # the Hub to the exact owner; callers that bypass it retain an
+            # alignment violation for the strict terminal gate to report.
+            continue
         if example_locations == [target]:
             continue
         if cr.is_culmination(out[target].get("concept_title") or ""):
@@ -15033,7 +15066,7 @@ def _align_activity_examples_with_hubs(
     if moved:
         progress.log(
             f"Aligned {moved} assessable Activity Example(s) with their "
-            "GPT-selected Activity/Info Hub concept.",
+            "final Activity/Info Hub concept.",
             level="success",
         )
     return cr.renumber_types_continuously(out)

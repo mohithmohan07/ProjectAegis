@@ -185,7 +185,7 @@ def test_runner_produces_publication_ready_output(
     #    purged word-count nomination safe to remove: a section banner the
     #    extractor mistook for a task now arrives at a reviewer instead of
     #    quietly becoming an Example.
-    assert summary["flagged_row_count"] == 6
+    assert summary["flagged_row_count"] == 7
     flagged_rows = [
         row for row in result["records"] if row.get("review_flags")
     ]
@@ -199,6 +199,7 @@ def test_runner_produces_publication_ready_output(
     ) == [
         "Educated Middle-class Leadership of Liberal-nationalist "
         "Revolutions",
+        "Fragmented Europe and the Multinational Habsburg Empire",
         "Gendered Limits of Liberal Political Rights",
         "Nationalism as Conservative State Power After 1848",
         "Romanticism and the Cultural Construction of the Nation",
@@ -207,6 +208,7 @@ def test_runner_produces_publication_ready_output(
     ]
     forced_qids: list[str] = []
     q14_moves = 0
+    q14_hub_moves = 0
     for row in flagged_rows:
         for flag in row["review_flags"]:
             if flag.startswith("R4: source question "):
@@ -216,12 +218,19 @@ def test_runner_produces_publication_ready_output(
             if "Q14 Type ownership moved this Case" in flag:
                 q14_moves += 1
                 continue
+            if "Q14 Type ownership moved this Activity/Info Hub" in flag:
+                q14_hub_moves += 1
+                continue
             assert flag.startswith(
                 "Q2: removed the example-less Case shell"
             )
             assert "its Example wording renders under:" in flag
     assert q14_moves == 18, (
         "every consolidated Case's move is flagged, never silent"
+    )
+    assert q14_hub_moves == 11, (
+        "every conflicting Hub placement follows its final Type owner and "
+        "is flagged, never silent"
     )
     # Every force-placement names its QID, so the reviewer can go back to
     # the source row rather than guessing which Example was synthesised.
@@ -438,9 +447,10 @@ def test_runner_produces_publication_ready_output(
     ]
     assert without_types == []
 
-    # Phase 2.2: every pooled hub item was placed by the recorded model
-    # verdict and its note renders on the placed row — the marker is the
-    # release-audit trail of that placement.
+    # Phase 2.2 + Q14: Place's original model verdict remains recorded,
+    # while each Type-riding Hub follows the final QID owner. The override
+    # ledger preserves the earlier and final concept ids, and the rendered
+    # marker agrees with Host's final identity projection.
     golden_place = json.loads(
         (settle_golden.GOLDEN / "rne_place.json").read_text(
             encoding="utf-8"
@@ -452,9 +462,19 @@ def test_runner_produces_publication_ready_output(
             marked[qid] = _normal(row["concept_title"])
             assert "Activity/Info Hub:" in row["concept_details"], qid
     assert marked == {
-        qid: _normal(entry["concept_title"])
-        for qid, entry in golden_place["hub_placements"].items()
+        qid: _normal(result["qid_map"][qid]["concept_title"])
+        for qid in golden_place["hub_placements"]
     }
+    place_snapshot = json.loads(
+        (store_dir.parent / "source.phase3-place.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    overrides = place_snapshot["type_owner_overrides"]
+    assert set(overrides) == set(golden_place["hub_placements"])
+    for qid, override in overrides.items():
+        assert override["from_concept_id"] != override["to_concept_id"]
+        assert _normal(override["owner_concept_title"]) == marked[qid]
     # The coverage accounting names every pooled verdict (R4).
     assert set(result["coverage"]["hub_placements"]) == set(marked)
     assert result["coverage"]["figure_placements"] == {}

@@ -426,6 +426,13 @@ def run(
 
         with progress.label_scope("Place"):
             placements, place_capture = _place_lane()
+        # Rule B/Q14 outranks per-question routing.  Place's model verdicts
+        # remain durable evidence, but an Activity/Info Hub that belongs to a
+        # reusable Type must follow the Type's already-decided final QID
+        # owner; otherwise terminal Hub normalization can re-split the Type.
+        placements = place_mod.project_type_owner_hub_placements(
+            stage_rows, hosts, placements
+        )
         _snapshot_place(placements, store_dir)
         with progress.label_scope("Analyse"):
             analysis, analyse_capture = _analyse_lane()
