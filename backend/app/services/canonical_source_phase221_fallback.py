@@ -1686,8 +1686,8 @@ def validate_page_extraction(
                 or canonical_rows != rows_value
             ):
                 flags.append(
-                    f"block {order}: normalized \mathrm unit atom(s) to "
-                    "supported \text"
+                    f"block {order}: normalized \\mathrm unit atom(s) to "
+                    "supported \\text"
                 )
                 latex = canonical_latex
                 text = canonical_text

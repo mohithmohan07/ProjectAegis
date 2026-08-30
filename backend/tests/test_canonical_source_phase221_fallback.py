@@ -1075,4 +1075,10 @@ def test_ingestion_normalizes_plain_mathrm_atoms_to_supported_text():
     assert "\\text{V}" in blocks[2]["text"]
     assert blocks[3]["latex"] == r"R = 5\ \mathrm{\Omega}"
     flags = normalized["pages"][0].get("review_flags") or []
-    assert any("normalized \\mathrm unit atom" in flag for flag in flags)
+    # The complete flag wording, including the second half: a non-raw
+    # literal once turned ``\t`` into a real TAB ('supported<TAB>ext').
+    assert any(
+        "normalized \\mathrm unit atom(s) to supported \\text" in flag
+        for flag in flags
+    )
+    assert not any("\t" in flag for flag in flags)

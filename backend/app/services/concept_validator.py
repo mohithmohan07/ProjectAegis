@@ -1686,11 +1686,16 @@ def validate_concept_rows(
             # than failing a whole revalidation — a warning records the
             # rule without deleting anybody's row from code. Either way,
             # at most one, and it goes last.
-            if len(normal) == 1 and culms:
+            if len(normal) < 2 and culms:
+                # ``< 2`` and not ``== 1``: a topic whose ONLY row is a
+                # culmination (zero normal concepts — legacy or
+                # hand-authored data) is the same D8 violation and must be
+                # just as visible to review.
                 _add(errors, culms[0][0], "concept_title",
                      "culmination_single_concept",
-                     "this topic teaches a single concept and must not "
-                     "carry a culmination row (owner decision D8, "
+                     f"this topic teaches {len(normal)} concept(s) and must "
+                     "not carry a culmination row — a single concept has "
+                     "nothing to consolidate (owner decision D8, "
                      "2026-08-29); flagged for review",
                      severity="warning")
             if len(normal) > 1 and not culms:

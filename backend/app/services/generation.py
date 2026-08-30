@@ -18441,6 +18441,13 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
     the model left without a culmination ships without one — the validator
     report records that as a warning for review; no row, title, or recap is
     ever synthesized from code. Normal rows are never touched.
+
+    This runs only from the TERMINAL contract, over attested rows. A
+    culmination in a topic teaching fewer than two concepts therefore ships
+    FLAGGED (``culmination_single_concept``), never dropped — owner decision
+    D8: dropping an attested row here breaks certificate lineage and refuses
+    finished work (R4). D8's authoring-time half (the prompts and
+    ``_merge_culmination_rows`` never minting one) is unchanged.
     """
     normal: dict[str, list[dict]] = {}
     culms: dict[str, list[dict]] = {}
@@ -18457,16 +18464,6 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
     for topic in order:
         out.extend(normal[topic])
         topic_culms = culms[topic]
-        if len(normal[topic]) < 2:
-            # Nothing to consolidate: a one-concept topic ships without a
-            # culmination, and any stray one is dropped rather than kept.
-            if topic_culms:
-                progress.log(
-                    f"Dropped {len(topic_culms)} culmination row(s) in topic "
-                    f"'{topic}': it teaches a single concept.",
-                    level="warning",
-                )
-            continue
         if topic_culms:
             keep = dict(topic_culms[0])
             keep["parent_concept"] = "Culmination"
@@ -18477,7 +18474,15 @@ def _enforce_culminations(records: list[dict]) -> list[dict]:
                     f"in topic '{topic}'.",
                     level="warning",
                 )
-        else:
+            if len(normal[topic]) < 2:
+                progress.log(
+                    f"Topic '{topic}' keeps its attested culmination although "
+                    f"it teaches {len(normal[topic])} concept(s): a "
+                    "single-concept culmination ships flagged "
+                    "(culmination_single_concept), never dropped (D8/R4).",
+                    level="warning",
+                )
+        elif len(normal[topic]) >= 2:
             progress.log(
                 f"Topic '{topic}' ships without a culmination row: the "
                 "model authored none, and Aegis never invents one; the "

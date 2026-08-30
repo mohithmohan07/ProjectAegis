@@ -30,7 +30,12 @@ context of the block, and the run completes. Nothing is ever guessed
 source-integrity pauses (source review, source-topic recovery, Type
 granularity) and genuine impossibility — source unreadable, provider down,
 quota exhausted, a decision that cannot be made mechanically applicable — may
-stop a run. Silently losing a learner's question is never recoverable.
+stop a run. One recorded extension of that list (Q24, §12 register,
+2026-08-29): an unattended run that could settle a rich-text source pending
+only with the measured dead-end `carry_forward` fails fast with the named
+remedy (reconvert the PDF) instead of spending into a downstream refusal —
+the source, as converted, is unusable, which is the impossibility clause
+applied honestly. Silently losing a learner's question is never recoverable.
 
 ### Why
 

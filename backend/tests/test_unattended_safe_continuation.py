@@ -923,16 +923,17 @@ def test_rejection_batch_settles_every_decision_on_one_replay(
     assert recorded_ids >= set(settled)
 
 
-def test_rich_text_carry_forward_keeps_the_source_review_pause(monkeypatch):
-    """A dead-end settlement is not a safe continuation.
+def test_rich_text_carry_forward_fails_fast_with_the_named_remedy(monkeypatch):
+    """A dead-end settlement ends the run NOW, with the cure named.
 
     [measured] job 'Electricity' (Class 10 Ch 5, 2026-08-29): carrying a
     non-canonical rich-text block forward is refused downstream by the
     semantic-graph integrity gate ("not safe for concept generation"), so
     the best-judgement carry_forward ended every resume incomplete at the
-    same point. Source review is a sanctioned pre-spend pause (CLAUDE.md
-    Rule 1); when the only automatable settlement for such an issue is
-    carry_forward, the pause is kept for the user instead.
+    same point. Owner ruling 2026-08-29 (§12 register, Q24): unattended
+    runs have no pause to keep (Q13), so when the only settlement for such
+    a pending is carry_forward the run fails fast and names the remedy —
+    reconvert the PDF, whose ingestion now canonicalizes the rich text.
     """
     from app.services import build_concepts
 
@@ -949,7 +950,7 @@ def test_rich_text_carry_forward_keeps_the_source_review_pause(monkeypatch):
         "kind": "phase3_source_graph_review",
         "item": {"type_id": "semantic_source_rich_text"},
         # Only user-only routes were offered: best judgement resolves to
-        # carry_forward, which the guard must refuse to settle with.
+        # carry_forward, which is the measured dead end.
         "options": [
             {"choice": "replace_source", "recommended": True},
         ],
@@ -959,12 +960,13 @@ def test_rich_text_carry_forward_keeps_the_source_review_pause(monkeypatch):
         autonomous_resolution.carry_forward_option()
     )
 
-    result = build_concepts._apply_last_resort_safe_continuation(
-        None, None, pending, owner_sub=None,
-    )
+    with pytest.raises(build_concepts.UnattendedDecisionUnavailable) as excinfo:
+        build_concepts._apply_last_resort_safe_continuation(
+            None, None, pending, owner_sub=None,
+        )
 
-    assert result is None
-    assert any("kept the source-review pause" in m for m in logs)
+    assert "Convert the PDF again as a new upload" in str(excinfo.value)
+    assert any("Convert the PDF again" in m for m in logs)
     # A NON-rich-text pending with the same shape still carries forward
     # through the normal path (it reaches the recorder, which needs a real
     # db/job — reaching it at all proves the guard is scoped).
@@ -973,8 +975,45 @@ def test_rich_text_carry_forward_keeps_the_source_review_pause(monkeypatch):
         build_concepts._apply_last_resort_safe_continuation(
             None, None, other, owner_sub=None,
         )
+    except build_concepts.UnattendedDecisionUnavailable:  # pragma: no cover
+        raise AssertionError("the fail-fast guard intercepted a non-rich-text pending")
     except Exception:
         pass  # recorder rejects the stub db; the guard did not intercept
-    assert not any(
-        "kept the source-review pause" in m for m in logs[1:]
-    ) or len([m for m in logs if "kept the source-review pause" in m]) == 1
+
+
+def test_fixer_choice_never_settles_rich_text_with_the_dead_end(monkeypatch):
+    """The Fixer door is closed too: with only replace_source offered, the
+    allowed set for a rich-text pending is empty and the run fails fast
+    BEFORE a Fixer call is spent (owner ruling 2026-08-29, Q24)."""
+    from app.services import build_concepts
+    from app.services.phase3 import fixer as p3_fixer
+
+    monkeypatch.setattr(
+        autonomous_resolution, "unattended_completion_enabled", lambda: True,
+    )
+
+    def _no_fixer_call(*_a, **_k):  # pragma: no cover - must not be reached
+        raise AssertionError("a Fixer provider call was spent on a dead end")
+
+    monkeypatch.setattr(
+        p3_fixer, "default_provider", lambda: _no_fixer_call,
+    )
+    logs: list[str] = []
+    monkeypatch.setattr(
+        build_concepts.progress, "log",
+        lambda message, **_k: logs.append(str(message)),
+    )
+    pending = {
+        "decision_id": "DEC-2",
+        "kind": "phase3_source_graph_review",
+        "item": {"type_id": "semantic_source_rich_text"},
+        "options": [
+            {"choice": "replace_source", "recommended": True},
+        ],
+        "candidates": [],
+    }
+
+    with pytest.raises(build_concepts.UnattendedDecisionUnavailable):
+        build_concepts._apply_fixer_resolution_choice(
+            None, None, pending, owner_sub=None,
+        )

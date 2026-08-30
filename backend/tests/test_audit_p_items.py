@@ -369,6 +369,94 @@ def test_the_terminal_contract_keeps_a_legacy_single_concept_culmination():
     )
 
 
+def test_a_co_occurring_error_does_not_drop_an_attested_single_concept_culmination():
+    """The repair path itself honors D8. A duplicate culmination in Topic
+    Two routes ALL records through ``_enforce_culminations``; Topic One's
+    well-formed attested single-concept culmination must ride through
+    flagged, never dropped (the pre-fix branch discarded it)."""
+
+    from app.services import generation
+
+    rows = [
+        _concept_row("Topic One", "Only Concept"),
+        {
+            "topic": "Topic One",
+            "concept_title": "Culmination - Only Concept",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+        _concept_row("Topic Two", "Concept A"),
+        _concept_row("Topic Two", "Concept B"),
+        {
+            "topic": "Topic Two",
+            "concept_title": "Culmination - First",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+        {
+            "topic": "Topic Two",
+            "concept_title": "Culmination - Duplicate",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+    ]
+    out = generation._ensure_terminal_culmination_contract(rows)
+    titles_by_topic: dict[str, list[str]] = {}
+    for row in out:
+        titles_by_topic.setdefault(row["topic"], []).append(
+            row["concept_title"]
+        )
+    # Topic One keeps its attested culmination; Topic Two keeps exactly one.
+    assert titles_by_topic["Topic One"] == [
+        "Only Concept", "Culmination - Only Concept",
+    ]
+    assert titles_by_topic["Topic Two"] == [
+        "Concept A", "Concept B", "Culmination - First",
+    ]
+
+
+def test_a_misplaced_single_concept_culmination_is_repositioned_not_dropped():
+    from app.services import generation
+
+    rows = [
+        {
+            "topic": "Topic One",
+            "concept_title": "Culmination - Only Concept",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+        _concept_row("Topic One", "Only Concept"),
+    ]
+    out = generation._ensure_terminal_culmination_contract(rows)
+    assert [r["concept_title"] for r in out] == [
+        "Only Concept", "Culmination - Only Concept",
+    ]
+
+
+def test_a_topic_with_zero_normal_concepts_flags_its_culmination():
+    """``< 2``, not ``== 1``: a topic whose ONLY row is a culmination is
+    the same D8 violation and must be visible to review, not silent."""
+
+    from app.services import concept_validator as cv
+
+    rows = [
+        {
+            "topic": "Topic Zero",
+            "concept_title": "Culmination - Nothing",
+            "parent_concept": "Culmination",
+            "concept_details": "Description: Recap",
+        },
+        _concept_row("Topic Two", "Concept A"),
+        _concept_row("Topic Two", "Concept B"),
+    ]
+    report = cv.validate_concept_rows(rows, require_culmination=True)
+    assert any(
+        e["code"] == "culmination_single_concept"
+        and e["severity"] == "warning"
+        for e in report["errors"]
+    )
+
+
 def test_the_culmination_prompts_carry_the_two_concept_floor():
     from app.services import prompts
 
