@@ -139,8 +139,8 @@ def install() -> None:
             kwargs["prompt_cache_key"] = prompt_cache_key
         if model is not None:
             # Model selection belongs to the transport boundary.  The wrapper
-            # must not reject the Fixer's dedicated model or compute its
-            # provider ceiling against the deployment's default model.
+            # forwards the Fixer's explicit active-model identity and computes
+            # the provider ceiling against the model actually requested.
             kwargs["model"] = model
         if image_urls is not None:
             # Place author/critic/Fixer calls carry the exact pooled source

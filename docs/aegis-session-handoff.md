@@ -86,7 +86,7 @@ Known data-integrity facts about that zip (verified, owner informed):
 - D6 "Words"→Phrases fold stays as is.
 - D7 capitalized answer_restriction stays as is.
 - A6 widening beyond EN-Post's 30 slots: not done.
-- Terra Fixer spend observation in a live run summary: still unobserved.
+- Fixer spend observation in a live Luna run summary: still unobserved.
 - Post-restructure validation rerun of both audit chapters end-to-end
   (fresh runs through the deployed app) is still owed once C stabilizes.
 

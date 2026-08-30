@@ -134,13 +134,13 @@ def test_v6_wrapper_forwards_model_and_source_images(monkeypatch):
         "user",
         max_tokens=321,
         purpose="concept_mapping",
-        model="gpt-5.6-terra",
+        model="gpt-5.6-luna",
         image_urls=images,
     )
 
     assert result == {"ok": True}
     assert captured["max_tokens"] == 128_000
-    assert captured["model"] == "gpt-5.6-terra"
+    assert captured["model"] == "gpt-5.6-luna"
     assert captured["image_urls"] == images
 
 
@@ -166,12 +166,12 @@ def test_live_strict_schema_budget_and_retry_cap_use_provider_ceiling(monkeypatc
         response_schema={"name": "test", "strict": True, "schema": {}},
         purpose="concept_mapping",
         max_tokens=4_000,
-        model="gpt-5.6-terra",
+        model="gpt-5.6-luna",
     )
 
     assert result == {"ok": True}
     assert captured["max_tokens"] == 128_000
-    assert captured["model"] == "gpt-5.6-terra"
+    assert captured["model"] == "gpt-5.6-luna"
     assert phase34._completion_cap(4_000) == 128_000
     assert phase34._completion_cap(200_000) == 128_000
 
