@@ -36,7 +36,7 @@ export default function BuildAssessments() {
           <button className="module-card" onClick={() => setPath("upload")}>
             <div className="module-title">b · From Upload</div>
             <div className="module-desc">
-              Upload a PDF / text / handwritten image. Convert to MMD, choose the
+              Upload a PDF / text / handwritten image. Parse it, choose the
               upload type, pick where to deposit, then identify & generate.
             </div>
           </button>

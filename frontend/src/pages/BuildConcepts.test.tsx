@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -345,6 +346,34 @@ test("offers a resumable checkpoint and Resume restores setup without generating
   expect(screen.getByText("Target electricity")).toBeDefined();
   expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 42);
   expect(streamMock).not.toHaveBeenCalled();
+});
+
+test("the parameters panel stays mounted for a not-yet-parsed upload", async () => {
+  // Regression (owner report, 2026-08-30): the panel unmounted for a job in
+  // "uploaded" state and remounted when it turned "converted", so the page
+  // visibly reset after upload and again after the parse finished. Every
+  // pre-generation state keeps the panel; only generated/released collapse it.
+  apiMock.getUploadJob.mockImplementation(
+    async (_module: string, id: number) => savedJob({
+      id,
+      status: "uploaded",
+      mmd_text: "",
+      checkpoint_available: false,
+    }),
+  );
+  renderPage();
+  fireEvent.click(
+    within(
+      await screen.findByRole("dialog", { name: "Resume this concept run?" }),
+    ).getByRole("button", { name: "Resume" }),
+  );
+
+  // The panel and the upload card coexist for an uploaded job (the parse
+  // button itself is DocumentUpload's, pinned in its own test file).
+  expect(
+    await screen.findByText("1 · Choose the run parameters"),
+  ).toBeDefined();
+  expect(screen.getByText("2 · Upload document")).toBeDefined();
 });
 
 test("Keep for later acknowledges this checkpoint durably across visits", async () => {

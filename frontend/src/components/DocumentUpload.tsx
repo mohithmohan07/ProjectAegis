@@ -128,7 +128,7 @@ function safeStorageRemoveItem(key: string): void {
  * Document intake. Uploading a file starts its parse in one go (owner
  * request, 2026-08-28):
  *   1. Choose a file (staged locally — change it freely)
- *   2. Upload → the file is stored AND converted to MMD immediately
+ *   2. Upload → the file is stored AND parsed immediately
  *      (status "converted"); the Console streams the parse live
  *   3. Pick the deposit target, then start generation — or, when the
  *      parent chose every parameter up front, the converted job flows
@@ -429,7 +429,7 @@ export default function DocumentUpload({
         source_artifacts?: UploadJob["source_artifacts"];
         openai_usage?: UploadJob["openai_usage"];
       }>(
-        `Converting ${target.filename} to MMD`,
+        `Parsing ${target.filename}`,
         path,
         {},
         // The parse run reads and extends the SAME cumulative ledger the
@@ -640,8 +640,8 @@ export default function DocumentUpload({
             : released
               ? "output released for review"
               : converted
-                ? "converted to MMD"
-                : "uploaded (not processed)"}
+                ? "parsed"
+                : "uploaded (not parsed)"}
         </span>
         <span className="muted mono">{job.filename}</span>
         {job.source_book && <span className="badge accent">{job.source_book}</span>}
@@ -676,10 +676,11 @@ export default function DocumentUpload({
       {!converted && (
         <div className="row mt-12">
           <button disabled={controlsDisabled} onClick={convert}>
-            Convert to MMD
+            Parse source document
           </button>
           <span className="hint">
-            Runs conversion/normalization — watch the Console for progress.
+            Reads the source with the GPT reader and normalizes it — watch
+            the Console for progress.
           </span>
         </div>
       )}

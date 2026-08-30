@@ -26,7 +26,7 @@ export default function Home() {
         <button className="module-card" onClick={() => nav("/build-concepts")}>
           <div className="module-title">2 · Build Concepts</div>
           <div className="module-desc">
-            Post Learning — upload a document, convert to MMD, parse concepts,
+            Post Learning — upload a document, parse it, extract concepts,
             deposit under a chapter.
           </div>
         </button>

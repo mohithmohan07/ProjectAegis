@@ -370,11 +370,14 @@ function PostLearningFlow({
   // Every run parameter is chosen up front (owner request, 2026-08-29):
   // chapter target, model provider, source book, and the file sit in one
   // view before anything is uploaded, and one action runs the whole
-  // upload → parse → generate chain. The panel stays visible for a
-  // converted-but-ungenerated job (a restored run, or an upload made
-  // without a chapter picked), where its explicit Generate button remains
-  // the fallback path.
-  const parameterPanelOpen = !job || job.status === "converted";
+  // upload → parse → generate chain. The panel stays MOUNTED for every
+  // pre-generation state — no job, a restored not-yet-parsed upload, a
+  // parse in flight, a converted-but-ungenerated job — because
+  // unmounting it between "uploaded" and "converted" made the whole page
+  // visibly reset twice per run (owner report, 2026-08-30: "this page
+  // loads again"). It collapses only once generation has produced output.
+  const parameterPanelOpen = !job
+    || (job.status !== "generated" && job.status !== "released");
   const oneShotReady = !job && Boolean(scope);
 
   return (
@@ -453,8 +456,8 @@ function PostLearningFlow({
         onJob={handleJob}
         uploadLabel={oneShotReady ? "Upload, parse & generate" : undefined}
         uploadHint={oneShotReady
-          ? "One action runs the whole chain: the file is stored, converted "
-            + "to MMD, and generation starts against the chapter you picked "
+          ? "One action runs the whole chain: the file is stored, parsed, "
+            + "and generation starts against the chapter you picked "
             + "above. Watch the Console for live progress."
           : "Uploading stores the file and starts its conversion right away "
             + "— watch the Console for parse progress. Pick a chapter above "

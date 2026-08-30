@@ -368,7 +368,7 @@ test("locks file-changing controls while conversion is active", async () => {
   );
 
   fireEvent.click(await screen.findByRole("button", {
-    name: "Convert to MMD",
+    name: "Parse source document",
   }));
 
   await waitFor(() => {
