@@ -466,6 +466,7 @@ def upload_release_master_to_database(
     Generation never calls this; only a person does.
     """
     from ..services import assessment_release_service as release_svc
+    from ..services import generation_recovery
 
     try:
         release = release_svc.get_release(db, release_id, owner_sub=user.sub)
@@ -474,6 +475,8 @@ def upload_release_master_to_database(
     except release_svc.ReleaseNotFound as e:
         raise HTTPException(404, str(e))
     except release_svc.UploadRefused as e:
+        raise HTTPException(409, str(e))
+    except generation_recovery.NonResumableRunError as e:
         raise HTTPException(409, str(e))
 
 
@@ -488,6 +491,7 @@ def run_release_from_job(
     database upload stays a separate explicit action."""
     from ..services import assessment_release_run
     from ..services import assessment_release_service as release_svc
+    from ..services import generation_recovery
     from ..services import build_concepts_release as bc_release
     from ..services import build_concepts_release_contract as release_contract
     from ..services.phase3 import envelope, kernel, premap
@@ -516,6 +520,8 @@ def run_release_from_job(
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
     except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except generation_recovery.NonResumableRunError as e:
         raise HTTPException(409, str(e))
     except storage_capacity.StorageCapacityError as e:
         raise _storage_http_exception(e)
@@ -567,6 +573,7 @@ def run_pre_release_from_job(
     from ..services import assessment_release_service as release_svc
     from ..services import build_concepts_release as bc_release
     from ..services import build_concepts_release_contract as release_contract
+    from ..services import generation_recovery
     from ..services.phase3 import envelope, kernel, premap
 
     try:
@@ -590,6 +597,8 @@ def run_pre_release_from_job(
     except uploads.UploadJobNotFound as e:
         raise HTTPException(404, str(e))
     except uploads.JobAlreadyRunningError as e:
+        raise HTTPException(409, str(e))
+    except generation_recovery.NonResumableRunError as e:
         raise HTTPException(409, str(e))
     except storage_capacity.StorageCapacityError as e:
         raise _storage_http_exception(e)

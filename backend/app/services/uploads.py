@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from . import auth, mmd, openai_usage, progress
+from . import auth, generation_recovery, mmd, openai_usage, progress
 
 
 _usage_job_locks: dict[int, threading.Lock] = {}
@@ -168,6 +168,9 @@ def replace_file(
     job = get_job(db, job_id, owner_sub=owner_sub, module=module)
     with exclusive_job_operation(job.id):
         db.refresh(job)
+        generation_recovery.require_mutation_allowed(
+            job, operation="replace this upload's file"
+        )
         if job.status not in {"uploaded", "converted"}:
             raise ValueError(
                 "cannot replace the file after generation has started; "
@@ -210,6 +213,9 @@ def convert_job(
     job = get_job(db, job_id, owner_sub=owner_sub, module=module)
     with exclusive_job_operation(job.id):
         db.refresh(job)
+        generation_recovery.require_mutation_allowed(
+            job, operation="convert this upload"
+        )
         if job.status == "generated":
             raise ValueError(
                 "cannot reconvert a completed upload; start a new upload")

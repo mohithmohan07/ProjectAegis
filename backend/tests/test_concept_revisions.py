@@ -10,7 +10,7 @@ import pytest
 
 from app import models
 from app.db import SessionLocal
-from app.services import concept_revisions
+from app.services import concept_revisions, generation_recovery
 
 
 @pytest.fixture()
@@ -102,6 +102,44 @@ def test_instruction_is_committed_before_any_edit_is_attempted(db, job):
     assert revision.id is not None
     assert revision.status == "pending"
     assert revision.completed_at is None
+
+
+def test_non_resumable_job_cannot_record_or_apply_a_revision(db, job):
+    upload, _concept, _topics = job
+    revision = concept_revisions.record_instruction(
+        db, upload, "This ordinary round exists before the recovery verdict."
+    )
+    inventory = dict(upload.question_inventory or {})
+    inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = {
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": "Start a new upload and conversion.",
+    }
+    upload.question_inventory = inventory
+    db.commit()
+    db.refresh(upload)
+
+    before = len(concept_revisions.list_revisions(db, upload.id))
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        concept_revisions.record_instruction(
+            db, upload, "This round must never be recorded."
+        )
+    assert len(concept_revisions.list_revisions(db, upload.id)) == before
+
+    called = False
+
+    def forbidden_provider(**_kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("blocked revision entered the provider")
+
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        concept_revisions.apply_instruction(
+            db, upload, revision, provider=forbidden_provider
+        )
+    assert called is False
+    db.refresh(revision)
+    assert revision.status == "pending"
 
 
 def test_a_failed_round_keeps_the_reviewer_words(db, job):
@@ -423,6 +461,49 @@ def test_a_provider_failure_returns_the_failed_round_not_an_error(
     assert body["status"] == "failed"
     assert "provider unavailable" in body["error"]
     assert body["instruction"] == "Move the Sn concept."
+
+
+def test_non_resumable_job_refuses_revision_before_record_or_provider(
+    client, db, job, monkeypatch,
+):
+    """A stale/direct client cannot spend on an incomplete source graph."""
+
+    upload, _concept, _topics = job
+    inventory = dict(upload.question_inventory or {})
+    inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = {
+        "error": "UnattendedDecisionUnavailable: Q24",
+        "message": "Generation did not complete.",
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": "Start a new upload and conversion.",
+    }
+    upload.question_inventory = inventory
+    db.commit()
+
+    def forbidden_record(*_args, **_kwargs):
+        raise AssertionError("blocked recovery recorded a revision round")
+
+    def forbidden_apply(*_args, **_kwargs):
+        raise AssertionError("blocked recovery entered the revision provider")
+
+    monkeypatch.setattr(
+        concept_revisions, "record_instruction", forbidden_record,
+    )
+    monkeypatch.setattr(
+        concept_revisions, "apply_instruction", forbidden_apply,
+    )
+
+    response = client.post(
+        f"/build-concepts/uploads/{upload.id}/revisions",
+        json={"instruction": "Try to repair this output."},
+    )
+
+    assert response.status_code == 409
+    assert "Start a new upload and conversion" in response.text
+    assert concept_revisions.list_revisions(db, upload.id) == []
+    listed = client.get(f"/build-concepts/uploads/{upload.id}/revisions")
+    assert listed.status_code == 200
+    assert listed.json()["revisions"] == []
 
 
 def test_unknown_job_is_not_found(client):

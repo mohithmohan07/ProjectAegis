@@ -47,7 +47,7 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from .. import models
-from . import generation, storage_capacity, uploads
+from . import generation, generation_recovery, storage_capacity, uploads
 
 
 RELEASE_VERSION = "aegis-concept-release-1"
@@ -3389,9 +3389,20 @@ def stage_pre_release_from_run(
                     "Phase 03, so there was no Pre map to stage)"
                 )
                 record_pre_release_unavailable(db, job, reason=reason)
+                recovery = job.generation_recovery
+                if recovery.get("resume_allowed") is False:
+                    next_action = str(recovery.get("recovery") or "").strip()
+                    suffix = (
+                        ". " + next_action
+                        if next_action
+                        else ". This checkpoint is not resumable; start a "
+                        "new upload and conversion."
+                    )
+                else:
+                    suffix = ". Re-running generation stages the Pre lane."
                 progress.log(
                     "The Pre-Learning outputs were not staged: " + reason
-                    + ". Re-running generation stages the Pre lane.",
+                    + suffix,
                     level="error",
                 )
                 return None
@@ -4190,6 +4201,9 @@ def backfill_missing_pre_release(
     proof remains absence rather than an invented empty release.
     """
 
+    generation_recovery.require_mutation_allowed(
+        job, operation="stage another release from this run"
+    )
     # Fast-path only. A stale caller that still sees no sibling must claim
     # the same per-job mutation lock as generation, refresh, and re-check
     # before it can mint a release version.
@@ -4197,6 +4211,9 @@ def backfill_missing_pre_release(
         return False
     with uploads.exclusive_job_operation(int(job.id)):
         db.refresh(job)
+        generation_recovery.require_mutation_allowed(
+            job, operation="stage another release from this run"
+        )
         return _backfill_missing_pre_release_locked(
             db, job, reason=reason,
         )
@@ -4262,6 +4279,9 @@ def force_release(
     )
     with uploads.exclusive_job_operation(int(job.id)):
         db.refresh(job)
+        generation_recovery.require_mutation_allowed(
+            job, operation="stage another release from this run"
+        )
         if job.status == "generated":
             raise ValueError(
                 "this upload has already been published to the database"

@@ -965,8 +965,11 @@ def test_rich_text_carry_forward_fails_fast_with_the_named_remedy(monkeypatch):
             None, None, pending, owner_sub=None,
         )
 
-    assert "Convert the PDF again as a new upload" in str(excinfo.value)
-    assert any("Convert the PDF again" in m for m in logs)
+    assert excinfo.value.resume_allowed is False
+    assert excinfo.value.recovery_action == "reconvert_new_upload"
+    assert "Do not resume this saved checkpoint" in str(excinfo.value)
+    assert "If the same pause returns" in excinfo.value.recovery_message
+    assert any("Start a new upload" in m for m in logs)
     # A NON-rich-text pending with the same shape still carries forward
     # through the normal path (it reaches the recorder, which needs a real
     # db/job — reaching it at all proves the guard is scoped).
@@ -979,6 +982,60 @@ def test_rich_text_carry_forward_fails_fast_with_the_named_remedy(monkeypatch):
         raise AssertionError("the fail-fast guard intercepted a non-rich-text pending")
     except Exception:
         pass  # recorder rejects the stub db; the guard did not intercept
+
+
+def test_escalated_rich_text_review_never_claims_generation_will_complete(
+    db,
+    first_chapter,
+    monkeypatch,
+):
+    """The resolver-escalation door must hit Q24 before its success prose."""
+
+    chapter = db.get(models.Chapter, first_chapter["id"])
+    raw = _pending_raw(
+        options=[{
+            "choice": "replace_source",
+            "label": "Replace the uploaded source",
+            "recommended": True,
+        }],
+        candidates=[],
+    )
+    raw["decision_id"] = "phase3-rich-text-source-review"
+    raw["kind"] = "phase3_source_graph_review"
+    raw["item"]["type_id"] = "semantic_source_rich_text"
+    job, pending = _seed_paused_job(
+        db,
+        chapter,
+        monkeypatch,
+        filename="rich-text-escalation.mmd",
+        raw=raw,
+    )
+    monkeypatch.delenv("AEGIS_UNATTENDED_COMPLETION", raising=False)
+    monkeypatch.setattr(autonomous_resolution, "enabled", lambda: True)
+    monkeypatch.setattr(
+        autonomous_resolution,
+        "resolve_pending",
+        lambda *_args, **_kwargs: autonomous_resolution.ResolutionResult(
+            "escalated",
+            "The selected target is not a supplied candidate.",
+        ),
+    )
+    logs: list[str] = []
+    monkeypatch.setattr(
+        build_concepts.progress,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+
+    with pytest.raises(build_concepts.UnattendedDecisionUnavailable) as caught:
+        build_concepts._autonomously_resolve_pending_decision(
+            db, job, pending, owner_sub=None,
+        )
+
+    assert caught.value.resume_allowed is False
+    assert caught.value.recovery_action == "reconvert_new_upload"
+    assert not any("so generation completes" in message for message in logs)
+    assert any("Do not resume this saved checkpoint" in message for message in logs)
 
 
 def test_fixer_choice_never_settles_rich_text_with_the_dead_end(monkeypatch):

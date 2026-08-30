@@ -11,6 +11,7 @@ from app.services import (
     build_concepts,
     checkpoints,
     generation,
+    generation_recovery,
     openai_usage,
     uploads,
 )
@@ -638,6 +639,31 @@ def test_clear_checkpoint_keeps_converted_source(client, db):
     db.refresh(job)
     assert job.generation_checkpoint == {}
     assert job.mmd_text
+
+
+def test_non_resumable_checkpoint_cannot_be_cleared(client, db):
+    job = _job(db)
+    inventory = dict(job.question_inventory or {})
+    inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = {
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": "Start a new upload and conversion.",
+    }
+    job.question_inventory = inventory
+    checkpoint_before = copy.deepcopy(job.generation_checkpoint)
+    db.commit()
+
+    response = client.delete(
+        f"/build-concepts/uploads/{job.id}/checkpoint"
+    )
+
+    assert response.status_code == 409
+    assert "Start a new upload and conversion" in response.json()["detail"]
+    db.refresh(job)
+    assert job.generation_checkpoint == checkpoint_before
+    assert job.generation_recovery["resume_allowed"] is False
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        checkpoints.clear_checkpoint(db, job.id, owner_sub="local:default")
 
 
 def test_a_finished_run_is_not_offered_for_resume_again(db):

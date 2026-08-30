@@ -14,6 +14,7 @@ from . import (
     assessment_release_snapshot,
     build_concepts,
     concept_cleanup,
+    generation_recovery,
     identity,
     uploads,
 )
@@ -160,6 +161,10 @@ def upload_release_to_database(
         job_id,
         owner_sub=owner_sub,
         module="build_concepts",
+    )
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation=f"publish the {resolved} Concept release"
     )
     release_key = release_key_for_lane(resolved)
     # Restructure A: publication judges the verdict RECORDED at staging.

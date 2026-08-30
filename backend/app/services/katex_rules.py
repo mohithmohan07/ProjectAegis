@@ -953,13 +953,55 @@ def _balanced_group_end(
 def _normalize_legacy_roman_atoms(value: str) -> str:
     """Rewrite plain, balanced ``\\mathrm{...}`` as supported ``\\text``.
 
-    For a body made only of letters/digits and horizontal whitespace, both
-    commands render the same upright text atom.  TeX is case-sensitive, and a
-    body containing operators, commands, grouping, or other syntax may have
-    mathematical semantics that ``\\text`` would change.  Those forms remain
-    byte-for-byte visible so the strict validator refuses them instead of an
-    export migration guessing their meaning.
+    For a body made only of letters/digits, horizontal whitespace, slash
+    separators, and TeX's spacing-only controls, each upright roman run can be
+    represented by ``\\text`` without changing its characters. Literal slashes
+    remain OUTSIDE those text atoms as mathematical operators. TeX is
+    case-sensitive, and a body containing any other operator, semantic command,
+    grouping, or syntax may have mathematical meaning that ``\\text`` would
+    change. Those forms remain byte-for-byte visible so the strict validator
+    refuses them instead of an export migration guessing their meaning.
+
+    Mathpix/GPT unit spellings such as ``\\mathrm{V\\ A}`` and
+    ``\\mathrm{kW\\,h}`` are formatting variants of plain upright text, while
+    ``\\mathrm{J/s}`` projects mechanically to ``\\text{J}/\\text{s}`` so the
+    slash is never classified as prose. Spacing controls are projected to
+    ordinary spaces inside ``\\text``; a command such as ``\\Omega`` is
+    deliberately not accepted by this mechanical grammar.
     """
+
+    def _plain_text_body(body: str) -> str | None:
+        rendered: list[str] = []
+        index = 0
+        while index < len(body):
+            character = body[index]
+            if character.isalnum() or character in " \t/":
+                rendered.append(character)
+                index += 1
+                continue
+            # Mathpix commonly uses a leading ``~`` inside ``\mathrm`` solely
+            # as unit spacing (``\mathrm{~kg}``).
+            if character == "~":
+                rendered.append(" ")
+                index += 1
+                continue
+            if character != "\\" or index + 1 >= len(body):
+                return None
+            control_start = index
+            index += 1
+            control = body[index]
+            if control in " ,;:":
+                rendered.append(" ")
+                index += 1
+                continue
+            if not control.isalpha():
+                return None
+            while index < len(body) and body[index].isalpha():
+                index += 1
+            if body[control_start + 1:index] not in {"quad", "qquad"}:
+                return None
+            rendered.append(" ")
+        return "".join(rendered)
 
     parts: list[str] = []
     cursor = 0
@@ -975,19 +1017,23 @@ def _normalize_legacy_roman_atoms(value: str) -> str:
             cursor = match.end()
             continue
         body = value[opening + 1:end - 1]
-        # Mathpix commonly uses a leading ``~`` inside ``\mathrm`` solely as
-        # unit spacing (``\mathrm{~kg}``).  A normal space in ``\text`` has
-        # the same displayed role and carries no mathematical operator.
-        normalized_body = body.replace("~", " ")
-        if not normalized_body.strip() or any(
-            not (character.isalnum() or character in " \t")
-            for character in normalized_body
+        normalized_body = _plain_text_body(body)
+        if (
+            normalized_body is None
+            or not any(character.isalnum() for character in normalized_body)
         ):
             parts.append(value[cursor:end])
             cursor = end
             continue
         parts.append(value[cursor:match.start()])
-        parts.append(r"\text{" + normalized_body + "}")
+        # Preserve every literal slash as a mathematical operator. Only the
+        # alphanumeric/spacing runs on either side enter text mode; no local
+        # rule decides whether the printed slash means a unit ratio, division,
+        # or another source-authored relationship.
+        parts.append("/".join(
+            (r"\text{" + run + "}") if run else ""
+            for run in normalized_body.split("/")
+        ))
         cursor = end
     return "".join(parts)
 
@@ -998,9 +1044,10 @@ def normalize_supported_text_atoms(value: str) -> str:
     The public seam for INGESTION-time canonicalization: model transcription
     (GPT PDF reading, like Mathpix before it) writes physics units in LaTeX
     house style (``\\mathrm{V}``), which the CMS KaTeX subset bans. Plain
-    letter/digit/space bodies render identically as ``\\text`` atoms, so the
-    rewrite is meaning-preserving; any other body is left byte-for-byte for
-    the strict validator and source review to judge.
+    letter/digit/space runs and formatting-only TeX spacing render identically
+    as ``\\text`` atoms; literal slashes remain mathematical operators BETWEEN
+    those atoms. Any other body is left byte-for-byte for the strict validator
+    and source review to judge.
     """
 
     return _normalize_legacy_roman_atoms(str(value or ""))

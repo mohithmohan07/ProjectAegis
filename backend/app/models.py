@@ -12,12 +12,33 @@ are parsed from the chapter & label ID prefixes (e.g. ``10CBMA_...``) by
 
 Round-tripping back to the canonical sheets is handled by ``bulk_import.writer``.
 """
+import hashlib
 from datetime import datetime
 
 from sqlalchemy import String, Integer, Text, ForeignKey, DateTime, JSON, Float, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
+
+
+# Durable mechanical recovery contract for a non-terminal generation run.
+# It lives beside the inventory/release slots so portable checkpoint exports
+# preserve it without changing the frozen checkpoint-envelope schema.
+GENERATION_RECOVERY_INVENTORY_KEY = "_aegis_generation_recovery"
+# Exact SHA-256 of the historical job-97 Q24 error message, captured from its
+# durable generation_log.json.  Compatibility must not infer lifecycle state
+# from a handful of words that could appear in another diagnostic or in quoted
+# source text; only the measured pre-marker record earns this projection.
+_LEGACY_NON_RESUMABLE_LOG_MESSAGE_SHA256S = frozenset({
+    "06f959ce6f1d877d79b3d78ec07e2e05ec4a1f136acfa18df3b082b8e96d3a94",
+})
+_Q24_RECOVERY_MESSAGE = (
+    "Do not resume this saved checkpoint; it will replay the same source "
+    "graph refusal. Start a new upload with the PDF and let Aegis convert it "
+    "again before generation. If the same pause returns after that fresh "
+    "conversion, correct the named block in the source document and upload "
+    "the corrected document."
+)
 
 
 class Chapter(Base):
@@ -356,7 +377,58 @@ class UploadJob(Base):
             isinstance(self.generation_checkpoint, dict)
             and self.generation_checkpoint.get("stage")
             and self.status not in ("released", "generated")
+            and self.generation_recovery.get("resume_allowed") is not False
         )
+
+    @property
+    def generation_recovery(self) -> dict:
+        """Recorded recovery route for the latest non-terminal run.
+
+        The absence of a record retains the historical checkpoint behavior.
+        A present ``resume_allowed=False`` is an explicit server verdict, not
+        a UI inference from an exception sentence.
+        """
+
+        inventory = self.question_inventory
+        if not isinstance(inventory, dict):
+            return {}
+        value = inventory.get(GENERATION_RECOVERY_INVENTORY_KEY)
+        if isinstance(value, dict):
+            return {
+                "error": str(value.get("error") or ""),
+                "message": str(value.get("message") or ""),
+                "resume_allowed": value.get("resume_allowed") is not False,
+                "recovery_action": str(value.get("recovery_action") or ""),
+                "recovery": str(value.get("recovery") or ""),
+            }
+
+        # Compatibility for the measured job 97, which hit Q24 before the
+        # typed marker shipped.  This is an exact event fingerprint, not a
+        # judgement over source content.  The resumable-list reader persists
+        # this projection once so subsequent reads need not scan the journal.
+        for event in reversed(
+            self.generation_log if isinstance(self.generation_log, list) else []
+        ):
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") != "log" or event.get("level") != "error":
+                continue
+            message = str(event.get("message") or "")
+            message_sha256 = hashlib.sha256(
+                message.encode("utf-8")
+            ).hexdigest()
+            if message_sha256 in _LEGACY_NON_RESUMABLE_LOG_MESSAGE_SHA256S:
+                return {
+                    "error": "UnattendedDecisionUnavailable: " + message,
+                    "message": (
+                        "Generation did not complete and this checkpoint is "
+                        "not resumable. " + _Q24_RECOVERY_MESSAGE
+                    ),
+                    "resume_allowed": False,
+                    "recovery_action": "reconvert_new_upload",
+                    "recovery": _Q24_RECOVERY_MESSAGE,
+                }
+        return {}
 
     @property
     def checkpoint_stage(self) -> str:

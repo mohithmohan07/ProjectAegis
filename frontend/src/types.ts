@@ -414,6 +414,7 @@ export interface UploadJob {
   checkpoint_saved_at?: string;
   checkpoint_progress?: number;
   checkpoint_target_identity?: Record<string, string>;
+  generation_recovery?: GenerationRecovery;
   awaiting_decision?: boolean;
   pending_decision?: PendingSemanticDecision | null;
   generation_running?: boolean;
@@ -427,6 +428,16 @@ export interface UploadJob {
   }>;
   created_at: string;
   openai_usage?: OpenAIUsage;
+}
+
+export interface GenerationRecovery {
+  error?: string;
+  message?: string;
+  resume_allowed: boolean;
+  recovery_action?: string;
+  recovery?: string;
+  /** Compatibility text present only for resumable failures. */
+  resume?: string;
 }
 
 export interface AuthConfig {

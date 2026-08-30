@@ -53,6 +53,10 @@ _LOGGER = logging.getLogger(__name__)
 # omitted running header/footer/page number ships verbatim in the page's
 # ``dropped_furniture`` (R4: dropped and listed as dropped, with what it
 # said). Bumped so cached transcriptions without the record are re-read.
+# 2.5.0: the ingestion contract canonicalizes formatting-only ``\mathrm``
+# unit/text atoms, including Mathpix/GPT spacing controls and literal unit
+# slashes. Legacy 2.4.0 verified caches are upgraded mechanically below, so
+# this contract bump does not discard their paid page transcription.
 # NOT bumped for the sealed-bundle ``result_sha256`` integrity digest: that
 # added no new extraction/verification rule — no cached judgment became
 # stale — and the reuse gate itself already treats a legacy seal without
@@ -60,9 +64,18 @@ _LOGGER = logging.getLogger(__name__)
 # still hold their verified pages, and reseals with the digest). A bump
 # here would instead discard every paid page transcription for a change
 # that altered none of their content.
-FALLBACK_VERSION = "2.4.0"
+FALLBACK_VERSION = "2.5.0"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
+# Independent identity for deterministic ingestion canonicalization. It is
+# present in current cache keys, page bundles, manifests, and the MMD reader
+# stamp so a future formatting-contract change cannot silently replay an old
+# verified bundle merely because the model transcription compiler is stable.
+INGESTION_CONTRACT_VERSION = "supported-text-atoms-2"
+_LEGACY_CACHE_VERSIONS = ("2.4.0",)
+_LEGACY_PAGE_ACSD_SCHEMA_BY_FALLBACK_VERSION = {
+    "2.4.0": "1.1.0",
+}
 # The marker written into the rendered MMD header. Deliberately distinct
 # from FALLBACK_ORIGIN, which labels the job-level conversion source.
 MMD_SOURCE_ORIGIN = "gpt-pdf-to-acsd"
@@ -70,7 +83,7 @@ MMD_SOURCE_ORIGIN = "gpt-pdf-to-acsd"
 # validates against this exact constant, so producer and consumer can never
 # drift apart again (a hardcoded mismatch previously made that cache dead and
 # re-entered this lane on every Phase 3 rebuild).
-PAGE_ACSD_SCHEMA_VERSION = "1.1.0"
+PAGE_ACSD_SCHEMA_VERSION = "1.2.0"
 GPT_PAGE_ACSD_FILENAME = "source.gpt-page-acsd.json"
 ASSET_DIRNAME = "assets"
 # Artifacts this module used to publish and no longer does. They stay in the
@@ -612,27 +625,87 @@ def _pdf_sha256(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def _batch_cache_key_from_sha(pdf_sha256: str, pages: list[PdfPage]) -> str:
-    material = "\u241f".join([
-        FALLBACK_VERSION,
-        FALLBACK_COMPILER,
+def _batch_cache_key_for_contract(
+    pdf_sha256: str,
+    pages: list[PdfPage],
+    *,
+    fallback_version: str,
+    ingestion_contract: str | None,
+) -> str:
+    parts = [fallback_version, FALLBACK_COMPILER]
+    if ingestion_contract:
+        parts.append(ingestion_contract)
+    parts.extend([
         config.OPENAI_MODEL,
         str(pdf_sha256 or ""),
         ",".join(page.page_id for page in pages),
     ])
+    material = "\u241f".join(parts)
+    return _sha256_text(material)
+
+
+def _batch_cache_key_from_sha(pdf_sha256: str, pages: list[PdfPage]) -> str:
+    return _batch_cache_key_for_contract(
+        pdf_sha256,
+        pages,
+        fallback_version=FALLBACK_VERSION,
+        ingestion_contract=INGESTION_CONTRACT_VERSION,
+    )
+
+
+def _bundle_cache_key_for_contract(
+    pdf_sha256: str,
+    *,
+    fallback_version: str,
+    ingestion_contract: str | None,
+) -> str:
+    parts = [fallback_version, FALLBACK_COMPILER]
+    if ingestion_contract:
+        parts.append(ingestion_contract)
+    parts.extend([
+        config.OPENAI_MODEL,
+        str(pdf_sha256 or ""),
+        "full-verified-bundle",
+    ])
+    material = "\u241f".join(parts)
     return _sha256_text(material)
 
 
 def _bundle_cache_key(pdf_sha256: str) -> str:
     """Key for the sealed complete verified bundle of one source hash."""
-    material = "\u241f".join([
-        FALLBACK_VERSION,
-        FALLBACK_COMPILER,
-        config.OPENAI_MODEL,
-        str(pdf_sha256 or ""),
-        "full-verified-bundle",
-    ])
-    return _sha256_text(material)
+    return _bundle_cache_key_for_contract(
+        pdf_sha256,
+        fallback_version=FALLBACK_VERSION,
+        ingestion_contract=INGESTION_CONTRACT_VERSION,
+    )
+
+
+def _legacy_batch_cache_keys(
+    pdf_sha256: str,
+    pages: list[PdfPage],
+) -> list[str]:
+    """Exact pre-ingestion-contract keys eligible for mechanical upgrade."""
+    return [
+        _batch_cache_key_for_contract(
+            pdf_sha256,
+            pages,
+            fallback_version=version,
+            ingestion_contract=None,
+        )
+        for version in _LEGACY_CACHE_VERSIONS
+    ]
+
+
+def _legacy_bundle_cache_keys(pdf_sha256: str) -> list[str]:
+    """Exact pre-ingestion-contract seal keys eligible for upgrade."""
+    return [
+        _bundle_cache_key_for_contract(
+            pdf_sha256,
+            fallback_version=version,
+            ingestion_contract=None,
+        )
+        for version in _LEGACY_CACHE_VERSIONS
+    ]
 
 
 def _bundle_pages_sha256(bundle: dict[str, Any]) -> str:
@@ -678,11 +751,296 @@ def _read_verified_batch_cache(key: str) -> dict[str, Any] | None:
     return value
 
 
+def _legacy_cache_envelope_matches(
+    cached: dict[str, Any],
+    *,
+    fallback_version: str,
+    pdf_sha256: str,
+    page_ids: list[str] | None = None,
+) -> bool:
+    """Whether a cache row has the exact pre-contract key identity.
+
+    The filename is derived from these values, but it is not evidence that the
+    JSON stored at that filename still carries them. A copied or well-formed
+    altered cache row is a miss, never an input whose identity we repair while
+    promoting it to the current contract.
+    """
+    if (
+        cached.get("version") != fallback_version
+        or cached.get("model") != config.OPENAI_MODEL
+        or cached.get("pdf_sha256") != pdf_sha256
+        or "ingestion_contract_version" in cached
+    ):
+        return False
+    if page_ids is not None and cached.get("page_ids") != page_ids:
+        return False
+    return True
+
+
+def _legacy_bundle_identity_matches(
+    cached: dict[str, Any],
+    bundle: dict[str, Any],
+    *,
+    fallback_version: str,
+    pdf_sha256: str,
+    page_count: int,
+) -> bool:
+    """Require the exact 2.4 producer identity before bundle migration."""
+    schema_version = _LEGACY_PAGE_ACSD_SCHEMA_BY_FALLBACK_VERSION.get(
+        fallback_version
+    )
+    if schema_version is None or not _legacy_cache_envelope_matches(
+        cached,
+        fallback_version=fallback_version,
+        pdf_sha256=pdf_sha256,
+    ):
+        return False
+    if (
+        bundle.get("schema_name") != "Aegis GPT Page ACSD"
+        or bundle.get("schema_version") != schema_version
+        or bundle.get("compiler_version") != FALLBACK_COMPILER
+        or bundle.get("source_origin") != FALLBACK_ORIGIN
+        or bundle.get("model") != config.OPENAI_MODEL
+        or bundle.get("pdf_sha256") != pdf_sha256
+        or "ingestion_contract_version" in bundle
+    ):
+        return False
+    pages = bundle.get("pages")
+    if not isinstance(pages, list) or len(pages) != page_count:
+        return False
+    expected_page_identity = [
+        (f"PDF-PAGE-{number:04d}", number)
+        for number in range(1, page_count + 1)
+    ]
+    actual_page_identity = [
+        (
+            page.get("page_id"),
+            page.get("page_number"),
+        )
+        if isinstance(page, dict) else (None, None)
+        for page in pages
+    ]
+    return actual_page_identity == expected_page_identity
+
+
+def _legacy_batch_identity_matches(
+    cached: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    fallback_version: str,
+    pdf_sha256: str,
+    pages: list[PdfPage],
+) -> bool:
+    """Require both the batch envelope and result to name these pages."""
+    expected_page_ids = [page.page_id for page in pages]
+    if not _legacy_cache_envelope_matches(
+        cached,
+        fallback_version=fallback_version,
+        pdf_sha256=pdf_sha256,
+        page_ids=expected_page_ids,
+    ) or result.get("status") != "verified":
+        return False
+    result_pages = result.get("pages")
+    if not isinstance(result_pages, list):
+        return False
+    actual_page_identity = [
+        (
+            page.get("page_id"),
+            page.get("page_number"),
+        )
+        if isinstance(page, dict) else (None, None)
+        for page in result_pages
+    ]
+    expected_page_identity = [
+        (page.page_id, page.page_number) for page in pages
+    ]
+    return actual_page_identity == expected_page_identity
+
+
+def _legacy_outline_identity_matches(
+    cached: dict[str, Any],
+    outline: dict[str, Any],
+    *,
+    fallback_version: str,
+    pdf_sha256: str,
+) -> bool:
+    """Require the exact cache and outline versions before replay."""
+    return bool(
+        _legacy_cache_envelope_matches(
+            cached,
+            fallback_version=fallback_version,
+            pdf_sha256=pdf_sha256,
+        )
+        and outline.get("version") == OUTLINE_VERSION
+        and "ingestion_contract_version" not in outline
+    )
+
+
 def _write_verified_batch_cache(key: str, value: dict[str, Any]) -> None:
     _CACHE_DIR.mkdir(parents=True, exist_ok=True)
     canonical_source._atomic_write(
         _batch_cache_path(key), canonical_source._json_text(value)
     )
+
+
+def _canonicalize_cached_page_text_atoms(
+    pages: object,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Upgrade verified page rows to the current formatting-only contract.
+
+    This is deliberately narrower than page verification: an old verified
+    transcription remains the evidence authority. Only strings at the three
+    ingestion seams already normalized by ``validate_page_extraction`` are
+    projected to the supported wire format. No kind, order, wording, source
+    relationship, or model decision is inferred here.
+    """
+    if not isinstance(pages, list):
+        return [], False
+    upgraded = copy.deepcopy(pages)
+    changed = False
+    for page in upgraded:
+        if not isinstance(page, dict):
+            continue
+        changed_orders: list[int] = []
+        blocks = page.get("blocks")
+        if not isinstance(blocks, list):
+            continue
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            block_changed = False
+            for field in ("latex", "text"):
+                old_value = block.get(field)
+                if not isinstance(old_value, str):
+                    continue
+                new_value = kr.normalize_supported_text_atoms(old_value)
+                if new_value != old_value:
+                    block[field] = new_value
+                    block_changed = True
+            table_rows = block.get("table_rows")
+            if isinstance(table_rows, list):
+                new_rows = [
+                    [
+                        kr.normalize_supported_text_atoms(cell)
+                        if isinstance(cell, str) else cell
+                        for cell in row
+                    ]
+                    if isinstance(row, list) else row
+                    for row in table_rows
+                ]
+                if new_rows != table_rows:
+                    block["table_rows"] = new_rows
+                    block_changed = True
+            if block_changed:
+                changed = True
+                changed_orders.append(int(block.get("reading_order") or 0))
+        if changed_orders:
+            flags = page.get("review_flags")
+            if not isinstance(flags, list):
+                flags = []
+                page["review_flags"] = flags
+            for order in changed_orders:
+                flag = (
+                    f"block {order}: normalized \\mathrm unit atom(s) to "
+                    "supported \\text"
+                )
+                if flag not in flags:
+                    flags.append(flag)
+    return upgraded, changed
+
+
+def _upgrade_verified_batch_result(
+    result: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    upgraded = copy.deepcopy(result)
+    pages, changed = _canonicalize_cached_page_text_atoms(
+        upgraded.get("pages")
+    )
+    if isinstance(upgraded.get("pages"), list):
+        upgraded["pages"] = pages
+    return upgraded, changed
+
+
+def _canonicalize_outline_render_text_atoms(outline: object) -> bool:
+    """Normalize only source-rendering strings duplicated by the outline.
+
+    ``independent_parts`` are model-decided question boundaries, but their
+    ``stem`` and ``text`` values are verbatim render carriers copied from the
+    verified task block. They therefore receive the same formatting-only atom
+    projection as that block. Topic titles and every other semantic ruling stay
+    untouched.
+    """
+    if not isinstance(outline, dict):
+        return False
+    changed = False
+    for partition in outline.get("task_partitions") or []:
+        if not isinstance(partition, dict):
+            continue
+        for part in partition.get("independent_parts") or []:
+            if not isinstance(part, dict):
+                continue
+            for field in ("stem", "text"):
+                old_value = part.get(field)
+                if not isinstance(old_value, str):
+                    continue
+                new_value = kr.normalize_supported_text_atoms(old_value)
+                if new_value != old_value:
+                    part[field] = new_value
+                    changed = True
+    return changed
+
+
+def _upgrade_page_acsd_bundle(
+    bundle: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Stamp and mechanically migrate one already-verified page bundle."""
+    upgraded = copy.deepcopy(bundle)
+    pages, text_changed = _canonicalize_cached_page_text_atoms(
+        upgraded.get("pages")
+    )
+    if isinstance(upgraded.get("pages"), list):
+        upgraded["pages"] = pages
+    outline = upgraded.get("chapter_outline")
+    outline_changed = _canonicalize_outline_render_text_atoms(outline)
+    if isinstance(outline, dict):
+        if (
+            outline.get("ingestion_contract_version")
+            != INGESTION_CONTRACT_VERSION
+        ):
+            outline_changed = True
+        outline["ingestion_contract_version"] = INGESTION_CONTRACT_VERSION
+    old_identity = (
+        str(upgraded.get("schema_version") or ""),
+        str(upgraded.get("compiler_version") or ""),
+        str(upgraded.get("ingestion_contract_version") or ""),
+    )
+    upgraded["schema_version"] = PAGE_ACSD_SCHEMA_VERSION
+    upgraded["compiler_version"] = FALLBACK_COMPILER
+    upgraded["ingestion_contract_version"] = INGESTION_CONTRACT_VERSION
+    current_identity = (
+        PAGE_ACSD_SCHEMA_VERSION,
+        FALLBACK_COMPILER,
+        INGESTION_CONTRACT_VERSION,
+    )
+    return (
+        upgraded,
+        text_changed or outline_changed or old_identity != current_identity,
+    )
+
+
+def _write_verified_bundle_cache(pdf_sha256: str, bundle: dict[str, Any]) -> None:
+    """Seal a current-contract bundle with its post-upgrade page digest."""
+    _write_verified_batch_cache(_bundle_cache_key(pdf_sha256), {
+        "version": FALLBACK_VERSION,
+        "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
+        "status": "verified",
+        "created_at": time.time(),
+        "model": config.OPENAI_MODEL,
+        "pdf_sha256": pdf_sha256,
+        # PAGES ONLY, never the outline: see ``_bundle_pages_sha256``.
+        "result_sha256": _bundle_pages_sha256(bundle),
+        "result": copy.deepcopy(bundle),
+    })
 
 
 def _tokens(value: str) -> set[str]:
@@ -722,12 +1080,16 @@ _SOURCE_ORIGIN_RE = re.compile(r"<!--\s*source_origin:\s*([^>]*?)\s*-->")
 def source_reader_version() -> str:
     """Identifies everything that decides the SHAPE of the rendered MMD.
 
-    The compiler renders blocks; the outline decides which of them open a
-    topic and where questions divide; the render version tracks the MMD
-    shape itself (e.g. verbatim task-cue headings). A change to any of them
-    produces different MMD from the same PDF, so all belong in the stamp.
+    The compiler renders blocks; the ingestion contract owns supported
+    formatting atoms; the outline decides which blocks open a topic and where
+    questions divide; the render version tracks the MMD shape itself (e.g.
+    verbatim task-cue headings). A change to any of them produces different
+    MMD from the same PDF, so all belong in the stamp.
     """
-    return f"{FALLBACK_COMPILER}+{OUTLINE_VERSION}+{RENDER_VERSION}"
+    return (
+        f"{FALLBACK_COMPILER}+{INGESTION_CONTRACT_VERSION}+"
+        f"{OUTLINE_VERSION}+{RENDER_VERSION}"
+    )
 
 
 def mmd_reader_version(mmd_text: object) -> str:
@@ -757,15 +1119,42 @@ def stale_mmd_reader(mmd_text: object) -> str:
     return stamped or "unstamped (pre-dates source reader versioning)"
 
 
-def _outline_cache_key(pdf_sha256: str) -> str:
-    material = "␟".join([
-        FALLBACK_VERSION,
+def _outline_cache_key_for_contract(
+    pdf_sha256: str,
+    *,
+    fallback_version: str,
+    ingestion_contract: str | None,
+) -> str:
+    parts = [fallback_version]
+    if ingestion_contract:
+        parts.append(ingestion_contract)
+    parts.extend([
         OUTLINE_VERSION,
         config.OPENAI_MODEL,
         str(pdf_sha256 or ""),
         "chapter-outline",
     ])
+    material = "␟".join(parts)
     return _sha256_text(material)
+
+
+def _outline_cache_key(pdf_sha256: str) -> str:
+    return _outline_cache_key_for_contract(
+        pdf_sha256,
+        fallback_version=FALLBACK_VERSION,
+        ingestion_contract=INGESTION_CONTRACT_VERSION,
+    )
+
+
+def _legacy_outline_cache_keys(pdf_sha256: str) -> list[str]:
+    return [
+        _outline_cache_key_for_contract(
+            pdf_sha256,
+            fallback_version=version,
+            ingestion_contract=None,
+        )
+        for version in _LEGACY_CACHE_VERSIONS
+    ]
 
 
 def _outline_block_line(block: dict[str, Any]) -> str:
@@ -1385,9 +1774,52 @@ def derive_chapter_outline(page_acsd: dict[str, Any]) -> dict[str, Any] | None:
     pdf_sha = str(page_acsd.get("pdf_sha256") or "")
     key = _outline_cache_key(pdf_sha)
     cached = _read_verified_batch_cache(key)
+    legacy_contract = False
+    if cached is None:
+        for legacy_version, legacy_key in zip(
+            _LEGACY_CACHE_VERSIONS,
+            _legacy_outline_cache_keys(pdf_sha),
+        ):
+            candidate = _read_verified_batch_cache(legacy_key)
+            candidate_result = (
+                candidate.get("result") if isinstance(candidate, dict) else None
+            )
+            if (
+                isinstance(candidate_result, dict)
+                and _legacy_outline_identity_matches(
+                    candidate,
+                    candidate_result,
+                    fallback_version=legacy_version,
+                    pdf_sha256=pdf_sha,
+                )
+            ):
+                cached = candidate
+                legacy_contract = True
+                break
     if cached is not None and isinstance(cached.get("result"), dict):
         if cached["result"].get("version") == OUTLINE_VERSION:
-            return copy.deepcopy(cached["result"])
+            outline = copy.deepcopy(cached["result"])
+            render_text_changed = _canonicalize_outline_render_text_atoms(
+                outline
+            )
+            identity_changed = (
+                outline.get("ingestion_contract_version")
+                != INGESTION_CONTRACT_VERSION
+            )
+            outline["ingestion_contract_version"] = (
+                INGESTION_CONTRACT_VERSION
+            )
+            if legacy_contract or render_text_changed or identity_changed:
+                _write_verified_batch_cache(key, {
+                    "version": FALLBACK_VERSION,
+                    "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
+                    "status": "verified",
+                    "created_at": time.time(),
+                    "model": config.OPENAI_MODEL,
+                    "pdf_sha256": pdf_sha,
+                    "result": copy.deepcopy(outline),
+                })
+            return outline
     digest = _outline_digest(page_acsd)
     prompt = (
         "Structural digest of the verified chapter transcription "
@@ -1434,6 +1866,7 @@ def derive_chapter_outline(page_acsd: dict[str, Any]) -> dict[str, Any] | None:
     if outline is None:
         return None
     outline = _rule_on_omitted_tasks(page_acsd, candidate, outline)
+    outline["ingestion_contract_version"] = INGESTION_CONTRACT_VERSION
     content_topics = [t["title"] for t in outline["topics"] if t["kind"] == "content"]
     progress.log(
         f"Chapter outline: {outline['chapter_title']!r}; "
@@ -1446,6 +1879,7 @@ def derive_chapter_outline(page_acsd: dict[str, Any]) -> dict[str, Any] | None:
     )
     _write_verified_batch_cache(key, {
         "version": FALLBACK_VERSION,
+        "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
         "status": "verified",
         "created_at": time.time(),
         "model": config.OPENAI_MODEL,
@@ -1993,44 +2427,74 @@ def extract_pdf_to_page_acsd(
     # hash. A sealed complete verified bundle is returned without re-entering
     # batch orchestration, so a semantic-only repair or Phase 3 rebuild causes
     # zero lane replay while the source is unchanged.
-    sealed = _read_verified_batch_cache(_bundle_cache_key(pdf_sha))
-    if sealed is not None and isinstance(sealed.get("result"), dict):
-        bundle = copy.deepcopy(sealed["result"])
-        # Integrity gate on the sealed evidence: beyond the source hash and
-        # page count, the pages the cache actually holds must reproduce the
-        # digest recorded at seal time. A well-formed edit to the cached
-        # bundle (block text swapped, sha256 and page count preserved) must
-        # never replay as verified source; any mismatch — including a legacy
-        # seal written before the digest existed — is a MISS that falls
-        # through to re-extraction (free where the per-batch caches still
-        # hold their verified judgments) and reseals with the digest.
-        # Refusing a defective artifact is mechanics, not a content judgment.
+    sealed_candidates = [
+        (False, FALLBACK_VERSION, _bundle_cache_key(pdf_sha)),
+        *(
+            (True, version, key)
+            for version, key in zip(
+                _LEGACY_CACHE_VERSIONS,
+                _legacy_bundle_cache_keys(pdf_sha),
+            )
+        ),
+    ]
+    for legacy_contract, candidate_version, sealed_key in sealed_candidates:
+        sealed = _read_verified_batch_cache(sealed_key)
+        if sealed is None or not isinstance(sealed.get("result"), dict):
+            continue
+        original_bundle = copy.deepcopy(sealed["result"])
+        if legacy_contract and not _legacy_bundle_identity_matches(
+            sealed,
+            original_bundle,
+            fallback_version=candidate_version,
+            pdf_sha256=pdf_sha,
+            page_count=page_count,
+        ):
+            continue
+        # Integrity is checked BEFORE any migration. A well-formed edit to a
+        # cached bundle must never become verified merely because the current
+        # ingestion migration can parse it. A missing or mismatched legacy
+        # digest therefore falls through to per-batch reuse/re-extraction.
         recorded_digest = str(sealed.get("result_sha256") or "")
-        if (
-            bundle.get("pdf_sha256") == pdf_sha
-            and len(bundle.get("pages") or []) == page_count
+        if not (
+            original_bundle.get("pdf_sha256") == pdf_sha
+            and len(original_bundle.get("pages") or []) == page_count
             and recorded_digest
             and hmac.compare_digest(
-                recorded_digest, _bundle_pages_sha256(bundle)
+                recorded_digest, _bundle_pages_sha256(original_bundle)
             )
         ):
+            continue
+        bundle, identity_changed = _upgrade_page_acsd_bundle(original_bundle)
+        if legacy_contract:
+            progress.log(
+                "Upgraded the sealed verified GPT PDF-to-ACSD bundle to "
+                f"ingestion contract {INGESTION_CONTRACT_VERSION} for this "
+                f"unchanged source ({page_count} page(s)); no model batches "
+                "were replayed.",
+                level="info",
+            )
+        else:
             progress.log(
                 "Reusing the sealed verified GPT PDF-to-ACSD bundle for this "
                 f"unchanged source ({page_count} page(s)); no model batches "
                 "were replayed.",
                 level="info",
             )
-            # A bundle sealed before the outline pass existed (or under an
-            # older outline version) still gets the semantic structure.
-            existing_outline = bundle.get("chapter_outline")
-            if (
-                not isinstance(existing_outline, dict)
-                or existing_outline.get("version") != OUTLINE_VERSION
-            ):
-                outline = derive_chapter_outline(bundle)
-                if outline is not None:
-                    bundle["chapter_outline"] = outline
-            return bundle
+        # A bundle sealed before the outline pass existed (or under an older
+        # outline version) still gets the semantic structure.
+        outline_changed = False
+        existing_outline = bundle.get("chapter_outline")
+        if (
+            not isinstance(existing_outline, dict)
+            or existing_outline.get("version") != OUTLINE_VERSION
+        ):
+            outline = derive_chapter_outline(bundle)
+            if outline is not None:
+                bundle["chapter_outline"] = outline
+                outline_changed = True
+        if legacy_contract or identity_changed or outline_changed:
+            _write_verified_bundle_cache(pdf_sha, bundle)
+        return bundle
     # The transcription is the longest stage of a conversion; the bar walks
     # through its own band batch by batch instead of freezing until the end.
     band_start = progress.current_value()
@@ -2068,22 +2532,50 @@ def extract_pdf_to_page_acsd(
         )
         key = _batch_cache_key_from_sha(pdf_sha, batch)
         cached = _read_verified_batch_cache(key)
-        if cached is not None:
+        legacy_contract = False
+        if cached is None:
+            for legacy_version, legacy_key in zip(
+                _LEGACY_CACHE_VERSIONS,
+                _legacy_batch_cache_keys(pdf_sha, batch),
+            ):
+                candidate = _read_verified_batch_cache(legacy_key)
+                candidate_result = (
+                    candidate.get("result")
+                    if isinstance(candidate, dict) else None
+                )
+                if (
+                    isinstance(candidate_result, dict)
+                    and _legacy_batch_identity_matches(
+                        candidate,
+                        candidate_result,
+                        fallback_version=legacy_version,
+                        pdf_sha256=pdf_sha,
+                        pages=batch,
+                    )
+                ):
+                    cached = candidate
+                    legacy_contract = True
+                    break
+        if cached is not None and isinstance(cached.get("result"), dict):
             result = copy.deepcopy(cached["result"])
-            cache_state = "hit"
+            cache_state = "upgraded" if legacy_contract else "hit"
         else:
             result = provider(batch)
             cache_state = "miss"
-            if result.get("status") == "verified":
-                _write_verified_batch_cache(key, {
-                    "version": FALLBACK_VERSION,
-                    "status": "verified",
-                    "created_at": time.time(),
-                    "model": config.OPENAI_MODEL,
-                    "pdf_sha256": pdf_sha,
-                    "page_ids": [page.page_id for page in batch],
-                    "result": result,
-                })
+        result, text_changed = _upgrade_verified_batch_result(result)
+        if result.get("status") == "verified" and (
+            cache_state == "miss" or legacy_contract or text_changed
+        ):
+            _write_verified_batch_cache(key, {
+                "version": FALLBACK_VERSION,
+                "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
+                "status": "verified",
+                "created_at": time.time(),
+                "model": config.OPENAI_MODEL,
+                "pdf_sha256": pdf_sha,
+                "page_ids": [page.page_id for page in batch],
+                "result": result,
+            })
         page_ids = [page.page_id for page in batch]
         # Drop page image data before returning to the orchestrator.
         del batch
@@ -2181,6 +2673,7 @@ def extract_pdf_to_page_acsd(
         "schema_name": "Aegis GPT Page ACSD",
         "schema_version": PAGE_ACSD_SCHEMA_VERSION,
         "compiler_version": FALLBACK_COMPILER,
+        "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
         "source_origin": FALLBACK_ORIGIN,
         "model": config.OPENAI_MODEL,
         "pdf_sha256": pdf_sha,
@@ -2190,19 +2683,7 @@ def extract_pdf_to_page_acsd(
     outline = derive_chapter_outline(bundle)
     if outline is not None:
         bundle["chapter_outline"] = outline
-    _write_verified_batch_cache(_bundle_cache_key(pdf_sha), {
-        "version": FALLBACK_VERSION,
-        "status": "verified",
-        "created_at": time.time(),
-        "model": config.OPENAI_MODEL,
-        "pdf_sha256": pdf_sha,
-        # Integrity digest of the sealed pages, required at reuse. PAGES
-        # ONLY, never the outline: the outline may be (re)derived after the
-        # reuse gate under a newer OUTLINE_VERSION, and that upgrade must
-        # not invalidate the seal (see _bundle_pages_sha256).
-        "result_sha256": _bundle_pages_sha256(bundle),
-        "result": copy.deepcopy(bundle),
-    })
+    _write_verified_bundle_cache(pdf_sha, bundle)
     return bundle
 
 
@@ -3706,6 +4187,7 @@ def _reconstruction_manifest(
     return {
         "version": FALLBACK_VERSION,
         "compiler": FALLBACK_COMPILER,
+        "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
         "status": "verified",
         "source_origin": FALLBACK_ORIGIN,
         "fallback_reason": reasons,
@@ -3733,6 +4215,7 @@ def _attach_reconstruction_metadata(
     canonical.setdefault("source_contract", {}).update({
         "source_origin": FALLBACK_ORIGIN,
         "reconstruction_version": FALLBACK_VERSION,
+        "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
         "original_pdf_sha256": reconstruction["pdf_sha256"],
     })
     canonical.setdefault("document", {})["original_source_filename"] = (

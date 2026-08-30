@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from .. import models
 from . import build_concepts_release as bcr
+from . import generation_recovery
 
 EDITABLE_FIELDS = (
     "topic",
@@ -305,6 +306,10 @@ def apply_manual_edits(
     owner_sub: str = "",
 ) -> dict[str, Any]:
     """Apply the reviewer's verbatim field edits as one recorded round."""
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="edit the staged release"
+    )
     lane = bcr.normalize_lane(lane)
     payload = _current_payload(job, lane)
     current_uid = str(payload.get(bcr.STAGED_RELEASE_UID_FIELD) or "")
@@ -464,6 +469,10 @@ def apply_instruction_round(
     provider: Callable[..., Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """One bounded model pass applies the reviewer's change list (§7)."""
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="apply an instruction to the staged release"
+    )
     lane = bcr.normalize_lane(lane)
     instruction = str(instruction or "").strip()
     if not instruction:

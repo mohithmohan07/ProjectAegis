@@ -35,10 +35,13 @@ def _pending() -> dict:
 def test_a_final_call_cannot_answer_with_no_choice():
     schema = ar._response_schema(_pending(), set(), final=True)
     choice = schema["schema"]["properties"]["choice"]
+    target = schema["schema"]["properties"]["target_id"]
 
     assert schema["schema"]["properties"]["disposition"]["enum"] == ["apply"]
     assert "" not in choice["enum"]
     assert choice["enum"] == ["accept_recommended", "select_candidate"]
+    assert target["enum"] == ["3.2:keep:7485", "3.2:refine:c7d1"]
+    assert "" not in target["enum"]
 
 
 def test_an_earlier_pass_may_still_answer_with_no_choice():
@@ -48,6 +51,37 @@ def test_an_earlier_pass_may_still_answer_with_no_choice():
 
     assert "request_evidence" in schema["schema"]["properties"]["disposition"]["enum"]
     assert choice["enum"][0] == ""
+    assert schema["schema"]["properties"]["target_id"]["enum"][0] == ""
+
+
+def test_a_final_targetless_action_keeps_the_empty_target_shape():
+    pending = _pending()
+    pending["options"].append({"choice": "keep_distinct_types"})
+
+    schema = ar._response_schema(pending, set(), final=True)
+
+    # The flat compatibility contract must still represent a genuinely
+    # targetless action. The local validator enforces that select_candidate
+    # itself cannot use this empty value.
+    assert schema["schema"]["properties"]["target_id"]["enum"][0] == ""
+
+
+def test_candidate_selection_is_not_emitted_without_an_untried_target():
+    pending = _pending()
+    pending["excluded_prior_pathways"] = [
+        {
+            "choice": "select_candidate",
+            "target_id": candidate["target_id"],
+            "target_concept_id": "",
+        }
+        for candidate in pending["candidates"]
+    ]
+
+    schema = ar._response_schema(pending, set(), final=True)
+    properties = schema["schema"]["properties"]
+
+    assert properties["choice"]["enum"] == [""]
+    assert properties["target_id"]["enum"] == [""]
 
 
 def test_a_packet_with_no_automatable_choice_keeps_an_empty_option():

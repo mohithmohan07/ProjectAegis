@@ -9,11 +9,11 @@ from typing import Any
 from . import canonical_source_phase2 as phase2
 from . import canonical_source_phase221_fallback as fallback
 
-_CONTRACT_VERSION = 1
+_CONTRACT_VERSION = 2
 
 
 def install() -> None:
-    from . import mmd, openai_usage, progress, uploads
+    from . import generation_recovery, mmd, openai_usage, progress, uploads
     from .. import config
 
     if getattr(uploads, "_CANONICAL_SOURCE_PHASE221_VERSION", 0) >= _CONTRACT_VERSION:
@@ -154,6 +154,9 @@ def install() -> None:
             owner_sub=owner_sub,
             module="build_concepts",
         )
+        generation_recovery.require_mutation_allowed(
+            staged, operation="convert this upload"
+        )
         path = uploads.upload_file_path(staged)
         if path.suffix.lower() != ".pdf" or not fallback._enabled():
             return original_convert(*args, **kwargs)
@@ -167,6 +170,10 @@ def install() -> None:
             current = uploads.get_job(
                 db, int(job_id), owner_sub=owner_sub,
                 module="build_concepts",
+            )
+            db.refresh(current)
+            generation_recovery.require_mutation_allowed(
+                current, operation="convert this upload"
             )
             return _run_reader(db, current, reason=["pdf_source"])
 

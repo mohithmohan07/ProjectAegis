@@ -2,12 +2,21 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 
+from app import models, schemas
+from app.services import auth
+from app.services import assessment_release_run
+from app.services import assessment_release_service
+from app.services import build_concepts
 from app.services import build_concepts_release as release
+from app.services import build_concepts_release_api_contract as release_api
+from app.services import build_concepts_release_contract as release_contract
 from app.services import build_concepts_release_files as release_files
 from app.services import build_concepts_release_manifest as release_manifest
 from app.services import build_concepts_release_publication as publication
 from app.services import build_concepts_terminal_release_contract as terminal
+from app.services import checkpoints, generation_recovery
 
 from tests.test_build_concepts_release import _job, _records
 
@@ -18,6 +27,36 @@ def _checkpoint(stage: str, progress: float) -> dict:
         "progress": progress,
         "target_chapter_id": 0,
     }
+
+
+def _job_97_q24_message() -> str:
+    return (
+        "Unattended generation stopped instead of settling "
+        "kind=phase3_source_graph_review, phase=3, unit=BLK-00595, "
+        "type=semantic_source_rich_text, topic=ELECTRIC POWER, "
+        "issue=88812f3c03e6 with carry_forward: carrying non-canonical rich "
+        "text forward is a proven dead end — the semantic-graph integrity "
+        "gate downstream refuses the graph and every resume replays the same "
+        "refusal. Convert the PDF again as a new upload: sources converted "
+        "before \\mathrm ingestion canonicalization are cured by reconversion. "
+        "If the same pause returns on a fresh conversion, the named block "
+        "genuinely needs a corrected source document."
+    )
+
+
+def _mark_non_resumable(db, job) -> None:
+    inventory = dict(job.question_inventory or {})
+    inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = {
+        "error": "UnattendedDecisionUnavailable: Q24",
+        "message": "Generation did not complete.",
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": "Start a new upload and conversion.",
+    }
+    job.question_inventory = inventory
+    job.generation_checkpoint = _checkpoint("source_graph_review", 0.05)
+    db.commit()
+    db.refresh(job)
 
 
 def test_failed_checkpoint_stays_resumable_and_database_closed(db):
@@ -46,6 +85,7 @@ def test_failed_checkpoint_stays_resumable_and_database_closed(db):
     assert terminal.payload_terminal_generation_complete(payload) is False
     assert job.status == terminal.PARTIAL_RELEASE_STATUS
     assert job.checkpoint_available is True
+    assert job.generation_recovery == {}
     assert terminal.TERMINAL_GENERATION_DEFECT in "\n".join(
         release.structural_defects(payload)
     )
@@ -65,6 +105,450 @@ def test_failed_checkpoint_stays_resumable_and_database_closed(db):
         terminal.TERMINAL_GENERATION_DEFECT in defect
         for defect in database_entry.get("structural_defects") or []
     )
+
+
+def test_q24_checkpoint_is_durable_but_never_rediscovered_as_resumable(db):
+    """The immediate response and every later job reader agree on recovery."""
+
+    terminal.install()
+    job, chapter = _job(db)
+    error = build_concepts.UnattendedDecisionUnavailable(
+        "non-canonical rich text cannot be carried forward",
+        resume_allowed=False,
+        recovery_action="reconvert_new_upload",
+        recovery_message=(
+            "Do not resume this checkpoint. Start a new upload and conversion."
+        ),
+    )
+
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory={"items": [], "stats": {"items": 0}},
+        mined_types={"types": []},
+        checkpoint=_checkpoint("source_graph_review", 0.05),
+        error=error,
+        reason="Q24 diagnostic checkpoint",
+    )
+
+    db.refresh(job)
+    assert job.status == release.RELEASE_STATUS
+    assert job.generation_checkpoint["stage"] == "source_graph_review"
+    assert job.checkpoint_available is False
+    assert job.generation_recovery == {
+        "error": (
+            "UnattendedDecisionUnavailable: non-canonical rich text cannot "
+            "be carried forward"
+        ),
+        "message": (
+            "Generation did not complete and this checkpoint is not "
+            "resumable. Do not resume this checkpoint. Start a new upload "
+            "and conversion."
+        ),
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": (
+            "Do not resume this checkpoint. Start a new upload and conversion."
+        ),
+    }
+    serialized = schemas.UploadJobOut.model_validate(job).model_dump()
+    assert serialized["generation_recovery"]["resume_allowed"] is False
+    payload = release.release_payload(job)
+    assert payload is not None
+    assert payload[terminal.RUN_RECOVERY_FIELD]["resume_allowed"] is False
+    defects = "\n".join(release.structural_defects(payload))
+    assert "forbids resuming this checkpoint" in defects
+
+    # Exercise the SQL predicate independently of the released-status guard:
+    # an imported/legacy lifecycle can say converted, but the durable marker
+    # still makes both the model property and discovery endpoint say no.
+    job.status = terminal.PARTIAL_RELEASE_STATUS
+    db.commit()
+    db.refresh(job)
+    assert job.checkpoint_available is False
+    listed, _total = checkpoints.resumable_jobs(db, learning_kind="post")
+    assert not any(row["id"] == job.id for row in listed)
+
+    # A later successful staging clears a stale marker rather than poisoning
+    # the new run's lifecycle forever.
+    release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=_records(),
+        inventory={"items": [], "stats": {"items": 0}},
+        mined_types={"types": []},
+        checkpoint=_checkpoint("final_content_ready", 1.0),
+        reason="clean retry from a new conversion",
+    )
+    db.refresh(job)
+    assert job.generation_recovery == {}
+
+
+def test_pre_marker_q24_job_is_backfilled_without_replaying_generation(db):
+    """Measured job 97 becomes non-resumable on its first read after deploy."""
+
+    job, _chapter = _job(db)
+    job.status = terminal.PARTIAL_RELEASE_STATUS
+    job.generation_checkpoint = _checkpoint("source_graph_review", 0.05)
+    job.generation_log = [{
+        "type": "log",
+        "level": "error",
+        "message": _job_97_q24_message(),
+    }]
+    inventory = dict(job.question_inventory or {})
+    inventory.pop("_aegis_generation_recovery", None)
+    job.question_inventory = inventory
+    db.commit()
+    db.refresh(job)
+
+    assert job.generation_recovery["resume_allowed"] is False
+    assert job.checkpoint_available is False
+    assert "_aegis_generation_recovery" not in job.question_inventory
+
+    listed, _total = checkpoints.resumable_jobs(db, learning_kind="post")
+    assert not any(row["id"] == job.id for row in listed)
+    db.refresh(job)
+    assert job.question_inventory[
+        "_aegis_generation_recovery"
+    ]["recovery_action"] == "reconvert_new_upload"
+
+
+def test_legacy_q24_backfill_rejects_a_near_match(db, monkeypatch):
+    """One changed identity byte must not classify an ordinary run as Q24."""
+
+    # The full suite intentionally leaves many resumable fixtures in the
+    # shared test database. This assertion is about the predicate, not the
+    # production first-page cap, so include every matching row here.
+    monkeypatch.setattr(checkpoints, "MAX_RESUMABLE_JOBS", 1_000_000)
+
+    job, _chapter = _job(db)
+    job.status = terminal.PARTIAL_RELEASE_STATUS
+    job.generation_checkpoint = _checkpoint("source_graph_review", 0.05)
+    job.generation_log = [{
+        "type": "log",
+        "level": "error",
+        "message": _job_97_q24_message().replace("BLK-00595", "BLK-00596"),
+    }]
+    db.commit()
+    db.refresh(job)
+
+    assert job.generation_recovery == {}
+    assert job.checkpoint_available is True
+    listed, _total = checkpoints.resumable_jobs(db, learning_kind="post")
+    assert any(row["id"] == job.id for row in listed)
+    db.refresh(job)
+    assert models.GENERATION_RECOVERY_INVENTORY_KEY not in job.question_inventory
+
+
+def test_post_generate_refuses_non_resumable_before_stream_or_provider(
+    db, monkeypatch,
+):
+    """A stale/direct client cannot replay job 97 around the hidden UI action."""
+
+    job, chapter = _job(db)
+    inventory = dict(job.question_inventory or {})
+    inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = {
+        "error": "UnattendedDecisionUnavailable: Q24",
+        "message": "Generation did not complete.",
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": "Start a new upload and conversion.",
+    }
+    job.question_inventory = inventory
+    job.status = terminal.PARTIAL_RELEASE_STATUS
+    job.generation_checkpoint = _checkpoint("source_graph_review", 0.05)
+    db.commit()
+
+    monkeypatch.setattr(release_api.uploads, "is_job_running", lambda _id: False)
+
+    def forbidden_stream(*_args, **_kwargs):
+        raise AssertionError("blocked recovery entered the generation stream")
+
+    monkeypatch.setattr(release_api.progress, "stream", forbidden_stream)
+    with pytest.raises(HTTPException) as caught:
+        release_api._post_generate_endpoint(
+            job.id,
+            schemas.PostLearningGenerateRequest(target_chapter_id=chapter.id),
+            db=db,
+            user=auth.LOCAL_PRINCIPAL,
+        )
+
+    assert caught.value.status_code == 409
+    assert "Start a new upload and conversion" in str(caught.value.detail)
+
+
+def test_post_generate_keeps_ordinary_checkpoint_resumable(db, monkeypatch):
+    """Only explicit resume_allowed=false closes the existing resume route."""
+
+    job, chapter = _job(db)
+    job.status = terminal.PARTIAL_RELEASE_STATUS
+    job.generation_checkpoint = _checkpoint("description_method_snapshot", 0.55)
+    db.commit()
+
+    monkeypatch.setattr(release_api.uploads, "is_job_running", lambda _id: False)
+    streamed: list[int] = []
+
+    def capture_stream(_work, **kwargs):
+        streamed.append(int(kwargs["journal_job_id"]))
+        return {"stream": "started"}
+
+    monkeypatch.setattr(release_api.progress, "stream", capture_stream)
+    result = release_api._post_generate_endpoint(
+        job.id,
+        schemas.PostLearningGenerateRequest(target_chapter_id=chapter.id),
+        db=db,
+        user=auth.LOCAL_PRINCIPAL,
+    )
+
+    assert result == {"stream": "started"}
+    assert streamed == [job.id]
+
+
+def test_service_guard_blocks_before_instruction_assembly(db, monkeypatch):
+    """Internal callers cannot bypass the POST guard into provider work."""
+
+    job, chapter = _job(db)
+    inventory = dict(job.question_inventory or {})
+    inventory[models.GENERATION_RECOVERY_INVENTORY_KEY] = {
+        "error": "UnattendedDecisionUnavailable: Q24",
+        "message": "Generation did not complete.",
+        "resume_allowed": False,
+        "recovery_action": "reconvert_new_upload",
+        "recovery": "Start a new upload and conversion.",
+    }
+    job.question_inventory = inventory
+    job.generation_checkpoint = _checkpoint("source_graph_review", 0.05)
+    db.commit()
+
+    def forbidden_architect(*_args, **_kwargs):
+        raise AssertionError("blocked recovery reached instruction assembly")
+
+    monkeypatch.setattr(
+        build_concepts.instruction_architect,
+        "ensure_instruction_set",
+        forbidden_architect,
+    )
+    with pytest.raises(
+        build_concepts.UnattendedDecisionUnavailable,
+    ) as caught:
+        build_concepts.generate_post_learning(
+            db,
+            job.id,
+            chapter.id,
+            owner_sub=auth.LOCAL_PRINCIPAL.sub,
+        )
+
+    assert caught.value.resume_allowed is False
+    assert caught.value.recovery_action == "reconvert_new_upload"
+    assert caught.value.recovery_message == "Start a new upload and conversion."
+
+
+def test_release_wrapper_blocks_before_diagnostic_restaging(db, monkeypatch):
+    """Direct wrapper callers cannot turn a blocked replay into a new release."""
+
+    job, chapter = _job(db)
+    _mark_non_resumable(db, job)
+    before = dict(job.question_inventory)
+
+    def forbidden_stage(*_args, **_kwargs):
+        raise AssertionError("blocked wrapper staged a diagnostic release")
+
+    monkeypatch.setattr(
+        release_contract, "_stage_generation_release", forbidden_stage
+    )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        release_contract.generate_post_learning(
+            db,
+            job.id,
+            chapter.id,
+            owner_sub=auth.LOCAL_PRINCIPAL.sub,
+        )
+
+    db.refresh(job)
+    assert job.question_inventory == before
+
+
+def test_explicit_restaging_cannot_clear_non_resumable_recovery(db):
+    """The explicit release mutation cannot reopen a terminal checkpoint."""
+
+    terminal.install()
+    job, _chapter = _job(db)
+    _mark_non_resumable(db, job)
+    before = dict(job.question_inventory)
+
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        release.force_release(db, job.id)
+
+    db.refresh(job)
+    assert job.question_inventory == before
+    assert job.generation_recovery["resume_allowed"] is False
+    assert job.checkpoint_available is False
+
+
+def test_ordinary_force_release_remains_available(db):
+    job, _chapter = _job(db)
+
+    released = release.force_release(db, job.id)
+
+    assert released.id == job.id
+    assert release.release_available(released)
+    assert released.generation_recovery == {}
+
+
+@pytest.mark.parametrize("claim_job_lock", [False, True])
+def test_master_rebuild_refuses_non_resumable_before_storage_or_provider(
+    db, monkeypatch, claim_job_lock,
+):
+    job, _chapter = _job(db)
+    _mark_non_resumable(db, job)
+    before = dict(job.question_inventory)
+
+    def forbidden_capacity(*_args, **_kwargs):
+        raise AssertionError("blocked Master rebuild reserved storage")
+
+    def forbidden_runner(*_args, **_kwargs):
+        raise AssertionError("blocked Master rebuild entered a provider runner")
+
+    monkeypatch.setattr(
+        release_contract.storage_capacity,
+        "reserve_master_capacity",
+        forbidden_capacity,
+    )
+    monkeypatch.setattr(
+        assessment_release_run, "run_release_for_job", forbidden_runner
+    )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        release_contract.rebuild_lane_master(
+            db,
+            job.id,
+            release.LANE_POST,
+            owner_sub=auth.LOCAL_PRINCIPAL.sub,
+            claim_job_lock=claim_job_lock,
+        )
+
+    db.refresh(job)
+    assert job.question_inventory == before
+
+
+def test_direct_master_runner_refuses_before_profile_or_provider(db, monkeypatch):
+    job, _chapter = _job(db)
+    _mark_non_resumable(db, job)
+
+    def forbidden_profile(*_args, **_kwargs):
+        raise AssertionError("blocked Master runner resolved provider profile")
+
+    monkeypatch.setattr(
+        assessment_release_run.assessment_profile, "resolve", forbidden_profile
+    )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        assessment_release_run.run_release_for_job(
+            db, job.id, owner_sub=auth.LOCAL_PRINCIPAL.sub
+        )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        assessment_release_run.run_pre_release_for_job(
+            db, job.id, owner_sub=auth.LOCAL_PRINCIPAL.sub
+        )
+
+
+def test_non_resumable_publication_paths_refuse_before_mutation(
+    client, db, monkeypatch,
+):
+    job, _chapter = _job(db)
+    _mark_non_resumable(db, job)
+
+    def forbidden_verdict(*_args, **_kwargs):
+        raise AssertionError("blocked Concept publication mutated its verdict")
+
+    monkeypatch.setattr(
+        terminal, "ensure_explicit_terminal_verdict", forbidden_verdict
+    )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        publication.upload_release_to_database(
+            db, job.id, owner_sub=auth.LOCAL_PRINCIPAL.sub, lane="post"
+        )
+
+    master = models.AssessmentRelease(
+        release_uid=f"blocked-master-{job.id}",
+        version=1,
+        owner_sub=auth.LOCAL_PRINCIPAL.sub,
+        job_id=job.id,
+        lane="post",
+        state="ready_for_upload",
+    )
+    db.add(master)
+    db.commit()
+    db.refresh(master)
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        assessment_release_service.upload_master_to_database(
+            db, master, owner_sub=auth.LOCAL_PRINCIPAL.sub
+        )
+    master_response = client.post(
+        f"/build-assessments/releases/{master.id}/upload-to-database"
+    )
+    assert master_response.status_code == 409, master_response.text
+
+
+def test_non_resumable_mutation_routes_answer_409_before_dispatch(
+    client, db, monkeypatch,
+):
+    job, _chapter = _job(db)
+    _mark_non_resumable(db, job)
+
+    def forbidden_force(*_args, **_kwargs):
+        raise AssertionError("blocked release route force-staged the job")
+
+    def forbidden_decision(*_args, **_kwargs):
+        raise AssertionError("blocked decision route recorded an answer")
+
+    monkeypatch.setattr(release, "force_release", forbidden_force)
+
+    def forbidden_locked_decision(*_args, **_kwargs):
+        raise AssertionError("blocked decision service mutated its ledger")
+
+    monkeypatch.setattr(
+        build_concepts,
+        "_record_human_semantic_decision_locked",
+        forbidden_locked_decision,
+    )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        build_concepts.record_human_semantic_decision(
+            db,
+            job.id,
+            "Q24",
+            choice="accept_recommended",
+            owner_sub=auth.LOCAL_PRINCIPAL.sub,
+        )
+    with pytest.raises(generation_recovery.NonResumableRunError):
+        release.backfill_missing_pre_release(db, job)
+
+    monkeypatch.setattr(
+        build_concepts, "record_human_semantic_decision", forbidden_decision
+    )
+    released = client.post(f"/build-concepts/uploads/{job.id}/release")
+    assert released.status_code == 409
+    decision = client.post(
+        f"/build-concepts/uploads/{job.id}/decisions/Q24",
+        json={"choice": "accept_recommended"},
+    )
+    assert decision.status_code == 409
+    assert "Start a new upload and conversion" in decision.json()["detail"]
+    concept_publish = client.post(
+        f"/build-concepts/uploads/{job.id}/upload-release",
+        params={"lane": "post"},
+    )
+    assert concept_publish.status_code == 409, concept_publish.text
+
+    post_master = client.post(
+        f"/build-assessments/releases/from-job/{job.id}"
+    )
+    pre_master = client.post(
+        f"/build-assessments/releases/from-job/{job.id}/pre"
+    )
+    assert post_master.status_code == 409, post_master.text
+    assert pre_master.status_code == 409, pre_master.text
 
 
 def test_failure_before_any_checkpoint_is_diagnostic_not_fake_resumable(db):

@@ -56,6 +56,10 @@ AUTOMATABLE_CHOICES = frozenset({
     "consolidate_types",
     "keep_distinct_types",
 })
+_CANDIDATE_TARGET_CHOICES = frozenset({
+    "accept_recommended",
+    "select_candidate",
+})
 _DEFAULT_EVIDENCE_CANDIDATE_DETAILS = 18
 _DEFAULT_TOPOLOGY_CANDIDATE_DETAILS = 12
 _DEFAULT_PENDING_EVIDENCE_ROWS = 24
@@ -1891,7 +1895,7 @@ def _response_schema(
     }
     all_target_ids = list(dict.fromkeys(
         str(row.get("target_id") or "")
-        for row in [*candidate_rows, *(pending.get("options") or [])]
+        for row in candidate_rows
         if isinstance(row, Mapping)
         and row.get("target_id")
     ))
@@ -1899,6 +1903,14 @@ def _response_schema(
         value for value in all_target_ids
         if value not in excluded_target_ids
     ]
+    if not target_ids:
+        # A candidate-selection action without one untried generic target is
+        # not a transportable pathway. Do not advertise a choice whose only
+        # schema-valid directive would later fail exact membership checks.
+        choices = [
+            choice for choice in choices
+            if choice not in _CANDIDATE_TARGET_CHOICES
+        ]
     concept_ids = list(dict.fromkeys(
         str(row.get("concept_id") or row.get("target_concept_id") or "")
         for row in [*candidate_rows, *(pending.get("options") or [])]
@@ -1915,6 +1927,23 @@ def _response_schema(
         for block_id in row.get("source_block_ids") or []
         if str(block_id)
     ))
+    # A final response with only candidate-selection actions has no valid
+    # targetless shape. Excluding the empty value here prevents the strict
+    # provider contract from emitting ``select_candidate`` without one exact
+    # server-supplied candidate identity. Mixed action sets retain the empty
+    # value because actions such as ``keep_distinct_types`` are deliberately
+    # targetless; the validator below still enforces the choice/target pair.
+    final_requires_candidate_target = bool(
+        final
+        and choices
+        and set(choices).issubset(_CANDIDATE_TARGET_CHOICES)
+        and target_ids
+    )
+    target_id_enum = (
+        target_ids
+        if final_requires_candidate_target
+        else ["", *target_ids]
+    )
     return {
         "name": "aegis_autonomous_semantic_resolution",
         "strict": True,
@@ -1938,7 +1967,7 @@ def _response_schema(
                     "enum": [*choices] if (final and choices) else ["", *choices],
                 },
                 "target_id": {
-                    "type": "string", "enum": ["", *target_ids]
+                    "type": "string", "enum": target_id_enum
                 },
                 "target_concept_id": {
                     "type": "string", "enum": ["", *concept_ids]
@@ -2039,6 +2068,10 @@ def _provider_call(
             "appears in legacy_exact_source_matches, and the response cites one "
             "of that row's canonical evidence refs. The candidate catalog is "
             "complete even when detailed prose is relevance-bounded. "
+            "For accept_recommended or select_candidate, copy one exact "
+            "candidate-catalog target_id into target_id and leave "
+            "target_concept_id empty; target_concept_id names only an "
+            "existing-concept action. "
             "A compound claim may cite multiple exact candidate binding hashes, "
             "but the applied action/target must still be one server-offered safe "
             "continuation. If checkpoint_context.prior_agent_pathways is non-empty, "
@@ -2256,9 +2289,10 @@ def _validate_response(
         if isinstance(row, Mapping) and row.get("target_id")
     }
     candidate_concept_ids = {
-        str(row.get("concept_id") or "")
+        str(row.get("concept_id") or row.get("target_concept_id") or "")
         for row in pending.get("candidates") or []
-        if isinstance(row, Mapping) and row.get("concept_id")
+        if isinstance(row, Mapping)
+        and (row.get("concept_id") or row.get("target_concept_id"))
     }
     candidate_binding_by_target = {
         str(row.get("target_id") or ""): _candidate_binding(row)[
@@ -2311,12 +2345,29 @@ def _validate_response(
                 confidence,
                 refs,
             )
+    if choice in _CANDIDATE_TARGET_CHOICES:
+        # Transitional clients used the concept-specific field for every
+        # candidate selector. Treat it only as an alias for the generic
+        # target identity: never interpret a concept ID as a candidate choice
+        # or rank candidates to manufacture a match. Conflicting identities
+        # are a malformed transport directive and are rejected before either
+        # one can be applied.
+        if target_id and target_concept_id and target_id != target_concept_id:
+            return ResolutionResult(
+                "escalated",
+                "The candidate target fields conflict; target_concept_id may "
+                "only repeat target_id as a transitional alias.",
+                confidence,
+                refs,
+            )
+        if not target_id and target_concept_id:
+            target_id = target_concept_id
     if choice == "accept_recommended":
         expected = str(option.get("target_id") or "")
         if target_id and target_id != expected:
             return ResolutionResult("escalated", "The recommended target identity changed.")
         target_id = expected
-    if choice in {"accept_recommended", "select_candidate"}:
+    if choice in _CANDIDATE_TARGET_CHOICES:
         if not target_id or target_id not in candidate_target_ids:
             return ResolutionResult(
                 "escalated",

@@ -56,6 +56,17 @@ vi.mock("../api/client", () => ({
 }));
 
 vi.mock("../components/DocumentUpload", () => ({
+  hasRunOutputEntries: (manifest?: UploadJob["source_artifacts"]) =>
+    Boolean(
+      manifest?.files?.some((artifact) =>
+        [
+          "pre_release_bulk_import",
+          "pre_release_master",
+          "release_bulk_import",
+          "release_master",
+        ].includes(artifact.kind),
+      ),
+    ),
   default: ({
     conceptKind,
     externalJob,
@@ -282,6 +293,16 @@ function savedSummary(
     generation_running: job.generation_running,
     created_at: job.created_at,
     ...overrides,
+  };
+}
+
+function nonResumableRecovery() {
+  return {
+    error: "UnattendedDecisionUnavailable: rich text dead end",
+    message: "Generation did not complete and this checkpoint is not resumable.",
+    resume_allowed: false,
+    recovery_action: "reconvert_new_upload",
+    recovery: "Do not resume this checkpoint. Start a new upload and conversion.",
   };
 }
 
@@ -539,6 +560,101 @@ test("checkpoint recovery presents usage as one resumed cumulative file total", 
     "Cumulative usage · Resumed · 1250 tokens",
   );
   expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("a non-resumable result renders as an error, never a green success", async () => {
+  apiMock.getUploadJob
+    .mockResolvedValueOnce(savedJob())
+    .mockResolvedValueOnce(savedJob({
+      status: "released",
+      checkpoint_available: false,
+      generation_recovery: nonResumableRecovery(),
+    }));
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "released",
+    row_count: 0,
+    issue_count: 1,
+    run_incomplete: nonResumableRecovery(),
+  });
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  const heading = await screen.findByText(
+    "Generation incomplete — the four-output set was not created",
+  );
+  const card = heading.closest(".card");
+  expect(card?.classList.contains("success-card")).toBe(false);
+  expect(within(card as HTMLElement).getByText("incomplete").classList)
+    .toContain("red");
+  expect(within(card as HTMLElement).getByRole("alert").textContent).toContain(
+    "Start a new upload and conversion",
+  );
+  expect(screen.queryByText(
+    "Concepts written to the Bulk Import workbook (append-only)",
+  )).toBeNull();
+  expect(screen.queryByText("Review and correct the output")).toBeNull();
+  expect(apiMock.listConceptRevisions).not.toHaveBeenCalled();
+});
+
+test("a failed post-run refresh cannot re-enable a non-resumable run", async () => {
+  apiMock.getUploadJob
+    .mockResolvedValueOnce(savedJob())
+    .mockRejectedValueOnce(new Error("temporary job refresh failure"));
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "released",
+    row_count: 0,
+    issue_count: 1,
+    run_incomplete: nonResumableRecovery(),
+  });
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  expect(await screen.findByText(
+    "Generation incomplete — the four-output set was not created",
+  )).toBeDefined();
+  expect(screen.queryByRole("button", { name: /Resume from/ })).toBeNull();
+  expect(screen.queryByRole("button", {
+    name: "Parse & generate concepts",
+  })).toBeNull();
+  expect(screen.queryByText("Review and correct the output")).toBeNull();
+  expect(apiMock.listConceptRevisions).not.toHaveBeenCalled();
+  expect(streamMock).toHaveBeenCalledTimes(1);
+});
+
+test("a persisted non-resumable job offers no resume or generate action", async () => {
+  apiMock.getUploadJob.mockResolvedValue(savedJob({
+    status: "converted",
+    checkpoint_available: false,
+    generation_recovery: nonResumableRecovery(),
+  }));
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+
+  expect(screen.queryByRole("button", { name: /Resume from/ })).toBeNull();
+  expect(screen.queryByRole("button", {
+    name: "Parse & generate concepts",
+  })).toBeNull();
+  expect(streamMock).not.toHaveBeenCalled();
 });
 
 test("refreshes a rejected 98% checkpoint to the retained 91% stage", async () => {

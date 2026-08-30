@@ -2915,8 +2915,41 @@ def test_a_failure_exit_release_is_marked_incomplete_not_done(
     marker = staged.get("run_incomplete")
     assert isinstance(marker, dict)
     assert "provider down mid-run" in marker["error"]
+    assert marker["resume_allowed"] is True
+    assert marker["recovery_action"] == "resume_checkpoint"
     assert "resume" in marker and marker["resume"]
     assert any(
         level == "error" and "did NOT complete" in message
         for level, message in logs
     )
+
+
+def test_q24_incomplete_marker_has_no_resume_promise(monkeypatch):
+    """The streamed terminal marker carries the typed non-resumable route."""
+
+    from app.services import build_concepts
+    from app.services import build_concepts_release_contract as contract
+    from app.services import progress as progress_service
+
+    failure = build_concepts.UnattendedDecisionUnavailable(
+        "rich-text carry-forward is a proven dead end",
+        resume_allowed=False,
+        recovery_action="reconvert_new_upload",
+        recovery_message=(
+            "Do not resume this checkpoint. Start a new upload and conversion."
+        ),
+    )
+    logs: list[str] = []
+    monkeypatch.setattr(
+        progress_service,
+        "log",
+        lambda message, **_kwargs: logs.append(str(message)),
+    )
+
+    staged = contract._mark_run_incomplete({"status": "released"}, failure)
+    marker = staged["run_incomplete"]
+    assert marker["resume_allowed"] is False
+    assert marker["recovery_action"] == "reconvert_new_upload"
+    assert "resume" not in marker
+    assert "Start a new upload and conversion" in marker["recovery"]
+    assert not any("resume from the saved checkpoint" in row for row in logs)

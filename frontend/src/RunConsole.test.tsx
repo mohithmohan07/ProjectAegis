@@ -77,6 +77,9 @@ function Probe() {
         Watch
       </button>
       <output data-testid="line-count">{state.lines.length}</output>
+      <output data-testid="console-lines">
+        {state.lines.map((line) => line.message).join(" | ")}
+      </output>
       <button onClick={() => void run("First", "/first")}>First</button>
       <button onClick={() => void run("Second", "/second")}>Second</button>
       <button
@@ -270,6 +273,67 @@ test("an awaiting-decision result stays paused at its checkpoint", async () => {
   expect(screen.getByTestId("progress").textContent).toBe("0.81");
   expect(screen.getByTestId("progress-label").textContent).toBe(
     "Paused for your decision",
+  );
+});
+
+test("a non-resumable incomplete result names the new-upload recovery", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  await act(async () => {
+    pending[0].resolve({
+      status: "released",
+      run_incomplete: {
+        resume_allowed: false,
+        recovery_action: "reconvert_new_upload",
+        recovery: "Do not resume this checkpoint. Start a new upload and conversion.",
+      },
+    });
+  });
+
+  expect(screen.getByTestId("status").textContent).toBe("error");
+  expect(screen.getByTestId("progress-label").textContent).toBe(
+    "Incomplete — new upload and conversion required",
+  );
+  expect(screen.getByTestId("console-lines").textContent).toContain(
+    "Do not resume this checkpoint. Start a new upload and conversion.",
+  );
+  expect(screen.getByTestId("console-lines").textContent).not.toContain(
+    "resume from the saved checkpoint",
+  );
+});
+
+test("an ordinary incomplete result retains the checkpoint-resume action", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  await act(async () => {
+    pending[0].resolve({
+      status: "released",
+      run_incomplete: {
+        resume_allowed: true,
+        recovery_action: "resume_checkpoint",
+        resume: "Resume from the saved checkpoint to finish.",
+      },
+    });
+  });
+
+  expect(screen.getByTestId("status").textContent).toBe("error");
+  expect(screen.getByTestId("progress-label").textContent).toBe(
+    "Incomplete — resume to finish",
+  );
+  expect(screen.getByTestId("console-lines").textContent).toContain(
+    "Resume from the saved checkpoint to finish.",
   );
 });
 

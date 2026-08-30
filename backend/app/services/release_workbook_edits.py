@@ -42,6 +42,7 @@ from ..bulk_import.layouts import WorkbookLayoutError
 from . import build_concepts_release as bcr
 from . import build_concepts_release_files as release_files
 from . import identity
+from . import generation_recovery
 from . import release_review
 
 
@@ -177,6 +178,11 @@ def apply_workbook_and_publish(
     owner_sub: str = "",
 ) -> dict[str, Any]:
     """One recorded round of workbook edits, then the CMS publication."""
+
+    db.refresh(job)
+    generation_recovery.require_mutation_allowed(
+        job, operation="upload and publish an edited workbook"
+    )
 
     lane = bcr.normalize_lane(lane)
     payload = bcr.release_payload(job, lane=lane)

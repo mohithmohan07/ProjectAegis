@@ -100,6 +100,20 @@ type SavedJobMarker = {
   created_at: string;
 };
 
+function sameJobIdentity(
+  left: UploadJob | null,
+  right: UploadJob,
+): boolean {
+  return Boolean(
+    left
+    && left.id === right.id
+    && left.module === right.module
+    && left.learning_kind === right.learning_kind
+    && left.filename === right.filename
+    && left.created_at === right.created_at,
+  );
+}
+
 function safeStorageGetItem(key: string): string | null {
   try {
     return window.localStorage.getItem(key);
@@ -181,10 +195,16 @@ export default function DocumentUpload({
     null,
   );
   const [error, setError] = useState<string | null>(null);
+  const currentJobRef = useRef<UploadJob | null>(job);
+  currentJobRef.current = job;
   const controlsDisabled = busy || disabled;
   const inputRef = useRef<HTMLInputElement>(null);
   const checkpointInputRef = useRef<HTMLInputElement>(null);
   const savedJobRequestGenerationRef = useRef(0);
+  const activeConversionRef = useRef<{
+    target: UploadJob;
+    requestGeneration: number;
+  } | null>(null);
   const onJobRef = useRef(onJob);
   useEffect(() => {
     onJobRef.current = onJob;
@@ -220,6 +240,7 @@ export default function DocumentUpload({
 
   function emit(j: UploadJob | null) {
     invalidateSavedJobRestore();
+    currentJobRef.current = j;
     setJob(j);
     onJobRef.current(j);
     if (j) {
@@ -273,6 +294,7 @@ export default function DocumentUpload({
           return;
         }
         setSavedJobRestoreError(null);
+        currentJobRef.current = saved;
         setJob(saved);
         onJobRef.current(saved);
       })
@@ -322,6 +344,7 @@ export default function DocumentUpload({
       try {
         const fresh = await api.getUploadJob(module, job.id);
         if (!active) return;
+        currentJobRef.current = fresh;
         setJob(fresh);
         onJobRef.current(fresh);
         safeStorageSetItem(storageKey, JSON.stringify({
@@ -355,8 +378,23 @@ export default function DocumentUpload({
 
   useEffect(() => {
     if (!externalJob) return;
-    savedJobRequestGenerationRef.current += 1;
-    setRestoringSavedJob(false);
+    // ``emit(created)`` tells a controlled parent about the upload before
+    // conversion finishes. The parent's echo of that SAME job is
+    // synchronization, not a replacement that should cancel the active
+    // upload -> convert -> generate continuation. A genuinely different job
+    // still invalidates the stale request.
+    const activeConversion = activeConversionRef.current;
+    const echoesActiveConversion = Boolean(
+      activeConversion
+      && activeConversion.requestGeneration
+        === savedJobRequestGenerationRef.current
+      && sameJobIdentity(activeConversion.target, externalJob),
+    );
+    if (!echoesActiveConversion) {
+      savedJobRequestGenerationRef.current += 1;
+      setRestoringSavedJob(false);
+    }
+    currentJobRef.current = externalJob;
     setJob(externalJob);
     safeStorageSetItem(storageKey, JSON.stringify({
       id: externalJob.id,
@@ -416,6 +454,8 @@ export default function DocumentUpload({
     if (disabled) return;
     invalidateSavedJobRestore();
     const requestGeneration = savedJobRequestGenerationRef.current;
+    const activeConversion = { target, requestGeneration };
+    activeConversionRef.current = activeConversion;
     setBusy(true);
     setError(null);
     const path = module === "assessments"
@@ -467,6 +507,9 @@ export default function DocumentUpload({
         setError(String(e));
       }
     } finally {
+      if (activeConversionRef.current === activeConversion) {
+        activeConversionRef.current = null;
+      }
       setBusy(false);
     }
   }
@@ -622,6 +665,10 @@ export default function DocumentUpload({
 
   const generated = job.status === "generated";
   const released = job.status === "released";
+  const nonResumable = job.generation_recovery?.resume_allowed === false;
+  const recoveryMessage = job.generation_recovery?.recovery
+    || job.generation_recovery?.message
+    || "This checkpoint cannot complete by resuming; start a new upload and conversion.";
   const converted = (
     job.status === "converted"
     || generated
@@ -637,8 +684,10 @@ export default function DocumentUpload({
     <>
       <div className="card">
       <div className="row">
-        <span className={`badge ${converted ? "green" : "accent"}`}>
-          {generated
+        <span className={`badge ${nonResumable ? "red" : converted ? "green" : "accent"}`}>
+          {nonResumable
+            ? "generation incomplete"
+            : generated
             ? "uploaded to database"
             : released
               ? "output released for review"
@@ -649,7 +698,7 @@ export default function DocumentUpload({
         <span className="muted mono">{job.filename}</span>
         {job.source_book && <span className="badge accent">{job.source_book}</span>}
         <div className="spacer" />
-        {!generated && !released && (
+        {!generated && !released && !nonResumable && (
           <label
             className="upload-label"
             style={{ opacity: controlsDisabled ? 0.5 : 1 }}
@@ -672,7 +721,9 @@ export default function DocumentUpload({
               : "Clear this upload from this browser"
           }
         >
-          {job.checkpoint_available ? "Keep for later" : "Start over"}
+          {nonResumable
+            ? "Start new upload"
+            : job.checkpoint_available ? "Keep for later" : "Start over"}
         </button>
       </div>
 
@@ -697,7 +748,9 @@ export default function DocumentUpload({
         }`}>
           <div>
             <strong>
-              {released
+              {nonResumable
+                ? "This saved checkpoint is not resumable"
+                : released
                 ? "Released output is ready"
                 : job.checkpoint_available
                   ? `Saved checkpoint at ${Math.round(
@@ -706,7 +759,9 @@ export default function DocumentUpload({
                   : "Portable converted-source backup"}
             </strong>
             <div className="muted">
-              {released
+              {nonResumable
+                ? recoveryMessage
+                : released
                 ? "The four run outputs download from the Run outputs section below. Database publication is a separate explicit action."
                 : job.checkpoint_available
                   ? `Stage: ${formatCheckpointStage(
@@ -728,7 +783,7 @@ export default function DocumentUpload({
             </div>
           </div>
           <div className="row">
-            {!released && !generated && (
+            {!released && !generated && !nonResumable && (
               <button
                 className="ghost"
                 disabled={controlsDisabled}
@@ -786,7 +841,16 @@ export default function DocumentUpload({
           manifest={job.source_artifacts}
           jobId={job.id}
           jobRunning={Boolean(job.generation_running)}
-          onPublished={(freshJob) => emit(freshJob)}
+          showRunOutputs={module === "concepts"}
+          generationBlocked={nonResumable}
+          onPublished={(freshJob) => {
+            // Child actions may finish after Start new upload or after a
+            // controlled parent switches jobs. Never let an old response
+            // resurrect the run it was started from.
+            if (currentJobRef.current === job && freshJob.id === job.id) {
+              emit(freshJob);
+            }
+          }}
         />
       )}
     </>
@@ -798,12 +862,16 @@ function SourceArtifactsCard({
   manifest,
   jobId,
   jobRunning,
+  showRunOutputs,
+  generationBlocked,
   onPublished,
 }: {
   actionsDisabled: boolean;
   manifest?: UploadJob["source_artifacts"];
   jobId: number;
   jobRunning: boolean;
+  showRunOutputs: boolean;
+  generationBlocked: boolean;
   onPublished: (job: UploadJob) => void;
 }) {
   const [actionBusy, setActionBusy] = useState(false);
@@ -819,13 +887,48 @@ function SourceArtifactsCard({
   >({});
   const [refreshingOutputs, setRefreshingOutputs] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  if (!manifest?.available) return null;
+  const mountedRef = useRef(false);
+  const currentJobIdRef = useRef(jobId);
+  const actionGenerationRef = useRef(0);
+  currentJobIdRef.current = jobId;
+  useEffect(() => {
+    mountedRef.current = true;
+    actionGenerationRef.current += 1;
+    const generation = actionGenerationRef.current;
+    setActionBusy(false);
+    setActionMessage(null);
+    setRebuildingMaster({ pre: false, post: false });
+    setMasterErrors({});
+    setMasterNotices({});
+    setRefreshingOutputs(false);
+    setRefreshError(null);
+    return () => {
+      mountedRef.current = false;
+      if (actionGenerationRef.current === generation) {
+        actionGenerationRef.current += 1;
+      }
+    };
+  }, [jobId]);
+
+  function actionToken(): { jobId: number; generation: number } {
+    return { jobId, generation: actionGenerationRef.current };
+  }
+
+  function actionIsCurrent(
+    token: { jobId: number; generation: number },
+  ): boolean {
+    return Boolean(
+      mountedRef.current
+      && currentJobIdRef.current === token.jobId
+      && actionGenerationRef.current === token.generation,
+    );
+  }
   const anyMasterRebuilding = rebuildingMaster.pre || rebuildingMaster.post;
-  const summary = manifest.summary ?? {};
-  const phase2 = manifest.generation_usage?.mode === "source-critical";
-  const adjudication = manifest.source_adjudication;
+  const summary = manifest?.summary ?? {};
+  const phase2 = manifest?.generation_usage?.mode === "source-critical";
+  const adjudication = manifest?.source_adjudication;
   const adjudicationStatus = adjudication?.status ?? "";
-  const reconstruction = manifest.source_reconstruction;
+  const reconstruction = manifest?.source_reconstruction;
   const reconstructionVerified = reconstruction?.status === "verified"
     && reconstruction?.source_origin === "gpt_pdf_acsd_fallback";
   const reconstructionReviewRequired = reconstruction?.status === "review_required"
@@ -834,13 +937,13 @@ function SourceArtifactsCard({
     adjudicationStatus,
   );
   const pendingAdjudication = phase22 && adjudicationStatus === "pending";
-  const statusClass = manifest.status === "passed"
-    || (phase2 && manifest.phase2_inventory_ready) ? "green" : "accent";
+  const statusClass = manifest?.status === "passed"
+    || (phase2 && manifest?.phase2_inventory_ready) ? "green" : "accent";
   const statusLabel = reconstructionReviewRequired
     ? "source reconstruction review required"
     : pendingAdjudication
       ? "awaiting source adjudication"
-      : manifest.status.replace(/_/g, " ");
+      : (manifest?.status ?? "source evidence unavailable").replace(/_/g, " ");
   const title = reconstructionVerified
     ? "Phase 2.2.1 GPT-reconstructed canonical source"
     : reconstructionReviewRequired
@@ -922,7 +1025,11 @@ function SourceArtifactsCard({
     artifact: ActionableArtifact, file: File,
   ) {
     if (
-      actionsDisabled || actionBusy || anyMasterRebuilding || artifact.disabled
+      generationBlocked
+      || actionsDisabled
+      || actionBusy
+      || anyMasterRebuilding
+      || artifact.disabled
     ) return;
     const lane = artifactLane(artifact);
     const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
@@ -932,11 +1039,14 @@ function SourceArtifactsCard({
         + "now? Your changes are recorded as a review round first.",
       )
     ) return;
+    const token = actionToken();
     setActionBusy(true);
     setActionMessage(null);
     try {
       const summary = await api.uploadEditedWorkbook(jobId, lane, file);
+      if (!actionIsCurrent(token)) return;
       const fresh = await api.getUploadJob("concepts", jobId);
+      if (!actionIsCurrent(token)) return;
       onPublished(fresh);
       const changed = Number(summary["changed_fields"] ?? 0);
       setActionMessage(
@@ -947,16 +1057,18 @@ function SourceArtifactsCard({
         + " and uploaded to the CMS.",
       );
     } catch (e) {
-      setActionMessage(String(e));
+      if (actionIsCurrent(token)) setActionMessage(String(e));
     } finally {
-      setActionBusy(false);
+      if (actionIsCurrent(token)) setActionBusy(false);
     }
   }
 
   // The owner's four outputs (OD4 numbering) get the first-class grid; the
   // publish actions follow them; every evidence artifact — real, but not a
   // deliverable — lives in the disclosure below.
-  const files = manifest.files.map((raw) => raw as ActionableArtifact);
+  const files = (manifest?.files ?? []).map(
+    (raw) => raw as ActionableArtifact,
+  );
   const outputs = files.filter((f) => f.kind in OUTPUT_META);
   const publishActions = files.filter((f) => f.action === "post");
   const evidence = files.filter(
@@ -977,16 +1089,21 @@ function SourceArtifactsCard({
     if (
       actionsDisabled || actionBusy || anyMasterRebuilding || refreshingOutputs
     ) return;
+    const token = actionToken();
     setRefreshingOutputs(true);
     setRefreshError(null);
     try {
-      onPublished(await api.getUploadJob("concepts", jobId));
+      const fresh = await api.getUploadJob("concepts", jobId);
+      if (!actionIsCurrent(token)) return;
+      onPublished(fresh);
     } catch (e) {
-      setRefreshError(
-        `Could not refresh the run outputs: ${readableError(e)}`,
-      );
+      if (actionIsCurrent(token)) {
+        setRefreshError(
+          `Could not refresh the run outputs: ${readableError(e)}`,
+        );
+      }
     } finally {
-      setRefreshingOutputs(false);
+      if (actionIsCurrent(token)) setRefreshingOutputs(false);
     }
   }
 
@@ -995,8 +1112,13 @@ function SourceArtifactsCard({
     // sibling control visible but disabled so a second lane cannot predictably
     // collide with the active rebuild and return 409.
     if (
-      actionsDisabled || actionBusy || jobRunning || anyMasterRebuilding
+      generationBlocked
+      || actionsDisabled
+      || actionBusy
+      || jobRunning
+      || anyMasterRebuilding
     ) return;
+    const token = actionToken();
     const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
     setRebuildingMaster((current) => ({ ...current, [lane]: true }));
     setMasterErrors((current) => ({ ...current, [lane]: undefined }));
@@ -1011,16 +1133,19 @@ function SourceArtifactsCard({
       } catch (error) {
         requestError = error;
       }
+      if (!actionIsCurrent(token)) return;
 
       // Refresh after both success and failure. A response can be lost after
       // the server committed the release, while a failed request may have
       // recorded a more precise durable reason on the job manifest.
       try {
         fresh = await api.getUploadJob("concepts", jobId);
+        if (!actionIsCurrent(token)) return;
         onPublished(fresh);
       } catch (error) {
         refreshError = error;
       }
+      if (!actionIsCurrent(token)) return;
 
       if (fresh && masterIsAvailable(fresh, lane)) {
         setMasterNotices((current) => ({
@@ -1059,13 +1184,15 @@ function SourceArtifactsCard({
           + "not expose a downloadable file. Reload the page before trying again.",
       }));
     } finally {
-      setRebuildingMaster((current) => ({ ...current, [lane]: false }));
+      if (actionIsCurrent(token)) {
+        setRebuildingMaster((current) => ({ ...current, [lane]: false }));
+      }
     }
   }
 
   return (
     <>
-      {(outputs.length > 0 || publishActions.length > 0) && (
+      {showRunOutputs && (
         <div>
           {/* The four deliverables are the page's own third step — a
               first-class section beside "1 · parameters" and "2 · upload",
@@ -1077,8 +1204,8 @@ function SourceArtifactsCard({
           <div className="card">
           <div className="row">
             <span className="muted">
-              The four files this run produced. Download them here; database
-              publication stays a separate, explicit act.
+              The four output slots for this run. Available files download
+              here; database publication stays a separate, explicit act.
             </span>
             <div className="spacer" />
             <button
@@ -1103,12 +1230,20 @@ function SourceArtifactsCard({
               {actionMessage}
             </div>
           )}
+          {outputs.length === 0 && publishActions.length === 0 && (
+            <div className="muted mt-8" role="status">
+              No output entries are available for this run yet. Refresh the
+              server state here; if generation is incomplete, follow the
+              recovery message above before starting another run.
+            </div>
+          )}
           <div className="outputs-grid">
             {outputs.map((artifact) => {
               const meta = OUTPUT_META[artifact.kind];
               const lane = masterLane(artifact.kind);
               const canRebuild = Boolean(
-                lane
+                !generationBlocked
+                && lane
                 && artifact.disabled
                 && sameLaneConceptIsAvailable(lane),
               );
@@ -1196,7 +1331,7 @@ function SourceArtifactsCard({
               );
             })}
           </div>
-          {publishActions.length > 0 && (
+          {!generationBlocked && publishActions.length > 0 && (
             <div className="row">
           {publishActions.map((artifact) => {
             const lane = artifactLane(artifact);
@@ -1246,7 +1381,7 @@ function SourceArtifactsCard({
         </div>
       )}
 
-      <div className="checkpoint-card">
+      {manifest?.available && <div className="checkpoint-card">
         <div>
           <div className="row">
             <strong>{title}</strong>
@@ -1294,7 +1429,7 @@ function SourceArtifactsCard({
           ))}
         </div>
         </details>
-      </div>
+      </div>}
     </>
   );
 }
@@ -1318,6 +1453,15 @@ const OUTPUT_META: Record<
     num: "04", lane: "Post-Learning", name: "Master File", pre: false,
   },
 };
+
+/** True only when the manifest contains at least one OD4 output entry. */
+export function hasRunOutputEntries(
+  manifest?: UploadJob["source_artifacts"],
+): boolean {
+  return Boolean(
+    manifest?.files?.some((artifact) => artifact.kind in OUTPUT_META),
+  );
+}
 
 function formatBytes(value: number): string {
   if (!Number.isFinite(value) || value < 0) return "unknown size";

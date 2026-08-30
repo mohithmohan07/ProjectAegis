@@ -131,7 +131,8 @@ install.
   install order `app/services/__init__.py:121-142`.
 - Block schema: `_block_schema` `canonical_source_phase221_fallback.py:305`;
   kinds `:89-99`; bundle envelope `:2172-2184`
-  (`PAGE_ACSD_SCHEMA_VERSION = "1.1.0"`).
+  (`PAGE_ACSD_SCHEMA_VERSION = "1.2.0"`; ingestion contract
+  `supported-text-atoms-2`).
 - Artifacts on disk (`UPLOAD_DIR/{job_id}/source-shadow/`): `source.raw.mmd`,
   `source.aegis-source.json`, `source.aegis.mmd`, `source.source-report.json`,
   `source.gpt-page-acsd.json` (`:3438-3448`); figure crops content-addressed

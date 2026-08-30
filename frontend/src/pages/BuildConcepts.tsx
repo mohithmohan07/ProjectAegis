@@ -8,11 +8,14 @@ import { useOptionalAuth } from "../Auth";
 import { useAsync } from "../hooks";
 import { useRunConsole } from "../RunConsole";
 import DirectoryPicker from "../components/DirectoryPicker";
-import DocumentUpload from "../components/DocumentUpload";
+import DocumentUpload, {
+  hasRunOutputEntries,
+} from "../components/DocumentUpload";
 import SyllabusUploader from "../components/SyllabusUploader";
 import { ConceptReviewPanel } from "../components/ConceptReviewPanel";
 import ApiUsageSummary from "../components/ApiUsageSummary";
 import type {
+  GenerationRecovery,
   OpenAIUsage,
   PendingSemanticDecision,
   ResumableCheckpoint,
@@ -329,19 +332,54 @@ function PostLearningFlow({
           // fields the result panel reads from the completed job itself.
           recoverResult: async () => {
             const finished = await api.getUploadJob("concepts", runJob.id);
+            const recovery = finished.generation_recovery;
             return {
-              status: "generated",
+              status: finished.status,
               reattached: true,
               job_id: finished.id,
               openai_usage: finished.openai_usage,
               pending_decision: finished.pending_decision,
+              ...(recovery?.resume_allowed === false
+                ? { run_incomplete: recovery }
+                : {}),
             } as Record<string, unknown>;
           },
         },
       );
+      const streamedRecovery = incompleteGenerationRecovery(data);
+      if (streamedRecovery?.resume_allowed === false) {
+        // The streamed terminal result is already authoritative. Preserve its
+        // non-resumable verdict locally before the best-effort job refresh so
+        // a transient GET failure cannot leave the old ``converted`` job and
+        // its Generate action on screen.
+        setJob((current) => {
+          if (!current || current.id !== runJob.id) return current;
+          return {
+            ...current,
+            status: typeof data.status === "string"
+              ? data.status
+              : current.status,
+            checkpoint_available: false,
+            generation_recovery: streamedRecovery,
+          };
+        });
+      }
       let refreshedJob: UploadJob | null = null;
       try {
         refreshedJob = await api.getUploadJob("concepts", runJob.id);
+        if (
+          streamedRecovery?.resume_allowed === false
+          && refreshedJob.generation_recovery?.resume_allowed !== false
+        ) {
+          // Do not let a stale read erase the terminal recovery contract that
+          // arrived in the stream. A later Refresh outputs can replace this
+          // projection once the server read catches up.
+          refreshedJob = {
+            ...refreshedJob,
+            checkpoint_available: false,
+            generation_recovery: streamedRecovery,
+          };
+        }
         setJob(refreshedJob);
       } catch {
         // The result remains usable even if refreshing the completed job fails.
@@ -379,6 +417,11 @@ function PostLearningFlow({
   const parameterPanelOpen = !job
     || (job.status !== "generated" && job.status !== "released");
   const oneShotReady = !job && Boolean(scope);
+  const resultIncomplete = result
+    ? incompleteGenerationRecovery(result)
+    : null;
+  const generationIncomplete = Boolean(resultIncomplete)
+    || job?.generation_recovery?.resume_allowed === false;
 
   return (
     <>
@@ -428,7 +471,10 @@ function PostLearningFlow({
                 {scope ? `Chapter: ${scope.label}` : "Pick a chapter"}
               </span>
               <div className="spacer" />
-              {job && job.status === "converted" && (
+              {job
+                && job.status === "converted"
+                && job.generation_recovery?.resume_allowed !== false
+                && (
                 <button
                   className="primary"
                   disabled={!scope || busy}
@@ -481,6 +527,7 @@ function PostLearningFlow({
         <CarriedSemanticIssue issue={carriedIssue} />
       )}
       {job
+        && !generationIncomplete
         && (result
           || job.status === "generated"
           || job.status === "released")
@@ -493,7 +540,7 @@ function PostLearningFlow({
           result={result}
           filename={job?.filename}
           resumed={resultResumed}
-          outputsVisible={Boolean(job?.source_artifacts?.available)}
+          outputsVisible={hasRunOutputEntries(job?.source_artifacts)}
         />
       )}
     </>
@@ -793,12 +840,26 @@ function ConceptResult({
   const status = typeof result.status === "string" ? result.status : "";
   const rowCount = typeof result.row_count === "number" ? result.row_count : null;
   const issueCount = typeof result.issue_count === "number" ? result.issue_count : null;
+  const incomplete = incompleteGenerationRecovery(result);
   return (
-    <div className="card success-card mt-16">
+    <div className={`card mt-16 ${incomplete ? "" : "success-card"}`}>
       <div className="row">
-        <strong>Concepts written to the Bulk Import workbook (append-only)</strong>
-        {status && <span className="badge green">{status}</span>}
+        <strong>
+          {incomplete
+            ? "Generation incomplete — the four-output set was not created"
+            : "Concepts written to the Bulk Import workbook (append-only)"}
+        </strong>
+        {incomplete
+          ? <span className="badge red">incomplete</span>
+          : status && <span className="badge green">{status}</span>}
       </div>
+      {incomplete && (
+        <div className="error-box mt-12" role="alert">
+          {incomplete.recovery
+            || incomplete.message
+            || "This generation run did not complete."}
+        </div>
+      )}
       {(rowCount !== null || issueCount !== null) && (
         <div className="row mt-8">
           {rowCount !== null && (
@@ -820,18 +881,30 @@ function ConceptResult({
         cumulative={jobId != null || Boolean(filename)}
         resumed={resumed}
       />
-      <div className="muted mt-12">
-        The four run outputs (Concept and Master Files for both lanes)
-        download from the{" "}
-        {outputsVisible
-          ? <a href="#run-outputs">3 · Run outputs section</a>
-          : "Run outputs section (use Refresh outputs if it has not appeared)"}
-        ; review and publishing stay separate, explicit acts.
-      </div>
+      {!incomplete && (
+        <div className="muted mt-12">
+          The four run outputs (Concept and Master Files for both lanes)
+          download from the{" "}
+          {outputsVisible
+            ? <a href="#run-outputs">3 · Run outputs section</a>
+            : "Run outputs section (use Refresh outputs if it has not appeared)"}
+          ; review and publishing stay separate, explicit acts.
+        </div>
+      )}
       <details className="mt-12">
         <summary>Raw result JSON</summary>
         <pre className="mono mt-8">{JSON.stringify(result, null, 2)}</pre>
       </details>
     </div>
   );
+}
+
+function incompleteGenerationRecovery(
+  result: Record<string, unknown>,
+): GenerationRecovery | null {
+  const marker = result.run_incomplete;
+  if (!marker || typeof marker !== "object" || Array.isArray(marker)) {
+    return null;
+  }
+  return marker as GenerationRecovery;
 }

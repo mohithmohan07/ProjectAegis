@@ -135,6 +135,42 @@ test("restores and displays a portable checkpoint with saved diagnostics", async
   });
 });
 
+test("shows a persisted non-resumable recovery instead of checkpoint success", () => {
+  const job: UploadJob = {
+    ...restoredJob(),
+    status: "released",
+    checkpoint_available: false,
+    generation_recovery: {
+      resume_allowed: false,
+      recovery_action: "reconvert_new_upload",
+      recovery: (
+        "Do not resume this checkpoint. Start a new upload and conversion."
+      ),
+    },
+  };
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={job}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  const badge = screen.getByText("generation incomplete");
+  expect(badge.classList).toContain("red");
+  expect(screen.getByText(
+    "This saved checkpoint is not resumable",
+  )).toBeDefined();
+  expect(screen.getByText(/Start a new upload and conversion/)).toBeDefined();
+  expect(screen.queryByText("Released output is ready")).toBeNull();
+  expect(screen.getByRole("button", { name: "Start new upload" })).toBeDefined();
+  expect(screen.queryByRole("button", { name: /Discard checkpoint/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: /Release latest output/ })).toBeNull();
+});
+
 test("continues when browser storage is disabled or full", async () => {
   vi.stubGlobal("localStorage", {
     getItem: () => {
@@ -271,6 +307,91 @@ test("a slow saved-job lookup cannot overwrite a new upload", async () => {
 
   expect(screen.queryByText("stale.mmd")).toBeNull();
   expect(onJob).toHaveBeenLastCalledWith(expect.objectContaining({ id: 99 }));
+});
+
+test("a parent upload echo does not cancel one-shot conversion continuation", async () => {
+  const uploaded: UploadJob = {
+    ...restoredJob(),
+    id: 98,
+    filename: "one-shot.pdf",
+    status: "uploaded",
+    mmd_text: "",
+    checkpoint_available: false,
+    created_at: "2026-08-30T02:00:00Z",
+  };
+  apiMock.postLearningUpload.mockResolvedValue(uploaded);
+  let resolveConversion!: (result: {
+    status: string;
+    mmd_text: string;
+    mmd_chars: number;
+  }) => void;
+  streamNdjsonMock.mockReturnValue(new Promise((resolve) => {
+    resolveConversion = resolve;
+  }));
+  const onJob = vi.fn();
+  const onConverted = vi.fn();
+
+  function ControlledOneShot() {
+    const [externalJob, setExternalJob] = useState<UploadJob | null>(null);
+    return (
+      <RunConsoleProvider>
+        <DocumentUpload
+          module="concepts"
+          conceptKind="post"
+          externalJob={externalJob}
+          onJob={(next) => {
+            onJob(next);
+            setExternalJob(next ? { ...next } : null);
+          }}
+          onConverted={onConverted}
+          uploadLabel="Upload, parse & generate"
+        />
+        <output data-testid="parent-job-status">
+          {externalJob?.status ?? "none"}
+        </output>
+      </RunConsoleProvider>
+    );
+  }
+
+  const { container } = render(<ControlledOneShot />);
+  const uploadInput = container.querySelector(
+    'input[type="file"]:not([accept])',
+  ) as HTMLInputElement;
+  fireEvent.change(uploadInput, {
+    target: {
+      files: [new File(["pdf"], "one-shot.pdf", {
+        type: "application/pdf",
+      })],
+    },
+  });
+  fireEvent.click(screen.getByRole("button", {
+    name: "Upload, parse & generate",
+  }));
+
+  await waitFor(() => {
+    expect(screen.getByTestId("parent-job-status").textContent).toBe("uploaded");
+    expect(streamNdjsonMock).toHaveBeenCalledTimes(1);
+  });
+  await act(async () => {
+    resolveConversion({
+      status: "converted",
+      mmd_text: "## One shot",
+      mmd_chars: 11,
+    });
+  });
+
+  await waitFor(() => {
+    expect(onConverted).toHaveBeenCalledTimes(1);
+    expect(onConverted).toHaveBeenCalledWith(expect.objectContaining({
+      id: 98,
+      status: "converted",
+      mmd_text: "## One shot",
+    }));
+    expect(screen.getByTestId("parent-job-status").textContent)
+      .toBe("converted");
+  });
+  expect(apiMock.postLearningUpload).toHaveBeenCalledTimes(1);
+  expect(streamNdjsonMock).toHaveBeenCalledTimes(1);
 });
 
 test("shows configured automatic Drive backup status from auth config", async () => {
