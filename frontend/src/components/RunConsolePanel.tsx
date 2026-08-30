@@ -130,6 +130,11 @@ export default function RunConsolePanel() {
       : state.status === "paused" ? "progress-paused"
         : state.status === "done" ? "progress-done"
           : state.active ? "progress-active" : "";
+  const usageState = state.active
+    ? "live — still accumulating"
+    : state.status === "done"
+      ? "final for this run"
+      : "recorded so far";
 
   const onScroll = () => {
     const el = bodyRef.current;
@@ -194,7 +199,7 @@ export default function RunConsolePanel() {
       {state.usage && (
         <details className="console-usage-fold" open={!SMALL_SCREEN}>
           <summary>
-            Model usage
+            Model usage ({usageState})
             {" · "}
             {formatTokenCount(state.usage.total_tokens)} tokens
             {state.usage.estimated_cost_usd != null && (

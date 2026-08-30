@@ -604,6 +604,56 @@ test("a non-resumable result renders as an error, never a green success", async 
   expect(apiMock.listConceptRevisions).not.toHaveBeenCalled();
 });
 
+test("a terminal run with one missing Master is not presented as four-file success", async () => {
+  streamMock.mockResolvedValue({
+    job_id: 42,
+    status: "released",
+    row_count: 120,
+    issue_count: 1,
+    all_four_outputs_ready: false,
+    master_outputs: {
+      pre: { ready: true },
+      post: { ready: false },
+    },
+    output_completion: {
+      ready_count: 3,
+      total_count: 4,
+      all_ready: false,
+      missing: [{
+        number: "04",
+        lane: "post",
+        label: "Post-Learning Master File",
+      }],
+    },
+  });
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+  fireEvent.click(await screen.findByRole("button", {
+    name: "Select Electricity target",
+  }));
+  fireEvent.click(screen.getByRole("button", {
+    name: "Resume from 91% checkpoint",
+  }));
+
+  const heading = await screen.findByText(
+    "Output set incomplete — 3/4 files ready",
+  );
+  const card = heading.closest(".card");
+  expect(card?.classList.contains("success-card")).toBe(false);
+  expect(within(card as HTMLElement).getByText("3/4 ready").classList)
+    .toContain("yellow");
+  expect(within(card as HTMLElement).getByRole("alert").textContent).toContain(
+    "Post-Learning Master File did not finish",
+  );
+  expect(within(card as HTMLElement).getByRole("alert").textContent).toContain(
+    "Do not rerun Concept generation",
+  );
+  expect(screen.queryByText(
+    "Concepts written to the Bulk Import workbook (append-only)",
+  )).toBeNull();
+});
+
 test("a failed post-run refresh cannot re-enable a non-resumable run", async () => {
   apiMock.getUploadJob
     .mockResolvedValueOnce(savedJob())

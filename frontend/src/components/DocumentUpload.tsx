@@ -336,7 +336,18 @@ export default function DocumentUpload({
   }, [module, savedJobRestoreAttempt, storageKey]);
 
   useEffect(() => {
-    if (module !== "concepts" || !job?.generation_running) return;
+    // The parent marks this intake disabled for the whole streamed Concept
+    // run. That signal starts polling immediately, including the short race
+    // before the first GET can observe the process-local generation lock.
+    // Previously polling required the already-stale local job to say
+    // ``generation_running`` first, so files committed by either concurrent
+    // Master lane appeared only after one or more manual page reloads.
+    const parentRunActive = disabled;
+    if (
+      module !== "concepts"
+      || !job
+      || (!job.generation_running && !parentRunActive)
+    ) return;
     let active = true;
     let timer: number | undefined;
 
@@ -354,7 +365,7 @@ export default function DocumentUpload({
           filename: fresh.filename,
           created_at: fresh.created_at,
         }));
-        if (fresh.generation_running) {
+        if (fresh.generation_running || parentRunActive) {
           timer = window.setTimeout(poll, 3000);
         }
       } catch (pollError) {
@@ -374,7 +385,7 @@ export default function DocumentUpload({
       active = false;
       if (timer !== undefined) window.clearTimeout(timer);
     };
-  }, [job?.generation_running, job?.id, module, storageKey]);
+  }, [disabled, job?.generation_running, job?.id, module, storageKey]);
 
   useEffect(() => {
     if (!externalJob) return;
