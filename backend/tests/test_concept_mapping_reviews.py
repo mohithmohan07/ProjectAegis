@@ -5266,6 +5266,42 @@ def test_inventory_coverage_survives_cosmetic_cleanup_punctuation():
     }
 
 
+def test_inventory_repair_replay_preserves_sentence_final_see_exactly():
+    prompt = (
+        "Now we will see. Write the answers by looking at the calendar "
+        "provided. On what date will both doctors be available?"
+    )
+    inventory = {"items": [{
+        "qid": "QINV-0013",
+        "source_kind": "checkpoint_question",
+        "raw_task": prompt,
+        "topic_hint": "LCM",
+    }]}
+    rows = [{
+        "topic": "LCM",
+        "parent_concept": "Choosing the operation",
+        "concept_title": "Choosing GCD or LCM from problem conditions",
+        "concept_details": (
+            "Description: Choose GCD or LCM from the stated condition. // "
+            "Achieving Mastery: I can choose the correct operation."
+        ),
+        "keywords": "",
+    }]
+
+    first = g._enforce_rendered_inventory_coverage(rows, inventory)
+    deposited = [concept_cleanup.clean_concept_record(dict(first[0]))]
+    replayed = g._enforce_rendered_inventory_coverage(
+        [dict(deposited[0])], inventory)
+
+    assert replayed == deposited
+    assert replayed[0]["concept_details"].count(prompt) == 1
+    assert g._rendered_inventory_coverage_defects(replayed, inventory) == {
+        "missing": [],
+        "duplicate": [],
+    }
+    assert g._unexpected_rendered_type_examples(replayed, inventory) == []
+
+
 def test_repair_rendered_inventory_coverage_removes_duplicates_and_fills_gaps():
     first = "Explain how a shared identity was created by revolutionaries."
     second = "Interpret the symbols used in a national allegory."
