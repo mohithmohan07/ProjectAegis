@@ -1719,7 +1719,10 @@ def rich_text_issues(
         ):
             issues.append("raw_math_delimiter")
 
-    masked = _KATEX_TAG_RE.sub("", value)
+    # Keep a non-math boundary where a valid KaTeX span was removed. Without
+    # it, an equals sign immediately before the span can join ordinary text on
+    # the next line and fabricate a cross-block raw equation.
+    masked = _KATEX_TAG_RE.sub("\ue000", value)
     if re.search(r"!\[", masked):
         issues.append("markdown_image")
     math_masked = _replace_markdown_code(
