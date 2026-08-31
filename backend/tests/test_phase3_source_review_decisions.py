@@ -354,6 +354,142 @@ def test_legacy_metadata_source_review_migrates_without_model_retry(
     )
 
 
+def test_cross_block_math_pause_resumes_after_canonical_reload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source = (
+        "# Review Chapter\n\n"
+        "## Verified Topic\n\n"
+        "Common prime factors of 24 and 36 = "
+        "[Katex] 2, 2, 3 [/Katex]\n\n"
+        "G.C.D. of 24 and [Katex] 36 = Product [/Katex] "
+        "of their common factors.\n"
+    )
+    metadata = {
+        "board": "CBSE",
+        "grade": "6",
+        "subject": "Mathematics",
+        "chapter_title": "GCD and LCM",
+        "learning_kind": "Post",
+    }
+    persisted = phase2.compile_phase2_source(
+        source,
+        source_filename="gcd-and-lcm.pdf",
+        consumer_module="build_concepts",
+    ).canonical
+    marker = persisted.setdefault("source_adjudication", {
+        "version": phase22.ADJUDICATION_VERSION,
+        "status": "not_required",
+        "raw_mmd_changed": False,
+    })
+    marker.pop("semantic_source_sha256", None)
+    in_memory = copy.deepcopy(persisted)
+    in_memory["source_adjudication"]["semantic_source_sha256"] = str(
+        in_memory["document"]["source_sha256"]
+    )
+
+    def classify(payload: dict) -> dict:
+        return {
+            "sections": [{
+                "section_id": row["section_id"],
+                "role": row["baseline_role"],
+                "parent_section_id": "",
+                "confidence": 0.999,
+                "evidence": ["verified test hierarchy"],
+            } for row in payload["sections"]]
+        }
+
+    graph, _report = phase3.compile_semantic_graph(
+        in_memory,
+        source_text=source,
+        metadata=metadata,
+        hierarchy_provider=classify,
+        critic_provider=lambda _payload: {
+            "verdict": "verified",
+            "confidence": 0.999,
+            "repairs": [],
+            "issues": [],
+        },
+    )
+    semantic = phase3.render_semantic_source(graph, in_memory)
+    assert phase3.kr.rich_text_issues(semantic) == []
+    assert graph["source_contract_hash"] != phase3.source_contract_hash(persisted)
+    assert phase3._source_contract_hash_matches(
+        graph["source_contract_hash"], persisted
+    )
+
+    context_hash = "a" * 64
+    graph["issues"] = [
+        row
+        for row in graph.get("issues") or []
+        if row.get("severity") != "error"
+    ] + [{
+        "severity": "error",
+        "code": "semantic_source_rich_text",
+        "block_ids": [],
+        "message": (
+            "Phase 3 semantic source has non-canonical rich text: "
+            "raw_math_expression"
+        ),
+    }]
+    graph["status"] = "failed"
+    graph[phase3._SOURCE_REVIEW_KEY] = {
+        "version": phase3._SOURCE_REVIEW_VERSION,
+        "decision_id": f"phase3-source-{context_hash[:24]}",
+        "context_hash": context_hash,
+        "item": {"block_id": ""},
+    }
+
+    monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
+    monkeypatch.setattr(
+        phase3,
+        "_classify_hierarchy_via_openai",
+        lambda *_args, **_kwargs: pytest.fail(
+            "checkpoint migration must not repeat hierarchy calls"
+        ),
+    )
+    monkeypatch.setattr(
+        phase3,
+        "_critic_hierarchy_via_openai",
+        lambda *_args, **_kwargs: pytest.fail(
+            "checkpoint migration must not repeat critic calls"
+        ),
+    )
+    monkeypatch.setattr(
+        phase3,
+        "_diagnose_source_review_via_openai",
+        lambda *_args, **_kwargs: pytest.fail(
+            "obsolete blockless review must not repeat diagnosis calls"
+        ),
+    )
+
+    resumed = phase3.prepare_generation_graph(
+        canonical=persisted,
+        source_text=source,
+        metadata=metadata,
+        source_path=None,
+        artifact_dir=tmp_path,
+        verify_semantics=True,
+        resume_review_graph=copy.deepcopy(graph),
+    )
+
+    assert resumed["status"] == "ready"
+    assert phase3._SOURCE_REVIEW_KEY not in resumed
+    assert resumed[phase3._CROSS_BLOCK_MATH_MIGRATION_KEY][
+        "obsolete_decision_id"
+    ] == f"phase3-source-{context_hash[:24]}"
+    assert any(
+        row.get("code") == "cross_block_math_validation_migrated"
+        for row in resumed.get("issues") or []
+    )
+    assert phase3.validate_graph(
+        resumed,
+        canonical=persisted,
+        semantic_source=phase3.render_semantic_source(resumed, persisted),
+    ) == []
+
+
 def test_saved_metadata_only_pause_is_retired_before_generation(
     db,
     first_chapter,

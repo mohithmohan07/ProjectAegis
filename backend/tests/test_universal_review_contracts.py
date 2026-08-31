@@ -473,6 +473,17 @@ def test_plain_ascii_equations_require_katex(expression):
         f"Description: Apply [Katex] {expression} [/Katex] to solve the problem.")
 
 
+def test_raw_equation_detection_never_joins_separate_source_lines():
+    rendered = (
+        "Common prime factors of 24 and 36 = "
+        "[Katex] 2, 2, 3 [/Katex]\n"
+        "G.C.D. of 24 and [Katex] 36 = Product [/Katex] of the factors"
+    )
+
+    assert "raw_math_expression" not in kr.rich_text_issues(rendered)
+    assert "raw_math_expression" in kr.rich_text_issues("Solve x =\n5.")
+
+
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [

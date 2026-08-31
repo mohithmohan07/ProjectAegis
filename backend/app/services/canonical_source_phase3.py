@@ -94,6 +94,8 @@ _ADJUDICATED_HEADING_MIGRATION_KEY = (
     "adjudicated_heading_validation_migration"
 )
 _ADJUDICATED_HEADING_MIGRATION_VERSION = 1
+_CROSS_BLOCK_MATH_MIGRATION_KEY = "cross_block_math_validation_migration"
+_CROSS_BLOCK_MATH_MIGRATION_VERSION = 1
 _NUMBERED_TOPIC_PATCH_VERSION = "phase3-canonical-topic-patch-1"
 
 _SPACE_RE = re.compile(r"\s+")
@@ -458,6 +460,55 @@ def source_contract_hash(canonical: dict[str, Any]) -> str:
         "source_adjudication": canonical.get("source_adjudication") or {},
     }
     return _sha256_json(payload)
+
+
+def _source_contract_hash_matches(
+    stored_hash: object,
+    canonical: dict[str, Any],
+) -> bool:
+    """Accept only the proven transient no-overlay adjudication-seal pair.
+
+    Phase 2.2 historically added ``semantic_source_sha256`` to an in-memory
+    no-overlay adjudication marker without persisting it.  The semantic source
+    in that one state is byte-for-byte the canonical document, so the missing
+    and derived seals describe the same source.  Preserve the established
+    contract hash for every new graph while allowing a saved review graph to
+    survive that exact reload boundary; every other source-contract change
+    remains incompatible.
+    """
+
+    supplied = str(stored_hash or "")
+    current = source_contract_hash(canonical)
+    if supplied == current:
+        return True
+    marker = canonical.get("source_adjudication")
+    source_sha256 = str(
+        (canonical.get("document") or {}).get("source_sha256") or ""
+    )
+    if (
+        not isinstance(marker, dict)
+        or not marker
+        or canonical.get("source_overlays")
+        or marker.get("raw_mmd_changed")
+        or not re.fullmatch(r"[0-9a-f]{64}", source_sha256)
+        or (
+            marker.get("semantic_source_sha256")
+            and str(marker.get("semantic_source_sha256")) != source_sha256
+        )
+    ):
+        return False
+    without_seal = copy.deepcopy(canonical)
+    without_seal["source_adjudication"].pop(
+        "semantic_source_sha256", None
+    )
+    with_seal = copy.deepcopy(without_seal)
+    with_seal["source_adjudication"][
+        "semantic_source_sha256"
+    ] = source_sha256
+    return supplied in {
+        source_contract_hash(without_seal),
+        source_contract_hash(with_seal),
+    }
 
 
 def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
@@ -4936,7 +4987,9 @@ def validate_graph(
             "severity": "error", "code": "task_order_drift",
             "message": "Semantic graph QID order differs from the ACSD task ledger.",
         })
-    if graph.get("source_contract_hash") != source_contract_hash(canonical):
+    if not _source_contract_hash_matches(
+        graph.get("source_contract_hash"), canonical
+    ):
         errors.append({
             "severity": "error", "code": "stale_source_contract_hash",
             "message": "Semantic graph was compiled from a stale ACSD contract.",
@@ -6047,7 +6100,9 @@ def load_graph(directory: Path, canonical: dict[str, Any]) -> dict[str, Any] | N
         or graph.get("phase") != PHASE
     ):
         return None
-    if graph.get("source_contract_hash") != source_contract_hash(canonical):
+    if not _source_contract_hash_matches(
+        graph.get("source_contract_hash"), canonical
+    ):
         return None
     return graph
 
@@ -6256,6 +6311,121 @@ def _migrate_adjudicated_heading_validation_false_positive(
     return graph
 
 
+def _migrate_cross_block_math_validation_false_positive(
+    value: Any,
+    *,
+    canonical: dict[str, Any],
+    semantic_source: str,
+) -> dict[str, Any] | None:
+    """Retire a blockless raw-math pause caused only by line joining.
+
+    The former raw-equation scanner allowed ``\\s`` around ``=``, so after a
+    valid KaTeX span was masked it could join a dangling equals sign at the end
+    of one source block to an ordinary word at the start of the next block.
+    Such a failure had no block identity and therefore no source-supported
+    candidate a reviewer could actually apply.  Migrate only when the saved
+    failure is exactly that blockless shape, every source block and the whole
+    semantic rendering pass the current rich-text contract, and the complete
+    graph passes validation without changing any source-owned content.
+    """
+
+    if not isinstance(value, dict) or (
+        value.get("status") not in {"failed", "review_required"}
+        or value.get("classification_mode")
+        != "api_classified_and_verified"
+        or value.get("semantic_source_sha256")
+        != _sha256_text(semantic_source)
+    ):
+        return None
+    review = value.get(_SOURCE_REVIEW_KEY)
+    if (
+        not isinstance(review, dict)
+        or review.get("version") != _SOURCE_REVIEW_VERSION
+        or not str(review.get("decision_id") or "").startswith(
+            "phase3-source-"
+        )
+        or not re.fullmatch(
+            r"[0-9a-f]{64}", str(review.get("context_hash") or "")
+        )
+        or str((review.get("item") or {}).get("block_id") or "")
+    ):
+        return None
+    error_issues = [
+        row
+        for row in value.get("issues") or []
+        if isinstance(row, dict) and row.get("severity") == "error"
+    ]
+    if not error_issues or any(
+        str(row.get("code") or "") != "semantic_source_rich_text"
+        or any(str(block_id) for block_id in row.get("block_ids") or [])
+        or "raw_math_expression" not in str(row.get("message") or "")
+        for row in error_issues
+    ):
+        return None
+    if kr.rich_text_issues(semantic_source):
+        return None
+    graph_blocks = {
+        str(row.get("block_id") or ""): row
+        for row in value.get("blocks") or []
+        if isinstance(row, dict)
+    }
+    if any(
+        kr.rich_text_issues(_clean_public_text(_graph_block_text(
+            graph_blocks.get(str(block.get("block_id") or "")),
+            block,
+        )))
+        for block in canonical.get("blocks") or []
+        if isinstance(block, dict)
+    ):
+        return None
+
+    graph = copy.deepcopy(value)
+    graph.pop(_SOURCE_REVIEW_KEY, None)
+    retained = [
+        copy.deepcopy(issue)
+        for issue in graph.get("issues") or []
+        if isinstance(issue, dict) and issue.get("severity") != "error"
+    ]
+    graph["issues"] = retained
+    graph["status"] = "ready"
+    if validate_graph(
+        graph,
+        canonical=canonical,
+        semantic_source=semantic_source,
+    ):
+        return None
+
+    migration_material = {
+        "version": _CROSS_BLOCK_MATH_MIGRATION_VERSION,
+        "source_contract_hash": str(graph.get("source_contract_hash") or ""),
+        "semantic_context_hash": str(
+            graph.get("semantic_context_hash") or ""
+        ),
+        "semantic_source_sha256": _sha256_text(semantic_source),
+        "obsolete_decision_id": str(review.get("decision_id") or ""),
+        "obsolete_context_hash": str(review.get("context_hash") or ""),
+    }
+    migration_hash = _sha256_json(migration_material)
+    graph[_CROSS_BLOCK_MATH_MIGRATION_KEY] = {
+        **migration_material,
+        "migration_sha256": migration_hash,
+    }
+    graph["issues"] = [
+        *retained,
+        {
+            "severity": "warning",
+            "code": "cross_block_math_validation_migrated",
+            "message": (
+                "Retired a blockless raw-math review created by the former "
+                "cross-line equation scanner; the canonical source and "
+                "semantic rendering were unchanged."
+            ),
+            "migration_sha256": migration_hash,
+        },
+    ]
+    return graph
+
+
 def machine_metadata_migration_seal_valid(
     value: Any,
     *,
@@ -6361,7 +6531,9 @@ def _compatible_source_review_graph(
         or graph.get("phase") != PHASE
         or graph.get("semantic_confidence_policy")
         != confidence_policy.cache_identity()
-        or graph.get("source_contract_hash") != source_contract_hash(canonical)
+        or not _source_contract_hash_matches(
+            graph.get("source_contract_hash"), canonical
+        )
         or graph.get("semantic_context_hash") != semantic_context_hash(metadata)
         or graph.get("classification_mode")
         != "api_classified_and_verified"
@@ -6385,6 +6557,16 @@ def _compatible_source_review_graph(
         if migrated is None:
             return None
         graph, semantic_source = migrated
+    if graph.get("status") != "ready":
+        migrated_cross_block_math = (
+            _migrate_cross_block_math_validation_false_positive(
+                graph,
+                canonical=canonical,
+                semantic_source=semantic_source,
+            )
+        )
+        if migrated_cross_block_math is not None:
+            graph = migrated_cross_block_math
     if graph.get("status") != "ready":
         migrated_heading = (
             _migrate_adjudicated_heading_validation_false_positive(

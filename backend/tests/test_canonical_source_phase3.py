@@ -1315,6 +1315,34 @@ def test_source_contract_hash_changes_when_verified_overlay_changes():
     assert phase3.source_contract_hash(changed) != phase3.source_contract_hash(canonical)
 
 
+def test_source_contract_hash_compatibility_survives_no_overlay_reload():
+    _source, canonical, _graph, _report, _semantic = _compile_fixture(
+        "RNE.mmd", subject="History",
+    )
+    persisted = copy.deepcopy(canonical)
+    marker = persisted.setdefault("source_adjudication", {
+        "version": phase3.phase22.ADJUDICATION_VERSION,
+        "status": "not_required",
+        "raw_mmd_changed": False,
+    })
+    marker.pop("semantic_source_sha256", None)
+    assert not persisted.get("source_overlays")
+
+    in_memory = copy.deepcopy(persisted)
+    in_memory["source_adjudication"]["semantic_source_sha256"] = str(
+        in_memory["document"]["source_sha256"]
+    )
+
+    persisted_hash = phase3.source_contract_hash(persisted)
+    in_memory_hash = phase3.source_contract_hash(in_memory)
+
+    # Keep the established hash identity for newly compiled graphs, while
+    # recognizing only this historic transient-seal pair across a reload.
+    assert persisted_hash != in_memory_hash
+    assert phase3._source_contract_hash_matches(in_memory_hash, persisted)
+    assert phase3._source_contract_hash_matches(persisted_hash, in_memory)
+
+
 def test_qid_derived_type_scope_ignores_stale_visible_topic_hint():
     _source, _canonical, graph, _report, _semantic = _compile_fixture(
         "RNE.mmd", subject="History",
