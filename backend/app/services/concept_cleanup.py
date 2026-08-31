@@ -109,9 +109,13 @@ _REF_CORE_NO_FIG = (
 )
 # Parenthetical reference, e.g. "(Example 19)", "(Examples Type III)", "(see Fig 2)".
 _PAREN_REF_RE = re.compile(
+    r"(?:(?:[,;]\s*|\b(?:and|or)\s+)?"
+    r"\b(?:see|refer(?:\s+to)?)\s+)?"
     r"\(\s*(?:see\s+)?(?:" + _REF_CORE + r")\s*\)", re.IGNORECASE,
 )
 _PAREN_REF_NO_FIG_RE = re.compile(
+    r"(?:(?:[,;]\s*|\b(?:and|or)\s+)?"
+    r"\b(?:see|refer(?:\s+to)?)\s+)?"
     r"\(\s*(?:see\s+)?(?:" + _REF_CORE_NO_FIG + r")\s*\)", re.IGNORECASE,
 )
 # Bare inline reference, optionally led by a connector ("and"/"or"/",") and/or a
@@ -338,7 +342,13 @@ def _tidy(text: str) -> str:
     text = re.sub(r"([(])\s+", r"\1", text)         # space after "("
     text = re.sub(r"\s+\)", ")", text)              # space before ")"
     text = re.sub(r"(?:\s*,){2,}", ",", text)       # doubled commas
-    text = re.sub(r"\bsee\s*([.;,])", r"\1", text, flags=re.IGNORECASE)  # orphan "see"
+    # Do not erase a bare ``see`` here.  The reference removers above consume
+    # their own cue word (``see Figure 2`` / ``see Example 3``) together with
+    # the proved source pointer.  Treating every sentence-final ``see`` as an
+    # orphan changes legitimate source wording such as ``Now we will see.``.
+    # Rendered-inventory repair then restores that exact wording after cleanup,
+    # so the deposit replay can append the same Example forever instead of
+    # reaching its required fixpoint.
     text = re.sub(r"\b(?:or|and)\s*([.;])", r"\1", text, flags=re.IGNORECASE)
     # Neutralization can stack ("as shown in in the chapter", "as in in the chapter").
     text = re.sub(

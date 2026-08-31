@@ -130,6 +130,15 @@ def test_parenthetical_example_reference_removed_content_kept():
     assert out.endswith("not square.")
 
 
+def test_parenthetical_reference_consumes_only_its_attached_cue_word():
+    assert strip_dangling_references(
+        "Compare the results; see (Example 19)."
+    ) == "Compare the results."
+    assert strip_dangling_references(
+        "Now we will see. Compare the results."
+    ) == "Now we will see. Compare the results."
+
+
 def test_examples_type_roman_reference_removed():
     text = (
         "worked example: show four points form a parallelogram by equating "
@@ -171,6 +180,24 @@ def test_page14_and_p14_are_neutralized():
 def test_worded_example_without_number_is_not_stripped():
     text = "Description: a worked example illustrates the parallelogram property."
     assert strip_dangling_references(text) == text
+
+
+def test_sentence_final_see_is_source_content_not_a_dangling_reference():
+    text = "Now we will see. Write the answers by looking at the calendar."
+
+    assert strip_dangling_references(text) == text
+    cleaned = clean_concept_record({
+        "concept_title": "Choosing GCD or LCM",
+        "concept_details": (
+            "Description: Choose the operation from the problem condition. // "
+            "Types: Type 01: Calendar recurrence\n"
+            "Case 01: Earliest common date\n"
+            f"Example 01: {text}"
+        ),
+    })
+
+    assert text in cleaned["concept_details"]
+    assert clean_concept_record(dict(cleaned)) == cleaned
 
 
 # ------------------------ MMD references (Input 02b) -------------------------- #
