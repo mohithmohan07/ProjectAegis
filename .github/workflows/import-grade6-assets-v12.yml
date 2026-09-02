@@ -1,0 +1,50 @@
+name: Import Grade 6 source assets v1.2
+
+on:
+  push:
+    branches:
+      - ops/grade6-assets-v12-20260902
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grade6-assets-v12-import
+  cancel-in-progress: false
+
+jobs:
+  import-assets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+      - name: Download and verify import archive
+        env:
+          AEGIS_ASSET_IMPORT_URL: ${{ secrets.AEGIS_ASSET_IMPORT_URL }}
+        run: |
+          set -euo pipefail
+          curl --fail --location --retry 3 \
+            --output /tmp/aegis-grade6-v1.2.tar.gz \
+            "$AEGIS_ASSET_IMPORT_URL"
+          printf '%s  %s\n' \
+            '74bb6d0f9ad0edbaebd4f85f96df14463687de6a7eecc0fb845eba0a14857933' \
+            '/tmp/aegis-grade6-v1.2.tar.gz' | sha256sum --check -
+      - name: Transfer archive to the volume-bearing machine
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl ssh sftp put \
+            /tmp/aegis-grade6-v1.2.tar.gz \
+            /tmp/aegis-grade6-v1.2.tar.gz \
+            --app projectaegis \
+            --machine 8d4066aed23998
+      - name: Validate and pin assets
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl ssh console \
+            --app projectaegis \
+            --machine 8d4066aed23998 \
+            --command "sh -lc 'mkdir -p /tmp/aegis-grade6-v1.2 && tar -xzf /tmp/aegis-grade6-v1.2.tar.gz -C /tmp/aegis-grade6-v1.2 && cd /app && PYTHONPATH=/app python /tmp/aegis-grade6-v1.2/fly_asset_import/load_assets_on_fly.py --bundle /tmp/aegis-grade6-v1.2/fly_asset_import && PYTHONPATH=/app python /tmp/aegis-grade6-v1.2/fly_asset_import/load_assets_on_fly.py --bundle /tmp/aegis-grade6-v1.2/fly_asset_import --apply'"
