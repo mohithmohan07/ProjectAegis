@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "generated_for": "Project Aegis Grade 6 six-chapter v1.4 live-asset delta",
+  "source_authority": "release_snapshot_v5/normalized_check deterministic asset projection",
+  "source_asset_manifest": {
+    "filename": "Asset_Manifest_v1.4.json",
+    "sha256": "f5c08bfd69720021d9317c936a3fbc6e788752e6e11def18bee45d4f00ea8f8d",
+    "asset_count": 29,
+    "release_used_asset_count": 27,
+    "unused_asset_count": 2,
+    "public_content_occurrences": 69,
+    "internal_source_evidence_occurrences": 3,
+    "all_normalized_occurrences": 72,
+    "pending_live_asset_ids": [
+      "FR-ASSET-001",
+      "WD-PRE-AST-LIBRARY-ACTION"
+    ]
+  },
+  "target": {
+    "app": "projectaegis",
+    "job_id": 0,
+    "public_base_url": "https://projectaegis.fly.dev"
+  },
+  "asset_count": 2,
+  "retention_rule": "Add these hashes only. Never delete superseded hashes because published v1.2 workbooks still reference them.",
+  "assets": [
+    {
+      "asset_id": "FR-ASSET-001",
+      "reason": "Corrected full fraction-cycle spinner required by the random-spin activity; replaces the stale fixed-arrow crop only in v1.4 references.",
+      "source_sha256": "30815d436b542ec0d8269c77614fa609ba7f109990243e2d4821115ab987dfa5",
+      "jpeg_filename": "d8fc15e13e1601d15045489b92b6661ddba41265d16f725318f7ee164b31526d.jpg",
+      "jpeg_sha256": "d8fc15e13e1601d15045489b92b6661ddba41265d16f725318f7ee164b31526d",
+      "jpeg_size_bytes": 53567,
+      "width": 273,
+      "height": 283,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/d8fc15e13e1601d15045489b92b6661ddba41265d16f725318f7ee164b31526d.jpg"
+    },
+    {
+      "asset_id": "WD-PRE-AST-LIBRARY-ACTION",
+      "reason": "Fresh prerequisite-only library action illustration required by the Water Drop Pre assessment.",
+      "source_sha256": "97fd7cc6d4ffc9ab92e4578bef76252a6b3a3c4155bbacac16a38b2c670067fb",
+      "jpeg_filename": "385d4a1b3cfdb770a4a8b52fb47d063d5197c7b98d7e90b05a0f6fa19bb9a16d.jpg",
+      "jpeg_sha256": "385d4a1b3cfdb770a4a8b52fb47d063d5197c7b98d7e90b05a0f6fa19bb9a16d",
+      "jpeg_size_bytes": 62654,
+      "width": 960,
+      "height": 540,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/385d4a1b3cfdb770a4a8b52fb47d063d5197c7b98d7e90b05a0f6fa19bb9a16d.jpg"
+    }
+  ]
+}

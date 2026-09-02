@@ -1,0 +1,211 @@
+name: Import Grade 6 source assets v1.4 delta
+
+on:
+  push:
+    branches:
+      - ops/grade6-assets-v14-20260902
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type PIN_GRADE6_V14_TWO_ASSETS exactly
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: grade6-assets-v14-delta-import
+  cancel-in-progress: false
+
+env:
+  AEGIS_APP: projectaegis
+  AEGIS_MACHINE_ID: 8d4066aed23998
+  AEGIS_EXPECTED_BRANCH: ops/grade6-assets-v14-20260902
+  AEGIS_ARCHIVE: ops/grade6-assets-v14-delta/Project_Aegis_Grade6_Fly_Asset_Delta_v1.4.tar.gz
+  AEGIS_ARCHIVE_SHA256: d5d8642732641e73e8ab44cd8f58007a48f0434d3a02aae4fc90543aa140a98c
+  AEGIS_DELTA_MANIFEST_SHA256: 85c37c720f89a3602770c9bfc38de3d56328b9bfdb6936d89d252e1ee4129051
+  AEGIS_LIVE_MANIFEST: ops/grade6-assets-v14-delta/verification/Asset_Manifest_v1.4.json
+  AEGIS_LIVE_MANIFEST_SHA256: f5c08bfd69720021d9317c936a3fbc6e788752e6e11def18bee45d4f00ea8f8d
+  AEGIS_REMOTE_ARCHIVE: /tmp/aegis-grade6-v14-d5d864273264.tar.gz
+  AEGIS_REMOTE_ROOT: /tmp/aegis-grade6-v14-d5d864273264
+
+jobs:
+  import-assets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Gate the exact reviewed trigger
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/$AEGIS_EXPECTED_BRANCH"
+          case "$GITHUB_EVENT_NAME" in
+            push)
+              ;;
+            workflow_dispatch)
+              test "$CONFIRMATION" = "PIN_GRADE6_V14_TWO_ASSETS"
+              ;;
+            *)
+              echo "Unsupported trigger: $GITHUB_EVENT_NAME" >&2
+              exit 2
+              ;;
+          esac
+
+      - name: Check out the triggering commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate the immutable local bundle
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          printf '%s  %s\n' "$AEGIS_ARCHIVE_SHA256" "$AEGIS_ARCHIVE" | sha256sum --check --strict -
+          printf '%s  %s\n' \
+            "$AEGIS_LIVE_MANIFEST_SHA256" \
+            "$AEGIS_LIVE_MANIFEST" | sha256sum --check --strict -
+          printf '%s  %s\n' \
+            "$AEGIS_DELTA_MANIFEST_SHA256" \
+            'ops/grade6-assets-v14-delta/fly_asset_import/migration-manifest.json' | \
+            sha256sum --check --strict -
+          python - "$AEGIS_ARCHIVE" <<'PY'
+          import sys
+          import tarfile
+
+          expected_files = {
+              "fly_asset_import/assets/385d4a1b3cfdb770a4a8b52fb47d063d5197c7b98d7e90b05a0f6fa19bb9a16d.jpg",
+              "fly_asset_import/assets/d8fc15e13e1601d15045489b92b6661ddba41265d16f725318f7ee164b31526d.jpg",
+              "fly_asset_import/load_assets_on_fly.py",
+              "fly_asset_import/migration-manifest.json",
+              "fly_asset_import/production_preflight.py",
+          }
+          with tarfile.open(sys.argv[1], "r:gz") as archive:
+              members = archive.getmembers()
+          files = {member.name for member in members if member.isfile()}
+          unsafe = [
+              member.name
+              for member in members
+              if member.name.startswith("/")
+              or ".." in member.name.split("/")
+              or not (member.isfile() or member.isdir())
+          ]
+          if files != expected_files or unsafe:
+              raise SystemExit(
+                  f"unexpected archive members: files={sorted(files)!r}, unsafe={unsafe!r}"
+              )
+          PY
+          local_stage="$RUNNER_TEMP/aegis-grade6-v14-local"
+          mkdir -p "$local_stage"
+          tar -xzf "$AEGIS_ARCHIVE" -C "$local_stage"
+          local_report="$(
+            PYTHONDONTWRITEBYTECODE=1 python \
+              "$local_stage/fly_asset_import/load_assets_on_fly.py" \
+              --bundle "$local_stage/fly_asset_import"
+          )"
+          test "$local_report" = '{"mode": "dry-run", "pinned": 0, "validated": 2}'
+          printf '%s\n' "$local_report"
+
+      - name: Set up pinned Fly CLI
+        uses: superfly/flyctl-actions/setup-flyctl@ed8efb33836e8b2096c7fd3ba1c8afe303ebbff1
+
+      - name: Check the exact production machine without writing
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$FLY_API_TOKEN"
+          curl --fail --silent --show-error --location --retry 3 \
+            --output "$RUNNER_TEMP/aegis-health.json" \
+            'https://projectaegis.fly.dev/health'
+          flyctl machine status "$AEGIS_MACHINE_ID" --app "$AEGIS_APP"
+
+      - name: Transfer the hash-pinned delta archive
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          flyctl ssh sftp put \
+            "$AEGIS_ARCHIVE" \
+            "$AEGIS_REMOTE_ARCHIVE" \
+            --app "$AEGIS_APP" \
+            --machine "$AEGIS_MACHINE_ID"
+
+      - name: Run volume preflight and remote dry-run
+        id: remote_dry_run
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          remote_output="$(
+            flyctl ssh console \
+              --app "$AEGIS_APP" \
+              --machine "$AEGIS_MACHINE_ID" \
+              --command "sh -lc 'set -eu; printf \"%s  %s\\n\" \"$AEGIS_ARCHIVE_SHA256\" \"$AEGIS_REMOTE_ARCHIVE\" | sha256sum --check --strict -; mkdir -p \"$AEGIS_REMOTE_ROOT\"; tar -xzf \"$AEGIS_REMOTE_ARCHIVE\" -C \"$AEGIS_REMOTE_ROOT\"; cd /app; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app python \"$AEGIS_REMOTE_ROOT/fly_asset_import/production_preflight.py\"; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app python \"$AEGIS_REMOTE_ROOT/fly_asset_import/load_assets_on_fly.py\" --bundle \"$AEGIS_REMOTE_ROOT/fly_asset_import\"'"
+          )"
+          printf '%s\n' "$remote_output"
+          loader_report="$(printf '%s\n' "$remote_output" | tail -n 1)"
+          test "$loader_report" = '{"mode": "dry-run", "pinned": 0, "validated": 2}'
+          printf 'report=%s\n' "$loader_report" >> "$GITHUB_OUTPUT"
+
+      - name: Apply exactly the two reviewed assets
+        id: remote_apply
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          apply_report="$(
+            flyctl ssh console \
+              --app "$AEGIS_APP" \
+              --machine "$AEGIS_MACHINE_ID" \
+              --command "sh -lc 'set -eu; cd /app; PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=/app python \"$AEGIS_REMOTE_ROOT/fly_asset_import/load_assets_on_fly.py\" --bundle \"$AEGIS_REMOTE_ROOT/fly_asset_import\" --apply'"
+          )"
+          printf '%s\n' "$apply_report"
+          loader_report="$(printf '%s\n' "$apply_report" | tail -n 1)"
+          test "$loader_report" = '{"mode": "apply", "pinned": 2, "validated": 2}'
+          printf 'report=%s\n' "$loader_report" >> "$GITHUB_OUTPUT"
+
+      - name: Anonymously verify the complete final 29-asset set
+        id: verify_live
+        continue-on-error: true
+        env:
+          DRY_RUN_REPORT: ${{ steps.remote_dry_run.outputs.report }}
+          APPLY_REPORT: ${{ steps.remote_apply.outputs.report }}
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/Project_Aegis_Grade6_Asset_Live_Verification_v1.4.json"
+          PYTHONDONTWRITEBYTECODE=1 python \
+            ops/grade6-assets-v14-delta/verification/verify_live_assets_v14.py \
+            --manifest "$AEGIS_LIVE_MANIFEST" \
+            --output "$report" \
+            --workflow-name 'Import Grade 6 source assets v1.4 delta' \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-url "https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --repository "$GITHUB_REPOSITORY" \
+            --branch "$GITHUB_REF_NAME" \
+            --commit "$GITHUB_SHA" \
+            --archive-sha256 "$AEGIS_ARCHIVE_SHA256" \
+            --machine-id "$AEGIS_MACHINE_ID" \
+            --loader-dry-run-report "$DRY_RUN_REPORT" \
+            --loader-apply-report "$APPLY_REPORT" \
+            --github-step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the live-verification evidence
+        if: always() && steps.verify_live.outcome != 'skipped'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: grade6-v14-live-asset-verification-${{ github.run_id }}
+          path: ${{ runner.temp }}/Project_Aegis_Grade6_Asset_Live_Verification_v1.4.json
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Enforce the anonymous-verification gate
+        if: always()
+        env:
+          VERIFY_OUTCOME: ${{ steps.verify_live.outcome }}
+        run: |
+          set -euo pipefail
+          test "$VERIFY_OUTCOME" = success

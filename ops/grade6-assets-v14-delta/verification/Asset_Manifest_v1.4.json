@@ -1,0 +1,856 @@
+{
+  "schema_version": "aegis.manual-assets.v1.4",
+  "status": "PASS_PENDING_LIVE_PINS",
+  "generated_at_utc": "2026-09-02T10:07:28.156Z",
+  "public_base": "https://projectaegis.fly.dev/source-assets/0",
+  "asset_count": 29,
+  "release_used_asset_count": 27,
+  "public_content_occurrences": 69,
+  "internal_source_evidence_occurrences": 3,
+  "all_normalized_occurrences": 72,
+  "prior_manifest": "/workspace/scratch/cee9e8e145bd/outputs/cee9e8e145bd/qa_evidence/Asset_Manifest.json",
+  "prior_live_verification": "/workspace/scratch/cee9e8e145bd/outputs/cee9e8e145bd/qa_evidence/Asset_Live_Verification.json",
+  "reused_asset_ids": [
+    "DM-AST-HUB-EARTHQUAKE",
+    "DM-AST-HUB-FOREST-FIRE",
+    "DM-AST-HUB-STORM",
+    "DM-AST-HUB-TSUNAMI",
+    "DM-AST-Q016-WORDGRID",
+    "FR-ASSET-002",
+    "FR-ASSET-003",
+    "FR-ASSET-004",
+    "FR-ASSET-005",
+    "MEAS-A001",
+    "MEAS-A003",
+    "PROP-A001",
+    "PROP-A002",
+    "PROP-A003",
+    "PROP-A004",
+    "PROP-A005",
+    "PROP-A006",
+    "PROP-A007",
+    "PROP-A008",
+    "PROP-A009",
+    "RADHA-A01",
+    "RADHA-A02",
+    "RADHA-A03",
+    "WD-AST-P01-JOURNEY-ILLUSTRATION",
+    "WD-AST-P03-Q10-A",
+    "WD-AST-P03-Q10-B",
+    "WD-GRID-Q017"
+  ],
+  "content_replaced_asset_ids": [
+    "FR-ASSET-001"
+  ],
+  "added_asset_ids": [
+    "WD-PRE-AST-LIBRARY-ACTION"
+  ],
+  "retired_asset_ids": [
+    "MEAS-A002"
+  ],
+  "reused_live_asset_ids": [
+    "DM-AST-HUB-EARTHQUAKE",
+    "DM-AST-HUB-FOREST-FIRE",
+    "DM-AST-HUB-STORM",
+    "DM-AST-HUB-TSUNAMI",
+    "DM-AST-Q016-WORDGRID",
+    "FR-ASSET-002",
+    "FR-ASSET-003",
+    "FR-ASSET-004",
+    "FR-ASSET-005",
+    "MEAS-A001",
+    "MEAS-A003",
+    "PROP-A001",
+    "PROP-A002",
+    "PROP-A003",
+    "PROP-A004",
+    "PROP-A005",
+    "PROP-A006",
+    "PROP-A007",
+    "PROP-A008",
+    "PROP-A009",
+    "RADHA-A01",
+    "RADHA-A02",
+    "RADHA-A03",
+    "WD-AST-P01-JOURNEY-ILLUSTRATION",
+    "WD-GRID-Q017"
+  ],
+  "pending_live_asset_ids": [
+    "FR-ASSET-001",
+    "WD-PRE-AST-LIBRARY-ACTION"
+  ],
+  "normalized_files": [
+    {
+      "filename": "disaster_management.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_identity_v14/disaster_management.normalized.json",
+      "materialized_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_materialized_v14/disaster_management.normalized.json",
+      "before_sha256": "632673b358b2e77f7a507cecc9dd04e4eecb62a7c066db882d0dc7d70687241b",
+      "after_sha256": "acb6b8acf2af0a059ca5a320c35103c615853ceb261985766726fd986e94a5e0"
+    },
+    {
+      "filename": "fractions.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_identity_v14/fractions.normalized.json",
+      "materialized_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_materialized_v14/fractions.normalized.json",
+      "before_sha256": "84952da06831953008a54362121ad88bab026517bff32e74f513d83d50cfaa07",
+      "after_sha256": "9a28b6290bd28c1858d08b2ebbb04903d1fa4c20d7ce53581367523fa3df09dd"
+    },
+    {
+      "filename": "measurement.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_identity_v14/measurement.normalized.json",
+      "materialized_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_materialized_v14/measurement.normalized.json",
+      "before_sha256": "3d4a94fc5645c219c51a09e5fb95e2562b6b504f3b7aef3a4138fd8fb49b8021",
+      "after_sha256": "f2e5fba729dfbbf97c902357d0d61ea39680659772088866ed1491ee40467e0b"
+    },
+    {
+      "filename": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_identity_v14/properties_substances.normalized.json",
+      "materialized_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_materialized_v14/properties_substances.normalized.json",
+      "before_sha256": "93d56cc9a632edb9bc5e1b7ccdbbb67a25e91602bfd061f75c7a74d344173a94",
+      "after_sha256": "7cdd05a20a4b29c569b6f919dba4e612f245d97b9811f33226960eceeea294ce"
+    },
+    {
+      "filename": "radhas_letter.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_identity_v14/radhas_letter.normalized.json",
+      "materialized_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_materialized_v14/radhas_letter.normalized.json",
+      "before_sha256": "670aa52d66a4ef8bbd4433c299c072ee2f1ac675830f97891c73348db515ede4",
+      "after_sha256": "8ba4b579ed0bef4dc56905c0bb853343b8332c60c5ff9029ae894bea1e9fde0c"
+    },
+    {
+      "filename": "water_drop.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_identity_v14/water_drop.normalized.json",
+      "materialized_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/normalized_materialized_v14/water_drop.normalized.json",
+      "before_sha256": "a0b93dc1a78c42583a6f5c6d655e19fc29cf01a9f82684e322a98a0390395e63",
+      "after_sha256": "20c075dd547c22f873636d097f44d8f39687d7104fcd673fbf2902f3ac79702f"
+    }
+  ],
+  "assets": [
+    {
+      "asset_id": "DM-AST-HUB-EARTHQUAKE",
+      "chapter_file": "disaster_management.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/assets/disaster_management/DM-AST-HUB-EARTHQUAKE.jpg",
+      "source_sha256": "bf6bafbe59a3ad08f29c5833e9d6bf44ccaf5cfc2b08080c27f8ed8152f982aa",
+      "jpeg_filename": "bf6bafbe59a3ad08f29c5833e9d6bf44ccaf5cfc2b08080c27f8ed8152f982aa.jpg",
+      "jpeg_sha256": "bf6bafbe59a3ad08f29c5833e9d6bf44ccaf5cfc2b08080c27f8ed8152f982aa",
+      "jpeg_size_bytes": 259900,
+      "mime_type": "image/jpeg",
+      "width": 860,
+      "height": 638,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/bf6bafbe59a3ad08f29c5833e9d6bf44ccaf5cfc2b08080c27f8ed8152f982aa.jpg",
+      "alt": "A severely damaged building and rubble after an earthquake.",
+      "role": "post_concept_hub",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSSC_DisasterMana_PL_T02_C01"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "DM-AST-HUB-FOREST-FIRE",
+      "chapter_file": "disaster_management.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/assets/disaster_management/DM-AST-HUB-FOREST-FIRE.jpg",
+      "source_sha256": "58611ebb3d37b4a52d044cbd8d83f5db81d3bfcd2cf5f32afe6a07de7c1aaecd",
+      "jpeg_filename": "58611ebb3d37b4a52d044cbd8d83f5db81d3bfcd2cf5f32afe6a07de7c1aaecd.jpg",
+      "jpeg_sha256": "58611ebb3d37b4a52d044cbd8d83f5db81d3bfcd2cf5f32afe6a07de7c1aaecd",
+      "jpeg_size_bytes": 642085,
+      "mime_type": "image/jpeg",
+      "width": 1148,
+      "height": 838,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/58611ebb3d37b4a52d044cbd8d83f5db81d3bfcd2cf5f32afe6a07de7c1aaecd.jpg",
+      "alt": "Flames spreading through trees and undergrowth in a forest fire.",
+      "role": "post_concept_hub",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSSC_DisasterMana_PL_T03_C03"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "DM-AST-HUB-STORM",
+      "chapter_file": "disaster_management.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/assets/disaster_management/DM-AST-HUB-STORM.jpg",
+      "source_sha256": "179fa02f42700bf3a8f84369ee874a80297e0ea4004ae284d5cf83f9240974f3",
+      "jpeg_filename": "179fa02f42700bf3a8f84369ee874a80297e0ea4004ae284d5cf83f9240974f3.jpg",
+      "jpeg_sha256": "179fa02f42700bf3a8f84369ee874a80297e0ea4004ae284d5cf83f9240974f3",
+      "jpeg_size_bytes": 349873,
+      "mime_type": "image/jpeg",
+      "width": 938,
+      "height": 498,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/179fa02f42700bf3a8f84369ee874a80297e0ea4004ae284d5cf83f9240974f3.jpg",
+      "alt": "A large fallen tree damaging a building during a severe storm.",
+      "role": "post_concept_hub",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSSC_DisasterMana_PL_T03_C02"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "DM-AST-HUB-TSUNAMI",
+      "chapter_file": "disaster_management.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/assets/disaster_management/DM-AST-HUB-TSUNAMI.jpg",
+      "source_sha256": "f612aac8352aaa997e8dc392d16f4669ad82cefb510049fe330be486f540b42f",
+      "jpeg_filename": "f612aac8352aaa997e8dc392d16f4669ad82cefb510049fe330be486f540b42f.jpg",
+      "jpeg_sha256": "f612aac8352aaa997e8dc392d16f4669ad82cefb510049fe330be486f540b42f",
+      "jpeg_size_bytes": 331991,
+      "mime_type": "image/jpeg",
+      "width": 1108,
+      "height": 600,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/f612aac8352aaa997e8dc392d16f4669ad82cefb510049fe330be486f540b42f.jpg",
+      "alt": "Large tsunami waves advancing over a coastal settlement.",
+      "role": "post_concept_hub",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSSC_DisasterMana_PL_T02_C03"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "DM-AST-Q016-WORDGRID",
+      "chapter_file": "disaster_management.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/assets/disaster_management/DM-AST-Q016-WORDGRID.jpg",
+      "source_sha256": "c5cd5c70ae2dd0f99ad7532e399266d2f3c038839163febf998451c10eaed2f5",
+      "jpeg_filename": "c5cd5c70ae2dd0f99ad7532e399266d2f3c038839163febf998451c10eaed2f5.jpg",
+      "jpeg_sha256": "c5cd5c70ae2dd0f99ad7532e399266d2f3c038839163febf998451c10eaed2f5",
+      "jpeg_size_bytes": 321183,
+      "mime_type": "image/jpeg",
+      "width": 1938,
+      "height": 1685,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/c5cd5c70ae2dd0f99ad7532e399266d2f3c038839163febf998451c10eaed2f5.jpg",
+      "alt": "A twelve-by-twelve letter grid with storm highlighted vertically as an example.",
+      "role": "essential_question_stimulus",
+      "release_used": true,
+      "owning_question_ids": [
+        "DM_POST_Q016"
+      ],
+      "owning_concept_ids": [
+        "06MSSC_DisasterMana_PL_T01_C02"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "FR-ASSET-001",
+      "chapter_file": "fractions.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/fractions/assets/FR-ASSET-001.png",
+      "source_sha256": "30815d436b542ec0d8269c77614fa609ba7f109990243e2d4821115ab987dfa5",
+      "jpeg_filename": "d8fc15e13e1601d15045489b92b6661ddba41265d16f725318f7ee164b31526d.jpg",
+      "jpeg_sha256": "d8fc15e13e1601d15045489b92b6661ddba41265d16f725318f7ee164b31526d",
+      "jpeg_size_bytes": 53567,
+      "mime_type": "image/jpeg",
+      "width": 273,
+      "height": 283,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/d8fc15e13e1601d15045489b92b6661ddba41265d16f725318f7ee164b31526d.jpg",
+      "alt": "A fraction cycle with a spinner and several shaded equal-part figures around it.",
+      "role": "question_image",
+      "release_used": true,
+      "owning_question_ids": [
+        "FR-QINV-0003"
+      ],
+      "owning_concept_ids": [],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "FR-ASSET-002",
+      "chapter_file": "fractions.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/fractions/assets/FR-ASSET-002.png",
+      "source_sha256": "60b041c6abefac94de6a73d1a10d8445cf2c06da5f7e8fc1f5cbfb7d80c165cd",
+      "jpeg_filename": "fcfcf032d795322e4d84c4547185f5d82326f72d1243f7af76faf29aa17a712f.jpg",
+      "jpeg_sha256": "fcfcf032d795322e4d84c4547185f5d82326f72d1243f7af76faf29aa17a712f",
+      "jpeg_size_bytes": 4151,
+      "mime_type": "image/jpeg",
+      "width": 165,
+      "height": 78,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/fcfcf032d795322e4d84c4547185f5d82326f72d1243f7af76faf29aa17a712f.jpg",
+      "alt": "A rectangle divided into three equal parts with one part coloured.",
+      "role": "question_image",
+      "release_used": true,
+      "owning_question_ids": [
+        "FR-QINV-0004"
+      ],
+      "owning_concept_ids": [],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "FR-ASSET-003",
+      "chapter_file": "fractions.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/fractions/assets/FR-ASSET-003.png",
+      "source_sha256": "6c82c51fdf3d4c098aba51de5f8e3fa6dd042874d9d27d40ac2f41668116e4e6",
+      "jpeg_filename": "18a4baca91767577c4b6a9f4f22ff86eb8ded039997e375ca6a901c1515cb875.jpg",
+      "jpeg_sha256": "18a4baca91767577c4b6a9f4f22ff86eb8ded039997e375ca6a901c1515cb875",
+      "jpeg_size_bytes": 7008,
+      "mime_type": "image/jpeg",
+      "width": 125,
+      "height": 125,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/18a4baca91767577c4b6a9f4f22ff86eb8ded039997e375ca6a901c1515cb875.jpg",
+      "alt": "A circle divided into two equal parts with one part coloured.",
+      "role": "question_image",
+      "release_used": true,
+      "owning_question_ids": [
+        "FR-QINV-0005"
+      ],
+      "owning_concept_ids": [],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "FR-ASSET-004",
+      "chapter_file": "fractions.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/fractions/assets/FR-ASSET-004.png",
+      "source_sha256": "7031a15a0a5ddc91480fd3c7951b6be9afdbd6131683f8bec376ce5f704ef37f",
+      "jpeg_filename": "13bcdcc74b2c79faa469fa84471ec77c5a7701e321c0493f8a5699a2750a9056.jpg",
+      "jpeg_sha256": "13bcdcc74b2c79faa469fa84471ec77c5a7701e321c0493f8a5699a2750a9056",
+      "jpeg_size_bytes": 36636,
+      "mime_type": "image/jpeg",
+      "width": 310,
+      "height": 415,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/13bcdcc74b2c79faa469fa84471ec77c5a7701e321c0493f8a5699a2750a9056.jpg",
+      "alt": "Six equal paper strips showing one whole and one coloured part in partitions of two through six.",
+      "role": "question_image",
+      "release_used": true,
+      "owning_question_ids": [
+        "FR-QINV-0006"
+      ],
+      "owning_concept_ids": [],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "FR-ASSET-005",
+      "chapter_file": "fractions.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/fractions/assets/FR-ASSET-005.png",
+      "source_sha256": "cf5ad89582a1d12b155af44da052093bf8467d3f71001740a0c2f0f0488fe1c8",
+      "jpeg_filename": "ad0cba55079d30755088c647a582c03ff1df1cda0ada47070cf593062a742c5c.jpg",
+      "jpeg_sha256": "ad0cba55079d30755088c647a582c03ff1df1cda0ada47070cf593062a742c5c",
+      "jpeg_size_bytes": 11940,
+      "mime_type": "image/jpeg",
+      "width": 222,
+      "height": 165,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/ad0cba55079d30755088c647a582c03ff1df1cda0ada47070cf593062a742c5c.jpg",
+      "alt": "Two equal-whole diagrams representing one half and one third with an unknown comparison sign.",
+      "role": "question_image",
+      "release_used": true,
+      "owning_question_ids": [
+        "FR-QINV-0007"
+      ],
+      "owning_concept_ids": [],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "MEAS-A001",
+      "chapter_file": "measurement.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/measurement/assets/MEAS-A001_everyday_measurement_roles.jpg",
+      "source_sha256": "afa0ff481b03f3c4a0e5a27c3dcd103dbb09d2df1a26e30c0a6624378944bc39",
+      "jpeg_filename": "afa0ff481b03f3c4a0e5a27c3dcd103dbb09d2df1a26e30c0a6624378944bc39.jpg",
+      "jpeg_sha256": "afa0ff481b03f3c4a0e5a27c3dcd103dbb09d2df1a26e30c0a6624378944bc39",
+      "jpeg_size_bytes": 910086,
+      "mime_type": "image/jpeg",
+      "width": 1650,
+      "height": 1130,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/afa0ff481b03f3c4a0e5a27c3dcd103dbb09d2df1a26e30c0a6624378944bc39.jpg",
+      "alt": "Illustration of a milkman filling a measuring cup, a cloth seller using a tape on cloth, a vegetable vendor using a balance, and a doctor holding a measuring instrument.",
+      "role": "question_stimulus_crop",
+      "release_used": true,
+      "owning_question_ids": [
+        "MEAS-POST-Q001"
+      ],
+      "owning_concept_ids": [],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "MEAS-A003",
+      "chapter_file": "measurement.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/measurement/assets/MEAS-A003_laboratory_thermometer_scale.jpg",
+      "source_sha256": "b8746bfc6fdd4456b81ab041eac2336d0632f11e824dfab67a7c389289feee5c",
+      "jpeg_filename": "b8746bfc6fdd4456b81ab041eac2336d0632f11e824dfab67a7c389289feee5c.jpg",
+      "jpeg_sha256": "b8746bfc6fdd4456b81ab041eac2336d0632f11e824dfab67a7c389289feee5c",
+      "jpeg_size_bytes": 547738,
+      "mime_type": "image/jpeg",
+      "width": 585,
+      "height": 7995,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/b8746bfc6fdd4456b81ab041eac2336d0632f11e824dfab67a7c389289feee5c.jpg",
+      "alt": "Vertical laboratory thermometer with a marked Celsius scale for the five-part observation task.",
+      "role": "question_stimulus_crop",
+      "release_used": true,
+      "owning_question_ids": [
+        "MEAS-POST-Q018"
+      ],
+      "owning_concept_ids": [],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "PROP-A001",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A001_room_scene.png",
+      "source_sha256": "73c11d1736daf04511d750e4a517a2157a98bd74e8e7e6e2785817ade1167962",
+      "jpeg_filename": "3b31f9b65dbb644079f57cdc1c1b9b1bfa7bad6b32fcef11876b060b45cd497f.jpg",
+      "jpeg_sha256": "3b31f9b65dbb644079f57cdc1c1b9b1bfa7bad6b32fcef11876b060b45cd497f",
+      "jpeg_size_bytes": 274462,
+      "mime_type": "image/jpeg",
+      "width": 980,
+      "height": 645,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/3b31f9b65dbb644079f57cdc1c1b9b1bfa7bad6b32fcef11876b060b45cd497f.jpg",
+      "alt": "Illustrated room containing furniture, tools, a clock, curtains, a window and objects made from different materials.",
+      "role": "essential_question_stimulus",
+      "release_used": true,
+      "owning_question_ids": [
+        "POST-SRC-001"
+      ],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T01_C01"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 1,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "PROP-A002",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A002_solid_particles.png",
+      "source_sha256": "b257ee18fa0f25f4bd985187c9496f8eb300246652d5e9b7f29715b253262577",
+      "jpeg_filename": "c5d04e722f1dd46082a297a0b6e1e45de0fb4b2d0c654d03a89001226118bd92.jpg",
+      "jpeg_sha256": "c5d04e722f1dd46082a297a0b6e1e45de0fb4b2d0c654d03a89001226118bd92",
+      "jpeg_size_bytes": 24087,
+      "mime_type": "image/jpeg",
+      "width": 181,
+      "height": 157,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/c5d04e722f1dd46082a297a0b6e1e45de0fb4b2d0c654d03a89001226118bd92.jpg",
+      "alt": "Particle diagram showing closely packed particles in a solid.",
+      "role": "concept_hub",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T02_C01"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "PROP-A003",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A003_liquid_particles.png",
+      "source_sha256": "85c8311f4c5ae6680a3472287c0d1cd3c2487e0ffd9a314555dac8bac420248b",
+      "jpeg_filename": "340bf701549aec7f6b46589242c9ab1a0cde10fea64bb655d8496ab30e421a98.jpg",
+      "jpeg_sha256": "340bf701549aec7f6b46589242c9ab1a0cde10fea64bb655d8496ab30e421a98",
+      "jpeg_size_bytes": 22202,
+      "mime_type": "image/jpeg",
+      "width": 181,
+      "height": 161,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/340bf701549aec7f6b46589242c9ab1a0cde10fea64bb655d8496ab30e421a98.jpg",
+      "alt": "Particle diagram showing loosely packed mobile particles in a liquid.",
+      "role": "concept_hub",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T02_C01"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "PROP-A004",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A004_gas_particles.png",
+      "source_sha256": "4dbfd81dd5e86048c22745ccfd69b24c9bf550df5851464c4c0b86f40d81b9a7",
+      "jpeg_filename": "7983b0a64cda95d54743236aaf47dcb5ee0a61d68c49143ded7358b1a13ac42d.jpg",
+      "jpeg_sha256": "7983b0a64cda95d54743236aaf47dcb5ee0a61d68c49143ded7358b1a13ac42d",
+      "jpeg_size_bytes": 16456,
+      "mime_type": "image/jpeg",
+      "width": 181,
+      "height": 257,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/7983b0a64cda95d54743236aaf47dcb5ee0a61d68c49143ded7358b1a13ac42d.jpg",
+      "alt": "Particle diagram showing gas particles spreading out of a container into available space.",
+      "role": "concept_hub",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T02_C01"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "PROP-A005",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A005_spring_balance_activity.png",
+      "source_sha256": "ae93256ccbc9ab2a254f3b66bc876b0fcc6bac8e041feefd766ecf79b0fa35a8",
+      "jpeg_filename": "bf20a9eec908539d7087ad752e4db5db2651cb1eaaa0090e9466c72d7039b678.jpg",
+      "jpeg_sha256": "bf20a9eec908539d7087ad752e4db5db2651cb1eaaa0090e9466c72d7039b678",
+      "jpeg_size_bytes": 60440,
+      "mime_type": "image/jpeg",
+      "width": 426,
+      "height": 308,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/bf20a9eec908539d7087ad752e4db5db2651cb1eaaa0090e9466c72d7039b678.jpg",
+      "alt": "Learners measuring a hanging stone with a spring balance.",
+      "role": "concept_and_activity_support",
+      "release_used": true,
+      "owning_question_ids": [
+        "POST-SRC-009"
+      ],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T03_C01",
+        "06MSSC_Propertiesof_PL_T03_C02"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 4,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "PROP-A006",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A006_displacement_activity.png",
+      "source_sha256": "6f55514e77e11f9b95a04432f8bd059a650ffe26d2de28e6c669b9113a3fb5ae",
+      "jpeg_filename": "2904cea251463c60181c8201450fb2c2b6177e4d83d02c7d071391ef14710ddf.jpg",
+      "jpeg_sha256": "2904cea251463c60181c8201450fb2c2b6177e4d83d02c7d071391ef14710ddf",
+      "jpeg_size_bytes": 60741,
+      "mime_type": "image/jpeg",
+      "width": 302,
+      "height": 318,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/2904cea251463c60181c8201450fb2c2b6177e4d83d02c7d071391ef14710ddf.jpg",
+      "alt": "Learners collecting and measuring water displaced by an immersed object.",
+      "role": "concept_and_activity_support",
+      "release_used": true,
+      "owning_question_ids": [
+        "POST-SRC-009"
+      ],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T03_C01",
+        "06MSSC_Propertiesof_PL_T03_C02"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 4,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "PROP-A007",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A007_measuring_cylinder.png",
+      "source_sha256": "7b29bfc4cb93c7d7a1a06c5c38b3a908fafd602d965189d838fe0173d0e1ac09",
+      "jpeg_filename": "3385a5f00d1e0597794eba1e51a7d0615ef90605514eff7148cd172d18336a6b.jpg",
+      "jpeg_sha256": "3385a5f00d1e0597794eba1e51a7d0615ef90605514eff7148cd172d18336a6b",
+      "jpeg_size_bytes": 25088,
+      "mime_type": "image/jpeg",
+      "width": 112,
+      "height": 474,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/3385a5f00d1e0597794eba1e51a7d0615ef90605514eff7148cd172d18336a6b.jpg",
+      "alt": "Transparent graduated measuring cylinder containing liquid.",
+      "role": "concept_and_activity_support",
+      "release_used": true,
+      "owning_question_ids": [
+        "POST-SRC-009"
+      ],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T03_C01",
+        "06MSSC_Propertiesof_PL_T03_C02"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 4,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "PROP-A008",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A008_measuring_instruments.png",
+      "source_sha256": "0e4fce935c8676f8a4a9b4ba6f4ee40c0ab67ab378c92be54252ea76ef6440e2",
+      "jpeg_filename": "e2cca0ada3c316c34b56883927468b47d51d632bf93d89578b5ec4943e5bdae2.jpg",
+      "jpeg_sha256": "e2cca0ada3c316c34b56883927468b47d51d632bf93d89578b5ec4943e5bdae2",
+      "jpeg_size_bytes": 63730,
+      "mime_type": "image/jpeg",
+      "width": 590,
+      "height": 296,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/e2cca0ada3c316c34b56883927468b47d51d632bf93d89578b5ec4943e5bdae2.jpg",
+      "alt": "Picture of measuring instruments including balances, a measuring cylinder, a syringe, a ruler, a tape and a clock.",
+      "role": "essential_question_stimulus",
+      "release_used": true,
+      "owning_question_ids": [
+        "POST-SRC-031"
+      ],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T03_C01"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 1,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "PROP-A009",
+      "chapter_file": "properties_substances.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/properties_substances/assets/PROP-A009_paper_strip_activity.png",
+      "source_sha256": "3aaa7b15fc0079d3ea5377ba6e969ada19c48d8c6f6a747d6fa82ca6a93e2d23",
+      "jpeg_filename": "3d1605ecf08975ab4236a16ddbb1b31988531c05d1dfac4cd1b29c014ad48f8e.jpg",
+      "jpeg_sha256": "3d1605ecf08975ab4236a16ddbb1b31988531c05d1dfac4cd1b29c014ad48f8e",
+      "jpeg_size_bytes": 73451,
+      "mime_type": "image/jpeg",
+      "width": 390,
+      "height": 294,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/3d1605ecf08975ab4236a16ddbb1b31988531c05d1dfac4cd1b29c014ad48f8e.jpg",
+      "alt": "Learners holding different paper strips in front of their eyes to test visibility.",
+      "role": "concept_and_activity_support",
+      "release_used": true,
+      "owning_question_ids": [
+        "POST-SRC-012"
+      ],
+      "owning_concept_ids": [
+        "06MSSC_Propertiesof_PL_T04_C01"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    },
+    {
+      "asset_id": "RADHA-A01",
+      "chapter_file": "radhas_letter.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/radhas_letter/assets/RADHA-A01_sample_letter.jpg",
+      "source_sha256": "3e484000d2d65a3e2a77e59f9c26b2a17d3ea08d5dadfddae2fcc877e737cabd",
+      "jpeg_filename": "3e484000d2d65a3e2a77e59f9c26b2a17d3ea08d5dadfddae2fcc877e737cabd.jpg",
+      "jpeg_sha256": "3e484000d2d65a3e2a77e59f9c26b2a17d3ea08d5dadfddae2fcc877e737cabd",
+      "jpeg_size_bytes": 221805,
+      "mime_type": "image/jpeg",
+      "width": 810,
+      "height": 700,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/3e484000d2d65a3e2a77e59f9c26b2a17d3ea08d5dadfddae2fcc877e737cabd.jpg",
+      "alt": "Radha's illustrated informal letter to Mowgli with greeting body safety message and friendly sign-off.",
+      "role": "Post Concept Activity/Info Hub and optional composition context image",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSEN_RadhasLetter_PL_T01_C01",
+        "06MSEN_RadhasLetter_PL_T01_C02"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 2,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 2
+    },
+    {
+      "asset_id": "RADHA-A02",
+      "chapter_file": "radhas_letter.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/radhas_letter/assets/RADHA-A02_informal_letter_format.jpg",
+      "source_sha256": "99045855577fdf3c5039afa9cdcd3eb9ff00c84a9857cc6f29c7090576166008",
+      "jpeg_filename": "99045855577fdf3c5039afa9cdcd3eb9ff00c84a9857cc6f29c7090576166008.jpg",
+      "jpeg_sha256": "99045855577fdf3c5039afa9cdcd3eb9ff00c84a9857cc6f29c7090576166008",
+      "jpeg_size_bytes": 175775,
+      "mime_type": "image/jpeg",
+      "width": 955,
+      "height": 885,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/99045855577fdf3c5039afa9cdcd3eb9ff00c84a9857cc6f29c7090576166008.jpg",
+      "alt": "Format of an informal letter showing sender name and address date salutation body closing and sender's sign-off.",
+      "role": "Essential stimulus for the informal-reply composition and Post Concept Activity/Info Hub",
+      "release_used": true,
+      "owning_question_ids": [
+        "06MSEN_RadhasLetter_PL_Q006"
+      ],
+      "owning_concept_ids": [
+        "06MSEN_RadhasLetter_PL_T02_C02",
+        "06MSEN_RadhasLetter_PL_T02_C01"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 4,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "RADHA-A03",
+      "chapter_file": "radhas_letter.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/radhas_letter/assets/RADHA-A03_adjective_types.jpg",
+      "source_sha256": "5fdf75d296c4de4f50eedc0b6433ee32a0a1eff836ecf49f7d53f9154ebabbfc",
+      "jpeg_filename": "5fdf75d296c4de4f50eedc0b6433ee32a0a1eff836ecf49f7d53f9154ebabbfc.jpg",
+      "jpeg_sha256": "5fdf75d296c4de4f50eedc0b6433ee32a0a1eff836ecf49f7d53f9154ebabbfc",
+      "jpeg_size_bytes": 119633,
+      "mime_type": "image/jpeg",
+      "width": 975,
+      "height": 265,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/5fdf75d296c4de4f50eedc0b6433ee32a0a1eff836ecf49f7d53f9154ebabbfc.jpg",
+      "alt": "Source panel defining descriptive distributive and demonstrative adjectives with examples.",
+      "role": "Post Concept Activity/Info Hub for the adjective-type teaching panel",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSEN_RadhasLetter_PL_T03_C02",
+        "06MSEN_RadhasLetter_PL_T03_C03",
+        "06MSEN_RadhasLetter_PL_T03_C04",
+        "06MSEN_RadhasLetter_PL_T03_C05"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 4,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "WD-AST-P01-JOURNEY-ILLUSTRATION",
+      "chapter_file": "water_drop.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/water_drop/assets/WD-AST-P01-JOURNEY-ILLUSTRATION.jpg",
+      "source_sha256": "bde686f297bdde0e83b60072a9aa954d74fa9a4f07874baf478e0cde59f350de",
+      "jpeg_filename": "bde686f297bdde0e83b60072a9aa954d74fa9a4f07874baf478e0cde59f350de.jpg",
+      "jpeg_sha256": "bde686f297bdde0e83b60072a9aa954d74fa9a4f07874baf478e0cde59f350de",
+      "jpeg_size_bytes": 116628,
+      "mime_type": "image/jpeg",
+      "width": 465,
+      "height": 940,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/bde686f297bdde0e83b60072a9aa954d74fa9a4f07874baf478e0cde59f350de.jpg",
+      "alt": "A girl imagines a running household tap above a lower scene with clouds rain sunshine and rising water vapour",
+      "role": "concept_support",
+      "release_used": true,
+      "owning_question_ids": [],
+      "owning_concept_ids": [
+        "06MSEN_AWaterDrop_PL_T05_C02"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 1,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 1
+    },
+    {
+      "asset_id": "WD-AST-P03-Q10-A",
+      "chapter_file": "water_drop.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/water_drop/assets/WD-AST-P03-Q10-A.jpg",
+      "source_sha256": "3ae7df3db52c8df9a04e80d95d8fbe9e4725dfd61123299153eafb636b7f2df2",
+      "jpeg_filename": "3ae7df3db52c8df9a04e80d95d8fbe9e4725dfd61123299153eafb636b7f2df2.jpg",
+      "jpeg_sha256": "3ae7df3db52c8df9a04e80d95d8fbe9e4725dfd61123299153eafb636b7f2df2",
+      "jpeg_size_bytes": 107993,
+      "mime_type": "image/jpeg",
+      "width": 482,
+      "height": 361,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/3ae7df3db52c8df9a04e80d95d8fbe9e4725dfd61123299153eafb636b7f2df2.jpg",
+      "alt": "Picture A from Exercise 10",
+      "role": "essential_question_stimulus_source_panel",
+      "release_used": false,
+      "owning_question_ids": [
+        "06MSEN_AWaterDrop_PL_Q020"
+      ],
+      "owning_concept_ids": [
+        "06MSEN_AWaterDrop_PL_T05_C01"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 0,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 0
+    },
+    {
+      "asset_id": "WD-AST-P03-Q10-B",
+      "chapter_file": "water_drop.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/water_drop/assets/WD-AST-P03-Q10-B.jpg",
+      "source_sha256": "a9eef6a95f5c4ecb89fb1c8c07aba5990661617e8d79808950cf63540946d775",
+      "jpeg_filename": "a9eef6a95f5c4ecb89fb1c8c07aba5990661617e8d79808950cf63540946d775.jpg",
+      "jpeg_sha256": "a9eef6a95f5c4ecb89fb1c8c07aba5990661617e8d79808950cf63540946d775",
+      "jpeg_size_bytes": 96112,
+      "mime_type": "image/jpeg",
+      "width": 526,
+      "height": 365,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/a9eef6a95f5c4ecb89fb1c8c07aba5990661617e8d79808950cf63540946d775.jpg",
+      "alt": "Picture B from Exercise 10",
+      "role": "essential_question_stimulus_source_panel",
+      "release_used": false,
+      "owning_question_ids": [
+        "06MSEN_AWaterDrop_PL_Q020"
+      ],
+      "owning_concept_ids": [
+        "06MSEN_AWaterDrop_PL_T05_C01"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 0,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 0
+    },
+    {
+      "asset_id": "WD-GRID-Q017",
+      "chapter_file": "water_drop.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/water_drop/assets/WD-GRID-Q017.jpg",
+      "source_sha256": "bba37ce5054edaffed3bc7bc9c05e6ebb85d51fe3b2413a369419367b97c4776",
+      "jpeg_filename": "bba37ce5054edaffed3bc7bc9c05e6ebb85d51fe3b2413a369419367b97c4776.jpg",
+      "jpeg_sha256": "bba37ce5054edaffed3bc7bc9c05e6ebb85d51fe3b2413a369419367b97c4776",
+      "jpeg_size_bytes": 214017,
+      "mime_type": "image/jpeg",
+      "width": 1108,
+      "height": 458,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/bba37ce5054edaffed3bc7bc9c05e6ebb85d51fe3b2413a369419367b97c4776.jpg",
+      "alt": "Picture A shows people in shallow water beside stacked white bags; Picture B shows rows of white bags extending across a stream in a wooded area.",
+      "role": "essential_question_stimulus",
+      "release_used": true,
+      "owning_question_ids": [
+        "06MSEN_AWaterDrop_PL_Q020"
+      ],
+      "owning_concept_ids": [
+        "06MSEN_AWaterDrop_PL_T05_C01"
+      ],
+      "conversion": "verified_jpeg_bytes_preserved",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 1,
+      "all_normalized_occurrences": 4
+    },
+    {
+      "asset_id": "WD-PRE-AST-LIBRARY-ACTION",
+      "chapter_file": "water_drop.normalized.json",
+      "source_path": "/workspace/scratch/cee9e8e145bd/aegis_resume/aegis_working/work/run_20260901/release_snapshot_v5/source_author/water_drop/assets/WD-PRE-AST-LIBRARY-ACTION.png",
+      "source_sha256": "97fd7cc6d4ffc9ab92e4578bef76252a6b3a3c4155bbacac16a38b2c670067fb",
+      "jpeg_filename": "385d4a1b3cfdb770a4a8b52fb47d063d5197c7b98d7e90b05a0f6fa19bb9a16d.jpg",
+      "jpeg_sha256": "385d4a1b3cfdb770a4a8b52fb47d063d5197c7b98d7e90b05a0f6fa19bb9a16d",
+      "jpeg_size_bytes": 62654,
+      "mime_type": "image/jpeg",
+      "width": 960,
+      "height": 540,
+      "public_url": "https://projectaegis.fly.dev/source-assets/0/385d4a1b3cfdb770a4a8b52fb47d063d5197c7b98d7e90b05a0f6fa19bb9a16d.jpg",
+      "alt": "A library scene with a child between a table of books and a bookshelf",
+      "role": "essential_question_stimulus",
+      "release_used": true,
+      "owning_question_ids": [
+        "06MSEN_AWaterDrop_PrL_Q028"
+      ],
+      "owning_concept_ids": [
+        "06MSEN_AWaterDrop_PrL_T02_C01"
+      ],
+      "conversion": "deterministic_png_or_raster_to_jpeg",
+      "public_content_occurrences": 3,
+      "internal_source_evidence_occurrences": 0,
+      "all_normalized_occurrences": 3
+    }
+  ]
+}
