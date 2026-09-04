@@ -28,7 +28,7 @@ from .. import config
 from . import assessment_profile
 from .phase3 import kernel
 
-ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-1"
+ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-2"
 AUDIT_FIELD = "_aegis_assessment_item_review"
 WARNING = "assessment_item_review"
 UNAVAILABLE_WARNING = "assessment_item_review_unavailable"
@@ -47,10 +47,15 @@ ITEM_REVIEW_SYSTEM = (
     "the source atom (when the item is source-owned), the recorded blueprint "
     "cell, the complete materialized item, its recorded Open/Specific "
     "answer-space verdict and its recorded mark decomposition. Verify, "
-    "jointly and against the source evidence: (1) source fidelity — the "
-    "item preserves the source task's demand, scope, response mode, answer "
-    "space and media dependency; polishing added no requirement and lost no "
-    "required context; (2) lane and category — the response mechanics match "
+    "jointly and against the source evidence: (1) source wording and "
+    "fidelity — a source-owned question is the source task's wording "
+    "VERBATIM (owner ruling 2026-09-04: only page apparatus dropped, an "
+    "outside pointer replaced by the referenced content copied verbatim, "
+    "notation and blanks projected), so any rephrasing, simplification, "
+    "added requirement, added hint or sub-question, or lost required "
+    "context is an issue; the item preserves the source task's demand, "
+    "scope, response mode, answer space and media dependency; (2) lane and "
+    "category — the response mechanics match "
     "the sheet and the exact category (a closed one-key option set is "
     "Objective; deterministic blanks and every True or False item are "
     "Subjective with placeholder-bound answers; constructed responses are "
@@ -125,7 +130,7 @@ def _live_review(payload: dict[str, Any]) -> dict[str, Any]:
         purpose="advisory_critic",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
-            "item-review-v1",
+            "item-review-v2",
             prefix,
             shard_seed=str(payload.get("candidate_id") or ""),
         ),

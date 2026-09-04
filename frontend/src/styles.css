@@ -534,6 +534,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 /* Free-text widths: compact numeric input, capped prose input, full-width
    prose textarea (sans-serif — .prompt-text stays the mono editor). */
 .input-sm { width: 90px; }
+.input-num { width: 140px; }
 .input-md { max-width: 320px; width: 100%; }
 .textarea-block {
   display: block;
@@ -678,28 +679,61 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 /* ============================== Checkpoints ============================= */
 
 .checkpoint-restore {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
   margin-top: 14px;
-  padding-top: 14px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
 }
 .checkpoint-copy { display: grid; gap: 4px; flex: 1 1 360px; }
+/* The run-files block: a quiet bordered strip, never a second coloured
+   card competing with the outputs grid. A ready checkpoint gets one green
+   edge, nothing more. */
 .checkpoint-card {
   display: grid;
   gap: 10px;
   margin-top: 12px;
-  padding: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--panel);
+}
+.checkpoint-card.checkpoint-ready { border-left-color: var(--green); }
+.checkpoint-card .muted { font-size: 12.5px; line-height: 1.5; }
+.backup-status { margin-top: 4px; }
+.backup-status > summary { font-size: 11.5px; }
+.source-text > summary { padding: 2px 0; }
+.file-row input[type="file"] { max-width: 420px; }
+.run-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--r-md);
-  background: var(--accent-tint);
+  background: var(--panel-2);
+  color: var(--text-2);
+  font-size: 12.5px;
 }
-.checkpoint-card.checkpoint-ready {
-  border-color: var(--green);
-  background: var(--green-tint);
+.run-summary strong { color: var(--text); font-weight: 600; }
+.syllabus-uploader { margin-top: 4px; }
+.syllabus-uploader > summary { font-size: 12px; }
+.upload-label-ghost {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
 }
+.upload-label-ghost:hover { background: var(--panel-2); }
+.publish-row { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.evidence-card {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel);
+}
+.mt-4 { margin-top: 4px; }
 .checkpoint-target { margin-top: 4px; font-family: var(--font-mono); font-size: 11px; }
 .resume-target-ok {
   padding: 8px 12px;

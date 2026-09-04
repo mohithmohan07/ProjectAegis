@@ -80,7 +80,7 @@ def test_msbshse_grade_6_science_keeps_the_generic_run_profile() -> None:
     )
     assert profile.master_workbook_contract(
         run_profile, learning_phase="Post",
-    )["contract_id"] == "update-aware-master-1"
+    )["contract_id"] == "update-aware-master-2"
     assert profile.assessment_format_policy(run_profile)["policy_id"] == (
         "generic-cms"
     )
@@ -488,7 +488,7 @@ def test_board_grade_partial_metadata_keeps_the_pinned_run_profile(
     )
     assert profile.master_workbook_contract(
         run_profile, learning_phase="Post",
-    )["contract_id"] == "update-aware-master-1"
+    )["contract_id"] == "update-aware-master-2"
     assert profile.assessment_format_policy(
         run_profile, metadata,
     )["policy_id"] == "generic-cms"

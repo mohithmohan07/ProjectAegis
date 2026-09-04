@@ -448,7 +448,7 @@ function PostLearningFlow({
 
   return (
     <>
-      {parameterPanelOpen && (
+      {parameterPanelOpen ? (
         <>
           <div className="section-title">1 · Choose the run parameters</div>
           <div className="card">
@@ -490,8 +490,10 @@ function PostLearningFlow({
               <div className="error-box mb-12">{modelProviderError}</div>
             )}
             <div className="row mt-16">
-              <span className="muted">
-                {scope ? `Chapter: ${scope.label}` : "Pick a chapter"}
+              <span className={scope ? "" : "muted"}>
+                {scope
+                  ? <>Chapter: <strong>{scope.label}</strong></>
+                  : "Pick the chapter first, then upload the source below."}
               </span>
               <div className="spacer" />
               {job
@@ -511,6 +513,27 @@ function PostLearningFlow({
                 </button>
               )}
             </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="section-title">1 · Run parameters</div>
+          <div className="run-summary" role="status">
+            {job?.checkpoint_target_identity
+              && Object.keys(job.checkpoint_target_identity).length > 0 && (
+              <span>
+                Chapter: <strong>{formatCheckpointTarget(
+                  job.checkpoint_target_identity,
+                )}</strong>
+              </span>
+            )}
+            <span>File: <strong className="mono">{job?.filename}</strong></span>
+            {job?.source_book && (
+              <span>Source: <strong>{job.source_book}</strong></span>
+            )}
+            {modelProvider && (
+              <span>Model: <strong>{modelProvider.model}</strong></span>
+            )}
           </div>
         </>
       )}
@@ -542,6 +565,7 @@ function PostLearningFlow({
           filename={job?.filename}
           fileLabel="Source file"
           cumulative
+          compact
           resumed={Boolean(job?.checkpoint_available)}
         />
       )}

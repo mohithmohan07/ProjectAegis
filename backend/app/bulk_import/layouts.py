@@ -436,20 +436,19 @@ def _canonical_layout(layout_id: str, *, concept_fields: Sequence[str],
 REFERENCE_LAYOUT_ID = "sop-mes-1"
 # The update-aware layouts of Master Governing Contract v2.0 §14: the
 # committed reference schema plus the five ``is_update_*`` columns and the
-# Descriptive ``concept_source`` column — 72 / 380 / 149 columns — and the
-# expanded-Descriptive variant with 30 rubric slots (440 columns). They were
-# first evidenced by the 2026-08-27 Grade-6 audit workbooks, but they are
-# NOT board layouts: every generated output of every board uses the
-# update-aware geometry, and only an explicitly frozen profile widens the
-# Descriptive slots. The historical names below remain as aliases.
-UPDATE_AWARE_MASTER_LAYOUT_ID = "update-aware-master-1"
-UPDATE_AWARE_EXPANDED_DESCRIPTIVE_LAYOUT_ID = (
-    "update-aware-master-expanded-descriptive-1"
-)
+# Descriptive ``concept_source`` column. ``update-aware-master-2`` is the
+# geometry of the owner's physical CMS template of 2026-09-04 (register
+# Q27): 72 / 440 / 149 columns, 30 Descriptive answer blocks on EVERY
+# subject and lane — the one layout every generated output of every board
+# renders. ``update-aware-master-1`` (72 / 380 / 149, the 2026-08-27
+# Grade-6 audit geometry the contract text still quotes) stays registered
+# on the READ side only, so an already-published workbook still imports.
+# The historical names below remain as aliases of the universal layout.
+UPDATE_AWARE_MASTER_LAYOUT_ID = "update-aware-master-2"
+UPDATE_AWARE_MASTER_380_LAYOUT_ID = "update-aware-master-1"
+UPDATE_AWARE_EXPANDED_DESCRIPTIVE_LAYOUT_ID = UPDATE_AWARE_MASTER_LAYOUT_ID
 MSBSHSE_GRADE_6_MASTER_LAYOUT_ID = UPDATE_AWARE_MASTER_LAYOUT_ID
-MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID = (
-    UPDATE_AWARE_EXPANDED_DESCRIPTIVE_LAYOUT_ID
-)
+MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID = UPDATE_AWARE_MASTER_LAYOUT_ID
 REFERENCE_WORKBOOK_PATH = (
     Path(__file__).resolve().parents[2]
     / "data" / "Testing" / "reference_bulk_import" / "bulk_import_format.xlsx"
@@ -680,7 +679,13 @@ _AUDIT_UPDATE_FIELD_AFTER = (
     ("is_update_question", "question_label"),
 )
 _AUDIT_BASE_DESCRIPTIVE_ANSWER_SLOTS = 10
-_AUDIT_ENGLISH_POST_DESCRIPTIVE_ANSWER_SLOTS = 30
+# The owner's physical CMS template of 2026-09-04 (Bulk_Upload_New_Format,
+# register Q27) carries 30 Descriptive answer blocks on every subject; this
+# is the universal slot capacity every generated Master and Concept file
+# renders (contract v2.0 §14 as amended by Q27). The fingerprint of that
+# template is pinned in ``templates/bulk_upload_new_format_2026-09-04.json``.
+UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS = 30
+_AUDIT_ENGLISH_POST_DESCRIPTIVE_ANSWER_SLOTS = UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS
 
 
 def _insert_unique_after(fields: list[str], anchor: str, field: str) -> None:
@@ -847,17 +852,18 @@ for _defect in _REGISTRY_DEFECTS:
     )
 if _reference_layout is not None:
     register(_reference_layout)
+    # Read-side only: the 380-column geometry of the 2026-08-27 audit
+    # workbooks (and of every Master published before Q27).
     register(_audit_master_layout(
         _reference_layout,
-        MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+        UPDATE_AWARE_MASTER_380_LAYOUT_ID,
         descriptive_answer_slots=_AUDIT_BASE_DESCRIPTIVE_ANSWER_SLOTS,
     ))
+    # The universal output layout: the CMS template geometry (Q27).
     register(_audit_master_layout(
         _reference_layout,
-        MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
-        descriptive_answer_slots=(
-            _AUDIT_ENGLISH_POST_DESCRIPTIVE_ANSWER_SLOTS
-        ),
+        UPDATE_AWARE_MASTER_LAYOUT_ID,
+        descriptive_answer_slots=UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS,
     ))
 register(CANONICAL_CURRENT)
 register(CANONICAL_NO_QUESTION_TEXT)
@@ -870,15 +876,15 @@ register(CANONICAL_LEGACY_CONCEPT_BAND)
 # disposable legacy columns.
 CURRENT_TARGET_LAYOUT_IDS = frozenset({
     REFERENCE_LAYOUT_ID,
-    MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
-    MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+    UPDATE_AWARE_MASTER_380_LAYOUT_ID,
+    UPDATE_AWARE_MASTER_LAYOUT_ID,
 })
 
 # A generated Master is one three-tab artifact, in this exact order.  Older
 # registered inputs retain their historical partial-workbook tolerance.
 STRICT_COMPLETE_LAYOUT_IDS = frozenset({
-    MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
-    MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+    UPDATE_AWARE_MASTER_380_LAYOUT_ID,
+    UPDATE_AWARE_MASTER_LAYOUT_ID,
 })
 
 

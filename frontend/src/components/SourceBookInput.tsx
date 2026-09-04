@@ -1,9 +1,11 @@
 import { useId } from "react";
 
 /**
- * Book-source picker: free text with suggestions (NCERT, RD Sharma, …).
- * Concepts/questions arriving from a second book merge into existing entries
- * with their sources accumulated, instead of duplicating.
+ * The run's publication: free text with suggestions (NCERT, Balbharati, …).
+ * Contract v2.0 §18 / register Q27: this one value is printed as
+ * ``concept_source`` and ``question_source`` on every row of all four
+ * outputs. Concepts arriving from a second book still merge into existing
+ * entries with their provenance accumulated in the database.
  */
 export default function SourceBookInput({
   value,
@@ -21,7 +23,7 @@ export default function SourceBookInput({
   return (
     <div className="field">
       <label className="field-label" htmlFor={inputId}>
-        Source book (for multi-source tagging)
+        Source (publication)
       </label>
       <input
         className="input-md"
@@ -29,7 +31,7 @@ export default function SourceBookInput({
         list="book-sources-list"
         value={value}
         disabled={disabled}
-        placeholder="e.g. NCERT, RD Sharma…"
+        placeholder="e.g. NCERT, Balbharati…"
         onChange={(e) => onChange(e.target.value)}
       />
       <datalist id="book-sources-list">
@@ -37,6 +39,11 @@ export default function SourceBookInput({
           <option key={o} value={o} />
         ))}
       </datalist>
+      <div className="hint mt-4">
+        Printed as the concept source and question source on every row of
+        the four outputs. Leave it blank and the database upload is blocked
+        until one is supplied.
+      </div>
     </div>
   );
 }

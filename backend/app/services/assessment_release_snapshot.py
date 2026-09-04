@@ -252,7 +252,10 @@ def build(
             "keywords": str(concept.keywords or ""),
             "related_concepts": str(concept.related_concepts or ""),
             "digicards": str(concept.digicards or ""),
-            "concept_source": str(concept.sources or ""),
+            # Contract v2.0 §18 (Q27): the run's publication, not the
+            # concept's accumulated provenance — one value for every
+            # ``concept_source`` and ``question_source`` cell of the run.
+            "concept_source": str(release.get("source_book") or ""),
         }
         concept_rows.append(row)
         carried.append(concept)
@@ -266,7 +269,7 @@ def build(
             "keywords": str(concept.keywords or ""),
             "related_concepts": str(concept.related_concepts or ""),
             "digicards": str(concept.digicards or ""),
-            "concept_source": str(concept.sources or ""),
+            "concept_source": str(release.get("source_book") or ""),
             "released_record": _semantic_evidence(record),
         }
         if isinstance(record.get("is_culmination"), bool):

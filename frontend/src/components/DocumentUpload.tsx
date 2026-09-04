@@ -598,13 +598,12 @@ export default function DocumentUpload({
           disabled={controlsDisabled}
         />
         {module === "concepts" && (
-          <div className="field mt-8">
+          <div className="field">
             <label className="field-label" htmlFor="chapter-duration-minutes">
-              Chapter duration in minutes (only if the duration registry has
-              no row for this chapter)
+              Chapter duration (minutes)
             </label>
             <input
-              className="input-md"
+              className="input-num"
               id="chapter-duration-minutes"
               type="number"
               min={1}
@@ -615,26 +614,43 @@ export default function DocumentUpload({
               placeholder="e.g. 200"
               onChange={(e) => setChapterDurationMinutes(e.target.value)}
             />
+            <div className="hint mt-4">
+              Needed only when the accepted duration registry has no row for
+              this chapter; the registry value wins when it has one.
+            </div>
           </div>
         )}
-        <div className="row mt-8">
-          <input ref={inputRef} type="file" disabled={controlsDisabled}
-            onChange={(e) => {
-              invalidateSavedJobRestore();
-              setFile(e.target.files?.[0] ?? null);
-            }} />
-          <button disabled={!file || controlsDisabled} onClick={upload}>
-            {busy
-              ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
-              : uploadLabel || "Upload"}
-          </button>
-          {file && <span className="muted mono">{file.name}</span>}
-        </div>
-        <div className="hint mt-8">
-          {uploadHint
-            || "Uploading stores the file and starts its conversion right "
-            + "away — watch the Console for parse progress. You pick where "
-            + "to deposit before anything is generated."}
+        <div className="field">
+          <label className="field-label" htmlFor="source-document-file">
+            Source document
+          </label>
+          <div className="row file-row">
+            <input
+              ref={inputRef}
+              id="source-document-file"
+              type="file"
+              disabled={controlsDisabled}
+              onChange={(e) => {
+                invalidateSavedJobRestore();
+                setFile(e.target.files?.[0] ?? null);
+              }}
+            />
+            <button
+              className="primary"
+              disabled={!file || controlsDisabled}
+              onClick={upload}
+            >
+              {busy
+                ? <><span className="spinner" aria-hidden="true" /> Uploading…</>
+                : uploadLabel || "Upload"}
+            </button>
+          </div>
+          <div className="hint mt-4">
+            {uploadHint
+              || "Uploading stores the file and starts its conversion right "
+              + "away — watch the Console for parse progress. You pick where "
+              + "to deposit before anything is generated."}
+          </div>
         </div>
         {restoringSavedJob && (
           <div className="muted mt-8" role="status">
@@ -656,46 +672,44 @@ export default function DocumentUpload({
           </div>
         )}
         {module === "concepts" && (
-          <div className="checkpoint-restore">
-            <div className="checkpoint-copy">
-              <strong>Restore an optional backup</strong>
-              <span className="muted">
-                Signed-in runs are checkpointed automatically on this server and
-                offered when you open Build Concepts.
-              </span>
-              <span className="muted">
-                {backupStatusCopy} Import a JSON file here only when restoring
-                a portable backup.
-              </span>
+          <details className="checkpoint-restore">
+            <summary>Restore a checkpoint backup</summary>
+            <div className="hint mt-8">
+              Signed-in runs are checkpointed automatically on this server
+              and offered when you open Build Concepts. {backupStatusCopy}
+              {" "}Import a JSON file here only when restoring a portable
+              backup.
             </div>
-            <label
-              className="upload-label"
-              style={{ opacity: controlsDisabled ? 0.5 : 1 }}
-            >
-              Import checkpoint backup
-              <input
-                ref={checkpointInputRef}
-                type="file"
-                accept=".json,.aegis-checkpoint.json,application/json"
-                disabled={controlsDisabled}
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  const selected = e.target.files?.[0];
-                  if (selected) void restoreCheckpoint(selected);
-                }}
-              />
-            </label>
-            {DRIVE_BACKUP_FOLDER_URL && (
-              <a
-                className="button-link ghost"
-                href={DRIVE_BACKUP_FOLDER_URL}
-                target="_blank"
-                rel="noreferrer"
+            <div className="row mt-8">
+              <label
+                className="upload-label upload-label-ghost"
+                style={{ opacity: controlsDisabled ? 0.5 : 1 }}
               >
-                Open Google Drive backup folder
-              </a>
-            )}
-          </div>
+                Import checkpoint backup
+                <input
+                  ref={checkpointInputRef}
+                  type="file"
+                  accept=".json,.aegis-checkpoint.json,application/json"
+                  disabled={controlsDisabled}
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    const selected = e.target.files?.[0];
+                    if (selected) void restoreCheckpoint(selected);
+                  }}
+                />
+              </label>
+              {DRIVE_BACKUP_FOLDER_URL && (
+                <a
+                  className="button-link ghost"
+                  href={DRIVE_BACKUP_FOLDER_URL}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open Google Drive backup folder
+                </a>
+              )}
+            </div>
+          </details>
         )}
         {error && <div className="error-box mt-8">{error}</div>}
       </div>
@@ -779,7 +793,10 @@ export default function DocumentUpload({
       )}
 
       {converted && job.mmd_text && (
-        <MmdViewer text={job.mmd_text} filename={job.filename} />
+        <details className="source-text mt-12">
+          <summary>Converted source text</summary>
+          <MmdViewer text={job.mmd_text} filename={job.filename} />
+        </details>
       )}
       {module === "concepts" && converted && (
         <div className={`checkpoint-card ${
@@ -814,12 +831,15 @@ export default function DocumentUpload({
                 Target: {formatCheckpointTarget(job.checkpoint_target_identity)}
               </div>
             )}
-            <div className="muted">
-              {backupStatusCopy}
-              {auth?.config?.drive_checkpoint_backup?.notice
-                ? ` ${auth.config.drive_checkpoint_backup.notice}`
-                : ""}
-            </div>
+            <details className="backup-status">
+              <summary>Backup status</summary>
+              <div className="hint mt-4">
+                {backupStatusCopy}
+                {auth?.config?.drive_checkpoint_backup?.notice
+                  ? ` ${auth.config.drive_checkpoint_backup.notice}`
+                  : ""}
+              </div>
+            </details>
           </div>
           <div className="row">
             {!released && !generated && !nonResumable && (
@@ -1371,7 +1391,8 @@ function SourceArtifactsCard({
             })}
           </div>
           {!generationBlocked && publishActions.length > 0 && (
-            <div className="row">
+            <div className="row publish-row">
+          <span className="muted">Publish reviewed workbooks:</span>
           {publishActions.map((artifact) => {
             const lane = artifactLane(artifact);
             const laneLabel = lane === "pre" ? "Pre-Learning" : "Post-Learning";
@@ -1420,29 +1441,27 @@ function SourceArtifactsCard({
         </div>
       )}
 
-      {manifest?.available && <div className="checkpoint-card">
-        <div>
-          <div className="row">
-            <strong>{title}</strong>
-            <span className={`badge ${statusClass}`}>
-              {statusLabel}
+      {manifest?.available && <div className="evidence-card">
+        <div className="row">
+          <strong>{title}</strong>
+          <span className={`badge ${statusClass}`}>
+            {statusLabel}
+          </span>
+          <span className={`badge ${phase2 ? "green" : "accent"}`}>
+            {usageBadge}
+          </span>
+          {reconstructionBadge && (
+            <span className={`badge ${reconstructionVerified ? "green" : "accent"}`}>
+              {reconstructionBadge}
             </span>
-            <span className={`badge ${phase2 ? "green" : "accent"}`}>
-              {usageBadge}
+          )}
+          {adjudicationBadge && (
+            <span className={`badge ${adjudicationStatus === "verified" ? "green" : "accent"}`}>
+              {adjudicationBadge}
             </span>
-            {reconstructionBadge && (
-              <span className={`badge ${reconstructionVerified ? "green" : "accent"}`}>
-                {reconstructionBadge}
-              </span>
-            )}
-            {adjudicationBadge && (
-              <span className={`badge ${adjudicationStatus === "verified" ? "green" : "accent"}`}>
-                {adjudicationBadge}
-              </span>
-            )}
-          </div>
-          {counts && <div className="muted mono mt-8">{counts}</div>}
+          )}
         </div>
+        {counts && <div className="muted mono mt-8">{counts}</div>}
         <details className="artifact-evidence">
         <summary>Source pipeline details &amp; evidence files</summary>
         <div className="muted mt-8">

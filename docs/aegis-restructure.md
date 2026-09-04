@@ -1340,7 +1340,8 @@ remove what is not necessary. What this entry decides, and what it
 supersedes:
 
 * **Workbook contract, universal.** Every lane and every board ships the
-  update-aware 72/380/149 schema (`update-aware-master-1`, formerly named
+  update-aware schema (72/380/149 as first frozen here; 72/440/149 since
+  Q27 accepted the CMS template — `update-aware-master-2`; formerly named
   after MSBSHSE grade 6) with all five `is_update_*` fields `No` on EVERY
   authored row — questionless concept tails included (amends Q23 D3's
   "populated bands" wording); three sheets (Objective, Descriptive,
@@ -1461,6 +1462,68 @@ every artefact, publish nothing with a blocker), Q14/Rule B, Q15, Q16's
 naming, Q17 (the asset route is anonymous; "signed" was wording), Q18, Q19,
 Q21's non-table clauses, Q23 D1/P10/D2 (D2 as the explicit MSBSHSE profile
 layer; True/False durations read per row), D4, Q24, Q25, D5, D7.
+
+### Q27 · Decided — the physical CMS template of 4 Sep 2026 is the accepted fingerprint; one source on every output; Post questions verbatim
+
+Owner rulings, 4 Sep 2026 (later the same day as Q26), three of them:
+
+* **The physical template supersedes the quoted widths.** The owner
+  supplied the CMS's current bulk-upload template
+  (`Bulk_Upload_New_Format.xlsx`, SHA-256 `a199ffe3…cfcc972`, fingerprint
+  transcribed byte-exactly in
+  `backend/app/bulk_import/templates/bulk_upload_new_format_2026-09-04.json`)
+  "so you are aligned with the same". Contract §14 lets a later physical
+  template supersede its widths once the full fingerprint is explicitly
+  accepted for the run; this entry is that acceptance. Its geometry is the
+  update-aware schema with **30 Descriptive answer blocks on every subject
+  and lane — 72 / 440 / 149** — so that is now the one universal output
+  layout (`update-aware-master-2`) for all four outputs on every board; the
+  380-column `update-aware-master-1` stays registered on the read side
+  only, so an already-published workbook still imports, and the
+  English-Post-only 440 variant of §14 is retired as a variant because it is
+  simply the universal shape (the `english-post-master-expanded-1` contract
+  id is gone; the MSBSHSE grade-6 board layer keeps only its aggregate rules,
+  re-frozen as `msbshse-grade-6-master-2026-09-04`). Recorded, not
+  reproduced, because §14 and B.3 forbid them in a write: the template
+  carries `chapter_display_name` twice on Subjective and Descriptive,
+  seventeen copy-pasted answer-block header cells between Descriptive
+  blocks 9–13, a duplicated trailing `sq15_keyword_6`, three
+  `is_update_*` headers with a trailing newline, and its sheets in the
+  order Objective, Subjective, Descriptive where §12 says Objective,
+  Descriptive, Subjective. The generated outputs carry every header once,
+  trimmed, in the contract order; the template repair and the sheet-order
+  question are the CMS side's, and `test_bulk_upload_template_fingerprint`
+  proves column for column that the template's intended geometry and the
+  registered layout are the same thing. A repaired template changes that
+  pin deliberately.
+* **One source, the upload page's.** `concept_source` on Outputs 01/03 and
+  `concept_source`/`question_source` on Outputs 02/04 all carry the run's
+  publication — the Source book typed on the Build Concepts page and
+  frozen on the job (§18) — never a concept's accumulated provenance list
+  (`concept.sources`, which stays the database's record of every book a
+  concept was built from and still exports on the run-less accumulator
+  workbook), never a filename. The chapter's human tag names the same
+  publication.
+* **Post questions verbatim (narrows §7.3).** "Post learning questions
+  should be the questions exactly present in the source, no creation by
+  its own." The Post lane already generates nothing (§7.2, the generated
+  lane is Pre only); what changes is the polishing latitude: a
+  source-owned question is the source task's wording verbatim, and exactly
+  four mechanical changes remain — page apparatus dropped, an outside
+  pointer replaced by the referenced content copied verbatim, notation
+  and blanks projected into the workbook's forms, an activity carried as
+  stated. §7.3's "correcting grammar … an obvious wording defect" column is
+  withdrawn: a grammar slip in the source ships as printed and is noted in
+  the rationale. The materialization author (`assessment-materialize-14`),
+  its advisory critic and the joint item review
+  (`assessment-item-review-2`) all hold the rule; per Rule 1 the check that
+  a question IS the source's wording is the reviewer's verdict, never a
+  string comparison. The legacy "Build Assessments → from Concept Mapping"
+  generator is untouched by this entry: it is a blueprint tool outside the
+  four outputs, and whether it stays is an open question for the owner.
+
+**Stands:** everything Q26 lists, with §14's widths and §7.3's permitted
+column read as amended above.
 
 ---
 

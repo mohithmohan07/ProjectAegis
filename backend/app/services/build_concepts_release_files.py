@@ -501,9 +501,13 @@ def build_release_bulk_import_workbook(
     ]
     # Contract v2.0 §14: Outputs 01/03 ship on the update-aware layout.
     layout_id = bi_writer.CONCEPT_FILE_LAYOUT_ID
+    # Contract v2.0 §18 (Q27): ``concept_source`` is the run's publication,
+    # the Source book named on the upload page — the same value every
+    # Master row carries in ``question_source``.
+    publication = str(job.source_book or "")
     if bool(summary.get("database_uploaded")) and result_ids:
         return bi_writer.write_concepts_workbook(
-            db, result_ids, layout_id=layout_id,
+            db, result_ids, layout_id=layout_id, publication=publication,
         )
 
     chapter, concepts, _records, defects = transient_release_hierarchy(
@@ -530,6 +534,7 @@ def build_release_bulk_import_workbook(
                     topic,
                     sheet_layout=sheet_layout,
                     export_scope=export_scope,
+                    publication=publication,
                 ),
                 start=1,
             ):

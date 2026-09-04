@@ -5,7 +5,8 @@
 `docs/aegis-master-governing-contract-v2.md` (document ID
 AEGIS-MGC-2.0-20260904, adopted 2026-09-04, register entry Q26 in
 docs/aegis-restructure.md) is the binding specification for what every run
-produces: the four outputs, their schema (update-aware 72/380/149 columns,
+produces: the four outputs, their schema (update-aware 72/440/149 columns
+per register Q27, the owner's CMS template of 2026-09-04,
 every `is_update_*` cell exact `No`, ` | ` list delimiter, `<br>` line
 breaks), lane routing (True/False on Subjective, label-free Objective
 explanations, identical Descriptive model answers), rubric rules (0.5 or 1

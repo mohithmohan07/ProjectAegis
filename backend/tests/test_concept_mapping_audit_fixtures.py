@@ -1423,37 +1423,38 @@ def test_raw_headers_match_documented_defects_position_for_position() -> None:
     }
 
 
-# Contract v2.0 §14: the 440-column Descriptive variant is an English-Post
-# profile fact selected by subject and lane, no longer a board/grade row —
-# its contract id is ``english-post-master-expanded-1``.
+# Register Q27 (2026-09-04): the owner's CMS template carries 30 Descriptive
+# answer blocks on every subject and lane, so every rendered Master is the
+# universal 72/440/149 geometry; the MSBSHSE grade-6 board layer keeps only
+# its aggregate rules (re-frozen as ``msbshse-grade-6-master-2026-09-04``).
 MASTER_CONTRACTS = (
     (
         "english_post_master.xlsx",
         "English",
         "Post",
         30,
-        "english-post-master-expanded-1",
+        "msbshse-grade-6-master-2026-09-04",
     ),
     (
         "english_pre_master.xlsx",
         "English",
         "Pre",
-        10,
-        "msbshse-grade-6-master-2026-08-27",
+        30,
+        "msbshse-grade-6-master-2026-09-04",
     ),
     (
         "math_post_master.xlsx",
         "Mathematics",
         "Post",
-        10,
-        "msbshse-grade-6-master-2026-08-27",
+        30,
+        "msbshse-grade-6-master-2026-09-04",
     ),
     (
         "math_pre_master.xlsx",
         "Mathematics",
         "Pre",
-        10,
-        "msbshse-grade-6-master-2026-08-27",
+        30,
+        "msbshse-grade-6-master-2026-09-04",
     ),
 )
 
@@ -1515,29 +1516,29 @@ def test_production_concept_contract_normalizes_raw_update_columns(
     filename: str, subject: str, phase: str
 ) -> None:
     """Contract v2.0 §12/§14 retires the 67/374/144 Concept geometry: every
-    Concept file shares the Master's update-aware 72/380/149 schema, so the
+    Concept file shares the Master's update-aware 72/440/149 schema, so the
     partial ``is_update_*`` trio hand-added to ``math_pre_concept.xlsx`` is
     normalized into the complete five-column contract, never rejected."""
 
     schema = workbook.output_schema(
         "concept", _profile(subject), _lane_snapshot(phase)
     )
-    assert schema["contract_id"] == "concept-update-aware-1"
+    assert schema["contract_id"] == "concept-update-aware-2"
     assert {
         sheet: schema["fields"][sheet] for sheet in CANONICAL_SHEET_ORDER
     } == {
-        sheet: _expected_master_fields(sheet, 10)
+        sheet: _expected_master_fields(sheet, 30)
         for sheet in CANONICAL_SHEET_ORDER
     }
     assert [
         len(schema["fields"][sheet]) for sheet in CANONICAL_SHEET_ORDER
-    ] == [72, 380, 149]
+    ] == [72, 440, 149]
     for sheet in CANONICAL_SHEET_ORDER:
         assert [
             schema["fields"][sheet].index(field) + 1 for field in UPDATE_FIELDS
         ] == [2, 9, 16, 28, 36]
     assert schema["fields"]["Descriptive"].index("concept_source") + 1 == 26
-    assert schema["descriptive_answer_slots"] == 10
+    assert schema["descriptive_answer_slots"] == 30
 
     raw_objective = _read_fixture(filename).sheets["Objective"]
     raw_update_columns = [
@@ -1940,7 +1941,10 @@ def _full_rendered_master_evidence(
 # single-concept roster "Classifying Numbers in the Natural, Whole, and
 # Integer Systems" now renders as the one entry it is — §16, a writer never
 # guesses at a comma) and the Subjective ``answer_display_N`` cell became
-# the §23 literal "Yes".
+# the §23 literal "Yes". Re-pinned once more for register Q27: every
+# Descriptive sheet now carries the universal 30 answer blocks (440
+# columns) of the owner's CMS template, so the three 380-column digests
+# moved; the populated cells are byte-identical.
 FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
     "english_post_master.xlsx": {
         "digest": "9abc6541bc9eb88623bcb63db321288addb12334570a51df979b65358d8b21e9",
@@ -1960,15 +1964,15 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
     "english_pre_master.xlsx": {
-        "digest": "aa77338b6722834e93b33b9396c78a7de86b73113abd3202cf67e5285ad98635",
+        "digest": "daedc877b12be58bc608de6d49095dc25bf20c07cfc1863345c1434cc9d547a3",
         "sheets": {
             "Objective": (
                 5, 72, 360,
                 "75a74f5dbf5e6f7d60ac665faa60b57a64a8b85f876fc20942fc78d3f566ab96",
             ),
             "Descriptive": (
-                36, 380, 13680,
-                "9d12f253b5950d6458fbc89ce1eba25d14e366d28a0dba6320a38e68363f53c1",
+                36, 440, 15840,
+                "531d4fbfa085520c617fc3555fdfa085c2c2ba5bf950c10f6c8b363dc7c47592",
             ),
             "Subjective": (
                 0, 149, 0,
@@ -1982,15 +1986,15 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         # legacy export no longer rewrites the gold file's 7 spaced cells
         # to bare ``\\`` — the rendered master matches the corrected
         # workbook's own bytes in those cells.
-        "digest": "4d4486a66b8362f5bcd688bd4571e2cd03f5709f6c9c1bb102f086df2173a128",
+        "digest": "05457e7cb6edcb91ddc4b1a6546e8ff717e1e2ed3badec75ecc6bfa903e95e05",
         "sheets": {
             "Objective": (
                 47, 72, 3384,
                 "f0cb28914223ef57c29496d51e300431b379a0392666a8a1186ee67e0fef7865",
             ),
             "Descriptive": (
-                24, 380, 9120,
-                "1d698a44859d7c715a05e4e8b675319c279d2921cff26ac2bba2c158adaa72d0",
+                24, 440, 10560,
+                "7245b84185892bbcecd04442f619249c88911f36bdaa2c0a0c592f56a9dc1056",
             ),
             "Subjective": (
                 4, 149, 596,
@@ -1999,15 +2003,15 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
     "math_pre_master.xlsx": {
-        "digest": "223f00bcbc41a51c8b6e60887ed9f334f3a16032f508ae186e81a6fca2a88855",
+        "digest": "4c00cfed5d81620ba3860a59a92c9d33cb22629476df89803c06ae6986b3a72c",
         "sheets": {
             "Objective": (
                 6, 72, 432,
                 "ee0ba1f6dffd66ce979c5cdf1daaf52d7d4262551614e07386409715dc80cb9b",
             ),
             "Descriptive": (
-                21, 380, 7980,
-                "5af9e3734c42814da052167a530e2d68775c47880bb2e9b65f01d00bb1290932",
+                21, 440, 9240,
+                "2568a4fa660ec02e5f91aa1f26d27231bdbc1b5b8d76a5cc7c3c4edb20ae2bc3",
             ),
             "Subjective": (
                 0, 149, 0,

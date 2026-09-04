@@ -53,7 +53,7 @@ def _target_sheet(kind: str) -> layouts.SheetLayout:
 
 
 # Contract v2.0 §14/§14.1: the reviewer-facing Concept Files (Outputs 01
-# and 03) ship on the update-aware layout — 72/380/149 columns with every
+# and 03) ship on the update-aware layout — 72/440/149 columns (Q27) with every
 # ``is_update_*`` cell ``No`` — exactly as the Master files do. The app-data
 # accumulator workbook keeps the committed reference layout it was migrated
 # to; the reader identifies both.
@@ -775,7 +775,7 @@ def _list_cell(value: str) -> str:
 
 def _concept_field_value(
     concept: models.Concept, topic: models.Topic, field: str, *,
-    include_group_columns: bool,
+    include_group_columns: bool, publication: str | None = None,
 ) -> str:
     # Parent Concept ships empty by team decision: concepts sit flat under
     # their topic. The target layout (spec-step8 Q5) has no parent_concept
@@ -813,6 +813,14 @@ def _concept_field_value(
             "advanced_groups": by_type["Advanced"],
         }[field]
     if field == "concept_source":
+        # Contract v2.0 §18 (owner ruling 2026-09-04, register Q27): on a
+        # run's outputs this cell is the run's publication — the Source
+        # book named on the upload page — never the concept's accumulated
+        # provenance list. ``concept.sources`` stays the database record of
+        # every book a concept was built from; a caller with no run (the
+        # accumulator workbook) still exports it.
+        if publication is not None:
+            return publication
         return concept.sources
     if field == "is_update_concept":
         # Contract v2.0 §14.1: exact ``No`` on every authored row.
@@ -838,7 +846,8 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
                  concept_fields: list[str] | None = None,
                  concept_question_labels: str = "",
                  export_scope: ConceptExportScope | None = None,
-                 sheet_layout: layouts.SheetLayout | None = None) -> list:
+                 sheet_layout: layouts.SheetLayout | None = None,
+                 publication: str | None = None) -> list:
     """Chapter + Topic + Concept bands, with tags in the title columns.
 
     The title columns carry a human-readable tag; the display columns stay
@@ -859,7 +868,10 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     composer and never disagree on a value.
     """
     chapter = topic.chapter
-    book = _chapter_book_source(chapter, concept)
+    # The run's publication (Q27) names the chapter tag and the
+    # ``concept_source`` cell alike; without a run the accumulated
+    # provenance decides, as before.
+    book = publication or _chapter_book_source(chapter, concept)
     c_tag = directory.chapter_tag(
         chapter.board, chapter.grade, chapter.subject, book=book)
     layout = sheet_layout or _target_sheet("objective")
@@ -915,6 +927,7 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
         else _concept_field_value(
             concept, topic, field,
             include_group_columns=include_group_columns,
+            publication=publication,
         )
         for field in concept_fields
     ]
@@ -1637,7 +1650,8 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
                     concept_fields: list[str] | None = None,
                     sheet_layout: layouts.SheetLayout | None = None,
                     export_scope: ConceptExportScope | None = None,
-                    decisions: list[dict] | None = None) -> list:
+                    decisions: list[dict] | None = None,
+                    publication: str | None = None) -> list:
     """Build a concept-catalog row (chapter/topic/concept filled, no question).
 
     ``topic`` selects the placement: the concept's authoring home
@@ -1667,6 +1681,7 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
         concept_fields=concept_fields,
         export_scope=export_scope,
         sheet_layout=sheet_layout,
+        publication=publication,
     ))
     expected_front = (
         len(sheet_layout.block_fields("chapter"))
@@ -2181,6 +2196,7 @@ def write_workbook(db: Session, dest: Path | None = None,
 
 def write_concepts_workbook(
     db: Session, concept_ids: list[int], *, layout_id: str | None = None,
+    publication: str | None = None,
 ) -> bytes:
     """Write a fresh canonical workbook holding only the given concepts.
 
@@ -2190,7 +2206,9 @@ def write_concepts_workbook(
     exactly the shape ``append_concepts`` writes to the app-data output
     workbook. Used by the per-functionality "download Bulk Import Excel"
     export for the Build Concepts flows; the release lane passes
-    ``CONCEPT_FILE_LAYOUT_ID`` for the contract's Outputs 01/03.
+    ``CONCEPT_FILE_LAYOUT_ID`` for the contract's Outputs 01/03 and the
+    run's ``publication`` (contract v2.0 §18 / Q27), which every
+    ``concept_source`` cell and chapter tag then carries.
     """
     sheet_layout = layouts.sheet(
         layout_id or layouts.REFERENCE_LAYOUT_ID, "objective",
@@ -2216,6 +2234,7 @@ def write_concepts_workbook(
                     topic,
                     sheet_layout=sheet_layout,
                     export_scope=export_scope,
+                    publication=publication,
                 ),
                 start=1,
             ):

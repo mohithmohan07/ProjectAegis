@@ -1,6 +1,6 @@
 """Exact workbook geometry recorded by the 2026-08-27 mapping audit.
 
-Master Governing Contract v2.0 (§12/§14) made the update-aware 72/380/149
+Master Governing Contract v2.0 (§12/§14, widths per register Q27) made the update-aware 72/440/149
 schema universal — every output of every board, Concept files included — so
 the geometry pinned here is the contract's, not a Grade-6 board fact.
 """
@@ -180,10 +180,10 @@ def test_concept_role_shares_the_update_aware_schema() -> None:
     snapshot = _snapshot("Post")
 
     schema = workbook.output_schema("concept", profile, snapshot)
-    assert schema["contract_id"] == "concept-update-aware-1"
+    assert schema["contract_id"] == "concept-update-aware-2"
     assert [
         len(schema["fields"][sheet]) for sheet in workbook.SHEET_ORDER
-    ] == [72, 380, 149]
+    ] == [72, 440, 149]
     for sheet, fields in schema["fields"].items():
         assert len(fields) == len(set(fields)), sheet
         assert [
@@ -200,7 +200,7 @@ def test_concept_role_shares_the_update_aware_schema() -> None:
     assert [
         len(rendered["sheets"][sheet]["fields"])
         for sheet in workbook.SHEET_ORDER
-    ] == [72, 380, 149]
+    ] == [72, 440, 149]
     rows = rendered["sheets"]["Objective"]["rows"]
     assert len(rows) == 1
     assert [rows[0][field] for field in UPDATE_FIELDS] == ["No"] * 5
@@ -215,7 +215,7 @@ def test_msbshse_grade6_master_has_one_clean_update_schema() -> None:
 
     assert [
         len(schema["fields"][sheet]) for sheet in workbook.SHEET_ORDER
-    ] == [72, 380, 149]
+    ] == [72, 440, 149]
     for sheet, fields in schema["fields"].items():
         assert len(fields) == len(set(fields)), sheet
         assert [
@@ -234,7 +234,7 @@ def test_msbshse_grade6_master_has_one_clean_update_schema() -> None:
     assert [
         len(parsed["sheets"][sheet]["fields"])
         for sheet in workbook.SHEET_ORDER
-    ] == [72, 380, 149]
+    ] == [72, 440, 149]
 
     raw = openpyxl.load_workbook(io.BytesIO(data), data_only=False)
     try:
@@ -254,19 +254,19 @@ def test_msbshse_grade6_master_has_one_clean_update_schema() -> None:
     )
     assert built["manifest"]["workbook_contracts"] == {
         "concepts_xlsx": {
-            "layout_id": "update-aware-master-1",
-            "contract_id": "concept-update-aware-1",
+            "layout_id": "update-aware-master-2",
+            "contract_id": "concept-update-aware-2",
             "field_counts": {
-                "Objective": 72, "Descriptive": 380, "Subjective": 149,
+                "Objective": 72, "Descriptive": 440, "Subjective": 149,
             },
         },
         "master_xlsx": {
-            "layout_id": "update-aware-master-1",
-            "contract_id": "msbshse-grade-6-master-2026-08-27",
+            "layout_id": "update-aware-master-2",
+            "contract_id": "msbshse-grade-6-master-2026-09-04",
             "field_counts": {
-                "Objective": 72, "Descriptive": 380, "Subjective": 149,
+                "Objective": 72, "Descriptive": 440, "Subjective": 149,
             },
-            "descriptive_answer_slots": 10,
+            "descriptive_answer_slots": 30,
         },
     }
 
@@ -274,28 +274,28 @@ def test_msbshse_grade6_master_has_one_clean_update_schema() -> None:
 @pytest.mark.parametrize(
     ("subject", "profile_factory", "master_layout_id", "contract_id"),
     [
-        # Contract v2.0 §14: an unresolved profile renders the same
-        # update-aware geometry as every board; only the frozen English
-        # Post profile widens the Descriptive rubric capacity.
+        # Contract v2.0 §14 as amended by register Q27: an unresolved
+        # profile, a board profile and the English Post run all render
+        # the one universal 72/440/149 geometry of the CMS template.
         pytest.param(
             "Default",
             None,
             layouts.UPDATE_AWARE_MASTER_LAYOUT_ID,
-            "update-aware-master-1",
+            "update-aware-master-2",
             id="default",
         ),
         pytest.param(
             "Mathematics",
             _profile,
             layouts.UPDATE_AWARE_MASTER_LAYOUT_ID,
-            "msbshse-grade-6-master-2026-08-27",
+            "msbshse-grade-6-master-2026-09-04",
             id="mathematics",
         ),
         pytest.param(
             "English",
             _profile,
             layouts.UPDATE_AWARE_EXPANDED_DESCRIPTIVE_LAYOUT_ID,
-            "english-post-master-expanded-1",
+            "msbshse-grade-6-master-2026-09-04",
             id="english-post",
         ),
     ],
@@ -312,7 +312,7 @@ def test_manifest_records_each_projection_layout_and_contract(
         layouts.UPDATE_AWARE_MASTER_LAYOUT_ID
     )
     assert contracts["concepts_xlsx"]["contract_id"] == (
-        "concept-update-aware-1"
+        "concept-update-aware-2"
     )
     assert contracts["master_xlsx"]["layout_id"] == master_layout_id
     assert contracts["master_xlsx"]["contract_id"] == contract_id
@@ -404,29 +404,31 @@ def test_english_post_master_has_thirty_descriptive_slots_and_reads_back() -> No
     ) == []
 
 
-def test_english_pre_master_retains_ten_descriptive_slots() -> None:
+def test_english_pre_master_renders_the_universal_thirty_slots() -> None:
+    """Register Q27: the 30-slot Descriptive is the CMS template geometry on
+    every lane and subject, so the Pre lane is no narrower than Post."""
     profile = _profile("English")
     schema = workbook.output_schema("master", profile, _snapshot("Pre"))
 
     assert [
         len(schema["fields"][sheet]) for sheet in workbook.SHEET_ORDER
-    ] == [72, 380, 149]
-    assert schema["descriptive_answer_slots"] == 10
-    assert "answer_type_11" not in schema["fields"]["Descriptive"]
+    ] == [72, 440, 149]
+    assert schema["descriptive_answer_slots"] == 30
+    assert "answer_type_30" in schema["fields"]["Descriptive"]
 
 
 def test_unresolved_metadata_keeps_update_aware_master_byte_shape() -> None:
     """Contract v2.0 §14: the update-aware schema is universal, so a run
-    with no resolved board profile still renders 72/380/149 (the former
+    with no resolved board profile still renders 72/440/149 (the former
     67/374/144 ``reference-master-1`` default is retired)."""
     snapshot = _snapshot("Post")
     schema = workbook.output_schema("master", None, snapshot)
 
     assert [
         len(schema["fields"][sheet]) for sheet in workbook.SHEET_ORDER
-    ] == [72, 380, 149]
-    assert schema["contract_id"] == "update-aware-master-1"
-    assert schema["descriptive_answer_slots"] == 10
+    ] == [72, 440, 149]
+    assert schema["contract_id"] == "update-aware-master-2"
+    assert schema["descriptive_answer_slots"] == 30
 
 
 @pytest.mark.parametrize("field", [

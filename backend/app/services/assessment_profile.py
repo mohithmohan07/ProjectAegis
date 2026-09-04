@@ -16,6 +16,8 @@ from __future__ import annotations
 import copy
 from typing import Any, Mapping
 
+from ..bulk_import import layouts
+
 
 # Master Governing Contract v2.0 §21 (True/False override): every True or
 # False item is a Subjective row with one placeholder-bound accepted answer.
@@ -88,41 +90,35 @@ _SOCIAL_SCIENCE_SUBJECT_ALIASES = (
 # resolved by an accepted wider profile or the row is blocked.  These are
 # declarative capabilities selected by metadata + lane; no renderer branch
 # names a subject or chapter.
+# Register Q27 (2026-09-04): the owner's physical CMS template carries 30
+# Descriptive answer blocks on every subject and lane, so the universal
+# contract renders the 72/440/149 geometry (``update-aware-master-2``) and
+# no profile widens or narrows it — the former English-Post-only 440-column
+# variant is simply the universal shape now.
 DEFAULT_MASTER_WORKBOOK_CONTRACT: dict[str, Any] = {
-    "contract_id": "update-aware-master-1",
+    "contract_id": "update-aware-master-2",
     "include_update_fields": True,
     "include_descriptive_concept_source": True,
-    "descriptive_answer_slots": 10,
+    "descriptive_answer_slots": layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS,
     "natural_label_aggregates": False,
     "aggregate_rendered_questions_only": False,
 }
 
 MSBSHSE_GRADE_6_MASTER_WORKBOOK_CONTRACT: dict[str, Any] = {
-    "contract_id": "msbshse-grade-6-master-2026-08-27",
+    # Re-frozen 2026-09-04 on the universal 30-slot geometry (Q27); the
+    # aggregate rules below are the board layer, the width is not.
+    "contract_id": "msbshse-grade-6-master-2026-09-04",
     "include_update_fields": True,
     "include_descriptive_concept_source": True,
-    "descriptive_answer_slots": 10,
+    "descriptive_answer_slots": layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS,
     "natural_label_aggregates": True,
     "aggregate_rendered_questions_only": True,
 }
 
-# Contract v2.0 §14: the 440-column English Post Descriptive variant is an
-# ENGLISH-profile fact, selected by subject and lane — never by a board or
-# a grade.  It is an explicitly frozen, versioned profile row that any
-# board's English Post run resolves to (first evidenced by the 2026-08-27
-# MSBSHSE grade-6 audit, whose name the row no longer carries).
-ENGLISH_POST_MASTER_WORKBOOK_OVERRIDES: tuple[dict[str, Any], ...] = (
-    {
-        "metadata_match": {
-            "subject": _ENGLISH_SUBJECT_ALIASES,
-        },
-        "learning_phases": ("post",),
-        "overrides": {
-            "contract_id": "english-post-master-expanded-1",
-            "descriptive_answer_slots": 30,
-        },
-    },
-)
+# Retired by Q27: the 440-column Descriptive is no longer an English Post
+# variant but the universal geometry, so there is nothing left for a
+# subject-and-lane override to widen. The names stay importable and empty.
+ENGLISH_POST_MASTER_WORKBOOK_OVERRIDES: tuple[dict[str, Any], ...] = ()
 # Historical name, kept for callers that imported it.
 MSBSHSE_GRADE_6_MASTER_WORKBOOK_OVERRIDES = ENGLISH_POST_MASTER_WORKBOOK_OVERRIDES
 
@@ -1148,11 +1144,14 @@ def master_workbook_contract(
             contract.update(copy.deepcopy(dict(overrides)))
         break
 
+    floor = layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS
     try:
-        slots = int(contract.get("descriptive_answer_slots", 10))
+        slots = int(contract.get("descriptive_answer_slots", floor))
     except (TypeError, ValueError):
-        slots = 10
-    contract["descriptive_answer_slots"] = max(10, slots)
+        slots = floor
+    # Q27: the universal template capacity is a floor a profile may not
+    # narrow (a capacity limit never drops content — contract §14).
+    contract["descriptive_answer_slots"] = max(floor, slots)
     contract["include_update_fields"] = bool(
         contract.get("include_update_fields", False)
     )

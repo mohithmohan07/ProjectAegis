@@ -785,7 +785,22 @@ def test_staged_shape_uses_the_selected_descriptive_answer_capacity():
     ] == ["answer_content_11"]
 
     descriptive["answers"][10]["answer_content"] = "[content]: criterion 11"
+    # Register Q27: the Pre lane carries the same 30-slot capacity, so
+    # eleven answers fit there too and only the thirty-first overflows.
     snapshot["topics"][0]["pre_post_learning"] = "Pre"
+    pre_fits = [
+        finding for finding in rel.unresolved_question_homes(
+            snapshot, english_profile,
+        )
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answers"
+    ]
+    assert pre_fits == []
+    descriptive["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": f"[content]: criterion {number}",
+        "answer_weightage": "",
+    } for number in range(1, 32)]
     pre_overflows = [
         finding for finding in rel.unresolved_question_homes(
             snapshot, english_profile,
@@ -794,7 +809,7 @@ def test_staged_shape_uses_the_selected_descriptive_answer_capacity():
         and finding.get("field") == "answers"
     ]
     assert [(finding["cap"], finding["actual"]) for finding in pre_overflows] == [
-        (10, 11),
+        (30, 31),
     ]
 
 

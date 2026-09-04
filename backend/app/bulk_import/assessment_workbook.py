@@ -101,16 +101,17 @@ _UPDATE_FIELD_AFTER = {
 # carries in all five ``is_update_*`` fields.
 UPDATE_FIELD_VALUE = "No"
 
-# Contract v2.0 §12/§14: every one of the four outputs is a projection of
-# one snapshot onto the update-aware schema (72 / 380 / 149 columns). The
+# Contract v2.0 §12/§14 (widths as amended by register Q27): every one of
+# the four outputs is a projection of one snapshot onto the update-aware
+# schema (72 / 440 / 149 columns, the owner's CMS template geometry). The
 # Concept files render hierarchy rows on the Objective carrier sheet with
 # the other two sheets header-only; they share the Master's geometry so the
 # identity, source and update columns are byte-consistent across all four.
 CONCEPT_WORKBOOK_CONTRACT: dict[str, Any] = {
-    "contract_id": "concept-update-aware-1",
+    "contract_id": "concept-update-aware-2",
     "include_update_fields": True,
     "include_descriptive_concept_source": True,
-    "descriptive_answer_slots": MAX_DESCRIPTIVE_ANSWERS,
+    "descriptive_answer_slots": layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS,
     "natural_label_aggregates": False,
     "aggregate_rendered_questions_only": False,
 }
@@ -255,7 +256,9 @@ def output_schema(
             "contract_id": str(CONCEPT_WORKBOOK_CONTRACT["contract_id"]),
             "fields": concept_fields,
             "bands": _master_bands(concept_fields, CONCEPT_WORKBOOK_CONTRACT),
-            "descriptive_answer_slots": MAX_DESCRIPTIVE_ANSWERS,
+            "descriptive_answer_slots": int(
+                CONCEPT_WORKBOOK_CONTRACT["descriptive_answer_slots"]
+            ),
         }
     if normalized_role != "master":
         raise ValueError(f"unknown workbook output role {role!r}")

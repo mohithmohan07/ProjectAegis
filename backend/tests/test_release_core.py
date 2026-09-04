@@ -280,19 +280,19 @@ def test_the_release_row_carries_its_lane_the_profile_and_the_layout_the_run_exe
         # every board; the profile only names the schema contract.
         assert (
             row.layout_id == release_core.layout_id()
-            == "update-aware-master-1"
+            == "update-aware-master-2"
         )
         identity = row.provider_identity
         assert identity["lane"] == lane
-        assert identity["layout_id"] == "update-aware-master-1"
+        assert identity["layout_id"] == "update-aware-master-2"
         assert identity["workbook_outputs"] == {
             "concepts_xlsx": {
-                "layout_id": "update-aware-master-1",
-                "contract_id": "concept-update-aware-1",
+                "layout_id": "update-aware-master-2",
+                "contract_id": "concept-update-aware-2",
             },
             "master_xlsx": {
-                "layout_id": "update-aware-master-1",
-                "contract_id": "update-aware-master-1",
+                "layout_id": "update-aware-master-2",
+                "contract_id": "update-aware-master-2",
             },
         }
         assert identity["profile"], "the run's profile name is recorded"
@@ -306,13 +306,13 @@ def test_the_release_row_carries_its_lane_the_profile_and_the_layout_the_run_exe
         pytest.param(
             "Mathematics",
             layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
-            "msbshse-grade-6-master-2026-08-27",
+            "msbshse-grade-6-master-2026-09-04",
             id="mathematics",
         ),
         pytest.param(
             "English",
             layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
-            "english-post-master-expanded-1",
+            "msbshse-grade-6-master-2026-09-04",
             id="english-post",
         ),
     ],
@@ -349,7 +349,7 @@ def test_release_persists_the_rendered_dynamic_master_layout(
         assert released.provider_identity["workbook_outputs"] == {
             "concepts_xlsx": {
                 "layout_id": layouts.UPDATE_AWARE_MASTER_LAYOUT_ID,
-                "contract_id": "concept-update-aware-1",
+                "contract_id": "concept-update-aware-2",
             },
             "master_xlsx": {
                 "layout_id": rendered_layout_id,

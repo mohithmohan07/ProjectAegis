@@ -119,7 +119,7 @@ def _headers(data: bytes) -> dict[str, tuple]:
             "Mathematics",
             "Post",
             layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
-            (72, 380, 149),
+            (72, 440, 149),
         ),
         (
             "English",
