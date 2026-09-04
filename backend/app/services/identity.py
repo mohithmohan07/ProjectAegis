@@ -804,7 +804,9 @@ def topic_concept_roster(topic, export_scope=None) -> str:
         if export_scope is not None
         else sorted(list(topic.concepts or []), key=source_order_key)
     )
-    return ", ".join(
+    # Contract v2.0 §16: every multi-value cell uses the exact " | "
+    # delimiter, so a concept title may itself contain a comma.
+    return bi.join_multi([
         titled(concept.concept_title, machine_id_for_concept(concept))
         for concept in concepts
-    )
+    ])

@@ -71,6 +71,7 @@ def _pre_job(db, chapter) -> models.UploadJob:
         learning_kind="pre",
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
+        source_book="NCERT",
         question_inventory=copy.deepcopy(SOURCE_INVENTORY),
     )
     db.add(job)
@@ -158,16 +159,23 @@ def _generated_authorities(*, calls=None, critic=None, materialize=None):
         return {
             "candidate_id": payload["candidate_id"],
             "question": question,
+            # Contract v2.0 §24 parity, §27.5 atomic 1-mark criteria (two
+            # for the 2-mark cell), §28 no tags on a non-English run.
             "display_answer": generated["answer"],
             "answers": [
                 {
                     "answer_type": "Phrases",
-                    "answer_content": f"[content]: {generated['answer']}",
-                    "answer_weightage": "2",
+                    "answer_content": f"{generated['answer']} in order",
+                    "answer_weightage": "1",
+                },
+                {
+                    "answer_type": "Phrases",
+                    "answer_content": "no number is omitted",
+                    "answer_weightage": "1",
                 },
             ],
             "sub_questions": [],
-            "answer_explanation": "",
+            "answer_explanation": generated["answer"],
             "requires_visual": False,
             "rationale": "authored from the generated prerequisite question",
         }
@@ -192,7 +200,8 @@ def _generated_authorities(*, calls=None, critic=None, materialize=None):
         record("marking", payload)
         candidate = payload["candidate"]
         answers = copy.deepcopy(candidate["answers"])
-        answers[0]["answer_weightage"] = 2
+        for answer in answers:
+            answer["answer_weightage"] = 1
         return {
             "candidate_id": candidate["candidate_id"],
             "question": candidate["question"],
@@ -264,10 +273,21 @@ def _generated_authorities(*, calls=None, critic=None, materialize=None):
         record("critic", payload)
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
+    def item_reviewer(payload):
+        # Contract v2.0 §27 step 6 (Q26): the joint per-item review.
+        record("item_review", payload)
+        return {
+            "candidate_id": payload["candidate_id"],
+            "verdict": "verified",
+            "confidence": 1.0,
+            "issues": [],
+        }
+
     stage_critic = critic or verified_critic
     return {
         "dedup": (dedup_author, stage_critic),
         "materialize": (materialize_author, stage_critic),
+        "item_review": (item_reviewer, None),
         "answer_restriction": (answer_restriction_author, stage_critic),
         "marking": (marking_author, stage_critic),
         "level": (level_author, stage_critic),
@@ -504,6 +524,7 @@ def test_empty_source_atom_ids_is_deliberate_not_string_coercion():
         "difficulty": "Less", "marks": 1, "question_duration": 2,
         "math_keyboard": "", "restriction_reason": "Authored evidence.",
         "answer_restriction": "Specific",
+        "answer_explanation": "A. It is the only solid listed.",
         "answers": [
             {
                 "answer_type": "Phrases", "answer_content": "A",

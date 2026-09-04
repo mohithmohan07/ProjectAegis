@@ -1079,6 +1079,46 @@ def test_the_committed_fixture_is_on_the_target_layout():
 # OWNER RULING OD6 / T17 — the Concept File's shape, on BOTH lanes
 # --------------------------------------------------------------------------- #
 
+def _both_lanes_job_with_publication(db, chapter, *, source_book="NCERT"):
+    """``_both_lanes_job`` staged under a named publication.
+
+    Contract v2.0 §18: ``concept_source`` is the run's publication
+    (``source_book``) and nothing else — no filename fallback — so a job
+    staged without one ships the cell blank. The wiring fixture creates the
+    job before staging; here the publication is stamped and both lanes are
+    re-staged so the frozen payloads carry it, with the wiring module's own
+    records so the two fixtures cannot drift.
+    """
+    import copy
+
+    from tests import test_pre_release_lane_wiring as wiring
+
+    job = wiring._both_lanes_job(db, chapter)
+    job.source_book = source_book
+    db.commit()
+    db.refresh(job)
+    wiring.release.stage_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        records=wiring._routed_post_records(),
+        inventory=copy.deepcopy(wiring.SOURCE_INVENTORY),
+        mined_types=wiring._post_mined_types(),
+        reason="recorded Output-01 fixture (publication stamped)",
+    )
+    wiring.release.stage_pre_release(
+        db,
+        job,
+        target_chapter_id=chapter.id,
+        pre_map=wiring._pre_map(),
+        pre_questions=wiring._pre_questions(),
+        inventory=copy.deepcopy(wiring.SOURCE_INVENTORY),
+        reason="recorded Output-03 fixture (publication stamped)",
+    )
+    db.refresh(job)
+    return job
+
+
 def test_the_concept_files_are_filled_to_the_concept_band_and_no_further(db):
     """Outputs 01 and 03 — the two files the owner ruled on.
 
@@ -1087,20 +1127,23 @@ def test_the_concept_files_are_filled_to_the_concept_band_and_no_further(db):
     was false, and it is this slice that makes it true: the builder emitted
     four sheets (including a ``Doc Link <> Each fields `` tab that is in no
     registered layout) in the wrong order.
+
+    Contract v2.0 §18: the ``concept_source`` cell asserted non-blank below
+    is the run's publication, so the fixture job carries one.
     """
     from app.services import build_concepts_release_files as release_files
     from tests.test_assessment_release_run import _chapter_with_concepts
-    from tests.test_pre_release_lane_wiring import _both_lanes_job
 
     chapter = _chapter_with_concepts(db)
-    job = _both_lanes_job(db, chapter)
+    job = _both_lanes_job_with_publication(db, chapter)
 
-    group_start = min(
-        band["start"] for band in bi.SECTION_BANDS["objective"]
-        if band["label"].strip() == "Group"
-    )
-    labels_index = bi.FIELDS_BY_KIND["objective"].index("topic_concept_labels")
-    source_index = bi.FIELDS_BY_KIND["objective"].index("concept_source")
+    # Contract v2.0 §3: the Concept File is rendered on the same update-aware
+    # layout as the Master, so the band boundaries are read from it.
+    concept_layout = layouts.layout(writer.CONCEPT_FILE_LAYOUT_ID)
+    objective = concept_layout.sheet("objective")
+    group_start = objective.block_start("group")  # 0-based
+    labels_index = objective.fields.index("topic_concept_labels")
+    source_index = objective.fields.index("concept_source")
 
     for lane in (release_files.LANE_PRE, release_files.LANE_POST):
         data = release_files.build_release_bulk_import_workbook(
@@ -1115,7 +1158,8 @@ def test_the_concept_files_are_filled_to_the_concept_band_and_no_further(db):
         rows_by_sheet = {}
         for kind, sheet_name in bi.SHEET_BY_KIND.items():
             sheet = workbook[sheet_name]
-            assert [c.value for c in sheet[2]] == bi.FIELDS_BY_KIND[kind]
+            assert tuple(c.value for c in sheet[2]) == (
+                concept_layout.fields_by_kind()[kind])
             rows_by_sheet[kind] = [
                 row for row in sheet.iter_rows(min_row=3, values_only=True)
                 if row and any(str(v or "").strip() for v in row)
@@ -1126,7 +1170,7 @@ def test_the_concept_files_are_filled_to_the_concept_band_and_no_further(db):
         assert rows_by_sheet["subjective"] == []
 
         for row in rows_by_sheet["objective"]:
-            tail = row[group_start - 1:]
+            tail = row[group_start:]
             assert not any(str(v or "").strip() for v in tail), (lane, tail)
             assert str(row[labels_index] or "").strip(), lane
             assert str(row[source_index] or "").strip(), lane

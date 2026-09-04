@@ -4,6 +4,13 @@ These tests intentionally exercise the production release validators and
 XLSX render/read-back path.  The Refiner may improve only answer/rubric prose
 and occupied-group descriptions; every assessment identity remains exact and
 any failure leaves the authored unit in place with a review warning.
+
+The fixture is a contract v2.0 release (docs/aegis-master-governing-contract
+-v2.md): every candidate carries the run's publication as ``question_source``
+(§18), the Objective explanation opens with the exact correct-option text
+(§22.5), the Descriptive ``display_answer`` and ``answer_explanation`` are
+the same model answer (§24), rubric criteria carry exactly 0.5 or 1 mark and
+— this being a Mathematics run — no English bracket tag (§27.5, §28.3).
 """
 from __future__ import annotations
 
@@ -24,6 +31,9 @@ from app.services.phase3 import kernel
 
 ENVELOPE_SHA256 = "e" * 64
 CONCEPT_KEY = "release:test:0001"
+# Contract v2.0 §18: ``question_source`` names the run's publication; the
+# release run stamps it on every candidate before any learner text exists.
+PUBLICATION = "Balbharati"
 MACHINE_ID = "06MSMA_T01_Shapes"
 OBJECTIVE_ID = "CAND-OBJECTIVE"
 DESCRIPTIVE_ID = "CAND-DESCRIPTIVE"
@@ -42,12 +52,25 @@ _METADATA = {
     "profile": assessment_profile.DEFAULT_PROFILE,
 }
 
-_OBJECTIVE_EXPLANATION = (
+_OBJECTIVE_RATIONALE = (
     "QINV-0001 identifies the cube beside "
     "[img src=\"https://assets.example/cube.png\" alt=\"cube\"] while "
     "[Katex]x^2[/Katex] is notation; see "
     "https://example.edu/wiki/Function_(mathematics)"
 )
+
+
+def _objective_explanation(
+    correct_answer: str, rationale: str = _OBJECTIVE_RATIONALE,
+) -> str:
+    """Contract v2.0 §22.5: the Objective explanation opens with the exact
+    correct-option text, then the rationale (never an option letter/number).
+    Every polish that rewords the key must reword this prefix with it."""
+
+    return f"{correct_answer}. {rationale}"
+
+
+_OBJECTIVE_EXPLANATION = _objective_explanation("Cube")
 _DESCRIPTIVE_DISPLAY = (
     "A square is flat and a cube occupies space. QINV-0002 "
     "[img src=\"https://assets.example/square-cube.png\" "
@@ -68,6 +91,9 @@ def _payload() -> dict:
         "pre_topics": "",
         "post_topics": "Dimensions",
         "chapter_description": "Flat and solid shapes.",
+        # Contract v2.0 §32: the duration is registered/uploaded, never
+        # estimated; a release without one is a QC blocker.
+        "chapter_duration": "40 minutes",
     }
     concept = {
         "concept_key": CONCEPT_KEY,
@@ -76,7 +102,7 @@ def _payload() -> dict:
         "concept_display_name": "Shape dimensions",
         "parent_concept": "",
         "concept_details": "Description: Flat and solid shapes.",
-        "keywords": "flat; solid; dimensions",
+        "keywords": "flat | solid | dimensions",
         "related_concepts": "",
         "digicards": "",
         "concept_source": "Balbharati",
@@ -161,6 +187,7 @@ def _payload() -> dict:
             "difficulty": "Less",
             "marks": 1.0,
             "question_duration": 1.0,
+            "question_source": PUBLICATION,
             "math_keyboard": "",
             "question_appears_in": "Pre/Post-Worksheet/Test",
             "answer_restriction": "Specific",
@@ -201,6 +228,7 @@ def _payload() -> dict:
             "difficulty": "Moderate",
             "marks": 4.0,
             "question_duration": 6.0,
+            "question_source": PUBLICATION,
             "math_keyboard": "No",
             "question_appears_in": "Pre/Post-Worksheet/Test",
             "answer_restriction": "Open",
@@ -210,28 +238,46 @@ def _payload() -> dict:
             "display_answer": _DESCRIPTIVE_DISPLAY,
             # Multipart scoring lives only in the subquestion keyword
             # rubrics. Main answer blocks would duplicate the same marks.
+            # Contract v2.0 §27.5: each criterion carries exactly 0.5 or 1
+            # mark, so a 2-mark child is two discrete criteria; §28.3: a
+            # Mathematics rubric carries no English bracket tag.
             "answers": [],
             "sub_questions": [
                 {
                     "text": "State the dimensions of a square.",
                     "marks": "2",
-                    "keywords": [{
-                        "answer_type": "Phrases",
-                        "weightage": "2",
-                        "keyword": "[content]: two dimensions",
-                    }],
+                    "keywords": [
+                        {
+                            "answer_type": "Phrases",
+                            "weightage": "1",
+                            "keyword": "two dimensions",
+                        },
+                        {
+                            "answer_type": "Phrases",
+                            "weightage": "1",
+                            "keyword": "length and breadth only",
+                        },
+                    ],
                 },
                 {
                     "text": "State the dimensions of a cube.",
                     "marks": "2",
-                    "keywords": [{
-                        "answer_type": "Phrases",
-                        "weightage": "2",
-                        "keyword": "[content]: three dimensions",
-                    }],
+                    "keywords": [
+                        {
+                            "answer_type": "Phrases",
+                            "weightage": "1",
+                            "keyword": "three dimensions",
+                        },
+                        {
+                            "answer_type": "Phrases",
+                            "weightage": "1",
+                            "keyword": "length, breadth and height",
+                        },
+                    ],
                 },
             ],
-            "answer_explanation": "Compare flat extent with occupied space.",
+            # Contract v2.0 §24: one complete model answer, twice.
+            "answer_explanation": _DESCRIPTIVE_DISPLAY,
             "assets": copy.deepcopy(source_atoms[1]["assets"]),
             "concept_id": CONCEPT_KEY,
             "concept_key": CONCEPT_KEY,
@@ -335,6 +381,7 @@ def _payload_with_subjective() -> dict:
         "difficulty": "Less",
         "marks": 1.0,
         "question_duration": 1.0,
+        "question_source": PUBLICATION,
         "math_keyboard": "No",
         "question_appears_in": "Pre/Post-Worksheet/Test",
         "answer_restriction": "Specific",
@@ -461,10 +508,15 @@ def test_fixture_exercises_the_real_release_and_workbook_contracts():
 
 def test_image_answer_readback_compares_with_the_rendered_url_projection():
     payload = _payload()
-    answer = payload["candidates"][0]["answers"][0]
+    candidate = payload["candidates"][0]
+    answer = candidate["answers"][0]
     answer["answer_type"] = "Image"
     answer["answer_content"] = (
         '[img src="https://assets.example/cube.png" alt="cube"]'
+    )
+    # Contract v2.0 §22.5: the explanation opens with the key's exact text.
+    candidate["answer_explanation"] = _objective_explanation(
+        answer["answer_content"]
     )
     profile = assessment_profile.resolve_for_metadata(
         _METADATA["profile"], _METADATA,
@@ -481,8 +533,17 @@ def test_image_answer_readback_compares_with_the_rendered_url_projection():
 
 
 def test_equation_answer_and_keyword_readback_use_the_raw_wire_projection():
+    """An Equation cell round-trips as its raw, trimmed TeX.
+
+    The Equation option is the distractor: under contract v2.0 §22.5 the
+    explanation must open with the key's exact text, and the only rich-text-
+    legal spelling of a TeX key is ``[Katex]…[/Katex]``, which the prefix
+    gate does not yet normalise (reported app gap) — the projection under
+    test is the same for every option slot.
+    """
+
     payload = _payload()
-    answer = payload["candidates"][0]["answers"][0]
+    answer = payload["candidates"][0]["answers"][1]
     answer["answer_type"] = "Equation"
     answer["answer_content"] = "  x^2  "
     keyword = payload["candidates"][1]["sub_questions"][0]["keywords"][0]
@@ -497,7 +558,7 @@ def test_equation_answer_and_keyword_readback_use_the_raw_wire_projection():
     assert state["errors"] == []
     objective = state["candidate_rows"][OBJECTIVE_ID][0]
     descriptive = state["candidate_rows"][DESCRIPTIVE_ID][0]
-    assert objective["answer_content_1"] == "x^2"
+    assert objective["answer_content_2"] == "x^2"
     assert descriptive["sq1_keyword_1"] == "x^2+1"
 
 
@@ -607,17 +668,21 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
                 record["answers"][0]["answer_content"] = "A cube"
-                record["answer_explanation"] = (
-                    _OBJECTIVE_EXPLANATION.replace(
+                record["answer_explanation"] = _objective_explanation(
+                    "A cube",
+                    _OBJECTIVE_RATIONALE.replace(
                         "identifies the cube", "clearly identifies the cube"
-                    )
+                    ),
                 )
             elif record.get("candidate_id") == DESCRIPTIVE_ID:
-                record["display_answer"] = _DESCRIPTIVE_DISPLAY.replace(
+                # Contract v2.0 §24: the two model-answer cells move together.
+                polished = _DESCRIPTIVE_DISPLAY.replace(
                     "A square is flat", "The square is flat"
                 )
+                record["display_answer"] = polished
+                record["answer_explanation"] = polished
                 record["sub_questions"][0]["keywords"][0]["keyword"] = (
-                    "[content]: two spatial dimensions"
+                    "two spatial dimensions"
                 )
             elif record.get("group_key") == BASIC_GROUP:
                 record["semantic_description"] = (
@@ -648,6 +713,7 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert [change["unit_id"] for change in diff["changes"]] == [
         OBJECTIVE_ID,
         OBJECTIVE_ID,
+        DESCRIPTIVE_ID,
         DESCRIPTIVE_ID,
         DESCRIPTIVE_ID,
         BASIC_GROUP,
@@ -681,12 +747,19 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert descriptive["display_answer"] == refined["candidates"][1][
         "display_answer"
     ]
-    assert descriptive["question_text"] == (
-        original["candidates"][1]["question_text"]
-    )
-    assert descriptive["sq1_keyword_1"] == (
-        "[content]: two spatial dimensions"
-    )
+    assert descriptive["answer_explanation"] == descriptive["display_answer"]
+    # Contract v2.0 §19.1/§20 (A-027): the rendered multipart question_text
+    # is the shared stem followed by every child on a ``<br>`` line; the
+    # refiner still may not touch the stem or the children.
+    assert descriptive["question"] == original["candidates"][1]["question"]
+    assert descriptive["question_text"] == "<br>".join([
+        original["candidates"][1]["question_text"],
+        *(
+            sub["text"]
+            for sub in original["candidates"][1]["sub_questions"]
+        ),
+    ])
+    assert descriptive["sq1_keyword_1"] == "two spatial dimensions"
 
 
 def _question_drift(record, _request):
@@ -730,7 +803,7 @@ def _decomposition_drift(record, _request):
 
 
 def _keyword_weight_drift(record, _request):
-    record["sub_questions"][0]["keywords"][0]["weightage"] = "1"
+    record["sub_questions"][0]["keywords"][0]["weightage"] = "0.5"
 
 
 def _group_identity_type_drift(record, _request):
@@ -872,6 +945,9 @@ def test_critic_dissent_is_advisory_and_the_valid_refinement_still_ships():
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
                 record["answers"][0]["answer_content"] = "A solid cube"
+                record["answer_explanation"] = _objective_explanation(
+                    "A solid cube"
+                )
 
         return _proposal(request, polish)
 
@@ -954,6 +1030,7 @@ def test_fixer_uses_the_same_contract_and_its_valid_decision_ships_flagged():
 
         def polish(record, _request):
             record["answers"][0]["answer_content"] = "The cube"
+            record["answer_explanation"] = _objective_explanation("The cube")
 
         return _proposal(original_request, polish, rationale="Fixer repair.")
 
@@ -984,7 +1061,10 @@ def test_renderer_exception_rolls_back_but_retains_fixer_decision_authority():
         original_request = request["original_payload"]
 
         def too_large(record, _request):
-            record["answers"][0]["answer_content"] = "x" * 40_000
+            oversized = "x" * 40_000
+            record["answers"][0]["answer_content"] = oversized
+            # Keep §22.5 parity so the oversized cell is the only defect.
+            record["answer_explanation"] = _objective_explanation(oversized)
 
         return _proposal(original_request, too_large, rationale="Fixer prose.")
 
@@ -1028,6 +1108,7 @@ def test_decide_once_replay_makes_zero_author_critic_or_fixer_calls():
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
                 record["answers"][0]["answer_content"] = "A cube"
+                record["answer_explanation"] = _objective_explanation("A cube")
 
         return _proposal(request, polish)
 
@@ -1161,9 +1242,14 @@ def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved(
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
                 record["answers"][0]["answer_content"] = normalised_by_xlsx
+                # Keep §22.5 parity so the CR normalisation is the only
+                # reason the unit rolls back.
+                record["answer_explanation"] = _objective_explanation(
+                    normalised_by_xlsx
+                )
             elif record.get("candidate_id") == DESCRIPTIVE_ID:
                 record["sub_questions"][0]["keywords"][0]["keyword"] = (
-                    "[content]: two-dimensional extent"
+                    "two-dimensional extent"
                 )
             elif record.get("group_key") == BASIC_GROUP:
                 record["semantic_description"] = normalised_by_xlsx
@@ -1189,7 +1275,7 @@ def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved(
     )
     assert _unit(refined, DESCRIPTIVE_ID)["sub_questions"][0][
         "keywords"
-    ][0]["keyword"] == "[content]: two-dimensional extent"
+    ][0]["keyword"] == "two-dimensional extent"
     assert _unit(refined, INTERMEDIATE_GROUP)["semantic_description"] == (
         "Explaining the dimensional contrast between shapes."
     )
@@ -1249,7 +1335,7 @@ def test_candidate_refiner_cannot_reintroduce_labels_or_malformed_tags():
         "answer_weightage": "2",
     }, {
         "answer_type": "Phrases",
-        "answer_content": "[method]: valid reasoning",
+        "answer_content": "[reasoning]: valid reasoning",
         "answer_weightage": "2",
     }]
     malformed = copy.deepcopy(descriptive)

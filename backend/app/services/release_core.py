@@ -90,11 +90,12 @@ def layout_id() -> str:
     """The workbook layout every release in this process executes under.
 
     One accessor, so the row's ``layout_id`` and the run context's copy of
-    it can never be filled from two different constants. The layout
-    MIGRATION is S7's; this only records which one was in force.
+    it can never be filled from two different constants. Contract v2.0 §3
+    makes the update-aware layout universal (every output, every board);
+    this only records which one is in force.
     """
 
-    return layouts.REFERENCE_LAYOUT_ID
+    return layouts.UPDATE_AWARE_MASTER_LAYOUT_ID
 
 
 def lane_of(release: models.AssessmentRelease) -> str:

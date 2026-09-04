@@ -339,6 +339,11 @@ def test_a_reviewer_reword_of_concept_details_never_blocks_the_upload():
         "records": [dict(row) for row in _sound_records()],
         "staged_row_defects": [],
         "issues": [],
+        # Contract v2.0 §32.1: a frozen chapter duration, so the only
+        # blocking question left is the one this test asks.
+        "directory_metadata": {"chapter_duration": "40 minutes"},
+        # Contract v2.0 §18: the run's publication is a frozen run variable.
+        "source_book": "NCERT",
     }
     reworded = copy.deepcopy(base)
     reworded["issues"] = [
@@ -410,6 +415,11 @@ def test_the_coverage_ledger_produces_release_issues():
             ],
         },
         "learning_kind": "post",
+        # Contract v2.0 §32.1: a frozen chapter duration, so coverage is
+        # the only blocking family this payload can raise.
+        "directory_metadata": {"chapter_duration": "40 minutes"},
+        # Contract v2.0 §18: the run's publication is a frozen run variable.
+        "source_book": "NCERT",
     }
     issues, blocking = release_qc.audit(payload)
     unaccounted = [
@@ -474,7 +484,7 @@ def test_the_audit_runs_at_staging_for_both_lanes_and_never_raises(
     chapter = models.Chapter(
         chapter_code="07CBSC_S11Audit", board="CBSE", grade="07",
         subject="Science", unit="Unit", chapter_title="S11 Audit",
-        chapter_display_name="S11 Audit",
+        chapter_display_name="S11 Audit", chapter_duration="40 minutes",
     )
     db.add(chapter)
     db.commit()
@@ -526,7 +536,14 @@ def test_the_audit_runs_at_staging_for_both_lanes_and_never_raises(
     # AND BLOCKING findings (Round 9) — a net that could not run to
     # completion must not certify the release.
     monkeypatch.undo()
-    issues, blocking = release_qc.audit({"records": object()})
+    issues, blocking = release_qc.audit({
+        "records": object(),
+        # Contract v2.0 §32.1: a frozen duration, so every finding below
+        # is the poisoned passes' own and none is a missing-duration one.
+        "directory_metadata": {"chapter_duration": "40 minutes"},
+        # Contract v2.0 §18: the run's publication is a frozen run variable.
+        "source_book": "NCERT",
+    })
     assert issues
     assert all(
         issue["code"] == release_qc.AUDIT_UNAVAILABLE for issue in issues
@@ -585,6 +602,11 @@ def test_the_pre_lane_skips_the_post_inventory_coverage():
             }],
         },
         release.RELEASE_LANE_FIELD: release.LANE_PRE,
+        # Contract v2.0 §32.1: the shared chapter's frozen duration rides
+        # both lanes' payloads; the Pre lane owes nothing else here.
+        "directory_metadata": {"chapter_duration": "40 minutes"},
+        # Contract v2.0 §18: the run's publication is a frozen run variable.
+        "source_book": "NCERT",
     }
     issues, blocking = release_qc.audit(payload)
     assert issues == []
@@ -708,6 +730,8 @@ def _own_staged_job(db, chapter, records):
     job = models.UploadJob(
         owner_sub=OWNER, module="build_concepts", upload_type="textbook",
         filename="ch.mmd", mmd_text="# Chapter", status="generated",
+        # Contract v2.0 §18: the run's publication is a frozen run variable.
+        source_book="NCERT",
         deposit_scope_type="chapter", deposit_scope_ids=[chapter.id],
         question_inventory={},
     )
@@ -726,7 +750,7 @@ def test_a_blank_mint_refuses_the_publication(db, monkeypatch):
     chapter = models.Chapter(
         chapter_code="07CBSC_S11BlankMint", board="CBSE", grade="07",
         subject="Science", unit="Unit", chapter_title="S11 Blank Mint",
-        chapter_display_name="S11 Blank Mint",
+        chapter_display_name="S11 Blank Mint", chapter_duration="40 minutes",
     )
     db.add(chapter)
     db.commit()
@@ -745,7 +769,7 @@ def test_a_duplicate_persisted_machine_id_refuses_the_publication(db):
     chapter = models.Chapter(
         chapter_code="07CBSC_S11DupId", board="CBSE", grade="07",
         subject="Science", unit="Unit", chapter_title="S11 Dup Id",
-        chapter_display_name="S11 Dup Id",
+        chapter_display_name="S11 Dup Id", chapter_duration="40 minutes",
     )
     db.add(chapter)
     db.flush()
@@ -853,3 +877,81 @@ def test_audit_issues_reach_the_release_workbook_issues_sheet(
     evidence = json.loads(archive.read("context/source_evidence.json"))
     archive.close()
     assert "release_qc_injected" in json.dumps(evidence)
+
+
+# --------------------------------------------------------------------------- #
+# 8. Contract v2.0 §32.1: the frozen chapter duration gates the WRITE only
+# --------------------------------------------------------------------------- #
+
+def _own_chapter(db, code, **fields):
+    chapter = models.Chapter(
+        chapter_code=code, board="CBSE", grade="07", subject="Science",
+        unit="Unit", chapter_title=f"S11 {code}",
+        chapter_display_name=f"S11 {code}", **fields,
+    )
+    db.add(chapter)
+    db.commit()
+    db.refresh(chapter)
+    return chapter
+
+
+def _staged_payload_for(db, chapter):
+    job = models.UploadJob(
+        module="build_concepts", upload_type="document", learning_kind="post",
+        source_book="NCERT", filename="duration.mmd",
+        mmd_text="## Topic A\nA source paragraph.", status="converted",
+        deposit_scope_type="chapter", deposit_scope_ids=[chapter.id],
+        question_inventory={"items": [], "stats": {}, "mined_types": []},
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+    release.stage_release(
+        db, job, target_chapter_id=chapter.id,
+        records=_rendered_records(), inventory=_inventory(),
+        mined_types=_mined_types(),
+    )
+    return release.release_payload(job)
+
+
+def test_a_chapter_with_no_frozen_duration_blocks_the_write_and_ships(db):
+    """Contract v2.0 §32.1: a duration is never estimated — a chapter the
+    registry does not cover and no upload variable names stages with the
+    cell blank, records ``chapter_duration_unregistered`` as an issue AND a
+    blocking finding, and stays a downloadable Diagnostic release.
+    """
+    chapter = _own_chapter(db, "07CBSC_S11NoDuration")
+    payload = _staged_payload_for(db, chapter)
+    assert payload["directory_metadata"]["chapter_duration"] == ""
+    assert any(
+        issue["code"] == release_qc.CHAPTER_DURATION_UNREGISTERED
+        for issue in payload["issues"]
+    )
+    assert any(
+        release_qc.CHAPTER_DURATION_UNREGISTERED in defect
+        for defect in payload[release.QC_BLOCKING_FIELD]
+    )
+    assert any(
+        release_qc.CHAPTER_DURATION_UNREGISTERED in defect
+        for defect in release.structural_defects(payload)
+    )
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+
+
+def test_a_chapter_with_a_frozen_duration_passes_the_gate_at_staging(db):
+    """The gate reads the FROZEN directory metadata the staging call hands
+    the audit: [measured] the audit ran over a payload slice without
+    ``directory_metadata``/``chapter_meta`` and so recorded the blocker for
+    every release, duration or not — the recompute in ``structural_defects``
+    could never clear a finding staging had already written.
+    """
+    chapter = _own_chapter(
+        db, "07CBSC_S11Duration", chapter_duration="40 minutes")
+    payload = _staged_payload_for(db, chapter)
+    assert payload["directory_metadata"]["chapter_duration"] == "40 minutes"
+    assert not any(
+        issue["code"] == release_qc.CHAPTER_DURATION_UNREGISTERED
+        for issue in payload["issues"]
+    )
+    assert payload[release.QC_BLOCKING_FIELD] == []
+    assert release.structural_defects(payload) == []

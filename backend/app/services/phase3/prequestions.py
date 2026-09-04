@@ -1,13 +1,16 @@
 """Pass 2.9c — Prequestions: the Pre-Learning coverage plan and its questions.
 
-docs/aegis-restructure.md §4 Phase 03 (Q4, resolved per D3; calibration
-re-set by owner steer 2026-08-20 to ~10, then 2026-08-21 to about 5
-questions per pre-concept with the tier split left to the model, plus
-the diagnostic posture: plan the minimum coverage that genuinely
-verifies the prerequisite): neither mandatory quota nor maximum; the
-model authors a concept-specific coverage plan; variance carries an
-authored, critic-flagged rationale; an explicit blueprint may override;
-a thin pre-concept is never padded.
+docs/aegis-restructure.md §4 Phase 03 (Q4, resolved per D3; the recorded
+numeric calibration targets of Q20 — re-set by owner steer 2026-08-20 and
+2026-08-21, with the tier split left to the model — are superseded by
+register Q26, 2026-09-04: the Master Governing Contract v2.0 §8 states
+"complete diagnostic coverage of the Mastery, at least one routed
+question, no quotas", and the diagnostic posture of 2026-08-21 stands:
+plan the minimum coverage that genuinely verifies the prerequisite):
+neither mandatory quota nor maximum; the model authors a
+concept-specific coverage plan; every plan carries an authored,
+critic-flagged rationale; an explicit blueprint may override; a thin
+pre-concept is never padded.
 
 This pass authors the plan and the questions and carries them. Routing
 them through the assessment lane — cells, materialization, grouping,
@@ -26,16 +29,16 @@ compare a plan against, so no code here compares one to anything. A plan
 of exactly forty carries a rationale for the same reason a plan of six
 does — because every plan does.
 
-The stated norm therefore appears in exactly one place: as
-explicitly-labelled CALIBRATION prose inside ``_plan_rules``, quoted with
-Q4's own qualifiers attached, because "variance carries a rationale" is
-undefined if the model cannot see the norm it may vary from. It appears
-in no constant, no checker, no threshold, no default and no comparison —
-pinned by a regression over the whole validator surface. And because a
-stated norm becoming a de facto quota is the real hazard, the advisory
-critic is asked in as many words whether the plan is **evidence-led or
-anchored on the stated norm**: a thin pre-concept planning six questions
-with a good reason is a correct outcome, not a defect.
+The coverage rule therefore appears in exactly one place: as
+explicitly-labelled COVERAGE prose inside ``_plan_rules`` (contract §8:
+complete diagnostic coverage of the Mastery, no quotas). No number of
+any kind is stated there since Q26, and no norm appears in any constant,
+checker, threshold, default or comparison — pinned by a regression over
+the whole validator surface. And because a stated figure becoming a de
+facto quota is the real hazard, the advisory critic is asked in as many
+words whether the plan is **evidence-led or anchored on a customary
+number**: a thin pre-concept planning one question with a good reason
+is a correct outcome, not a defect.
 
 **The checker's only arithmetic is between two numbers the model itself
 wrote.** A plan's split sums to the plan's own total; a concept's
@@ -93,8 +96,8 @@ than it is.
 
 **The tier/difficulty axis is not conflated, and the level verdict is not
 pre-empted.** Q4's original "20 Basic and 20 Intermediate" — and every
-later calibration of it, Q20's ~5-with-the-split-left-to-the-model
-included — names the GROUP TIER (``assessment_grouping.TIER_CODES``),
+later calibration of it, Q20's split-left-to-the-model included — names
+the GROUP TIER (``assessment_grouping.TIER_CODES``),
 which is decided per question by an independent level verdict in the
 assessment lane that is explicitly told no other label has authority
 over it. The workbook's
@@ -430,18 +433,20 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.PREQUESTIONS_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="pre_learning",
+        purpose="advisory_critic",
     )
 
 
-# The ONE place the doc's stated norm appears, and it appears as what it
-# is: labelled calibration prose inside the plan payload's rules, quoted
-# with Q4's own qualifiers attached. Q4's "any variance in total or split
-# carries an authored rationale" is undefined if the model cannot see the
-# norm it may vary from — but the norm is evidence the model weighs, never
-# a number any code holds. It is in no constant, checker, threshold,
-# default or comparison anywhere in this codebase, and a regression pins
-# that over the whole validator surface.
+# The ONE place the coverage rule appears, and it appears as what it is:
+# labelled COVERAGE prose inside the plan payload's rules. Until register
+# Q26 (2026-09-04) this prose quoted a recorded numeric target ("about 5
+# questions per concept", Q20) as calibration evidence; the Master
+# Governing Contract v2.0 §8 replaces every such target with "complete
+# diagnostic coverage of the Mastery, at least one routed question, no
+# quotas", so no number of any kind is stated here any more. Q4's "every
+# plan carries a rationale" stands unchanged: the rationale is required
+# unconditionally, so no code ever compares a plan to anything, and a
+# regression pins that over the whole validator surface.
 def _plan_rules(rules_suffix: str) -> str:
     return (
         "Phase 03: author a coverage plan for the generated questions of "
@@ -457,29 +462,33 @@ def _plan_rules(rules_suffix: str) -> str:
         "the post-learning concepts listed as needing it will demand. "
         "EVERY plan carries a rationale — the one of ordinary size as "
         "much as the unusual one — so state yours whatever your numbers "
-        "are. CALIBRATION (the reference point, not a rule): the "
-        "recorded target for pre-learning coverage is about 5 questions "
-        "per concept, with the split across the tiers left to your "
-        "judgment of the prerequisite (owner steer, 2026-08-21; "
-        "supersedes the earlier ~10). That figure is a target this "
-        "project recorded, not an observed practice of any school, "
-        "board or grade, and it is neither a mandatory quota nor a "
-        "maximum; a thin pre-concept is never padded to reach it, and a "
-        "rich one is not capped at it. POSTURE (owner steer, "
-        "2026-08-21): plan the minimum coverage that genuinely verifies "
-        "the prerequisite — prefer fewer, more diagnostic questions, "
-        "each earning its place by testing something the chapter's "
-        "learning actually depends on, over breadth or drill. "
-        "Plan what the evidence in front of you supports and say why — a "
-        "prerequisite whose evidence supports six questions is planned at "
-        "six, and that is a correct answer, not a shortfall. A plan of "
-        "zero is legitimate where the fundamental is held by a single "
-        "definition the learner either knows or does not. Naming a tier "
-        "here states the coverage you intend; it is not a verdict on any "
-        "question, and each question's own level is decided later and "
-        "independently. Decide EVERY pre_concept_id in the request "
-        "exactly once, and make the split account for the total you "
-        "state." + rules_suffix
+        "are. COVERAGE (Master Governing Contract v2.0 §8 — there are no "
+        "quotas): plan the complete diagnostic coverage of THIS "
+        "prerequisite's Mastery. Each capability a learner must already "
+        "hold before the chapter starts is verified by a question, and "
+        "nothing the chapter itself goes on to teach is. There is no "
+        "target count, no minimum and no maximum, and no figure from any "
+        "other concept, school, board or grade is a reference point: a "
+        "thin pre-concept is never padded, and a rich one is never "
+        "capped. The split across the tiers is left to your judgment of "
+        "the prerequisite. POSTURE (owner steer, 2026-08-21): plan the "
+        "minimum coverage that genuinely verifies the prerequisite — "
+        "prefer fewer, more diagnostic questions, each earning its place "
+        "by testing something the chapter's learning actually depends "
+        "on, over breadth or drill. Plan what the evidence in front of "
+        "you supports and say why — a prerequisite whose evidence "
+        "supports six questions is planned at six, and one whose Mastery "
+        "is a single definition the learner either holds or does not is "
+        "planned at one; both are correct answers, not shortfalls. Every "
+        "shipped pre-learning concept carries at least one diagnostic "
+        "question, so a plan of zero says the concept has no Mastery worth "
+        "verifying before this chapter — plan zero only when that is "
+        "true, and say so in the rationale so the reviewer can act on "
+        "it. Naming a tier here states the coverage you intend; it is not "
+        "a verdict on any question, and each question's own level is "
+        "decided later and independently. Decide EVERY pre_concept_id in "
+        "the request exactly once, and make the split account for the "
+        "total you state." + rules_suffix
     )
 
 

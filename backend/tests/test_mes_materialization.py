@@ -75,7 +75,8 @@ def _objective_response(request: dict, **changes) -> dict:
             },
         ],
         "sub_questions": [],
-        "answer_explanation": "The curved face tapers to an apex.",
+        # Contract v2.0 §22.5: opens with the exact correct-option text.
+        "answer_explanation": "Cone. The curved face tapers to an apex.",
         "requires_visual": True,
         "rationale": "The item preserves the supplied visual identification.",
     }
@@ -103,7 +104,8 @@ def _descriptive_response(request: dict, **changes) -> dict:
             },
         ],
         "sub_questions": [],
-        "answer_explanation": "",
+        # Contract v2.0 §24: the same complete model answer in both fields.
+        "answer_explanation": "Evaporation, condensation and precipitation.",
         "requires_visual": False,
         "rationale": "The answer and rubric satisfy the fixed cell.",
     }
@@ -183,7 +185,7 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-12"
+        "assessment-materialize-13"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
@@ -648,7 +650,7 @@ def test_english_post_materialization_honors_thirty_answer_master_capacity():
     assert len(candidate["answers"]) == 30
     assert candidate["assessment_eligibility"] == "accepted"
     assert candidate["authority"]["policy_version"] == (
-        "assessment-materialize-12"
+        "assessment-materialize-13"
     )
 
 

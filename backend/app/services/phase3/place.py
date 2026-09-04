@@ -302,7 +302,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.PLACE_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="concept_mapping",
+        purpose="advisory_critic",
         image_urls=_payload_image_urls(payload),
     )
 
@@ -319,7 +319,9 @@ def _live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.FIXER_SYSTEM,
         prompts.render(payload),
-        purpose="concept_validation",
+        # The Fixer authors a best-judgment decision: priced as authoring
+        # (matches phase3/fixer.live_fixer), never as a critic pass.
+        purpose="semantic_resolution",
         model=fixer_mod.fixer_model(),
         image_urls=_payload_image_urls(vision_payload),
     )

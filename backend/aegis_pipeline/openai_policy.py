@@ -64,8 +64,14 @@ OpenAIPurpose = Literal[
     "workbook_authoring",
     "revision_editing",
     "metadata",
+    # The independent advisory critic (CLAUDE.md Rule 1, register Q10): it
+    # re-reads an author's decision and may only flag. Labelling it as its own
+    # purpose lets the cost policy price the second pass below the first
+    # without touching the author's effort (register Q26).
+    "advisory_critic",
 ]
 ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
+REASONING_PROFILE_ENV: Final = "AEGIS_OPENAI_REASONING_PROFILE"
 
 
 def ensure_json_mode_prompt(system: str, user: str) -> tuple[str, str]:
@@ -86,33 +92,96 @@ def ensure_json_mode_prompt(system: str, user: str) -> tuple[str, str]:
     return system_text, user_text
 
 
-# Q22 makes ``xhigh`` the uniform preferred effort for every registered Luna
-# purpose. Purpose labels remain mandatory because they are the routing and
-# audit contract even though they no longer select different effort tiers.
+# Reasoning effort is TRANSPORT policy (register Q22): it is not part of any
+# prompt, schema, payload or decide-once key, so changing it never re-keys a
+# recorded decision. Two named profiles exist and one environment variable
+# selects between them; nothing else in the codebase chooses an effort.
 #
-# ``xhigh`` is a *request*, not an assumption. A compatible endpoint may expose
-# a lower ceiling and reject the value outright. Capability negotiation below
-# discovers the real ceiling once per model, per process, and every later
-# request is built at that ceiling — so an unsupported value costs one probe,
-# not one 400 per call. Structured-output recovery may also lower effort after
-# truncation; neither recovery path weakens the normal Luna request policy.
+# ``tiered`` (the default since register Q26, 2026-09-04) prices each purpose
+# by what the call actually decides. Semantic AUTHORING and ADJUDICATION —
+# reading the source, deciding task membership, topology, concept content,
+# assessments, the Fixer — request ``high``. The independent advisory critic,
+# which re-reads an author's decision and may only flag (Q10), requests
+# ``medium``: its dissent is review evidence, never a gate, so a second pass
+# at author effort doubled the spend of every consequential decision for no
+# change in what ships. Transcription, outlining, metadata, refinement and
+# the offline workbook tools request ``medium``/``low`` because they render
+# or restate content the model has already decided. Every purpose still
+# goes to the same model; the tiers change how much the model deliberates,
+# never who decides (CLAUDE.md Rule 1 is untouched).
+#
+# ``uniform-xhigh`` is the former Q22 policy, kept selectable so the two can
+# be measured against each other on the same source.
+#
+# Whatever the profile, the value is a *request*, not an assumption. A
+# compatible endpoint may expose a lower ceiling and reject the value
+# outright. Capability negotiation below discovers the real ceiling once per
+# model, per process, and every later request is built at that ceiling — so
+# an unsupported value costs one probe, not one 400 per call. Structured-
+# output recovery may also lower effort after truncation.
 UNIFORM_REASONING_EFFORT: Final[ReasoningEffort] = "xhigh"
-REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = {
-    "assessment_generation": UNIFORM_REASONING_EFFORT,
-    "source_extraction": UNIFORM_REASONING_EFFORT,
-    "source_adjudication": UNIFORM_REASONING_EFFORT,
-    "page_transcription": UNIFORM_REASONING_EFFORT,
-    "chapter_outline": UNIFORM_REASONING_EFFORT,
-    "concept_mapping": UNIFORM_REASONING_EFFORT,
-    "concept_detailing": UNIFORM_REASONING_EFFORT,
-    "concept_validation": UNIFORM_REASONING_EFFORT,
-    "semantic_resolution": UNIFORM_REASONING_EFFORT,
-    "pre_learning": UNIFORM_REASONING_EFFORT,
-    "workbook_planning": UNIFORM_REASONING_EFFORT,
-    "workbook_authoring": UNIFORM_REASONING_EFFORT,
-    "revision_editing": UNIFORM_REASONING_EFFORT,
-    "metadata": UNIFORM_REASONING_EFFORT,
+DEFAULT_REASONING_PROFILE: Final = "tiered"
+TIERED_REASONING_EFFORT_BY_PURPOSE: Final[
+    dict[OpenAIPurpose, ReasoningEffort]
+] = {
+    "assessment_generation": "high",
+    "source_extraction": "high",
+    "source_adjudication": "high",
+    "page_transcription": "medium",
+    "chapter_outline": "medium",
+    "concept_mapping": "high",
+    "concept_detailing": "high",
+    "concept_validation": "medium",
+    "semantic_resolution": "high",
+    "pre_learning": "high",
+    "workbook_planning": "medium",
+    "workbook_authoring": "medium",
+    "revision_editing": "medium",
+    "metadata": "low",
+    "advisory_critic": "medium",
 }
+UNIFORM_REASONING_EFFORT_BY_PURPOSE: Final[
+    dict[OpenAIPurpose, ReasoningEffort]
+] = {
+    purpose: UNIFORM_REASONING_EFFORT
+    for purpose in TIERED_REASONING_EFFORT_BY_PURPOSE
+}
+REASONING_PROFILES: Final[
+    dict[str, dict[OpenAIPurpose, ReasoningEffort]]
+] = {
+    "tiered": TIERED_REASONING_EFFORT_BY_PURPOSE,
+    "uniform-xhigh": UNIFORM_REASONING_EFFORT_BY_PURPOSE,
+}
+# The complete purpose registry (every purpose, in the default profile). Kept
+# under its historical name because call-site audits read it as "the set of
+# purposes a request may declare".
+REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = (
+    TIERED_REASONING_EFFORT_BY_PURPOSE
+)
+
+
+def configured_reasoning_profile() -> str:
+    """The named effort profile in force, from the environment or default.
+
+    An unknown name is a configuration error and is reported as such rather
+    than silently falling back to any profile: an operator who typed a
+    profile name expects that profile, not a quiet substitute.
+    """
+    raw = os.environ.get(REASONING_PROFILE_ENV, "").strip().lower()
+    if not raw:
+        return DEFAULT_REASONING_PROFILE
+    if raw not in REASONING_PROFILES:
+        known = ", ".join(sorted(REASONING_PROFILES))
+        raise ValueError(
+            f"{REASONING_PROFILE_ENV} names unknown reasoning profile "
+            f"{raw!r}; expected one of: {known}"
+        )
+    return raw
+
+
+def reasoning_policy() -> dict[OpenAIPurpose, ReasoningEffort]:
+    """The purpose -> effort table of the profile in force."""
+    return dict(REASONING_PROFILES[configured_reasoning_profile()])
 
 # Ranked weakest to strongest. ``none`` is a real provider value; ``""`` means
 # the parameter is omitted entirely, which is the last rung for an endpoint that
@@ -331,14 +400,18 @@ def effective_completion_tokens(
 
 
 def reasoning_effort_for(purpose: OpenAIPurpose) -> ReasoningEffort:
-    """Resolve a known purpose to its reasoning effort, rejecting silent drift."""
-    try:
-        return REASONING_EFFORT_BY_PURPOSE[purpose]
-    except KeyError as exc:
+    """Resolve a known purpose to its reasoning effort, rejecting silent drift.
+
+    The effort comes from the profile in force (``reasoning_policy``); the
+    purpose must be registered whatever the profile, so a call site that
+    invents a label is refused rather than priced at some default.
+    """
+    if purpose not in REASONING_EFFORT_BY_PURPOSE:
         known = ", ".join(sorted(REASONING_EFFORT_BY_PURPOSE))
         raise ValueError(
             f"Unknown OpenAI request purpose {purpose!r}; expected one of: {known}"
-        ) from exc
+        )
+    return reasoning_policy()[purpose]
 
 
 def supports_reasoning_effort(model: str) -> bool:

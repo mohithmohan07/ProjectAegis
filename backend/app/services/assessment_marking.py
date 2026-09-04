@@ -22,6 +22,7 @@ from typing import Any, Mapping
 
 from .. import bulk_import as bi
 from .. import config
+from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
 from . import katex_rules
 from . import assessment_release as rel
@@ -34,7 +35,9 @@ from .phase3 import kernel
 # contract on top so replay cannot collide with either provider input shape.
 # ``-7`` adds Subjective answer blocks, the board/profile duration contract,
 # and mutually exclusive main-vs-subquestion rubrics.
-MARKING_POLICY_VERSION = "assessment-marking-7"
+# ``-8`` adopts Master Governing Contract v2.0 §27.5/§32: every Descriptive
+# rubric criterion carries exactly 0.5 or 1 mark.
+MARKING_POLICY_VERSION = "assessment-marking-8"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
 
 _PROMPT_CACHE_STABLE_KEYS = (
@@ -85,13 +88,14 @@ MARKING_SYSTEM = (
     "Enumerate every represented subquestion exactly to match the stem, and "
     "award no marks for redundant steps. Allocate marks in fair, logical "
     "increments consistent with the represented scoring evidence; never "
-    "use token slivers such as 0.1 merely to force a sum. Default every "
-    "Descriptive rubric criterion to a uniform 1.0 weight, so marks equal "
-    "the number of criteria satisfied (0.5 only where the scoring "
-    "evidence genuinely awards half-steps); a non-uniform split such as "
-    "1.5/2.5 must name its scoring evidence in the rationale — the "
-    "audited failure put all 4 marks on one criterion (owner audit, "
-    "2026-08-29).\n"
+    "use token slivers such as 0.1 merely to force a sum. Every Descriptive "
+    "rubric criterion — a main answer/rubric block or a subquestion "
+    "keyword — carries EXACTLY 0.5 or 1 mark, never more: marks equal the "
+    "number of criteria satisfied, and an award larger than 1 is split "
+    "into discrete, non-overlapping criteria by the materialized rubric "
+    "(never manufactured here). A single undivided multi-mark criterion "
+    "is invalid — the audited failure put all 4 marks on one criterion "
+    "(owner audit, 2026-08-29; Master Governing Contract v2.0 §27).\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","question":"","question_text":"",'
     '"answers":[],"sub_questions":[],"question_duration":1,'
@@ -635,6 +639,11 @@ def _weight_defects(
                 )
                 continue
             answer_weights.append(weight)
+            quantum = rel.rubric_weight_quantum_defect(
+                weight, what=f"descriptive rubric {position}",
+            )
+            if quantum:
+                defects.append(quantum)
 
     score_in_main_answers = kind != "descriptive" or not (
         isinstance(response.get("sub_questions"), list)
@@ -686,6 +695,12 @@ def _weight_defects(
                 )
                 continue
             keyword_weights.append(weight)
+            quantum = rel.rubric_weight_quantum_defect(
+                weight,
+                what=f"subquestion {position} keyword {keyword_position}",
+            )
+            if quantum:
+                defects.append(quantum)
         if len(keyword_weights) == len(keywords) and sum(
             keyword_weights, Decimal(0)
         ) != sub_mark:
@@ -1037,7 +1052,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         MARKING_CRITIC_SYSTEM,
         suffix,
-        purpose="concept_validation",
+        purpose="advisory_critic",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "marking-critic-v5",
@@ -1058,7 +1073,11 @@ def _live_authorities(
     from .phase3 import fixer as fixer_mod
 
     envelope_mod.require_live_api()
-    return _live_author, critic or _live_critic, fixer or fixer_mod.live_fixer
+    return (
+        _live_author,
+        critic or lane_policy.critic_for("marking", _live_critic),
+        fixer or fixer_mod.live_fixer,
+    )
 
 
 def _kernel_provider(provider: kernel.Provider) -> kernel.Provider:

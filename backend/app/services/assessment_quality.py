@@ -17,6 +17,7 @@ import copy
 import json
 from typing import Any, Mapping
 
+from . import assessment_lane_policy as lane_policy
 from .phase3 import kernel
 
 QUALITY_POLICY_VERSION = "assessment-group-quality-1"
@@ -165,7 +166,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         QA_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -220,7 +221,8 @@ def review_group(
 
         envelope_mod.require_live_api()
         provider = _live_review
-        critic = critic if critic is not None else _live_critic
+        if critic is None:
+            critic = lane_policy.critic_for("qa", _live_critic)
         fixer = fixer or fixer_mod.live_fixer
     store = store or kernel.DecisionStore()
 

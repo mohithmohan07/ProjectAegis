@@ -40,8 +40,11 @@ never overwritten.
 The workbook has three content sheets — Objective, Subjective, Descriptive —
 each with two header rows (section bands + field names) and the hierarchical
 column blocks Chapter → Topic → Concept → Group → Question → Answers. Exact
-field orders live in `backend/app/bulk_import/__init__.py` (65 / 92 / 374
-columns, including `concept_source` and the trailing `question_text`).
+field orders live in `backend/app/bulk_import/__init__.py` and
+`layouts.py`: the reference base is 67 / 374 / 144 columns and every output
+ships the update-aware 72 / 380 / 149 layout of the Master Governing
+Contract v2.0 (`is_update_*` columns, `concept_source`, the trailing
+`question_text`; lists use ` | `, line breaks use `<br>`).
 `backend/app/bulk_import/reader.py` and `writer.py` round-trip it; the reader
 auto-detects older templates without the newer columns.
 

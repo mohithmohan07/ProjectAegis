@@ -27,6 +27,16 @@ from app.services import release_refiner
 from app.services.phase3 import kernel
 
 OWNER = "local:default"
+# Contract v2.0 §18: the run's publication (any non-blank publication).
+PUBLICATION = "NCERT"
+# Contract v2.0 §24/§27.5: the scripted 3-mark Descriptive rubric is three
+# untagged (non-English run, §28) criteria worth exactly 1 mark each.
+DESCRIPTIVE_MODEL_ANSWER = "A cube occupies space in three dimensions."
+DESCRIPTIVE_CRITERIA = (
+    "three dimensions are named",
+    "occupying space is stated as the defining property",
+    "the cube is given as the example",
+)
 ENVELOPE_SHA256 = "e" * 64
 
 
@@ -71,6 +81,9 @@ def _make_job(db, chapter) -> models.UploadJob:
         filename="ch.mmd",
         mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
         status="generated",
+        # Contract v2.0 §18: the run's publication is a frozen run variable
+        # that every question_source/concept_source cell names.
+        source_book=PUBLICATION,
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
         question_inventory=inventory,
@@ -90,7 +103,7 @@ def _make_job(db, chapter) -> models.UploadJob:
                     "Solid shapes occupy space in three dimensions; cubes "
                     "are examples."
                 ),
-                "keywords": "solid, cube, three dimensions",
+                "keywords": "solid | cube | three dimensions",
             },
             {
                 "topic": "Shapes",
@@ -98,7 +111,7 @@ def _make_job(db, chapter) -> models.UploadJob:
                 "concept_details": (
                     "Plane shapes are flat, two-dimensional figures."
                 ),
-                "keywords": "plane, flat, two dimensions",
+                "keywords": "plane | flat | two dimensions",
             },
         ],
         inventory=inventory,
@@ -147,7 +160,9 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
                      "correct_answer": "No", "answer_weightage": "0"},
                 ],
                 "sub_questions": [],
-                "answer_explanation": "A cube is three-dimensional.",
+                # Contract v2.0 §22.5: the explanation opens with the exact
+                # correct-option text, never a letter or number.
+                "answer_explanation": "Cube. A cube is three-dimensional.",
                 "requires_visual": False,
                 "rationale": "preserves the source question and answer",
             }
@@ -156,15 +171,17 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "question": atom["normalized_public_text"],
             "answer_restriction": "Open",
             "restriction_reason": "several valid explanations",
-            "display_answer": "A cube occupies space in three dimensions.",
+            # Contract v2.0 §24: display_answer and answer_explanation are
+            # the same complete model answer; criteria are untagged (§28)
+            # and atomic (§27.5).
+            "display_answer": DESCRIPTIVE_MODEL_ANSWER,
             "answers": [
-                {"answer_type": "Phrases", "answer_weightage": "3",
-                 "answer_content": (
-                     "[content]: three dimensions named and justified"
-                 )},
+                {"answer_type": "Phrases", "answer_weightage": "1",
+                 "answer_content": criterion}
+                for criterion in DESCRIPTIVE_CRITERIA
             ],
             "sub_questions": [],
-            "answer_explanation": "",
+            "answer_explanation": DESCRIPTIVE_MODEL_ANSWER,
             "requires_visual": False,
             "rationale": "preserves the constructed-response obligation",
         }
@@ -214,8 +231,11 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             duration = 2
             keyboard = ""
         else:
-            assert len(answers) == 1
-            answers[0]["answer_weightage"] = cell["marks"]
+            # Contract v2.0 §27.5: each criterion carries exactly 1 mark;
+            # the three criteria sum to the cell's 3 marks.
+            assert len(answers) == len(DESCRIPTIVE_CRITERIA)
+            for answer in answers:
+                answer["answer_weightage"] = 1
             duration = 5
             keyboard = "No"
         return {
@@ -294,11 +314,12 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
                     "A cube occupies space in three dimensions."
                 )
             else:
-                refined["display_answer"] = (
-                    "A cube occupies space in all three dimensions."
-                )
+                # §24 parity: both model-answer fields move together.
+                polished = "A cube occupies space in all three dimensions."
+                refined["display_answer"] = polished
+                refined["answer_explanation"] = polished
                 refined["answers"][0]["answer_content"] = (
-                    "[content]: names and justifies all three dimensions."
+                    "all three dimensions are named"
                 )
         else:
             refined["semantic_description"] = (
@@ -334,11 +355,23 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "rationale": "the scripted questions are all distinct asks",
         }
 
+    def item_reviewer(payload):
+        # Contract v2.0 §27 step 6 (register Q26): the ONE joint per-item
+        # review that replaced the per-decision critics.
+        record("item_review", payload)
+        return {
+            "candidate_id": payload["candidate_id"],
+            "verdict": "verified",
+            "confidence": 1.0,
+            "issues": [],
+        }
+
     return {
         "pre_claim": (pre_claim_author, verified_critic),
         "dedup": (dedup_author, verified_critic),
         "cells": (cell_author, verified_critic),
         "materialize": (materialize_author, verified_critic),
+        "item_review": (item_reviewer, None),
         "answer_restriction": (
             answer_restriction_author, verified_critic
         ),
@@ -477,7 +510,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ] == "assessment-cell-3"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-12"
+        ] == "assessment-materialize-13"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
@@ -489,7 +522,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-7"
+        ] == "assessment-marking-8"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
         ]["decomposition_authority"] == "api_per_item_verdict"

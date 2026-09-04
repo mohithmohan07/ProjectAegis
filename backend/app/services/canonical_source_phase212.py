@@ -1309,7 +1309,7 @@ def _critic_review(
             system=_CRITIC_SYSTEM,
             prompt=prompt,
             schema=critic_schema(),
-            purpose="source_adjudication",
+            purpose="advisory_critic",
         )
     except Exception as exc:  # advisory pass: never a gate, never a halt (Q10)
         return {"verdict": "concur", "dissents": [], "unavailable": str(exc)}

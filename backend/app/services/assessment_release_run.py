@@ -40,6 +40,8 @@ from . import assessment_blueprint
 from . import assessment_cells as cell_decisions
 from . import assessment_dedup
 from . import assessment_grouping as grouping
+from . import assessment_item_review as item_review
+from . import assessment_lane_policy as lane_policy
 from . import assessment_prelearning_claim as prelearning_claim
 from . import assessment_marking as marking
 from . import assessment_master_refiner as master_refiner
@@ -146,6 +148,7 @@ MASTER_BUILD_STAGES = (
     "materialize",
     "restriction",
     "marking",
+    "item_review",
     "routing",
     "levels",
     "clustering",
@@ -2267,6 +2270,23 @@ def run_release_for_job(
             "(Objective options keep their own images)."
         )
 
+    # Contract v2.0 §18: ``question_source`` is a mandatory per-run scalar
+    # naming the publication — the staged release's frozen source book —
+    # stamped on every candidate here, never defaulted by the renderer. A
+    # run whose publication is unknown ships the cell blank and the
+    # read-back records it as a blocker (never a borrowed value).
+    publication = str(bridge.get("source_book") or "").strip()
+    for candidate in candidates:
+        candidate["question_source"] = publication
+    if not publication:
+        progress.log(
+            "Assessment release: the run has no publication (source book); "
+            "question_source ships blank and the release read-back records "
+            "it as a blocker until the source book is set (contract v2.0 "
+            "§18).",
+            level="warning",
+        )
+
     learner_text_before = _learner_text_snapshot(candidates)
 
     # Stage 5 — decide Open/Specific from the complete, unweighted answer
@@ -2387,6 +2407,64 @@ def run_release_for_job(
         envelope_sha256=envelope_sha,
         candidates=candidates,
     )
+
+    # Stage 6.5 — the joint per-item review (contract v2.0 §27 step 6,
+    # register Q26): ONE independent critic over the finished item — cell,
+    # materialization, answer space and marking together — replacing the
+    # four per-decision critics that audited the same item in fragments.
+    # An auditor only (Q10): dissent rides the candidate as review flags.
+    if lane_policy.item_review_enabled():
+        _observe_stage(stage_progress, "item_review", 0, len(candidates))
+        progress.log(
+            f"Reviewing {len(candidates)} finished candidate(s) jointly "
+            "(question, answer space, model answer, criteria, arithmetic)."
+        )
+        review_provider, _unused_review_critic = _authority_pair(
+            authorities, "item_review"
+        )
+        cell_by_id = {
+            str(cell.get("cell_id") or ""): cell for cell in cells
+        }
+        atom_by_qid = {
+            str(atom.get("source_qid") or ""): atom for atom in atoms
+        }
+        review_units = []
+        for candidate in candidates:
+            cell = cell_by_id.get(
+                str(candidate.get("blueprint_cell_id") or ""), {}
+            )
+            atom_ids = list(candidate.get("source_atom_ids") or [])
+            atom = atom_by_qid.get(str(atom_ids[0])) if atom_ids else None
+            review_units.append((candidate, cell, atom))
+        reviews = item_review.review_items(
+            review_units,
+            meta=meta,
+            profile=profile,
+            envelope_sha256=envelope_sha,
+            provider=review_provider,
+            store=store,
+            on_result=(
+                None if stage_progress is None
+                else lambda index, item, result: _observe_stage(
+                    stage_progress, "item_review", index + 1, len(candidates)
+                )
+            ),
+        )
+        review_by_candidate = _candidate_rows_exactly(
+            "assessment item review", candidates, reviews
+        )
+        for candidate in candidates:
+            review = review_by_candidate[candidate["candidate_id"]]
+            candidate[item_review.AUDIT_FIELD] = {
+                "verdict": str(review.get("verdict") or ""),
+                "confidence": review.get("confidence"),
+                "issues": list(review.get("issues") or []),
+                "flags": list(review.get("review_flags") or []),
+                "authority": dict(review.get("authority") or {}),
+            }
+            if review.get("review_flags"):
+                _append_warning(candidate, item_review.WARNING)
+        _assert_learner_text_unchanged(learner_text_before, candidates)
 
     # Stage 7 — route only across the immutable staged concept-release
     # concepts (this run's own lane; OD4 numbers them 01 or 03).
@@ -2699,10 +2777,25 @@ def run_release_for_job(
 
     # Stage 11 — every group receives the complete, symmetric same-home/tier
     # sibling context. QA only flags and never changes the authored records.
+    # Opt-in since register Q26 (contract v2.0 cost policy): the joint item
+    # review and the route critic already audit every member; a further
+    # per-group pass is enabled explicitly (AEGIS_MASTER_GROUP_QA=1).
     qa_provider, qa_critic = _authority_pair(authorities, "qa")
     quality_groups = [_group_evidence(group) for group in groups]
-    _observe_stage(stage_progress, "qa", 0, len(groups))
-    for group_index, record in enumerate(groups):
+    qa_groups = (
+        groups
+        if qa_provider is not None or lane_policy.group_qa_enabled()
+        else []
+    )
+    if not qa_groups and groups:
+        progress.log(
+            "Assessment release: touched-group QA is opt-in under the "
+            "contract v2.0 cost policy (AEGIS_MASTER_GROUP_QA=1) and did "
+            "not run; the joint item review and route critic audited every "
+            "member."
+        )
+    _observe_stage(stage_progress, "qa", 0, len(qa_groups))
+    for group_index, record in enumerate(qa_groups):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
@@ -2749,7 +2842,7 @@ def run_release_for_job(
             or str(review.get("quality_review") or "") == "flagged"
         ):
             _append_warning(record, _QUALITY_WARNING)
-        _observe_stage(stage_progress, "qa", group_index + 1, len(groups))
+        _observe_stage(stage_progress, "qa", group_index + 1, len(qa_groups))
 
     _assert_learner_text_unchanged(learner_text_before, candidates)
     _snapshot_groups(
@@ -2847,24 +2940,49 @@ def run_release_for_job(
     refiner_provider, refiner_critic = _authority_pair(
         authorities, "refiner"
     )
-    refined_records, refinement_diff, refinement_flags = (
-        release_refiner.refine_release(
-            [payload],
-            on_unit=(
-                None if stage_progress is None
-                else lambda done, total: _observe_stage(
-                    stage_progress, "refine", done, total
-                )
-            ),
-            metadata={**meta, "assessment_profile": profile},
-            provider=refiner_provider,
-            critic=refiner_critic,
-            store=store,
-            output_kind="assessment_master",
-            envelope_sha256=envelope_sha,
-            fixer=fixer,
+    if refiner_provider is not None or lane_policy.master_refiner_enabled():
+        refined_records, refinement_diff, refinement_flags = (
+            release_refiner.refine_release(
+                [payload],
+                on_unit=(
+                    None if stage_progress is None
+                    else lambda done, total: _observe_stage(
+                        stage_progress, "refine", done, total
+                    )
+                ),
+                metadata={**meta, "assessment_profile": profile},
+                provider=refiner_provider,
+                critic=refiner_critic,
+                store=store,
+                output_kind="assessment_master",
+                envelope_sha256=envelope_sha,
+                fixer=fixer,
+            )
         )
-    )
+    else:
+        # Opt-in since register Q26 (contract v2.0 cost policy): the
+        # materialized prose ships as authored; a prose polish over every
+        # finished row is enabled explicitly (AEGIS_MASTER_REFINER=1).
+        progress.log(
+            "Assessment release: the Master Refiner is opt-in under the "
+            "contract v2.0 cost policy (AEGIS_MASTER_REFINER=1) and did not "
+            "run; authored prose ships as materialized."
+        )
+        refined_records = [payload]
+        refinement_diff = {
+            "policy_version": master_refiner.MASTER_REFINER_POLICY_VERSION,
+            "decision_policies": {},
+            "output_kind": "assessment_master",
+            "changes": [],
+            "review_flags": [],
+            "summary": (
+                "Master Refiner not run (opt-in under the contract v2.0 "
+                "cost policy, register Q26); prose ships as materialized"
+            ),
+            "resealed_after_refinement": False,
+            "skipped": True,
+        }
+        refinement_flags = []
     if len(refined_records) == 1 and isinstance(
         refined_records[0], Mapping
     ):

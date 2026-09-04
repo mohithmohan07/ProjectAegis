@@ -1,12 +1,13 @@
 """The Phase 03 coverage plan and its generated questions (Q4 per D3).
 
-Step-7 slice D1 regressions. Q4 (calibration re-set by owner steer
-2026-08-20 to ~10, then 2026-08-21 to about 5 questions per pre-concept
-with the tier split left to the model, plus the diagnostic posture):
-neither mandatory quota nor maximum. The model authors a
-concept-specific coverage plan; any variance in total or split carries
-an authored, critic-flagged rationale; an explicit blueprint may
-override; a thin pre-concept is never padded to reach the target.
+Step-7 slice D1 regressions. Q4 (the recorded numeric calibration
+targets of Q20 are superseded by register Q26: the Master Governing
+Contract v2.0 §8 states complete diagnostic coverage of the Mastery, at
+least one routed question and no quotas, with the tier split left to the
+model and the 2026-08-21 diagnostic posture standing): neither mandatory
+quota nor maximum. The model authors a concept-specific coverage plan;
+every plan carries an authored, critic-flagged rationale; an explicit
+blueprint may override; a thin pre-concept is never padded.
 
 The obvious implementation — ``if planned != 40: require_rationale()`` —
 is a numeric threshold deciding meaning AND the literal in a validator,
@@ -325,58 +326,55 @@ def test_no_literal_forty_in_any_validator_anywhere_in_the_backend():
     assert offenders == []
 
 
-def test_the_stated_norm_lives_only_in_the_plan_payloads_rules_prose():
-    """The norm (~5, owner steer 2026-08-21) lives only in labelled prose.
+def test_no_numeric_coverage_target_lives_anywhere_in_the_module():
+    """Contract v2.0 §8 (register Q26): no quotas, stated once, as prose.
 
-    Not a constant, not a default, not a threshold, not a comparison —
-    only inside the plan payload's rules text, where Q4's own qualifiers
-    are attached to it, because "variance carries a rationale" is
-    undefined if the model cannot see the norm.
+    The former recorded target ("about 5 questions per concept", Q20) is
+    gone: no numeric norm — current or superseded — is a literal anywhere
+    in the module, no string quotes one, and the coverage rule lives ONLY
+    inside ``_plan_rules`` as labelled COVERAGE prose with the 2026-08-21
+    diagnostic posture alongside it — never in a constant, a default, a
+    threshold, a comparison, or a prompt.
     """
     source = pathlib.Path(prequestions.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
-    holders: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and node.value in (5, 10):
-            holders.append(f"numeric literal {node.value}")
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if "about 5 questions" in node.value:
-                holders.append(node.value[:40])
-    # No numeric norm (current or superseded) anywhere in the module…
-    assert "numeric literal 5" not in holders
-    assert "numeric literal 10" not in holders
-    # …and every textual mention is inside _plan_rules' calibration prose.
+        if not isinstance(node, ast.Constant):
+            continue
+        if isinstance(node.value, bool):
+            continue
+        if node.value in (5, 10, 40):
+            raise AssertionError(f"numeric norm literal {node.value!r}")
+        if isinstance(node.value, str):
+            assert "about 5 questions" not in node.value
+            assert "about 10 questions" not in node.value
+            assert "questions per concept" not in node.value
     rules = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "_plan_rules"
     )
-    inside = {
-        sub.value for sub in ast.walk(rules)
-        if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
-        and "about 5 questions" in sub.value
-    }
-    assert inside, "the calibration prose must state the norm"
-    # …and Q4's own qualifiers are attached to it wherever it is stated,
-    # with the 2026-08-21 diagnostic posture carried alongside — labelled
-    # as posture, in the same payload prose, never in a prompt or a check.
     prose = "".join(
         sub.value for sub in ast.walk(rules)
         if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
     )
-    assert "CALIBRATION (the reference point, not a rule)" in prose
-    assert "neither a mandatory quota nor a maximum" in prose
-    assert "is never padded to reach it" in prose
+    assert "COVERAGE (Master Governing Contract v2.0 §8" in prose
+    assert "there are no quotas" in prose
+    assert "complete diagnostic coverage" in prose
+    assert "no target count, no minimum and no maximum" in prose
+    assert "never padded" in prose
+    assert "at least one diagnostic question" in prose
     assert "POSTURE (owner steer, 2026-08-21)" in prose
     assert "minimum coverage that genuinely verifies the prerequisite" in prose
-    module_mentions = {
-        node.value for node in ast.walk(tree)
+    # The coverage rule is stated in _plan_rules and nowhere else.
+    elsewhere = {
+        node.value[:60] for node in ast.walk(tree)
         if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        and "about 5 questions" in node.value
-    }
-    # The module docstring may discuss the ruling; no other string may.
-    assert module_mentions - inside - {
-        ast.get_docstring(tree, clean=False)
-    } == set()
+        and "complete diagnostic coverage" in node.value
+    } - {
+        sub.value[:60] for sub in ast.walk(rules)
+        if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+    } - {(ast.get_docstring(tree, clean=False) or "")[:60]}
+    assert elsewhere == set()
 
 
 def test_the_registered_prompts_do_not_carry_the_norm():
@@ -396,25 +394,27 @@ def test_the_registered_prompts_do_not_carry_the_norm():
             prompts, name)
 
 
-def test_the_norm_is_stated_as_a_recorded_target_not_as_anyones_practice():
-    """The calibration prose must not invent a provenance for the norm.
+def test_the_coverage_rule_names_no_practice_of_any_school_board_or_grade():
+    """The coverage prose must not invent a reference point.
 
-    Q4 recorded an adaptive target; the owner re-set it to ~10 (steer
-    2026-08-20), then to about 5 per concept with the tier split left to
-    the model (steer 2026-08-21). No doc attributes the figure to a
-    school, a board or a grade's usual practice. Presenting it as an
+    Contract v2.0 §8 states the rule without a number, and the prose
+    says so in as many words: no figure from any other concept, school,
+    board or grade is a reference point. Presenting any figure as an
     observed norm — above all of the reference school, whose accepted
-    workbooks Q5 makes the schema of record — would turn the target into
-    the strongest anchor available, which is precisely the hazard the
+    workbooks Q5 makes the schema of record — would turn it into the
+    strongest anchor available, which is precisely the hazard the
     unconditional rationale and the critic's ANCHORING dimension exist to
     hold off.
     """
     prose = prequestions._plan_rules("")
-    assert "recorded target" in prose
-    assert "split across the tiers left to your judgment" in prose
-    assert "not an observed practice of any school, board or grade" in prose
+    assert "left to your judgment" in prose
+    assert (
+        "no figure from any other concept, school, board or grade is a "
+        "reference point"
+    ) in prose
     for invented in (
         "reference school", "'s usual", " usual ", "typical", "average",
+        "recorded target", "reference point, not a rule",
     ):
         assert invented not in prose, invented
 

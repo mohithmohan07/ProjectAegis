@@ -304,7 +304,9 @@ def test_outline_request_purpose_is_registered():
     # silently disable the pass for every book. Pin the registration.
     from aegis_pipeline import openai_policy
 
-    assert openai_policy.reasoning_effort_for("chapter_outline") == "xhigh"
+    assert openai_policy.reasoning_effort_for("chapter_outline") in (
+        openai_policy.REASONING_ORDER
+    )
 
 
 def test_misconfigured_outline_pass_fails_loudly(monkeypatch):

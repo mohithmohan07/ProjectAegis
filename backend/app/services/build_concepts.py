@@ -1125,11 +1125,61 @@ def _parse_duration_minutes(value: str) -> int | None:
         return None
 
 
+def resolve_chapter_duration_minutes(
+    chapter: models.Chapter, *, explicit_minutes: int = 0,
+) -> int | None:
+    """The chapter's frozen duration, or ``None`` (contract v2.0 §32.1).
+
+    In order: a duration the chapter already carries, the accepted
+    board-grade-subject-chapter registry row (exact match only — the
+    registry has no nearest-title or cross-board lookup), then the explicit
+    upload variable. Nothing else: a chapter that none of these covers has
+    no duration, ships it blank and is recorded as a release blocker
+    (``chapter_duration_unregistered``); it is never estimated.
+    """
+    registered = chapter_durations.lookup_duration_minutes(
+        board=chapter.board,
+        grade=chapter.grade,
+        subject=chapter.subject,
+        chapter_title=chapter.chapter_title,
+    )
+    if registered:
+        return int(registered)
+    try:
+        explicit = int(explicit_minutes or 0)
+    except (TypeError, ValueError):
+        explicit = 0
+    if explicit > 0:
+        return explicit
+    # A value the Chapter row already carries comes last: it may be a
+    # registry/upload value frozen by an earlier run, or a retired pre-Q26
+    # model estimate — nothing distinguishes them, so an accepted registry
+    # row or an explicit upload value always outranks it.
+    finalized = _parse_duration_minutes(chapter.chapter_duration)
+    return finalized or None
+
+
+def _with_frozen_duration(
+    meta: Mapping[str, Any] | None, minutes: int | None,
+) -> dict[str, Any]:
+    """Seed the authored metadata with the frozen duration (contract §32.1).
+
+    The duration is a run variable (registry or upload), never a model
+    output, so it rides the metadata deterministically whether or not the
+    model pass ran, was dry, or failed.
+    """
+    result = dict(meta or {})
+    if minutes and not result.get("chapter_duration_minutes"):
+        result["chapter_duration_minutes"] = int(minutes)
+    return result
+
+
 def _chapter_meta_summary(
     chapter: models.Chapter,
     active_concept_ids: set[int] | None = None,
     *,
     pre_post: str | None = None,
+    explicit_duration_minutes: int = 0,
 ) -> dict:
     """API-written chapter/topic metadata (empty dict in dry mode / on failure).
 
@@ -1137,12 +1187,8 @@ def _chapter_meta_summary(
     fallback; a metadata failure must never fail a generation job that has
     already produced a valid concept map.
     """
-    finalized = _parse_duration_minutes(chapter.chapter_duration)
-    expected_duration = finalized or chapter_durations.lookup_duration_minutes(
-        board=chapter.board,
-        grade=chapter.grade,
-        subject=chapter.subject,
-        chapter_title=chapter.chapter_title,
+    expected_duration = resolve_chapter_duration_minutes(
+        chapter, explicit_minutes=explicit_duration_minutes,
     )
     active_concept_ids = set(active_concept_ids or ())
     scoped_topics = [
@@ -1193,7 +1239,12 @@ def _chapter_meta_summary(
     last_exc: Exception | None = None
     for attempt in range(1, 4):
         try:
-            return generation.chapter_meta_via_api(meta=meta, topics=topics_payload)
+            return _with_frozen_duration(
+                generation.chapter_meta_via_api(
+                    meta=meta, topics=topics_payload,
+                ),
+                expected_duration,
+            )
         except Exception as exc:  # noqa: BLE001 — metadata must never kill the job
             last_exc = exc
             progress.log(
@@ -1205,7 +1256,7 @@ def _chapter_meta_summary(
         "using deterministic summaries instead.",
         level="warning",
     )
-    return {}
+    return _with_frozen_duration({}, expected_duration)
 
 
 def _sync_chapter_topic_summary(
@@ -1217,7 +1268,8 @@ def _sync_chapter_topic_summary(
 ) -> None:
     """Refresh topic lists and fill the summary/duration fields.
 
-    pre_topics / post_topics are comma-separated topic titles. When
+    pre_topics / post_topics are pipe-delimited topic titles (contract v2.0
+    §16: the exact " | " separator, so a title may contain a comma). When
     ``meta_summary`` (the API-written chapter/topic metadata) is available it
     OVERWRITES the chapter description, chapter duration, and per-topic
     descriptions — these fields were previously synthesized and read weak.
@@ -1255,9 +1307,9 @@ def _sync_chapter_topic_summary(
         for t in topics if t.pre_post_learning == "Post"
     ]
     if pre_post != "Post":
-        chapter.pre_topics = ", ".join(pre)
+        chapter.pre_topics = bi.join_multi(pre)
     if pre_post != "Pre":
-        chapter.post_topics = ", ".join(post)
+        chapter.post_topics = bi.join_multi(post)
 
     # Per-topic description: API-written when available, else the concept list.
     topic_descriptions = meta_summary.get("topic_descriptions") or {}
@@ -1303,11 +1355,26 @@ def _sync_chapter_topic_summary(
     # honest, rather than filled with arithmetic dressed as content.
     if meta_summary.get("chapter_description"):
         chapter.chapter_description = meta_summary["chapter_description"]
-    finalized = _parse_duration_minutes(chapter.chapter_duration)
-    if finalized:
-        chapter.chapter_duration = f"{finalized} minutes"
-    elif meta_summary.get("chapter_duration_minutes") and _is_blank(chapter.chapter_duration):
-        chapter.chapter_duration = f"{meta_summary['chapter_duration_minutes']} minutes"
+    # Contract v2.0 §32.1: the chapter duration is an accepted registry
+    # value (``chapter_durations``), explicit source periods, or an explicit
+    # upload variable — never an estimate. ``meta_summary`` carries the
+    # registry value the metadata pass was handed (it echoes ``finalized``);
+    # a model-estimated duration is no longer accepted, so a chapter with no
+    # registry row ships BLANK and is flagged at release
+    # (``chapter_duration_unregistered``), never guessed.
+    resolved = meta_summary.get("chapter_duration_minutes")
+    try:
+        resolved = int(resolved or 0)
+    except (TypeError, ValueError):
+        resolved = 0
+    if resolved > 0:
+        # The resolver's value (registry, else explicit upload) outranks a
+        # carried value, which may be a retired estimate.
+        chapter.chapter_duration = f"{resolved} minutes"
+    else:
+        finalized = _parse_duration_minutes(chapter.chapter_duration)
+        if finalized:
+            chapter.chapter_duration = f"{finalized} minutes"
 
 
 # --------------------------------------------------------------------------- #
@@ -2051,6 +2118,7 @@ def _deposit_and_publish_concepts(
     final_grounding_certificate: dict | None = None,
     grounding_audit_job: models.UploadJob | None = None,
     phase3_pre_release: dict | None = None,
+    explicit_duration_minutes: int = 0,
 ) -> tuple[list[int], list[int], dict]:
     """Serialize final dedupe, DB commit, and shared workbook publication.
 
@@ -2113,6 +2181,7 @@ def _deposit_and_publish_concepts(
                 chapter,
                 active_ids,
                 pre_post=pre_post,
+                explicit_duration_minutes=explicit_duration_minutes,
             ),
             active_concept_ids=active_ids,
             pre_post=pre_post,
@@ -4519,31 +4588,45 @@ def _record_human_semantic_decision_locked(
 
 def create_post_learning_job(
     db: Session, *, filename: str, raw_bytes: bytes, source_book: str = "",
+    chapter_duration_minutes: int = 0,
     owner_sub: str | None = None,
 ) -> models.UploadJob:
-    """Stage the file only — conversion to MMD is a separate explicit step."""
+    """Stage the file only — conversion to MMD is a separate explicit step.
+
+    ``chapter_duration_minutes`` is the contract's explicit upload variable
+    (v2.0 §32.1); a negative or non-integer value is refused rather than
+    coerced, and 0 means "not supplied".
+    """
+    try:
+        minutes = int(chapter_duration_minutes or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("chapter_duration_minutes must be a whole number") from exc
+    if minutes < 0:
+        raise ValueError("chapter_duration_minutes must not be negative")
     job = models.UploadJob(
         owner_sub=uploads.normalize_owner_sub(owner_sub),
         module="build_concepts", upload_type="document", learning_kind="post",
         filename=Path(filename).name, mmd_text="", status="uploaded",
         source_book=source_book.strip(),
+        chapter_duration_minutes=minutes,
     )
     return uploads.persist_new_job(db, job, raw_bytes)
 
 
 def _job_source_label(job: models.UploadJob) -> str:
-    """Use an explicit book name, or retain the uploaded filename identity."""
-    explicit = str(job.source_book or "").strip()
-    if explicit:
-        return explicit
-    filename = Path(str(job.filename or "")).name.strip()
-    stem = Path(filename).stem.strip()
-    fallback = stem or filename or "Uploaded source"
-    # ``sources`` is currently a delimiter-separated legacy field. A raw
-    # filename comma/semicolon would be parsed as multiple fake books.
-    fallback = re.sub(r"[,;\r\n]+", " - ", fallback)
-    fallback = re.sub(r"\s+", " ", fallback).strip(" -")
-    return fallback or "Uploaded source"
+    """The run's publication: the explicit source book, else nothing.
+
+    Contract v2.0 §18 makes ``concept_source`` / ``question_source`` a
+    mandatory per-run scalar naming the PUBLICATION. The value comes from
+    the upload's source-book field or from the Architect's publication
+    verdict over the source's own imprint (``ensure_instruction_set`` fills
+    ``job.source_book`` from that verdict before this is read). A filename
+    is not a publication and is never borrowed as one (§2: an unrecognized
+    value blocks rather than borrows a nearby one); a run whose publication
+    is unknown ships the cell blank and the release records
+    ``question_source`` / ``concept_source`` as a blocker at read-back.
+    """
+    return str(job.source_book or "").strip()
 
 
 def generate_post_learning(
@@ -4915,6 +4998,9 @@ def generate_post_learning(
                 grounding_audit_job=job,
                 phase3_pre_release=artifacts.get(
                     generation.PHASE3_PRE_RELEASE_FIELD
+                ),
+                explicit_duration_minutes=int(
+                    getattr(job, "chapter_duration_minutes", 0) or 0
                 ),
             )
         except DepositValidationError:

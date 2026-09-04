@@ -75,7 +75,10 @@ def live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.FIXER_SYSTEM,
         prompts.render(payload),
-        purpose="concept_validation",
+        # The Fixer is a semantic resolution (register Q13): one recorded
+        # best-judgment decision at a block, priced as authoring, never as
+        # a critic pass.
+        purpose="semantic_resolution",
         model=fixer_model(),
     )
 

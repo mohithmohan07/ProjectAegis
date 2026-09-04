@@ -800,6 +800,7 @@ def author_language_plan(
                 "request": json.loads(request),
             }, ensure_ascii=False),
             schema=critic_schema(),
+            purpose="advisory_critic",
         )
     except Exception as exc:  # advisory: never a gate, never a halt (Q10)
         # Audit F14: a critic that never ran is recorded as UNAVAILABLE,

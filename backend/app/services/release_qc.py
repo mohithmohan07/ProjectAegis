@@ -47,6 +47,13 @@ FLAGGED_VALIDATION_FINDING = "flagged_validation_finding"
 # the audit never costs a run or a download, and a swallowed exception is
 # the anti-pattern T9-3 bans — so the failure is a visible issue.
 AUDIT_UNAVAILABLE = "release_qc_unavailable"
+# Master Governing Contract v2.0 §32.1 (NUM-001): the chapter duration is
+# frozen once per chapter from an accepted registry row, explicit source
+# periods, or the explicit upload variable — never estimated. A release
+# whose chapter has none is blocked from the database write (every
+# download still ships) until one is supplied.
+CHAPTER_DURATION_UNREGISTERED = "chapter_duration_unregistered"
+PUBLICATION_UNKNOWN = "publication_unknown"
 
 _VALIDATION_FLAG_PREFIX = "validation: "
 
@@ -165,6 +172,74 @@ def _coverage_findings(
         ))
         blocking.append(f"{COVERAGE_UNACCOUNTED}: {message}")
     return issues, blocking
+
+
+def _chapter_duration_findings(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Contract v2.0 §32.1: the frozen chapter duration must exist.
+
+    Reads the two places the staged payload records it — the frozen
+    directory metadata (``chapter_duration``, the value the Chapter row
+    carried at staging) and the authored chapter metadata
+    (``chapter_duration_minutes``, the registry/upload value the metadata
+    pass was handed). Either being a positive number satisfies the gate;
+    neither is a blocking finding. Mechanics: a numeric presence check,
+    never a judgment about the source.
+    """
+    from .. import bulk_import as bi
+
+    directory = payload.get("directory_metadata")
+    directory = directory if isinstance(directory, Mapping) else {}
+    chapter_meta = payload.get("chapter_meta")
+    chapter_meta = chapter_meta if isinstance(chapter_meta, Mapping) else {}
+    if bi.duration_minutes_cell(directory.get("chapter_duration")) != "":
+        return [], []
+    if bi.duration_minutes_cell(
+        chapter_meta.get("chapter_duration_minutes")
+    ) != "":
+        return [], []
+    message = (
+        "the chapter has no frozen duration: the accepted duration registry "
+        "has no row for this board/grade/subject/chapter and no explicit "
+        "chapter duration was supplied with the upload; the workbooks ship "
+        "the cell blank and the database write is blocked until one is "
+        "supplied (contract v2.0 §32.1) — a duration is never estimated"
+    )
+    issue = _issue(
+        code=CHAPTER_DURATION_UNREGISTERED,
+        message=message,
+        severity="error",
+        phase="release_qc",
+    )
+    return [issue], [f"{CHAPTER_DURATION_UNREGISTERED}: {message}"]
+
+
+def _publication_findings(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Contract v2.0 §18: the run's publication is a frozen run variable.
+
+    ``concept_source``/``question_source`` name it on every populated band,
+    so a release whose ``source_book`` is blank cannot be written to the
+    database: nothing borrows a filename or an origin-system constant for
+    it. A presence check, never a judgment about the source.
+    """
+    if str(payload.get("source_book") or "").strip():
+        return [], []
+    message = (
+        "the run has no publication: source_book is blank, so "
+        "concept_source and question_source cannot name it; supply the "
+        "publication on the upload and stage again (contract v2.0 §18) — "
+        "a filename or a default is never borrowed for it"
+    )
+    issue = _issue(
+        code=PUBLICATION_UNKNOWN,
+        message=message,
+        severity="error",
+        phase="release_qc",
+    )
+    return [issue], [f"{PUBLICATION_UNKNOWN}: {message}"]
 
 
 def _unresolved_link_findings(
@@ -312,6 +387,22 @@ def audit(
         blocking.extend(coverage_blocking)
 
     _pass("coverage", _run_coverage)
+
+    def _run_chapter_duration() -> None:
+        duration_issues, duration_blocking = _chapter_duration_findings(
+            payload)
+        issues.extend(duration_issues)
+        blocking.extend(duration_blocking)
+
+    _pass("chapter-duration", _run_chapter_duration)
+
+    def _run_publication() -> None:
+        publication_issues, publication_blocking = _publication_findings(
+            payload)
+        issues.extend(publication_issues)
+        blocking.extend(publication_blocking)
+
+    _pass("publication", _run_publication)
     _pass(
         "needed-for link",
         lambda: issues.extend(_unresolved_link_findings(payload)),

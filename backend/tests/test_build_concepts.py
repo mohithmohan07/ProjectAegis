@@ -23,14 +23,18 @@ def _use_specific_dry_learner_analysis(monkeypatch):
     del monkeypatch
 
 
-def test_filename_source_fallback_cannot_create_fake_delimited_sources():
+def test_a_filename_is_never_borrowed_as_the_publication():
+    """Contract v2.0 §18 retired the filename fallback: the source label is
+    the run's PUBLICATION (``job.source_book``) and nothing else — a job
+    whose publication is unknown ships the cell blank (a read-back blocker)
+    rather than borrowing a filename, delimited or not.
+    """
     job = models.UploadJob(filename="History, Grade 10; Part 1.pdf")
 
-    label = build_concepts._job_source_label(job)
+    assert build_concepts._job_source_label(job) == ""
 
-    assert label == "History - Grade 10 - Part 1"
-    assert "," not in label
-    assert ";" not in label
+    job.source_book = "  NCERT History Part 1  "
+    assert build_concepts._job_source_label(job) == "NCERT History Part 1"
 
 
 def test_post_learning_creates_concepts(client, db, first_chapter, monkeypatch):

@@ -206,19 +206,110 @@ def strip_topic_title(text: str) -> str:
     return strip_title_tag(strip_topic_number(text)).strip()
 
 
+# --------------------------------------------------------------------------- #
+# Multi-value cells (Master Governing Contract v2.0 §16, Appendix B.1)
+#
+# Every exported multi-value cell uses the exact separator ``" | "`` — one
+# space, a pipe, one space. A comma is ordinary content: a topic or concept
+# name may contain one, so the parser splits ONLY on the pipe. Workbooks
+# written before v2.0 carry comma lists; a value with no pipe at all is read
+# as such a legacy list so the deployed database keeps loading. A value that
+# carries a pipe is never comma-split.
+# --------------------------------------------------------------------------- #
+
+LIST_DELIMITER = " | "
+
+
+def _legacy_or_pipe_parts(value: str, *, legacy_commas: bool = True) -> list[str]:
+    text = str(value or "")
+    if LIST_DELIMITER.strip() in text:
+        # The exact delimiter is " | ". A bare pipe glued to its neighbours
+        # ("a|b") is content (contract §16 forbids one inside a value and
+        # the read-back records it — ``list_token_defects``), so it is never
+        # a split point.
+        parts = text.split(LIST_DELIMITER)
+        if len(parts) == 1:
+            parts = [text]
+    elif legacy_commas:
+        # Pre-v2.0 export or hand-filled sheet: comma (or the older
+        # semicolon) separated. Never applied when a pipe is present, and
+        # only where a legacy cell is being READ (import, migration) — an
+        # export treats a pipe-free value as exactly one token, because a
+        # comma is content.
+        parts = text.replace(";", ",").split(",")
+    else:
+        parts = [text]
+    return [part.strip() for part in parts if part.strip()]
+
+
+def list_token_defects(value: str) -> list[str]:
+    """Contract §16 (DEL-001): a literal pipe inside one list token blocks."""
+
+    return [
+        f"list token {token!r} contains a literal pipe"
+        for token in split_multi(value, legacy_commas=False)
+        if "|" in token
+    ]
+
+
 def merge_sources(existing: str, new: str) -> str:
-    """Merge multi-value source lists (comma-separated, order-preserving,
-    case-insensitive dedupe). Legacy '; '-separated data is normalized to
-    commas on the way through — comma is the only supported separator."""
+    """Merge multi-value source lists (pipe-delimited, order-preserving,
+    case-insensitive dedupe). Legacy comma/semicolon data is normalized to
+    the v2.0 pipe delimiter on the way through."""
     out: list[str] = []
     seen: set[str] = set()
     for blob in (existing, new):
-        for part in (blob or "").replace(";", ",").split(","):
-            p = part.strip()
-            if p and p.lower() not in seen:
+        for p in _legacy_or_pipe_parts(blob):
+            if p.lower() not in seen:
                 seen.add(p.lower())
                 out.append(p)
-    return ", ".join(out)
+    return LIST_DELIMITER.join(out)
+
+
+# --------------------------------------------------------------------------- #
+# Rich cells (contract §17): the workbook projection of a line break is the
+# canonical HTML ``<br>``; a paragraph break is ``<br><br>``. The internal
+# model keeps real newlines; ONLY the exporter projects, and the reader
+# inverts it, so a round trip is byte-stable on the model side.
+# --------------------------------------------------------------------------- #
+
+LINE_BREAK = "<br>"
+_BR_RE = _re_tags.compile(r"<br\s*/?>", _re_tags.IGNORECASE)
+
+
+def to_workbook_rich_text(text) -> str:
+    """Project internal newlines to ``<br>`` for one workbook cell."""
+    value = str(text if text is not None else "")
+    value = value.replace("\r\n", "\n").replace("\r", "\n")
+    return value.replace("\n", LINE_BREAK)
+
+
+def from_workbook_rich_text(text) -> str:
+    """Invert :func:`to_workbook_rich_text` on import (``<br/>`` included)."""
+    return _BR_RE.sub("\n", str(text if text is not None else ""))
+
+
+_DURATION_MINUTES_RE = _re_tags.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?)?\s*$", _re_tags.IGNORECASE)
+
+
+def duration_minutes_cell(value):
+    """The numeric workbook cell for a stored chapter duration (§32).
+
+    The internal model stores ``"200 minutes"``; the contract stores a real
+    number. A value that is not a plain minute count (blank, prose, a unit
+    other than minutes) projects to blank — never to a guessed number.
+    """
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)):
+        return value if value > 0 else ""
+    match = _DURATION_MINUTES_RE.match(str(value or ""))
+    if not match:
+        return ""
+    number = float(match.group(1))
+    if number <= 0:
+        return ""
+    return int(number) if number == int(number) else number
 
 
 # Standard action-verb form (the gerund forms are legacy and are normalized).
@@ -249,25 +340,113 @@ def normalize_difficulty(value: str) -> str:
     return _DIFFICULTY_LEGACY.get(v.lower(), v) if v else v
 
 APPEARS_IN = ["Pre-test", "Post-test", "Worksheet", "Test"]
-APPEARS_IN_ALL = ", ".join(APPEARS_IN)
-# Legacy composite value used across earlier imports/generations.
-_APPEARS_IN_LEGACY = {"pre/post-worksheet/test": APPEARS_IN_ALL}
+APPEARS_IN_ALL = LIST_DELIMITER.join(APPEARS_IN)
+# The exact wire literal every question row carries in the four outputs
+# (contract §18): the composite spelling, never an expanded list.
+APPEARS_IN_WIRE = "Pre/Post-Worksheet/Test"
+# The composite wire value expands to the internal purpose list on import.
+_APPEARS_IN_LEGACY = {APPEARS_IN_WIRE.lower(): APPEARS_IN_ALL}
 
+
+def appears_in_wire(value: str) -> str:
+    """The workbook cell for an internal ``question_appears_in`` value.
+
+    The complete purpose set — which is what every generated row carries —
+    projects to the exact contract literal. A deliberately narrower set (a
+    hand-tagged row) is exported as a pipe list of its purposes.
+    """
+    parts = split_multi(normalize_appears_in(value))
+    if not parts:
+        return ""
+    canon = {a.lower(): a for a in APPEARS_IN}
+    normalized = {canon.get(p.lower(), p) for p in parts}
+    if normalized == set(APPEARS_IN):
+        return APPEARS_IN_WIRE
+    return join_multi(parts)
+
+# Contract v2.0 §22–§24: the WORKBOOK carries a lane-exact textual medium —
+# ``Words`` on Objective option cells and Subjective answer cells, ``Phrases``
+# on Descriptive rubric criteria and keyword cells; ``Equation`` and
+# ``Image`` read the same on every sheet. Inside the pipeline the one
+# canonical textual medium stays ``Phrases`` (every checker reads one enum),
+# the reader accepts both spellings, and the writers project the lane
+# literal at the cell (``wire_answer_type``). ``ANSWER_TYPES`` is the
+# canonical enum; ``WIRE_ANSWER_TYPES`` is the closed set a cell may carry.
 ANSWER_TYPES = ["Phrases", "Equation", "Image"]
+WIRE_ANSWER_TYPES = ["Words", "Phrases", "Equation", "Image"]
 _ANSWER_TYPE_LEGACY = {"words": "Phrases", "phrases": "Phrases",
                        "equation": "Equation", "image": "Image"}
+_WIRE_TEXT_ANSWER_TYPE_BY_SHEET = {
+    "objective": "Words",
+    "subjective": "Words",
+    "descriptive": "Phrases",
+}
 
-QUESTION_SOURCE_DEFAULT = "UpSchool DB"
+
+def wire_answer_type(answer_type: str, sheet_kind: str) -> str:
+    """The contract literal a workbook ``answer_type`` cell carries.
+
+    A textual medium projects to the lane's literal (``Words`` on Objective
+    and Subjective, ``Phrases`` on Descriptive); ``Equation``/``Image`` pass
+    through; an unknown value is returned as given so the enum gates keep
+    refusing it.
+    """
+    canonical = normalize_answer_type(answer_type)
+    if canonical == "Phrases":
+        return _WIRE_TEXT_ANSWER_TYPE_BY_SHEET.get(
+            str(sheet_kind or "").strip().lower(), "Phrases",
+        )
+    return canonical
+
+# Contract v2.0 §18: ``question_source`` is the run's publication, a frozen
+# run variable. The former origin-system default ("UpSchool DB") is retired;
+# no writer, renderer or post-generation step borrows a value for it.
 
 
-def split_multi(value: str) -> list[str]:
-    """Split a multi-value field. COMMA is the only supported separator —
-    newline, semicolon and pipe are content, never separators."""
-    return [p.strip() for p in (value or "").split(",") if p.strip()]
+def split_multi(value: str, *, legacy_commas: bool = True) -> list[str]:
+    """Split a multi-value field on the v2.0 pipe delimiter.
+
+    Contract §16: the parser splits only the list delimiter, never commas —
+    a comma is content. With ``legacy_commas`` (the default, for values
+    being READ from a legacy workbook, an API input or a pre-migration row)
+    a value with no pipe at all is a pre-v2.0 comma list and is read as
+    such; the writers pass ``legacy_commas=False`` so a pipe-free value
+    exports as exactly one token.
+    """
+    return _legacy_or_pipe_parts(value, legacy_commas=legacy_commas)
+
+
+def split_roster(value: str, *, legacy_commas: bool = True) -> list[str]:
+    """Split a roster of identified titles (``Title (id)`` items, §15).
+
+    A pipe-delimited value splits exactly like :func:`split_multi`. A
+    pre-v2.0 comma list is the one legacy shape a plain comma split reads
+    wrongly: every roster item closes with its identity tag, so a comma
+    INSIDE a title ("Story Setting, Events and Sequence (06MSEN_..._PL)")
+    used to split one topic into two. Here a fragment that does not close
+    its tag is glued back onto the fragment that follows it. This parses
+    the identity grammar this codebase itself writes; it never judges
+    content, and a roster whose items carry no tag at all is read as the
+    plain list it is.
+    """
+    text = str(value or "")
+    if LIST_DELIMITER.strip() in text or not legacy_commas:
+        return _legacy_or_pipe_parts(text, legacy_commas=False)
+    fragments = _legacy_or_pipe_parts(text, legacy_commas=True)
+    if not any(fragment.endswith(")") for fragment in fragments):
+        return fragments
+    items: list[str] = []
+    for fragment in fragments:
+        if items and not items[-1].endswith(")"):
+            items[-1] = f"{items[-1]}, {fragment}"
+        else:
+            items.append(fragment)
+    return items
 
 
 def join_multi(values: list[str]) -> str:
-    return ", ".join(v.strip() for v in values if v and v.strip())
+    """Join list tokens with the exact ``" | "`` delimiter (contract §16)."""
+    return LIST_DELIMITER.join(v.strip() for v in values if v and v.strip())
 
 
 def normalize_cognitive_skills(value: str) -> str:
@@ -316,13 +495,15 @@ def to_plain_text(text: str) -> str:
     s = _re3.sub(r"[ \t]{2,}", " ", s)
     return s.strip()
 
+# Contract §21 (True/False override): every True or False item is routed to
+# Subjective with one placeholder-bound accepted answer, never Objective.
 QUESTION_CATEGORIES = {
     "objective": [
         "Multiple Choice Question", "Assertion & Reasons",
-        "True/False", "Fill in the Blanks",
+        "Fill in the Blanks",
     ],
     "subjective": [
-        "Fill in the Blanks", "Very Short Answer",
+        "Fill in the Blanks", "True/False", "Very Short Answer",
         "Short Answer", "Sentence Transformation", "Error Correction",
     ],
     "descriptive": [

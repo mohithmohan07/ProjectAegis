@@ -215,7 +215,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         HOST_RECONCILIATION_CRITIC_SYSTEM,
         prompts.render(payload),
-        purpose="concept_mapping",
+        purpose="advisory_critic",
     )
 
 

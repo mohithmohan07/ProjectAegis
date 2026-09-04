@@ -85,6 +85,7 @@ def _job_with_records(db, chapter, records) -> models.UploadJob:
         filename="ch.mmd",
         mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
         status="generated",
+        source_book="NCERT",
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
         question_inventory=copy.deepcopy(_INVENTORY),
@@ -356,7 +357,10 @@ def test_emptiness_and_corruption_are_two_questions(db):
     empty-but-correct one was named *Diagnostic release* — which §4 defines
     as "structural/import integrity failed", and nothing failed.
     """
-    empty = {"records": [], "summary": {}}
+    empty = {
+        "records": [], "summary": {}, "source_book": "NCERT",
+        "chapter_meta": {"chapter_duration_minutes": 40},
+    }
     assert release.nothing_to_publish(empty) is True
     assert release.structural_defects(empty) == []
     assert release.release_state(empty) == release.READY
@@ -497,7 +501,11 @@ def test_every_new_key_has_a_live_reader(db):
     pinned here to a reader that CHANGES ITS ANSWER when the key is
     present — a stronger check than a grep, which a dead read would pass.
     """
-    base = {"records": [dict(_SOUND_ROW)], "summary": {}}
+    base = {
+        "records": [dict(_SOUND_ROW)], "summary": {},
+        "source_book": "NCERT",
+        "chapter_meta": {"chapter_duration_minutes": 40},
+    }
 
     # 1. ``staged_row_defects`` → structural_defects → release_state.
     assert release.structural_defects(base) == []
@@ -512,6 +520,8 @@ def test_every_new_key_has_a_live_reader(db):
     # 2. ``pre_lane_verdict`` → structural_defects, on the PRE lane only.
     empty_pre = {
         "records": [], "summary": {},
+        "source_book": "NCERT",
+        "chapter_meta": {"chapter_duration_minutes": 40},
         release.RELEASE_LANE_FIELD: release.LANE_PRE,
     }
     assert release.structural_defects(empty_pre), "no verdict blocks"

@@ -16,21 +16,27 @@ from app.services import assessment_routing
 from app.services import generation, workbooks
 
 
+# Register Q26 (2026-09-04): the default profile is TIERED. Semantic
+# authoring/adjudication request ``high``; the independent advisory critic
+# (``advisory_critic``) and mechanical restatement work request ``medium``;
+# metadata requests ``low``. ``uniform-xhigh`` (the former Q22 policy) stays
+# selectable through AEGIS_OPENAI_REASONING_PROFILE for A/B measurement.
 EXPECTED_REASONING_POLICY = {
-    "assessment_generation": "xhigh",
-    "source_extraction": "xhigh",
-    "source_adjudication": "xhigh",
-    "page_transcription": "xhigh",
-    "chapter_outline": "xhigh",
-    "concept_mapping": "xhigh",
-    "concept_detailing": "xhigh",
-    "concept_validation": "xhigh",
-    "semantic_resolution": "xhigh",
-    "pre_learning": "xhigh",
-    "workbook_planning": "xhigh",
-    "workbook_authoring": "xhigh",
-    "revision_editing": "xhigh",
-    "metadata": "xhigh",
+    "assessment_generation": "high",
+    "source_extraction": "high",
+    "source_adjudication": "high",
+    "page_transcription": "medium",
+    "chapter_outline": "medium",
+    "concept_mapping": "high",
+    "concept_detailing": "high",
+    "concept_validation": "medium",
+    "semantic_resolution": "high",
+    "pre_learning": "high",
+    "workbook_planning": "medium",
+    "workbook_authoring": "medium",
+    "revision_editing": "medium",
+    "metadata": "low",
+    "advisory_critic": "medium",
 }
 
 
@@ -63,11 +69,73 @@ class _CapturingClient:
 
 def test_default_model_and_complete_reasoning_policy(monkeypatch):
     monkeypatch.delenv(openai_policy.OPENAI_MODEL_ENV, raising=False)
+    monkeypatch.delenv(openai_policy.REASONING_PROFILE_ENV, raising=False)
 
     assert openai_policy.configured_openai_model() == "gpt-5.6-luna"
+    assert openai_policy.configured_reasoning_profile() == "tiered"
     assert openai_policy.REASONING_EFFORT_BY_PURPOSE == EXPECTED_REASONING_POLICY
+    assert openai_policy.reasoning_policy() == EXPECTED_REASONING_POLICY
+    for purpose, effort in EXPECTED_REASONING_POLICY.items():
+        assert openai_policy.reasoning_effort_for(purpose) == effort
+    # Every critic adapter is the same second pass and prices below the
+    # author it audits (register Q26).
+    assert openai_policy.reasoning_effort_for("advisory_critic") == "medium"
+    assert openai_policy.REASONING_ORDER["medium"] < openai_policy.REASONING_ORDER[
+        openai_policy.reasoning_effort_for("concept_mapping")
+    ]
+
+
+def test_uniform_xhigh_profile_stays_selectable(monkeypatch):
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
+
+    assert openai_policy.configured_reasoning_profile() == "uniform-xhigh"
     assert openai_policy.UNIFORM_REASONING_EFFORT == "xhigh"
-    assert set(openai_policy.REASONING_EFFORT_BY_PURPOSE.values()) == {"xhigh"}
+    assert set(openai_policy.reasoning_policy()) == set(
+        EXPECTED_REASONING_POLICY
+    )
+    assert set(openai_policy.reasoning_policy().values()) == {"xhigh"}
+    assert openai_policy.chat_request_policy("metadata", model="gpt-5.6-luna") == {
+        "model": "gpt-5.6-luna",
+        "reasoning_effort": "xhigh",
+    }
+
+
+def test_unknown_reasoning_profile_is_refused_not_defaulted(monkeypatch):
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "turbo")
+
+    with pytest.raises(ValueError, match="unknown reasoning profile"):
+        openai_policy.configured_reasoning_profile()
+    with pytest.raises(ValueError, match="unknown reasoning profile"):
+        openai_policy.reasoning_effort_for("metadata")
+
+
+def test_every_live_critic_adapter_declares_the_advisory_critic_purpose():
+    """Every ``_live_*critic`` adapter in the app is priced as the second
+    pass it is (register Q26). A critic that quietly re-declares an
+    authoring purpose would silently return to author effort."""
+    import re
+
+    app_root = Path(generation.__file__).resolve().parents[1]
+    offenders: list[str] = []
+    for path in sorted(app_root.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.FunctionDef)
+                and re.match(r"_live_\w*critic$", node.name)
+            ):
+                continue
+            purposes = [
+                keyword.value.value
+                for call in ast.walk(node)
+                if isinstance(call, ast.Call)
+                for keyword in call.keywords
+                if keyword.arg == "purpose"
+                and isinstance(keyword.value, ast.Constant)
+            ]
+            if any(purpose != "advisory_critic" for purpose in purposes):
+                offenders.append(f"{path.name}:{node.name}:{purposes}")
+    assert offenders == []
 
 
 def test_model_override_keeps_purpose_policy(monkeypatch):
@@ -78,10 +146,13 @@ def test_model_override_keeps_purpose_policy(monkeypatch):
     }
     assert openai_policy.chat_request_policy(
         "metadata", model="gpt-5.6-luna"
-    )["reasoning_effort"] == "xhigh"
+    )["reasoning_effort"] == "low"
     assert openai_policy.chat_request_policy(
         "concept_mapping", model="gpt-5.6-luna"
-    )["reasoning_effort"] == "xhigh"
+    )["reasoning_effort"] == "high"
+    assert openai_policy.chat_request_policy(
+        "advisory_critic", model="gpt-5.6-luna"
+    )["reasoning_effort"] == "medium"
     with pytest.raises(ValueError, match="Unknown OpenAI request purpose"):
         openai_policy.reasoning_effort_for("unregistered")  # type: ignore[arg-type]
 
@@ -116,7 +187,7 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     assert result == {"ok": True}
     call = _CapturingClient.completions.calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "xhigh"
+    assert call["reasoning_effort"] == "medium"
     assert call["response_format"] == {"type": "json_object"}
     assert "json" in str(call["messages"])
     assert call["max_completion_tokens"] == 321
@@ -504,7 +575,7 @@ def test_workbook_call_uses_same_policy_and_preserves_json_mode():
     assert result == '{"ok": true}'
     call = completions.calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "xhigh"
+    assert call["reasoning_effort"] == "medium"
     assert call["response_format"] == {"type": "json_object"}
     assert "json" in str(call["messages"]).casefold()
     assert call["max_completion_tokens"] == 654
@@ -556,10 +627,12 @@ def test_effort_ceiling_is_discovered_once_and_reused_process_wide(monkeypatch):
 
     A model that rejects `xhigh` must cost one probe for the process, not one
     rejected request per call, and the ceiling must be visible to every call
-    path rather than relearned by each.
+    path rather than relearned by each. Run under the uniform profile so every
+    purpose starts at the same rung; the ladder itself is profile-agnostic.
     """
 
     monkeypatch.delenv(openai_policy.OPENAI_MODEL_ENV, raising=False)
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
 
     assert openai_policy.chat_request_policy(
         "concept_mapping", model="gpt-5.6-luna"
@@ -612,6 +685,8 @@ def test_generation_negotiates_effort_instead_of_replaying_the_same_request(
 ):
     import openai
 
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
+
     class NegotiatingCompletions:
         def __init__(self) -> None:
             self.calls: list[dict] = []
@@ -645,6 +720,8 @@ def test_generation_negotiates_effort_instead_of_replaying_the_same_request(
 def test_single_attempt_records_the_ceiling_without_a_second_request(monkeypatch):
     import openai
 
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
+
     class RejectingCompletions:
         def __init__(self) -> None:
             self.calls: list[dict] = []
@@ -675,7 +752,8 @@ def test_single_attempt_records_the_ceiling_without_a_second_request(monkeypatch
     generation._openai_gate = None
 
 
-def test_workbook_writer_negotiates_unsupported_effort():
+def test_workbook_writer_negotiates_unsupported_effort(monkeypatch):
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
     workbooks._vendor()
     from gpt_writer import GPTWriter
 
@@ -709,9 +787,10 @@ def test_workbook_writer_negotiates_unsupported_effort():
     assert openai_policy.reasoning_ceiling("gpt-5.6-luna") == "high"
 
 
-def test_offline_helper_negotiates_down_to_an_accepted_effort():
+def test_offline_helper_negotiates_down_to_an_accepted_effort(monkeypatch):
     """The offline CLI tools use this instead of a transport retry loop."""
 
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
     seen: list[str] = []
 
     def invoke(effort: str):
@@ -736,9 +815,10 @@ def test_offline_helper_negotiates_down_to_an_accepted_effort():
     assert seen == ["high"]
 
 
-def test_offline_helper_recognizes_responses_api_reasoning_param():
+def test_offline_helper_recognizes_responses_api_reasoning_param(monkeypatch):
     """Responses API errors name the field ``reasoning.effort``."""
 
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
     seen: list[str] = []
 
     class ResponsesEffortError(RuntimeError):

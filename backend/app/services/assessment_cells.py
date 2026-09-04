@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 from .. import bulk_import as bi
 from .. import config
+from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
 from .phase3 import kernel
 
@@ -406,7 +407,7 @@ def _live_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         CELL_CRITIC_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -426,7 +427,7 @@ def _live_generated_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         GENERATED_CELL_CRITIC_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -442,7 +443,11 @@ def _live_authorities(
     from .phase3 import fixer as fixer_mod
 
     envelope_mod.require_live_api()
-    return _live_cell, critic or _live_cell_critic, fixer or fixer_mod.live_fixer
+    return (
+        _live_cell,
+        critic or lane_policy.critic_for("cells", _live_cell_critic),
+        fixer or fixer_mod.live_fixer,
+    )
 
 
 def _live_generated_authorities(
@@ -459,7 +464,7 @@ def _live_generated_authorities(
     envelope_mod.require_live_api()
     return (
         _live_generated_cell,
-        critic or _live_generated_cell_critic,
+        critic or lane_policy.critic_for("cells", _live_generated_cell_critic),
         fixer or fixer_mod.live_fixer,
     )
 

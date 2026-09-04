@@ -23,12 +23,12 @@ from tests.test_assessment_release_run import (
     _chapter_with_concepts,
     _decision_context,
 )
-from tests.test_assessment_pre_release_lane import (
-    _generated_authorities,
-    _questions,
+from tests.test_assessment_pre_release_lane import _questions
+from tests.test_generated_cell_decisions import (
+    _cell_verdict_author,
+    _contract_authorities,
+    _published_job,
 )
-from tests.test_generated_cell_decisions import _cell_verdict_author
-from tests.test_pre_release_lane_wiring import _both_lanes_job
 
 ENVELOPE = "e" * 64
 
@@ -239,13 +239,17 @@ def test_an_impossible_verdict_raises_without_a_fixer():
 def test_a_duplicate_is_removed_before_any_cell_spend(db):
     """The run-level pin: the removed question never reaches a cell
     verdict, the survivor ships, the removal rides the payload under
-    ``duplicates_removed``, and the release reads Ready-with-flags."""
+    ``duplicates_removed``, and the release reads Ready-with-flags.
+
+    Fixtures follow contract v2.0 (Q26): the staged release names its
+    publication (§18) and the item authorities are the contract-conformant
+    scripted set from ``test_generated_cell_decisions``."""
 
     from app.services import assessment_release_run as run
 
     chapter = _chapter_with_concepts(db)
-    job = _both_lanes_job(db, chapter, questions=2)
-    authorities, _ = _generated_authorities()
+    job = _published_job(db, chapter, questions=2)
+    authorities, _ = _contract_authorities()
     cell_calls: list[dict] = []
 
     def counting_cell_author(payload):
@@ -292,8 +296,8 @@ def test_no_duplicates_leaves_the_release_clean(db):
     from app.services import assessment_release_run as run
 
     chapter = _chapter_with_concepts(db)
-    job = _both_lanes_job(db, chapter, questions=2)
-    authorities, calls = _generated_authorities()
+    job = _published_job(db, chapter, questions=2)
+    authorities, calls = _contract_authorities()
     authorities["cells"] = (_cell_verdict_author, _verified)
 
     released = run.run_pre_release_for_job(

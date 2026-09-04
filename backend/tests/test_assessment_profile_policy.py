@@ -26,11 +26,14 @@ SCIENCE_META = {
 }
 
 
-def test_reference_profile_remains_pinned_and_msbshse_run_widens_it() -> None:
-    assert profile.sheet_kinds() == ("objective", "descriptive")
-    assert profile.forced_blank_fields() == (
-        "chapter_duration", "question_disclaimer",
+def test_default_profile_carries_the_universal_three_sheet_contract() -> None:
+    """Contract v2.0 §12/§21/§32.1: three sheets and a never-blank chapter
+    duration are universal, so the MSBSHSE Grade-6 run no longer widens
+    the default — it resolves to the same run-profile facts."""
+    assert profile.sheet_kinds() == (
+        "objective", "descriptive", "subjective",
     )
+    assert profile.forced_blank_fields() == ("question_disclaimer",)
 
     run_profile = profile.resolve_for_metadata(None, MATH_META)
     assert profile.sheet_kinds(run_profile) == (
@@ -65,23 +68,27 @@ def test_generic_format_fallback_is_the_existing_cms_vocabulary() -> None:
 
 
 def test_msbshse_grade_6_science_keeps_the_generic_run_profile() -> None:
+    """Contract v2.0 §14: the update-aware three-sheet geometry is the one
+    generic contract, so an unmatched subject renders exactly it."""
     run_profile = profile.resolve_for_metadata(None, SCIENCE_META)
 
     assert profile.sheet_kinds(run_profile) == (
-        "objective", "descriptive",
+        "objective", "descriptive", "subjective",
     )
     assert profile.forced_blank_fields(run_profile) == (
-        "chapter_duration", "question_disclaimer",
+        "question_disclaimer",
     )
     assert profile.master_workbook_contract(
         run_profile, learning_phase="Post",
-    )["contract_id"] == "reference-master-1"
+    )["contract_id"] == "update-aware-master-1"
     assert profile.assessment_format_policy(run_profile)["policy_id"] == (
         "generic-cms"
     )
 
 
 def test_msbshse_grade_6_mathematics_policy_is_exact_and_narrow() -> None:
+    """Contract v2.0 §21/§23.1: True or False is a Subjective category in
+    every profile, so it has left this policy's Objective set."""
     policy = profile.assessment_format_policy(metadata=MATH_META)
 
     assert policy["policy_id"] == "msbshse-grade-6-mathematics-2026-08-27"
@@ -90,10 +97,9 @@ def test_msbshse_grade_6_mathematics_policy_is_exact_and_narrow() -> None:
         "objective": (
             "Multiple Choice Question",
             "Match the Following",
-            "True or False",
             "Fill in the blanks",
         ),
-        "subjective": ("Fill in the blanks",),
+        "subjective": ("Fill in the blanks", "True or False"),
         "descriptive": (
             "Very Short Answer Questions",
             "Short Answer Type (2 Marks)",
@@ -373,7 +379,6 @@ def test_format_policy_accessors_return_defensive_copies() -> None:
     assert profile.question_categories(metadata=MATH_META)["objective"] == (
         "Multiple Choice Question",
         "Match the Following",
-        "True or False",
         "Fill in the blanks",
     )
 
@@ -471,15 +476,19 @@ def test_board_grade_aliases_select_matching_run_and_format_overrides(
 def test_board_grade_partial_metadata_keeps_the_pinned_run_profile(
     metadata,
 ) -> None:
+    """Contract v2.0 §14: the pinned default is the universal update-aware
+    three-sheet contract; partial metadata selects nothing narrower."""
     run_profile = profile.resolve_for_metadata(None, metadata)
 
-    assert profile.sheet_kinds(run_profile) == ("objective", "descriptive")
+    assert profile.sheet_kinds(run_profile) == (
+        "objective", "descriptive", "subjective",
+    )
     assert profile.forced_blank_fields(run_profile) == (
-        "chapter_duration", "question_disclaimer",
+        "question_disclaimer",
     )
     assert profile.master_workbook_contract(
         run_profile, learning_phase="Post",
-    )["contract_id"] == "reference-master-1"
+    )["contract_id"] == "update-aware-master-1"
     assert profile.assessment_format_policy(
         run_profile, metadata,
     )["policy_id"] == "generic-cms"
@@ -507,11 +516,15 @@ def test_board_grade_partial_metadata_keeps_the_pinned_run_profile(
 def test_inconclusive_partial_metadata_keeps_the_pinned_profile(
     metadata, policy_id,
 ) -> None:
+    """Contract v2.0 §12/§32.1: the pinned run-profile facts are the three
+    sheets and a never-blank chapter duration."""
     run_profile = profile.resolve_for_metadata(None, metadata)
 
-    assert profile.sheet_kinds(run_profile) == ("objective", "descriptive")
+    assert profile.sheet_kinds(run_profile) == (
+        "objective", "descriptive", "subjective",
+    )
     assert profile.forced_blank_fields(run_profile) == (
-        "chapter_duration", "question_disclaimer",
+        "question_disclaimer",
     )
     assert profile.assessment_format_policy(
         run_profile, metadata,

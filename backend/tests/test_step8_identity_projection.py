@@ -35,14 +35,16 @@ def _two_topic_chapter(db):
     The re-import half of the round trip resolves the chapter by the code
     the workbook text derives, not by the DB row — a mismatched code makes
     the import build a parallel chapter and the assertions vacuous (the
-    integrity audit measured exactly that). ``06CBSC_PROJECTIONID`` is what
-    ``directory.derive_chapter_meta`` yields for this board/grade/subject
-    and title.
+    integrity audit measured exactly that). ``06CBSC_ProjectionId`` is what
+    ``directory.derive_chapter_meta`` yields for this board/grade/subject,
+    publication and title (contract v2.0 §18: the run names its
+    publication, so the complete human tag decides the code).
     """
     chapter = models.Chapter(
-        chapter_code="06CBSC_PROJECTIONID", board="CBSE", grade="06",
+        chapter_code="06CBSC_ProjectionId", board="CBSE", grade="06",
         subject="Science", unit="Unit", chapter_title="Projection Identity",
         chapter_display_name="Projection Identity",
+        chapter_duration="40 minutes",
     )
     db.add(chapter)
     db.commit()
@@ -62,6 +64,7 @@ def _staged_two_culmination_job(db, chapter):
         mmd_text="# Chapter\n\nLight and sound.",
         status="generated",
         learning_kind="post",
+        source_book="NCERT",
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
         question_inventory={"items": []},
@@ -181,7 +184,7 @@ def test_two_same_titled_concepts_round_trip_their_persisted_ids(
         assert identity_issues == [], identity_issues
         assert (
             db.query(models.Chapter)
-            .filter_by(chapter_code="06CBSC_PROJECTIONID").count() == 1
+            .filter_by(chapter_code="06CBSC_ProjectionId").count() == 1
         ), "the import must land on the SAME chapter, not build a twin"
         restored = [row.machine_id for row in _culmination_rows(db, chapter)]
         assert set(restored) == set(minted), (
@@ -193,7 +196,7 @@ def test_two_same_titled_concepts_round_trip_their_persisted_ids(
         )
         assert all(restored_topics), "topic ids must restore from their cells"
     finally:
-        _cleanup_chapter(db, "06CBSC_PROJECTIONID")
+        _cleanup_chapter(db, "06CBSC_ProjectionId")
 
 
 def test_an_id_less_title_with_a_baked_minted_tag_stays_verbatim():
@@ -625,7 +628,7 @@ def test_the_read_back_blanks_by_the_profile_not_by_two_hardcoded_names(db):
         )
         assert any("chapter_duration must be blank" in e for e in errors)
     finally:
-        _cleanup_chapter(db, "06CBSC_PROJECTIONID")
+        _cleanup_chapter(db, "06CBSC_ProjectionId")
 
 def _tiny_snapshot():
     """A hand-built snapshot for renderer/validator MECHANICS tests only.

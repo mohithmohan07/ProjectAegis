@@ -434,11 +434,21 @@ def _canonical_layout(layout_id: str, *, concept_fields: Sequence[str],
 # --------------------------------------------------------------------------- #
 
 REFERENCE_LAYOUT_ID = "sop-mes-1"
-MSBSHSE_GRADE_6_MASTER_LAYOUT_ID = (
-    "msbshse-grade-6-master-2026-08-27"
+# The update-aware layouts of Master Governing Contract v2.0 §14: the
+# committed reference schema plus the five ``is_update_*`` columns and the
+# Descriptive ``concept_source`` column — 72 / 380 / 149 columns — and the
+# expanded-Descriptive variant with 30 rubric slots (440 columns). They were
+# first evidenced by the 2026-08-27 Grade-6 audit workbooks, but they are
+# NOT board layouts: every generated output of every board uses the
+# update-aware geometry, and only an explicitly frozen profile widens the
+# Descriptive slots. The historical names below remain as aliases.
+UPDATE_AWARE_MASTER_LAYOUT_ID = "update-aware-master-1"
+UPDATE_AWARE_EXPANDED_DESCRIPTIVE_LAYOUT_ID = (
+    "update-aware-master-expanded-descriptive-1"
 )
+MSBSHSE_GRADE_6_MASTER_LAYOUT_ID = UPDATE_AWARE_MASTER_LAYOUT_ID
 MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID = (
-    "msbshse-grade-6-english-post-master-2026-08-27"
+    UPDATE_AWARE_EXPANDED_DESCRIPTIVE_LAYOUT_ID
 )
 REFERENCE_WORKBOOK_PATH = (
     Path(__file__).resolve().parents[2]
@@ -792,7 +802,8 @@ def _audit_master_layout(
         sheets,
         ignored_sheets=(),
         source=(
-            f"normalized 2026-08-27 audit Master derived from {reference.id}"
+            "update-aware layout (contract v2.0 §14) derived from "
+            f"{reference.id}"
         ),
     )
 

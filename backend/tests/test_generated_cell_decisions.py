@@ -14,6 +14,12 @@ the whole Master with it. Three fixes, each pinned here:
    snapshot's ``pre_concept_id`` projection.
 3. A materialize obligation that exhausts bounded corrections AND The
    Fixer blocks ITSELF, recorded loudly; the Master ships the rest.
+
+The run-level fixtures here follow the Master Governing Contract v2.0
+(register Q26): the staged release names its publication (§18), the
+Descriptive proposal carries one model answer twice (§24) with untagged
+criteria worth exactly 1 mark each in a non-English run (§27.5, §28), and
+the joint item review (§27 step 6) is a scripted verified auditor.
 """
 from __future__ import annotations
 
@@ -23,6 +29,7 @@ import pytest
 
 from app.services import assessment_cells as cells_mod
 from app.services import assessment_materialization as materialization
+from app.services import build_concepts_release as release
 from app.services import release_core
 from app.services.phase3 import kernel
 
@@ -38,12 +45,128 @@ from tests.test_assessment_pre_release_lane import (
 from tests.test_pre_release_lane_wiring import _both_lanes_job
 
 ENVELOPE = "e" * 64
+# Contract v2.0 §18: ``question_source`` is the run's publication, stamped
+# from the staged release's frozen ``source_book`` — never a filename.
+PUBLICATION = "NCERT"
 
 _PROFILE = {
     "name": "reference-1",
     "appears_in": "Practice",
-    "sheet_kinds": ("objective", "descriptive"),
+    # Contract v2.0 §5: every run renders the three sheets.
+    "sheet_kinds": ("objective", "descriptive", "subjective"),
 }
+
+
+def _contract_materialize_author(payload):
+    """A contract-v2.0 Descriptive proposal for one generated question.
+
+    ``display_answer`` and ``answer_explanation`` are the same complete
+    model answer (§24); the criteria carry no bracket tag because the run
+    is not an English run (§28) and each is worth exactly 1 mark (§27.5),
+    summing to the cell's 2 marks.
+    """
+
+    generated = payload["blueprint_cell"]["generated_question"]
+    model_answer = (
+        f"Counting aloud in order gives: {generated['answer']}."
+    )
+    return {
+        "candidate_id": payload["candidate_id"],
+        "question": generated["question_text"],
+        "display_answer": model_answer,
+        "answers": [
+            {
+                "answer_type": "Phrases",
+                "answer_content": (
+                    "names every number in the correct order"
+                ),
+                "answer_weightage": "1",
+            },
+            {
+                "answer_type": "Phrases",
+                "answer_content": (
+                    "stops at the number the question asks for"
+                ),
+                "answer_weightage": "1",
+            },
+        ],
+        "sub_questions": [],
+        "answer_explanation": model_answer,
+        "requires_visual": False,
+        "rationale": "authored from the generated prerequisite question",
+    }
+
+
+def _contract_marking_author(payload):
+    """Marking under §27.5: every criterion keeps a 0.5-or-1 weight."""
+
+    candidate = payload["candidate"]
+    answers = copy.deepcopy(candidate["answers"])
+    for answer in answers:
+        answer["answer_weightage"] = 1
+    return {
+        "candidate_id": candidate["candidate_id"],
+        "question": candidate["question"],
+        "question_text": candidate["question_text"],
+        "answers": answers,
+        "sub_questions": [],
+        "question_duration": 3,
+        "math_keyboard": "No",
+        "rationale": "The generated cell owns the decomposition.",
+    }
+
+
+def _item_review_verified(payload):
+    """The Stage 6.5 joint item review (§27 step 6), scripted as verified."""
+
+    return {
+        "candidate_id": payload["candidate_id"],
+        "verdict": "verified",
+        "confidence": 1.0,
+        "issues": [],
+    }
+
+
+def _contract_authorities(*, calls=None):
+    """``_generated_authorities`` with the v2.0 item authorities in place.
+
+    Only the stages whose scripted output the contract retired are
+    replaced — materialize (§24/§27.5/§28), marking (§27.5) — plus the
+    joint item review the contract added (§27 step 6); every other
+    scripted authority, and the recorded ``calls`` ledger, is unchanged.
+    """
+
+    authorities, calls = _generated_authorities(calls=calls)
+    verified = authorities["materialize"][1]
+    authorities["materialize"] = (_contract_materialize_author, verified)
+    authorities["marking"] = (_contract_marking_author, verified)
+    authorities["item_review"] = (_item_review_verified, verified)
+    return authorities, calls
+
+
+def _published_job(db, chapter, *, questions=2):
+    """``_both_lanes_job`` whose staged slots name the publication (§18).
+
+    ``source_book`` is frozen onto the staged release at staging time, so
+    the fixture stamps it onto both staged slots (and the job) the way a
+    job uploaded with its source book would carry it; a job that already
+    names one is left exactly as it is.
+    """
+
+    job = _both_lanes_job(db, chapter, questions=questions)
+    inventory = copy.deepcopy(job.question_inventory)
+    for key in (release.RELEASE_KEY, release.PRE_RELEASE_KEY):
+        slot = inventory.get(key)
+        if isinstance(slot, dict) and not str(
+            slot.get("source_book") or ""
+        ).strip():
+            slot["source_book"] = PUBLICATION
+    if not str(job.source_book or "").strip():
+        job.source_book = PUBLICATION
+    job.question_inventory = inventory
+    db.commit()
+    db.refresh(job)
+    return job
 
 _CONCEPTS_BY_KEY = {
     "release:aaaaaaaaaaaaaaaaaaaa:0001": {
@@ -128,8 +251,8 @@ def test_output_02_builds_with_no_blueprint_anywhere(db):
     from app.services import assessment_release_run as run
 
     chapter = _chapter_with_concepts(db)
-    job = _both_lanes_job(db, chapter, questions=2)
-    authorities, calls = _generated_authorities()
+    job = _published_job(db, chapter, questions=2)
+    authorities, calls = _contract_authorities()
     cell_calls: list[dict] = []
 
     def counting_cell_author(payload):
@@ -151,6 +274,9 @@ def test_output_02_builds_with_no_blueprint_anywhere(db):
     assert released.payload["pre_post_learning"] == "Pre"
     assert len(cell_calls) == 2, "one recorded verdict per question"
     assert len(released.payload["candidates"]) == 2
+    for candidate in released.payload["candidates"]:
+        # Contract v2.0 §18: the publication rides every row.
+        assert candidate["question_source"] == PUBLICATION
     for cell in released.payload["blueprint_cells"]:
         assert cell["source_policy"] == "generate"
         # The recorded verdict's audit survives the binder (Q10: the
@@ -165,8 +291,8 @@ def test_one_impossible_question_blocks_itself_not_the_master(db):
     from app.services import assessment_release_run as run
 
     chapter = _chapter_with_concepts(db)
-    job = _both_lanes_job(db, chapter, questions=2)
-    authorities, _ = _generated_authorities()
+    job = _published_job(db, chapter, questions=2)
+    authorities, _ = _contract_authorities()
     healthy_author = authorities["materialize"][0]
 
     def failing_second(payload):
@@ -203,6 +329,49 @@ def test_one_impossible_question_blocks_itself_not_the_master(db):
     ), "the record says the Fixer was exhausted too"
     # The gap is user-visible: the release reads Ready-with-flags, never
     # a silent clean Ready.
+    assert release_core.release_state(released) == (
+        release_core.READY_WITH_FLAGS
+    )
+
+
+def test_item_review_without_a_reviewer_flags_and_never_blocks(db):
+    """Contract v2.0 §27 step 6 / Q10: the joint item review is an auditor.
+
+    With no injected reviewer and no live API, every item ships carrying
+    the named ``assessment_item_review_unavailable`` flag; the Master is
+    never blocked by its auditor (``review_items`` used to raise
+    ``LiveApiUnavailable`` from outside its own never-block guard)."""
+
+    from app.services import assessment_item_review as item_review
+    from app.services import assessment_release_run as run
+
+    chapter = _chapter_with_concepts(db)
+    job = _published_job(db, chapter, questions=2)
+    authorities, _ = _contract_authorities()
+    del authorities["item_review"]
+    authorities["cells"] = (
+        _cell_verdict_author,
+        lambda payload: {"verdict": "verified", "confidence": 1.0,
+                         "issues": []},
+    )
+    released = run.run_pre_release_for_job(
+        db,
+        job.id,
+        owner_sub=OWNER,
+        authorities=authorities,
+        **_decision_context(),
+    )
+    payload = released.payload
+    assert len(payload["candidates"]) == 2
+    assert payload["materialization_blocked"] == []
+    for candidate in payload["candidates"]:
+        audit = candidate[item_review.AUDIT_FIELD]
+        assert audit["verdict"] == "unavailable"
+        assert any(
+            item_review.UNAVAILABLE_WARNING in flag
+            for flag in audit["flags"]
+        )
+        assert item_review.WARNING in candidate["flags"]
     assert release_core.release_state(released) == (
         release_core.READY_WITH_FLAGS
     )
@@ -259,10 +428,9 @@ def test_an_orphaned_generated_question_blocks_itself_not_the_master(db):
     refusal.)"""
 
     from app.services import assessment_release_run as run
-    from app.services import build_concepts_release as release
 
     chapter = _chapter_with_concepts(db)
-    job = _both_lanes_job(db, chapter, questions=2)
+    job = _published_job(db, chapter, questions=2)
     inventory = copy.deepcopy(job.question_inventory)
     questions = inventory[release.PRE_RELEASE_KEY]["generated_questions"]
     orphan_qid = str(questions[1]["pre_question_id"])
@@ -270,7 +438,7 @@ def test_an_orphaned_generated_question_blocks_itself_not_the_master(db):
     job.question_inventory = inventory
     db.commit()
 
-    authorities, _ = _generated_authorities()
+    authorities, _ = _contract_authorities()
     authorities["cells"] = (
         _cell_verdict_author,
         lambda payload: {"verdict": "verified", "confidence": 1.0,

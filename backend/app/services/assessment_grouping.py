@@ -18,6 +18,7 @@ import json
 from typing import Any, Mapping
 
 from .. import config
+from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
 from . import identity
 from .phase3 import kernel
@@ -346,7 +347,7 @@ def _live_level_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         LEVEL_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -364,7 +365,7 @@ def _live_cluster_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         CLUSTER_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -382,7 +383,7 @@ def _live_description_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         DESCRIBE_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -393,6 +394,7 @@ def _live_authorities(
     *,
     live_provider: kernel.Provider,
     live_critic: kernel.Critic,
+    stage: str,
 ) -> tuple[kernel.Provider, kernel.Critic | None, kernel.Provider | None]:
     """Wire production authorities while preserving injected test seams."""
 
@@ -402,7 +404,11 @@ def _live_authorities(
     from .phase3 import fixer as fixer_mod
 
     envelope_mod.require_live_api()
-    return live_provider, critic or live_critic, fixer or fixer_mod.live_fixer
+    return (
+        live_provider,
+        critic or lane_policy.critic_for(stage, live_critic),
+        fixer or fixer_mod.live_fixer,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -470,6 +476,7 @@ def decide_levels(
         provider, critic, fixer,
         live_provider=_live_level,
         live_critic=_live_level_critic,
+        stage="level",
     )
     store = store or kernel.DecisionStore()
 
@@ -636,6 +643,7 @@ def cluster_tier(
         provider, critic, fixer,
         live_provider=_live_cluster,
         live_critic=_live_cluster_critic,
+        stage="cluster",
     )
     store = store or kernel.DecisionStore()
     payload = {
@@ -795,6 +803,7 @@ def describe_group(
         provider, critic, fixer,
         live_provider=_live_description,
         live_critic=_live_description_critic,
+        stage="describe",
     )
     store = store or kernel.DecisionStore()
     payload = {

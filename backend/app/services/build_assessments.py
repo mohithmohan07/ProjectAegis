@@ -331,7 +331,7 @@ def _live_legacy_cell_mark_critic(payload: dict) -> dict:
     return generation._openai_json(
         _LEGACY_CELL_MARK_CRITIC_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 

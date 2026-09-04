@@ -19,6 +19,7 @@ from typing import Any, Mapping
 
 from .. import bulk_import as bi
 from .. import config
+from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
 from . import assessment_release as rel
 from . import katex_rules
@@ -37,7 +38,10 @@ from .phase3 import kernel
 # into the question or its Image-typed answer/rubric cells rather than
 # silently dropped (owner audit 2026-08-27: self-contained wording; images
 # absent from Assessments and Rubrics).
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-12"
+# ``-13`` adopts Master Governing Contract v2.0: label-free Objective
+# explanations (§22), identical Descriptive model answers (§24), the True or
+# False Subjective projection (§23.1) and English-only rubric tags (§28).
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-13"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -149,13 +153,20 @@ MATERIALIZE_SYSTEM = (
     "with its enumeration label — a), b), c)… or (i), (ii), (iii)… — "
     "using the same scheme and order the item itself uses (SOP §5.4), so "
     "each part maps to its marking cleanly.\n"
-    "answer_explanation must open by naming the correct answer — for an "
-    "Objective item, the correct option by its lowercase letter and text (e.g. "
-    "\"b) Get ready — ...\") — and then explain why it is correct. For "
-    "Descriptive cells, display_answer and answer_explanation carry the "
-    "SAME model answer (SOP §5.4 keeps them the same): the explanation "
-    "restates the display answer's content, adding at most brief marking "
-    "clarity — never a different answer.\n"
+    "For an Objective item, answer_explanation BEGINS with the exact text "
+    "of the correct option and then explains why it is correct; it never "
+    "contains the option letter or number — no leading \"b)\", no "
+    "\"option 2\" (e.g. \"Sleepy. The clue 'curled up and slept' shows that "
+    "drowsy means sleepy.\"). For Descriptive cells, display_answer and "
+    "answer_explanation are the SAME complete learner-facing model answer, "
+    "byte for byte: the answer only — no rubric narration, criterion tags, "
+    "step labels with marks, or evaluator instructions. For a True or "
+    "False item (always a Subjective cell): the question carries the "
+    "complete statement followed by \"Answer: $$a$$\", the single "
+    "answers[] entry is exactly True or False with the textual "
+    "answer_type Phrases (the workbook shows it as the Subjective literal "
+    "Words) and placeholder a, and answer_explanation opens with that word "
+    "and then the source-grounded reason.\n"
     "Do not decide Open or Specific and do not allocate weights, subquestion "
     "marks, keyword weights, duration, or keyboard mode. Dedicated later "
     "decisions own answer restriction and marking; any such extra values in "
@@ -167,12 +178,24 @@ MATERIALIZE_SYSTEM = (
     "(owner audit, 2026-08-29). A type-declared answer_content uses exactly "
     "one whole-cell medium: Equation means full raw LaTeX with NO [Katex] "
     "wrapper and with any words inside \\text{...}; Phrases means wholly "
-    "plain text with no TeX or [Katex]. Never mix the two. Prefix each "
-    "Descriptive Phrases rubric block with one exact functional tag such "
-    "as [content]:, [method]:, [accuracy]:, [working]:, [language]:, "
-    "[creative]:, [evidence]:, or [diagram]:; a bracketed tag without its "
-    "colon is malformed. A 4-mark single-part Descriptive item must have "
-    "at least two distinct rubric blocks; one 4-mark block is invalid. "
+    "plain text with no TeX or [Katex]. Never mix the two. Every "
+    "Descriptive rubric criterion (a main answer/rubric block, or a "
+    "subquestion keyword) is ONE observable, question-specific, "
+    "credit-bearing demand worth exactly 0.5 or 1 mark: split a larger "
+    "award into discrete non-overlapping criteria, never write a single "
+    "undivided multi-mark criterion, and never pad with generic filler "
+    "such as 'correct content' or 'uses language well'. Every criterion "
+    "appears in the model answer and every required model-answer "
+    "component is scored. Follow the supplied rubric_tag_policy exactly: "
+    "when it is REQUIRED (an English run), every textual criterion opens "
+    "with exactly one approved tag from its registry in the syntax "
+    "'[tag]: criterion' (lowercase tag, closing bracket, colon, one space; "
+    "[creative] is invalid — use [creativity]); when it is not required "
+    "(every other subject), write the criterion directly with NO bracket "
+    "tag. A tag never appears in the question, options, accepted answers, "
+    "display answer or explanation. A 4-mark single-part Descriptive item "
+    "must have at least two distinct rubric blocks; one 4-mark block is "
+    "invalid. "
     "In a rich-text field, a text-only table uses one complete "
     "\\begin{array}{column-spec}...\\end{array} inside [Katex], in the "
     "house style (owner-corrected reference, 2026-08-29): pipe columns "
@@ -225,10 +248,16 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "dependence, answer leakage, stem/option separation (an Objective stem "
     "that enumerates its own options), invented subquestions (a part "
     "the source item does not itself carry), explanation/answer "
-    "consistency (the explanation must name the correct answer — the "
-    "correct option's lowercase letter and text on an Objective item — and "
-    "agree "
-    "with the display answer), literary over-quoting (a whole poem "
+    "consistency (an Objective explanation begins with the exact correct "
+    "answer text and never an option letter or number; a Descriptive "
+    "display answer and explanation are the same complete model answer; "
+    "a True or False item is Subjective with one True/False slot), "
+    "rubric-tag containment against the supplied rubric_tag_policy "
+    "(required at the head of every English textual criterion, forbidden "
+    "everywhere else), criterion atomicity (each criterion one "
+    "credit-bearing demand worth 0.5 or 1, no generic filler, "
+    "bidirectional coverage with the model answer), literary over-quoting "
+    "(a whole poem "
     "or passage quoted where only the asked-about lines belong), "
     "lowercase paper-option order with no label duplicated inside option "
     "content, declared answer-cell medium purity, table/image integrity "
@@ -236,8 +265,8 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "Image-typed cell holding no image source), "
     "fabricated values where the source intentionally leaves inputs open, "
     "Subjective placeholder/answer alignment, multipart content or rubrics "
-    "duplicated between main fields and sub-question fields, malformed "
-    "rubric tags, and the minimum two rubric blocks on a 4-mark single-part "
+    "duplicated between main fields and sub-question fields, and the "
+    "minimum two rubric blocks on a 4-mark single-part "
     "Descriptive item. Do not "
     "classify Open/Specific or audit "
     "mark allocation here. Do not "
@@ -362,10 +391,14 @@ def _duplicated_option_label(value: Any) -> bool:
     return rel.option_content_has_label(value)
 
 
-def _malformed_rubric_tag(value: Any, answer_type: Any) -> bool:
-    """Functional rubric prefixes are a wire format, not a judgment."""
+def _malformed_rubric_tag(
+    value: Any, answer_type: Any, *, tags_required: bool | None = None,
+) -> bool:
+    """Rubric-tag containment is a wire format, not a judgment (§28)."""
 
-    return rel.malformed_rubric_tag(value, answer_type)
+    return rel.malformed_rubric_tag(
+        value, answer_type, tags_required=tags_required,
+    )
 
 
 def _proposal_defects(
@@ -374,6 +407,7 @@ def _proposal_defects(
     candidate_id: str,
     *,
     descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
+    tags_required: bool | None = None,
 ) -> list[str]:
     """Validate response mechanics only; semantic quality belongs to models."""
 
@@ -476,6 +510,12 @@ def _proposal_defects(
                 )
         if not str(proposal.get("answer_explanation") or "").strip():
             defects.append("missing answer explanation")
+        else:
+            # Contract v2.0 §22.5: the explanation opens with the exact
+            # correct-answer text, never an option letter or number.
+            defects.extend(rel.objective_explanation_defects(
+                answers, proposal.get("answer_explanation"),
+            ))
     elif kind == "subjective":
         if not 1 <= len(answers) <= MAX_SUBJECTIVE_ANSWERS:
             defects.append(
@@ -514,6 +554,13 @@ def _proposal_defects(
     elif kind == "descriptive":
         if not str(proposal.get("display_answer") or "").strip():
             defects.append("missing display answer")
+        else:
+            # Contract v2.0 §24: display_answer and answer_explanation are
+            # the same complete model answer.
+            defects.extend(rel.descriptive_answer_parity_defects(
+                proposal.get("display_answer"),
+                proposal.get("answer_explanation"),
+            ))
         if not answers and not subquestions:
             defects.append("descriptive needs at least one answer/rubric block")
         if len(answers) > descriptive_answer_capacity:
@@ -538,10 +585,18 @@ def _proposal_defects(
                 )
             if _malformed_rubric_tag(
                 answer.get("answer_content"), answer.get("answer_type"),
+                tags_required=tags_required,
             ):
                 defects.append(
-                    f"answer/rubric block {position} does not start with an "
-                    "allowed functional tag or is without its required colon"
+                    f"answer/rubric block {position} breaks English "
+                    "rubric-tag containment: "
+                    + (
+                        "an English criterion opens with exactly one "
+                        "approved tag as '[tag]: text'"
+                        if tags_required
+                        else "a non-English criterion carries no bracket "
+                        "tag and is not empty"
+                    )
                 )
         if len(subquestions) > MAX_SUBQUESTIONS:
             defects.append(f"more than {MAX_SUBQUESTIONS} subquestions")
@@ -598,13 +653,19 @@ def _proposal_defects(
                     )
                 if _malformed_rubric_tag(
                     keyword.get("keyword"), keyword_type,
+                    tags_required=tags_required,
                 ):
                     defects.append(
                         f"subquestion {position} keyword {keyword_position} "
-                        "does not start with an allowed functional tag or is "
-                        "without its required colon"
+                        "breaks English rubric-tag containment (contract "
+                        "v2.0 §28)"
                     )
     defects.extend(_rich_text_defects(proposal, sheet_kind=kind))
+    # Contract v2.0 §28.3: no rubric tag in the question, options, accepted
+    # answers, model answer or explanation.
+    defects.extend(rel.model_answer_leak_defects(
+        {**dict(proposal), "question_text": ""}, sheet_kind=kind,
+    ))
     return defects
 
 
@@ -613,6 +674,7 @@ def _checker(
     candidate_id: str,
     *,
     descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
+    tags_required: bool | None = None,
 ) -> kernel.Checker:
     def check(response: Mapping[str, Any]) -> list[str]:
         return _proposal_defects(
@@ -620,6 +682,7 @@ def _checker(
             cell,
             candidate_id,
             descriptive_answer_capacity=descriptive_answer_capacity,
+            tags_required=tags_required,
         )
 
     return check
@@ -655,7 +718,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         MATERIALIZE_CRITIC_SYSTEM,
         suffix,
-        purpose="concept_validation",
+        purpose="advisory_critic",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "materialize-critic-v6",
@@ -676,7 +739,11 @@ def _live_authorities(
     from .phase3 import fixer as fixer_mod
 
     envelope_mod.require_live_api()
-    return _live_materialize, critic or _live_critic, fixer or fixer_mod.live_fixer
+    return (
+        _live_materialize,
+        critic or lane_policy.critic_for("materialize", _live_critic),
+        fixer or fixer_mod.live_fixer,
+    )
 
 
 def _review_flags(decision: Mapping[str, Any]) -> list[str]:
@@ -809,6 +876,11 @@ def _decision_payload(
     context: Any,
     descriptive_answer_capacity: int,
 ) -> dict[str, Any]:
+    # Contract v2.0 §28: the tag containment rule for this run's subject,
+    # handed to the author and critic as evidence and enforced by the
+    # mechanical checker. Part of the payload, so the decision key changes
+    # with the rule (a replay under another subject never reuses it).
+    tag_policy = assessment_profile.rubric_tag_policy(meta)
     return {
         "stage": "assessment.materialize",
         "rules": MATERIALIZE_SYSTEM,
@@ -817,6 +889,7 @@ def _decision_payload(
         "workbook_capacities": {
             "descriptive_answer_slots": descriptive_answer_capacity,
         },
+        "rubric_tag_policy": tag_policy,
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "curricular_evidence": copy.deepcopy(context),
@@ -855,6 +928,7 @@ def _materialize_prepared(
             cell,
             candidate_id,
             descriptive_answer_capacity=descriptive_answer_capacity,
+            tags_required=bool(payload["rubric_tag_policy"]["required"]),
         ),
         critic=critic,
         store=store,

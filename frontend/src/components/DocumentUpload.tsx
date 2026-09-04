@@ -186,6 +186,10 @@ export default function DocumentUpload({
   const { run } = useRunConsole();
   const auth = useOptionalAuth();
   const [source, setSource] = useState("");
+  // The contract's explicit chapter-duration upload variable (Master
+  // Governing Contract v2.0 §32.1): used only when the accepted duration
+  // registry has no row for the chapter. Blank means "not supplied".
+  const [chapterDurationMinutes, setChapterDurationMinutes] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [job, setJob] = useState<UploadJob | null>(null);
   const [busy, setBusy] = useState(false);
@@ -424,7 +428,11 @@ export default function DocumentUpload({
     try {
       const created: UploadJob = module === "assessments"
         ? await api.createAssessmentUpload(uploadType || "document", file, source)
-        : await api.postLearningUpload(file, source);
+        : await api.postLearningUpload(
+          file,
+          source,
+          Number.parseInt(chapterDurationMinutes, 10) || 0,
+        );
       setFile(null);
       if (inputRef.current) inputRef.current.value = "";
       emit(created);
@@ -589,6 +597,26 @@ export default function DocumentUpload({
           options={bookSources}
           disabled={controlsDisabled}
         />
+        {module === "concepts" && (
+          <div className="field mt-8">
+            <label className="field-label" htmlFor="chapter-duration-minutes">
+              Chapter duration in minutes (only if the duration registry has
+              no row for this chapter)
+            </label>
+            <input
+              className="input-md"
+              id="chapter-duration-minutes"
+              type="number"
+              min={1}
+              step={1}
+              inputMode="numeric"
+              value={chapterDurationMinutes}
+              disabled={controlsDisabled}
+              placeholder="e.g. 200"
+              onChange={(e) => setChapterDurationMinutes(e.target.value)}
+            />
+          </div>
+        )}
         <div className="row mt-8">
           <input ref={inputRef} type="file" disabled={controlsDisabled}
             onChange={(e) => {

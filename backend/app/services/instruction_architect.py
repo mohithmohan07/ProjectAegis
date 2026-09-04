@@ -455,7 +455,10 @@ def assemble_instruction_set(
     response = call(
         prompts.get_text("architect.assemble.system"),
         json.dumps(request, ensure_ascii=False, indent=1),
-        purpose="metadata",
+        # The Architect reads the source and decides its language mode and
+        # publication: a semantic adjudication of the source (priced as
+        # authoring under the tiered profile), not a metadata restatement.
+        purpose="source_adjudication",
     )
     defects = _slot_defects(response)
     if defects:
@@ -473,7 +476,7 @@ def assemble_instruction_set(
             return call(
                 phase3_prompts.CRITIC_SYSTEM,
                 json.dumps(payload, ensure_ascii=False, indent=1),
-                purpose="metadata",
+                purpose="advisory_critic",
             )
 
     try:

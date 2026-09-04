@@ -31,6 +31,7 @@ from zipfile import ZipFile
 
 import pytest
 
+from app import bulk_import as bi
 from app.bulk_import import assessment_workbook as workbook
 from app.services import assessment_profile
 from app.services import identity
@@ -501,10 +502,78 @@ def _field_values(row: dict[str, str], fields: Iterable[str]) -> dict[str, str]:
     return {field: row.get(field, "") for field in fields}
 
 
+# Master Governing Contract v2.0 §16 / Appendix B.1: the one list delimiter
+# every multi-value cell carries, and the ``<br>`` projection of a line break
+# (§17).  Pinned here as literals so a drift in the production constant is a
+# test failure, not a silently re-pinned expectation.
+LIST_DELIMITER = " | "
+LINE_BREAK = "<br>"
+assert bi.LIST_DELIMITER == LIST_DELIMITER
+assert bi.LINE_BREAK == LINE_BREAK
+
+# Contract v2.0 §18: ``question_source`` is the run's publication.  Every
+# audit chapter names it in the chapter-title tag
+# (``06_English_MSBSHSE_Balbharati``); the corrected masters instead carry
+# the retired origin-system default ``UpSchool DB`` on every question row,
+# which is evidence of the defect, never the expected cell.
+AUDIT_PUBLICATION = "Balbharati"
+RAW_RETIRED_QUESTION_SOURCE = "UpSchool DB"
+
+# The multi-value cells of Appendix B.1 that the audit workbooks carry as
+# pre-v2.0 comma lists (and, in ``math_pre_concept.xlsx``, one
+# newline-separated ``related_concepts`` list).
+_MULTI_VALUE_CHAPTER_FIELDS = ("pre_topics", "post_topics")
+_MULTI_VALUE_TOPIC_FIELDS = ("related_topics",)
+_MULTI_VALUE_CONCEPT_FIELDS = ("keywords", "digicards", "related_concepts")
+
+
+def _contract_list(value: str) -> str:
+    """Re-delimit a legacy comma/newline list to the exact contract cell.
+
+    Contract v2.0 §16: the production reader splits a pipe-free legacy cell
+    on commas only; the corrected-intent normalized snapshot additionally
+    treats a raw line break as the list separator it visibly was.
+    """
+
+    return LIST_DELIMITER.join(
+        part
+        for line in str(value or "").splitlines()
+        for part in bi.split_multi(line)
+    )
+
+
+def _projected_cell(value: object) -> str:
+    """The comparable form of one EXPECTED cell after the renderer's
+    deterministic projections: internal ``\\n`` → ``<br>`` (§17); numbers
+    and everything else exactly as ``_normalized_cell`` reads them back."""
+
+    if isinstance(value, str):
+        value = value.replace("\r\n", "\n").replace("\r", "\n")
+        value = value.replace("\n", LINE_BREAK)
+    return _normalized_cell(value)
+
+
 def _normalize_chapter(chapter: dict[str, str], subject: str) -> dict[str, str]:
     normalized = dict(chapter)
     if subject == "Mathematics":
         normalized["chapter_duration"] = "362"
+    for field in _MULTI_VALUE_CHAPTER_FIELDS:
+        normalized[field] = _contract_list(normalized.get(field, ""))
+    assert normalized["chapter_title"].endswith(f"_{AUDIT_PUBLICATION})")
+    return normalized
+
+
+def _normalize_topic(topic: dict[str, str]) -> dict[str, str]:
+    normalized = dict(topic)
+    for field in _MULTI_VALUE_TOPIC_FIELDS:
+        normalized[field] = _contract_list(normalized.get(field, ""))
+    return normalized
+
+
+def _normalize_concept(concept: dict[str, str]) -> dict[str, str]:
+    normalized = dict(concept)
+    for field in _MULTI_VALUE_CONCEPT_FIELDS:
+        normalized[field] = _contract_list(normalized.get(field, ""))
     return normalized
 
 
@@ -517,6 +586,9 @@ def _concept_snapshot(
         "chapter": _normalize_chapter(
             _field_values(raw_rows[0], CHAPTER_FIELDS), subject
         ),
+        # Contract v2.0 §18: the publication is a frozen run scalar on the
+        # snapshot, stamped onto every candidate before any learner text.
+        "source_book": AUDIT_PUBLICATION,
         "topics": [],
         "groups": [],
         "candidates": [],
@@ -527,14 +599,17 @@ def _concept_snapshot(
         topic_title = row["topic_title"]
         topic = topic_index.get(topic_title)
         if topic is None:
-            topic = {**_field_values(row, TOPIC_FIELDS), "concepts": []}
+            topic = {
+                **_normalize_topic(_field_values(row, TOPIC_FIELDS)),
+                "concepts": [],
+            }
             topic_index[topic_title] = topic
             snapshot["topics"].append(topic)
         concept_title = row["concept_title"]
         if concept_title not in seen_concepts:
             seen_concepts.add(concept_title)
             topic["concepts"].append({
-                **_field_values(row, CONCEPT_FIELDS),
+                **_normalize_concept(_field_values(row, CONCEPT_FIELDS)),
                 "concept_key": concept_title,
             })
     if filename in {
@@ -569,9 +644,10 @@ def _concept_snapshot(
 
     # Roster cells are derived summaries.  Rebuild them from the surviving
     # normalized concepts; the Math Post fixture carries a stale Topic-04
-    # roster and is evidence of the defect, not the expected output.
+    # roster and is evidence of the defect, not the expected output.  Rosters
+    # are pipe lists (contract §16): a title may itself contain a comma.
     for topic in snapshot["topics"]:
-        topic["topic_concept_labels"] = ", ".join(
+        topic["topic_concept_labels"] = LIST_DELIMITER.join(
             identity.titled(
                 concept["concept_title"],
                 concept.get("concept_machine_id", ""),
@@ -588,8 +664,8 @@ def _concept_snapshot(
             topic.get("topic_machine_id", ""),
             lane_positions[lane],
         ))
-    snapshot["chapter"]["post_topics"] = ", ".join(lane_titles["PL"])
-    snapshot["chapter"]["pre_topics"] = ", ".join(lane_titles["PrL"])
+    snapshot["chapter"]["post_topics"] = LIST_DELIMITER.join(lane_titles["PL"])
+    snapshot["chapter"]["pre_topics"] = LIST_DELIMITER.join(lane_titles["PrL"])
     return snapshot, raw_rows
 
 
@@ -748,13 +824,17 @@ def _candidate_from_audit_row(
     restriction = row.get("answer_restriction", "")
     if restriction.casefold() in {"open", "specific"}:
         restriction = restriction.title()
+    # Contract v2.0 §18: the run stamps its publication on every candidate;
+    # the raw ``UpSchool DB`` cell is the retired origin default (see
+    # ``test_master_raw_question_source_is_the_retired_origin_default``).
+    assert row.get("question_source", "") == RAW_RETIRED_QUESTION_SOURCE
     candidate = {
         "candidate_id": f"AUDIT-{row['question_label']}",
         "question_label": row["question_label"],
         "sheet_kind": sheet.casefold(),
         "question_category": category,
         "cognitive_skill": row.get("cognitive_skills", ""),
-        "question_source": row.get("question_source", ""),
+        "question_source": AUDIT_PUBLICATION,
         "question_disclaimer": "",
         "question_duration": row.get("question_duration", ""),
         "question_appears_in": row.get("question_appears_in", ""),
@@ -811,13 +891,16 @@ def _master_snapshot(
             topic_title = row.get("topic_title", "")
             topic = topics.get(topic_title)
             if topic is None:
-                topic = {**_field_values(row, TOPIC_FIELDS), "concepts": []}
+                topic = {
+                    **_normalize_topic(_field_values(row, TOPIC_FIELDS)),
+                    "concepts": [],
+                }
                 topics[topic_title] = topic
                 snapshot["topics"].append(topic)
             concept_title = row.get("concept_title", "")
             if concept_title and concept_title not in concepts:
                 concept = {
-                    **_field_values(row, CONCEPT_FIELDS),
+                    **_normalize_concept(_field_values(row, CONCEPT_FIELDS)),
                     "concept_key": concept_title,
                 }
                 concepts[concept_title] = concept
@@ -922,10 +1005,21 @@ def _expected_question_record(
         "answer_explanation": candidate["answer_explanation"],
     }
     answers = candidate["answers"]
+    # Contract v2.0 §22–§24: a textual medium carries the lane literal —
+    # ``Words`` on Objective option and Subjective answer cells, ``Phrases``
+    # on Descriptive rubric/keyword cells; Equation/Image read the same.
+    lane_text_literal = "Phrases" if sheet == "Descriptive" else "Words"
+
+    def _wire_type(value: str) -> str:
+        normalized = str(value or "").strip()
+        if normalized.casefold() in {"words", "phrases"}:
+            return lane_text_literal
+        return normalized
+
     if sheet == "Objective":
         option_lines = []
         for number, answer in enumerate(answers, start=1):
-            record[f"answer_type_{number}"] = answer["answer_type"]
+            record[f"answer_type_{number}"] = _wire_type(answer["answer_type"])
             record[f"answer_content_{number}"] = katex_rules.raw_answer_cell(
                 answer["answer_type"], answer["answer_content"]
             )
@@ -950,24 +1044,43 @@ def _expected_question_record(
             ).strip()
     elif sheet == "Subjective":
         record["math_keyboard"] = candidate["math_keyboard"]
+        # Contract §23: ``question`` keeps the ``$$a$$`` machine placeholders
+        # and ``question_text`` shows the visible blank at the same position.
+        visible = str(record["question_text"])
+        for answer in answers:
+            placeholder = str(answer["placeholder"] or "").strip()
+            if len(placeholder) == 1 and "a" <= placeholder <= "t":
+                visible = visible.replace(f"$${placeholder}$$", "____")
+        record["question_text"] = visible
         for number, answer in enumerate(answers, start=1):
-            record[f"answer_type_{number}"] = answer["answer_type"]
+            record[f"answer_type_{number}"] = _wire_type(answer["answer_type"])
             record[f"answer_{number}"] = katex_rules.raw_answer_cell(
                 answer["answer_type"], answer["answer_content"]
             )
+            # Contract §23: ``answer_display_N`` on the Subjective sheet is
+            # the literal "Yes" for every populated answer block; the
+            # accepted answer itself lives in ``answer_N``.
             record[f"answer_display_{number}"] = (
-                answer["answer_display"]
-                or katex_rules.rich_answer_display(
-                    answer["answer_type"], answer["answer_content"]
-                )
+                "Yes" if str(answer["answer_content"]).strip() else ""
             )
             record[f"weightage_{number}"] = answer["answer_weightage"]
             record[f"placeholder_{number}"] = answer["placeholder"]
     else:
         record["math_keyboard"] = candidate["math_keyboard"]
         record["display_answer"] = candidate["display_answer"]
+        # Contract §19.1/§20: the complete ``question_text`` is the shared
+        # context followed by every labelled child, one per line.
+        record["question_text"] = "\n".join(
+            part for part in (
+                str(record["question_text"]).rstrip(),
+                *(
+                    str(subquestion["text"] or "").strip()
+                    for subquestion in candidate["sub_questions"]
+                ),
+            ) if part
+        ).strip()
         for number, answer in enumerate(answers[:answer_slots], start=1):
-            record[f"answer_type_{number}"] = answer["answer_type"]
+            record[f"answer_type_{number}"] = _wire_type(answer["answer_type"])
             record[f"answer_weightage_{number}"] = answer[
                 "answer_weightage"
             ]
@@ -983,7 +1096,7 @@ def _expected_question_record(
                 subquestion["keywords"], start=1
             ):
                 record[f"sq{number}_answer_type_{keyword_number}"] = (
-                    keyword["answer_type"]
+                    _wire_type(keyword["answer_type"])
                 )
                 record[f"sq{number}_weightage_{keyword_number}"] = (
                     keyword["weightage"]
@@ -1000,7 +1113,14 @@ def _expected_question_record(
             record[field] = katex_rules.replace_unsupported_tables(
                 str(record[field])
             )
-    return {field: _normalized_cell(value) for field, value in record.items()}
+    for number in range(1, 16):
+        field = f"sub_question_{number}"
+        if field in record:
+            record[field] = katex_rules.replace_unsupported_tables(
+                str(record[field])
+            )
+    # Contract §17: every string cell projects its line breaks to ``<br>``.
+    return {field: _projected_cell(value) for field, value in record.items()}
 
 
 def _digest(values: object) -> str:
@@ -1303,13 +1423,16 @@ def test_raw_headers_match_documented_defects_position_for_position() -> None:
     }
 
 
+# Contract v2.0 §14: the 440-column Descriptive variant is an English-Post
+# profile fact selected by subject and lane, no longer a board/grade row —
+# its contract id is ``english-post-master-expanded-1``.
 MASTER_CONTRACTS = (
     (
         "english_post_master.xlsx",
         "English",
         "Post",
         30,
-        "msbshse-grade-6-english-post-master-2026-08-27",
+        "english-post-master-expanded-1",
     ),
     (
         "english_pre_master.xlsx",
@@ -1388,36 +1511,50 @@ def test_production_master_contract_normalizes_raw_schema_defects(
         ("math_pre_concept.xlsx", "Mathematics", "Pre"),
     ),
 )
-def test_production_concept_contract_rejects_raw_update_columns(
+def test_production_concept_contract_normalizes_raw_update_columns(
     filename: str, subject: str, phase: str
 ) -> None:
+    """Contract v2.0 §12/§14 retires the 67/374/144 Concept geometry: every
+    Concept file shares the Master's update-aware 72/380/149 schema, so the
+    partial ``is_update_*`` trio hand-added to ``math_pre_concept.xlsx`` is
+    normalized into the complete five-column contract, never rejected."""
+
     schema = workbook.output_schema(
         "concept", _profile(subject), _lane_snapshot(phase)
     )
-    assert schema["contract_id"] == "concept-reference-1"
+    assert schema["contract_id"] == "concept-update-aware-1"
     assert {
         sheet: schema["fields"][sheet] for sheet in CANONICAL_SHEET_ORDER
     } == {
-        sheet: list(BASE_FIELDS[sheet]) for sheet in CANONICAL_SHEET_ORDER
+        sheet: _expected_master_fields(sheet, 10)
+        for sheet in CANONICAL_SHEET_ORDER
     }
     assert [
         len(schema["fields"][sheet]) for sheet in CANONICAL_SHEET_ORDER
-    ] == [67, 374, 144]
+    ] == [72, 380, 149]
+    for sheet in CANONICAL_SHEET_ORDER:
+        assert [
+            schema["fields"][sheet].index(field) + 1 for field in UPDATE_FIELDS
+        ] == [2, 9, 16, 28, 36]
+    assert schema["fields"]["Descriptive"].index("concept_source") + 1 == 26
+    assert schema["descriptive_answer_slots"] == 10
 
     raw_objective = _read_fixture(filename).sheets["Objective"]
+    raw_update_columns = [
+        (field, raw_objective.headers.index(field) + 1)
+        for field in UPDATE_FIELDS
+        if field in raw_objective.headers
+    ]
     if filename == "math_pre_concept.xlsx":
-        assert [
-            (field, raw_objective.headers.index(field) + 1)
-            for field in UPDATE_FIELDS[:3]
-        ] == [
+        # The raw trio already sits at the contract's positions; the Group
+        # and Question markers it lacks are what the contract adds.
+        assert raw_update_columns == [
             ("is_update_chapter", 2),
             ("is_update_topic", 9),
             ("is_update_concept", 16),
         ]
-        assert all(
-            field not in schema["fields"]["Objective"]
-            for field in UPDATE_FIELDS[:3]
-        )
+    else:
+        assert raw_update_columns == []
 
 
 CONCEPT_ROLES = (
@@ -1433,9 +1570,13 @@ def test_normalized_concept_rows_render_field_for_field(
     filename: str, subject: str
 ) -> None:
     snapshot, raw_rows = _concept_snapshot(filename, subject)
+    profile = _profile(subject)
     rendered = workbook.parse_workbook(
-        workbook.render_concept_file(snapshot, _profile(subject))
+        workbook.render_concept_file(snapshot, profile)
     )
+    schema = workbook.output_schema("concept", profile, snapshot)
+    concept_fields = schema["fields"]["Objective"]
+    assert rendered["sheets"]["Objective"]["fields"] == concept_fields
     rows = rendered["sheets"]["Objective"]["rows"]
     assert len(rows) == len(raw_rows)
     assert rendered["sheets"]["Descriptive"]["rows"] == []
@@ -1444,7 +1585,11 @@ def test_normalized_concept_rows_render_field_for_field(
     for row_number, (raw_row, rendered_row) in enumerate(
         zip(raw_rows, rows, strict=True), start=3
     ):
-        expected = dict(raw_row)
+        # Only the hierarchy bands are authored; every Group/Question cell
+        # of a Concept file is blank and every update marker is ``No``
+        # (contract v2.0 §14.1) — including the two entity bands the
+        # Concept file never populates.
+        expected = {field: "" for field in concept_fields}
         expected.update(snapshot["chapter"])
         topic = next(
             topic for topic in snapshot["topics"]
@@ -1454,21 +1599,48 @@ def test_normalized_concept_rows_render_field_for_field(
             concept for concept in topic["concepts"]
             if concept["concept_key"] == raw_row["concept_title"]
         )
+        expected.update(_field_values(topic, TOPIC_FIELDS))
+        expected.update(_field_values(concept, CONCEPT_FIELDS))
         expected["topic_title"] = _rendered_topic_title(snapshot, topic)
         expected["concept_title"] = _rendered_concept_title(concept)
-        expected["topic_concept_labels"] = topic["topic_concept_labels"]
+        # Contract §32: the chapter duration is a numeric minutes cell.
+        expected["chapter_duration"] = bi.duration_minutes_cell(
+            snapshot["chapter"]["chapter_duration"]
+        )
         for field in (
             "basic_groups", "intermediate_groups", "advanced_groups",
             "concept_question_labels",
         ):
             expected[field] = ""
+        for field in UPDATE_FIELDS:
+            expected[field] = "No"
+        # Contract §16: a comma inside a concept title is content.  A
+        # single-concept roster is pipe-free, and the renderer's legacy
+        # comma re-split (``_bands_record``) must not turn that title into
+        # three roster entries.
+        assert _normalized_cell(rendered_row.get("topic_concept_labels")) == (
+            _projected_cell(expected["topic_concept_labels"])
+        ), (
+            filename, row_number,
+            "contract v2.0 §16: the concept title's commas are content; a "
+            "pipe-free single-item roster must render verbatim",
+        )
         assert {
             field: _normalized_cell(rendered_row.get(field, ""))
-            for field in BASE_FIELDS["Objective"]
+            for field in concept_fields
         } == {
-            field: _normalized_cell(expected.get(field, ""))
-            for field in BASE_FIELDS["Objective"]
+            field: _projected_cell(expected[field])
+            for field in concept_fields
         }, (filename, row_number)
+        # The raw cells the normalized snapshot did not correct survive
+        # verbatim (modulo the §16/§17 projections) — nothing is rewritten.
+        for field in ("chapter_display_name", "chapter_description",
+                      "topic_display_name", "pre_post_learning",
+                      "topic_description", "concept_display_name",
+                      "concept_details", "concept_source"):
+            assert _normalized_cell(rendered_row.get(field, "")) == (
+                _projected_cell(raw_row.get(field, ""))
+            ), (filename, row_number, field)
 
 
 @pytest.mark.parametrize(
@@ -1536,6 +1708,9 @@ def test_normalized_master_questions_and_hierarchy_render_field_for_field(
         group = group_home[candidate["group_key"]]
         expected_hierarchy = {
             **snapshot["chapter"],
+            "chapter_duration": bi.duration_minutes_cell(
+                snapshot["chapter"]["chapter_duration"]
+            ),
             "is_update_chapter": "No",
             "topic_title": _rendered_topic_title(snapshot, topic),
             "topic_display_name": topic["topic_display_name"],
@@ -1567,7 +1742,7 @@ def test_normalized_master_questions_and_hierarchy_render_field_for_field(
             field: _normalized_cell(rendered_row.get(field, ""))
             for field in comparable
         } == {
-            field: _normalized_cell(expected_hierarchy[field])
+            field: _projected_cell(expected_hierarchy[field])
             for field in comparable
         }, (master_filename, raw_sheet, label, "hierarchy")
 
@@ -1638,16 +1813,24 @@ def test_normalized_aggregates_and_tails_are_derived_from_survivors(
         for topic in snapshot["topics"]
         for concept in topic["concepts"]
     ]
+    # A concept title that carries a raw line break renders it as ``<br>``
+    # (contract §17); the identity tag is unaffected.
     assert set(rendered_by_concept) == {
-        _rendered_concept_title(concept) for concept in concepts
+        _projected_cell(_rendered_concept_title(concept))
+        for concept in concepts
     }
     for concept in concepts:
         concept_key = concept["concept_key"]
-        rows = rendered_by_concept[_rendered_concept_title(concept)]
+        rows = rendered_by_concept[
+            _projected_cell(_rendered_concept_title(concept))
+        ]
         expected_labels = questions_by_concept.get(concept_key, [])
-        expected_concept_aggregate = ", ".join(expected_labels)
+        # Contract §16: label aggregates and BG/IG/AG roll-ups are pipe lists.
+        expected_concept_aggregate = LIST_DELIMITER.join(expected_labels)
         expected_rollups = {
-            field: ", ".join(rollups.get(concept_key, {}).get(field, []))
+            field: LIST_DELIMITER.join(
+                rollups.get(concept_key, {}).get(field, [])
+            )
             for field in rollup_field.values()
         }
 
@@ -1662,10 +1845,8 @@ def test_normalized_aggregates_and_tails_are_derived_from_survivors(
             } == {field: "" for field in expected_rollups}
             assert {
                 field: _normalized_cell(row.get(field, ""))
-                for field in (*GROUP_FIELDS, "is_update_group")
-            } == {
-                field: "" for field in (*GROUP_FIELDS, "is_update_group")
-            }
+                for field in GROUP_FIELDS
+            } == {field: "" for field in GROUP_FIELDS}
             question_fields = schema["fields"]["Objective"]
             question_fields = question_fields[
                 question_fields.index("question_label"):
@@ -1673,14 +1854,12 @@ def test_normalized_aggregates_and_tails_are_derived_from_survivors(
             assert all(
                 _normalized_cell(row.get(field, "")) == ""
                 for field in question_fields
+                if field != "is_update_question"
             )
-            assert [
-                row[field]
-                for field in (
-                    "is_update_chapter", "is_update_topic",
-                    "is_update_concept",
-                )
-            ] == ["No", "No", "No"]
+            # Contract v2.0 §14.1 supersedes register D3: a questionless
+            # concept tail carries exact ``No`` in all five markers, the
+            # blank Group/Question bands notwithstanding.
+            assert [row[field] for field in UPDATE_FIELDS] == ["No"] * 5
             assert _normalized_cell(row["concept_source"]) == (
                 _normalized_cell(concept["concept_source"])
             )
@@ -1702,12 +1881,14 @@ def test_normalized_aggregates_and_tails_are_derived_from_survivors(
             concept_id = identity.title_tag(str(row["concept_title"]))
             assert row["group_name"].startswith(f"({concept_id}) ")
             assert row["group_display_name"] == row["group_name"]
-            assert row["group_question_labels"] == ", ".join(
+            assert row["group_question_labels"] == LIST_DELIMITER.join(
                 questions_by_group[group["group_key"]]
             )
             assert row["question_label"].startswith(
                 f"{identity.title_tag(str(row['concept_title']))} Q"
             )
+            assert [row[field] for field in UPDATE_FIELDS] == ["No"] * 5
+            assert row["question_source"] == AUDIT_PUBLICATION
 
 
 def _full_rendered_master_evidence(
@@ -1747,34 +1928,47 @@ def _full_rendered_master_evidence(
     return {"digest": _digest(combined), "sheets": sheets}
 
 
+# Re-pinned 2026-09-04 for Master Governing Contract v2.0 (register Q26):
+# every multi-value cell is a " | " list (§16), every line break renders as
+# ``<br>`` (§17), textual answer types carry the lane literal ``Words`` on
+# Objective/Subjective (§22–§23), ``question_source`` is the publication
+# (§18), ``chapter_duration`` is numeric (§32) and every one of the five
+# ``is_update_*`` cells is exact ``No`` on questionless tails too (§14.1).
+# The digests pin the renderer's CURRENT bytes; correctness is asserted
+# field for field by the tests above.  Re-pinned later the same day once
+# the renderer stopped comma-splitting a pipe-free roster (Topic 06's
+# single-concept roster "Classifying Numbers in the Natural, Whole, and
+# Integer Systems" now renders as the one entry it is — §16, a writer never
+# guesses at a comma) and the Subjective ``answer_display_N`` cell became
+# the §23 literal "Yes".
 FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
     "english_post_master.xlsx": {
-        "digest": "8d80a35ff5fffa1841093f99b8d2954fac66cba941a6912a9f9e1737e27da727",
+        "digest": "9abc6541bc9eb88623bcb63db321288addb12334570a51df979b65358d8b21e9",
         "sheets": {
             "Objective": (
                 10, 72, 720,
-                "1335550f1cb0036f7e2a6ad8f48620fdb019df5c13dd4bdba3e57a4cc50c7d0d",
+                "f1ed4b1b9c9d01d91f99794b24a085537d151976470246a16737ae07bccc8137",
             ),
             "Descriptive": (
                 13, 440, 5720,
-                "707f2490da7876b621c25df53425b181efedaf052fd8f5a58ad625b988b9148c",
+                "c7891fd5cfd5482b251408d8c7e1c6fe7ed6d3561d61da52060ddcfaa4fcb296",
             ),
             "Subjective": (
                 6, 149, 894,
-                "79b8145303fba0fd043be400d8a48e8eec5043a0e219f601830938eea77e81e7",
+                "cee17d36e5a0c97a9129369af76c389ebba8e80a5a8a15607bdf9e9502023368",
             ),
         },
     },
     "english_pre_master.xlsx": {
-        "digest": "b228178e9e800b3243fda9f8c6c5016ac8fbfd476738d94a4febc1d446349c0d",
+        "digest": "aa77338b6722834e93b33b9396c78a7de86b73113abd3202cf67e5285ad98635",
         "sheets": {
             "Objective": (
                 5, 72, 360,
-                "1e398a9fa649a6f33923489bb8dd8d957a63b00efcd6a9e4368dab459c483815",
+                "75a74f5dbf5e6f7d60ac665faa60b57a64a8b85f876fc20942fc78d3f566ab96",
             ),
             "Descriptive": (
                 36, 380, 13680,
-                "c1bbf1481cbc8f59b080c52e5a9f2a8b3f301f6ae75a41712d195e4e953eebfa",
+                "9d12f253b5950d6458fbc89ce1eba25d14e366d28a0dba6320a38e68363f53c1",
             ),
             "Subjective": (
                 0, 149, 0,
@@ -1783,37 +1977,37 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
     "math_post_master.xlsx": {
-        # Descriptive digest re-pinned 2026-08-29 (owner decision D1):
-        # dimension row spacing (``\\[0.12 cm]``) is supported, so the
+        # Descriptive digest first re-pinned 2026-08-29 (owner decision
+        # D1): dimension row spacing (``\\[0.12 cm]``) is supported, so the
         # legacy export no longer rewrites the gold file's 7 spaced cells
-        # to bare ``\\`` — the rendered master now matches the corrected
+        # to bare ``\\`` — the rendered master matches the corrected
         # workbook's own bytes in those cells.
-        "digest": "6ece2da8aaca6300bd62c1ba60d0aeecd32acbffd816c46e6e6d041253d0f875",
+        "digest": "4d4486a66b8362f5bcd688bd4571e2cd03f5709f6c9c1bb102f086df2173a128",
         "sheets": {
             "Objective": (
                 47, 72, 3384,
-                "5fc27a1aa3e721e9ccefc35eac150b110bd214c8bf05a9c183820f1ec68a0c67",
+                "f0cb28914223ef57c29496d51e300431b379a0392666a8a1186ee67e0fef7865",
             ),
             "Descriptive": (
                 24, 380, 9120,
-                "86899d0dd709c51ad889748e0e3b822a6e00b0a5244fa609fba4619c0ebf5a79",
+                "1d698a44859d7c715a05e4e8b675319c279d2921cff26ac2bba2c158adaa72d0",
             ),
             "Subjective": (
                 4, 149, 596,
-                "c0614760168131b86ab30391f83f2c0688e5a002d93ff5fa60f8248a0ec64dcd",
+                "1afbbf1566209b36877881fc1edd913b881746657937e62b8cfaf861a1dc3372",
             ),
         },
     },
     "math_pre_master.xlsx": {
-        "digest": "f5d622a57d8f83c373b2424740e341a8752be9f0176e0a297f9cac9a96e41f14",
+        "digest": "223f00bcbc41a51c8b6e60887ed9f334f3a16032f508ae186e81a6fca2a88855",
         "sheets": {
             "Objective": (
                 6, 72, 432,
-                "58a09920c7a78415abed7ec25b6ba0a97de990e814e00bd511f4f254b3f9580b",
+                "ee0ba1f6dffd66ce979c5cdf1daaf52d7d4262551614e07386409715dc80cb9b",
             ),
             "Descriptive": (
                 21, 380, 7980,
-                "1a97a679411c525b5d14b29622bb285a0b5762387b82ca1d073ff0c80df32d1d",
+                "5af9e3734c42814da052167a530e2d68775c47880bb2e9b65f01d00bb1290932",
             ),
             "Subjective": (
                 0, 149, 0,
@@ -1838,6 +2032,42 @@ def test_every_normalized_rendered_master_cell_is_pinned(
     assert _full_rendered_master_evidence(
         master_filename, subject, phase, answer_slots
     ) == FULL_RENDERED_MASTER_EVIDENCE[master_filename]
+
+
+def test_master_raw_question_source_is_the_retired_origin_default() -> None:
+    """Contract v2.0 §18: ``question_source`` names the run's publication;
+    the corrected masters carry the retired ``UpSchool DB`` origin default on
+    every question row, and the normalized render replaces it."""
+
+    raw_sources: Counter[str] = Counter()
+    for master_filename, subject, _phase, answer_slots, _id in MASTER_CONTRACTS:
+        raw = _read_fixture(master_filename)
+        for sheet in raw.sheet_order:
+            for row in raw.sheets[sheet].logical_records():
+                if row.get("question_label"):
+                    raw_sources[row.get("question_source", "")] += 1
+        snapshot, candidates = _master_snapshot(
+            master_filename,
+            master_filename.replace("_master", "_concept"),
+            subject,
+            answer_slots,
+        )
+        assert snapshot["source_book"] == AUDIT_PUBLICATION
+        assert {
+            candidate["question_source"]
+            for _sheet, _row, candidate in candidates.values()
+        } == {AUDIT_PUBLICATION}
+        data, _issues = workbook.render_master_file(
+            snapshot, _profile(subject)
+        )
+        parsed = workbook.parse_workbook(data)
+        assert {
+            str(row["question_source"])
+            for sheet in CANONICAL_SHEET_ORDER
+            for row in parsed["sheets"][sheet]["rows"]
+            if row.get("question_label")
+        } == {AUDIT_PUBLICATION}
+    assert raw_sources == Counter({RAW_RETIRED_QUESTION_SOURCE: 150})
 
 
 def test_english_post_article_blanks_are_six_subjective_rows_in_log_order() -> None:
@@ -1917,6 +2147,9 @@ MATH_NORMALIZED_CATEGORY_COUNTS = Counter({
     "Short Answer Type (3 Marks)": 3,
     "Long Answer Type (5 Marks)": 2,
 })
+# Categories whose contract lane differs from the raw sheet they were
+# authored on (contract v2.0 §23: True/False is a Subjective format).
+MATH_CONTRACT_LANES = {"True or False": "subjective"}
 
 
 def _math_question_rows() -> Iterable[tuple[str, str, dict[str, str]]]:
@@ -1958,8 +2191,19 @@ def test_math_category_casing_is_normalized_to_the_log_taxonomy() -> None:
     categories = assessment_profile.question_categories(
         _profile("Mathematics"), metadata
     )
+    # Contract v2.0 §23 moves True/False out of Objective: it is a
+    # placeholder-bound Subjective format.  The five raw ``True or False``
+    # rows sit on the corrected Objective sheet — evidence of the pre-v2.0
+    # lane, not the lane the taxonomy now assigns.
+    assert "True or False" in categories["subjective"]
+    assert "True or False" not in categories["objective"]
+    assert Counter(
+        sheet for _filename, sheet, category in normalized
+        if category == "True or False"
+    ) == Counter({"Objective": 5})
     for _filename, sheet, category in normalized:
-        assert category in categories[sheet.casefold()]
+        lane = MATH_CONTRACT_LANES.get(category, sheet.casefold())
+        assert category in categories[lane], (sheet, category)
 
 
 MATH_DURATION_MATRIX = {

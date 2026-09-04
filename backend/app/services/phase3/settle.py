@@ -240,10 +240,19 @@ def _topology_checker(
                 )
                 continue
             try:
-                confidence = float(row.get("confidence") or 0.0)
+                confidence = float(row.get("confidence"))
             except (TypeError, ValueError):
-                confidence = 0.0
-            if not confidence_policy.accepts(confidence):
+                # A missing or non-numeric score is a SHAPE defect (the
+                # bounded corrections ask for the number), never an honest
+                # sub-floor score that ships flagged on the first attempt.
+                defects.append(
+                    f"{concept_id} confidence must be a number between "
+                    "0 and 1"
+                )
+                confidence = None
+            if confidence is not None and not confidence_policy.accepts(
+                confidence
+            ):
                 defects.append(
                     f"[confidence] {concept_id} confidence "
                     f"{confidence:.3f} is below "
@@ -371,10 +380,19 @@ def _grounding_checker(
                     + ", ".join(unknown_refs[:4])
                 )
             try:
-                confidence = float(row.get("confidence") or 0.0)
+                confidence = float(row.get("confidence"))
             except (TypeError, ValueError):
-                confidence = 0.0
-            if not confidence_policy.accepts(confidence):
+                # A missing or non-numeric score is a SHAPE defect (the
+                # bounded corrections ask for the number), never an honest
+                # sub-floor score that ships flagged on the first attempt.
+                defects.append(
+                    f"{concept_id} confidence must be a number between "
+                    "0 and 1"
+                )
+                confidence = None
+            if confidence is not None and not confidence_policy.accepts(
+                confidence
+            ):
                 defects.append(
                     f"[confidence] {concept_id} confidence "
                     f"{confidence:.3f} is below "
@@ -559,8 +577,12 @@ def _live_analysis(payload: dict[str, Any]) -> dict[str, Any]:
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
+    from .. import generation
 
-    return _api_json(prompts.CRITIC_SYSTEM, prompts.render(payload))
+    return generation._openai_json(
+        prompts.CRITIC_SYSTEM, prompts.render(payload),
+        purpose="advisory_critic",
+    )
 
 
 # ---------------------------------------------------------------------------

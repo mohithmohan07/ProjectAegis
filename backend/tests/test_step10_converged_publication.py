@@ -43,7 +43,8 @@ def _chapter(db, code, *, title=None, grade="06"):
         chapter_code=code, board="CBSE", grade=grade, subject="Science",
         unit="Science Unit", chapter_title=title or f"S10 {code}",
         chapter_display_name=title or f"S10 {code}",
-        chapter_description="", chapter_duration="",
+        # Contract v2.0 §32.1: a release chapter carries a frozen duration.
+        chapter_description="", chapter_duration="40 minutes",
     )
     db.add(chapter)
     db.commit()
@@ -171,6 +172,7 @@ def _job_with_records(db, chapter, records):
         filename="ch.mmd",
         mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
         status="generated",
+        source_book="NCERT",
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
         question_inventory=copy.deepcopy(_INVENTORY),
@@ -949,7 +951,7 @@ def test_a_prepended_topic_still_homes_master_questions(db):
                  "correct_answer": "0", "answer_weightage": "0"},
             ],
             "sub_questions": [],
-            "answer_explanation": "Authored against Concept X.",
+            "answer_explanation": "Cube. Authored against Concept X.",
             "concept_key": concept_key,
             "group_key": f"({x_mid}) BG01",
             "flags": [],
@@ -961,6 +963,8 @@ def test_a_prepended_topic_still_homes_master_questions(db):
             "concept_provenance": bridge.get("concept_provenance") or [],
             "chapter": {"chapter_title": chapter.chapter_title},
             "topics": bridge["snapshot"]["topics"],
+            # Contract v2.0 §18: every question names the run's publication.
+            "source_book": str(job.source_book or ""),
         },
     }
     created = svc.create_release(

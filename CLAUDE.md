@@ -1,5 +1,28 @@
 # Aegis — working rules
 
+## Rule 0: The Master Governing Contract v2.0 is the output specification
+
+`docs/aegis-master-governing-contract-v2.md` (document ID
+AEGIS-MGC-2.0-20260904, adopted 2026-09-04, register entry Q26 in
+docs/aegis-restructure.md) is the binding specification for what every run
+produces: the four outputs, their schema (update-aware 72/380/149 columns,
+every `is_update_*` cell exact `No`, ` | ` list delimiter, `<br>` line
+breaks), lane routing (True/False on Subjective, label-free Objective
+explanations, identical Descriptive model answers), rubric rules (0.5 or 1
+per criterion; English-only bracket tags), identity grammar, KaTeX/asset
+rules and the release gates. Where an older register entry, SOP, prompt,
+validator or sample disagrees, the contract governs and the conflict is
+recorded in the register — never blended, never silently defaulted. The
+contract is board-, publication- and grade-agnostic: a board-specific
+category/marks/duration profile is an explicit, versioned layer on top of it,
+never a precondition for any contract behaviour.
+
+The contract's semantic boundary (§37) and Rule 1 below are the same rule.
+Its fail-closed release stance applies to the RELEASE (the database write and
+the "done" verdict): a run still completes and stages every artefact with its
+blockers named (Q13); what it may not do is publish or call itself done while
+a blocker stands.
+
 ## Rule 1: No deterministic judgment. Ever.
 
 **Every decision that requires judgment goes through the model. Not a rule, not

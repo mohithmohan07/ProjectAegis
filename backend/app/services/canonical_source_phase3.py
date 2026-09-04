@@ -1161,7 +1161,7 @@ def _critic_hierarchy_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         pages=[],
         response_schema=_hierarchy_critic_schema(section_ids),
-        purpose="concept_mapping",
+        purpose="advisory_critic",
         max_tokens=max(4000, min(16000, len(section_ids) * 180)),
     )
 
@@ -2609,7 +2609,7 @@ def _critic_source_anomaly_via_openai(
             source_path, packet.get("candidate_page_numbers") or []
         ),
         response_schema=_anomaly_critic_schema(keys),
-        purpose="source_adjudication",
+        purpose="advisory_critic",
         max_tokens=4000,
     )
 
@@ -5616,7 +5616,7 @@ def _critic_record_topics_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         pages=[],
         response_schema=_record_topic_critic_schema(),
-        purpose="concept_mapping",
+        purpose="advisory_critic",
         max_tokens=4000,
     )
 

@@ -77,6 +77,7 @@ def _fresh_converted_job(db, chapter) -> models.UploadJob:
         filename="ch.mmd",
         mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
         status="converted",
+        source_book="NCERT",
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
         question_inventory=copy.deepcopy(_INVENTORY),

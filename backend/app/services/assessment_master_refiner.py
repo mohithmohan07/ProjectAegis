@@ -24,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 from .. import config
 from ..bulk_import import assessment_workbook
+from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
 from . import katex_rules
 from . import assessment_release as rel
@@ -559,7 +560,7 @@ def _live_critic(request: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         CRITIC_SYSTEM,
         json.dumps(request, ensure_ascii=False),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -1072,7 +1073,7 @@ def refine_master(
             if not phase3_core.semantic_api_enabled():
                 return _global_fallback(original, "live semantic API is not enabled")
             provider = _live_author
-            critic = critic or _live_critic
+            critic = critic or lane_policy.critic_for("refiner", _live_critic)
             fixer = fixer or fixer_mod.live_fixer
         provider = _kernel_provider(provider)
         critic = _kernel_critic(critic)

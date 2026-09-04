@@ -386,6 +386,7 @@ ISSUES_NOTE_LABEL = "Release issues"
 
 def _write_issues_note(
     sheet, defects: list[dict[str, Any]], concepts: list[Any],
+    *, width: int | None = None,
 ) -> None:
     """Row 1's note, past the last banded column. See the caller's docstring.
 
@@ -416,7 +417,10 @@ def _write_issues_note(
         )
     if not lines:
         return
-    column = len(bi_writer.FIELDS_BY_KIND["objective"]) + 2
+    column = (
+        width if width is not None
+        else len(bi_writer.FIELDS_BY_KIND["objective"])
+    ) + 2
     cell = sheet.cell(row=1, column=column)
     text = _cell_text(f"{ISSUES_NOTE_LABEL}: " + " | ".join(lines))
     if len(text) > CELL_LIMIT:
@@ -495,16 +499,23 @@ def build_release_bulk_import_workbook(
         ) or []
         if v
     ]
+    # Contract v2.0 §14: Outputs 01/03 ship on the update-aware layout.
+    layout_id = bi_writer.CONCEPT_FILE_LAYOUT_ID
     if bool(summary.get("database_uploaded")) and result_ids:
-        return bi_writer.write_concepts_workbook(db, result_ids)
+        return bi_writer.write_concepts_workbook(
+            db, result_ids, layout_id=layout_id,
+        )
 
     chapter, concepts, _records, defects = transient_release_hierarchy(
         db, job, payload=payload
     )
 
-    wb = bi_writer._new_workbook()
+    from ..bulk_import import layouts
+
+    sheet_layout = layouts.sheet(layout_id, "objective")
+    wb = bi_writer._new_workbook(layout_id)
     ws = wb[bi_writer.SHEET_BY_KIND["objective"]]
-    _write_issues_note(ws, defects, concepts)
+    _write_issues_note(ws, defects, concepts, width=len(sheet_layout.fields))
     export_scope = bi_writer.ConceptExportScope(concepts)
     next_row = 3
     for concept in concepts:
@@ -517,6 +528,7 @@ def build_release_bulk_import_workbook(
                     concept,
                     "objective",
                     topic,
+                    sheet_layout=sheet_layout,
                     export_scope=export_scope,
                 ),
                 start=1,
@@ -782,11 +794,8 @@ def transient_release_hierarchy(
                 else str(record.get("related_concepts") or "")
             ),
             digicards=str(record.get("digicards") or ""),
-            sources=str(
-                release.get("source_book")
-                or release.get("filename")
-                or ""
-            ),
+            # Contract v2.0 §18: the publication only, never a filename.
+            sources=str(release.get("source_book") or ""),
         )
         concept.id = -len(concepts) - 1
         concept_positions[key] = concept_positions.get(key, 0) + 1

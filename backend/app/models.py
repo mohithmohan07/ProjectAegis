@@ -336,6 +336,12 @@ class UploadJob(Base):
     learning_kind: Mapped[str] = mapped_column(String(16), default="")
     # Book this upload came from (e.g. "RD Sharma"); drives multi-source tagging.
     source_book: Mapped[str] = mapped_column(String(128), default="")
+    # The explicit upload variable for the chapter duration (Master Governing
+    # Contract v2.0 §32.1): used when the accepted board-grade-subject-chapter
+    # registry has no row. 0 means "not supplied"; a chapter with neither
+    # ships its duration blank and is recorded as a release blocker, never
+    # estimated.
+    chapter_duration_minutes: Mapped[int] = mapped_column(Integer, default=0)
     filename: Mapped[str] = mapped_column(String(255), default="")
     # Private path relative to UPLOAD_DIR. Legacy rows with an empty key fall
     # back to the historical filename-only location.

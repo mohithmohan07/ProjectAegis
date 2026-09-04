@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import copy
+import math
+from decimal import Decimal
 
 import pytest
 
@@ -24,6 +26,55 @@ SUBJECTIVE_PROFILE = {
     **marking.assessment_profile.DEFAULT_PROFILE,
     "sheet_kinds": ("objective", "descriptive", "subjective"),
 }
+# Master Governing Contract v2.0 §21: every True or False item is a
+# Subjective row (statement + "Answer: $$a$$", one placeholder-bound
+# accepted answer).  Both the generic and the MSBSHSE spellings project the
+# same way.
+_TRUE_FALSE_CATEGORIES = ("True or False", "True/False")
+# Master Governing Contract v2.0 §27.5 (RUB-002): every Descriptive rubric
+# criterion carries exactly 0.5 or 1 mark, so a single-part fixture needs
+# enough discrete criteria to reach its cell total in those quanta.  Two
+# contrasts cover a 1- or 2-mark cell; each further mark adds a criterion.
+_DESCRIPTIVE_CRITERIA = (
+    ("A square is two-dimensional.", "first contrast"),
+    ("A cube is three-dimensional.", "second contrast"),
+    ("A square has four equal sides.", "third criterion"),
+    ("A cube has six square faces.", "fourth criterion"),
+    ("A square has four right angles.", "fifth criterion"),
+    ("A cube has twelve equal edges.", "sixth criterion"),
+)
+
+
+def _descriptive_criteria(marks) -> list[dict]:
+    """Enough 0.5/1-mark rubric criteria for a single-part cell total."""
+
+    try:
+        total = float(marks)
+    except (TypeError, ValueError):
+        total = float("nan")
+    count = max(2, math.ceil(total)) if math.isfinite(total) and total > 0 else 2
+    if count > len(_DESCRIPTIVE_CRITERIA):
+        raise ValueError(
+            f"the descriptive fixture covers at most "
+            f"{len(_DESCRIPTIVE_CRITERIA)} marks (asked for {marks!r})"
+        )
+    return [
+        {
+            "answer_type": "Phrases",
+            "answer_content": content,
+            "answer_weightage": "",
+            "placeholder": placeholder,
+        }
+        for content, placeholder in _DESCRIPTIVE_CRITERIA[:count]
+    ]
+
+
+def _descriptive_weights(marks, count: int) -> list[str]:
+    """Split ``marks`` over ``count`` criteria using only 1 and 0.5."""
+
+    ones = int(Decimal(str(marks)) * 2) - count
+    assert 0 <= ones <= count, (marks, count)
+    return ["1" if position < ones else "0.5" for position in range(count)]
 
 
 def _restriction_audit() -> dict:
@@ -108,6 +159,25 @@ def _candidate(
         sub_questions = []
         question = "Which listed shape is two-dimensional?"
         restriction = "Specific"
+    elif (
+        kind == "subjective"
+        and cell["question_category"] in _TRUE_FALSE_CATEGORIES
+    ):
+        # Contract v2.0 §21: one accepted answer (the word True or False)
+        # bound to placeholder a; internal answer_type Phrases projects to
+        # the Subjective wire literal Words.
+        answers = [
+            {
+                "answer_type": "Phrases",
+                "answer_content": "True",
+                "answer_weightage": "",
+                "answer_display": "Text",
+                "placeholder": "a",
+            },
+        ]
+        sub_questions = []
+        question = "A square is a two-dimensional shape. Answer: $$a$$"
+        restriction = "Specific"
     elif kind == "subjective":
         answers = [
             {
@@ -150,34 +220,28 @@ def _candidate(
                 ],
             },
             {
-                "text": "State one property of a cube.",
+                "text": "State two properties of a cube.",
                 "marks": "",
                 "keywords": [
                     {
                         "answer_type": "Phrases",
                         "keyword": "six square faces",
                         "weightage": "",
-                    }
+                    },
+                    {
+                        "answer_type": "Phrases",
+                        "keyword": "twelve equal edges",
+                        "weightage": "",
+                    },
                 ],
             },
         ]
         question = "Answer both parts about a square and a cube."
         restriction = "Open"
     else:
-        answers = [
-            {
-                "answer_type": "Phrases",
-                "answer_content": "A square is two-dimensional.",
-                "answer_weightage": "",
-                "placeholder": "first contrast",
-            },
-            {
-                "answer_type": "Phrases",
-                "answer_content": "A cube is three-dimensional.",
-                "answer_weightage": "",
-                "placeholder": "second contrast",
-            },
-        ]
+        # Contract v2.0 §27.5: enough discrete 0.5/1-mark criteria to reach
+        # the cell total (two contrasts for 1-2 marks, one more per mark).
+        answers = _descriptive_criteria(marks)
         sub_questions = []
         question = "Explain how a square differs from a cube."
         restriction = "Open"
@@ -227,21 +291,21 @@ def _valid_response(request: dict) -> dict:
     elif sub_questions:
         # This helper's multipart fixture is deliberately a four-mark, two-
         # part item so arithmetic mutations can target each independent sum.
+        # Contract v2.0 §27.5: every keyword criterion carries 0.5 or 1.
         sub_questions[0]["marks"] = 2
         sub_questions[1]["marks"] = 2
         sub_questions[0]["keywords"][0]["weightage"] = 1
         sub_questions[0]["keywords"][1]["weightage"] = 1
-        sub_questions[1]["keywords"][0]["weightage"] = 2
+        sub_questions[1]["keywords"][0]["weightage"] = 1
+        sub_questions[1]["keywords"][1]["weightage"] = 1
         duration = 6
         keyboard = "Yes"
     else:
-        if cell["marks"] == 4:
-            answers[0]["answer_weightage"] = "1.5"
-            answers[1]["answer_weightage"] = "2.5"
-        else:
-            each = str(cell["marks"] / len(answers))
-            for answer in answers:
-                answer["answer_weightage"] = each
+        # Contract v2.0 §27.5: each rubric criterion is exactly 0.5 or 1.
+        for answer, weight in zip(
+            answers, _descriptive_weights(cell["marks"], len(answers)),
+        ):
+            answer["answer_weightage"] = weight
         duration = 6
         keyboard = "Yes"
     return {
@@ -340,7 +404,10 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     assert verdict["answers"][0]["answer_content"] == (
         candidate["answers"][0]["answer_content"]
     )
-    assert verdict["answers"][0]["answer_weightage"] == "1.5"
+    # Contract v2.0 §27.5: four 1-mark criteria, never 1.5 + 2.5.
+    assert [row["answer_weightage"] for row in verdict["answers"]] == [
+        "1", "1", "1", "1",
+    ]
     assert verdict["sub_questions"] == []
     assert verdict["question_duration"] == 6.0
     assert verdict["duration_basis_count"] is None
@@ -362,7 +429,7 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
         ),
     }
     authority = verdict["authority"]
-    assert authority["policy_version"] == "assessment-marking-7"
+    assert authority["policy_version"] == "assessment-marking-8"
     assert "created_at" not in authority and "provider" not in authority
     stored = store.get(authority["decision_key"])
     assert stored is not None
@@ -397,9 +464,10 @@ def test_marking_replays_without_author_critic_or_fixer(monkeypatch) -> None:
     assert len(store.keys()) == 1
 
 
-def test_stale_v6_marking_record_redecides_under_current_policy(monkeypatch) -> None:
+def test_stale_v7_marking_record_redecides_under_current_policy(monkeypatch) -> None:
+    """Contract v2.0 §27.5 (0.5/1 rubric quantum) re-keyed the policy to v8."""
     monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
-    assert marking.MARKING_POLICY_VERSION == "assessment-marking-7"
+    assert marking.MARKING_POLICY_VERSION == "assessment-marking-8"
     pair = (_candidate(), _cell())
     store = kernel.DecisionStore()
     calls = 0
@@ -410,14 +478,14 @@ def test_stale_v6_marking_record_redecides_under_current_policy(monkeypatch) -> 
         return _valid_response(request)
 
     monkeypatch.setattr(
-        marking, "MARKING_POLICY_VERSION", "assessment-marking-6"
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-7"
     )
     stale = marking.decide_markings(
         [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
         provider=author, store=store,
     )[0]
     monkeypatch.setattr(
-        marking, "MARKING_POLICY_VERSION", "assessment-marking-7"
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-8"
     )
     current = marking.decide_markings(
         [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
@@ -425,8 +493,8 @@ def test_stale_v6_marking_record_redecides_under_current_policy(monkeypatch) -> 
     )[0]
 
     assert calls == 2
-    assert stale["authority"]["policy_version"] == "assessment-marking-6"
-    assert current["authority"]["policy_version"] == "assessment-marking-7"
+    assert stale["authority"]["policy_version"] == "assessment-marking-7"
+    assert current["authority"]["policy_version"] == "assessment-marking-8"
     assert stale["authority"]["decision_key"] != (
         current["authority"]["decision_key"]
     )
@@ -743,7 +811,7 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
         pytest.param(
             "single",
             lambda row: row["answers"][0].__setitem__(
-                "answer_weightage", "+1.5"
+                "answer_weightage", "+1"
             ),
             "finite and positive",
             id="answer-signed-string",
@@ -765,9 +833,33 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
         ),
         pytest.param(
             "single",
-            lambda row: row["answers"][0].__setitem__("answer_weightage", 1),
+            lambda row: row["answers"][0].__setitem__("answer_weightage", 0.5),
             "sum exactly",
             id="answer-wrong-sum",
+        ),
+        # Contract v2.0 §27.5 (RUB-002): a criterion is exactly 0.5 or 1 —
+        # a larger award is refused even when the arithmetic still sums.
+        pytest.param(
+            "single",
+            lambda row: (
+                row["answers"][0].__setitem__("answer_weightage", 1.5),
+                row["answers"][1].__setitem__("answer_weightage", 0.5),
+            ),
+            "is not 0.5 or 1",
+            id="answer-quantum",
+        ),
+        pytest.param(
+            "multipart",
+            lambda row: (
+                row["sub_questions"][0]["keywords"][0].__setitem__(
+                    "weightage", 1.5
+                ),
+                row["sub_questions"][0]["keywords"][1].__setitem__(
+                    "weightage", 0.5
+                ),
+            ),
+            "is not 0.5 or 1",
+            id="keyword-quantum",
         ),
         pytest.param(
             "multipart",
@@ -954,7 +1046,7 @@ def test_fixer_is_revalidated_by_the_same_semantic_and_arithmetic_checker(
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.marking",
         "unit_id": "CAND-DESC",
-        "policy_version": "assessment-marking-7",
+        "policy_version": "assessment-marking-8",
     }
 
 
@@ -980,7 +1072,7 @@ def test_valid_fixer_verdict_is_recorded_and_flagged(monkeypatch) -> None:
 
     assert verdict["authority"]["fixer"] is True
     assert any(flag.startswith("fixer:") for flag in verdict["flags"])
-    assert verdict["answers"][0]["answer_weightage"] == "1.5"
+    assert verdict["answers"][0]["answer_weightage"] == "1"
 
 
 def test_parallel_markings_preserve_exact_pair_order(monkeypatch) -> None:
@@ -1318,8 +1410,10 @@ def test_msbshse_matrix_duration_rejects_a_positive_but_wrong_value(
         # The Objective wire has one correct-option score, so compound
         # source tasks must be split into one-subpoint cells.
         ("objective", "Match the Following", 1, 1),
-        ("objective", "True or False", 1, 1),
         ("objective", "Fill in the blanks", 1, 1),
+        # Contract v2.0 §21: True or False is a Subjective row with one
+        # placeholder-bound answer, so it is likewise a one-subpoint cell.
+        ("subjective", "True or False", 1, 1),
         # The Subjective fixture contains two declared response slots.
         ("subjective", "Fill in the blanks", 2, 2),
     ],
@@ -1358,21 +1452,26 @@ def test_msbshse_per_subpoint_duration_uses_contract_bound_basis(
 
 
 @pytest.mark.parametrize(
-    "category",
-    ["Match the Following", "True or False", "Fill in the blanks"],
+    ("kind", "category"),
+    [
+        ("objective", "Match the Following"),
+        ("objective", "Fill in the blanks"),
+        # Contract v2.0 §21: True or False lives on the Subjective sheet.
+        ("subjective", "True or False"),
+    ],
 )
-def test_msbshse_objective_compound_subpoints_fail_before_provider(
-    category,
+def test_msbshse_compound_subpoints_fail_before_provider(
+    kind, category,
 ) -> None:
     candidate = _candidate(
         "CAND-COMPOUND",
         cell_id="CELL-COMPOUND",
-        kind="objective",
+        kind=kind,
         marks=2,
         category=category,
     )
     cell = _cell(
-        "CELL-COMPOUND", kind="objective", marks=2, category=category,
+        "CELL-COMPOUND", kind=kind, marks=2, category=category,
     )
 
     with pytest.raises(marking.MarkingError, match="at most 1"):

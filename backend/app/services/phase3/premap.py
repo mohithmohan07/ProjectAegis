@@ -847,7 +847,7 @@ def _live_empty_capture_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="concept_mapping",
+        purpose="advisory_critic",
     )
 
 
@@ -955,7 +955,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.PREMAP_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="concept_mapping",
+        purpose="advisory_critic",
     )
 
 

@@ -884,16 +884,22 @@ def convert_upload(
 @router.post("/post-learning/uploads", response_model=schemas.UploadJobOut)
 async def post_learning_upload(
     source_book: str = "",
+    chapter_duration_minutes: int = 0,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: auth.Principal = Depends(auth.require_user),
 ):
-    """Stage the file only — conversion to MMD is a separate /convert step."""
+    """Stage the file only — conversion to MMD is a separate /convert step.
+
+    ``chapter_duration_minutes`` is the contract's explicit upload variable
+    (v2.0 §32.1) for chapters the accepted duration registry does not carry.
+    """
     try:
         raw_bytes = await read_limited_upload(file)
         return svc.create_post_learning_job(
             db, filename=file.filename or "document.txt", raw_bytes=raw_bytes,
             source_book=source_book,
+            chapter_duration_minutes=chapter_duration_minutes,
             owner_sub=user.sub,
         )
     except ValueError as e:

@@ -5,13 +5,43 @@ import copy
 
 import pytest
 
+from app import bulk_import as bi
 from app.bulk_import import assessment_workbook as workbook
 from app.services import assessment_profile
 from app.services import assessment_release as rel
 from tests.test_mes_dual_output import _snapshot
 
 
+def _conform_to_contract(snapshot: dict) -> None:
+    """Contract v2.0 fixture requirements applied over the shared snapshot.
+
+    §18: ``question_source`` is the run's publication (``source_book``);
+    §32: a chapter carries its finalized duration; §21: an Objective
+    explanation opens with the exact correct-option text and names no
+    option label; §24: Descriptive ``display_answer`` equals
+    ``answer_explanation``.
+    """
+    snapshot["source_book"] = "Balbharati"
+    snapshot["chapter"]["chapter_duration"] = "40 minutes"
+    for candidate in snapshot["candidates"]:
+        kind = candidate.get("sheet_kind")
+        if kind == "objective":
+            correct = next(
+                a["answer_content"] for a in candidate["answers"]
+                if str(a.get("correct_answer")) == "1"
+            )
+            candidate["answer_explanation"] = (
+                f"{correct} is flat, so it is two-dimensional; a sphere "
+                "is a solid."
+            )
+        elif kind == "descriptive":
+            candidate["answer_explanation"] = candidate["display_answer"]
+
+
 def _single_part_descriptive(snapshot: dict) -> None:
+    """A 4-mark single-part rubric under contract v2.0 §28/§24: a
+    Mathematics run carries no bracket tags and every criterion is worth
+    exactly 0.5 or 1 mark (four 1-mark criteria sum to the 4 marks)."""
     candidate = next(
         row for row in snapshot["candidates"]
         if row["sheet_kind"] == "descriptive"
@@ -19,16 +49,60 @@ def _single_part_descriptive(snapshot: dict) -> None:
     candidate["answers"] = [
         {
             "answer_type": "Phrases",
-            "answer_content": "[content]: identifies two dimensions",
-            "answer_weightage": "2",
+            "answer_content": "identifies two dimensions",
+            "answer_weightage": "1",
         },
         {
             "answer_type": "Phrases",
-            "answer_content": "[content]: contrasts three dimensions",
-            "answer_weightage": "2",
+            "answer_content": "contrasts three dimensions",
+            "answer_weightage": "1",
+        },
+        {
+            "answer_type": "Phrases",
+            "answer_content": "names the square as a plane figure",
+            "answer_weightage": "1",
+        },
+        {
+            "answer_type": "Phrases",
+            "answer_content": "names the cube as a solid",
+            "answer_weightage": "1",
         },
     ]
     candidate["sub_questions"] = []
+
+
+def _multipart_descriptive(snapshot: dict) -> None:
+    """A true multipart rubric under contract v2.0 §19.1/§24/§28: scoring
+    lives only in the child blocks, each child criterion is worth 0.5 or 1
+    (two 1-mark criteria per 2-mark child) and a Mathematics run carries no
+    bracket tags."""
+    candidate = next(
+        row for row in snapshot["candidates"]
+        if row["sheet_kind"] == "descriptive"
+    )
+    candidate["answers"] = []
+    candidate["sub_questions"] = [
+        {
+            "text": "Name the number of faces of a cube.",
+            "marks": "2",
+            "keywords": [
+                {"answer_type": "Phrases", "weightage": "1",
+                 "keyword": "six faces"},
+                {"answer_type": "Phrases", "weightage": "1",
+                 "keyword": "each face is a square"},
+            ],
+        },
+        {
+            "text": "State the dimensions of a square.",
+            "marks": "2",
+            "keywords": [
+                {"answer_type": "Phrases", "weightage": "1",
+                 "keyword": "two dimensions"},
+                {"answer_type": "Phrases", "weightage": "1",
+                 "keyword": "length and breadth"},
+            ],
+        },
+    ]
 
 
 def _add_subjective(snapshot: dict) -> None:
@@ -73,7 +147,10 @@ def _add_subjective(snapshot: dict) -> None:
 
 def _parsed_master(*, multipart: bool = False, subjective: bool = False):
     snapshot = _snapshot()
-    if not multipart:
+    _conform_to_contract(snapshot)
+    if multipart:
+        _multipart_descriptive(snapshot)
+    else:
         _single_part_descriptive(snapshot)
     if subjective:
         _add_subjective(snapshot)
@@ -237,10 +314,12 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
         ),
         pytest.param(
             "Objective",
+            # Contract v2.0 §17: the workbook cell joins option lines with
+            # the literal ``<br>``; the read-back must still see the label.
             lambda row: row.__setitem__(
                 "question_text",
                 str(row.get("question_text") or "").replace(
-                    "\na) ", "\nA) ", 1,
+                    f"{bi.LINE_BREAK}a) ", f"{bi.LINE_BREAK}A) ", 1,
                 ),
             ),
             "question_text uses uppercase objective option label(s) A)",
@@ -325,9 +404,16 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
         ),
         pytest.param(
             "Descriptive",
-            lambda row: row.__setitem__("answer_weightage_1", 1),
+            # 0.5 keeps the criterion on the §24 quantum; only the sum breaks.
+            lambda row: row.__setitem__("answer_weightage_1", 0.5),
             "answer/rubric weights must sum exactly",
             id="descriptive-answer-wrong-sum",
+        ),
+        pytest.param(
+            "Descriptive",
+            lambda row: row.__setitem__("answer_weightage_1", 2),
+            "is not 0.5 or 1; each rubric criterion carries exactly",
+            id="descriptive-answer-weight-off-quantum",
         ),
         pytest.param(
             "Descriptive",
@@ -337,13 +423,17 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
         ),
         pytest.param(
             "Descriptive",
+            # Contract v2.0 §19.1/§20: the complete ``question_text`` MUST
+            # carry every labelled child, so only the parent ``question``
+            # (shared context alone) is where a child's wording is a
+            # duplication.
             lambda row: row.__setitem__(
-                "question_text",
-                str(row.get("question_text") or "")
+                "question",
+                str(row.get("question") or "")
                 + " Name the number of faces of a cube.",
             ),
-            "subquestion 1 text is duplicated in the main question/question_text",
-            id="subquestion-duplicated-in-question-text",
+            "subquestion 1 text is duplicated in the main question",
+            id="subquestion-duplicated-in-question",
         ),
         pytest.param(
             "Descriptive",
@@ -380,9 +470,16 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
         ),
         pytest.param(
             "Descriptive",
-            lambda row: row.__setitem__("sq1_weightage_1", 1),
+            # 0.5 keeps the criterion on the §24 quantum; only the sum breaks.
+            lambda row: row.__setitem__("sq1_weightage_1", 0.5),
             "subquestion 1 keyword weights must sum exactly",
             id="keyword-wrong-sum",
+        ),
+        pytest.param(
+            "Descriptive",
+            lambda row: row.__setitem__("sq1_weightage_1", 2),
+            "is not 0.5 or 1; each rubric criterion carries exactly",
+            id="keyword-weight-off-quantum",
         ),
         pytest.param(
             "Descriptive",
@@ -394,9 +491,13 @@ def test_the_duration_and_keyboard_refusal_moved_to_freeze(
             "Descriptive",
             lambda row: (
                 row.__setitem__("answer_weightage_1", 4),
-                row.__setitem__("answer_type_2", ""),
-                row.__setitem__("answer_content_2", ""),
-                row.__setitem__("answer_weightage_2", ""),
+                *(
+                    row.__setitem__(f"{field}_{n}", "")
+                    for n in (2, 3, 4)
+                    for field in (
+                        "answer_type", "answer_content", "answer_weightage",
+                    )
+                ),
             ),
             (
                 "4-mark single-part descriptive requires at least two "
@@ -427,10 +528,13 @@ def test_readback_rejects_invalid_marking_arithmetic(
 
 
 def test_single_and_multipart_descriptive_scoring_read_back_exclusively():
+    """Contract v2.0 §28: a Mathematics run's criteria carry no bracket tag;
+    §24: each criterion is 0.5 or 1; §19.1: the complete ``question_text``
+    of a multipart item carries every child after the shared context."""
     single, _single_snapshot, _single_provenance = _parsed_master()
     single_row = _question_row(single, "Descriptive")
-    assert single_row["answer_content_1"].startswith("[content]:")
-    assert single_row["answer_weightage_1"] == "2"
+    assert single_row["answer_content_1"] == "identifies two dimensions"
+    assert single_row["answer_weightage_1"] == "1"
     assert single_row["sub_question_1"] == ""
 
     multipart, _multipart_snapshot, _multipart_provenance = _parsed_master(
@@ -438,17 +542,29 @@ def test_single_and_multipart_descriptive_scoring_read_back_exclusively():
     )
     multipart_row = _question_row(multipart, "Descriptive")
     assert multipart_row["answer_content_1"] == ""
+    assert multipart_row["question"] == (
+        "Explain how a square differs from a cube."
+    )
+    # §17: the read-back sees the literal workbook cell, so the line
+    # breaks between the shared context and each child are ``<br>``.
+    assert multipart_row["question_text"] == bi.LINE_BREAK.join((
+        "Explain how a square differs from a cube.",
+        "Name the number of faces of a cube.",
+        "State the dimensions of a square.",
+    ))
     assert multipart_row["sub_question_1"] == (
         "Name the number of faces of a cube."
     )
-    assert multipart_row["sq1_keyword_1"] == "[content]: six faces"
+    assert multipart_row["sq1_keyword_1"] == "six faces"
+    assert multipart_row["sq1_weightage_1"] == "1"
+    assert multipart_row["sq1_weightage_2"] == "1"
 
 
 def test_readback_rejects_multipart_descriptive_main_rubric_duplication():
     parsed, snapshot, provenance = _parsed_master(multipart=True)
     row = _question_row(parsed, "Descriptive")
     row["answer_type_1"] = "Phrases"
-    row["answer_content_1"] = "[content]: duplicated shared scoring"
+    row["answer_content_1"] = "duplicated shared scoring"
     row["answer_weightage_1"] = 1
 
     errors = workbook.validate_master_file(
@@ -464,11 +580,23 @@ def test_readback_rejects_multipart_descriptive_main_rubric_duplication():
 
 
 @pytest.mark.parametrize("multipart", [False, True])
-def test_readback_rejects_a_tag_without_rubric_content(multipart: bool):
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("[content]:   ", id="empty-tagged-criterion"),
+        pytest.param("[content]: six faces", id="tag-on-a-non-english-run"),
+    ],
+)
+def test_readback_rejects_a_tag_without_rubric_content(
+    multipart: bool, value: str,
+):
+    """Contract v2.0 §28: an empty tagged criterion is refused under every
+    rule, and on a non-English run (this Mathematics snapshot) any bracket
+    tag at all breaks containment."""
     parsed, snapshot, provenance = _parsed_master(multipart=multipart)
     row = _question_row(parsed, "Descriptive")
     field = "sq1_keyword_1" if multipart else "answer_content_1"
-    row[field] = "[content]:   "
+    row[field] = value
 
     errors = workbook.validate_master_file(
         parsed,
@@ -477,7 +605,8 @@ def test_readback_rejects_a_tag_without_rubric_content(multipart: bool):
     )
 
     assert any(
-        "allowed functional tag" in error for error in errors
+        "rubric-tag containment (contract v2.0 §28)" in error
+        for error in errors
     ), errors
 
 
@@ -486,9 +615,11 @@ def test_subjective_answers_render_and_read_back_without_options():
     row = _question_row(parsed, "Subjective")
 
     assert row["question"] == "A square is $$a$$ and a cube is $$b$$."
-    assert row["answer_type_1"] == "Phrases"
+    # Contract v2.0 §23: a textual Subjective answer carries ``Words``.
+    assert row["answer_type_1"] == "Words"
     assert row["answer_1"] == "two-dimensional"
-    assert row["answer_display_1"] == "two-dimensional"
+    # Contract v2.0 §23: a used slot carries the literal ``Yes``.
+    assert row["answer_display_1"] == "Yes"
     assert row["weightage_1"] == "1"
     assert row["placeholder_1"] == "a"
     assert row["answer_2"] == "three-dimensional"

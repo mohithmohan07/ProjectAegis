@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .. import config
+from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
 from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
@@ -370,7 +371,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         ANSWER_RESTRICTION_CRITIC_SYSTEM,
         suffix,
-        purpose="concept_validation",
+        purpose="advisory_critic",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "answer-restriction-critic-v3",
@@ -391,7 +392,11 @@ def _live_authorities(
     from .phase3 import fixer as fixer_mod
 
     envelope_mod.require_live_api()
-    return _live_author, critic or _live_critic, fixer or fixer_mod.live_fixer
+    return (
+        _live_author,
+        critic or lane_policy.critic_for("answer_restriction", _live_critic),
+        fixer or fixer_mod.live_fixer,
+    )
 
 
 def _kernel_provider(provider: kernel.Provider) -> kernel.Provider:

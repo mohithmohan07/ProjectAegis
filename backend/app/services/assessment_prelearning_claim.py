@@ -31,6 +31,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Mapping
 
+from . import assessment_lane_policy as lane_policy
 from .phase3 import kernel
 
 PRE_CLAIM_POLICY_VERSION = "assessment-pre-claim-1"
@@ -89,7 +90,7 @@ def _live_claim_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         PRE_CLAIM_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -154,7 +155,8 @@ def decide_pre_learning_claims(
 
     if provider is None:
         provider = _live_claim
-        critic = critic if critic is not None else _live_claim_critic
+        if critic is None:
+            critic = lane_policy.critic_for("pre_claim", _live_claim_critic)
     store = store or kernel.DecisionStore()
 
     payload = {

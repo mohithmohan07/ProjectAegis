@@ -8,6 +8,7 @@ import zipfile
 from openpyxl import load_workbook
 import pytest
 
+from app import bulk_import as bi
 from app import models
 from app.services import build_concepts
 from app.services import build_concepts_release as release
@@ -26,6 +27,14 @@ def _chapter(db):
 
 def _job(db, *, checkpoint=None):
     chapter = _chapter(db)
+    # Contract v2.0 §32.1: a release chapter carries a frozen duration
+    # (never estimated). The shared fixture chapter guarantees one so the
+    # ``chapter_duration_unregistered`` gate judges only what a test stages;
+    # a test that blanks it deliberately restores it afterwards.
+    if bi.duration_minutes_cell(chapter.chapter_duration) == "":
+        chapter.chapter_duration = "40 minutes"
+        db.commit()
+        db.refresh(chapter)
     job = models.UploadJob(
         module="build_concepts",
         upload_type="document",
@@ -1444,19 +1453,27 @@ def test_release_bulk_import_workbook_renders_canonical_rows_without_db_upload(d
     job, chapter = _job(db)
     # A finalized chapter duration wins over authored metadata by design;
     # this test exercises the authored path, so the shared fixture chapter
-    # must not carry one from an earlier test's upload.
+    # must not carry one while this release is staged. The directory
+    # metadata is frozen AT staging, so the row is restored right after —
+    # the shared chapter stays contract-conformant (v2.0 §32.1) for every
+    # later release test.
+    restored = (chapter.chapter_duration, chapter.chapter_description)
     chapter.chapter_duration = ""
     chapter.chapter_description = ""
     db.commit()
     concepts_before = db.query(models.Concept).count()
-    release.stage_release(
-        db,
-        job,
-        target_chapter_id=chapter.id,
-        records=_records(),
-        inventory=_inventory(),
-        mined_types=_mined_types(),
-    )
+    try:
+        release.stage_release(
+            db,
+            job,
+            target_chapter_id=chapter.id,
+            records=_records(),
+            inventory=_inventory(),
+            mined_types=_mined_types(),
+        )
+    finally:
+        chapter.chapter_duration, chapter.chapter_description = restored
+        db.commit()
     db.refresh(job)
     payload = release.release_payload(job)
     payload["chapter_meta"] = {
@@ -1482,7 +1499,10 @@ def test_release_bulk_import_workbook_renders_canonical_rows_without_db_upload(d
     values = [str(value or "") for value in first]
     assert any("Released Concept Alpha" in value for value in values)
     assert any("An authored chapter description." in value for value in values)
-    assert any("120 minutes" in value for value in values)
+    # Contract v2.0 §32: the chapter duration is a real numeric cell (120),
+    # never unit-bearing text ("120 minutes").
+    assert 120 in [value for value in first if isinstance(value, (int, float))]
+    assert not any("120 minutes" in value for value in values)
     assert any("Topic A teaches the method." in value for value in values)
     assert db.query(models.Concept).count() == concepts_before
 

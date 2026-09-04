@@ -92,9 +92,14 @@ Known data-integrity facts about that zip (verified, owner informed):
 
 ## Working conventions (hard-won; follow exactly)
 
-- NEVER run two pytest processes concurrently — it once produced 300+
-  phantom sqlalchemy failures. Full suite:
-  `cd backend && python3 -m pytest tests/ -q` (~4–5 min, ~3400 tests).
+- NEVER run two pytest processes concurrently on the SAME database — it
+  once produced 300+ phantom sqlalchemy failures. The default test database
+  is `backend/aegis_test.db` (set with `setdefault` in `backend/conftest.py`),
+  so a per-process override isolates parallel runs:
+  `cd backend && AEGIS_DB_URL=sqlite:///./aegis_test_<tag>.db python3 -m pytest tests/test_x.py -q`
+  (delete the `aegis_test_<tag>.db*` files afterwards; they are not
+  ignored). Full suite, one process:
+  `cd backend && python3 -m pytest tests/ -q` (~3–5 min, ~3500 tests).
 - In background shell commands the cwd resets to the repo root; `cd` inside
   the command.
 - Ship pattern per change set: commit → push to

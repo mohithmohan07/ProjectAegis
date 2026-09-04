@@ -2661,6 +2661,7 @@ def _chapter_meta_for_release(
     record_rows: Sequence[Mapping[str, Any]],
     *,
     pre_post: str,
+    explicit_duration_minutes: int = 0,
 ) -> dict[str, Any]:
     """Author chapter/topic metadata while the model is still in the loop.
 
@@ -2670,6 +2671,9 @@ def _chapter_meta_for_release(
     with an empty topic-description column, a zero concept count, and no
     duration because the upload had nothing authored to apply.
     """
+    from . import build_concepts as concepts_service
+
+    expected: int | None = None
     if not record_rows or not target_chapter_id:
         return {}
     try:
@@ -2691,14 +2695,23 @@ def _chapter_meta_for_release(
                 grouped[topic] = []
                 order.append(topic)
             grouped[topic].append(title)
-        if not order:
-            return {}
+        # Contract v2.0 §32.1: the accepted registry row (exact match), else
+        # the explicit upload variable, else nothing — never an estimate.
         expected = chapter_durations.lookup_duration_minutes(
             board=chapter.board,
             grade=chapter.grade,
             subject=chapter.subject,
             chapter_title=chapter.chapter_title,
         )
+        if not expected:
+            try:
+                explicit = int(explicit_duration_minutes or 0)
+            except (TypeError, ValueError):
+                explicit = 0
+            expected = explicit if explicit > 0 else None
+        if not order:
+            # Nothing to author, but the frozen duration still rides.
+            return concepts_service._with_frozen_duration({}, expected)
         meta = generation._metadata(
             subject=chapter.subject,
             board=chapter.board,
@@ -2712,16 +2725,19 @@ def _chapter_meta_for_release(
         last_exc: Exception | None = None
         for _attempt in range(2):
             try:
-                return generation.chapter_meta_via_api(
-                    meta=meta,
-                    topics=[
-                        {
-                            "topic": topic,
-                            "pre_post_learning": pre_post,
-                            "concepts": grouped[topic],
-                        }
-                        for topic in order
-                    ],
+                return concepts_service._with_frozen_duration(
+                    generation.chapter_meta_via_api(
+                        meta=meta,
+                        topics=[
+                            {
+                                "topic": topic,
+                                "pre_post_learning": pre_post,
+                                "concepts": grouped[topic],
+                            }
+                            for topic in order
+                        ],
+                    ),
+                    expected,
                 )
             except Exception as exc:  # noqa: BLE001 — retried once below
                 last_exc = exc
@@ -2735,7 +2751,9 @@ def _chapter_meta_for_release(
             "summaries.",
             level="warning",
         )
-        return {}
+        # The duration is a run variable, not model output: it rides the
+        # payload even when the authored metadata could not be produced.
+        return concepts_service._with_frozen_duration({}, expected)
 
 
 def _pre_chapter_meta_from_staged_post(
@@ -2968,6 +2986,28 @@ def stage_release(
     # ``snapshot_defects``, which ``structural_defects`` reads.
     from . import release_qc
 
+    # Contract v2.0 §32.1: the audit's chapter-duration pass reads the
+    # frozen directory metadata and the authored chapter metadata, so both
+    # are resolved BEFORE the audit runs and reused in the payload below —
+    # an audit fed a payload slice without them recorded
+    # ``chapter_duration_unregistered`` for every release, duration or not.
+    target = int(
+        target_chapter_id
+        or newest.get("target_chapter_id")
+        or checkpoint_value.get("target_chapter_id")
+        or (job.deposit_scope_ids or [0])[0]
+        or 0
+    )
+    directory_metadata = _directory_metadata_for_release(db, target)
+    chapter_meta = _chapter_meta_for_release(
+        db,
+        target,
+        record_rows,
+        pre_post="Pre" if job.learning_kind == "pre" else "Post",
+        explicit_duration_minutes=int(
+            getattr(job, "chapter_duration_minutes", 0) or 0
+        ),
+    )
     qc_issues, qc_blocking = release_qc.audit({
         "records": record_rows,
         "issues": issues,
@@ -2975,6 +3015,11 @@ def stage_release(
         "mined_types": types_value,
         "type_case_rows": type_case_rows,
         "learning_kind": job.learning_kind,
+        "directory_metadata": directory_metadata,
+        "chapter_meta": chapter_meta,
+        # Contract v2.0 §18: the audit's publication pass reads the frozen
+        # run variable the payload below carries.
+        "source_book": str(job.source_book or ""),
     })
     issues.extend(qc_issues)
     # Q13/R4: public Examples whose wording has no exact owner in the
@@ -3016,23 +3061,9 @@ def stage_release(
 
     annotated = _annotate_records(record_rows, issues, routes)
     summary = _release_summary(annotated, issues)
-    target = int(
-        target_chapter_id
-        or newest.get("target_chapter_id")
-        or checkpoint_value.get("target_chapter_id")
-        or (job.deposit_scope_ids or [0])[0]
-        or 0
-    )
-    directory_metadata = _directory_metadata_for_release(db, target)
     source_document_hash = "sha256:" + hashlib.sha256(
         str(job.mmd_text or "").encode("utf-8")
     ).hexdigest()
-    chapter_meta = _chapter_meta_for_release(
-        db,
-        target,
-        annotated,
-        pre_post="Pre" if job.learning_kind == "pre" else "Post",
-    )
     released_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "version": RELEASE_VERSION,
@@ -3240,7 +3271,8 @@ def _refine_pre_records(
             "chapter_title": chapter.chapter_title if chapter else "",
             "chapter_code": chapter.chapter_code if chapter else "",
             "pre_post": "Pre",
-            "source_book": job.source_book or job.filename or "",
+            # Contract v2.0 §18: the publication only, never a filename.
+            "source_book": job.source_book or "",
             # Deliberately absent: the chapter's question/task inventory,
             # its mined Types, AND its source text — all three of which
             # the Post hook passes. The Pre lane extracts no question
@@ -3968,11 +4000,32 @@ def stage_pre_release(
     # input-artifact defects on the transport this lane already carries.
     from . import release_qc
 
+    # Contract v2.0 §32.1: resolved BEFORE the audit and reused in the
+    # payload below, for the same reason as the Post lane — the audit's
+    # chapter-duration pass reads both keys.
+    target = int(
+        target_chapter_id
+        or (job.deposit_scope_ids or [0])[0]
+        or 0
+    )
+    directory_metadata = _directory_metadata_for_release(db, target)
+    chapter_meta = _pre_chapter_meta_from_staged_post(
+        job,
+        _chapter_meta_for_release(
+            db, target, raw_rows, pre_post="Pre",
+            explicit_duration_minutes=int(
+                getattr(job, "chapter_duration_minutes", 0) or 0
+            ),
+        ),
+    )
     qc_issues, qc_blocking = release_qc.audit({
         "records": raw_rows,
         "issues": [],
         "question_task_inventory": dict(inventory or {}),
         RELEASE_LANE_FIELD: LANE_PRE,
+        "directory_metadata": directory_metadata,
+        "chapter_meta": chapter_meta,
+        "source_book": str(job.source_book or ""),
     })
     # Round 9: QC blocking findings ride their OWN key. Folding them into
     # ``snapshot_defects`` [measured] minted one spurious
@@ -3989,20 +4042,9 @@ def stage_pre_release(
     issues.extend(qc_issues)
     annotated = _annotate_records(raw_rows, issues, {})
     summary = _release_summary(annotated, issues)
-    target = int(
-        target_chapter_id
-        or (job.deposit_scope_ids or [0])[0]
-        or 0
-    )
     source_document_hash = "sha256:" + hashlib.sha256(
         str(job.mmd_text or "").encode("utf-8")
     ).hexdigest()
-    chapter_meta = _pre_chapter_meta_from_staged_post(
-        job,
-        _chapter_meta_for_release(
-            db, target, annotated, pre_post="Pre",
-        ),
-    )
     payload = {
         "version": RELEASE_VERSION,
         # Minted per LANE, so a Pre re-stage never reads as a Post one
@@ -4024,9 +4066,7 @@ def stage_pre_release(
         "filename": job.filename,
         "source_document_hash": source_document_hash,
         "target_chapter_id": target,
-        "directory_metadata": _json_safe(
-            _directory_metadata_for_release(db, target)
-        ),
+        "directory_metadata": _json_safe(directory_metadata),
         "records": _json_safe(annotated),
         "issues": _json_safe(issues),
         # S9 — the row-level defect record, the same key and the same shape
