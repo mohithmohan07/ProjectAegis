@@ -93,8 +93,19 @@ def column_mapping(db: Session, questions: list[models.Question]) -> int:
     for q in questions:
         changed = False
         if not q.question_source:
-            q.question_source = bi.QUESTION_SOURCE_DEFAULT
-            changed = True
+            # Contract v2.0 §18: question_source is the publication the
+            # question's concept was built from — never an origin-system
+            # constant. A concept with no recorded source leaves the value
+            # blank, and the read-back refuses the row rather than guess.
+            concept = getattr(getattr(q, "group", None), "concept", None)
+            sources = bi.split_multi(
+                str(getattr(concept, "sources", "") or "")
+            )
+            # Exactly one recorded publication is the run's publication; a
+            # first-of-many would be a borrowed value (§37) — left blank.
+            if len(sources) == 1:
+                q.question_source = sources[0]
+                changed = True
         appears = bi.normalize_appears_in(q.question_appears_in) or bi.APPEARS_IN_ALL
         if appears != q.question_appears_in:
             q.question_appears_in = appears

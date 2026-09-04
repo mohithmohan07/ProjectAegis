@@ -442,9 +442,10 @@ def test_completion_limit_escalates_budget_and_finishes(monkeypatch):
     assert len(calls) == 2
     assert calls[0]["max_completion_tokens"] == 1200
     assert calls[1]["max_completion_tokens"] == 5200
-    # Truncation recovery steps effort down from the preferred xhigh request.
-    assert calls[0]["reasoning_effort"] == "xhigh"
-    assert calls[1]["reasoning_effort"] == "high"
+    # Truncation recovery steps effort down one rung from the purpose's
+    # tiered request (concept_mapping requests ``high``, register Q26).
+    assert calls[0]["reasoning_effort"] == "high"
+    assert calls[1]["reasoning_effort"] == "medium"
     assert "STRUCTURED OUTPUT RECOVERY" in calls[1]["messages"][0]["content"]
     generation._openai_gate = None
 

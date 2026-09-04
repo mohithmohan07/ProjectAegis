@@ -563,11 +563,16 @@ def test_skeleton_user_message_lists_section_headings(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def test_chapter_meta_via_api_parses_fields(monkeypatch):
+    """Contract v2.0 §32.1: the chapter duration is the FINALIZED registry /
+    upload value handed in on ``meta`` — a number the model volunteers is
+    ignored, and with no finalized value the key is absent, never guessed.
+    """
     def fake_openai(system, user, **kw):
         assert "Topics and their concepts" in user
         return {
             "chapter_description": "Builds similarity from figures to proofs.",
-            "chapter_duration_minutes": "270",
+            # A model estimate: must never reach the output.
+            "chapter_duration_minutes": "999",
             "topics": [
                 {"topic": "Similar Triangles",
                  "topic_description": "Defines similarity and its criteria."},
@@ -577,7 +582,7 @@ def test_chapter_meta_via_api_parses_fields(monkeypatch):
 
     monkeypatch.setattr(g, "_openai_json", fake_openai)
     out = g.chapter_meta_via_api(
-        meta=g._metadata(subject="Math"),
+        meta=g._metadata(subject="Math", finalized_duration_minutes=270),
         topics=[{"topic": "Similar Triangles", "concepts": ["A", "B"]}],
         live=True,
     )
@@ -585,6 +590,15 @@ def test_chapter_meta_via_api_parses_fields(monkeypatch):
     assert out["chapter_duration_minutes"] == 270
     assert out["topic_descriptions"] == {
         "similar triangles": "Defines similarity and its criteria."}
+
+    unregistered = g.chapter_meta_via_api(
+        meta=g._metadata(subject="Math"),
+        topics=[{"topic": "Similar Triangles", "concepts": ["A", "B"]}],
+        live=True,
+    )
+    assert "chapter_duration_minutes" not in unregistered
+    assert unregistered["chapter_description"] == (
+        "Builds similarity from figures to proofs.")
 
 
 def test_chapter_meta_via_api_is_empty_in_dry_mode():
@@ -626,7 +640,15 @@ def test_sync_chapter_topic_summary_uses_api_meta(db):
     assert topic.topic_description == "Develops the criteria for triangle similarity."
 
 
-def test_sync_chapter_topic_summary_preserves_finalized_duration(db):
+def test_sync_chapter_topic_summary_frozen_duration_outranks_a_carried_one(db):
+    """Contract v2.0 §32.1: the resolved duration is the run variable.
+
+    ``meta_summary`` carries the value the resolver froze (registry, else
+    the explicit upload variable, else the carried value). When it differs
+    from what the row carries, the row held a retired estimate or a stale
+    edit, and the frozen value wins; a carried value survives only when the
+    resolver had nothing else (pinned below).
+    """
     chapter = models.Chapter(
         chapter_code="10CBMA_MetaDuration", board="CBSE", grade="10",
         subject="Mathematics", unit="Mathematics Unit",
@@ -647,7 +669,12 @@ def test_sync_chapter_topic_summary_preserves_finalized_duration(db):
         "chapter_duration_minutes": 315,
         "topic_descriptions": {"similar triangles": "Topic description."},
     })
-    assert chapter.chapter_duration == "160 minutes"
+    assert chapter.chapter_duration == "315 minutes"
+
+    build_concepts._sync_chapter_topic_summary(chapter, {
+        "topic_descriptions": {"similar triangles": "Topic description."},
+    })
+    assert chapter.chapter_duration == "315 minutes", "carried when unresolved"
 
 
 def test_sync_chapter_topic_summary_authors_nothing_without_meta(db):

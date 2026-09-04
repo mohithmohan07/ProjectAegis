@@ -44,11 +44,12 @@ EVIDENCE AND DECISION BOUNDARY:
   place of the requested question object.
 
 STANDARD VALUES (use EXACTLY these):
-- cognitive_skills: Remember | Understand | Apply | Analyse | Evaluate | Create
-- level_of_difficulty: Less | Moderate | High
+- cognitive_skills: one of Remember / Understand / Apply / Analyse / Evaluate / Create
+- level_of_difficulty: one of Less / Moderate / High
 - answer_type: Phrases | Equation | Image
-- question_source: UpSchool DB
-- Multi-value fields are comma-separated ONLY (never newline/semicolon/pipe).
+- question_source: the run's publication, supplied in the metadata (never invent one)
+- Multi-value fields use the exact " | " separator (space, pipe, space);
+  a comma is ordinary content, never a separator.
 
 UNIVERSAL QUALITY RULES:
 - The question must directly test the given concept; never drift off-syllabus.
@@ -79,11 +80,12 @@ necessary and visually flagged ("... is NOT ..."). The answers array is the
 display order and maps to lowercase paper labels a), b), c), d), e), f) —
 never uppercase A), B), C), D). Do not put those labels inside answer_content;
 the workbook adds them. Correct option weightage = 1 (or the marks), wrong
-options = 0. answer_explanation names the correct option with its lowercase
-label and text, then explains why it is right and briefly why key distractors
-are wrong.
+options = 0. answer_explanation BEGINS with the exact text of the correct
+option and then explains why it is right and briefly why key distractors
+are wrong; it never contains the option letter or number (no "b)", no
+"option 2").
 FIB rules: the blank tests a meaningful term/value; the sentence stays
-grammatically clear; list accepted alternatives comma-separated only when
+grammatically clear; list accepted alternatives " | "-separated only when
 several answers are genuinely valid.""",
     "subjective": """\
 QUESTION TYPE: SUBJECTIVE (short answer).

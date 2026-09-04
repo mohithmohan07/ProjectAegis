@@ -28,6 +28,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Mapping
 
+from . import assessment_lane_policy as lane_policy
 from .phase3 import kernel
 
 GENERATED_DEDUP_POLICY_VERSION = "assessment-generated-dedup-1"
@@ -81,7 +82,7 @@ def _live_dedup_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         GENERATED_DEDUP_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -187,7 +188,8 @@ def decide_generated_duplicates(
 
     if provider is None:
         provider = _live_dedup
-        critic = critic if critic is not None else _live_dedup_critic
+        if critic is None:
+            critic = lane_policy.critic_for("dedup", _live_dedup_critic)
     store = store or kernel.DecisionStore()
 
     payload = {
@@ -311,7 +313,7 @@ def _live_source_dedup_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         SOURCE_DEDUP_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -349,7 +351,8 @@ def decide_source_duplicates(
 
     if provider is None:
         provider = _live_source_dedup
-        critic = critic if critic is not None else _live_source_dedup_critic
+        if critic is None:
+            critic = lane_policy.critic_for("dedup", _live_source_dedup_critic)
     store = store or kernel.DecisionStore()
 
     payload = {

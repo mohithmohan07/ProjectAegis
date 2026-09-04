@@ -91,7 +91,7 @@ def _live_ownership_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         EXAMPLE_OWNERSHIP_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 

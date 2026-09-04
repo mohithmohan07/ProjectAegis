@@ -57,9 +57,10 @@ never re-decided by the audit:
 (schema/layout — the header gate, the reader's layout gate, the
 manifest-union field gate; owners unchanged).
 
-**Fixed in code rather than checked:** item 5 — `question_source` names the
-ORIGIN SYSTEM, not a school; the profile carries the "UpSchool DB" default
-(S11) and the renderer reads it when a candidate declares none.
+**Checked, since contract v2.0 (register Q26):** item 5 — `question_source`
+is the run's PUBLICATION (the frozen `source_book` run variable, contract
+§18), stamped on every candidate at release time; there is no default and
+no filename fallback, and a blank value is a read-back blocker.
 
 **Pure judgment, no mechanical check ever** (writing a regex here would be
 the defect): item 17 (alt-text neutrality — the only expression stays the

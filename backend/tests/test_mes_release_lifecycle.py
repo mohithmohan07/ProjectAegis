@@ -17,6 +17,10 @@ from app.services import assessment_profile
 from app.services import assessment_release_service as svc
 
 OWNER = "local:default"
+# Contract v2.0 §18: ``question_source`` names the run's publication — a
+# per-run scalar stamped on every candidate, never a filename or a borrowed
+# "UpSchool DB" default. Fixtures declare it on the candidate.
+PUBLICATION = "NCERT"
 
 
 def _chapter_concept(db) -> models.Concept:
@@ -53,6 +57,7 @@ def _payload(
         "marks": 1.0,
         "question_duration": 2.0,
         "math_keyboard": "",
+        "question_source": PUBLICATION,
         "question_appears_in": "Pre/Post-Worksheet/Test",
         "answer_restriction": "Specific",
         "restriction_reason": "The authored answer space is bounded.",
@@ -65,7 +70,9 @@ def _payload(
              "correct_answer": "0", "answer_weightage": "0"},
         ],
         "sub_questions": [],
-        "answer_explanation": "A cube is a three-dimensional solid.",
+        # Contract v2.0: an Objective explanation begins with the exact
+        # correct-option text and never names an option letter/number.
+        "answer_explanation": "Cube is a three-dimensional solid.",
         "concept_key": concept_key,
         "group_key": f"({concept_machine_id}) BG01",
         "flags": list(flags or []),
@@ -322,7 +329,9 @@ def test_subjective_release_upload_generic_export_strict_roundtrip(
     assert result["questions_created"] == 1
 
     stored = db.query(models.Question).filter_by(question_label=label).one()
-    assert stored.question_source == "UpSchool DB"
+    # Contract v2.0 §18: the stored source is the run's publication, never
+    # the retired "UpSchool DB" default.
+    assert stored.question_source == PUBLICATION
     assert stored.question_disclaimer == "Release-authored disclaimer."
     assert stored.answer_restriction == "Specific"
     assert stored.answers[0]["answer_content"] == "solid"
@@ -337,7 +346,7 @@ def test_subjective_release_upload_generic_export_strict_roundtrip(
     assert row["answer_1"] == "solid"
     assert str(row["weightage_1"]) == "1"
     assert row["answer_restriction"] == "Specific"
-    assert row["question_source"] == "UpSchool DB"
+    assert row["question_source"] == PUBLICATION
     assert row["question_disclaimer"] == "Release-authored disclaimer."
 
     path = tmp_path / "subjective-release-roundtrip.xlsx"
@@ -392,7 +401,7 @@ def test_staged_master_waits_for_exact_output03_publication(db):
                 "concept_display_name": concept_name,
                 "parent_concept": "",
                 "concept_details": "Exact staged teaching content.",
-                "keywords": "staged, exact",
+                "keywords": "staged | exact",
                 "related_concepts": "",
                 "digicards": "",
                 "concept_source": "fixture",
@@ -424,7 +433,7 @@ def test_staged_master_waits_for_exact_output03_publication(db):
         concept_display_name=concept_name,
         parent_concept="",
         concept_details="Exact staged teaching content.",
-        keywords="staged, exact",
+        keywords="staged | exact",
         sources="fixture",
         machine_id=machine_id,
     )

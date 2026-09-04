@@ -425,7 +425,11 @@ def test_import_workbook_roundtrip(client, db, request):
 def test_append_migrates_historical_cells_before_strict_reimport(
     db, tmp_path, append_kind,
 ):
-    """Both staged append paths repair old rows on the workbook copy."""
+    """Both staged append paths repair old rows on the workbook copy.
+
+    Contract v2.0 §17: line breaks inside a cell ship as ``<br>``, so the
+    repaired option lines are read back on that marker, never on ``\\n``.
+    """
 
     from app import models
     from app.bulk_import import layouts, reader, writer
@@ -585,10 +589,12 @@ def test_append_migrates_historical_cells_before_strict_reimport(
         column=objective_layout.column("question", "question_text") + 1,
     ).value
     assert "Answer A) stays prose." in migrated_question
-    assert "\na) Alpha\nb) Beta" in migrated_question
+    assert "<br>a) Alpha<br>b) Beta" in migrated_question
+    assert "\n" not in migrated_question
     assert "Table row 1, column 1: Name" in migrated_question_text
     assert "|---|" not in migrated_question_text
-    assert "\na) Alpha\nb) Beta" in migrated_question_text
+    assert "<br>a) Alpha<br>b) Beta" in migrated_question_text
+    assert "\n" not in migrated_question_text
 
     descriptive = migrated[descriptive_layout.sheet_name]
     answer_display = descriptive.cell(
@@ -640,7 +646,11 @@ def test_append_migrates_historical_cells_before_strict_reimport(
 def test_fresh_export_lowercases_legacy_objective_labels_on_the_copy(
     client, db,
 ):
-    """Fresh public export is strict-importable without rewriting storage."""
+    """Fresh public export is strict-importable without rewriting storage.
+
+    Contract v2.0 §17: the exported cell carries ``<br>`` line breaks while
+    storage keeps ``\\n``; the strict re-import below reads them back.
+    """
 
     from app import models
     from app.bulk_import import writer
@@ -693,10 +703,12 @@ def test_fresh_export_lowercases_legacy_objective_labels_on_the_copy(
         ).value
         workbook.close()
         assert "Answer A) stays prose." in question_value
-        assert "\na) Alpha\nb) Beta" in question_value
+        assert "<br>a) Alpha<br>b) Beta" in question_value
+        assert "\n" not in question_value
         assert "Table row 1, column 1: Name" in text_value
         assert "|---|" not in text_value
-        assert "\na) Alpha\nb) Beta" in text_value
+        assert "<br>a) Alpha<br>b) Beta" in text_value
+        assert "\n" not in text_value
 
         response = client.post(
             "/data/import",

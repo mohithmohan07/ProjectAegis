@@ -1,148 +1,148 @@
 {
- "_comment": "Recorded Slice-3 assessment cell, materialization, and route verdicts for QINV-0009 and QINV-0016.5. The source atoms come from the sealed RNE envelope; the learner-facing materializations preserve the two candidates already recorded in rne_assessment_groups.json. These responses are replay evidence, never executable defaults. | 2026-08-21: cell/candidate ids re-derived through the real pipeline after the assessment-cell-2 / assessment-materialize-4 policy bumps re-keyed the decisions (category vocabulary gate + answer_type contract); content untouched. | 2026-08-21 (later): assessment-materialize-5 adds the literary only-the-needed-lines rule (owner ruling); replay evidence unchanged. | 2026-08-27: cell/candidate ids re-derived after assessment-cell-3 binds the resolved board/grade/subject format policy into every cell verdict. Candidate IDs were then re-derived after resolved-profile materialization, and recorded phrase rubrics received the required functional tag for assessment-materialize-10.",
- "envelope_fixture": "rne_envelope.json",
- "source_concept_release_sha256": "d4e896c302bfe2487c882845eabc36d8ad00120baab21cb95ef5580d093d5ee1",
- "metadata": {
-  "subject": "History",
-  "board": "CBSE",
-  "grade": "10",
-  "chapter_title": "The Rise of Nationalism in Europe",
-  "chapter_code": "10CBSS_TheRiseOfNat",
-  "chapter_id": 1759,
-  "learning_kind": "Post",
-  "subject_adapter": "social_science",
-  "unit": "Modern World History"
- },
- "profile": {
-  "name": "reference-1",
-  "appears_in": "Pre/Post-Worksheet/Test",
-  "allow_subjective_rows": false
- },
- "concepts": [
-  {
-   "concept_key": "rne:gendered-limits-of-liberal-political-rights",
-   "concept_title": "Gendered Limits of Liberal Political Rights",
-   "concept_display_name": "Gendered Limits of Liberal Political Rights",
-   "teaching_description": "Liberal political rights were historically restricted by gender even when liberal movements claimed equality and representative government."
+  "_comment": "Recorded Slice-3 assessment cell, materialization, and route verdicts for QINV-0009 and QINV-0016.5. The source atoms come from the sealed RNE envelope; the learner-facing materializations preserve the two candidates already recorded in rne_assessment_groups.json. These responses are replay evidence, never executable defaults. | 2026-08-21: cell/candidate ids re-derived through the real pipeline after the assessment-cell-2 / assessment-materialize-4 policy bumps re-keyed the decisions (category vocabulary gate + answer_type contract); content untouched. | 2026-08-21 (later): assessment-materialize-5 adds the literary only-the-needed-lines rule (owner ruling); replay evidence unchanged. | 2026-08-27: cell/candidate ids re-derived after assessment-cell-3 binds the resolved board/grade/subject format policy into every cell verdict. Candidate IDs were then re-derived after resolved-profile materialization, and recorded phrase rubrics received the required functional tag for assessment-materialize-10. Updated for Master Governing Contract v2.0 (register Q26): a History run carries no rubric tags (§28) and answer_explanation equals display_answer (§24). | 2026-09-04: cell/candidate ids re-derived after the profile evidence bound into every cell verdict grew the universal Subjective sheet (contract v2.0 §26); replay evidence unchanged.",
+  "envelope_fixture": "rne_envelope.json",
+  "source_concept_release_sha256": "d4e896c302bfe2487c882845eabc36d8ad00120baab21cb95ef5580d093d5ee1",
+  "metadata": {
+    "subject": "History",
+    "board": "CBSE",
+    "grade": "10",
+    "chapter_title": "The Rise of Nationalism in Europe",
+    "chapter_code": "10CBSS_TheRiseOfNat",
+    "chapter_id": 1759,
+    "learning_kind": "Post",
+    "subject_adapter": "social_science",
+    "unit": "Modern World History"
   },
-  {
-   "concept_key": "rne:visual-symbols-of-the-nation",
-   "concept_title": "Visual Symbols of the Nation",
-   "concept_display_name": "Visual Symbols of the Nation",
-   "teaching_description": "National movements represented the nation through allegorical female figures, symbols and visual attributes."
-  }
- ],
- "atoms": [
-  {
-   "source_qid": "QINV-0009",
-   "source_document_hash": "sha256:7c9abe9903eef7324319f630032c8a0302929e6bae731f1dd51416af9ca84d61",
-   "source_kind": "checkpoint_question",
-   "raw_text": "Compare the positions on the question of women's rights voiced by the three writers cited above. What do they reveal about liberal ideology?",
-   "normalized_public_text": "Compare the positions on the question of women's rights voiced by the three writers cited in the accompanying material. What do they reveal about liberal ideology?",
-   "shared_context": "",
-   "source_answer": "",
-   "options": [],
-   "assets": [],
-   "route_evidence": {
-    "home_concept": "Gendered Limits of Liberal Political Rights"
-   }
+  "profile": {
+    "name": "reference-1",
+    "appears_in": "Pre/Post-Worksheet/Test",
+    "allow_subjective_rows": false
   },
-  {
-   "source_qid": "QINV-0016.5",
-   "source_document_hash": "sha256:7c9abe9903eef7324319f630032c8a0302929e6bae731f1dd51416af9ca84d61",
-   "source_kind": "exercise",
-   "raw_text": "e) The role of women in nationalist struggles",
-   "normalized_public_text": "Write a note on the role of women in nationalist struggles.",
-   "shared_context": "Write a note on:",
-   "source_answer": "",
-   "options": [],
-   "assets": [],
-   "parent_qid": "QINV-0016",
-   "subpart": "e)",
-   "route_evidence": {
-    "home_concept": "Gendered Limits of Liberal Political Rights"
-   }
-  }
- ],
- "cell_responses": [
-  {
-   "source_qid": "QINV-0009",
-   "sheet_kind": "descriptive",
-   "question_category": "Long Answer",
-   "cognitive_skill": "Analyse",
-   "difficulty": "High",
-   "marks": 4,
-   "rationale": "The source asks for comparison of multiple positions and an ideological inference."
-  },
-  {
-   "source_qid": "QINV-0016.5",
-   "sheet_kind": "descriptive",
-   "question_category": "Long Answer",
-   "cognitive_skill": "Analyse",
-   "difficulty": "Moderate",
-   "marks": 3,
-   "rationale": "The source asks for a concise historical synthesis of participation and constraint."
-  }
- ],
- "expected_cell_ids": {
-  "QINV-0009": "CELL-b6a6309b767973a0",
-  "QINV-0016.5": "CELL-b1453116c3b7d1a3"
- },
- "materialization_responses": [
-  {
-   "candidate_id": "CAND-ba3c2ed43dab0d11",
-   "question": "Compare the positions on the question of women's rights voiced by the three writers cited in the accompanying material. What do they reveal about liberal ideology?",
-   "answer_restriction": "Open",
-   "restriction_reason": "A complete comparison can be organised and expressed in more than one valid way.",
-   "display_answer": "The writers' positions show that liberal claims of equality and political participation remained bounded by gender, with women excluded from rights claimed for men.",
-   "answers": [
+  "concepts": [
     {
-     "answer_type": "Phrases",
-     "answer_content": "[content]: Compares the writers' positions and connects their differences to the gendered limits of liberal ideology.",
-     "answer_weightage": "4"
-    }
-   ],
-   "sub_questions": [],
-   "answer_explanation": "A complete response compares the supplied positions before drawing the ideological conclusion.",
-   "requires_visual": false,
-   "rationale": "The recorded item preserves the comparative source task and its ideological inference."
-  },
-  {
-   "candidate_id": "CAND-728d08303f52d0d9",
-   "question": "Write a note on the role of women in nationalist struggles.",
-   "answer_restriction": "Open",
-   "restriction_reason": "Several historically sound explanations can satisfy the note-form task.",
-   "display_answer": "Women participated in nationalist movements as activists, organisers and symbols while often remaining excluded from equal formal political rights.",
-   "answers": [
+      "concept_key": "rne:gendered-limits-of-liberal-political-rights",
+      "concept_title": "Gendered Limits of Liberal Political Rights",
+      "concept_display_name": "Gendered Limits of Liberal Political Rights",
+      "teaching_description": "Liberal political rights were historically restricted by gender even when liberal movements claimed equality and representative government."
+    },
     {
-     "answer_type": "Phrases",
-     "answer_content": "[content]: Explains women's participation and the political constraints that remained within nationalist movements.",
-     "answer_weightage": "3"
+      "concept_key": "rne:visual-symbols-of-the-nation",
+      "concept_title": "Visual Symbols of the Nation",
+      "concept_display_name": "Visual Symbols of the Nation",
+      "teaching_description": "National movements represented the nation through allegorical female figures, symbols and visual attributes."
     }
-   ],
-   "sub_questions": [],
-   "answer_explanation": "The note must cover both participation and continuing exclusion.",
-   "requires_visual": false,
-   "rationale": "The recorded item preserves the source-owned note and its complete response space."
-  }
- ],
- "route_responses": [
-  {
-   "candidate_id": "CAND-ba3c2ed43dab0d11",
-   "concept_key": "rne:gendered-limits-of-liberal-political-rights",
-   "evidence": "The released concept explicitly teaches the gendered restriction inside liberal claims of political equality.",
-   "rationale": "The comparison asks what the writers reveal about that precise ideological limit."
+  ],
+  "atoms": [
+    {
+      "source_qid": "QINV-0009",
+      "source_document_hash": "sha256:7c9abe9903eef7324319f630032c8a0302929e6bae731f1dd51416af9ca84d61",
+      "source_kind": "checkpoint_question",
+      "raw_text": "Compare the positions on the question of women's rights voiced by the three writers cited above. What do they reveal about liberal ideology?",
+      "normalized_public_text": "Compare the positions on the question of women's rights voiced by the three writers cited in the accompanying material. What do they reveal about liberal ideology?",
+      "shared_context": "",
+      "source_answer": "",
+      "options": [],
+      "assets": [],
+      "route_evidence": {
+        "home_concept": "Gendered Limits of Liberal Political Rights"
+      }
+    },
+    {
+      "source_qid": "QINV-0016.5",
+      "source_document_hash": "sha256:7c9abe9903eef7324319f630032c8a0302929e6bae731f1dd51416af9ca84d61",
+      "source_kind": "exercise",
+      "raw_text": "e) The role of women in nationalist struggles",
+      "normalized_public_text": "Write a note on the role of women in nationalist struggles.",
+      "shared_context": "Write a note on:",
+      "source_answer": "",
+      "options": [],
+      "assets": [],
+      "parent_qid": "QINV-0016",
+      "subpart": "e)",
+      "route_evidence": {
+        "home_concept": "Gendered Limits of Liberal Political Rights"
+      }
+    }
+  ],
+  "cell_responses": [
+    {
+      "source_qid": "QINV-0009",
+      "sheet_kind": "descriptive",
+      "question_category": "Long Answer",
+      "cognitive_skill": "Analyse",
+      "difficulty": "High",
+      "marks": 4,
+      "rationale": "The source asks for comparison of multiple positions and an ideological inference."
+    },
+    {
+      "source_qid": "QINV-0016.5",
+      "sheet_kind": "descriptive",
+      "question_category": "Long Answer",
+      "cognitive_skill": "Analyse",
+      "difficulty": "Moderate",
+      "marks": 3,
+      "rationale": "The source asks for a concise historical synthesis of participation and constraint."
+    }
+  ],
+  "expected_cell_ids": {
+    "QINV-0009": "CELL-6689027ab72bbcf4",
+    "QINV-0016.5": "CELL-fe08c81617f0ad06"
   },
-  {
-   "candidate_id": "CAND-728d08303f52d0d9",
-   "concept_key": "rne:gendered-limits-of-liberal-political-rights",
-   "evidence": "The released concept teaches women's participation alongside exclusion from equal formal political rights.",
-   "rationale": "The note assesses that participation-and-exclusion relationship rather than national allegory."
+  "materialization_responses": [
+    {
+      "candidate_id": "CAND-ea6837dc3c38425d",
+      "question": "Compare the positions on the question of women's rights voiced by the three writers cited in the accompanying material. What do they reveal about liberal ideology?",
+      "answer_restriction": "Open",
+      "restriction_reason": "A complete comparison can be organised and expressed in more than one valid way.",
+      "display_answer": "The writers' positions show that liberal claims of equality and political participation remained bounded by gender, with women excluded from rights claimed for men.",
+      "answers": [
+        {
+          "answer_type": "Phrases",
+          "answer_content": "Compares the writers' positions and connects their differences to the gendered limits of liberal ideology.",
+          "answer_weightage": "4"
+        }
+      ],
+      "sub_questions": [],
+      "answer_explanation": "The writers' positions show that liberal claims of equality and political participation remained bounded by gender, with women excluded from rights claimed for men.",
+      "requires_visual": false,
+      "rationale": "The recorded item preserves the comparative source task and its ideological inference."
+    },
+    {
+      "candidate_id": "CAND-0d2a9e8c5126e705",
+      "question": "Write a note on the role of women in nationalist struggles.",
+      "answer_restriction": "Open",
+      "restriction_reason": "Several historically sound explanations can satisfy the note-form task.",
+      "display_answer": "Women participated in nationalist movements as activists, organisers and symbols while often remaining excluded from equal formal political rights.",
+      "answers": [
+        {
+          "answer_type": "Phrases",
+          "answer_content": "Explains women's participation and the political constraints that remained within nationalist movements.",
+          "answer_weightage": "3"
+        }
+      ],
+      "sub_questions": [],
+      "answer_explanation": "Women participated in nationalist movements as activists, organisers and symbols while often remaining excluded from equal formal political rights.",
+      "requires_visual": false,
+      "rationale": "The recorded item preserves the source-owned note and its complete response space."
+    }
+  ],
+  "route_responses": [
+    {
+      "candidate_id": "CAND-ea6837dc3c38425d",
+      "concept_key": "rne:gendered-limits-of-liberal-political-rights",
+      "evidence": "The released concept explicitly teaches the gendered restriction inside liberal claims of political equality.",
+      "rationale": "The comparison asks what the writers reveal about that precise ideological limit."
+    },
+    {
+      "candidate_id": "CAND-0d2a9e8c5126e705",
+      "concept_key": "rne:gendered-limits-of-liberal-political-rights",
+      "evidence": "The released concept teaches women's participation alongside exclusion from equal formal political rights.",
+      "rationale": "The note assesses that participation-and-exclusion relationship rather than national allegory."
+    }
+  ],
+  "critic_review": {
+    "verdict": "verified",
+    "confidence": 1.0,
+    "issues": []
   }
- ],
- "critic_review": {
-  "verdict": "verified",
-  "confidence": 1.0,
-  "issues": []
- }
 }

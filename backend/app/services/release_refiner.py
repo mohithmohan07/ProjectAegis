@@ -49,6 +49,46 @@ REFINER_POLICY_VERSION = "refiner-1"
 # the first attempt and replays individually from the decision store.
 _BATCH_SIZE = 1
 
+# Which released rows the Refiner reads (Master Governing Contract v2.0
+# §38 stage 10 — "bounded repairs and re-review of CHANGED dependents";
+# register Q26). ``flagged`` (the default) refines only the rows that
+# carry a recorded review flag — critic dissent, a Fixer decision, a
+# Polish or validator finding — which selects by the PRESENCE of a
+# recorded verdict, never by the shape of the content; ``all`` restores
+# the pre-Q26 blanket pass over every row for A/B measurement; ``off``
+# stages the rows exactly as authored. Before Q26 the blanket pass was
+# about half of every Phase 3 call on a chapter.
+SCOPE_ENV = "AEGIS_CONCEPT_REFINER"
+SCOPES = ("flagged", "all", "off")
+DEFAULT_SCOPE = "flagged"
+
+
+def refiner_scope() -> str:
+    """The configured Refiner scope; an unknown value is refused, not guessed."""
+
+    import os
+
+    raw = os.environ.get(SCOPE_ENV, "").strip().lower()
+    if not raw:
+        return DEFAULT_SCOPE
+    if raw not in SCOPES:
+        raise ValueError(
+            f"{SCOPE_ENV} names unknown Refiner scope {raw!r}; expected one "
+            f"of: {', '.join(SCOPES)}"
+        )
+    return raw
+
+
+def _carries_review_flags(row: Mapping[str, Any]) -> bool:
+    """Whether a released row carries any recorded review flag."""
+
+    flags = row.get("review_flags")
+    if isinstance(flags, str):
+        return bool(flags.strip())
+    if isinstance(flags, (list, tuple)):
+        return any(str(flag).strip() for flag in flags)
+    return False
+
 # The mechanics-enforced editable whitelist. Everything else on a row —
 # titles, topics, placements, audit fields, seals, QIDs, Types — is identity
 # and is never swapped, whatever the model returns.
@@ -405,7 +445,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.CRITIC_SYSTEM,
         prompts.render(payload),
-        purpose="concept_validation",
+        purpose="advisory_critic",
     )
 
 
@@ -635,6 +675,50 @@ def _refine(
             ),
             [],
         )
+    scope = refiner_scope()
+    if scope == "off":
+        return (
+            copy.deepcopy(original),
+            _empty_diff(
+                output_kind=output_kind,
+                summary=f"Refiner not run ({SCOPE_ENV}=off): rows ship as "
+                "authored",
+            ),
+            [],
+        )
+
+    projection = _transient_projection(original, metadata)
+    # The identity proof below compares the WHOLE release before and
+    # after, whatever subset the scope hands to the model.
+    placement_keys_before = sorted(
+        row["placement_key"] for row in projection.values()
+    )
+    shipped_as_authored = 0
+    if scope == "flagged":
+        # Contract §38 stage 10: re-review what a recorded verdict touched.
+        # Selecting by the presence of a flag is identity accounting; the
+        # polish itself stays a model decision where it runs.
+        unflagged = [
+            index for index in projection
+            if not _carries_review_flags(original[index])
+        ]
+        for index in unflagged:
+            projection.pop(index, None)
+        shipped_as_authored = len(unflagged)
+    if not projection:
+        return (
+            copy.deepcopy(original),
+            _empty_diff(
+                output_kind=output_kind,
+                summary=(
+                    f"no flagged rows to refine ({shipped_as_authored} "
+                    "row(s) ship as authored; Refiner scope: flagged rows only)"
+                    if shipped_as_authored
+                    else "no renderable rows to refine"
+                ),
+            ),
+            [],
+        )
     if provider is None:
         provider = _default_provider()
         if provider is None:
@@ -645,17 +729,6 @@ def _refine(
             )
         critic = critic if critic is not None else _default_critic()
     store = store or kernel.DecisionStore()
-
-    projection = _transient_projection(original, metadata)
-    if not projection:
-        return (
-            copy.deepcopy(original),
-            _empty_diff(
-                output_kind=output_kind,
-                summary="no renderable rows to refine",
-            ),
-            [],
-        )
     envelope_sha = next(
         (
             str(row.get(gc.SOURCE_CONTRACT_FIELD) or "").strip()
@@ -877,9 +950,9 @@ def _refine(
             output_kind=output_kind,
         )
     after_projection = _transient_projection(refined, metadata)
-    if sorted(
-        row["placement_key"] for row in projection.values()
-    ) != sorted(row["placement_key"] for row in after_projection.values()):
+    if placement_keys_before != sorted(
+        row["placement_key"] for row in after_projection.values()
+    ):
         return _fallback(
             original,
             "refinement changed the concept placement keys",
@@ -928,9 +1001,11 @@ def _refine(
                     "reason": applied[index],
                 })
     summary = (
-        f"{len(applied)} of {len(projection)} released row(s) refined "
-        f"({len(changes)} field change(s)); {discarded} refinement(s) "
-        f"discarded for identity drift; {rolled_back} rolled back"
+        f"{len(applied)} of {len(projection)} refined row(s) changed "
+        f"({len(changes)} field change(s)); {shipped_as_authored} of "
+        f"{len(original)} released row(s) shipped as authored (Refiner "
+        f"scope: {scope}); {discarded} refinement(s) discarded for identity "
+        f"drift; {rolled_back} rolled back"
     )
     progress.log(
         f"Refiner: {summary}.",
@@ -941,6 +1016,9 @@ def _refine(
         "output_kind": output_kind,
         "changes": changes,
         "summary": summary,
+        "scope": scope,
+        "rows_refined": len(projection),
+        "rows_shipped_as_authored": shipped_as_authored,
         "resealed_after_refinement": resealed,
     }
     return refined, diff, flags

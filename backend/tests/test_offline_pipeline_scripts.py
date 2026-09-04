@@ -331,8 +331,9 @@ def test_call_gpt_json_builds_a_request_a_reasoning_model_accepts(
     # The modern parameter name, not the removed max_tokens.
     assert "max_completion_tokens" in request
     assert "max_tokens" not in request
-    # Q22 applies the same preferred effort to every registered purpose.
-    assert request["reasoning_effort"] == "xhigh"
+    # Register Q26: the CLI shares the app's tiered policy; assessment
+    # authoring requests ``high``.
+    assert request["reasoning_effort"] == "high"
     assert [message["role"] for message in request["messages"]] == [
         "system",
         "user",
@@ -342,6 +343,9 @@ def test_call_gpt_json_builds_a_request_a_reasoning_model_accepts(
 def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
     """The offline tools get the same recovery as the FastAPI paths."""
 
+    from aegis_pipeline import openai_policy
+
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
     calls: list[dict] = []
 
     class _RejectingCompletions(_FakeCompletions):
@@ -368,8 +372,9 @@ def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
     assert [call["reasoning_effort"] for call in calls] == ["xhigh", "high"]
 
 
-def test_responses_api_concept_extraction_requests_uniform_xhigh(monkeypatch):
-    """The surviving Responses API CLI path follows the same Q22 policy."""
+def test_responses_api_concept_extraction_follows_the_tiered_policy(monkeypatch):
+    """The surviving Responses API CLI path follows the same policy table
+    as the app (register Q26: concept mapping requests ``high``)."""
 
     calls: list[dict] = []
 
@@ -397,6 +402,6 @@ def test_responses_api_concept_extraction_requests_uniform_xhigh(monkeypatch):
     assert len(calls) == 1
     request = calls[0]
     assert request["model"] == "gpt-5.6-luna"
-    assert request["reasoning"] == {"effort": "xhigh"}
+    assert request["reasoning"] == {"effort": "high"}
     assert "reasoning_effort" not in request
     assert request["text"]["format"]["type"] == "json_schema"

@@ -7,6 +7,8 @@ grade-scoped policies are listed FIRST and win, so Class 6 keeps its
 audited closed sets (no Case Based / Assertion & Reasons) and Mathematics
 keeps Match the Following / True or False / Fill in the blanks at one
 minute per sub-point even though the matrix sheet does not list them.
+Master Governing Contract v2.0 §21 then moved True or False to the
+Subjective sheet in every profile; its marks/duration contract is unchanged.
 """
 from __future__ import annotations
 
@@ -50,10 +52,16 @@ def test_class_6_keeps_its_audited_sets_over_the_board_wide_matrix():
     assert "Case Based Questions" not in descriptive
     objective = maths["formats_by_sheet"]["objective"]
     assert "Assertion & Reasons Type" not in objective
-    # The owner kept the per-subpoint trio for Mathematics.
-    assert {
-        "Match the Following", "True or False", "Fill in the blanks",
-    } <= set(objective)
+    # The owner kept the per-subpoint trio for Mathematics; contract v2.0
+    # §21 places True or False on the Subjective sheet, never Objective.
+    assert {"Match the Following", "Fill in the blanks"} <= set(objective)
+    assert "True or False" not in objective
+    subjective = maths["formats_by_sheet"]["subjective"]
+    assert {"True or False", "Fill in the blanks"} <= set(subjective)
+    assert subjective["True or False"]["marks"]["max_subpoints"] == 1
+    assert subjective["True or False"]["duration"] == {
+        "mode": "per_subpoint", "minutes_per_subpoint": 1,
+    }
 
     english = _policy(_meta("English", "6"))
     assert english["policy_id"] == "msbshse-grade-6-english-2026-08-29"

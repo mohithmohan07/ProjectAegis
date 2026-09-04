@@ -85,6 +85,7 @@ def _ensure_columns() -> None:
         ("upload_jobs", "owner_sub", "VARCHAR(255) DEFAULT 'local:default'"),
         ("upload_jobs", "upload_storage_key", "VARCHAR(512) DEFAULT ''"),
         ("upload_jobs", "source_book", "VARCHAR(128) DEFAULT ''"),
+        ("upload_jobs", "chapter_duration_minutes", "INTEGER DEFAULT 0"),
         ("upload_jobs", "question_inventory", "TEXT DEFAULT '{}'"),
         ("upload_jobs", "generation_checkpoint", "TEXT DEFAULT '{}'"),
         ("upload_jobs", "generation_log", "TEXT DEFAULT '[]'"),
@@ -264,9 +265,12 @@ def _backfill_and_normalize() -> None:
     - question_text: backfilled from the clean (plain-text) question; existing
       non-empty values are never overwritten.
     - cognitive_skills: gerund forms -> action-verb forms (Remembering->Remember).
-    - question_appears_in: legacy 'Pre/Post-Worksheet/Test' -> comma list.
-    - answers JSON: answer_type 'Words' -> 'Phrases'.
-    - concept sources: legacy '; ' separators -> comma-separated.
+    - question_appears_in: legacy 'Pre/Post-Worksheet/Test' -> pipe list.
+    - answers JSON: answer_type 'Words' -> 'Phrases' (the canonical enum;
+      the workbook cell projects the lane literal, contract v2.0 §22-§24).
+    - every stored multi-value list (chapter pre/post topics, topic
+      related_topics, concept keywords/digicards/related_concepts/sources,
+      group related_digicards): legacy comma/semicolon -> " | " (§16).
     - Topic/Concept machine_id: minted for BLANK columns only, in
       ``identity.source_order_key`` order (spec-step8 T4-8).
     """
@@ -305,9 +309,35 @@ def _backfill_and_normalize() -> None:
                 if dirty:
                     q.answers = new_answers
                     changed = True
-        for c in db.query(models.Concept).filter(models.Concept.sources.like("%;%")):
-            c.sources = bi.merge_sources(c.sources, "")
-            changed = True
+        # Contract v2.0 §16: every stored multi-value list carries the
+        # exact " | " delimiter. A pre-v2.0 row holds a comma/semicolon
+        # list; it is re-delimited ONCE here (the reading side of the
+        # migration allowance) so no export ever has to guess whether a
+        # comma is a separator or content. Rosters of identified titles
+        # (§15: every item closes with its "(id)" tag) are split by that
+        # grammar, so a comma inside a title survives the migration.
+        roster_columns = {
+            "pre_topics", "post_topics", "related_topics", "related_concepts",
+        }
+        for model, columns in (
+            (models.Chapter, ("pre_topics", "post_topics")),
+            (models.Topic, ("related_topics",)),
+            (models.Concept, (
+                "keywords", "digicards", "related_concepts", "sources",
+            )),
+            (models.Group, ("related_digicards",)),
+        ):
+            for row in db.query(model).all():
+                for column in columns:
+                    value = str(getattr(row, column, "") or "")
+                    if "|" in value or not any(ch in value for ch in ",;"):
+                        continue
+                    splitter = (
+                        bi.split_roster if column in roster_columns
+                        else bi.split_multi
+                    )
+                    setattr(row, column, bi.join_multi(splitter(value)))
+                    changed = True
         if _backfill_machine_ids(db):
             changed = True
         if changed:

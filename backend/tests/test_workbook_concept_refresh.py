@@ -172,8 +172,9 @@ def test_append_concepts_refreshes_complete_band_after_normalized_title_change(
         assert writer._cell_str(
             row, writer._IDX_CONCEPT_TITLE + 1) == concept.concept_title
         assert writer._cell_str(row, details_col) == concept.concept_details
+        # Contract v2.0 §16: the merged source cell is " | "-joined.
         assert writer._cell_str(row, source_col) == (
-            "Original Book, Current Book")
+            "Original Book | Current Book")
         title_cells_by_topic[topic_key] = expected_title
 
         is_question_row = bool(
@@ -282,7 +283,7 @@ def test_append_concepts_relocates_catalog_and_question_rows_in_place(
     assert {
         writer._cell_str(row, source_col)
         for _, row in after_rows
-    } == {"Original Book, Relocated Book"}
+    } == {"Original Book | Relocated Book"}  # contract v2.0 §16 delimiter
 
     index = writer.scan_workbook(path)
     assert writer.concept_placement_key(concept, new_topic) \
@@ -491,7 +492,9 @@ def test_append_concepts_migrates_a_legacy_workbook_then_refreshes_its_fields(
     before_max_row = before_ws.max_row
 
     concept.concept_details = "Corrected legacy concept details"
-    concept.keywords = "corrected, searchable, keywords"
+    # Contract v2.0 §16: keywords are a " | " list; a stored value is
+    # rendered on that delimiter, so the fixture stores it the same way.
+    concept.keywords = "corrected | searchable | keywords"
     concept.related_concepts = "Current Legacy Relation"
     basic.group_name = "Legacy Basic Updated"
     basic.group_display_name = "Legacy Basic Updated"

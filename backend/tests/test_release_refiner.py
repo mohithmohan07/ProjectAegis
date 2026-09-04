@@ -13,6 +13,7 @@ import io
 import sys
 import types
 
+import pytest
 from openpyxl import load_workbook
 
 from app import models
@@ -119,6 +120,92 @@ class _Provider:
                 "rationale": "polished wording for grade consistency",
             }]
         }
+
+
+@pytest.fixture(autouse=True)
+def _blanket_refiner_scope(monkeypatch):
+    """These regressions exercise the polish mechanics on unflagged rows.
+
+    Under the default scope (register Q26: flagged rows only) unflagged
+    rows ship as authored, so the mechanics are pinned under the explicit
+    ``all`` scope; the scope selection itself is pinned below.
+    """
+    monkeypatch.setenv(release_refiner.SCOPE_ENV, "all")
+
+
+def test_the_default_scope_refines_only_rows_carrying_a_review_flag(
+    monkeypatch,
+):
+    """Contract v2.0 §38 stage 10: re-review what a recorded verdict touched.
+
+    Selecting by the PRESENCE of a recorded flag is identity accounting;
+    the polish itself stays a model decision on the rows it reaches.
+    """
+    monkeypatch.delenv(release_refiner.SCOPE_ENV, raising=False)
+    assert release_refiner.refiner_scope() == "flagged"
+    rows = _rows()
+    rows[0]["review_flags"] = ["critic: tone drifts above grade level"]
+    provider = _Provider(replace=("see how", "discover how"))
+    refined, diff, flags = release_refiner.refine_release(
+        rows, metadata=_METADATA, provider=provider,
+        store=kernel.DecisionStore(),
+    )
+    assert provider.calls == 1
+    assert refined[0]["concept_details"] != _BEFORE_DETAILS
+    assert refined[1] == rows[1]
+    assert "refiner unavailable" not in " ".join(flags)
+
+
+def test_a_release_with_no_flagged_row_spends_nothing_and_ships_as_authored(
+    monkeypatch,
+):
+    monkeypatch.delenv(release_refiner.SCOPE_ENV, raising=False)
+    provider = _Provider(replace=("see how", "discover how"))
+    original = _rows()
+    refined, diff, flags = release_refiner.refine_release(
+        original, metadata=_METADATA, provider=provider,
+        store=kernel.DecisionStore(),
+    )
+    assert provider.calls == 0
+    assert refined == original
+    assert diff["changes"] == []
+    assert "no flagged rows to refine" in diff["summary"]
+    assert flags == []
+
+
+def test_scope_off_ships_rows_as_authored_without_an_availability_flag(
+    monkeypatch,
+):
+    monkeypatch.setenv(release_refiner.SCOPE_ENV, "off")
+    provider = _Provider(replace=("see how", "discover how"))
+    original = _rows()
+    refined, diff, flags = release_refiner.refine_release(
+        original, metadata=_METADATA, provider=provider,
+        store=kernel.DecisionStore(),
+    )
+    assert provider.calls == 0
+    assert refined == original
+    assert "Refiner not run" in diff["summary"]
+    assert flags == []
+
+
+def test_an_unknown_scope_is_refused_never_guessed(monkeypatch):
+    monkeypatch.setenv(release_refiner.SCOPE_ENV, "some")
+    with pytest.raises(ValueError, match="unknown Refiner scope"):
+        release_refiner.refiner_scope()
+    # …and inside the seam that refusal is a recorded availability flag,
+    # never a blocked release.
+    original = _rows()
+    refined, diff, flags = release_refiner.refine_release(
+        original, metadata=_METADATA, provider=_Provider(),
+        store=kernel.DecisionStore(),
+    )
+    assert refined == original
+    assert any(
+        flag.startswith("refiner unavailable:") and "unknown Refiner scope"
+        in flag
+        for flag in flags
+    )
 
 
 def test_assessment_master_output_kind_delegates_lazily(monkeypatch):

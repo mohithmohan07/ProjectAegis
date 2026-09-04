@@ -25,8 +25,10 @@ from sqlalchemy.orm import Session
 from . import (
     ANSWER_TYPES, CHAPTER_FIELDS, TOPIC_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SECTION_BANDS, GROUP_FIELDS_BY_KIND,
-    merge_sources, normalize_answer_type, normalize_question_text,
-    strip_title_tag, strip_topic_title,
+    appears_in_wire, duration_minutes_cell, join_multi, merge_sources,
+    normalize_answer_type, wire_answer_type,
+    normalize_question_text, split_multi, strip_title_tag, strip_topic_title,
+    to_workbook_rich_text,
 )
 from . import layouts
 from . import assessment_workbook as workbook_contract
@@ -48,6 +50,14 @@ _BAND_FILL = {
 def _target_sheet(kind: str) -> layouts.SheetLayout:
     """The sheet of the TARGET layout this writer emits (spec-step8 S7)."""
     return layouts.sheet(layouts.REFERENCE_LAYOUT_ID, kind)
+
+
+# Contract v2.0 §14/§14.1: the reviewer-facing Concept Files (Outputs 01
+# and 03) ship on the update-aware layout — 72/440/149 columns (Q27) with every
+# ``is_update_*`` cell ``No`` — exactly as the Master files do. The app-data
+# accumulator workbook keeps the committed reference layout it was migrated
+# to; the reader identifies both.
+CONCEPT_FILE_LAYOUT_ID = layouts.UPDATE_AWARE_MASTER_LAYOUT_ID
 
 
 def _group_fields(kind: str) -> list[str]:
@@ -278,6 +288,10 @@ def _set_cell_value(cell, value) -> None:
     XLSX because it would change the stored content.
     """
     safe = _safe_cell(value)
+    if isinstance(safe, str):
+        # Contract v2.0 §17: the workbook projection of a line break is the
+        # canonical ``<br>``; the reader inverts it on import.
+        safe = to_workbook_rich_text(safe)
     _validate_cell_length(cell, safe)
     cell.value = safe
     if isinstance(safe, str) and safe.startswith(_FORMULA_PREFIXES):
@@ -552,6 +566,7 @@ def _validate_concepts_workbook_bytes(
     export_scope: ConceptExportScope,
     *,
     exact_rows: bool,
+    sheet_layout: layouts.SheetLayout | None = None,
 ) -> list[dict]:
     """Read the serialized XLSX back and verify final delivery identity.
 
@@ -559,7 +574,18 @@ def _validate_concepts_workbook_bytes(
     its accepted DB topology). Each finding batch is one content-addressed
     decision, logged in full here because the fresh-workbook export paths
     return bytes and have no decisions list to collect into.
+
+    ``sheet_layout`` is the layout the bytes were written on (the reference
+    layout by default); every column is addressed by field name on it.
     """
+    layout = sheet_layout or _target_sheet("objective")
+    fields = list(layout.fields)
+    idx_chapter_title = fields.index("chapter_title")
+    idx_topic_title = fields.index("topic_title")
+    idx_topic_pre_post = fields.index("pre_post_learning")
+    idx_concept_title = fields.index("concept_title")
+    labels_index = fields.index("topic_concept_labels")
+    description_index = fields.index("topic_description")
     expected: dict[tuple[str, str, str, str], dict[str, str]] = {}
     for concept in concepts:
         for topic in _concept_placements(concept):
@@ -576,17 +602,12 @@ def _validate_concepts_workbook_bytes(
                 topic,
                 include_group_columns=False,
                 export_scope=export_scope,
+                sheet_layout=layout,
             )
             expected[key] = {
-                "topic_title": str(front[_IDX_TOPIC_TITLE] or ""),
-                "concept_labels": str(front[
-                    len(CHAPTER_FIELDS)
-                    + TOPIC_FIELDS.index("topic_concept_labels")
-                ] or ""),
-                "topic_description": str(front[
-                    len(CHAPTER_FIELDS)
-                    + TOPIC_FIELDS.index("topic_description")
-                ] or ""),
+                "topic_title": str(front[idx_topic_title] or ""),
+                "concept_labels": str(front[labels_index] or ""),
+                "topic_description": str(front[description_index] or ""),
             }
 
     workbook = openpyxl.load_workbook(
@@ -599,12 +620,12 @@ def _validate_concepts_workbook_bytes(
 
         for row in ws.iter_rows(min_row=3, values_only=True):
             chapter_title = strip_title_tag(
-                _cell_str(row, _IDX_CHAPTER_TITLE))
+                _cell_str(row, idx_chapter_title))
             concept_title = strip_title_tag(
-                _cell_str(row, _IDX_CONCEPT_TITLE))
+                _cell_str(row, idx_concept_title))
             topic_title = strip_topic_title(
-                _cell_str(row, _IDX_TOPIC_TITLE))
-            learning_kind = _cell_str(row, _IDX_TOPIC_PRE_POST)
+                _cell_str(row, idx_topic_title))
+            learning_kind = _cell_str(row, idx_topic_pre_post)
             key = (
                 normalize_question_text(chapter_title),
                 normalize_question_text(concept_title),
@@ -615,19 +636,13 @@ def _validate_concepts_workbook_bytes(
                 continue
             seen[key] = seen.get(key, 0) + 1
             contract = expected[key]
-            if _cell_str(row, _IDX_TOPIC_TITLE) != contract["topic_title"]:
+            if _cell_str(row, idx_topic_title) != contract["topic_title"]:
                 issues.append(
                     f"{concept_title}: noncanonical topic number/title")
-            labels_index = (
-                len(CHAPTER_FIELDS)
-                + TOPIC_FIELDS.index("topic_concept_labels"))
             if _cell_str(row, labels_index) != contract["concept_labels"]:
                 issues.append(
                     f"{topic_title}: topic_concept_labels do not match "
                     "the selected topology")
-            description_index = (
-                len(CHAPTER_FIELDS)
-                + TOPIC_FIELDS.index("topic_description"))
             if _cell_str(
                 row, description_index
             ) != contract["topic_description"]:
@@ -740,17 +755,27 @@ def _sop_group_name(group: models.Group) -> str:
 
 
 def _groups_by_type(concept: models.Concept) -> dict[str, str]:
-    """All groups of each type, comma-separated (S/T/U columns)."""
+    """All groups of each type, pipe-delimited (S/T/U columns; §16)."""
     buckets: dict[str, list[str]] = {"Basic": [], "Intermediate": [], "Advanced": []}
     for g in sorted(concept.groups, key=lambda g: g.id):
         if g.group_type in buckets:
             buckets[g.group_type].append(_sop_group_name(g))
-    return {k: ", ".join(v) for k, v in buckets.items()}
+    return {k: join_multi(v) for k, v in buckets.items()}
+
+
+def _list_cell(value: str) -> str:
+    """Re-delimit a stored multi-value field to the v2.0 ``" | "`` wire.
+
+    Values authored before v2.0 carry comma lists; ``split_multi`` reads
+    those only when no pipe is present, so a pipe-delimited value (which may
+    contain commas inside a token) is never re-split on commas.
+    """
+    return join_multi(split_multi(value, legacy_commas=False))
 
 
 def _concept_field_value(
     concept: models.Concept, topic: models.Topic, field: str, *,
-    include_group_columns: bool,
+    include_group_columns: bool, publication: str | None = None,
 ) -> str:
     # Parent Concept ships empty by team decision: concepts sit flat under
     # their topic. The target layout (spec-step8 Q5) has no parent_concept
@@ -770,14 +795,14 @@ def _concept_field_value(
     if field == "concept_details":
         return concept.concept_details
     if field == "keywords":
-        return concept.keywords
+        return _list_cell(concept.keywords)
     if field == "digicards":
-        return concept.digicards
+        return _list_cell(concept.digicards)
     if field == "related_concepts":
         # The "parent: X" marker this used to smuggle in is gone with the
         # parent column: ``parent`` is unconditionally "" above, so the branch
         # was dead code claiming a fallback that could never fire.
-        return concept.related_concepts or ""
+        return _list_cell(concept.related_concepts or "")
     if field in {"basic_groups", "intermediate_groups", "advanced_groups"}:
         if not include_group_columns:
             return ""
@@ -788,7 +813,18 @@ def _concept_field_value(
             "advanced_groups": by_type["Advanced"],
         }[field]
     if field == "concept_source":
+        # Contract v2.0 §18 (owner ruling 2026-09-04, register Q27): on a
+        # run's outputs this cell is the run's publication — the Source
+        # book named on the upload page — never the concept's accumulated
+        # provenance list. ``concept.sources`` stays the database record of
+        # every book a concept was built from; a caller with no run (the
+        # accumulator workbook) still exports it.
+        if publication is not None:
+            return publication
         return concept.sources
+    if field == "is_update_concept":
+        # Contract v2.0 §14.1: exact ``No`` on every authored row.
+        return workbook_contract.UPDATE_FIELD_VALUE
     return ""
 
 
@@ -809,7 +845,9 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
                  include_group_columns: bool = True,
                  concept_fields: list[str] | None = None,
                  concept_question_labels: str = "",
-                 export_scope: ConceptExportScope | None = None) -> list:
+                 export_scope: ConceptExportScope | None = None,
+                 sheet_layout: layouts.SheetLayout | None = None,
+                 publication: str | None = None) -> list:
     """Chapter + Topic + Concept bands, with tags in the title columns.
 
     The title columns carry a human-readable tag; the display columns stay
@@ -822,13 +860,23 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     of the concept: on the TARGET layout that column sits at the end of the
     Concept band (it used to head the Group band), so it is passed in per row
     and is "" for a concept-catalog row (T17 point 3).
+
+    The bands are composed BY FIELD NAME against ``sheet_layout`` (the
+    reference layout by default), so the update-aware Concept File layout
+    (contract v2.0 §14: ``is_update_chapter``/``is_update_topic`` columns,
+    ``No`` on every row) and the reference accumulator layout share one
+    composer and never disagree on a value.
     """
     chapter = topic.chapter
-    book = _chapter_book_source(chapter, concept)
+    # The run's publication (Q27) names the chapter tag and the
+    # ``concept_source`` cell alike; without a run the accumulated
+    # provenance decides, as before.
+    book = publication or _chapter_book_source(chapter, concept)
     c_tag = directory.chapter_tag(
         chapter.board, chapter.grade, chapter.subject, book=book)
+    layout = sheet_layout or _target_sheet("objective")
     if concept_fields is None:
-        concept_fields = list(_target_sheet("objective").block_fields("concept"))
+        concept_fields = list(layout.block_fields("concept"))
     # Column J lists each concept exactly as its concept_title column reads —
     # the tagged "Name (machine id)" form — so the importer links them
     # (reviewers: "labels should be concept title, not concept display
@@ -836,31 +884,50 @@ def _front_bands(concept: models.Concept, topic: models.Topic, *,
     # scope is PASSED, never imported, so neither renderer imports the other.
     concept_labels = identity.topic_concept_roster(topic, export_scope)
     if export_scope is not None:
-        pre_topics = ", ".join(
+        pre_topics = join_multi([
             composed_topic_title(t, export_scope)
             for t in export_scope.topics_for(chapter, "Pre")
-        )
-        post_topics = ", ".join(
+        ])
+        post_topics = join_multi([
             composed_topic_title(t, export_scope)
             for t in export_scope.topics_for(chapter, "Post")
-        )
+        ])
     else:
-        pre_topics = chapter.pre_topics
-        post_topics = chapter.post_topics
-    return [
+        pre_topics = _list_cell(chapter.pre_topics)
+        post_topics = _list_cell(chapter.post_topics)
+    chapter_values = {
         # ---- Chapter band (tag in title, clean display) ----
-        f"{chapter.chapter_title} ({c_tag})", chapter.chapter_title,
-        chapter.chapter_duration, pre_topics, post_topics,
-        chapter.chapter_description,
+        "chapter_title": f"{chapter.chapter_title} ({c_tag})",
+        "is_update_chapter": workbook_contract.UPDATE_FIELD_VALUE,
+        "chapter_display_name": chapter.chapter_title,
+        # Contract v2.0 §32: a real numeric minutes cell, never unit text.
+        "chapter_duration": duration_minutes_cell(chapter.chapter_duration),
+        "pre_topics": pre_topics,
+        "post_topics": post_topics,
+        "chapter_description": chapter.chapter_description,
+    }
+    topic_values = {
         # ---- Topic band ("Topic NN: <title> (<tag>)", display "Topic NN: <title>") ----
-        composed_topic_title(topic, export_scope),
-        composed_topic_display(topic), topic.pre_post_learning, concept_labels,
-        topic.related_topics, topic.topic_description,
+        "topic_title": composed_topic_title(topic, export_scope),
+        "is_update_topic": workbook_contract.UPDATE_FIELD_VALUE,
+        "topic_display_name": composed_topic_display(topic),
+        "pre_post_learning": topic.pre_post_learning,
+        "topic_concept_labels": concept_labels,
+        "related_topics": _list_cell(topic.related_topics),
+        "topic_description": topic.topic_description,
+    }
+    return [
+        chapter_values.get(field, "")
+        for field in layout.block_fields("chapter")
+    ] + [
+        topic_values.get(field, "")
+        for field in layout.block_fields("topic")
     ] + [
         concept_question_labels if field == "concept_question_labels"
         else _concept_field_value(
             concept, topic, field,
             include_group_columns=include_group_columns,
+            publication=publication,
         )
         for field in concept_fields
     ]
@@ -1032,7 +1099,8 @@ def _question_band_values(
         "question_disclaimer": q.question_disclaimer,
         "question_duration": q.question_duration,
         "math_keyboard": q.math_keyboard,
-        "question_appears_in": q.question_appears_in,
+        # Contract v2.0 §18: the exact composite wire literal.
+        "question_appears_in": appears_in_wire(q.question_appears_in),
         "answer_restriction": q.answer_restriction,
         "level_of_difficulty": q.level_of_difficulty,
         "question": q.question,
@@ -1135,13 +1203,18 @@ def _question_band_values(
             )
             exported_answer[content_field] = exported_content
         if "answer_display" in exported_answer:
+            # Contract v2.0 §23: a used Subjective slot carries the literal
+            # ``Yes``; a legacy display string is not exported as content.
             exported_answer["answer_display"] = (
-                katex_rules.legacy_export_rich_text(
-                    str(exported_answer.get("answer_display") or "")
-                )
+                "Yes"
+                if str(exported_answer.get(content_field) or "").strip()
+                else ""
             )
         if "answer_type" in exported_answer:
-            exported_answer["answer_type"] = exported_type
+            # Contract v2.0 §22–§24: the cell carries the lane literal.
+            exported_answer["answer_type"] = wire_answer_type(
+                exported_type, sheet_layout.kind,
+            )
         # The answer dict's keys ARE the column prefixes on every sheet
         # (objective answer_content_N, subjective answer_N, descriptive
         # answer_weightage_N), so no per-kind translation table is needed.
@@ -1168,7 +1241,9 @@ def _question_band_values(
                     keyword_type, str(keyword.get("keyword") or ""),
                 )
             )
-            values[f"sq{n}_answer_type_{m}"] = keyword_type
+            values[f"sq{n}_answer_type_{m}"] = wire_answer_type(
+                keyword_type, "descriptive",
+            )
             values[f"sq{n}_weightage_{m}"] = keyword.get("weightage", "")
             values[f"sq{n}_keyword_{m}"] = keyword_content
     return values
@@ -1438,7 +1513,10 @@ def _migrate_existing_question_cells(workbook) -> int:
                             answer_type, text(content_cell.value),
                         )
                     )
-                    update(type_cell, answer_type)
+                    update(
+                        type_cell,
+                        wire_answer_type(answer_type, sheet_layout.kind),
+                    )
                     update(content_cell, answer_content)
 
                 display_column = sheet_layout.column(
@@ -1496,7 +1574,9 @@ def _migrate_existing_question_cells(workbook) -> int:
                             answer_type, text(keyword_cell.value),
                         )
                     )
-                    update(type_cell, answer_type)
+                    update(
+                        type_cell, wire_answer_type(answer_type, "descriptive"),
+                    )
                     update(keyword_cell, keyword)
 
             # A bulk-import workbook has no executable-formula contract.
@@ -1570,7 +1650,8 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
                     concept_fields: list[str] | None = None,
                     sheet_layout: layouts.SheetLayout | None = None,
                     export_scope: ConceptExportScope | None = None,
-                    decisions: list[dict] | None = None) -> list:
+                    decisions: list[dict] | None = None,
+                    publication: str | None = None) -> list:
     """Build a concept-catalog row (chapter/topic/concept filled, no question).
 
     ``topic`` selects the placement: the concept's authoring home
@@ -1599,6 +1680,8 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
         include_group_columns=False,
         concept_fields=concept_fields,
         export_scope=export_scope,
+        sheet_layout=sheet_layout,
+        publication=publication,
     ))
     expected_front = (
         len(sheet_layout.block_fields("chapter"))
@@ -1998,7 +2081,7 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int],
     return result
 
 
-def _write_headers(ws, kind: str) -> None:
+def _write_headers(ws, kind: str, layout_id: str | None = None) -> None:
     """Emit the two header rows of one sheet, exactly as the authority has them.
 
     Row 1's bands are ``{label, start, end}`` and they DO NOT tile the sheet:
@@ -2007,10 +2090,14 @@ def _write_headers(ws, kind: str) -> None:
     (``'Chapter '`` vs ``'Chapter  '``) and it is written byte-exactly, never
     normalised — a normaliser here is what the trailing-space sheet-name
     constant was.
+
+    ``layout_id`` selects the registered layout (the reference layout by
+    default; ``CONCEPT_FILE_LAYOUT_ID`` for the contract's Concept Files).
     """
-    fields = FIELDS_BY_KIND[kind]
+    layout = layouts.layout(layout_id or layouts.REFERENCE_LAYOUT_ID)
+    fields = list(layout.sheets[kind].fields)
     # Row 1: section bands (merged, with gaps).
-    for band in SECTION_BANDS[kind]:
+    for band in layout.bands_by_kind()[kind]:
         label, start, end = band["label"], band["start"], band["end"]
         cell = ws.cell(row=1, column=start)
         _set_cell_value(cell, label)
@@ -2030,7 +2117,7 @@ def _write_headers(ws, kind: str) -> None:
     ws.column_dimensions[get_column_letter(1)].width = 22
 
 
-def _new_workbook() -> openpyxl.Workbook:
+def _new_workbook(layout_id: str | None = None) -> openpyxl.Workbook:
     """A fresh workbook on the target layout — the authority's THREE sheets.
 
     This function builds Outputs 01 and 03 (the two Concept Files) as well as
@@ -2047,7 +2134,7 @@ def _new_workbook() -> openpyxl.Workbook:
     wb.remove(wb.active)
     for kind, sheet_name in SHEET_BY_KIND.items():
         ws = wb.create_sheet(sheet_name)
-        _write_headers(ws, kind)
+        _write_headers(ws, kind, layout_id)
     return wb
 
 
@@ -2107,7 +2194,10 @@ def write_workbook(db: Session, dest: Path | None = None,
     return data
 
 
-def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
+def write_concepts_workbook(
+    db: Session, concept_ids: list[int], *, layout_id: str | None = None,
+    publication: str | None = None,
+) -> bytes:
     """Write a fresh canonical workbook holding only the given concepts.
 
     Concepts have no questions of their own here, so they are emitted as
@@ -2115,9 +2205,15 @@ def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
     placement) (the authoring home topic plus every tagged topic/chapter) —
     exactly the shape ``append_concepts`` writes to the app-data output
     workbook. Used by the per-functionality "download Bulk Import Excel"
-    export for the Build Concepts flows.
+    export for the Build Concepts flows; the release lane passes
+    ``CONCEPT_FILE_LAYOUT_ID`` for the contract's Outputs 01/03 and the
+    run's ``publication`` (contract v2.0 §18 / Q27), which every
+    ``concept_source`` cell and chapter tag then carries.
     """
-    wb = _new_workbook()
+    sheet_layout = layouts.sheet(
+        layout_id or layouts.REFERENCE_LAYOUT_ID, "objective",
+    )
+    wb = _new_workbook(layout_id)
     ws = wb[SHEET_BY_KIND["objective"]]
     concepts = (
         db.query(models.Concept).filter(models.Concept.id.in_(concept_ids))
@@ -2136,7 +2232,9 @@ def write_concepts_workbook(db: Session, concept_ids: list[int]) -> bytes:
                     c,
                     "objective",
                     topic,
+                    sheet_layout=sheet_layout,
                     export_scope=export_scope,
+                    publication=publication,
                 ),
                 start=1,
             ):

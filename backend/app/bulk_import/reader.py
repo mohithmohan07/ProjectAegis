@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from . import (
     ANSWER_TYPES, APPEARS_IN_ALL, COGNITIVE_SKILLS, DIFFICULTY_LEVELS,
+    from_workbook_rich_text,
     merge_sources, normalize_answer_type, normalize_appears_in,
     normalize_cognitive_skills, normalize_difficulty, normalize_question_text,
     split_multi, strip_title_tag, strip_topic_title, to_plain_text,
@@ -39,6 +40,21 @@ from ..services import directory, identity, katex_rules
 
 class WorkbookContentError(ValueError):
     """A recognized workbook contains content unsafe to persist."""
+
+
+def _block(
+    sheet_layout: layouts.SheetLayout, row: tuple, block: str,
+) -> dict[str, str]:
+    """One band of one row, read by name, with the workbook's ``<br>``
+    projection inverted back to the internal newline (contract v2.0 §17).
+
+    Every reader of a data cell goes through this so a re-imported
+    generated workbook round-trips byte-for-byte on the model side.
+    """
+    return {
+        field: from_workbook_rich_text(value)
+        for field, value in sheet_layout.block_values(row, block).items()
+    }
 
 
 def _parse_answers(
@@ -360,9 +376,9 @@ def _row_chapter_meta(
     or changes a row's authored values.
     """
 
-    chapter = sheet_layout.block_values(row, "chapter")
-    topic = sheet_layout.block_values(row, "topic")
-    concept = sheet_layout.block_values(row, "concept")
+    chapter = _block(sheet_layout, row, "chapter")
+    topic = _block(sheet_layout, row, "topic")
+    concept = _block(sheet_layout, row, "concept")
     return directory.derive_chapter_meta(
         str(chapter.get("chapter_title") or ""),
         str(chapter.get("chapter_display_name") or ""),
@@ -599,13 +615,17 @@ def _blocking_content_issues(wb, identified) -> list[str]:
         ):
             if row is None or not any(row):
                 continue
-            question = sheet_layout.block_values(row, "question")
+            question = _block(sheet_layout, row, "question")
             # A concept-catalogue tail row deliberately stops before the
             # Question band. It is not a malformed zero-mark question, so
             # question-only medium, rubric, and numeric checks do not apply.
+            # Contract v2.0 §14.1 stamps ``is_update_question = No`` on
+            # every row, tails included; the marker is never a presence
+            # probe (the renderer's read-back excludes it the same way).
             if not any(
                 value is not None and str(value).strip()
-                for value in question.values()
+                for field, value in question.items()
+                if field not in workbook_contract._UPDATE_FIELD_PRESENCE
             ):
                 continue
             label = str(question.get("question_label") or "").strip()
@@ -772,9 +792,18 @@ def _blocking_content_issues(wb, identified) -> list[str]:
                         marking_row[field] = normalize_answer_type(
                             str(marking_row.get(field) or "")
                         )
-            for issue in marking_validator(
-                marking_row, label=row_label, marks=marks,
-            ):
+            # The importer reads NORMALIZED answer types (legacy ``Words``
+            # and ``Phrases`` alike), so the lane-literal gate of the
+            # generated read-back (contract §22–§24) does not apply here.
+            marking_kwargs = {
+                "label": row_label, "marks": marks, "lane_literal": False,
+            }
+            if kind == "descriptive":
+                # The importer is not an authoring gate: pre-v2.0 rows may
+                # carry larger criterion awards, and the run's subject (and
+                # so the English tag rule) is not known here.
+                marking_kwargs["rubric_quantum"] = False
+            for issue in marking_validator(marking_row, **marking_kwargs):
                 flag(issue)
             keyboard = str(question.get("math_keyboard") or "")
             if kind == "objective" and keyboard:
@@ -1053,10 +1082,10 @@ def import_workbook(
         for row_i, row in enumerate(ws.iter_rows(min_row=3, values_only=True), start=3):
             if row is None or not any(row):
                 continue
-            chap = sheet_layout.block_values(row, "chapter")
-            top = sheet_layout.block_values(row, "topic")
-            con = sheet_layout.block_values(row, "concept")
-            grp = sheet_layout.block_values(row, "group")
+            chap = _block(sheet_layout, row, "chapter")
+            top = _block(sheet_layout, row, "topic")
+            con = _block(sheet_layout, row, "concept")
+            grp = _block(sheet_layout, row, "group")
 
             if not chap.get("chapter_title"):
                 _flag(f"{sheet_name!r} row {row_i}: skipped — missing chapter_title")
@@ -1237,7 +1266,7 @@ def import_workbook(
             # used to decouple by construction: the names were taken from the
             # canonical FIELDS_BY_KIND while the values were sliced from the
             # detected geometry.
-            qd = sheet_layout.block_values(row, "question")
+            qd = _block(sheet_layout, row, "question")
             label = qd.get("question_label", "")
             has_question = bool(label or qd.get("question"))
 

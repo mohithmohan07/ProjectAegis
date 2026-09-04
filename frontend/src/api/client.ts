@@ -484,11 +484,23 @@ export const api = {
     ),
 
   // Build Concepts
-  postLearningUpload: (file: File, sourceBook = "") => {
+  postLearningUpload: (
+    file: File,
+    sourceBook = "",
+    chapterDurationMinutes = 0,
+  ) => {
     const fd = new FormData();
     fd.append("file", file);
+    const qs = new URLSearchParams({
+      source_book: sourceBook,
+      chapter_duration_minutes: String(
+        Number.isFinite(chapterDurationMinutes) && chapterDurationMinutes > 0
+          ? Math.round(chapterDurationMinutes)
+          : 0,
+      ),
+    });
     return http<UploadJob>(
-      `/build-concepts/post-learning/uploads?source_book=${encodeURIComponent(sourceBook)}`,
+      `/build-concepts/post-learning/uploads?${qs}`,
       { method: "POST", body: fd },
     );
   },

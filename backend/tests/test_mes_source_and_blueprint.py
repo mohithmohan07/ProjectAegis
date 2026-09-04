@@ -335,12 +335,16 @@ def test_blueprint_validation_rejects_nonfinite_marks(invalid_marks: float):
 
 
 def test_strict_profile_widens_subjective_only_for_resolved_ms_grade_6_run():
+    """Contract v2.0 §12/§21 (Q26): the Subjective lane is universal.
+
+    The default profile enables all three sheets; only a profile that
+    explicitly narrows ``sheet_kinds`` refuses a Subjective cell.
+    """
     default_cells = bp.compile_cells_from_batches(
         [_Batch(question_type="subjective")], concepts=[_Concept(1)],
         default_marks={"subjective": 3.0}, strict_profile=True,
     )
-    with pytest.raises(bp.BlueprintError, match="sheet_kind"):
-        bp.validate_cells(default_cells, strict_profile=True)
+    bp.validate_cells(default_cells, strict_profile=True)
 
     ms_grade_6 = assessment_profile.resolve_for_metadata(None, {
         "board": "MSBSHSE", "grade": "6", "subject": "Mathematics",

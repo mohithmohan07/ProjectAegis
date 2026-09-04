@@ -194,7 +194,8 @@ def test_batch_appears_in_flows_to_questions(client, db, first_concept):
     qid = client.get(f"/build-assessments/sessions/{s['id']}").json()[
         "generated_question_ids"][0]
     q = db.get(models.Question, qid)
-    assert q.question_appears_in == "Pre-test, Worksheet"
+    # Contract v2.0 §8 (Q26): multi-value cells are joined with " | ".
+    assert q.question_appears_in == "Pre-test | Worksheet"
     assert q.level_of_difficulty == "Less"
 
 

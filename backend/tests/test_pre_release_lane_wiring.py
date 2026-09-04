@@ -255,6 +255,8 @@ def _both_lanes_job(
         mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
         status="generated",
         learning_kind="post",
+        # Contract v2.0 §18: the run's publication is a frozen run variable.
+        source_book="NCERT",
         deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id],
         question_inventory=copy.deepcopy(SOURCE_INVENTORY),
@@ -291,7 +293,7 @@ def test_pre_release_inherits_post_chapter_metadata_but_keeps_pre_topics(
 ):
     """The chapter is shared; the two lane-specific topic maps are not."""
 
-    def authored_meta(_db, _chapter_id, _rows, *, pre_post):
+    def authored_meta(_db, _chapter_id, _rows, *, pre_post, **_kwargs):
         if pre_post == "Post":
             return {
                 "chapter_description": "Shared Post chapter description.",
@@ -347,7 +349,7 @@ def test_pre_release_copies_post_chapter_metadata_absence_exactly(
 ):
     """A partial Post pass cannot leave an independent Pre chapter value."""
 
-    def authored_meta(_db, _chapter_id, _rows, *, pre_post):
+    def authored_meta(_db, _chapter_id, _rows, *, pre_post, **_kwargs):
         if pre_post == "Post":
             return {
                 **post_meta,
@@ -1341,6 +1343,7 @@ def test_semantic_doubt_flags_and_never_blocks_the_pre_release(db):
         filename="ch.mmd", mmd_text="# Chapter", status="generated",
         learning_kind="post", deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id], question_inventory={"items": []},
+        source_book="NCERT",
     )
     db.add(job)
     db.commit()
@@ -1963,6 +1966,7 @@ def _snapshot_job(db, chapter, *, filename="ch.mmd"):
         filename=filename,
         mmd_text="# Chapter\n\nExercise 1. Which of these is a solid?",
         status="generated", learning_kind="post", deposit_scope_type="chapter",
+        source_book="NCERT",
         deposit_scope_ids=[chapter.id],
         question_inventory=copy.deepcopy(SOURCE_INVENTORY),
     )

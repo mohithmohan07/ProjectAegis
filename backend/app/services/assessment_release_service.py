@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 import re
 
+from .. import bulk_import as bi
 from .. import config, models
 from ..bulk_import import assessment_workbook
 from . import assessment_profile
@@ -163,13 +164,15 @@ def snapshot_from_chapter(
             # from every projection that reads this snapshot (T3.7). The
             # composition is the SHARED ``identity.titled``, not a second
             # copy of it.
-            "topic_concept_labels": ", ".join(
+            # Contract v2.0 §16: the roster is a pipe list (a title may
+            # contain a comma).
+            "topic_concept_labels": bi.join_multi([
                 identity.titled(
                     concept.concept_title,
                     identity.machine_id_for_concept(concept),
                 )
                 for concept in concepts
-            ),
+            ]),
             "related_topics": topic.related_topics,
             "topic_description": topic.topic_description,
             # DELIBERATELY no identity keys on this lane (spec-step8 B4
@@ -235,6 +238,9 @@ def snapshot_from_staged_release(payload: Mapping) -> dict:
         "concept_provenance": copy.deepcopy(
             list(source.get("concept_provenance") or [])
         ),
+        # Contract v2.0 §18: the run's publication rides the Master
+        # snapshot so the renderer can fill and the read-back require it.
+        "source_book": str(source.get("source_book") or ""),
         "chapter": copy.deepcopy(dict(chapter)),
         "topics": copy.deepcopy(topics),
         "groups": [dict(group) for group in payload.get("groups") or []],

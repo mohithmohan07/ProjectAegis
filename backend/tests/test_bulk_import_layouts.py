@@ -325,13 +325,21 @@ def test_the_canonical_registry_entries_did_not_move_with_FIELDS_BY_KIND():
     assert set(layouts.LAYOUTS) == {
         layouts.REFERENCE_LAYOUT_ID, "canonical-current",
         "canonical-no-question-text", "canonical-legacy-concept-band",
-        layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
-        layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+        layouts.UPDATE_AWARE_MASTER_380_LAYOUT_ID,
+        layouts.UPDATE_AWARE_MASTER_LAYOUT_ID,
     }
+    # Register Q27: the board-named aliases all resolve to the one
+    # universal output layout; the 380-column entry is read-side only.
+    assert layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID == (
+        layouts.UPDATE_AWARE_MASTER_LAYOUT_ID
+    )
+    assert layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID == (
+        layouts.UPDATE_AWARE_MASTER_LAYOUT_ID
+    )
     assert layouts.CURRENT_TARGET_LAYOUT_IDS == {
         layouts.REFERENCE_LAYOUT_ID,
-        layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
-        layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+        layouts.UPDATE_AWARE_MASTER_380_LAYOUT_ID,
+        layouts.UPDATE_AWARE_MASTER_LAYOUT_ID,
     }
 
 

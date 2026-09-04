@@ -326,7 +326,7 @@ def generate_questions_for_concept(
             "question_label": question_label(concept, idx),
             "question_category": category,
             "cognitive_skills": cognitive_skill,
-            "question_source": bi.QUESTION_SOURCE_DEFAULT,
+            "question_source": _concept_publication(concept),
             "level_of_difficulty": difficulty,
             "marks": marks,
             "question_duration": question_duration,
@@ -444,7 +444,7 @@ def _live_questions_for_concept(
                 "question_label": question_label(concept, start_index + n),
                 "question_category": category,
                 "cognitive_skills": cognitive_skill,
-                "question_source": bi.QUESTION_SOURCE_DEFAULT,
+                "question_source": _concept_publication(concept),
                 "level_of_difficulty": difficulty,
                 # The blueprint-cell kernel owns these three semantic values.
                 # Model output cannot silently replace or default them.
@@ -697,6 +697,19 @@ STANDARD VALUES (use EXACTLY these):
 Return ONLY the JSON object.""")
 
 
+def _concept_publication(concept: models.Concept) -> str:
+    """The publication a legacy-lane question cites (contract v2.0 §18).
+
+    ``question_source`` names the run's publication and nothing else. The
+    legacy lane stamps the job's publication when it has one; when it does
+    not, the concept's own recorded source is used ONLY when it is exactly
+    one publication — a first-of-many source is a borrowed value (§37), so
+    the cell stays blank and the read-back refuses it rather than guess.
+    """
+    sources = bi.split_multi(str(getattr(concept, "sources", "") or ""))
+    return sources[0] if len(sources) == 1 else ""
+
+
 def _identify_system(upload_type: str, question_type: str, *, extract: bool) -> str:
     """System prompt for live question identification from an uploaded document."""
     intent = prompts.get_text(
@@ -762,7 +775,9 @@ def _identify_row_to_record(row: dict, *, auto: bool, question_type: str) -> dic
         "sheet_kind": kind,
         "question_category": category,
         "cognitive_skills": skill,
-        "question_source": bi.QUESTION_SOURCE_DEFAULT,
+        # Contract v2.0 §18: the publication is a run variable, filled from
+        # the concept's recorded source at persistence, never a constant.
+        "question_source": str(row.get("question_source") or "").strip(),
         "level_of_difficulty": difficulty,
         "marks": marks,
         "question_duration": duration,
@@ -1085,7 +1100,7 @@ QUALITY RULES (universal — apply to ANY chapter/subject; never invent
 chapter-specific exceptions):
 - Cover the section exhaustively at concept level, but stay within syllabus scope
   (max ~90 words per section of the description).
-- keywords: 3-6 comma-separated lowercase terms.
+- keywords: 3-6 lowercase terms separated by " | " (space, pipe, space).
 - Infer structure from THIS upload's headings, reading order, and task blocks.
   Review feedback (Activity/Info Hub, omit Overview/Summary, Cases are
   conceptual, Culmination is synthesis-only) is structural and chapter-agnostic.
@@ -2521,11 +2536,9 @@ Rules:
   covers, the storyline across its topics, the key skills built, and what
   learners can do at the end. It must be specific to THIS chapter's content;
   never generic filler like "This chapter develops N concepts across M topics".
-- chapter_duration_minutes: a realistic INTEGER estimate of total classroom
-  minutes needed to teach the full chapter (typical school periods are
-  35-45 minutes; a standard chapter runs roughly 4-14 periods). When a
-  FINALIZED chapter duration is provided in the metadata block, return that
-  exact integer — do not override it.
+- chapter_duration_minutes: return the FINALIZED chapter duration exactly as
+  given in the metadata block; when none is given return 0. The duration is a
+  registry/upload value, never an estimate — do not invent one.
 - topics: one entry per provided topic, using the EXACT same topic strings.
 - topic_description: 2-3 sentences specific to that topic — what it teaches,
   the key ideas/skills among its concepts, and how it connects to the
@@ -19452,15 +19465,14 @@ def chapter_meta_via_api(
     description = (data.get("chapter_description") or "").strip()
     if description:
         out["chapter_description"] = description
-    try:
-        minutes = int(float(data.get("chapter_duration_minutes") or 0))
-    except (TypeError, ValueError):
-        minutes = 0
+    # Contract v2.0 §32.1: the chapter duration is the accepted registry
+    # value handed in as ``finalized_duration_minutes`` (or an explicit
+    # upload/source value upstream) — never a model estimate. A number the
+    # model volunteers is ignored; a chapter with no registry row stays
+    # blank and is flagged at release rather than guessed.
     finalized = int(meta.get("finalized_duration_minutes") or 0)
     if finalized > 0:
         out["chapter_duration_minutes"] = finalized
-    elif minutes > 0:
-        out["chapter_duration_minutes"] = minutes
     topic_descriptions: dict[str, str] = {}
     for row in data.get("topics", []) or []:
         if not isinstance(row, dict):

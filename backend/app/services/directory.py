@@ -180,8 +180,14 @@ def book_tag(source: str) -> str:
 
 
 def primary_book_source(sources: str) -> str:
-    """First book source from a comma/semicolon-separated concept source list."""
-    for part in (sources or "").replace(";", ",").split(","):
+    """First book source from a concept source list.
+
+    Contract v2.0 §16: lists are ``" | "``-separated; legacy comma/semicolon
+    cells are still read so an existing row keeps its first publication.
+    """
+    from .. import bulk_import as bi
+
+    for part in bi.split_multi(sources or ""):
         p = part.strip()
         if p:
             return p

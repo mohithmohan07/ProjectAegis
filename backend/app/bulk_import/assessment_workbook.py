@@ -42,6 +42,7 @@ from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.styles import Alignment, Font
 
 from . import ANSWER_TYPES
+from .. import bulk_import as bi
 from ..services import assessment_profile
 from ..services import assessment_release as rel
 from ..services import identity
@@ -95,6 +96,24 @@ _UPDATE_FIELD_AFTER = {
     "is_update_topic": "topic_title",
     "is_update_concept": "concept_title",
     "is_update_question": "question_label",
+}
+# Contract v2.0 §14.1: the exact case-sensitive text every authored data row
+# carries in all five ``is_update_*`` fields.
+UPDATE_FIELD_VALUE = "No"
+
+# Contract v2.0 §12/§14 (widths as amended by register Q27): every one of
+# the four outputs is a projection of one snapshot onto the update-aware
+# schema (72 / 440 / 149 columns, the owner's CMS template geometry). The
+# Concept files render hierarchy rows on the Objective carrier sheet with
+# the other two sheets header-only; they share the Master's geometry so the
+# identity, source and update columns are byte-consistent across all four.
+CONCEPT_WORKBOOK_CONTRACT: dict[str, Any] = {
+    "contract_id": "concept-update-aware-2",
+    "include_update_fields": True,
+    "include_descriptive_concept_source": True,
+    "descriptive_answer_slots": layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS,
+    "natural_label_aggregates": False,
+    "aggregate_rendered_questions_only": False,
 }
 
 # One owner for both render and read-back of the update-marker contract.  The
@@ -231,15 +250,15 @@ def output_schema(
 
     normalized_role = str(role or "").strip().casefold()
     if normalized_role == "concept":
+        concept_fields = _master_fields(CONCEPT_WORKBOOK_CONTRACT)
         return {
             "role": "concept",
-            "contract_id": "concept-reference-1",
-            "fields": {name: list(fields) for name, fields in FIELDS.items()},
-            "bands": {
-                name: [dict(band) for band in bands]
-                for name, bands in BANDS.items()
-            },
-            "descriptive_answer_slots": MAX_DESCRIPTIVE_ANSWERS,
+            "contract_id": str(CONCEPT_WORKBOOK_CONTRACT["contract_id"]),
+            "fields": concept_fields,
+            "bands": _master_bands(concept_fields, CONCEPT_WORKBOOK_CONTRACT),
+            "descriptive_answer_slots": int(
+                CONCEPT_WORKBOOK_CONTRACT["descriptive_answer_slots"]
+            ),
         }
     if normalized_role != "master":
         raise ValueError(f"unknown workbook output role {role!r}")
@@ -423,7 +442,14 @@ def _cell_value(
         return ""
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
-    text = str(value)
+    raw = str(value)
+    # Contract v2.0 §17: the workbook projection of a line break is the
+    # canonical HTML ``<br>`` (``<br><br>`` for a paragraph). The internal
+    # model keeps real newlines; this seam — the one cell writer both
+    # renderers share — is the deterministic HTML projection, and the
+    # reader inverts it on import. It is applied FIRST so the Excel cap
+    # below is measured on the text the cell will actually hold.
+    text = bi.to_workbook_rich_text(raw)
     defects = cell_text_defects(text)
     if defects and oversized is not None:
         for defect in defects:
@@ -435,7 +461,7 @@ def _cell_value(
                 "code_points": defect.get("code_points", []),
                 # The whole value, unabridged. This is the record that
                 # makes truncation a repair rather than a loss.
-                "full_value": text,
+                "full_value": raw,
             })
     if any(
         defect["reason"] == CELL_TEXT_ILLEGAL_CHARACTER for defect in defects
@@ -453,9 +479,10 @@ def _cell_value(
         # said it held 32 585 characters while holding 32 589 — a false
         # sentence inside a repair whose justification is that the record
         # stays true.
-        kept = budget - len(
-            _TRUNCATION_MARK.format(kept=budget, actual=actual))
-        mark = _TRUNCATION_MARK.format(kept=kept, actual=actual)
+        kept = budget - len(bi.to_workbook_rich_text(
+            _TRUNCATION_MARK.format(kept=budget, actual=actual)))
+        mark = bi.to_workbook_rich_text(
+            _TRUNCATION_MARK.format(kept=kept, actual=actual))
         kept = min(kept, budget - len(mark))
         text = text[:kept] + mark
     return text
@@ -478,14 +505,13 @@ def _row_values(
     blank = frozenset(forced_blank)
     fields = (schema or output_schema("concept"))["fields"][sheet]
     materialized = dict(record)
-    for update_field, identity_fields in _UPDATE_FIELD_PRESENCE.items():
-        if update_field not in fields:
-            continue
-        populated = any(
-            value is not None and str(value).strip()
-            for value in (materialized.get(name) for name in identity_fields)
-        )
-        materialized[update_field] = "No" if populated else ""
+    # Contract v2.0 §14.1 (exact update rule): every one of the five
+    # ``is_update_*`` fields carries the exact text ``No`` on every authored
+    # data row, even when the corresponding later entity band is blank. The
+    # earlier "No only on populated bands" (register D3) is superseded.
+    for update_field in _UPDATE_FIELD_PRESENCE:
+        if update_field in fields:
+            materialized[update_field] = UPDATE_FIELD_VALUE
     row = []
     for field in fields:
         value = "" if field in blank else materialized.get(field, "")
@@ -535,10 +561,10 @@ def _append_record(
             and column <= len(active_fields)
             and _ONE_DECIMAL_FIELD_RE.match(active_fields[column - 1])
         ):
-            # A11 (owner audit): marks, durations, and weightages display
-            # with one decimal ("1.0"), matching the corrected files. The
-            # stored value stays numeric — this is presentation only.
-            ws.cell(row=row_number, column=column).number_format = "0.0"
+            # Contract v2.0 §42.10 (supersedes the A11 "1.0" display):
+            # marks, durations and weightages are stored numeric and
+            # display as 0.## — 0.5, 1, 1.5, 2 — presentation only.
+            ws.cell(row=row_number, column=column).number_format = "0.##"
 
 
 def _write_headers(
@@ -696,7 +722,31 @@ def _bands_record(entry: Mapping) -> dict:
     # Outputs 02/04 shipped the bare title while the roster carried the
     # tagged one, and a re-import re-minted every identity.
     record["concept_title"] = _titled_concept(entry["concept"])
+    # Contract v2.0 §16: every multi-value cell uses the exact " | "
+    # delimiter. Values authored before v2.0 carry comma lists and are
+    # re-delimited here; a pipe-bearing value is never re-split on commas.
+    for field in _MULTI_VALUE_FIELDS:
+        if field in record and isinstance(record[field], str):
+            record[field] = bi.join_multi(
+                bi.split_multi(record[field], legacy_commas=False)
+            )
+    # Contract v2.0 §32: the chapter duration is a real numeric cell, never
+    # unit-bearing text; a value the registry/upload never supplied stays
+    # blank (and is a release blocker), never a guess.
+    if "chapter_duration" in record:
+        record["chapter_duration"] = bi.duration_minutes_cell(
+            record.get("chapter_duration")
+        )
     return record
+
+
+# The pipe-delimited multi-value cells of Appendix B.1 that carry model- or
+# snapshot-authored lists (the label aggregates and group roll-ups are
+# composed by the renderer itself and never pass through here).
+_MULTI_VALUE_FIELDS = (
+    "pre_topics", "post_topics", "topic_concept_labels", "related_topics",
+    "keywords", "digicards", "related_concepts",
+)
 
 
 def snapshot_sha256(snapshot: Mapping) -> str:
@@ -825,7 +875,10 @@ def _question_record(
         # staging as ``render_shape_overflow`` and refuses the DB write.
         capped_answers = _cap("answers", answers, MAX_OBJECTIVE_OPTIONS)
         for n, answer in enumerate(capped_answers, start=1):
-            record[f"answer_type_{n}"] = answer.get("answer_type", "")
+            # Contract §22.2: textual options carry the ``Words`` literal.
+            record[f"answer_type_{n}"] = bi.wire_answer_type(
+                answer.get("answer_type", ""), "objective",
+            )
             # The declared medium controls the whole CMS cell.  Equation is
             # raw LaTeX with no [Katex] wrapper; Phrases stays plain text.
             record[f"answer_content_{n}"] = katex_rules.raw_answer_cell(
@@ -844,11 +897,12 @@ def _question_record(
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
         # ``question_text`` is the CMS's one-cell rendering of the whole
-        # item: for an objective question that is the stem PLUS the
-        # ordered options (the owner's ruling; the reference workbooks
-        # carry the options in the text). The stem-equality gates
-        # upstream stay untouched — this is a render-time composition of
-        # already-decided content, options lettered in answer order.
+        # item (contract v2.0 §20/§22): the stem PLUS the ordered options,
+        # each on its own line and labelled lowercase ``a)``, ``b)``, …
+        # The stem-equality gates upstream stay untouched — this is a
+        # render-time composition of already-decided content, options
+        # lettered in answer order; the shared cell writer projects the
+        # line breaks to ``<br>``.
         option_lines = [
             f"{chr(ord('a') + index)}) "
             + katex_rules.rich_answer_display(
@@ -870,28 +924,37 @@ def _question_record(
         ):
             answer_type = answer.get("answer_type", "")
             content = answer.get("answer_content", "")
-            record[f"answer_type_{n}"] = answer_type
+            # Contract §23: textual answers carry the ``Words`` literal.
+            record[f"answer_type_{n}"] = bi.wire_answer_type(
+                answer_type, "subjective",
+            )
             record[f"answer_{n}"] = katex_rules.raw_answer_cell(
                 answer_type, content,
             )
-            record[f"answer_display_{n}"] = (
-                answer.get("answer_display")
-                or katex_rules.rich_answer_display(answer_type, content)
-            )
+            # Contract §23: every used slot carries the literal ``Yes`` in
+            # ``answer_display_N`` (the CMS flag that the slot is shown);
+            # the learner-visible blank is projected into question_text.
+            record[f"answer_display_{n}"] = "Yes"
             record[f"weightage_{n}"] = answer.get(
                 "answer_weightage", ""
             )
             record[f"placeholder_{n}"] = answer.get("placeholder", "")
+        # Contract §23: ``question`` keeps the machine placeholders
+        # ``$$a$$``…; ``question_text`` shows the learner-visible blank at
+        # the same position, one-to-one. Mechanics over recorded tokens.
+        record["question_text"] = subjective_question_text(
+            str(record.get("question_text") or ""), answers,
+        )
     else:  # Descriptive
         record["math_keyboard"] = candidate.get("math_keyboard", "")
         record["display_answer"] = candidate.get("display_answer", "")
-        # The newer source-audit contract keeps part text only in the
-        # dedicated sub_question_N columns. Re-appending it to question_text
-        # duplicates both the visible task and, downstream, its scoring.
         for n, answer in enumerate(
             _cap("answers", answers, descriptive_answer_slots), start=1
         ):
-            record[f"answer_type_{n}"] = answer.get("answer_type", "")
+            # Contract §24: textual criteria carry the ``Phrases`` literal.
+            record[f"answer_type_{n}"] = bi.wire_answer_type(
+                answer.get("answer_type", ""), "descriptive",
+            )
             record[f"answer_weightage_{n}"] = answer.get(
                 "answer_weightage", "")
             record[f"answer_content_{n}"] = katex_rules.raw_answer_cell(
@@ -900,6 +963,15 @@ def _question_record(
             )
         sub_questions = _mapping_array(
             "sub_questions", candidate.get("sub_questions"),
+        )
+        # Contract §19.1/§20: for a true multipart item the parent
+        # ``question`` carries only the shared context, while the complete
+        # ``question_text`` carries that context followed by EVERY labelled
+        # child in order; each child is ALSO projected once into its
+        # ``sub_question_N`` column with identical wording. Scoring stays
+        # exclusively in the child columns (non-additive views).
+        record["question_text"] = descriptive_question_text(
+            str(record.get("question_text") or ""), sub_questions,
         )
         for n, sub in enumerate(
             _cap("sub_questions", sub_questions, MAX_SUBQUESTIONS), start=1
@@ -913,8 +985,9 @@ def _question_record(
                 ),
                 MAX_SUBQUESTION_KEYWORDS)
             for m, keyword in enumerate(keywords, start=1):
-                record[f"sq{n}_answer_type_{m}"] = keyword.get(
-                    "answer_type", "")
+                record[f"sq{n}_answer_type_{m}"] = bi.wire_answer_type(
+                    keyword.get("answer_type", ""), "descriptive",
+                )
                 record[f"sq{n}_weightage_{m}"] = keyword.get("weightage", "")
                 # SOP §4.3: keyword cells are raw for Equation/Image too.
                 record[f"sq{n}_keyword_{m}"] = katex_rules.raw_answer_cell(
@@ -942,6 +1015,35 @@ def _question_record(
     return record
 
 
+_SUBJECTIVE_BLANK = "____"
+
+
+def subjective_question_text(question: str, answers: list[Mapping]) -> str:
+    """Project each recorded ``$$x$$`` placeholder to a visible blank.
+
+    Only the placeholders the ordered answer blocks declare are replaced,
+    so a stray dollar pair in prose is left exactly as authored.
+    """
+    text = str(question or "")
+    for answer in answers:
+        placeholder = str(answer.get("placeholder") or "").strip()
+        if len(placeholder) == 1 and "a" <= placeholder <= "t":
+            text = text.replace(f"$${placeholder}$$", _SUBJECTIVE_BLANK)
+    return text
+
+
+def descriptive_question_text(
+    question: str, sub_questions: list[Mapping],
+) -> str:
+    """Shared context followed by every labelled child, one per line."""
+    parts = [str(question or "").rstrip()]
+    for sub in sub_questions:
+        child = str(sub.get("text") or "").strip()
+        if child:
+            parts.append(child)
+    return "\n".join(part for part in parts if part).strip()
+
+
 def _group_record_fields(
     group: Mapping, group_labels: list[str],
     profile: Mapping | str | None = None,
@@ -953,7 +1055,7 @@ def _group_record_fields(
         "group_status": group.get(
             "group_status", assessment_profile.group_status(profile)),
         "group_type": group.get("group_type", ""),
-        "group_question_labels": ", ".join(group_labels),
+        "group_question_labels": bi.join_multi(group_labels),
         "related_digicards": "",
     }
 
@@ -1133,14 +1235,14 @@ def render_master_file(
     def _apply_rollups(record: dict, concept_key: str) -> None:
         values = rollups_by_concept.get(concept_key, {})
         for field in rollup_field.values():
-            record[field] = ", ".join(values.get(field, []))
+            record[field] = bi.join_multi(values.get(field, []))
 
     def _full_record(candidate: Mapping, sheet: str) -> dict:
         concept_key = str(candidate.get("concept_key") or "")
         group_key = str(candidate.get("group_key") or "")
         entry = concept_entries[concept_key]
         record = _bands_record(entry)
-        record["concept_question_labels"] = ", ".join(
+        record["concept_question_labels"] = bi.join_multi(
             concept_labels.get(concept_key, []))
         _apply_rollups(record, concept_key)
         record.update(_group_record_fields(
@@ -1152,6 +1254,12 @@ def render_master_file(
                 descriptive_answer_slots=descriptive_answer_slots,
             )
         )
+        if not str(record.get("question_source") or "").strip():
+            # Contract v2.0 §18: the publication is a per-run scalar; a
+            # candidate that predates the stamping seam takes the
+            # snapshot's frozen source book. Still blank → read-back
+            # blocker, never a borrowed default.
+            record["question_source"] = str(snapshot.get("source_book") or "")
         return record
 
     question_rows = 0
@@ -1350,7 +1458,14 @@ def _populated(value: Any) -> bool:
 
 def _objective_marking_errors(
     row: Mapping[str, Any], *, label: str, marks: Decimal | None,
+    lane_literal: bool = True,
 ) -> list[str]:
+    """Objective read-back marking gate.
+
+    ``lane_literal`` enforces contract v2.0 §22 (a textual option cell
+    carries exactly ``Words``); the generated outputs are always read back
+    with it on, the legacy importer reads normalized values with it off.
+    """
     errors: list[str] = []
     correct_count = 0
     weights: list[Decimal] = []
@@ -1367,12 +1482,26 @@ def _objective_marking_errors(
             continue
         populated_options += 1
         populated_option_numbers.append(n)
-        answer_type = str(row.get(f"answer_type_{n}") or "")
-        answer_content = str(row.get(f"answer_content_{n}") or "")
+        wire_type = str(row.get(f"answer_type_{n}") or "")
+        answer_type = bi.normalize_answer_type(wire_type)
+        # The cell carries the ``<br>`` projection (§17); the medium and
+        # label probes read the internal form, as the reader does.
+        answer_content = bi.from_workbook_rich_text(
+            str(row.get(f"answer_content_{n}") or "")
+        )
         if answer_type not in ANSWER_TYPES:
             errors.append(
                 f"{label}: option {n} has unsupported answer_type "
-                f"{answer_type!r}"
+                f"{wire_type!r}"
+            )
+        elif lane_literal and wire_type != bi.wire_answer_type(
+            answer_type, "objective",
+        ):
+            errors.append(
+                f"{label}: option {n} answer_type {wire_type!r} is not the "
+                "Objective lane literal "
+                f"{bi.wire_answer_type(answer_type, 'objective')!r} "
+                "(contract v2.0 §22)"
             )
         if not answer_content.strip():
             errors.append(f"{label}: option {n} has no answer content")
@@ -1416,8 +1545,12 @@ def _objective_marking_errors(
             f"{label}: objective option blocks must be contiguous from "
             "slot 1"
         )
+    # Contract v2.0 §17: the cell carries ``<br>`` for a line break; the
+    # line-anchored label scan reads through the same inverse projection
+    # the import reader applies, or it could never see a label at all.
     uppercase_labels = katex_rules.uppercase_objective_option_labels(
-        str(row.get("question_text") or ""), MAX_OBJECTIVE_OPTIONS,
+        bi.from_workbook_rich_text(row.get("question_text")),
+        MAX_OBJECTIVE_OPTIONS,
     )
     if uppercase_labels:
         errors.append(
@@ -1439,7 +1572,9 @@ def _objective_marking_errors(
 
 def _subjective_marking_errors(
     row: Mapping[str, Any], *, label: str, marks: Decimal | None,
+    lane_literal: bool = True,
 ) -> list[str]:
+    """Subjective read-back marking gate (``lane_literal``: contract §23)."""
     errors: list[str] = []
     weights: list[Decimal] = []
     populated = 0
@@ -1454,12 +1589,24 @@ def _subjective_marking_errors(
             continue
         populated += 1
         populated_numbers.append(n)
-        answer_type = str(row.get(f"answer_type_{n}") or "")
-        answer_content = str(row.get(f"answer_{n}") or "")
+        wire_type = str(row.get(f"answer_type_{n}") or "")
+        answer_type = bi.normalize_answer_type(wire_type)
+        answer_content = bi.from_workbook_rich_text(
+            str(row.get(f"answer_{n}") or "")
+        )
         if answer_type not in ANSWER_TYPES:
             errors.append(
                 f"{label}: subjective answer {n} has unsupported "
-                f"answer_type {answer_type!r}"
+                f"answer_type {wire_type!r}"
+            )
+        elif lane_literal and wire_type != bi.wire_answer_type(
+            answer_type, "subjective",
+        ):
+            errors.append(
+                f"{label}: subjective answer {n} answer_type {wire_type!r} "
+                "is not the Subjective lane literal "
+                f"{bi.wire_answer_type(answer_type, 'subjective')!r} "
+                "(contract v2.0 §23)"
             )
         if not answer_content.strip():
             errors.append(f"{label}: subjective answer {n} has no content")
@@ -1475,11 +1622,18 @@ def _subjective_marking_errors(
             errors.append(
                 f"{label}: subjective answer {n} has no answer_display"
             )
-        for issue in katex_rules.rich_text_issues(answer_display):
+        elif lane_literal and answer_display.strip() != "Yes":
             errors.append(
-                f"{label}: subjective answer {n} answer_display rich-text: "
-                f"{issue}"
+                f"{label}: subjective answer {n} answer_display "
+                f"{answer_display!r} is not the literal 'Yes' "
+                "(contract v2.0 §23)"
             )
+        elif not lane_literal:
+            for issue in katex_rules.rich_text_issues(answer_display):
+                errors.append(
+                    f"{label}: subjective answer {n} answer_display "
+                    f"rich-text: {issue}"
+                )
         expected_placeholder = chr(ord("a") + n - 1)
         placeholder = str(row.get(f"placeholder_{n}") or "")
         if placeholder != expected_placeholder:
@@ -1521,7 +1675,20 @@ def _subjective_marking_errors(
 def _descriptive_marking_errors(
     row: Mapping[str, Any], *, label: str, marks: Decimal | None,
     answer_slots: int = MAX_DESCRIPTIVE_ANSWERS,
+    tags_required: bool | None = None,
+    rubric_quantum: bool = True,
+    lane_literal: bool = True,
 ) -> list[str]:
+    """Descriptive read-back marking gate.
+
+    ``lane_literal`` enforces contract v2.0 §24 (a textual criterion or
+    keyword cell carries exactly ``Phrases``); off for the legacy importer.
+
+    ``rubric_quantum`` enforces contract v2.0 §27.5 (each criterion 0.5 or
+    1). The generated outputs are always read back with it on; the legacy
+    workbook importer passes ``False`` because pre-v2.0 rows may carry
+    larger criterion awards and the importer is not an authoring gate.
+    """
     errors: list[str] = []
     answer_weights: list[Decimal] = []
     populated_answers = 0
@@ -1537,22 +1704,36 @@ def _descriptive_marking_errors(
             continue
         populated_answers += 1
         populated_answer_numbers.append(n)
-        answer_type = str(row.get(f"answer_type_{n}") or "")
-        answer_content = str(row.get(f"answer_content_{n}") or "")
+        wire_type = str(row.get(f"answer_type_{n}") or "")
+        answer_type = bi.normalize_answer_type(wire_type)
+        answer_content = bi.from_workbook_rich_text(
+            str(row.get(f"answer_content_{n}") or "")
+        )
         if answer_type not in ANSWER_TYPES:
             errors.append(
                 f"{label}: answer/rubric block {n} has unsupported "
-                f"answer_type {answer_type!r}"
+                f"answer_type {wire_type!r}"
+            )
+        elif lane_literal and wire_type != bi.wire_answer_type(
+            answer_type, "descriptive",
+        ):
+            errors.append(
+                f"{label}: answer/rubric block {n} answer_type "
+                f"{wire_type!r} is not the Descriptive lane literal "
+                f"{bi.wire_answer_type(answer_type, 'descriptive')!r} "
+                "(contract v2.0 §24)"
             )
         if not answer_content.strip():
             errors.append(
                 f"{label}: answer/rubric block {n} has no content"
             )
-        malformed_tag = rel.malformed_rubric_tag(answer_content, answer_type)
+        malformed_tag = rel.malformed_rubric_tag(
+            answer_content, answer_type, tags_required=tags_required,
+        )
         if malformed_tag:
             errors.append(
-                f"{label}: answer/rubric block {n} does not start with an "
-                "allowed functional tag or is without its required colon"
+                f"{label}: answer/rubric block {n} breaks English rubric-tag "
+                "containment (contract v2.0 §28)"
             )
         medium_issues = katex_rules.answer_cell_issues(
             answer_type, answer_content,
@@ -1569,6 +1750,11 @@ def _descriptive_marking_errors(
             )
             continue
         answer_weights.append(weight)
+        quantum = rel.rubric_weight_quantum_defect(
+            weight, what=f"{label}: answer/rubric block {n}",
+        ) if rubric_quantum else ""
+        if quantum:
+            errors.append(quantum)
         if (
             answer_type in ANSWER_TYPES
             and answer_content.strip()
@@ -1599,13 +1785,16 @@ def _descriptive_marking_errors(
         subquestion_text = str(row.get(f"sub_question_{n}") or "").strip()
         if not subquestion_text:
             errors.append(f"{label}: subquestion {n} has no text")
-        elif any(
-            subquestion_text in str(row.get(field) or "")
-            for field in ("question", "question_text")
-        ):
+        elif subquestion_text in str(row.get("question") or ""):
+            # Contract v2.0 §19.1/§20: the parent ``question`` excludes the
+            # child wording (it lives in ``sub_question_N``), while the
+            # complete ``question_text`` MUST carry every labelled child —
+            # the renderer composes it that way, so only ``question`` is
+            # the duplication probe (the same field the staging twin in
+            # ``assessment_release.validate_candidate`` reads).
             errors.append(
                 f"{label}: subquestion {n} text is duplicated in the main "
-                "question/question_text"
+                "question"
             )
         sub_mark = _readback_decimal(row.get(f"sub_question_marks_{n}"))
         if sub_mark is None or sub_mark <= 0:
@@ -1628,12 +1817,25 @@ def _descriptive_marking_errors(
                 continue
             populated_keywords += 1
             populated_keyword_numbers.append(m)
-            keyword_type = str(row.get(f"sq{n}_answer_type_{m}") or "")
-            keyword_content = str(row.get(f"sq{n}_keyword_{m}") or "")
+            wire_keyword_type = str(row.get(f"sq{n}_answer_type_{m}") or "")
+            keyword_type = bi.normalize_answer_type(wire_keyword_type)
+            keyword_content = bi.from_workbook_rich_text(
+                str(row.get(f"sq{n}_keyword_{m}") or "")
+            )
             if keyword_type not in ANSWER_TYPES:
                 errors.append(
                     f"{label}: subquestion {n} keyword {m} has unsupported "
-                    f"answer_type {keyword_type!r}"
+                    f"answer_type {wire_keyword_type!r}"
+                )
+            elif lane_literal and wire_keyword_type != bi.wire_answer_type(
+                keyword_type, "descriptive",
+            ):
+                errors.append(
+                    f"{label}: subquestion {n} keyword {m} answer_type "
+                    f"{wire_keyword_type!r} is not the Descriptive lane "
+                    f"literal "
+                    f"{bi.wire_answer_type(keyword_type, 'descriptive')!r} "
+                    "(contract v2.0 §24)"
                 )
             if not keyword_content.strip():
                 errors.append(
@@ -1647,12 +1849,11 @@ def _descriptive_marking_errors(
                     f"declared medium: {issue}"
                 )
             if rel.malformed_rubric_tag(
-                keyword_content, keyword_type,
+                keyword_content, keyword_type, tags_required=tags_required,
             ):
                 errors.append(
-                    f"{label}: subquestion {n} keyword {m} does not start "
-                    "with an allowed functional tag or is without its "
-                    "required colon"
+                    f"{label}: subquestion {n} keyword {m} breaks English "
+                    "rubric-tag containment (contract v2.0 §28)"
                 )
             weight = _readback_decimal(row.get(f"sq{n}_weightage_{m}"))
             if weight is None or weight <= 0:
@@ -1662,6 +1863,11 @@ def _descriptive_marking_errors(
                 )
                 continue
             keyword_weights.append(weight)
+            quantum = rel.rubric_weight_quantum_defect(
+                weight, what=f"{label}: subquestion {n} keyword {m}",
+            ) if rubric_quantum else ""
+            if quantum:
+                errors.append(quantum)
         if (
             populated_keywords
             and sub_mark is not None
@@ -1793,6 +1999,9 @@ def validate_master_file(
     forced_blank = assessment_profile.forced_blank_fields(profile)
     schema = output_schema("master", profile, snapshot)
     descriptive_answer_slots = int(schema["descriptive_answer_slots"])
+    # Contract v2.0 §28: the run's subject decides whether textual rubric
+    # criteria carry English tags (required) or none (forbidden).
+    tags_required = assessment_profile.rubric_tags_required(profile)
     errors = _header_errors(parsed, schema)
     if errors:
         return errors
@@ -1988,23 +2197,20 @@ def validate_master_file(
             row_concept_title = str(row.get("concept_title") or "")
             seen_concepts.add(row_concept_title)
             sheet_fields = schema["fields"][name]
-            for update_field, identity_fields in _UPDATE_FIELD_PRESENCE.items():
+            # Contract v2.0 §14.1 / gate 2 (UPD-001): exact ``No`` in all
+            # five update fields on every authored data row.
+            for update_field in _UPDATE_FIELD_PRESENCE:
                 if update_field not in sheet_fields:
                     continue
-                entity_populated = any(
-                    _populated(row.get(field)) for field in identity_fields
-                )
-                expected_update = "No" if entity_populated else ""
                 raw_update = row.get(update_field)
                 actual_update = (
                     "" if raw_update is None else str(raw_update)
                 )
-                if actual_update != expected_update:
+                if actual_update != UPDATE_FIELD_VALUE:
                     errors.append(
                         f"{name} row {i}: {update_field} "
-                        f"{actual_update!r} != {expected_update!r} for "
-                        f"the {'populated' if entity_populated else 'blank'} "
-                        "entity band"
+                        f"{actual_update!r} != {UPDATE_FIELD_VALUE!r} "
+                        "(every authored data row carries exact 'No')"
                     )
 
             if "concept_source" in sheet_fields:
@@ -2041,8 +2247,16 @@ def validate_master_file(
                         f"{actual_source!r} != snapshot value "
                         f"{expected_source!r}"
                     )
-            question_fields = sheet_fields[
-                sheet_fields.index("question_label"):
+            # Contract v2.0 §14.1: the ``is_update_*`` markers carry ``No``
+            # on EVERY row, a concept-only tail included, so the marker
+            # itself is never evidence of a populated Question band (the
+            # same exclusion ``_UPDATE_FIELD_PRESENCE`` documents).
+            question_fields = [
+                field
+                for field in sheet_fields[
+                    sheet_fields.index("question_label"):
+                ]
+                if field not in _UPDATE_FIELD_PRESENCE
             ]
             has_question_band = any(
                 row.get(field) is not None
@@ -2120,7 +2334,7 @@ def validate_master_file(
                         errors.append(
                             f"{name} row {i}: concept home does not match "
                             f"{group_key!r}")
-                    expected_concept_aggregate = ", ".join(
+                    expected_concept_aggregate = bi.join_multi(
                         expected_concept_labels.get(group_concept_key, [])
                     )
                     if str(row.get("concept_question_labels") or "") != (
@@ -2134,7 +2348,7 @@ def validate_master_file(
                         group_concept_key, {}
                     )
                     for field in rollup_field.values():
-                        expected_value = ", ".join(
+                        expected_value = bi.join_multi(
                             expected_concept_rollups.get(field, [])
                         )
                         actual_value = str(row.get(field) or "")
@@ -2182,6 +2396,20 @@ def validate_master_file(
                 errors.append(
                     f"{label}: question_appears_in {appears!r} is not the "
                     f"profile wire value {wire!r}")
+            # Contract v2.0 §18: ``question_source`` is a mandatory per-run
+            # scalar naming the publication; a blank cell is a blocker,
+            # never a borrowed default.
+            if not str(row.get("question_source") or "").strip():
+                errors.append(
+                    f"{label}: question_source must name the run's "
+                    "publication (contract v2.0 §18)")
+            # Contract v2.0 §16 (DEL-001): a literal pipe inside one list
+            # token blocks; the read-back records it rather than guess.
+            for field in _MULTI_VALUE_FIELDS:
+                for defect in bi.list_token_defects(
+                    str(row.get(field) or "")
+                ):
+                    errors.append(f"{label}: {field} {defect}")
             restriction = str(row.get("answer_restriction") or "")
             if restriction not in rel.ANSWER_RESTRICTIONS:
                 errors.append(
@@ -2207,7 +2435,10 @@ def validate_master_file(
                 "question", "question_text", "display_answer",
                 "answer_explanation",
             ):
-                rich_value = str(row.get(field) or "")
+                # Contract v2.0 §17: read the cell through the inverse
+                # ``<br>`` projection so the line-anchored table probe
+                # sees the same lines the import reader sees.
+                rich_value = bi.from_workbook_rich_text(row.get(field))
                 if name == "Subjective" and field in {
                     "question", "question_text",
                 }:
@@ -2230,7 +2461,7 @@ def validate_master_file(
                         )
             for n in range(1, MAX_SUBQUESTIONS + 1):
                 for issue in katex_rules.rich_text_issues(
-                    str(row.get(f"sub_question_{n}") or "")
+                    bi.from_workbook_rich_text(row.get(f"sub_question_{n}"))
                 ):
                     if issue == "unsupported_table":
                         errors.append(
@@ -2248,6 +2479,7 @@ def validate_master_file(
                 errors.extend(_descriptive_marking_errors(
                     row, label=label, marks=marks,
                     answer_slots=descriptive_answer_slots,
+                    tags_required=tags_required,
                 ))
 
     # Every concept (questionless included) and every created group appears.
@@ -2274,7 +2506,7 @@ def validate_master_file(
                 "repeated rows")
             continue
         actual_aggregate = next(iter(aggregates), "")
-        expected_aggregate = ", ".join(
+        expected_aggregate = bi.join_multi(
             expected_group_labels.get(group_key, []))
         if actual_aggregate != expected_aggregate:
             errors.append(

@@ -276,18 +276,23 @@ def test_the_release_row_carries_its_lane_the_profile_and_the_layout_the_run_exe
 
     for row, lane in ((pre, release.LANE_PRE), (post, release.LANE_POST)):
         assert row.lane == lane
-        assert row.layout_id == release_core.layout_id() == "sop-mes-1"
+        # Contract v2.0 §3: one update-aware layout for every output, on
+        # every board; the profile only names the schema contract.
+        assert (
+            row.layout_id == release_core.layout_id()
+            == "update-aware-master-2"
+        )
         identity = row.provider_identity
         assert identity["lane"] == lane
-        assert identity["layout_id"] == "sop-mes-1"
+        assert identity["layout_id"] == "update-aware-master-2"
         assert identity["workbook_outputs"] == {
             "concepts_xlsx": {
-                "layout_id": "sop-mes-1",
-                "contract_id": "concept-reference-1",
+                "layout_id": "update-aware-master-2",
+                "contract_id": "concept-update-aware-2",
             },
             "master_xlsx": {
-                "layout_id": "sop-mes-1",
-                "contract_id": "reference-master-1",
+                "layout_id": "update-aware-master-2",
+                "contract_id": "update-aware-master-2",
             },
         }
         assert identity["profile"], "the run's profile name is recorded"
@@ -296,22 +301,24 @@ def test_the_release_row_carries_its_lane_the_profile_and_the_layout_the_run_exe
 
 
 @pytest.mark.parametrize(
-    ("subject", "expected_layout_id"),
+    ("subject", "expected_layout_id", "expected_contract_id"),
     [
         pytest.param(
             "Mathematics",
             layouts.MSBSHSE_GRADE_6_MASTER_LAYOUT_ID,
+            "msbshse-grade-6-master-2026-09-04",
             id="mathematics",
         ),
         pytest.param(
             "English",
             layouts.MSBSHSE_GRADE_6_ENGLISH_POST_MASTER_LAYOUT_ID,
+            "msbshse-grade-6-master-2026-09-04",
             id="english-post",
         ),
     ],
 )
 def test_release_persists_the_rendered_dynamic_master_layout(
-    db, subject, expected_layout_id,
+    db, subject, expected_layout_id, expected_contract_id,
 ):
     chapter = _chapter_with_concepts(db)
     original_metadata = (chapter.board, chapter.grade, chapter.subject)
@@ -341,17 +348,17 @@ def test_release_persists_the_rendered_dynamic_master_layout(
         assert released.provider_identity["layout_id"] == rendered_layout_id
         assert released.provider_identity["workbook_outputs"] == {
             "concepts_xlsx": {
-                "layout_id": layouts.REFERENCE_LAYOUT_ID,
-                "contract_id": "concept-reference-1",
+                "layout_id": layouts.UPDATE_AWARE_MASTER_LAYOUT_ID,
+                "contract_id": "concept-update-aware-2",
             },
             "master_xlsx": {
                 "layout_id": rendered_layout_id,
-                "contract_id": expected_layout_id,
+                "contract_id": expected_contract_id,
             },
         }
         assert _published_layout_id(
             released, svc.CONCEPTS_FILENAME,
-        ) == layouts.REFERENCE_LAYOUT_ID
+        ) == layouts.UPDATE_AWARE_MASTER_LAYOUT_ID
     finally:
         chapter.board, chapter.grade, chapter.subject = original_metadata
         db.commit()
@@ -388,11 +395,19 @@ def test_release_state_is_the_same_vocabulary_for_both_payload_shapes(db):
     moment the shared core started asking.
     """
 
+    # Contract v2.0 §18/§32.1: the publication and the chapter duration
+    # are frozen run variables the release QC recomputes on both shapes.
+    frozen = {
+        "source_book": "NCERT",
+        "chapter_meta": {"chapter_duration_minutes": 40},
+    }
     concept_payload = {
         "records": [{"topic": "Solids", "concept_title": "What is a solid"}],
         "summary": {"issue_count": 0, "affected_row_count": 0},
+        **frozen,
     }
     assessment_payload = {
+        **frozen,
         "source_atoms": [{"atom_id": "QINV-0001"}],
         "candidates": [{
             "candidate_id": "CAND-1",

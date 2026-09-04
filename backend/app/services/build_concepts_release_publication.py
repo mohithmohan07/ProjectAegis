@@ -334,11 +334,10 @@ def upload_release_to_database(
             "publication": {"written": 0, "sources_updated": 0},
         }
     pre_post = "Pre" if resolved == LANE_PRE else "Post"
-    source_book = (
-        str(payload.get("source_book") or "").strip()
-        or str(payload.get("filename") or "").strip()
-        or "Released source"
-    )
+    # Contract v2.0 §18: the publication is the run's frozen source book;
+    # a filename is never borrowed as one (an unknown publication stays
+    # blank and is a recorded release blocker, never a nearby value).
+    source_book = str(payload.get("source_book") or "").strip()
     created_ids: list[int] = []
     merged_ids: list[int] = []
     # T4-2: a grade label the normaliser could not parse keeps its raw token

@@ -353,7 +353,7 @@ def fragmentation_verdict(
                     ),
                     "author_rationale": rationale,
                 }, ensure_ascii=False),
-                purpose="concept_validation",
+                purpose="advisory_critic",
             )
             critic_verdict = _normal((critic or {}).get("verdict"))
             if critic_verdict != "confirmed":

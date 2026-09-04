@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Mapping
 
+from .. import bulk_import as bi
 from .. import models
 from . import assessment_release as rel
 from . import build_concepts_release_files
@@ -251,7 +252,10 @@ def build(
             "keywords": str(concept.keywords or ""),
             "related_concepts": str(concept.related_concepts or ""),
             "digicards": str(concept.digicards or ""),
-            "concept_source": str(concept.sources or ""),
+            # Contract v2.0 §18 (Q27): the run's publication, not the
+            # concept's accumulated provenance — one value for every
+            # ``concept_source`` and ``question_source`` cell of the run.
+            "concept_source": str(release.get("source_book") or ""),
         }
         concept_rows.append(row)
         carried.append(concept)
@@ -265,7 +269,7 @@ def build(
             "keywords": str(concept.keywords or ""),
             "related_concepts": str(concept.related_concepts or ""),
             "digicards": str(concept.digicards or ""),
-            "concept_source": str(concept.sources or ""),
+            "concept_source": str(release.get("source_book") or ""),
             "released_record": _semantic_evidence(record),
         }
         if isinstance(record.get("is_culmination"), bool):
@@ -303,11 +307,11 @@ def build(
             # Composed off the SHARED ``identity.titled`` over this topic's
             # own concept rows, so the roster reads exactly as each
             # concept's own title cell does.
-            "topic_concept_labels": ", ".join(
+            "topic_concept_labels": bi.join_multi([
                 identity.titled(
                     row["concept_title"], row["concept_machine_id"])
                 for row in rows_by_topic_object[marker]
-            ),
+            ]),
             "related_topics": str(topic.related_topics or ""),
             "topic_description": str(topic.topic_description or ""),
             "concepts": rows_by_topic_object[marker],
@@ -355,6 +359,10 @@ def build(
             "chapter_description": str(chapter.chapter_description or ""),
         },
         "topics": snapshot_topics,
+        # Contract v2.0 §18: the run's publication, the per-run scalar every
+        # Master row carries in ``question_source``. Frozen on the staged
+        # release; carried here so the renderer's read-back can require it.
+        "source_book": str(release.get("source_book") or ""),
     }
     metadata = {
         "subject": str(chapter.subject or ""),
@@ -384,6 +392,7 @@ def build(
     return {
         "source_concept_release_sha256": release_sha,
         "source_document_hash": source_document_hash,
+        "source_book": str(release.get("source_book") or ""),
         "snapshot": snapshot,
         "concepts": route_concepts,
         "concepts_by_key": {

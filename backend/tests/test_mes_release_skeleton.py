@@ -249,6 +249,8 @@ def test_answer_restriction_is_never_silently_defaulted():
             },
         ],
         "sub_questions": [],
+        # Contract v2.0 §22.5: the explanation opens with the key text.
+        "answer_explanation": "A. The first option is the correct one.",
     }
     missing = rel.validate_candidate(dict(base))
     assert any("answer_restriction" in e for e in missing)
@@ -388,14 +390,17 @@ def test_release_refuses_prefixed_options_and_malformed_rubric_tags(
         "repeats its letter label" in error
         for error in rel.validate_candidate(objective)
     )
+    # Contract v2.0 §28: the tag is a fixed syntax on an English run and
+    # forbidden on every other subject; either way "[content] missing colon"
+    # breaks containment.
     assert any(
-        "without its required colon" in error
+        "breaks English rubric-tag containment" in error
         for error in rel.validate_candidate(descriptive)
     )
 
     descriptive["answers"][0]["answer_content"] = "[content]:   "
     assert any(
-        "allowed functional tag" in error
+        "breaks English rubric-tag containment" in error
         for error in rel.validate_candidate(descriptive)
     )
 
@@ -469,8 +474,11 @@ def test_release_accepts_exclusive_multipart_descriptive_scoring():
         "math_keyboard": "No",
         "answer_restriction": "Specific",
         "restriction_reason": "Each source part fixes its own result.",
+        # Contract v2.0 §24: one complete model answer in both fields;
+        # §27.5: every criterion is exactly 0.5 or 1 (two per 2-mark part);
+        # §28: no subject metadata here, so criteria carry no bracket tag.
         "display_answer": "First result; second result.",
-        "answer_explanation": "Apply the stated method to each part.",
+        "answer_explanation": "First result; second result.",
         "answers": [],
         "sub_questions": [
             {
@@ -479,8 +487,13 @@ def test_release_accepts_exclusive_multipart_descriptive_scoring():
                 "keywords": [
                     {
                         "answer_type": "Phrases",
-                        "keyword": "[content]: first result",
-                        "weightage": 2,
+                        "keyword": "first result stated",
+                        "weightage": 1,
+                    },
+                    {
+                        "answer_type": "Phrases",
+                        "keyword": "first result exact",
+                        "weightage": 1,
                     },
                 ],
             },
@@ -490,8 +503,13 @@ def test_release_accepts_exclusive_multipart_descriptive_scoring():
                 "keywords": [
                     {
                         "answer_type": "Phrases",
-                        "keyword": "[method]: second result",
-                        "weightage": 2,
+                        "keyword": "second result explained",
+                        "weightage": 1,
+                    },
+                    {
+                        "answer_type": "Phrases",
+                        "keyword": "working shown",
+                        "weightage": 1,
                     },
                 ],
             },

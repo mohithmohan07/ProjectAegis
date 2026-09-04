@@ -195,10 +195,13 @@ def test_envelope_rejects_missing_fields_and_broken_seals():
         envelope_mod.validate(tampered)
 
 
-def test_pure_confidence_shortfall_ships_flagged_after_bounded_attempts():
+def test_pure_confidence_shortfall_ships_flagged_after_one_attempt():
     """An honest sub-floor confidence must not kill a run (staging: one
     0.880 grounding failed a whole chapter). Structural defects still
-    fail closed; confidence-only shortfalls ship with review flags."""
+    fail closed; confidence-only shortfalls ship with review flags — and
+    after ONE attempt (register Q26): the prompts forbid inflating a score
+    to pass a threshold, so a re-ask on the same evidence could only buy
+    an inflated number for a full re-spend."""
     calls = 0
 
     def provider(_request: dict) -> dict:
@@ -218,12 +221,46 @@ def test_pure_confidence_shortfall_ships_flagged_after_bounded_attempts():
         store=kernel.DecisionStore(),
     )
 
-    assert calls == 3
+    assert calls == 1
     assert decision["response"] == {"confidence": 0.88}
     assert any(
         "0.880 is below 0.920" in flag and "shipped for review" in flag
         for flag in decision["review_flags"]
     )
+
+
+def test_a_structural_defect_beside_a_confidence_shortfall_still_re_asks():
+    """Only a PURE confidence shortfall skips the bounded corrections."""
+    calls = 0
+
+    def provider(_request: dict) -> dict:
+        nonlocal calls
+        calls += 1
+        if calls < 2:
+            return {"confidence": 0.88}
+        return {"confidence": 0.99, "rows": [1]}
+
+    def checker(response: dict) -> list[str]:
+        defects = []
+        if "rows" not in response:
+            defects.append("rows missing")
+        if float(response.get("confidence") or 0) < 0.92:
+            defects.append("[confidence] U-1 confidence is below 0.920")
+        return defects
+
+    decision = kernel.decide(
+        kind="test",
+        unit_id="U-1",
+        envelope_sha256="e" * 64,
+        payload=_payload(),
+        provider=provider,
+        checker=checker,
+        store=kernel.DecisionStore(),
+    )
+
+    assert calls == 2
+    assert decision["response"] == {"confidence": 0.99, "rows": [1]}
+    assert decision["review_flags"] == []
 
 
 def test_a_clean_pass_emits_nothing_and_the_band_is_gone():

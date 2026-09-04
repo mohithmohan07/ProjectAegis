@@ -23,6 +23,8 @@ def _snapshot() -> dict:
         "chapter_title": (
             "Three-Dimensional Shapes (06_Mathematics_MSBSHSE_Balbharati)"),
         "chapter_display_name": "Three-Dimensional Shapes",
+        # Contract v2.0 §32.1: the frozen chapter duration.
+        "chapter_duration": "40 minutes",
         "pre_topics": "", "post_topics": "Topic 01",
         "chapter_description": "Solids and their properties.",
     }
@@ -31,7 +33,8 @@ def _snapshot() -> dict:
         "concept_title": "Two-dimensional shape (06MSMA_T01_TwoDim)",
         "concept_display_name": "Two-dimensional shape",
         "concept_details": "Description: flat shapes.",
-        "keywords": "shape; plane",
+        # Contract v2.0 §16: lists carry the exact " | " delimiter.
+        "keywords": "shape | plane",
         "related_concepts": "",
         "digicards": "",
         "concept_source": "Balbharati",
@@ -76,7 +79,9 @@ def _snapshot() -> dict:
              "correct_answer": "0", "answer_weightage": "0"},
         ],
         "sub_questions": [],
-        "answer_explanation": "A circle is flat; a sphere is a solid.",
+        # Contract v2.0 §22.5: opens with the exact correct-option text.
+        "answer_explanation": "Circle. A circle is flat; a sphere is a solid.",
+        "question_source": "Balbharati",
         "concept_key": "C_A",
         "group_key": "(06MSMA_T01_TwoDim) BG01",
         "flags": [],
@@ -95,26 +100,36 @@ def _snapshot() -> dict:
         "answer_restriction": "Open",
         "question": "Explain how a square differs from a cube.",
         "question_text": "Explain how a square differs from a cube.",
+        # Contract v2.0 §24: display_answer and answer_explanation are the
+        # same complete model answer.
         "display_answer": "A square is flat with two dimensions ...",
         # Multipart items keep all scoring evidence with their parts.  Main
-        # answer blocks would duplicate the same four marks.
+        # answer blocks would duplicate the same four marks. Criteria are
+        # untagged on a Mathematics run (§28) and worth exactly 1 (§27.5).
         "answers": [],
         "sub_questions": [
             {"text": "Name the number of faces of a cube.", "marks": "2",
              "keywords": [
-                 {"answer_type": "Phrases", "weightage": "2",
-                  "keyword": "[content]: six faces"}]},
+                 {"answer_type": "Phrases", "weightage": "1",
+                  "keyword": "six faces"},
+                 {"answer_type": "Phrases", "weightage": "1",
+                  "keyword": "every face is a square"}]},
             {"text": "State the dimensions of a square.", "marks": "2",
              "keywords": [
-                 {"answer_type": "Phrases", "weightage": "2",
-                  "keyword": "[content]: two dimensions"}]},
+                 {"answer_type": "Phrases", "weightage": "1",
+                  "keyword": "two dimensions"},
+                 {"answer_type": "Phrases", "weightage": "1",
+                  "keyword": "length and breadth named"}]},
         ],
-        "answer_explanation": "",
+        "answer_explanation": "A square is flat with two dimensions ...",
+        "question_source": "Balbharati",
         "concept_key": "C_A",
         "group_key": "(06MSMA_T01_TwoDim) IG01",
         "flags": [],
     }
     return {
+        # Contract v2.0 §18: the run's publication rides the snapshot.
+        "source_book": "Balbharati",
         "chapter": chapter,
         "topics": [{
             "topic_title": "Topic 01: Dimensions (06MSMA_ThreeDim_PL)",
@@ -172,7 +187,9 @@ def test_concept_file_is_a_clean_catalogue():
     for row in rows:
         assert row["group_name"] == "" and row["question_label"] == ""
         assert row["basic_groups"] == "" and row["concept_question_labels"] == ""
-        assert row["chapter_duration"] == ""
+        # Contract v2.0 §3: the frozen chapter duration is stamped on every
+        # row of every output, the catalogue included (minutes, numeric).
+        assert row["chapter_duration"] == 40
         # Identity values survive byte-exact, spelling variants included.
         assert row["chapter_title"].endswith("(06_Mathematics_MSBSHSE_Balbharati)")
         assert row["keywords"] != "" or row["concept_title"].startswith("Three")
@@ -253,15 +270,17 @@ def test_master_contains_everything_including_questionless_concepts():
     assert str(q["correct_answer_1"]) == "Yes"
     assert q["group_question_labels"] == "06MSMA_T01_TwoDim Q01"
     assert q["concept_question_labels"] == (
-        "06MSMA_T01_TwoDim Q01, 06MSMA_T01_TwoDim Q02")
+        "06MSMA_T01_TwoDim Q01 | 06MSMA_T01_TwoDim Q02")
     assert q["basic_groups"] == "(06MSMA_T01_TwoDim) BG01"
     assert q["intermediate_groups"] == "(06MSMA_T01_TwoDim) IG01"
     assert q["advanced_groups"] == ""
 
     d = descriptive_rows[0]
     assert d["sub_question_1"] == "Name the number of faces of a cube."
-    assert d["sq1_keyword_1"] == "[content]: six faces"
-    assert d["sq2_keyword_1"] == "[content]: two dimensions"
+    # Contract v2.0 §28: the snapshot carries no English metadata, so the
+    # criteria ship exactly as authored, with no bracket tag.
+    assert d["sq1_keyword_1"] == "six faces"
+    assert d["sq2_keyword_1"] == "two dimensions"
     assert d["display_answer"].startswith("A square is flat")
     assert d["answer_restriction"] == "Open"
     assert d["answer_content_1"] == ""
@@ -766,7 +785,22 @@ def test_staged_shape_uses_the_selected_descriptive_answer_capacity():
     ] == ["answer_content_11"]
 
     descriptive["answers"][10]["answer_content"] = "[content]: criterion 11"
+    # Register Q27: the Pre lane carries the same 30-slot capacity, so
+    # eleven answers fit there too and only the thirty-first overflows.
     snapshot["topics"][0]["pre_post_learning"] = "Pre"
+    pre_fits = [
+        finding for finding in rel.unresolved_question_homes(
+            snapshot, english_profile,
+        )
+        if finding.get("candidate_id") == descriptive["candidate_id"]
+        and finding.get("field") == "answers"
+    ]
+    assert pre_fits == []
+    descriptive["answers"] = [{
+        "answer_type": "Phrases",
+        "answer_content": f"[content]: criterion {number}",
+        "answer_weightage": "",
+    } for number in range(1, 32)]
     pre_overflows = [
         finding for finding in rel.unresolved_question_homes(
             snapshot, english_profile,
@@ -775,7 +809,7 @@ def test_staged_shape_uses_the_selected_descriptive_answer_capacity():
         and finding.get("field") == "answers"
     ]
     assert [(finding["cap"], finding["actual"]) for finding in pre_overflows] == [
-        (10, 11),
+        (30, 31),
     ]
 
 
@@ -886,16 +920,23 @@ def test_the_truncated_cell_states_a_true_count_and_stays_under_the_cap():
     """
     import re
 
+    # Contract v2.0 §17: the cell (and the mark's own line break) carry the
+    # ``<br>`` projection, and the cap is measured on that projected text.
     plain = mp._cell_value("z" * 40000, context="t")
     stated = int(re.search(r"first (\d+) of (\d+)", plain).group(1))
-    assert stated == plain.index("\n[Aegis:"), "the count is the true count"
+    assert stated == plain.index("<br>[Aegis:"), "the count is the true count"
     assert len(plain) <= mp.CELL_LIMIT
 
     guarded = mp._cell_value("=" + "x" * 40000, context="t")
     assert guarded.startswith("=")
     assert len(guarded) <= mp.CELL_LIMIT
     stated = int(re.search(r"first (\d+) of (\d+)", guarded).group(1))
-    assert stated == guarded.index("\n[Aegis:")
+    assert stated == guarded.index("<br>[Aegis:")
+
+    # A value under the cap whose line breaks project past it is measured
+    # AFTER the projection: the cell never exceeds Excel's limit.
+    projected = mp._cell_value(("x" * 100 + "\n") * 320, context="t")
+    assert len(projected) <= mp.CELL_LIMIT
 
 
 def test_formula_like_and_negative_answers_roundtrip_as_literal_text():
@@ -922,8 +963,11 @@ def test_formula_like_and_negative_answers_roundtrip_as_literal_text():
 
     workbook = openpyxl.load_workbook(io.BytesIO(master), data_only=False)
     worksheet = workbook["Objective"]
+    # The column is read off the rendered header row (the update-aware
+    # layout, contract v2.0 §14), never a hard-coded position.
+    headers = [cell.value for cell in worksheet[2]]
     formula_cell = worksheet.cell(
-        row=3, column=mp._INDEX["Objective"]["answer_content_2"] + 1,
+        row=3, column=headers.index("answer_content_2") + 1,
     )
     assert formula_cell.data_type == "s"
     assert formula_cell.value == "=HYPERLINK(\"https://invalid\",\"x\")"

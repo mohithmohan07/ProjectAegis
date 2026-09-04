@@ -3,8 +3,10 @@
 P1/P2/P4/P5/P9 are prompt rules (pinned as text contracts, matching
 test_prompt_clarity_contracts' doctrine); P3 is the recorded source-lane
 duplicate verdict; P6 the entity-ID uniqueness defect gate; P8 the
-one-decimal display format. P7 needed no change — assessment_release
-already refuses ``question != question_text`` on every candidate.
+numeric display format (``0.##`` since Master Governing Contract v2.0
+§32 superseded the audit's one-decimal rule). P7 needed no change —
+assessment_release already refuses ``question != question_text`` on every
+candidate.
 """
 from __future__ import annotations
 
@@ -135,6 +137,10 @@ def test_the_source_dedup_checker_refuses_a_broken_verdict():
 
 
 def test_a_source_duplicate_fold_names_the_release_ready_with_flags(db):
+    """The fold is read by the live projection of a release that deposited:
+    the borrowed both-lanes fixtures must clear the v2.0 materialization
+    gates, since a release with no depositable candidate is structurally
+    diagnostic and no flag can be observed on it."""
     from tests.test_release_core import (
         _both_lanes_job, _chapter_with_concepts, _run_both_lanes,
     )
@@ -144,6 +150,13 @@ def test_a_source_duplicate_fold_names_the_release_ready_with_flags(db):
     _pre, post = _run_both_lanes(db, job, chapter)
 
     before = release_core.release_state(post)
+    assert before in (release_core.READY, release_core.READY_WITH_FLAGS), (
+        before,
+        [
+            blocked.get("flags")
+            for blocked in post.payload.get("materialization_blocked") or []
+        ],
+    )
     post.payload = dict(post.payload, source_duplicates_represented=[{
         "source_qid": "QINV-0007", "duplicate_of": "QINV-0001",
         "reason": "double-ship",
@@ -206,10 +219,12 @@ def test_duplicate_carried_machine_ids_are_a_named_defect(db):
 
 
 # --------------------------------------------------------------------------- #
-# P8 — marks/durations/weightages display with one decimal
+# P8 — marks/durations/weightages are numeric cells with the 0.## display
 # --------------------------------------------------------------------------- #
 
-def test_numeric_master_cells_display_one_decimal():
+def test_numeric_master_cells_display_with_the_contract_number_format():
+    """Contract v2.0 §32/§42.10 supersedes P8's one-decimal "0.0": numeric
+    cells stay numeric and display as ``0.##`` (0.5, 1, 1.5, 2)."""
     from app.bulk_import import assessment_workbook as workbook
 
     schema = workbook.output_schema("master")
@@ -234,10 +249,10 @@ def test_numeric_master_cells_display_one_decimal():
         for index, field in enumerate(fields, start=1)
     }
     for field in ("marks", "question_duration", "answer_weightage_1"):
-        assert by_field[field].number_format == "0.0", field
+        assert by_field[field].number_format == "0.##", field
         assert by_field[field].value in (1.0, 2.0)
-    # chapter_title (a string) and chapter_duration (excluded by A11's
-    # rule — the corrected files carry it plain) keep the default format.
+    # chapter_title (a string) keeps the default format: the display rule
+    # applies to numerics only.
     assert by_field["chapter_title"].number_format == "General"
     book.close()
 
@@ -283,11 +298,13 @@ def test_figure_placement_forbids_repeats_and_generic_captions():
     assert "Source visual" in phase3_prompts.PLACE_SYSTEM
 
 
-def test_descriptive_rubric_weights_default_to_uniform_one():
+def test_descriptive_rubric_weights_are_exactly_half_or_one():
+    """Contract v2.0 §27.5/§32 retires P9's "uniform 1.0 default": every
+    Descriptive rubric criterion carries exactly 0.5 or 1 mark."""
     from app.services import assessment_marking
 
     prompt = assessment_marking.MARKING_SYSTEM
-    assert "uniform 1.0 weight" in prompt
+    assert "EXACTLY 0.5 or 1 mark" in prompt
     assert "number of criteria satisfied" in prompt
 
 

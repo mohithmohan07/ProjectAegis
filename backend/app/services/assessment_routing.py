@@ -16,6 +16,7 @@ import copy
 from typing import Any, Mapping
 
 from .. import config
+from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
 from .phase3 import kernel
 
@@ -403,7 +404,7 @@ def _live_route_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         ROUTE_CRITIC_SYSTEM,
         suffix,
-        purpose="concept_validation",
+        purpose="advisory_critic",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "route-critic-v2",
@@ -426,7 +427,11 @@ def _live_authorities(
     from .phase3 import fixer as fixer_mod
 
     envelope_mod.require_live_api()
-    return _live_route, critic or _live_route_critic, fixer or fixer_mod.live_fixer
+    return (
+        _live_route,
+        critic or lane_policy.critic_for("route", _live_route_critic),
+        fixer or fixer_mod.live_fixer,
+    )
 
 
 def route_candidate(

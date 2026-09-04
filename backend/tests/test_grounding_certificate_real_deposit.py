@@ -13,6 +13,7 @@ import copy
 import openpyxl
 import pytest
 
+from app import bulk_import as bi
 from app import models
 from app.bulk_import import writer
 from app.services import build_concepts, grounding_certificate
@@ -155,9 +156,12 @@ def _published_rows(path) -> list[dict]:
             "concept_details",
         )
     }
+    # Contract v2.0 §17: a cell's line breaks ship as ``<br>``; reading the
+    # published rows back through the reader's inverse restores the exact
+    # record text the certificate was built over.
     return [
         {
-            field: row[index]
+            field: bi.from_workbook_rich_text(row[index])
             for field, index in indexes.items()
         }
         for row in sheet.iter_rows(min_row=3, values_only=True)
@@ -304,8 +308,10 @@ def test_real_certified_deposit_binds_db_audit_and_workbook_atomically(
     ) == 1
     refreshed = [db.get(models.Concept, concept_id) for concept_id in merged_again]
     assert all(concept is not None for concept in refreshed)
+    # Contract v2.0 §16: merged sources are a " | " list.
     assert all(
-        set((concept.sources or "").split(", "))
+        concept.sources == "Certified Source A | Certified Source B"
+        and set(bi.split_multi(concept.sources))
         == {"Certified Source A", "Certified Source B"}
         for concept in refreshed
     )

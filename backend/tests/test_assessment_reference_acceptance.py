@@ -8,6 +8,15 @@ Master through the production renderer, and compares every gold question
 row field-by-field against what Aegis produces. Any divergence fails with
 the exact sheet, label, and field named — a defect is reported, never
 hidden behind polished output.
+
+The gold workbooks predate Master Governing Contract v2.0 and stay as
+calibration artefacts: they carry comma lists, real newlines and the
+pre-lane ``Phrases`` medium on every option cell. Every expectation below
+is therefore the v2.0 projection of the gold cell — the pipe list a
+pipe-free legacy cell reads as (§16), ``<br>`` line breaks (§17), the
+lane-exact ``answer_type`` literal (§22–§24) and the composed multipart
+``question_text`` (§19.1/§20) — so a divergence still names a renderer
+defect, never the delimiter change.
 """
 from __future__ import annotations
 
@@ -16,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from app import bulk_import as bi
 from app.bulk_import import assessment_workbook as aw
 from app.services import katex_rules
 
@@ -49,6 +59,27 @@ _ROLLUP_FIELD_BY_GROUP_TYPE = {
     "Intermediate": "intermediate_groups",
     "Advanced": "advanced_groups",
 }
+# Contract v2.0 §16: the multi-value cells the renderer re-delimits with
+# " | " (a pipe-free legacy cell is read as the comma list it is).
+_LIST_FIELDS = (
+    "pre_topics", "post_topics", "topic_concept_labels", "related_topics",
+    "keywords", "digicards", "related_concepts",
+    "concept_question_labels", "group_question_labels",
+)
+# Rosters of identified titles (§15): a legacy comma list is split by the
+# identity grammar, so a comma inside a title stays inside it.
+_ROSTER_FIELDS = (
+    "pre_topics", "post_topics", "topic_concept_labels", "related_topics",
+    "related_concepts",
+)
+
+
+def _relist(field: str, value) -> str:
+    """The gold cell's list in the v2.0 delimiter (contract §16)."""
+    text = _norm(value)
+    if field in _ROSTER_FIELDS:
+        return bi.join_multi(bi.split_roster(text))
+    return bi.join_multi(bi.split_multi(text))
 
 
 def _norm(value) -> str:
@@ -202,8 +233,15 @@ def _snapshots_by_chapter(parsed) -> dict[str, dict]:
             chapter_title = _norm(row.get("chapter_title"))
             if not chapter_title:
                 continue
+            chapter_fields = _fields(row, _CHAPTER_FIELDS)
+            # The chapter row in production holds the re-delimited roster
+            # (db backfill); the renderer emits it verbatim.
+            for field in ("pre_topics", "post_topics"):
+                if field in chapter_fields:
+                    chapter_fields[field] = _relist(
+                        field, chapter_fields[field])
             snapshot = chapters.setdefault(chapter_title, {
-                "chapter": _fields(row, _CHAPTER_FIELDS),
+                "chapter": chapter_fields,
                 "topics": [],
                 "groups": [],
                 "candidates": [],
@@ -263,7 +301,13 @@ def _expected_question_text(sheet: str, gold: dict) -> str:
     if sheet == "Descriptive":
         sub_questions = _sub_questions_from_row(gold)
         if sub_questions:
-            return _without_duplicated_subparts(text, sub_questions)
+            # Contract v2.0 §19.1/§20: the parent stem excludes the child
+            # wording, and the complete ``question_text`` carries every
+            # labelled child after it, one per line.
+            return aw.descriptive_question_text(
+                _without_duplicated_subparts(text, sub_questions),
+                sub_questions,
+            )
     if sheet == "Objective":
         options = []
         for n in range(1, aw.MAX_OBJECTIVE_OPTIONS + 1):
@@ -304,7 +348,7 @@ def _occupied_rollups(snapshot: dict) -> dict[str, dict[str, str]]:
         )
     return {
         concept_key: {
-            field: ", ".join(fields.get(field, []))
+            field: bi.join_multi(fields.get(field, []))
             for field in _ROLLUP_FIELD_BY_GROUP_TYPE.values()
         }
         for concept_key, fields in values.items()
@@ -337,6 +381,7 @@ def _diff_rows(
     concept_rollups = occupied_rollups.get(
         _norm(gold.get("concept_title")), {}
     )
+    sheet_kind = sheet.lower()
     for field in aw.FIELDS[sheet]:
         got = _norm(rendered.get(field))
         if field == "question_text":
@@ -347,12 +392,20 @@ def _diff_rows(
             ))
         elif field in _ROLLUP_FIELD_BY_GROUP_TYPE.values():
             want = concept_rollups.get(field, "")
+        elif field in _LIST_FIELDS:
+            want = _relist(field, gold.get(field))
         elif multipart and field.startswith(
             ("answer_type_", "answer_content_", "answer_weightage_")
         ):
             # Current multipart Descriptive rows score exclusively through
             # subquestion marks and keyword rubrics.
             want = ""
+        elif field.startswith("answer_type_") or (
+            field.startswith("sq") and "_answer_type_" in field
+        ):
+            # Contract v2.0 §22–§24: the lane-exact medium literal (Words
+            # on Objective option cells, Phrases on Descriptive rubrics).
+            want = bi.wire_answer_type(_norm(gold.get(field)), sheet_kind)
         elif field.startswith("answer_content_"):
             number = field.removeprefix("answer_content_")
             want = _norm(katex_rules.raw_answer_cell(
@@ -377,6 +430,9 @@ def _diff_rows(
             ))
         else:
             want = _norm(gold.get(field))
+        # Contract v2.0 §17: every string cell projects a line break as
+        # ``<br>``; the read-back parser keeps the literal cell.
+        want = bi.to_workbook_rich_text(want)
         if got != want:
             diffs.append(
                 f"{sheet} {gold.get('question_label')!r} {field}: "

@@ -1,5 +1,6 @@
-"""Bulk Import workflow spec: question_text, comma-only multi-values,
-cognitive-skill normalization, standard values, validation report."""
+"""Bulk Import workflow spec: question_text, pipe-delimited multi-values
+(contract v2.0 §16, with the lenient legacy comma read), cognitive-skill
+normalization, standard values, validation report."""
 import io
 
 import openpyxl
@@ -11,16 +12,24 @@ from app.db import _backfill_and_normalize
 from app.services import generation
 
 
-# ---------------------- multi-value parsing (comma only) ---------------------- #
+# ----------------- multi-value parsing (pipe delimiter, §16) ----------------- #
 
-def test_multi_value_comma_only():
-    assert bi.split_multi("Remember, Understand") == ["Remember", "Understand"]
-    assert bi.split_multi("Pre-test, Post-test, Worksheet") == [
+def test_multi_value_pipe_delimiter_with_legacy_comma_fallback():
+    """Contract v2.0 §16 retires the comma-only rule: ``" | "`` is the one
+    list delimiter, a comma beside a pipe is content, and a pipe-free
+    pre-v2.0 comma/semicolon cell still splits on import."""
+    assert bi.LIST_DELIMITER == " | "
+    assert bi.split_multi("Remember | Understand") == ["Remember", "Understand"]
+    assert bi.split_multi("Pre-test | Post-test | Worksheet") == [
         "Pre-test", "Post-test", "Worksheet"]
-    # newline / semicolon / pipe are NOT separators — they stay inside the value.
+    assert bi.split_multi("Poem Meaning, Theme and Tone | Articles") == [
+        "Poem Meaning, Theme and Tone", "Articles"]
+    assert bi.join_multi(["Remember", "Understand"]) == "Remember | Understand"
+    # Legacy cells (no pipe at all) keep reading as comma / semicolon lists.
+    assert bi.split_multi("Remember, Understand") == ["Remember", "Understand"]
+    assert bi.split_multi("Remember; Understand") == ["Remember", "Understand"]
+    # A newline is never a separator — it stays inside the value.
     assert bi.split_multi("Remember\nUnderstand") == ["Remember\nUnderstand"]
-    assert bi.split_multi("Remember; Understand") == ["Remember; Understand"]
-    assert bi.split_multi("Remember | Understand") == ["Remember | Understand"]
 
 
 def test_newlines_preserved_in_plain_text():
@@ -42,9 +51,12 @@ def test_cognitive_normalization_map():
     }
     for old, new in cases.items():
         assert bi.normalize_cognitive_skills(old) == new
-    # Multi-value (comma) normalizes element-wise.
+    # Multi-value normalizes element-wise and re-delimits with the v2.0
+    # pipe (§16) — a legacy comma list included.
+    assert bi.normalize_cognitive_skills("Remembering | Understanding") == \
+        "Remember | Understand"
     assert bi.normalize_cognitive_skills("Remembering, Understanding") == \
-        "Remember, Understand"
+        "Remember | Understand"
 
 
 def test_batch_normalizes_old_cognitive_values(client, first_concept):
@@ -61,9 +73,15 @@ def test_batch_normalizes_old_cognitive_values(client, first_concept):
 
 
 def test_other_standard_value_normalizers():
+    # The composite wire literal expands to the pipe-delimited purpose set
+    # (contract v2.0 §16/§18); a legacy comma list is re-delimited.
+    assert bi.APPEARS_IN_ALL == "Pre-test | Post-test | Worksheet | Test"
     assert bi.normalize_appears_in("Pre/Post-Worksheet/Test") == \
-        "Pre-test, Post-test, Worksheet, Test"
-    assert bi.normalize_appears_in("Pre-test, Worksheet") == "Pre-test, Worksheet"
+        bi.APPEARS_IN_ALL
+    assert bi.normalize_appears_in("Pre-test | Worksheet") == \
+        "Pre-test | Worksheet"
+    assert bi.normalize_appears_in("Pre-test, Worksheet") == \
+        "Pre-test | Worksheet"
     assert bi.normalize_answer_type("Words") == "Phrases"
     assert bi.normalize_answer_type("Equation") == "Equation"
 
@@ -157,7 +175,7 @@ def test_legacy_import_backfills_question_text(db, tmp_path):
         question_label="09CBPH_LgQT_PL_T01_X Q01").one()
     assert q.cognitive_skills == "Remember"          # normalized on import
     assert q.question_text == "State v = u + at in words."  # backfilled, plain
-    assert q.question_appears_in == "Pre-test, Post-test, Worksheet, Test"
+    assert q.question_appears_in == bi.APPEARS_IN_ALL  # pipe list (§16)
 
 
 def test_db_backfill_for_existing_questions(db, first_concept):
@@ -183,7 +201,7 @@ def test_db_backfill_for_existing_questions(db, first_concept):
     q2 = db.get(models.Question, qid)
     assert q2.question_text == "What is E = mc^2?"
     assert q2.cognitive_skills == "Evaluate"
-    assert q2.question_appears_in == "Pre-test, Post-test, Worksheet, Test"
+    assert q2.question_appears_in == bi.APPEARS_IN_ALL  # pipe list (§16)
     assert q2.answers[0]["answer_type"] == "Phrases"
 
     # Re-running never overwrites an existing value.
@@ -255,3 +273,31 @@ def test_import_validation_reports_issues(db, tmp_path):
     assert "raw math delimiters" in issues
     assert "[Katex]" in issues
     assert "marks not numeric" in issues
+
+
+def test_roster_split_keeps_a_comma_inside_an_identified_title():
+    """Contract v2.0 §15/§16: a legacy roster is split by its identity grammar.
+
+    Every roster item closes with its "(id)" tag, so the comma inside
+    "Story Setting, Events and Sequence" is content, not a separator. A
+    pipe-delimited roster splits on the pipe alone, and a roster whose items
+    carry no tag at all is read as the plain list it is.
+    """
+    legacy = (
+        "Topic 01: Story Setting, Events and Sequence (06MSEN_SelfHelp_PL), "
+        "Topic 02: Articles (06MSEN_SelfHelp_PL), "
+        "Topic 03: Oral, Creative, Research (06MSEN_SelfHelp_PL)"
+    )
+    assert bi.split_roster(legacy) == [
+        "Topic 01: Story Setting, Events and Sequence (06MSEN_SelfHelp_PL)",
+        "Topic 02: Articles (06MSEN_SelfHelp_PL)",
+        "Topic 03: Oral, Creative, Research (06MSEN_SelfHelp_PL)",
+    ]
+    piped = "Poem Meaning, Theme and Tone (X_PL) | Articles (X_PL)"
+    assert bi.split_roster(piped) == [
+        "Poem Meaning, Theme and Tone (X_PL)", "Articles (X_PL)",
+    ]
+    assert bi.split_roster("Remember, Understand") == ["Remember", "Understand"]
+    assert bi.split_roster("") == []
+    # A writer never guesses at a pipe-free value (one token).
+    assert bi.split_roster(legacy, legacy_commas=False) == [legacy]

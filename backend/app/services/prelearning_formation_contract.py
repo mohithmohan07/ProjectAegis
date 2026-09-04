@@ -155,14 +155,16 @@ def _chapter(env: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _live_json(system: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _live_json(
+    system: str, payload: dict[str, Any], *, purpose: str = "concept_mapping",
+) -> dict[str, Any]:
     from . import generation
     from .phase3 import prompts
 
     return generation._openai_json(
         system,
         prompts.render(payload),
-        purpose="concept_mapping",
+        purpose=purpose,
     )
 
 
@@ -171,7 +173,9 @@ def _live_prerequisite(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live_prerequisite_critic(payload: dict[str, Any]) -> dict[str, Any]:
-    return _live_json(PREREQUISITE_CRITIC_SYSTEM, payload)
+    return _live_json(
+        PREREQUISITE_CRITIC_SYSTEM, payload, purpose="advisory_critic",
+    )
 
 
 def _live_row_identity(payload: dict[str, Any]) -> dict[str, Any]:
@@ -179,7 +183,9 @@ def _live_row_identity(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live_row_identity_critic(payload: dict[str, Any]) -> dict[str, Any]:
-    return _live_json(ROW_IDENTITY_CRITIC_SYSTEM, payload)
+    return _live_json(
+        ROW_IDENTITY_CRITIC_SYSTEM, payload, purpose="advisory_critic",
+    )
 
 
 def _live_culmination(payload: dict[str, Any]) -> dict[str, Any]:
@@ -187,7 +193,9 @@ def _live_culmination(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _live_culmination_critic(payload: dict[str, Any]) -> dict[str, Any]:
-    return _live_json(CULMINATION_CRITIC_SYSTEM, payload)
+    return _live_json(
+        CULMINATION_CRITIC_SYSTEM, payload, purpose="advisory_critic",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -85,6 +85,7 @@ _JOB_KEYS = {
     "module", "upload_type", "learning_kind", "source_book", "filename",
     "mmd_text", "deposit_scope_type", "deposit_scope_ids",
 }
+_OPTIONAL_JOB_KEYS = {"chapter_duration_minutes"}
 _USAGE_INTS = {
     "request_count": MAX_REQUEST_COUNT,
     "input_tokens": MAX_TOKEN_COUNT,
@@ -1629,7 +1630,16 @@ def _validate_log(value: Any, path: str) -> None:
 def _validate_job(value: Any, path: str) -> tuple[str, str]:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be an object")
-    _exact_keys(value, _JOB_KEYS, path)
+    # ``chapter_duration_minutes`` (contract v2.0 §32.1's explicit upload
+    # variable) is optional so bundles written before it existed restore.
+    _exact_keys(
+        value, _JOB_KEYS | _OPTIONAL_JOB_KEYS, path, required=_JOB_KEYS,
+    )
+    duration = value.get("chapter_duration_minutes", 0)
+    if isinstance(duration, bool) or not isinstance(duration, int) or duration < 0:
+        raise ValueError(
+            f"{path}.chapter_duration_minutes must be a non-negative integer"
+        )
     if value["module"] != "build_concepts":
         raise ValueError("checkpoint bundle is not for Build Concepts")
     if value["upload_type"] != "document":
@@ -1695,6 +1705,9 @@ def _portable_payload(job: models.UploadJob) -> dict:
             "upload_type": job.upload_type,
             "learning_kind": job.learning_kind,
             "source_book": job.source_book,
+            "chapter_duration_minutes": int(
+                getattr(job, "chapter_duration_minutes", 0) or 0
+            ),
             "filename": job.filename,
             "mmd_text": job.mmd_text,
             "deposit_scope_type": job.deposit_scope_type,
@@ -1878,6 +1891,9 @@ def import_bundle(
         upload_type=job_data["upload_type"],
         learning_kind=learning_kind,
         source_book=job_data["source_book"],
+        chapter_duration_minutes=int(
+            job_data.get("chapter_duration_minutes") or 0
+        ),
         filename=job_data["filename"] or "restored.mmd",
         mmd_text=mmd_text,
         deposit_scope_type=job_data["deposit_scope_type"],

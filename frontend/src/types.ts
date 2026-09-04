@@ -401,6 +401,7 @@ export interface UploadJob {
   textbook_mode: string;
   learning_kind: string;
   source_book?: string;
+  chapter_duration_minutes?: number;
   filename: string;
   mmd_text: string;
   deposit_scope_type: string;

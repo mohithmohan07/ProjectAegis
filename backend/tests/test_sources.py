@@ -16,9 +16,12 @@ def _use_specific_dry_learner_analysis(monkeypatch):
 
 
 def test_merge_sources_dedupes_case_insensitively():
-    assert bi.merge_sources("NCERT", "RD Sharma") == "NCERT, RD Sharma"
-    # comma is the only supported separator; legacy "; " input normalizes
-    assert bi.merge_sources("NCERT; RD Sharma", "ncert") == "NCERT, RD Sharma"
+    """Contract v2.0 §16: merged sources are ``" | "``-joined; legacy comma
+    and semicolon lists still split on the way in."""
+    assert bi.merge_sources("NCERT", "RD Sharma") == "NCERT | RD Sharma"
+    # legacy "; " / ", " input normalizes onto the v2.0 pipe delimiter
+    assert bi.merge_sources("NCERT; RD Sharma", "ncert") == "NCERT | RD Sharma"
+    assert bi.merge_sources("NCERT, RD Sharma", "ncert") == "NCERT | RD Sharma"
     assert bi.merge_sources("", "Arihant") == "Arihant"
     assert bi.merge_sources("S Chand", "") == "S Chand"
 
@@ -112,11 +115,12 @@ def test_concept_resused_across_books_merges_sources(
 
     c = (db.query(models.Concept)
          .filter(models.Concept.concept_title.like("Refraction of light%")).one())
-    assert c.sources == "NCERT, RD Sharma"
+    assert c.sources == "NCERT | RD Sharma"
 
 
 def test_duplicate_questions_across_books_merge_sources(client, db, first_chapter):
-    """Same question text from another book: skipped, question_source merged."""
+    """Same question text from another book: skipped, question_source merged
+    (contract v2.0 §16: the merged cell is ``" | "``-joined)."""
     body = (b"# Qs\n\n"
             b"State the law of refraction with one worked example 4417.\n\n"
             b"Define critical angle for a glass-air interface 4417.")
@@ -147,11 +151,12 @@ def test_duplicate_questions_across_books_merge_sources(client, db, first_chapte
 
     q = (db.query(models.Question)
          .filter(models.Question.question.like("State the law of refraction%")).one())
-    assert q.question_source == "S Chand, Arihant"
+    assert q.question_source == "S Chand | Arihant"
 
 
 def test_output_workbook_source_cells_update_in_place(db, tmp_path, client, first_chapter):
-    """Re-appending an existing concept refreshes its concept_source cell."""
+    """Re-appending an existing concept refreshes its concept_source cell
+    (contract v2.0 §16: rendered ``" | "``-joined)."""
     detail = client.get(f"/directory/chapters/{first_chapter['id']}").json()
     concept_id = detail["topics"][0]["concepts"][0]["id"]
     concept = db.get(models.Concept, concept_id)
@@ -178,4 +183,4 @@ def test_output_workbook_source_cells_update_in_place(db, tmp_path, client, firs
         for row in ws.iter_rows(min_row=3, values_only=True)
         if bi.strip_title_tag(writer._cell_str(row, 12)) == concept.concept_title
     }
-    assert "NCERT, RS Aggarwal" in values
+    assert "NCERT | RS Aggarwal" in values

@@ -33,13 +33,14 @@ export default function SyllabusUploader({
   }
 
   return (
-    <div className="card mt-8">
-      <div className="muted mb-8">
-        Upload your syllabus structure workbooks (CBSE, ICSE, Maharashtra, Karnataka,
-        English Language). This fills the directory so you can <strong>manually pick</strong>{" "}
-        where to deposit concepts — nothing is inferred from the PDF filename.
+    <details className="syllabus-uploader">
+      <summary>Chapter not listed? Upload syllabus structure workbooks</summary>
+      <div className="hint mt-8">
+        Syllabus workbooks (CBSE, ICSE, Maharashtra, Karnataka, English
+        Language) fill the directory so you can pick where to deposit
+        concepts — nothing is inferred from the PDF filename.
       </div>
-      <label className="upload-label">
+      <label className="upload-label upload-label-ghost mt-8">
         {busy && <span className="spinner" aria-hidden="true" />}
         Upload syllabus Excel files
         <input
@@ -53,6 +54,6 @@ export default function SyllabusUploader({
       </label>
       {msg && <div className="muted mono mt-8">{msg}</div>}
       {error && <div className="error-box mt-8">{error}</div>}
-    </div>
+    </details>
   );
 }

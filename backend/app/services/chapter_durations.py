@@ -1,6 +1,13 @@
-"""Chapter duration lookup derived from Updated Clarius chapter time 2026-27.
+"""The accepted chapter-duration registry (contract v2.0 §32.1).
 
-Values are rounded Mean min from the supplied workbook export.
+Each row is an accepted board / grade / subject / chapter value (originally
+supplied as the Updated Clarius chapter time 2026-27 export, where the
+figures had been rounded from mean minutes before acceptance). The accepted
+value IS the authority: the lookup is an exact match on all four keys, no
+mean is ever recomputed at run time, no nearest-title or cross-board
+fallback exists, and a chapter with no row has no duration until one is
+accepted here or supplied explicitly with the upload — it is never
+estimated.
 """
 from __future__ import annotations
 

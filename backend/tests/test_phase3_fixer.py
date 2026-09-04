@@ -864,4 +864,5 @@ def test_live_fixer_requests_the_fixer_model(monkeypatch):
     assert fixer_mod.fixer_model() == "gpt-5.6-luna"
     fixer_mod.live_fixer(_payload())
     assert captured[-1]["model"] == "gpt-5.6-luna"
-    assert captured[-1]["purpose"] == "concept_validation"
+    # The Fixer is a semantic resolution priced as authoring (register Q26).
+    assert captured[-1]["purpose"] == "semantic_resolution"

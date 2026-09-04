@@ -90,6 +90,13 @@ def _concept_authority(
     projected["topic_title"] = bulk_import.strip_topic_title(
         projected["topic_title"]
     )
+    # Contract v2.0 §31/§32.1: the Master projects the frozen chapter
+    # duration as a real numeric minutes cell (``duration_minutes_cell``);
+    # the Concept export still carries the stored ``"<n> minutes"`` text, so
+    # the one reader-owned projection compares their common identity.
+    projected["chapter_duration"] = str(
+        bulk_import.duration_minutes_cell(projected["chapter_duration"])
+    )
     for field in assessment_profile.forced_blank_fields(profile):
         if field in projected:
             projected[field] = ""

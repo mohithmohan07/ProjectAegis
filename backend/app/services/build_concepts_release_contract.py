@@ -134,7 +134,8 @@ def _refine_captured_records(
             "chapter_title": chapter.chapter_title if chapter else "",
             "chapter_code": chapter.chapter_code if chapter else "",
             "pre_post": "Pre" if job.learning_kind == "pre" else "Post",
-            "source_book": job.source_book or job.filename or "",
+            # Contract v2.0 §18: the publication only, never a filename.
+            "source_book": job.source_book or "",
             "inventory": captured.get("inventory") or {},
             "mined_types": captured.get("mined_types") or {},
             "source_text": str(job.mmd_text or ""),

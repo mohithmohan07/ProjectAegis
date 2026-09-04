@@ -20,6 +20,7 @@ import uuid
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterable, Mapping
 
+from .. import bulk_import as bi
 from . import assessment_profile
 # Aliased: three functions in this module use ``identity`` as a local.
 from . import identity as identity_mod
@@ -140,9 +141,26 @@ _CANDIDATE_REQUIRED = (
 # ``source_atom_ids``. Read here and in ``assessment_release_run``'s
 # generated lane from this single owner so the two can never drift.
 GENERATED_SOURCE_POLICY = "generate"
+# Master Governing Contract v2.0 §28.1 — the approved English rubric-tag
+# registry. A tag is REQUIRED at the head of every populated textual rubric
+# criterion of an English Descriptive item and FORBIDDEN everywhere else:
+# every other field of an English item, and every rubric of every other
+# subject (§28.3). ``[creative]`` is the deprecated spelling (§2.1) and is
+# invalid everywhere. The historical registry (method/working/diagram/…) is
+# superseded by this contract.
 RUBRIC_TAGS = (
-    "content", "method", "accuracy", "working", "language", "creative",
-    "evidence", "diagram",
+    "content", "evidence", "reasoning", "organisation", "language",
+    "creativity", "accuracy",
+)
+DEPRECATED_RUBRIC_TAGS = ("creative",)
+# Any ``[word]`` prefix that is not one of the approved tags is malformed on
+# an English rubric and forbidden on every other rubric.
+_RUBRIC_TAG_PREFIX_RE = re.compile(r"^\s*\[(?P<tag>[^\]\n]*)\](?P<colon>:?)")
+_RUBRIC_TAG_ANYWHERE_RE = re.compile(
+    r"\[(?P<tag>"
+    + "|".join(re.escape(tag) for tag in (*RUBRIC_TAGS, *DEPRECATED_RUBRIC_TAGS))
+    + r")\]\s*:?",
+    re.IGNORECASE,
 )
 _PLACEMENT_REQUIRED = (
     "candidate_id", "concept_id", "group_key", "evidence",
@@ -171,27 +189,225 @@ def option_content_has_label(value: Any) -> bool:
     ) is not None
 
 
+def rubric_tag_of(value: Any) -> tuple[str, str] | None:
+    """``(tag, remainder)`` when a rubric cell opens with a bracket tag."""
+
+    match = _RUBRIC_TAG_PREFIX_RE.match(str(value or ""))
+    if match is None:
+        return None
+    return match.group("tag").strip(), str(value or "")[match.end():]
+
+
 def malformed_rubric_tag(
-    value: Any, answer_type: Any = "Phrases",
+    value: Any, answer_type: Any = "Phrases", *,
+    tags_required: bool | None = None,
 ) -> bool:
-    """Whether a Descriptive Phrases rubric lacks a usable tagged criterion.
+    """Whether a Descriptive textual rubric criterion breaks tag containment.
+
+    Contract v2.0 §28 / Appendix C.1. ``tags_required`` says which rule the
+    run is under — ``True`` for an English run (every populated textual
+    criterion MUST open with exactly one approved tag, ``[tag]: text``),
+    ``False`` for every other subject (a tag is FORBIDDEN; the criterion is
+    written directly), and ``None`` for a reader that does not know the
+    subject (either form is accepted, but a malformed, deprecated or empty
+    tagged criterion is still refused).
 
     The tag is metadata for a criterion, not the criterion itself.  Accepting
     ``"[content]:   "`` used to let an empty scoring block satisfy both the
     rubric count and weight arithmetic gates.  Keep the shared predicate as
     the single owner so staging, refinement, rendering, and strict import all
-    reject that shape identically.
+    reject that shape identically.  Equation and Image cells are never
+    tagged (§28.3: the tag is for textual criteria only).
     """
 
     if str(answer_type or "") != "Phrases":
         return False
-    text = str(value or "").lstrip()
-    lowered = text.casefold()
-    for tag in RUBRIC_TAGS:
-        prefix = f"[{tag}]:"
-        if lowered.startswith(prefix):
-            return not text[len(prefix):].strip()
-    return True
+    text = str(value or "")
+    if not text.strip():
+        return True
+    found = rubric_tag_of(text)
+    if found is None:
+        # Untagged criterion: valid unless the run REQUIRES tags.
+        return tags_required is True
+    tag, remainder = found
+    if tags_required is False:
+        return True  # a tag where tags are forbidden
+    if not text.lstrip().startswith(f"[{tag}]:"):
+        return True  # the colon is part of the syntax
+    stripped = remainder.strip()
+    if not stripped or stripped.startswith("["):
+        return True  # empty criterion, or two adjacent tags
+    if tags_required is None:
+        # A reader that does not know the run's subject (a legacy import)
+        # refuses only the shapes that are malformed under every rule.
+        return False
+    lowered = tag.casefold()
+    if lowered in DEPRECATED_RUBRIC_TAGS or lowered not in RUBRIC_TAGS:
+        return True
+    return tag != lowered  # exact lowercase spelling (§28.2)
+
+
+def rubric_tag_leaks(value: Any) -> list[str]:
+    """Every approved/deprecated tag appearing in a field that may carry none.
+
+    Contract v2.0 §28.3 / Appendix C.3: questions, options, accepted
+    answers, model answers, explanations, descriptions and metadata never
+    carry a rubric tag. Mechanics: a substring test for the registry, never
+    a judgment about the text.
+    """
+
+    return [
+        match.group("tag").casefold()
+        for match in _RUBRIC_TAG_ANYWHERE_RE.finditer(str(value or ""))
+    ]
+
+
+def _answer_prefix_key(value: Any) -> str:
+    """Whitespace/punctuation-insensitive comparison key for a leading answer."""
+
+    text = str(value or "").replace("\n", " ").strip().casefold()
+    text = re.sub(r"\s+", " ", text)
+    return text.rstrip(" .;:,!?")
+
+
+def objective_explanation_defects(
+    answers: list[Mapping], explanation: Any,
+) -> list[str]:
+    """Contract v2.0 §22.5 (QST-003): the Objective explanation opens with the
+    exact correct-answer text, then the rationale; never an option letter,
+    number or "option b".
+
+    Mechanics only: the correct option is the model's recorded marker and
+    the comparison is a normalized prefix test — the contract's own gate
+    (§42 gate 6).  An explanation that opens with the exact answer text
+    cannot open with a label unless the answer IS that token ("8.", "3:4",
+    "H."), so no label or "option N" regex classifies the prose: that
+    clause rides the materialization prompt and the joint item review.
+    An Equation key is accepted in its raw or its ``[Katex]``-wrapped
+    spelling (the rich-text field forbids raw LaTeX); an Image key is a
+    URL, not prose, and is left to the item review.
+    """
+
+    text = str(explanation or "")
+    if not text.strip():
+        return ["answer_explanation is empty"]
+    correct = [
+        answer
+        for answer in answers
+        if isinstance(answer, Mapping)
+        and is_correct_option(answer.get("correct_answer"))
+    ]
+    if len(correct) != 1:
+        return []
+    key = correct[0]
+    content = str(key.get("answer_content") or "")
+    medium = str(key.get("answer_type") or "").strip().lower()
+    if medium == "image":
+        return []
+    accepted = {_answer_prefix_key(content)}
+    if medium == "equation":
+        from . import katex_rules
+
+        accepted.add(_answer_prefix_key(
+            katex_rules.rich_answer_display("Equation", content)
+        ))
+    accepted.discard("")
+    actual = _answer_prefix_key(text)
+    if accepted and not any(actual.startswith(head) for head in accepted):
+        return [
+            "answer_explanation must begin with the exact correct "
+            f"answer text {content.strip()!r}"
+        ]
+    return []
+
+
+def _rich_text_key(value: Any) -> str:
+    """Canonical whitespace/HTML normalization for model-answer parity."""
+
+    text = re.sub(r"<br\s*/?>", "\n", str(value or ""), flags=re.IGNORECASE)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.split("\n")]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def descriptive_answer_parity_defects(
+    display_answer: Any, explanation: Any,
+) -> list[str]:
+    """Contract v2.0 §24 (ANS-001): ``display_answer`` and
+    ``answer_explanation`` are byte-equivalent after canonical
+    whitespace/HTML normalization — one complete model answer, twice."""
+
+    if _rich_text_key(display_answer) != _rich_text_key(explanation):
+        return [
+            "display_answer and answer_explanation must be the same "
+            "complete model answer (byte-equivalent after whitespace/HTML "
+            "normalization)"
+        ]
+    return []
+
+
+RUBRIC_CRITERION_WEIGHTS = (Decimal("0.5"), Decimal("1"))
+
+
+def rubric_weight_quantum_defect(weight: Decimal | None, *, what: str) -> str:
+    """Contract v2.0 §27.5 / §32 (RUB-002): a rubric criterion carries
+    exactly ``0.5`` or ``1``; a larger award is split into discrete
+    criteria.  Returns the defect text, or ``""`` when the weight is legal
+    (or unparsable — that is reported by the numeric gate, not here)."""
+
+    if weight is None or weight in RUBRIC_CRITERION_WEIGHTS:
+        return ""
+    return (
+        f"{what} weight {weight:g} is not 0.5 or 1; each rubric criterion "
+        "carries exactly 0.5 or 1 mark (split a larger award into discrete "
+        "criteria)"
+    )
+
+
+def model_answer_leak_defects(
+    candidate: Mapping, *, sheet_kind: str,
+) -> list[str]:
+    """Rubric tags in any field that may carry none (contract v2.0 §28.3)."""
+
+    defects: list[str] = []
+    fields = [
+        ("question", candidate.get("question")),
+        ("question_text", candidate.get("question_text")),
+        ("display_answer", candidate.get("display_answer")),
+        ("answer_explanation", candidate.get("answer_explanation")),
+    ]
+    sub_questions = candidate.get("sub_questions")
+    answers = candidate.get("answers")
+    # A malformed collection is reported by the shape checker; this pass
+    # reads only what is a list.
+    for position, sub in enumerate(
+        sub_questions if isinstance(sub_questions, list) else [], 1,
+    ):
+        if isinstance(sub, Mapping):
+            fields.append((f"sub_question {position} text", sub.get("text")))
+    if sheet_kind in {"objective", "subjective"}:
+        for position, answer in enumerate(
+            answers if isinstance(answers, list) else [], 1,
+        ):
+            if isinstance(answer, Mapping):
+                fields.append((
+                    f"{sheet_kind} answer {position}",
+                    answer.get("answer_content"),
+                ))
+                if sheet_kind == "subjective":
+                    fields.append((
+                        f"subjective answer {position} display",
+                        answer.get("answer_display"),
+                    ))
+    for name, value in fields:
+        tags = rubric_tag_leaks(value)
+        if tags:
+            defects.append(
+                f"{name} carries rubric tag(s) {sorted(set(tags))}; tags are "
+                "permitted only at the head of an English Descriptive "
+                "rubric criterion"
+            )
+    return defects
 
 
 def validate_source_atom(atom: Mapping) -> list[str]:
@@ -251,6 +467,10 @@ def validate_candidate(
         errors.append(
             f"sheet_kind must be one of {allowed_kinds} "
             f"(got {kind!r})")
+    # Contract v2.0 §28: English runs require the approved tag at the head
+    # of every textual Descriptive rubric criterion; every other run forbids
+    # one. Read from the run's frozen subject metadata (mechanics).
+    tags_required = assessment_profile.rubric_tags_required(profile)
     restriction = candidate.get("answer_restriction")
     if restriction not in ANSWER_RESTRICTIONS:
         # Never silently default an unknown restriction (spec §3.5).
@@ -327,10 +547,18 @@ def validate_candidate(
             )
         if kind == "descriptive" and malformed_rubric_tag(
             answer.get("answer_content"), answer_type,
+            tags_required=tags_required,
         ):
             errors.append(
-                f"descriptive rubric {position} does not start with an "
-                "allowed functional tag or is without its required colon"
+                f"descriptive rubric {position} breaks English rubric-tag "
+                "containment (contract v2.0 §28): "
+                + (
+                    "an English criterion opens with exactly one approved "
+                    "tag as '[tag]: text'"
+                    if tags_required
+                    else "a non-English criterion carries no bracket tag "
+                    "and is not empty"
+                )
             )
     raw_subquestions = candidate.get("sub_questions")
     if not isinstance(raw_subquestions, list):
@@ -396,6 +624,9 @@ def validate_candidate(
                 )
         if subquestions:
             errors.append("objective candidate must not have subquestions")
+        errors.extend(objective_explanation_defects(
+            answers, candidate.get("answer_explanation"),
+        ))
     elif kind == "subjective":
         if keyboard not in {"Yes", "No"}:
             errors.append("subjective math_keyboard must be exactly Yes or No")
@@ -452,6 +683,10 @@ def validate_candidate(
                 "4-mark descriptive candidate requires at least two "
                 "rubric blocks"
             )
+        errors.extend(descriptive_answer_parity_defects(
+            candidate.get("display_answer"),
+            candidate.get("answer_explanation"),
+        ))
         weights: list[Decimal] = []
         for position, answer in enumerate(answers, start=1):
             weight = finite(answer.get("answer_weightage"))
@@ -462,6 +697,11 @@ def validate_candidate(
                 )
             else:
                 weights.append(weight)
+                quantum = rubric_weight_quantum_defect(
+                    weight, what=f"descriptive rubric {position}",
+                )
+                if quantum:
+                    errors.append(quantum)
         weight_sum = sum(weights, Decimal(0))
         if (
             not subquestions
@@ -539,12 +779,12 @@ def validate_candidate(
                         )
                     if malformed_rubric_tag(
                         keyword.get("keyword"), keyword_type,
+                        tags_required=tags_required,
                     ):
                         errors.append(
                             f"subquestion {position} keyword "
-                            f"{keyword_position} does not start with an "
-                            "allowed functional tag or is without its "
-                            "required colon"
+                            f"{keyword_position} breaks English rubric-tag "
+                            "containment (contract v2.0 §28)"
                         )
                     weight = finite(keyword.get("weightage"))
                     if weight is None or weight <= 0:
@@ -555,6 +795,15 @@ def validate_candidate(
                         )
                     else:
                         keyword_weights.append(weight)
+                        quantum = rubric_weight_quantum_defect(
+                            weight,
+                            what=(
+                                f"subquestion {position} keyword "
+                                f"{keyword_position}"
+                            ),
+                        )
+                        if quantum:
+                            errors.append(quantum)
                 if (
                     len(keyword_weights) == len(keywords)
                     and sum(keyword_weights, Decimal(0)) != sub_mark
@@ -574,6 +823,9 @@ def validate_candidate(
                     "!= marks "
                     f"{marks:g}"
                 )
+    # Contract v2.0 §28.3 / Appendix C.3 (RUB-004): no rubric tag in any
+    # question, option, accepted answer, model answer or explanation.
+    errors.extend(model_answer_leak_defects(candidate, sheet_kind=str(kind)))
     return errors
 
 
@@ -1082,7 +1334,13 @@ def _cell_shape_findings(
 
     findings: list[dict] = []
     for field, value in record.items():
-        for defect in workbook.cell_text_defects(value):
+        # Measured on the ``<br>``-projected text the cell will hold (§17),
+        # exactly as the renderer's cell writer measures it.
+        projected = (
+            bi.to_workbook_rich_text(value) if isinstance(value, str)
+            else value
+        )
+        for defect in workbook.cell_text_defects(projected):
             findings.append(_finding(
                 RENDER_SHAPE_OVERFLOW,
                 f"{where}: {field} carries {defect['actual']} "

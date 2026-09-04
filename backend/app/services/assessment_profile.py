@@ -16,16 +16,22 @@ from __future__ import annotations
 import copy
 from typing import Any, Mapping
 
+from ..bulk_import import layouts
 
+
+# Master Governing Contract v2.0 §21 (True/False override): every True or
+# False item is a Subjective row with one placeholder-bound accepted answer.
+# The category therefore exists ONLY on the Subjective sheet, in every
+# profile; a legacy Objective spelling is not a legal cell.
 _GENERIC_QUESTION_FORMATS: dict[str, dict[str, dict[str, Any]]] = {
     "objective": {
         "Multiple Choice Question": {},
         "Assertion & Reasons": {},
-        "True/False": {},
         "Fill in the Blanks": {},
     },
     "subjective": {
         "Fill in the Blanks": {},
+        "True/False": {},
         "Very Short Answer": {},
         "Short Answer": {},
         "Sentence Transformation": {},
@@ -58,7 +64,7 @@ _MATHEMATICS_SUBJECT_ALIASES = (
     "math", "maths", "mathematics",
 )
 _ENGLISH_SUBJECT_ALIASES = (
-    "english", "english language", "english literature",
+    "english", "english language", "english literature", "english grammar",
 )
 # The owner's Question Duration Matrix (2026-08-29) shares one sheet
 # between Mathematics and Physics; Physics is its own alias set so plain
@@ -74,46 +80,47 @@ _SOCIAL_SCIENCE_SUBJECT_ALIASES = (
 
 
 # Workbook geometry is a run-profile fact, just like the set of enabled
-# sheets.  The default stays on the committed MES reference layout.  The
-# 2026-08-27 MSBSHSE Grade-6 audit records a distinct Master layout: each
-# entity band has an ``is_update_*`` column and Descriptive restores the
-# concept-source column.  One English Post workbook additionally needs 30
-# Descriptive rubric slots.  Those are declarative capabilities selected by
-# metadata + lane; no renderer branch names a subject or chapter.
+# sheets.  Master Governing Contract v2.0 §14 makes the UPDATE-AWARE schema
+# universal: every entity band carries an ``is_update_*`` column and
+# Descriptive carries the concept-source column, on every output of every
+# board (72 / 380 / 149 columns).  It was first evidenced by the 2026-08-27
+# Grade-6 audit workbooks, but it is not a board fact.  Only an explicitly
+# frozen profile may widen the Descriptive rubric capacity (the 440-column
+# English Post variant); a capacity limit never drops content — it is
+# resolved by an accepted wider profile or the row is blocked.  These are
+# declarative capabilities selected by metadata + lane; no renderer branch
+# names a subject or chapter.
+# Register Q27 (2026-09-04): the owner's physical CMS template carries 30
+# Descriptive answer blocks on every subject and lane, so the universal
+# contract renders the 72/440/149 geometry (``update-aware-master-2``) and
+# no profile widens or narrows it — the former English-Post-only 440-column
+# variant is simply the universal shape now.
 DEFAULT_MASTER_WORKBOOK_CONTRACT: dict[str, Any] = {
-    "contract_id": "reference-master-1",
-    "include_update_fields": False,
-    "include_descriptive_concept_source": False,
-    "descriptive_answer_slots": 10,
+    "contract_id": "update-aware-master-2",
+    "include_update_fields": True,
+    "include_descriptive_concept_source": True,
+    "descriptive_answer_slots": layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS,
     "natural_label_aggregates": False,
     "aggregate_rendered_questions_only": False,
 }
 
 MSBSHSE_GRADE_6_MASTER_WORKBOOK_CONTRACT: dict[str, Any] = {
-    "contract_id": "msbshse-grade-6-master-2026-08-27",
+    # Re-frozen 2026-09-04 on the universal 30-slot geometry (Q27); the
+    # aggregate rules below are the board layer, the width is not.
+    "contract_id": "msbshse-grade-6-master-2026-09-04",
     "include_update_fields": True,
     "include_descriptive_concept_source": True,
-    "descriptive_answer_slots": 10,
+    "descriptive_answer_slots": layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS,
     "natural_label_aggregates": True,
     "aggregate_rendered_questions_only": True,
 }
 
-MSBSHSE_GRADE_6_MASTER_WORKBOOK_OVERRIDES: tuple[dict[str, Any], ...] = (
-    {
-        "metadata_match": {
-            "board": _MSBSHSE_BOARD_ALIASES,
-            "grade": _GRADE_6_ALIASES,
-            "subject": _ENGLISH_SUBJECT_ALIASES,
-        },
-        "learning_phases": ("post",),
-        "overrides": {
-            "contract_id": (
-                "msbshse-grade-6-english-post-master-2026-08-27"
-            ),
-            "descriptive_answer_slots": 30,
-        },
-    },
-)
+# Retired by Q27: the 440-column Descriptive is no longer an English Post
+# variant but the universal geometry, so there is nothing left for a
+# subject-and-lane override to widen. The names stay importable and empty.
+ENGLISH_POST_MASTER_WORKBOOK_OVERRIDES: tuple[dict[str, Any], ...] = ()
+# Historical name, kept for callers that imported it.
+MSBSHSE_GRADE_6_MASTER_WORKBOOK_OVERRIDES = ENGLISH_POST_MASTER_WORKBOOK_OVERRIDES
 
 
 # The assessment-format policy supplied in the 2026-08-27 concept-mapping
@@ -158,16 +165,6 @@ MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY: dict[str, Any] = {
                     "minutes_per_subpoint": 1,
                 },
             },
-            "True or False": {
-                "marks": {
-                    "mode": "per_subpoint", "marks_per_subpoint": 1,
-                    "max_subpoints": 1,
-                },
-                "duration": {
-                    "mode": "per_subpoint",
-                    "minutes_per_subpoint": 1,
-                },
-            },
             # With options.  The same category on Subjective is the no-option
             # form; the materialization stage owns that semantic distinction.
             "Fill in the blanks": {
@@ -185,6 +182,20 @@ MSBSHSE_GRADE_6_MATHEMATICS_FORMAT_POLICY: dict[str, Any] = {
             # Without options (audit rule 9).
             "Fill in the blanks": {
                 "marks": {"mode": "per_subpoint", "marks_per_subpoint": 1},
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+            # Contract v2.0 §21/§23.1: True or False is a Subjective item with
+            # one placeholder-bound accepted answer (formerly an Objective
+            # category in this profile; the audited marks/duration contract
+            # is unchanged).
+            "True or False": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
                 "duration": {
                     "mode": "per_subpoint",
                     "minutes_per_subpoint": 1,
@@ -401,16 +412,6 @@ MSBSHSE_MATHEMATICS_PHYSICS_FORMAT_POLICY: dict[str, Any] = {
                     "minutes_per_subpoint": 1,
                 },
             },
-            "True or False": {
-                "marks": {
-                    "mode": "per_subpoint", "marks_per_subpoint": 1,
-                    "max_subpoints": 1,
-                },
-                "duration": {
-                    "mode": "per_subpoint",
-                    "minutes_per_subpoint": 1,
-                },
-            },
             "Fill in the blanks": {
                 "marks": {
                     "mode": "per_subpoint", "marks_per_subpoint": 1,
@@ -425,6 +426,17 @@ MSBSHSE_MATHEMATICS_PHYSICS_FORMAT_POLICY: dict[str, Any] = {
         "subjective": {
             "Fill in the blanks": {
                 "marks": {"mode": "per_subpoint", "marks_per_subpoint": 1},
+                "duration": {
+                    "mode": "per_subpoint",
+                    "minutes_per_subpoint": 1,
+                },
+            },
+            # Contract v2.0 §21/§23.1: True or False is Subjective.
+            "True or False": {
+                "marks": {
+                    "mode": "per_subpoint", "marks_per_subpoint": 1,
+                    "max_subpoints": 1,
+                },
                 "duration": {
                     "mode": "per_subpoint",
                     "minutes_per_subpoint": 1,
@@ -752,9 +764,10 @@ MSBSHSE_GRADE_6_RUN_PROFILE_OVERRIDE: dict[str, Any] = {
     "metadata_match": {
         "board": _MSBSHSE_BOARD_ALIASES,
         "grade": _GRADE_6_ALIASES,
-        # The audited workbook geometry and Subjective-sheet behavior are
-        # evidenced only for Mathematics and English.  Board + grade alone
-        # must not impose that contract on Science or another Grade-6 run.
+        # The audited natural-order label aggregates are evidenced for
+        # Mathematics and English; the three-sheet, update-aware geometry
+        # itself is now universal (contract v2.0), so this override only
+        # carries what remains profile-specific.
         "subject": _MATHEMATICS_SUBJECT_ALIASES,
     },
     "overrides": {
@@ -786,29 +799,33 @@ DEFAULT_PROFILE: dict = {
     # ``allow_subjective_rows`` boolean (spec-step8 T12/M6b): a boolean
     # cannot express a three-value set, and two keys answering one question
     # is the defect M6 forbids one paragraph above itself.  Read ONLY
-    # through ``sheet_kinds`` below.
-    "sheet_kinds": ("objective", "descriptive"),
+    # through ``sheet_kinds`` below.  Contract v2.0 §12/§21: every output
+    # carries the three sheets and the Subjective lane (deterministic Fill
+    # in the Blanks, True or False) is universal, so the default enables
+    # all three; a profile may only narrow it explicitly.
+    "sheet_kinds": ("objective", "descriptive", "subjective"),
     # Fields that ship blank in this school's workbooks regardless of what
     # upstream rows carry (spec-step8 T12/M4; Q5/§6 settles the layout, the
     # profile settles the fill practice).  Read ONLY through
-    # ``forced_blank_fields`` below.
-    "forced_blank_fields": ("chapter_duration", "question_disclaimer"),
-    # The wire value Master rows carry in ``question_source`` when a
-    # candidate declares none. T10-7 item 5 (S11): it names the ORIGIN
-    # SYSTEM, not a school — [measured] every gold row carries
-    # "UpSchool DB" — so the origin-system default lives here rather than
-    # being an empty string a declared-none candidate turns into a blank
-    # learner-visible cell.
-    "question_source": "UpSchool DB",
+    # ``forced_blank_fields`` below.  Contract v2.0 §32.1: the chapter
+    # duration is frozen once per chapter and repeated identically across
+    # all four outputs, so it is never forced blank; ``question_disclaimer``
+    # stays blank unless a profile explicitly requires content (§18).
+    "forced_blank_fields": ("question_disclaimer",),
+    # Contract v2.0 §18: ``question_source`` is a mandatory per-run scalar
+    # naming the publication (the run's frozen source book), stamped on
+    # every candidate by the release run.  The historical origin-system
+    # constant ("UpSchool DB") is no longer a default: a candidate that
+    # reaches the renderer without a source is a release blocker
+    # (``question_source_missing``), never a borrowed value.
+    "question_source": "",
     # The wire value this school's Master rows carry in ``group_status``
     # when a group declares none.
     "group_status": "Active",
     # Output-role geometry. Concept files always use the committed reference
     # schema; only Master rendering reads this contract.
     "master_workbook": DEFAULT_MASTER_WORKBOOK_CONTRACT,
-    "master_workbook_overrides": (
-        MSBSHSE_GRADE_6_MASTER_WORKBOOK_OVERRIDES
-    ),
+    "master_workbook_overrides": ENGLISH_POST_MASTER_WORKBOOK_OVERRIDES,
     # Automatic secondary QuestionTag placements are off; a future profile
     # may enable explicit, audited secondaries.
     "automatic_secondary_tags": False,
@@ -1127,11 +1144,14 @@ def master_workbook_contract(
             contract.update(copy.deepcopy(dict(overrides)))
         break
 
+    floor = layouts.UNIVERSAL_DESCRIPTIVE_ANSWER_SLOTS
     try:
-        slots = int(contract.get("descriptive_answer_slots", 10))
+        slots = int(contract.get("descriptive_answer_slots", floor))
     except (TypeError, ValueError):
-        slots = 10
-    contract["descriptive_answer_slots"] = max(10, slots)
+        slots = floor
+    # Q27: the universal template capacity is a floor a profile may not
+    # narrow (a capacity limit never drops content — contract §14).
+    contract["descriptive_answer_slots"] = max(floor, slots)
     contract["include_update_fields"] = bool(
         contract.get("include_update_fields", False)
     )
@@ -1338,6 +1358,73 @@ def automatic_secondary_tags(profile: Mapping | str | None = None) -> bool:
     """Whether this profile permits automatic secondary placements."""
 
     return bool(_value(profile, "automatic_secondary_tags"))
+
+
+# --------------------------------------------------------------------------- #
+# English rubric-tag containment (contract v2.0 §28, Appendix C)
+# --------------------------------------------------------------------------- #
+# Controlled bracket tags are REQUIRED on every populated textual rubric
+# criterion of an ENGLISH Descriptive item and FORBIDDEN everywhere else —
+# in every other field of an English item and in every rubric of every other
+# subject.  Whether a run is an English run is read from the run's frozen
+# subject metadata through the same alias set the format policies use; it is
+# metadata matching, never a judgment about content.  The tag on any given
+# criterion is the model's choice from the registry; code only validates the
+# syntax and the containment.
+
+ENGLISH_RUBRIC_TAGS: tuple[str, ...] = (
+    "content", "evidence", "reasoning", "organisation", "language",
+    "creativity", "accuracy",
+)
+
+
+def _subject_is_english(subject: Any) -> bool:
+    """Whether the run's frozen subject names English.
+
+    Identity mechanics over the run metadata (never content): the token
+    equals a registered alias, or opens with the word ``english`` — so an
+    "English L1" or "English Language and Literature" run is English and
+    never silently resolves to the tag-free non-English rule (§2).
+    """
+    token = _metadata_token(subject)
+    if token in {_metadata_token(alias) for alias in _ENGLISH_SUBJECT_ALIASES}:
+        return True
+    return token == "english" or token.startswith("english ")
+
+
+def rubric_tag_policy(
+    metadata: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """The tag containment rule for one run's subject metadata.
+
+    Returns ``{"required": bool, "tags": [...]}``: required (with the
+    registry) for an English run, forbidden (empty registry) otherwise.
+    Handed to the materialization author and critic as evidence and read by
+    the mechanical validators.
+    """
+    subject = (metadata or {}).get("subject") if isinstance(metadata, Mapping) else None
+    required = _subject_is_english(subject)
+    return {
+        "required": required,
+        "tags": list(ENGLISH_RUBRIC_TAGS) if required else [],
+        "syntax": "[tag]: <observable credit-bearing criterion>",
+    }
+
+
+def rubric_tags_required(
+    profile: Mapping | str | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> bool:
+    """Whether the run's Descriptive rubric criteria carry English tags."""
+    if isinstance(metadata, Mapping) and _metadata_token(
+        metadata.get("subject")
+    ):
+        return _subject_is_english(metadata.get("subject"))
+    resolved = resolve(profile)
+    carried = resolved.get("_resolved_metadata")
+    if isinstance(carried, Mapping):
+        return _subject_is_english(carried.get("subject"))
+    return False
 
 
 def name(profile: Mapping | str | None = None) -> str:

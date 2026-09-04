@@ -44,11 +44,14 @@ OWNER = "local:default"
 
 def _chapter(db, *, title="Light and Shadows", grade="06", board="CBSE",
              subject="Science", code="06CBSC_Light"):
+    # Contract v2.0 §32.1: a release whose chapter has no frozen duration
+    # is blocked from the database write (``chapter_duration_unregistered``),
+    # so a synthetic chapter that will be published carries one.
     chapter = models.Chapter(
         chapter_code=code, board=board, grade=grade, subject=subject,
         unit=f"{subject} Unit", chapter_title=title,
         chapter_display_name=title, chapter_description="",
-        chapter_duration="",
+        chapter_duration="40 minutes",
     )
     db.add(chapter)
     db.flush()
@@ -86,6 +89,8 @@ def _job(db, chapter, records) -> models.UploadJob:
         filename="identity.mmd", mmd_text="# Chapter\n\nExercise 1. Name one.",
         status="generated", deposit_scope_type="chapter",
         deposit_scope_ids=[chapter.id], question_inventory=inventory,
+        # Contract v2.0 §18: the run names its publication.
+        source_book="NCERT",
     )
     db.add(job)
     db.commit()

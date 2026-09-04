@@ -103,6 +103,7 @@ class UploadJobOut(BaseModel):
     textbook_mode: str
     learning_kind: str
     source_book: str = ""
+    chapter_duration_minutes: int = 0
     filename: str
     mmd_text: str
     deposit_scope_type: str

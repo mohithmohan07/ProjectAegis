@@ -323,8 +323,9 @@ def test_the_master_refiner_readback_still_fires_for_a_missing_occupied_row(
 
 def test_allow_subjective_rows_is_deleted_not_kept_beside_sheet_kinds():
     assert "allow_subjective_rows" not in assessment_profile.DEFAULT_PROFILE
+    # Contract v2.0 §12/§21 (Q26): every output carries the three sheets.
     assert assessment_profile.DEFAULT_PROFILE["sheet_kinds"] == (
-        "objective", "descriptive")
+        "objective", "descriptive", "subjective")
     live = Path("app/services").rglob("*.py")
     for path in [*live, *Path("app/bulk_import").rglob("*.py")]:
         for number, line in enumerate(
@@ -350,12 +351,14 @@ def test_the_recorded_golden_profile_still_resolves():
     recorded = golden["profile"]
     assert "allow_subjective_rows" in recorded
     assert "sheet_kinds" not in recorded
+    # Contract v2.0 §12/§21 (Q26): the fallback DEFAULT_PROFILE enables
+    # all three sheets, so the recorded partial profile resolves to them.
     assert assessment_profile.sheet_kinds(recorded) == (
-        "objective", "descriptive")
+        "objective", "descriptive", "subjective")
 
     from app.services import assessment_cells as cells
     assert cells._allowed_sheet_kinds(recorded) == (
-        "objective", "descriptive")
+        "objective", "descriptive", "subjective")
 
 
 def test_sheet_kinds_is_read_through_one_accessor():
@@ -455,9 +458,10 @@ def test_forced_blank_fields_is_read_at_all_three_sites():
     ):
         assert '"chapter_duration"' in Path(path).read_text(encoding="utf-8")
 
-    # reference-1 stays pinned to a blank chapter duration. Conclusive
-    # Grade-6 MSBSHSE metadata selects the program override that carries the
-    # authored source value, proving the same profile lever remains live.
+    # Contract v2.0 §32.1 (Q26): the chapter duration is frozen once and
+    # repeated identically on every output of every profile — never forced
+    # blank — as a real numeric minutes cell (§32). ``question_disclaimer``
+    # is what the default profile still forces blank.
     snapshot = copy.deepcopy(_snapshot())
     snapshot["chapter"]["chapter_duration"] = "45 minutes"
     default_rows = _objective_rows(mp.render_master_file(snapshot)[0])
@@ -467,12 +471,13 @@ def test_forced_blank_fields_is_read_at_all_three_sites():
     )
     carried_rows = _objective_rows(
         mp.render_master_file(snapshot, msbshse_profile)[0])
-    assert all(
-        not str(row.get("chapter_duration") or "")
-        for row in default_rows)
-    assert all(
-        str(row.get("chapter_duration") or "") == "45 minutes"
-        for row in carried_rows)
+    assert assessment_profile.forced_blank_fields(
+        assessment_profile.DEFAULT_PROFILE
+    ) == ("question_disclaimer",)
+    assert default_rows and all(
+        row.get("chapter_duration") == 45 for row in default_rows)
+    assert carried_rows and all(
+        row.get("chapter_duration") == 45 for row in carried_rows)
 
 
 def test_renderable_sheet_kinds_is_a_module_constant_not_the_profile():
@@ -552,11 +557,16 @@ def test_subjective_candidate_renders_and_reads_back_end_to_end():
     row = subjective_rows[0]
     assert row["question_label"] == "06MSMA_T01_TwoDim Q01"
     assert row["question"] == candidate["question"]
-    assert row["question_text"] == candidate["question_text"]
+    # Contract v2.0 §26: the learner-facing text shows each recorded
+    # placeholder as a blank; the placeholder form stays in ``question``.
+    assert row["question_text"] == mp.subjective_question_text(
+        candidate["question"], candidate["answers"])
     assert row["math_keyboard"] == "No"
-    assert row["answer_type_1"] == "Phrases"
+    # §26.2: the Subjective sheet carries the lane literals "Words" and
+    # "Yes"; the accepted answer itself lives in ``answer_N``.
+    assert row["answer_type_1"] == "Words"
     assert row["answer_1"] == "four"
-    assert row["answer_display_1"] == "four"
+    assert row["answer_display_1"] == "Yes"
     assert row["weightage_1"] == 1
     assert row["placeholder_1"] == "a"
     assert row["answer_2"] == "four"
@@ -885,13 +895,15 @@ def test_the_reference_profile_cells_payload_names_all_renderable_formats():
 
     from app.services import assessment_cells as cells
 
+    # Contract v2.0 §26: the Subjective sheet is universal, so the cell
+    # author is offered all three formats on every profile.
     assert cells._allowed_sheet_kinds(
         assessment_profile.DEFAULT_PROFILE) == (
-            "objective", "descriptive")
+            "objective", "descriptive", "subjective")
     payload = cells._profile_payload(assessment_profile.DEFAULT_PROFILE)
     assert payload["name"] == "reference-1"
     assert payload["allowed_sheet_kinds"] == [
-        "objective", "descriptive"]
+        "objective", "descriptive", "subjective"]
     assert payload["appears_in"] == "Pre/Post-Worksheet/Test"
     assert tuple(
         payload["assessment_format_policy"]["formats_by_sheet"]
@@ -1116,7 +1128,7 @@ def test_a_run_context_carrying_a_profile_dict_still_ships_four_outputs():
         {"assessment_profile": dict(assessment_profile.DEFAULT_PROFILE)})
     assert isinstance(as_dict, dict)
     assert assessment_profile.sheet_kinds(as_dict) == (
-        "objective", "descriptive")
+        "objective", "descriptive", "subjective")
     assert svc._run_profile({"profile": "reference-1"}) == "reference-1"
     assert svc._run_profile({"profile": ""}) is None
     assert svc._run_profile(None) is None

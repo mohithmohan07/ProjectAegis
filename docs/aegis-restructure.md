@@ -421,7 +421,7 @@ through the reader's auto-detection.
 | **01 · Post-Learning Concept Review** | Everything up to the Concepts column: Chapter, Topic and Concept bands filled, one row per concept, full concept detailing. Opens as a rendered, editable page (§7). |
 | **02 · Post-Learning Master File** | All columns filled, including assessments: every source question, polished, on its answer-style sheet (Objective / Subjective / Descriptive), with Groups, master records, categories, cognitive skills, difficulty, `answer_restriction`, marks and marking. |
 | **03 · Pre-Learning Concept Review** | As Output 01, for the Pre-Learning map. |
-| **04 · Pre-Learning Master File** | All columns filled: the generated pre-learning questions (adaptive target 40 per concept), grouped and marked the same way. |
+| **04 · Pre-Learning Master File** | All columns filled: the generated pre-learning questions (complete diagnostic coverage of each Pre Concept's Mastery, no quota — contract §8, Q26), grouped and marked the same way. |
 
 Two model passes finish every question row:
 
@@ -686,7 +686,7 @@ reviewer's, applied without ever re-entering the pipeline.
 | Release staging + diagnostics + explicit publication (Rules E–G) | Rebuild | From one workbook to the four named outputs; the two release systems converge. |
 | Pre-Learning flows (upload / from-existing) + ported quota engine | Retire | Replaced by Phase-03 capture inside the single run (Q3); quotas purged. |
 | Every-concept learner-analysis contract (author + flag on every concept) | Retire | Q1: chapter inventory + unique allotment replaces it; Achieving Mastery stays per-concept. |
-| Pre-Learning question generation (adaptive-40 master file) | New | Blueprint- and registry-guided (Q4 per D3, Q11). |
+| Pre-Learning question generation (coverage-planned master file; the adaptive-40 figure is struck per Q26) | New | Blueprint- and registry-guided (Q4 per D3, Q11). |
 | Groups for Build Concepts master files | New | Reuses the MES grouping engine (level verdict + variant clustering); its critic becomes advisory per Q10. |
 | Critic-gated retry loops in the assessment lane (MAX_ATTEMPTS acceptance gates) | Rebuild | Q10: decide-once everywhere — one verdict plus one correction; critic dissent flags, never retries. |
 | Open/Specific (`answer_restriction`) classification pass | New | Policy Registry v2.0 as model evidence, Math/Physics families Open (Q11). |
@@ -724,8 +724,8 @@ No code moves until the register below is signed off (it now is).
 6. **Groups + Master File passes** — level verdicts, variant clustering,
    Open/Specific, marking schemes; Output 02 ships.
 7. **Phase 03 pre-learning capture** — capture during all phases, pre-map
-   build, adaptive-40 generation; Outputs 03–04 ship; old pre-learning flows
-   removed.
+   build, coverage-planned generation (no quota, Q26); Outputs 03–04 ship;
+   old pre-learning flows removed.
 8. **Four-output release on the SOP/MES schema (Q5)** — including
    per-topic/per-concept ID minting and the QC-checklist audit.
 9. **The review/edit surface** — rendered pages, inline edit, instruction-box
@@ -765,7 +765,8 @@ run-context pinning, the semantic-authority matrix as a maintained
 drift-guard (§3); containers as non-destructive projections (§4 Phase 1.2);
 the three wording layers, the bidirectional-equivalence checklist, and
 recorded source roles (§4 Phase 2.3); needed-for prerequisite links and the
-D3 adaptive-40 formulation (§4 Phase 03); the group-description quality bar
+D3 coverage-plan formulation, its numeric target since struck (§4 Phase 03,
+Q26); the group-description quality bar
 (§4 Phase 4.5); the single-snapshot invariant, named release states, and
 publication hardening (§4 Phase 05); the Open/Specific decision-input
 contract and Blueprint canonicity for marks (§4 Phase 05);
@@ -819,7 +820,8 @@ Every place where the Aegis document, a decision recorded earlier, the built
 system, and/or the GPT blueprint disagree. Nothing here was resolved
 silently. Every point is decided: Q1–Q3, Q5–Q13 by Mohith's word on
 16 Aug 2026 (Q7 amended by Q13; Q8 decided for now), and Q4 provisionally per
-D3.
+D3. Since Q26 (4 Sep 2026) the Master Governing Contract v2.0 governs where
+an older entry disagrees; Q26 lists what it superseded and what stands.
 
 ### Q1 · Decided — Misconceptions: the chapter inventory is the only mechanism
 
@@ -1178,8 +1180,11 @@ Objective options render in the question paper as lowercase `a)`, `b)`,
 `c)`, `d)` (continuing alphabetically when the recorded answer list is
 longer). Option order and correct-answer identity remain unchanged.
 
-KaTeX `tabular`/`array` environments and Markdown pipe tables are unsupported
-and must not ship.
+*Table clause superseded in place (P10 in Q23, confirmed by contract §34 per
+Q26): a table ships as one complete canonical KaTeX `array` or one tight
+complete crop; the coordinate transcription below is a transport encoding
+only, never a shippable rendering.* Original text: KaTeX `tabular`/`array`
+environments and Markdown pipe tables are unsupported and must not ship.
 When the source already associates an image with that table, the semantic
 author preserves that source image. Otherwise the fallback is a mechanical,
 lossless row/column transcription (`Table row N, column N: value`) preserving
@@ -1319,6 +1324,206 @@ fix, plus the upload-UX and MMD-visibility complaints:
   implementation began with PR #273), C2 page identity end-to-end, C3
   block-sequence chunking, C4 non-PDF parity (needs its own go/no-go with
   cost). Each phase validates against the audit corpus.
+
+### Q26 · Decided — the Master Governing Contract v2.0 is the output specification; the run cost policy
+
+Owner ruling, 4 Sep 2026: the owner's **Master Governing Contract v2.0**
+(document AEGIS-MGC-2.0-20260904, checked in verbatim as
+`docs/aegis-master-governing-contract-v2.md`) is the specification every
+output, validator, exporter, prompt and review surface is built to. Its §2
+precedence rule binds: where this register, a SOP, a prompt, a validator or
+a sample disagrees with it, the contract wins, and the contract itself is
+board-, publication- and grade-agnostic — its Grade 6 MSBSHSE calibration is
+a calibration artefact, never a default. The owner's second ruling of the
+same day: a chapter costing USD 8–10 to run is not what the pipeline needs;
+remove what is not necessary. What this entry decides, and what it
+supersedes:
+
+* **Workbook contract, universal.** Every lane and every board ships the
+  update-aware schema (72/380/149 as first frozen here; 72/440/149 since
+  Q27 accepted the CMS template — `update-aware-master-2`; formerly named
+  after MSBSHSE grade 6) with all five `is_update_*` fields `No` on EVERY
+  authored row — questionless concept tails included (amends Q23 D3's
+  "populated bands" wording); three sheets (Objective, Descriptive,
+  Subjective) in every output, unused ones header-only; multi-value cells
+  use the exact ` | ` separator (comma/semicolon joins retired at every
+  writer, reader and read-back; legacy comma cells still import); in-cell
+  line breaks are `<br>` (never a raw newline); True/False is a Subjective
+  format everywhere (the closed one-key option set alone is Objective);
+  `question_appears_in` is the literal set; `question_source` is the run's
+  publication and nothing else (the filename and "UpSchool DB" fallbacks
+  are gone — a blank publication is a read-back blocker, never guessed);
+  `concept_source` likewise. Outputs 01/03 (the Concept File) render on the
+  same update-aware layout as the Master, and the layout every release row
+  records (`release_core.layout_id()`) is that one; the reference workbook
+  `sop-mes-1` stays registered as a read-side (import) layout only. The
+  one-time re-delimiting of stored legacy lists (db backfill) splits
+  rosters of identified titles — pre/post topics, related topics and
+  concepts — by the §15 identity grammar (every item closes with its
+  `(id)` tag), so a comma inside a title survives the migration; plain
+  lists (keywords, digicards, sources) split on the legacy comma. Board
+  profiles are explicit layers over the universal default, never the
+  default itself.
+* **Answer and rubric semantics.** An Objective explanation BEGINS with the
+  exact correct-option text and never names a letter or a number; a
+  Descriptive `display_answer` equals `answer_explanation`; a Subjective
+  True/False projects as a placeholder-bound answer; every rubric criterion
+  carries exactly 0.5 or 1 mark (the marking checker refuses any other
+  quantum, the reader stays lenient on legacy imports); rubric tags come
+  from the English registry only (`[content] [evidence] [reasoning]
+  [organisation] [language] [creativity] [accuracy]`; `[creative]` is
+  invalid) and appear only in English Descriptive criterion fields — a tag
+  anywhere else, or in any non-English rubric, is a materialization defect.
+  `question` carries the learner text with `$x$` blanks projected as
+  `____` for Subjective rows and the multipart stem plus sub-questions for
+  Descriptive rows (this restores stem-only `question` and retires the §6 D4
+  "both carry the full wording" reading). Answer-type cells carry the lane
+  literal (§22–§24): `Words` on Objective options and Subjective answers,
+  `Phrases` on Descriptive criteria and keywords, `Equation`/`Image`
+  unchanged; inside the pipeline the one canonical textual medium stays
+  `Phrases`, the reader accepts both spellings, and the writers project the
+  literal at the cell (the parked D6 "Words → Phrases fold" is thereby
+  registered and retired for export). Numbers display as `0.##` (§42.10,
+  supersedes the A11 "1.0" display).
+* **Other register text superseded in place.** Q21's table clause (already
+  overruled by P10 — contract §34) is annotated where it stands; the
+  "adaptive-40" wording of §4 Phase 03 is struck; Q11's "v2.0" means the
+  Open/Specific *registry* v2.0 (`docs/open-specific-registry-v2.md`, model
+  evidence, never a lookup), not this contract — and under §31 no subject
+  family holds a standing Open stance: a bounded target is Specific with
+  recorded accepted equivalents, the registry text stays evidence.
+* **Frozen run variables.** `chapter_duration` comes from the accepted
+  registry (exact match) or the explicit upload variable
+  (`chapter_duration_minutes` on the upload form and API) and from nowhere
+  else: the model-estimated duration is retired, the cell ships blank when
+  neither exists, and `chapter_duration_unregistered` blocks the database
+  write until one is supplied (§32.1). The publication is a run variable
+  the same way (§18).
+* **Pre coverage (amends Q20, keeps Q4 and the 2026-08-21 posture).** The
+  plan prose no longer quotes any numeric target: contract §8 is "complete
+  diagnostic coverage of the Mastery, at least one routed question, no
+  quotas". The unconditional rationale, the anchoring critic dimension and
+  the never-padded rule stand.
+* **Cost policy (amends Q22).** Reasoning effort is chosen by a named
+  profile (`AEGIS_OPENAI_REASONING_PROFILE`, default `tiered`): semantic
+  authoring and adjudication request `high`, the independent advisory
+  critic — now its own purpose, `advisory_critic`, on every live critic
+  adapter — requests `medium`, transcription/outline/refinement request
+  `medium`, metadata requests `low`; `uniform-xhigh` restores Q22 for A/B
+  measurement on the same source. Reasoning effort remains transport
+  policy: no decide-once key changes, and Q22's step-down negotiation
+  stands. In the Master lane the per-decision critics on cells,
+  materialization, answer restriction, marking, level, cluster and
+  description are OFF by default and replaced by ONE joint per-item review
+  after marking (contract §27 step 6: question, answer space, model answer,
+  criteria, accepted equivalents, arithmetic — `assessment_item_review`,
+  advisory, never a gate, Q10); the route, dedup and pre-claim critics stay
+  on (`AEGIS_MASTER_CRITICS` = `all` | `none` | a list); the Master Refiner
+  and the touched-group QA are opt-in (`AEGIS_MASTER_REFINER`,
+  `AEGIS_MASTER_GROUP_QA`); the concept-row Refiner (§8.3) refines only
+  rows carrying a recorded review flag (`AEGIS_CONCEPT_REFINER` =
+  `flagged` | `all` | `off`, contract §38 stage 10: re-review of what a
+  verdict touched). A pure `[confidence]` shortfall ships flagged after ONE
+  attempt instead of three — the prompts forbid inflating a score to pass a
+  threshold, so a re-ask on the same evidence could only buy an inflated
+  number. Nothing here moves a semantic verdict into code (Rule 1); only
+  the number of second passes and the effort they request change, and each
+  former behaviour is one environment variable away for measurement.
+* **Recorded, not yet done** (the six-area cost map of 4 Sep 2026, for a
+  follow-up entry): the legacy skeleton lane authors full descriptions that
+  Settle re-authors; Chapter Reading rewrites the chapter verbatim as
+  output; the PDF lane sends each page's text layer twice per call; chapter
+  metadata is authored up to four times per chapter; Host re-sends every
+  concept's full details per batch; Phase 3 critics run per batch rather
+  than per stage. Each is a transport or duplication cut compatible with
+  Rule 1; none is taken here because each re-keys stored decisions or
+  touches the legacy lane's prompts, and the owner should measure the
+  effect of this entry's cuts on the same source first. Also recorded: the
+  contract's §7.2 "repeated source occurrences remain distinct" reads
+  against the Post source-duplicate verdict (P3) and the pre-learning claim
+  (Q18); both stay on until the owner rules, since the 2026-08-29 audit
+  measured real double-shipped extraction artefacts. Also recorded as owed
+  and not done here: the §10 concept house format (`<br>` between sections,
+  numbered `Types:`/`Cases:`/`Examples:` lists with cross-references and a
+  `Question label:` line under each Example — the ` // ` house format of §5
+  still ships and its validators still read it); §26.1's ban on empty
+  BG01/IG01/AG01 group shells for questionless concepts (the shell
+  completer of Q16 still runs); the release half of §43–§44 (a critic
+  dissent the critic itself marks critical blocks publication — today every
+  dissent is advisory, Q10 unchanged); and §19.2's model parentage verdict
+  for independent enumerations (Phase 2.3's "never split" still governs).
+  Each is a contract requirement that touches the authoring prompts, the
+  concept validators and the refiner whitelist together, and is the next
+  slice.
+
+**Stands:** Q1, Q2/Rule C, Q3, Q5 (as the base layout the update-aware
+profile extends), Q6, Q8, Q9, Q13 (read as above: complete every stage, stage
+every artefact, publish nothing with a blocker), Q14/Rule B, Q15, Q16's
+naming, Q17 (the asset route is anonymous; "signed" was wording), Q18, Q19,
+Q21's non-table clauses, Q23 D1/P10/D2 (D2 as the explicit MSBSHSE profile
+layer; True/False durations read per row), D4, Q24, Q25, D5, D7.
+
+### Q27 · Decided — the physical CMS template of 4 Sep 2026 is the accepted fingerprint; one source on every output; Post questions verbatim
+
+Owner rulings, 4 Sep 2026 (later the same day as Q26), three of them:
+
+* **The physical template supersedes the quoted widths.** The owner
+  supplied the CMS's current bulk-upload template
+  (`Bulk_Upload_New_Format.xlsx`, SHA-256 `a199ffe3…cfcc972`, fingerprint
+  transcribed byte-exactly in
+  `backend/app/bulk_import/templates/bulk_upload_new_format_2026-09-04.json`)
+  "so you are aligned with the same". Contract §14 lets a later physical
+  template supersede its widths once the full fingerprint is explicitly
+  accepted for the run; this entry is that acceptance. Its geometry is the
+  update-aware schema with **30 Descriptive answer blocks on every subject
+  and lane — 72 / 440 / 149** — so that is now the one universal output
+  layout (`update-aware-master-2`) for all four outputs on every board; the
+  380-column `update-aware-master-1` stays registered on the read side
+  only, so an already-published workbook still imports, and the
+  English-Post-only 440 variant of §14 is retired as a variant because it is
+  simply the universal shape (the `english-post-master-expanded-1` contract
+  id is gone; the MSBSHSE grade-6 board layer keeps only its aggregate rules,
+  re-frozen as `msbshse-grade-6-master-2026-09-04`). Recorded, not
+  reproduced, because §14 and B.3 forbid them in a write: the template
+  carries `chapter_display_name` twice on Subjective and Descriptive,
+  seventeen copy-pasted answer-block header cells between Descriptive
+  blocks 9–13, a duplicated trailing `sq15_keyword_6`, three
+  `is_update_*` headers with a trailing newline, and its sheets in the
+  order Objective, Subjective, Descriptive where §12 says Objective,
+  Descriptive, Subjective. The generated outputs carry every header once,
+  trimmed, in the contract order; the template repair and the sheet-order
+  question are the CMS side's, and `test_bulk_upload_template_fingerprint`
+  proves column for column that the template's intended geometry and the
+  registered layout are the same thing. A repaired template changes that
+  pin deliberately.
+* **One source, the upload page's.** `concept_source` on Outputs 01/03 and
+  `concept_source`/`question_source` on Outputs 02/04 all carry the run's
+  publication — the Source book typed on the Build Concepts page and
+  frozen on the job (§18) — never a concept's accumulated provenance list
+  (`concept.sources`, which stays the database's record of every book a
+  concept was built from and still exports on the run-less accumulator
+  workbook), never a filename. The chapter's human tag names the same
+  publication.
+* **Post questions verbatim (narrows §7.3).** "Post learning questions
+  should be the questions exactly present in the source, no creation by
+  its own." The Post lane already generates nothing (§7.2, the generated
+  lane is Pre only); what changes is the polishing latitude: a
+  source-owned question is the source task's wording verbatim, and exactly
+  four mechanical changes remain — page apparatus dropped, an outside
+  pointer replaced by the referenced content copied verbatim, notation
+  and blanks projected into the workbook's forms, an activity carried as
+  stated. §7.3's "correcting grammar … an obvious wording defect" column is
+  withdrawn: a grammar slip in the source ships as printed and is noted in
+  the rationale. The materialization author (`assessment-materialize-14`),
+  its advisory critic and the joint item review
+  (`assessment-item-review-2`) all hold the rule; per Rule 1 the check that
+  a question IS the source's wording is the reviewer's verdict, never a
+  string comparison. The legacy "Build Assessments → from Concept Mapping"
+  generator is untouched by this entry: it is a blueprint tool outside the
+  four outputs, and whether it stays is an open question for the owner.
+
+**Stands:** everything Q26 lists, with §14's widths and §7.3's permitted
+column read as amended above.
 
 ---
 
