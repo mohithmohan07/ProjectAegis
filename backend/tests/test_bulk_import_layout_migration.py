@@ -28,6 +28,7 @@ import pytest
 from app import bulk_import as bi
 from app import config
 from app import models
+from app.bulk_import import assessment_workbook as workbook_contract
 from app.bulk_import import layouts, writer
 
 CANONICAL = "canonical-current"
@@ -1169,9 +1170,20 @@ def test_the_concept_files_are_filled_to_the_concept_band_and_no_further(db):
         assert rows_by_sheet["descriptive"] == []
         assert rows_by_sheet["subjective"] == []
 
+        # The tail past the Concept band carries NOTHING except the two
+        # update markers §14.1 puts on every authored row "even when the
+        # corresponding later entity band is otherwise blank" — the rule
+        # register Q26 restated, and the shape of the owner's corrected
+        # Concept File for Radha's Letter to Mowgli, whose Group and
+        # Question bands are empty beside an ``is_update_*`` pair of "No".
+        tail_fields = objective.fields[group_start:]
         for row in rows_by_sheet["objective"]:
-            tail = row[group_start:]
-            assert not any(str(v or "").strip() for v in tail), (lane, tail)
+            for field, value in zip(tail_fields, row[group_start:]):
+                if field in workbook_contract.UPDATE_FIELDS:
+                    assert value == workbook_contract.UPDATE_FIELD_VALUE, (
+                        lane, field, value)
+                else:
+                    assert not str(value or "").strip(), (lane, field, value)
             assert str(row[labels_index] or "").strip(), lane
             assert str(row[source_index] or "").strip(), lane
 
