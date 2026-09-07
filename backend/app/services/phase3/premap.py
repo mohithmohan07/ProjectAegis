@@ -167,9 +167,63 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from ... import bulk_import as bi
 from ... import config
 from .. import katex_rules as kr
 from .. import progress
+
+# The run the map belongs to, stamped on the map itself (register Q29).
+# ``generation.PRE_RUN_IDENTITY_FIELD`` names the same key on the release
+# bundle; a regression pins the two literals equal.
+RUN_IDENTITY_FIELD = "run_identity"
+
+
+def run_identity(env: Mapping[str, Any]) -> dict[str, Any]:
+    """The frozen identity of the run this Pre map was authored for.
+
+    Read off the sealed envelope, never off any content: the chapter the
+    envelope's metadata froze at stage 0 (§38), the source contract the
+    rows are sealed on, and the envelope seal every decision key carries.
+    Release staging compares the chapter against the job it is staging
+    into (``build_concepts_release.stage_pre_release_from_run``) and the
+    sidecar restore compares the hashes against the envelope in the same
+    directory (``concept_topology_contract.restored_pre_release``). Pure
+    identity accounting — it decides nothing about what the map means.
+    """
+
+    metadata = env.get("metadata") if isinstance(env, Mapping) else None
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    raw_chapter_id = metadata.get("chapter_id")
+    try:
+        chapter_id: int | None = (
+            int(raw_chapter_id)
+            if raw_chapter_id not in (None, "") else None
+        )
+    except (TypeError, ValueError):
+        chapter_id = None
+    return {
+        "chapter_id": chapter_id,
+        "chapter_code": _normal(metadata.get("chapter_code")),
+        "source_contract_hash": _normal(env.get("source_contract_hash")),
+        "envelope_sha256": _normal(env.get("envelope_sha256")),
+    }
+
+
+def keywords_cell(value: object) -> str:
+    """The ``keywords`` cell exactly as contract §16 writes a list.
+
+    The prompt asks for ONE ``" | "``-delimited string, and a model that
+    answers with a JSON array is still answering the same question: the
+    tokens are joined on the exact delimiter, mechanically. Before this
+    seam existed the array was ``str()``-ed into the cell, so every Pre
+    row of a run shipped ``['a', 'b']`` while its Post sibling shipped
+    ``a | b`` (register Q29). A string passes through untouched — a
+    comma list is left as the one token the writer already treats it as.
+    """
+
+    if isinstance(value, (list, tuple)):
+        return bi.join_multi([_normal(item) for item in value])
+    return _normal(value)
 
 POLICY_VERSION = "premap-1"
 
@@ -1090,6 +1144,7 @@ def build(
         "review_flags": {},
         "decision_flags": {},
         "validation": [],
+        RUN_IDENTITY_FIELD: run_identity(env),
     }
     if not captured:
         # D8.3 / S9 — ONE verdict, not an inference. This branch used to
@@ -1294,7 +1349,7 @@ def build(
                 "parent_concept": "",
                 "concept_title": _normal(entry.get("concept_title")),
                 "concept_details": details,
-                "keywords": _normal(entry.get("keywords")),
+                "keywords": keywords_cell(entry.get("keywords")),
                 "_semantic_topic_id": topic_id,
                 # A Pre concept has no current-chapter grounding by
                 # definition (spec T4); the contract says so explicitly
@@ -1587,6 +1642,7 @@ def build(
         "review_flags": review_flags,
         "decision_flags": decision_flags,
         "validation": validation,
+        RUN_IDENTITY_FIELD: run_identity(env),
     }
 
 

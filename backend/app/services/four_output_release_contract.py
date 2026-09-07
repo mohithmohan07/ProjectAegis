@@ -102,6 +102,33 @@ def _install_runner_handoff() -> None:
     runner.run = run_with_durable_envelope
 
 
+def _deposit_artifact_dir(original, args, kwargs) -> "Path | None":
+    """The artefact directory of the job the deposit is auditing.
+
+    Register Q29: the deposit binds the job it audits
+    (``grounding_audit_job``), so the sidecars restored for it must be
+    read from THAT job's directory, never from whatever directory the
+    process-scoped Phase 3 session happens to point at. ``None`` when the
+    deposit carries no job (the restore then falls back to the session
+    and says so through its own defects).
+    """
+    import inspect
+
+    try:
+        bound = inspect.signature(original).bind_partial(*args, **kwargs)
+    except (TypeError, ValueError):
+        return None
+    job = bound.arguments.get("grounding_audit_job")
+    job_id = getattr(job, "id", None)
+    if not job_id:
+        return None
+    uploads = importlib.import_module("app.services.uploads")
+    try:
+        return Path(uploads.source_artifact_directory(int(job_id)))
+    except Exception:  # noqa: BLE001 - an unresolvable directory is an absence
+        return None
+
+
 def _install_pre_release_handoff() -> None:
     release_contract = importlib.import_module(
         "app.services.build_concepts_release_contract"
@@ -122,8 +149,11 @@ def _install_pre_release_handoff() -> None:
 
         # The runner already wrote these sidecars atomically.  Reading them is
         # recovery/transport only: no prerequisite or question is inferred
-        # here, and absence is not interpreted as "no Pre-Learning".
-        restored, defects = topology.restored_pre_release()
+        # here, and absence is not interpreted as "no Pre-Learning". The
+        # directory is the audited job's own (register Q29).
+        restored, defects = topology.restored_pre_release(
+            artifact_dir=_deposit_artifact_dir(original, args, kwargs),
+        )
         if isinstance(restored, Mapping):
             # Wrapped through the ONE bundle mint, never stored verbatim:
             # ``restored_pre_release`` returns the raw map/questions pair

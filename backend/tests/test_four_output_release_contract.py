@@ -108,7 +108,7 @@ def test_release_capture_recovers_authored_pre_bundle_from_sidecars(monkeypatch)
     monkeypatch.setattr(
         topology,
         "restored_pre_release",
-        lambda: ({
+        lambda **_kwargs: ({
             "pre_map": {"rows": [{"concept_title": "Prior knowledge"}]},
             "pre_questions": {"questions": {"PRE-1": []}},
         }, []),
@@ -150,7 +150,7 @@ def test_missing_pre_sidecars_are_not_misread_as_empty_pre_learning(monkeypatch)
     monkeypatch.setattr(
         topology,
         "restored_pre_release",
-        lambda: (None, ["source.phase3-prelearn-map.json is absent"]),
+        lambda **_kwargs: (None, ["source.phase3-prelearn-map.json is absent"]),
     )
 
     contract._install_pre_release_handoff()

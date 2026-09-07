@@ -2156,12 +2156,16 @@ def test_an_absent_questions_snapshot_is_not_authored_zero(
 def test_a_lane_that_authored_no_question_stays_distinguishable_from_that(
     db, tmp_path, monkeypatch,
 ):
-    """The other half of the pair above — and it must NOT be a defect.
+    """The other half of the pair above — it is NOT a snapshot defect.
 
     A real Phase 03 run whose questions snapshot says "I authored none"
-    is a legitimate, flag-free Pre release. Only an UNREADABLE snapshot
-    is structural corruption. Collapsing the two in either direction is
-    the R4 failure.
+    is readable authority, and only an UNREADABLE snapshot is input
+    corruption; collapsing the two in either direction is the R4
+    failure. What the release IS, since register Q29, is Diagnostic on a
+    different and honestly named finding: the map carries a concept and
+    no question was authored for it, which contract v2.0 §8.6 refuses
+    to write to the database (``release_qc.PRE_CONCEPT_UNASSESSED``).
+    Every download still ships.
     """
 
     chapter = _chapter_with_concepts(db)
@@ -2186,8 +2190,14 @@ def test_a_lane_that_authored_no_question_stays_distinguishable_from_that(
 
     assert payload["generated_questions"] == []
     assert payload["snapshot_defects"] == []
-    assert release.structural_defects(payload) == []
-    assert release.release_state(payload) == release.READY
+    assert not any(
+        issue["code"] == "pre_learning_snapshot_unreadable"
+        for issue in payload["issues"]
+    )
+    defects = release.structural_defects(payload)
+    assert defects, "a concept with no question is not a Ready release"
+    assert all("pre_concept_unassessed" in defect for defect in defects)
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
 
 
 def test_an_unreadable_map_snapshot_is_recorded_not_silently_absent(

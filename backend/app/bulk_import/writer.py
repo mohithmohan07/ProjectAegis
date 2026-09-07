@@ -25,8 +25,8 @@ from sqlalchemy.orm import Session
 from . import (
     ANSWER_TYPES, CHAPTER_FIELDS, TOPIC_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SECTION_BANDS, GROUP_FIELDS_BY_KIND,
-    appears_in_wire, duration_minutes_cell, join_multi, merge_sources,
-    normalize_answer_type, wire_answer_type,
+    appears_in_wire, duration_minutes_cell, join_multi, list_token_defects,
+    merge_sources, normalize_answer_type, wire_answer_type,
     normalize_question_text, split_multi, strip_title_tag, strip_topic_title,
     to_workbook_rich_text,
 )
@@ -558,6 +558,11 @@ class ConceptExportScope:
 # prose, Rule 1's forbidden bullets, with [measured] no test anywhere
 # pinning any of them firing.
 READBACK_TOPOLOGY_MISMATCH = "bulk_import_readback_topology_mismatch"
+# Contract v2.0 §16 at the Concept File read-back (register Q29): a
+# multi-value cell that is a bracketed list literal or carries a literal
+# pipe inside one token. The Master read-back already names both through
+# ``bi.list_token_defects``; this is the same check on the same cells.
+READBACK_LIST_CELL_DEFECT = "bulk_import_readback_list_cell_defect"
 
 
 def _validate_concepts_workbook_bytes(
@@ -627,6 +632,16 @@ def _validate_concepts_workbook_bytes(
             for name in workbook_contract.UPDATE_FIELDS
             if name in fields
         }
+        # Contract v2.0 §16 (register Q29): the multi-value cells the
+        # Master read-back checks, checked here on the Concept File with
+        # the same function, so a serialized array or a literal pipe in a
+        # token is named on either output rather than shipping silently.
+        list_indices = {
+            name: fields.index(name)
+            for name in workbook_contract.MULTI_VALUE_FIELDS
+            if name in fields
+        }
+        list_issues: list[str] = []
 
         for row_number, row in enumerate(
             ws.iter_rows(min_row=3, values_only=True), start=3,
@@ -647,6 +662,11 @@ def _validate_concepts_workbook_bytes(
                             f"row {row_number}: {name} {actual!r} != "
                             f"{workbook_contract.UPDATE_FIELD_VALUE!r} "
                             "(every authored data row carries exact 'No')"
+                        )
+                for name, index in list_indices.items():
+                    for defect in list_token_defects(_cell_str(row, index)):
+                        list_issues.append(
+                            f"row {row_number}: {name} {defect}"
                         )
             key = (
                 normalize_question_text(chapter_title),
@@ -679,28 +699,41 @@ def _validate_concepts_workbook_bytes(
             issues.append(
                 "fresh concept export contains duplicate selected placements")
 
-        if not issues:
-            return []
-        findings = list(dict.fromkeys(issues))
-        decision = _fixer_decision(
-            READBACK_TOPOLOGY_MISMATCH,
-            detail=(
-                "the serialized concept workbook disagrees with its "
-                "accepted DB topology; the artifact ships with this "
-                "recorded decision instead of being withheld — every "
-                "finding is named here for the reviewer (T10-4, Q13)"
-            ),
-            context={
-                "findings": findings,
-                "exact_rows": bool(exact_rows),
-            },
-        )
-        logging.getLogger(__name__).warning(
-            "bulk-import %s: %s", READBACK_TOPOLOGY_MISMATCH,
-            json.dumps(
-                decision, sort_keys=True, ensure_ascii=False, default=str),
-        )
-        return [decision]
+        decisions: list[dict] = []
+        if issues:
+            decisions.append(_fixer_decision(
+                READBACK_TOPOLOGY_MISMATCH,
+                detail=(
+                    "the serialized concept workbook disagrees with its "
+                    "accepted DB topology; the artifact ships with this "
+                    "recorded decision instead of being withheld — every "
+                    "finding is named here for the reviewer (T10-4, Q13)"
+                ),
+                context={
+                    "findings": list(dict.fromkeys(issues)),
+                    "exact_rows": bool(exact_rows),
+                },
+            ))
+        if list_issues:
+            decisions.append(_fixer_decision(
+                READBACK_LIST_CELL_DEFECT,
+                detail=(
+                    "a multi-value cell of the serialized concept workbook "
+                    "is not a ' | ' list (contract v2.0 §16); the artifact "
+                    "ships with this recorded decision instead of being "
+                    "withheld — every cell is named here for the reviewer"
+                ),
+                context={"findings": list(dict.fromkeys(list_issues))},
+            ))
+        for decision in decisions:
+            logging.getLogger(__name__).warning(
+                "bulk-import %s: %s", decision["code"],
+                json.dumps(
+                    decision, sort_keys=True, ensure_ascii=False,
+                    default=str,
+                ),
+            )
+        return decisions
     finally:
         workbook.close()
 

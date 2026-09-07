@@ -481,10 +481,16 @@ def _plan_rules(rules_suffix: str) -> str:
         "is a single definition the learner either holds or does not is "
         "planned at one; both are correct answers, not shortfalls. Every "
         "shipped pre-learning concept carries at least one diagnostic "
-        "question, so a plan of zero says the concept has no Mastery worth "
-        "verifying before this chapter — plan zero only when that is "
-        "true, and say so in the rationale so the reviewer can act on "
-        "it. Naming a tier here states the coverage you intend; it is not "
+        "question (Master Governing Contract v2.0 §8.6), so a total of "
+        "zero is never a coverage plan for a concept that ships: it is "
+        "your recorded request to DROP the concept from the Pre map, "
+        "because a prerequisite with no Mastery worth verifying before "
+        "this chapter should not have become a pre-learning concept. "
+        "State that judgment in the rationale. The run does not drop the "
+        "concept itself — it records your request as a blocking finding "
+        "on the Pre lane so a reviewer removes the concept or re-runs, "
+        "and never ships the concept as if it were assessed. Naming a "
+        "tier here states the coverage you intend; it is not "
         "a verdict on any question, and each question's own level is "
         "decided later and independently. Decide EVERY pre_concept_id in "
         "the request exactly once, and make the split account for the "
@@ -549,7 +555,11 @@ def build(
 
     An empty Pre map returns without spending a decision, and so does a
     pre-concept the model planned at zero — a chapter whose prerequisites
-    the evidence supports thinly is never padded.
+    the evidence supports thinly is never padded. A zero plan is the
+    model's recorded request to drop that concept (register Q29): nothing
+    here drops it, the concept reaches release staging with no question,
+    and ``release_qc`` names it there as a blocking finding on the Pre
+    lane (contract v2.0 §8.6) so a reviewer acts on the recorded rationale.
     """
     from . import fixer as fixer_mod
     from . import premap as premap_mod

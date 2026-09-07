@@ -818,6 +818,10 @@ _MULTI_VALUE_FIELDS = (
     "pre_topics", "post_topics", "topic_concept_labels", "related_topics",
     "keywords", "digicards", "related_concepts",
 )
+# The Concept File read-back (``writer._validate_concepts_workbook_bytes``)
+# checks the same cells with the same ``bi.list_token_defects`` (register
+# Q29), so the two read-backs cannot disagree on which cells are lists.
+MULTI_VALUE_FIELDS = _MULTI_VALUE_FIELDS
 
 
 def snapshot_sha256(snapshot: Mapping) -> str:

@@ -74,7 +74,60 @@ def restored_prerequisites() -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
-def restored_pre_release() -> tuple[dict[str, Any] | None, list[str]]:
+PHASE3_ENVELOPE_SNAPSHOT = "source.phase3-envelope.json"
+
+
+def _sidecar_identity_defect(directory: "Path", pre_map: object) -> str:
+    """The recorded map's run identity against the envelope beside it.
+
+    Register Q29: the sidecar restore used to read whatever directory the
+    process-scoped session pointed at and hand the result over as THIS
+    run's Pre authority. The map now records the source contract it was
+    sealed on (``premap.run_identity``); when the same directory holds a
+    sealed envelope, the two must name one source. A map that recorded
+    nothing (written before the field existed) or a directory with no
+    envelope leaves nothing to compare — dormant, stated, never guessed.
+    Only the source contract is compared: the envelope seal legitimately
+    moves when the Architect's instruction set is reassembled for the
+    same source, and that is a replay decision, not another run.
+    """
+    import json
+
+    from . import generation
+
+    identity = generation.pre_release_run_identity(pre_map)
+    if identity is None:
+        return ""
+    try:
+        wrapper = json.loads(
+            (directory / PHASE3_ENVELOPE_SNAPSHOT).read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return ""
+    env = (
+        wrapper.get("envelope")
+        if isinstance(wrapper, dict) and "envelope" in wrapper
+        else wrapper
+    )
+    if not isinstance(env, dict):
+        return ""
+    recorded = str(identity.get("source_contract_hash") or "").strip()
+    current = str(env.get("source_contract_hash") or "").strip()
+    if not recorded or not current or recorded == current:
+        return ""
+    return (
+        f"{PREMAP_SNAPSHOT} was authored for another source than the "
+        f"envelope beside it (source contract {recorded[:12]}… on the map, "
+        f"{current[:12]}… in {PHASE3_ENVELOPE_SNAPSHOT}); the recorded Pre "
+        "map is not this run's authority"
+    )
+
+
+def restored_pre_release(
+    artifact_dir: "str | Path | None" = None,
+) -> tuple[dict[str, Any] | None, list[str]]:
     """Read the recorded Pre map/questions for a terminal-checkpoint resume.
 
     A legacy ``final_content_ready`` entry has no in-checkpoint Pre authority,
@@ -82,6 +135,13 @@ def restored_pre_release() -> tuple[dict[str, Any] | None, list[str]]:
     3.  Presence is mechanical: an authored empty mapping is valid, while a
     missing or unreadable file is not interpreted as "the chapter needs no
     Pre-Learning".
+
+    ``artifact_dir`` is the directory of the JOB being restored, handed over
+    by the caller (register Q29). It used to be read off the process-scoped
+    Phase 3 session alone, which is how a run could restore another job's
+    sidecars as its own Pre authority. The session is now only the fallback
+    for a caller that holds no job, and the recorded map's source contract
+    is checked against the envelope in the same directory either way.
     """
 
     import json
@@ -89,10 +149,11 @@ def restored_pre_release() -> tuple[dict[str, Any] | None, list[str]]:
 
     from . import canonical_source_phase3 as phase3_core
 
-    session = phase3_core.active_session() or {}
-    artifact_dir = session.get("artifact_dir") if isinstance(
-        session, dict
-    ) else None
+    if not artifact_dir:
+        session = phase3_core.active_session() or {}
+        artifact_dir = session.get("artifact_dir") if isinstance(
+            session, dict
+        ) else None
     if not artifact_dir:
         return None, []
 
@@ -120,6 +181,16 @@ def restored_pre_release() -> tuple[dict[str, Any] | None, list[str]]:
             )
             continue
         loaded[field] = value
+
+    if "pre_map" in loaded:
+        identity_defect = _sidecar_identity_defect(
+            Path(artifact_dir), loaded["pre_map"]
+        )
+        if identity_defect:
+            defects.append(identity_defect)
+            # Another run's map recovers nothing for this one: neither
+            # the map nor a Q4 replay keyed on it is this run's authority.
+            return None, defects
 
     if "pre_map" in loaded and "pre_questions" not in loaded:
         # Only Q4 is missing. Re-enter that exact pass over the recorded map

@@ -54,6 +54,13 @@ AUDIT_UNAVAILABLE = "release_qc_unavailable"
 # download still ships) until one is supplied.
 CHAPTER_DURATION_UNREGISTERED = "chapter_duration_unregistered"
 PUBLICATION_UNKNOWN = "publication_unknown"
+# Master Governing Contract v2.0 §8.6 (register Q29): every shipped Pre
+# concept carries at least one routed diagnostic question. A Pre concept
+# with none — the model planned zero (its recorded request to drop the
+# concept), its authoring was blocked, or nothing was recorded for it —
+# is a blocking finding on the Pre lane: the database write is refused
+# and every download ships, with the recorded reason on the row.
+PRE_CONCEPT_UNASSESSED = "pre_concept_unassessed"
 
 _VALIDATION_FLAG_PREFIX = "validation: "
 
@@ -171,6 +178,82 @@ def _coverage_findings(
             qids=[qid],
         ))
         blocking.append(f"{COVERAGE_UNACCOUNTED}: {message}")
+    return issues, blocking
+
+
+def _pre_question_coverage_findings(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Contract v2.0 §8.6: at least one routed question on every Pre concept.
+
+    Counts the generated-question ids ``stage_pre_release`` stamped on each
+    Pre row (``PRE_ROW_GENERATED_QUESTIONS_FIELD``) and transcribes WHY a
+    row has none from the lane's own records — the coverage plan
+    (``pre_question_plans``, whose zero total is the model's recorded
+    request to drop the concept, with its rationale) or the authoring
+    block (``pre_question_blocks``). Identity counting and transcription;
+    nothing here judges what a prerequisite means. Post lane: nothing.
+    """
+    from . import build_concepts_release as rel
+
+    if not _is_pre_lane(payload):
+        return [], []
+    plans = payload.get("pre_question_plans")
+    plans = plans if isinstance(plans, Mapping) else {}
+    blocks = payload.get("pre_question_blocks")
+    blocks = blocks if isinstance(blocks, Mapping) else {}
+    issues: list[dict[str, Any]] = []
+    blocking: list[str] = []
+    for position, row in enumerate(_records(payload), start=1):
+        routed = [
+            str(question_id).strip()
+            for question_id in row.get(rel.PRE_ROW_GENERATED_QUESTIONS_FIELD)
+            or []
+            if str(question_id or "").strip()
+        ]
+        if routed:
+            continue
+        concept_id = str(row.get("_pre_concept_id") or "").strip()
+        title = str(row.get("concept_title") or "")
+        plan = plans.get(concept_id) if concept_id else None
+        plan = plan if isinstance(plan, Mapping) else {}
+        try:
+            planned = int(plan.get("total") or 0)
+        except (TypeError, ValueError):
+            planned = 0
+        rationale = str(plan.get("rationale") or "").strip()
+        block = str(blocks.get(concept_id) or "").strip() if concept_id else ""
+        if plan and planned == 0:
+            why = (
+                "its coverage plan asked for zero, which is the model's "
+                "recorded request to drop the concept"
+                + (f" ({rationale})" if rationale else "")
+                + "; remove the concept from the Pre map or re-run generation"
+            )
+        elif block:
+            why = f"its question authoring was blocked: {block}"
+        elif plan:
+            why = (
+                f"its coverage plan asked for {planned} question(s) and none "
+                "was recorded for it"
+            )
+        else:
+            why = "no coverage plan and no authored question was recorded for it"
+        message = (
+            f"row {position} ({title!r}"
+            + (f", {concept_id}" if concept_id else "")
+            + ") ships with no generated question — contract v2.0 §8.6 "
+            "requires at least one routed diagnostic question on every "
+            f"Pre concept; {why}"
+        )
+        issues.append(_issue(
+            code=PRE_CONCEPT_UNASSESSED,
+            message=message,
+            severity="error",
+            phase="release_qc",
+            unit_id=concept_id,
+        ))
+        blocking.append(f"{PRE_CONCEPT_UNASSESSED}: {message}")
     return issues, blocking
 
 
@@ -387,6 +470,13 @@ def audit(
         blocking.extend(coverage_blocking)
 
     _pass("coverage", _run_coverage)
+
+    def _run_pre_question_coverage() -> None:
+        pre_issues, pre_blocking = _pre_question_coverage_findings(payload)
+        issues.extend(pre_issues)
+        blocking.extend(pre_blocking)
+
+    _pass("pre-question coverage", _run_pre_question_coverage)
 
     def _run_chapter_duration() -> None:
         duration_issues, duration_blocking = _chapter_duration_findings(

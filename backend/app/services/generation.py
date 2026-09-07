@@ -19493,6 +19493,11 @@ _TYPE_TAXONOMY_CHECKPOINT_STAGE = "type_taxonomy_ready"
 _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
 PHASE3_PRE_RELEASE_FIELD = "phase3_pre_release"
 PHASE3_PRE_RELEASE_SCHEMA = 1
+# The run identity the Pre map records about itself (premap.run_identity,
+# register Q29), lifted onto the release bundle so release staging can
+# refuse an authority that belongs to another chapter. The literal equals
+# ``phase3.premap.RUN_IDENTITY_FIELD``; a regression pins it.
+PRE_RUN_IDENTITY_FIELD = "run_identity"
 
 # Stage versions describe the serialized artifact contract, not the git
 # revision that produced it.  A later deployment may therefore reuse an older
@@ -19642,14 +19647,26 @@ def phase3_pre_release_bundle(
     *,
     snapshot_writes: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The exact Phase 3 Pre output carried through checkpoint and release."""
+    """The exact Phase 3 Pre output carried through checkpoint and release.
 
-    return {
+    The map's own recorded run identity (``premap.run_identity``) is
+    lifted onto the bundle, so every carrier of the authority — the
+    checkpoint entry, the in-memory transport, the sidecar restore — says
+    which chapter's run it is. A map minted before the identity existed
+    carries none, and the bundle then carries none: the staging gate is
+    dormant for it rather than guessing.
+    """
+
+    bundle = {
         "schema_version": PHASE3_PRE_RELEASE_SCHEMA,
         "pre_map": copy.deepcopy(dict(pre_map)),
         "pre_questions": copy.deepcopy(dict(pre_questions)),
         "snapshot_writes": copy.deepcopy(dict(snapshot_writes or {})),
     }
+    identity = pre_map.get(PRE_RUN_IDENTITY_FIELD)
+    if isinstance(identity, Mapping):
+        bundle[PRE_RUN_IDENTITY_FIELD] = copy.deepcopy(dict(identity))
+    return bundle
 
 
 def valid_phase3_pre_release_bundle(value: object) -> bool:
@@ -19661,6 +19678,70 @@ def valid_phase3_pre_release_bundle(value: object) -> bool:
         and isinstance(value.get("pre_map"), Mapping)
         and isinstance(value.get("pre_questions"), Mapping)
         and isinstance(value.get("snapshot_writes", {}), Mapping)
+    )
+
+
+def pre_release_run_identity(value: object) -> dict[str, Any] | None:
+    """The run identity a bundle or a bare Pre map records, or ``None``.
+
+    A bundle carries it at the top level; a map (a sidecar read straight
+    off disk) carries it on itself. ``None`` means "recorded nothing",
+    which is a legacy artefact, never a verdict.
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+    identity = value.get(PRE_RUN_IDENTITY_FIELD)
+    if not isinstance(identity, Mapping):
+        nested = value.get("pre_map")
+        identity = (
+            nested.get(PRE_RUN_IDENTITY_FIELD)
+            if isinstance(nested, Mapping) else None
+        )
+    return dict(identity) if isinstance(identity, Mapping) else None
+
+
+def pre_release_identity_defect(
+    value: object, *, chapter_id: int | None,
+) -> str:
+    """Why this Pre authority is NOT the named chapter's, or ``""``.
+
+    Register Q29 (owner corpus, 2026-09-06: the School Bell run shipped
+    Self Help's Pre Master beside its own Pre Concept file). Nothing bound
+    the staged Pre authority to the run: the bundle carried no chapter,
+    the sidecar restore read a process-scoped directory, and staging
+    preferred whatever arrived first. This is the binding — a comparison
+    of the chapter the map's envelope froze against the chapter the
+    release is being staged into.
+
+    Mechanics only. A bundle that recorded no identity (minted before
+    the field existed) yields ``""``: the gate is dormant for it, exactly
+    as the Master lane's seal gate is dormant for rows frozen before a
+    seal was recorded, and the caller says so rather than refusing paid
+    work on a guess. An identity that names ANOTHER chapter is the
+    defect, stated with both identities so the reviewer can see which
+    run's authority arrived.
+    """
+
+    identity = pre_release_run_identity(value)
+    if identity is None or chapter_id in (None, 0):
+        return ""
+    recorded = identity.get("chapter_id")
+    if recorded in (None, ""):
+        return ""
+    try:
+        matches = int(recorded) == int(chapter_id)
+    except (TypeError, ValueError):
+        matches = False
+    if matches:
+        return ""
+    code = str(identity.get("chapter_code") or "").strip()
+    return (
+        "the Phase 03 Pre-Learning authority records chapter "
+        f"{recorded!r}" + (f" ({code})" if code else "")
+        + f" as the run it was authored for, not this run's chapter "
+        f"{int(chapter_id)}; another chapter's Pre map is never staged "
+        "as this chapter's Output 01"
     )
 
 
@@ -22178,7 +22259,12 @@ def concepts_from_mmd(
             # the original decision keys and replays the decide-once store.
             from . import concept_topology_contract as _topology
 
-            restored_pre, pre_defects = _topology.restored_pre_release()
+            # The directory is THIS job's (the session the seam activated
+            # for it), handed over explicitly — register Q29 retired the
+            # read of a process-scoped ContextVar inside the restore.
+            restored_pre, pre_defects = _topology.restored_pre_release(
+                artifact_dir=active_artifact_dir or None,
+            )
             if isinstance(restored_pre, Mapping):
                 phase3_pre_release_authority = phase3_pre_release_bundle(
                     restored_pre.get("pre_map") or {},

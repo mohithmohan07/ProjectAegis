@@ -1601,6 +1601,95 @@ contract, and §2 forbids blending:**
 verdict into code (Rule 1): every change is a cell's type, marker or
 resolution, and no content decision changed hands.
 
+### Q29 · Decided — the Pre lane is bound to the run it was authored for
+
+Owner input, 6–7 Sep 2026: "the pre learning built wasn't so great either"
+— audit the Pre lane against the previous PRs for what the handoffs
+dropped. The audit ran over the same eleven-chapter corpus as Q28 and over
+the code at HEAD; the three findings below were confirmed in both places
+(the corpus reproduces them, and the code trace names the seam). Each is a
+mechanic: an identity comparison, a delimiter, a count against one. No
+content decision changed hands (Rule 1).
+
+**Implemented:**
+
+* **The Pre authority records the run it belongs to, and staging refuses
+  another run's.** Corpus: the School Bell Rings Again run shipped Self
+  Help Is the Only Way's Pre Master (`aegis_master_REL-8b37df…_v1.xlsx`,
+  every row carrying `06MSEN_SelfHelpIsth_…_PrL` identities) beside its
+  own, correct, Pre Concept file — and all eight School Bell Pre concepts
+  shipped with zero questions. Code: the Pre bundle carried no chapter,
+  the sidecar restore read a process-scoped ContextVar's directory rather
+  than the job's, staging preferred whatever arrived first, and Output
+  02's manifest entry never compared the frozen Master's lineage with the
+  staged payload's. Now `premap.build` stamps `run_identity` (the
+  envelope's frozen `chapter_id`/`chapter_code`, `source_contract_hash`,
+  `envelope_sha256`) on every map, including a refused one; the release
+  bundle lifts it; `stage_pre_release_from_run` compares every authority
+  in its chain against the chapter being staged
+  (`generation.pre_release_identity_defect`), refuses a mismatch, records
+  it under the payload's own `pre_authority_defects` key with the issue
+  `pre_learning_authority_not_this_run`, and falls through to the next
+  authority — a refusal that leaves no rows blocks the database write
+  (Diagnostic); one that a later authority of this run repaired is a
+  warning. `restored_pre_release` takes the job's directory explicitly
+  (the four-output deposit handoff passes the audited job's; the Phase 3
+  session is only the fallback for a caller with no job) and refuses a
+  map whose recorded source contract is not the envelope's beside it.
+  `master_entry` keeps the entry present and disabled with
+  `MASTER_STALE_FOR_RUN` when the live Master's frozen
+  `staged_release_uid` is not the staged payload's, and the publication
+  gate's silent `continue` on that lineage mismatch is a note on the
+  receipt (`identity_review_flags`). Every comparison is dormant, and
+  says so, for an artefact recorded before the field existed — the same
+  posture the Master lane's seal gate took for pre-seal rows.
+* **`keywords` on Pre rows is a `" | "` list.** Corpus: 100 % of Pre rows
+  in five chapters read `['connected verse', 'reading fluency', …]` while
+  the same run's Post rows read the clean form. Code:
+  `premap.py` `str()`-ed a JSON-array answer into the cell, PREMAP_SYSTEM
+  named `keywords` without a format, and the writer's `_list_cell` kept
+  the repr as one token. Now `premap.keywords_cell` joins a list on the
+  exact delimiter (§16), PREMAP_SYSTEM says the shape in the Post
+  prompt's words, `bi.list_token_defects` names a bracketed, quoted
+  literal beside the DEL-001 pipe check (so the Master read-back sees it
+  through the call it already makes), and the Concept File read-back
+  checks the same `MULTI_VALUE_FIELDS` with the same function, recording
+  a `bulk_import_readback_list_cell_defect` decision.
+* **A Pre concept with no routed question is a blocking QC finding
+  (§8.6).** Corpus: every School Bell Pre concept, and the hand-built Pre
+  Masters the owner had to write. Code: the plan prompt licensed a zero
+  plan ("plan zero only when that is true"), and nothing compared any
+  concept's routed count to one — the row rendered as a questionless tail
+  and the Pre lane's QC accounting skipped items entirely. Now
+  `release_qc.PRE_CONCEPT_UNASSESSED` blocks the database write (every
+  download ships) for each Pre row whose `_aegis_pre_generated_questions`
+  is empty, transcribing WHY from the lane's own records — the plan's zero
+  total, which the prompt now names as the model's recorded request to
+  DROP the concept (a prerequisite with no Mastery worth verifying should
+  not have become a Pre concept), with its rationale; or the recorded
+  authoring block. Nothing drops the concept: the run records the
+  request, the reviewer removes the concept or re-runs. The prior pin
+  "a lane that authored no question is a flag-free Ready release" is
+  retired by this entry; the R4 half it protected — a readable
+  "authored none" is not an unreadable snapshot — stands and is still
+  pinned.
+
+**Also recorded here (PR #291, 7 Sep 2026, jesc112.pdf):** the four
+Figure-citation gate codes (`phase2_unresolved_figure_reference`,
+`phase2_ambiguous_figure_reference` and their legacy spellings) joined
+`_PHASE2_ADVISORY_GATE_CODES`. `figure_citations_ship_for_review()` had
+emitted them as warnings since the rewritten pipeline, but the
+advisory/fatal split never listed them, so a verified 13-page extraction
+was refused over two unmatched "Fig." citations. §7.1.5 asks for every
+unresolved reference to be resolved before RELEASE; the review flag
+carries it there. Error severity still fails closed.
+
+**Stands:** everything Q26–Q28 list. The Pre lane's authoring — how many
+prerequisites, which concepts, how many questions each — remains the
+model's; this entry only makes the run unable to ship another run's
+answer, a list as a repr, or a concept it never assessed, without saying
+so.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the
