@@ -4132,6 +4132,11 @@ def stage_pre_release(
         # so the audit transcribes the reason instead of guessing one.
         "pre_question_plans": dict(questions_source.get("plans") or {}),
         "pre_question_blocks": dict(questions_source.get("blocked") or {}),
+        # Register Q30: the coverage rule the questions were authored
+        # under (absent when none was recorded) and the questions
+        # themselves, so the audit can hold each concept to the rule.
+        "pre_coverage_rule": questions_source.get("coverage_rule"),
+        "generated_questions": generated,
     })
     # Round 9: QC blocking findings ride their OWN key. Folding them into
     # ``snapshot_defects`` [measured] minted one spurious

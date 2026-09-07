@@ -1125,6 +1125,12 @@ def _bind_generated_cells(
             "answer": str(question.get("answer") or ""),
             "rationale": str(question.get("rationale") or ""),
         }
+        authored_tier = str(question.get("tier") or "").strip()
+        if authored_tier:
+            # Register Q30: a question authored AT a tier under the owner's
+            # Pre coverage rule carries it into the level stage, which
+            # transports the authoring decision rather than re-deciding.
+            cell["generated_question"]["tier"] = authored_tier
         cell["flags"] = list(decided_flags)
         cell["authority"] = authority
         cell[_CELL_AUDIT_FIELD] = {
@@ -2532,7 +2538,43 @@ def run_release_for_job(
 
     _observe_stage(stage_progress, "levels")
     level_provider, level_critic = _authority_pair(authorities, "level")
-    level_rows = grouping.decide_levels(
+    # Register Q30: a generated question authored AT a tier under the
+    # owner's Pre coverage rule carries that tier on its
+    # ``generated_question``; its level row transports that recorded
+    # authoring decision instead of asking for a second verdict (which
+    # could only break the split the owner fixed). Every other candidate
+    # — the source lane, and generated questions authored before the rule
+    # — keeps the independent model verdict exactly as before.
+    authored_level_rows: list[dict[str, Any]] = []
+    undecided: list[dict] = []
+    for candidate in eligible:
+        generated = candidate.get("generated_question")
+        authored_tier = (
+            str(generated.get("tier") or "").strip()
+            if generate_lane and isinstance(generated, Mapping) else ""
+        )
+        if authored_tier in grouping.TIER_CODES:
+            authored_level_rows.append({
+                "candidate_id": str(candidate.get("candidate_id") or ""),
+                "tier": authored_tier,
+                "rationale": (
+                    "authored at this tier under the owner's Pre-Learning "
+                    "coverage rule (register Q30); the tier is the "
+                    "authoring decision recorded on the generated "
+                    "question, not a second verdict"
+                ),
+                "flags": [],
+                "authority": {
+                    "decision_key": "",
+                    "policy_version": grouping.LEVEL_POLICY_VERSION,
+                    "review_flags": [],
+                    "fixer": False,
+                    "mechanical_basis": "authored_tier",
+                },
+            })
+        else:
+            undecided.append(candidate)
+    level_rows = authored_level_rows + grouping.decide_levels(
         [
             {
                 "candidate": candidate,
@@ -2540,7 +2582,7 @@ def run_release_for_job(
                     concept_records_by_key[str(candidate["concept_key"])]
                 ),
             }
-            for candidate in eligible
+            for candidate in undecided
         ],
         meta=meta,
         envelope_sha256=envelope_sha,

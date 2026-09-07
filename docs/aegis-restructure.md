@@ -1690,6 +1690,75 @@ model's; this entry only makes the run unable to ship another run's
 answer, a list as a repr, or a concept it never assessed, without saying
 so.
 
+### Q30 · Decided — the owner's Pre coverage rule: five Basic and five Intermediate questions per Pre concept (amends §8 for the Pre lane)
+
+Owner ruling, 7 Sep 2026: *"I would like 5 basic and 5 intermediate level
+questions per concept of Pre Learning."*
+
+**What it changes, stated rather than blended (Rule 0).** Contract v2.0 §8
+says "No fixed count such as five questions … is permitted" and Q26
+restated it as "no quotas"; Q20 (21 Aug) had set "about 5 per concept,
+split left to the model" and the 21 Aug diagnostic posture; the 20 Aug
+steer before it was ~10 as 5 Basic + 5 Intermediate. The owner, as the
+contract's author, now fixes the Pre lane's coverage at **exactly five
+Basic and five Intermediate generated questions for every Pre concept, and
+no Advanced ones**. §8's "no fixed count" is amended for the Pre lane by
+this ruling; the contract text itself awaits the owner's v2.1 issue and is
+not rewritten here. §8.6 (at least one routed question; Q29's blocking
+finding) stands beneath it. Q29's one exception stands too: a plan of
+zero is the model's recorded request to DROP the concept, never a shipped
+concept with fewer questions.
+
+**How it is held (`phase3/pre_coverage.py`, the one place the numbers
+live):**
+
+* **A frozen run variable.** The rule (`version`
+  `pre-coverage-owner-2026-09-07`, `per_tier` `{Basic: 5, Intermediate:
+  5}`) is stamped on the Phase 3 envelope's metadata where a production
+  envelope is built (`concept_topology_contract._run_rewritten_phase3`),
+  so it is inside the seal and inside every decision key. A reused sealed
+  envelope keeps the rule, or the absence, it was sealed with — decide-
+  once. `prequestions.build` reads it back and logs which posture is in
+  force. An envelope that records no rule (sealed before this ruling; the
+  RNE golden fixtures) runs under Q26's posture in full, which is why the
+  golden replay chain is unchanged and why re-recording it under Q30
+  needs a live run.
+* **The plan.** Under the rule the plan checker adds one comparison
+  against the ONE external number the owner fixed: every plan states
+  total 10 and the split 5 Basic / 5 Intermediate exactly, or zero with
+  no split. The plan's judgment is its RATIONALE — which capabilities of
+  the Mastery each tier's questions verify. The critic's ANCHORING
+  dimension is redirected to the rationale's coverage, never the number.
+* **Authoring.** Each question is written AT its tier and carries a
+  `tier` field; the authoring checker counts each tier against the
+  plan's split (the model's own plan against its own questions, tier by
+  tier). Basic verifies that the learner holds the fundamental as the
+  concept states it; Intermediate that the learner can apply it in a
+  situation the needing Post concepts depend on — stated to the model as
+  evidence, never branched on in code.
+* **The Master.** `assessment_release_run` transports the authored tier
+  into the level stage for a generated question that carries one — the
+  level row records `mechanical_basis: authored_tier` and no model
+  verdict is asked for, because a second verdict could only break the
+  split the owner fixed. Every other candidate (the source lane, and
+  generated questions authored before the rule) keeps the independent
+  verdict exactly as before. Clustering into BG/IG families within a tier
+  stays the model's.
+* **Release QC.** `release_qc.PRE_CONCEPT_COVERAGE_OFF_RULE` blocks the
+  database write (every download ships) for a staged Pre concept whose
+  questions are tiered otherwise than the rule the payload records;
+  dormant where no rule rode the payload or the questions carry no tier.
+
+**Rule 1, plainly.** A fixed count the owner set is a product rule, not a
+judgment about the source: the code compares recorded numbers and
+transports a recorded model decision. Which capabilities the ten
+questions verify, and every question's text, remain the model's. The
+Q4/Q26 pins over `prequestions.py` (no numeric literal, no norm the model
+is anchored on) stand: the module holds no count; it reads the owner's.
+
+**Stands:** everything Q26–Q29 list except §8's "no fixed count" for the
+Pre lane, amended above.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

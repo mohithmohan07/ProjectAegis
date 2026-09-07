@@ -61,6 +61,12 @@ PUBLICATION_UNKNOWN = "publication_unknown"
 # is a blocking finding on the Pre lane: the database write is refused
 # and every download ships, with the recorded reason on the row.
 PRE_CONCEPT_UNASSESSED = "pre_concept_unassessed"
+# Owner ruling, register Q30 (``phase3.pre_coverage``): under the owner's
+# coverage rule every Pre concept carries exactly the rule's questions per
+# tier. A concept whose staged questions are tiered otherwise is a blocking
+# finding; a concept whose questions carry no tier was authored before the
+# rule and is left to the §8.6 pass above (dormant, stated).
+PRE_CONCEPT_COVERAGE_OFF_RULE = "pre_concept_coverage_off_rule"
 
 _VALIDATION_FLAG_PREFIX = "validation: "
 
@@ -254,6 +260,81 @@ def _pre_question_coverage_findings(
             unit_id=concept_id,
         ))
         blocking.append(f"{PRE_CONCEPT_UNASSESSED}: {message}")
+    return issues, blocking
+
+
+def _pre_coverage_rule_findings(
+    payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Register Q30: the staged Pre questions match the owner's rule.
+
+    Counts the staged ``generated_questions`` per concept and per authored
+    tier against the ``pre_coverage_rule`` the questions were authored
+    under (``prequestions.build`` records it beside them). Identity
+    counting against the owner's recorded numbers; nothing here judges a
+    question. Dormant when no rule rode the payload, and per concept when
+    its questions carry no tier (authored before the rule) — the §8.6
+    pass already names a concept with no question at all.
+    """
+    from .phase3 import pre_coverage
+
+    if not _is_pre_lane(payload):
+        return [], []
+    recorded = payload.get("pre_coverage_rule")
+    if not isinstance(recorded, Mapping):
+        return [], []
+    try:
+        rule = pre_coverage.validate(recorded)
+    except pre_coverage.CoverageRuleError as exc:
+        message = (
+            "the staged Pre release records a malformed coverage rule "
+            f"({exc}); the questions cannot be held to it"
+        )
+        issue = _issue(
+            code=PRE_CONCEPT_COVERAGE_OFF_RULE,
+            message=message,
+            severity="error",
+            phase="release_qc",
+        )
+        return [issue], [f"{PRE_CONCEPT_COVERAGE_OFF_RULE}: {message}"]
+    counts: dict[str, dict[str, int]] = {}
+    for question in payload.get("generated_questions") or []:
+        if not isinstance(question, Mapping):
+            continue
+        concept_id = str(question.get("pre_concept_id") or "").strip()
+        if not concept_id:
+            continue
+        tier = str(question.get("tier") or "").strip()
+        by_tier = counts.setdefault(concept_id, {})
+        by_tier[tier] = by_tier.get(tier, 0) + 1
+    issues: list[dict[str, Any]] = []
+    blocking: list[str] = []
+    expected = dict(rule["per_tier"])
+    for position, row in enumerate(_records(payload), start=1):
+        concept_id = str(row.get("_pre_concept_id") or "").strip()
+        have = counts.get(concept_id)
+        if not concept_id or not have or "" in have:
+            continue
+        if have == expected:
+            continue
+        stated = ", ".join(
+            f"{count} {tier}" for tier, count in sorted(have.items())
+        )
+        message = (
+            f"row {position} ({str(row.get('concept_title') or '')!r}, "
+            f"{concept_id}) carries {stated} generated question(s), not the "
+            f"owner's coverage rule {rule['version']} "
+            f"({pre_coverage.describe(rule)}); re-run the Pre lane so the "
+            "questions are authored to the rule"
+        )
+        issues.append(_issue(
+            code=PRE_CONCEPT_COVERAGE_OFF_RULE,
+            message=message,
+            severity="error",
+            phase="release_qc",
+            unit_id=concept_id,
+        ))
+        blocking.append(f"{PRE_CONCEPT_COVERAGE_OFF_RULE}: {message}")
     return issues, blocking
 
 
@@ -477,6 +558,13 @@ def audit(
         blocking.extend(pre_blocking)
 
     _pass("pre-question coverage", _run_pre_question_coverage)
+
+    def _run_pre_coverage_rule() -> None:
+        rule_issues, rule_blocking = _pre_coverage_rule_findings(payload)
+        issues.extend(rule_issues)
+        blocking.extend(rule_blocking)
+
+    _pass("pre-coverage rule", _run_pre_coverage_rule)
 
     def _run_chapter_duration() -> None:
         duration_issues, duration_blocking = _chapter_duration_findings(

@@ -402,7 +402,12 @@ PREQUESTIONS_PLAN_SYSTEM = _SHARED + (
     "never padded to look fuller, and a rich one is not capped. Naming a "
     "tier states the coverage you intend; it is not a verdict on any "
     "question, and each question's own level is decided later and "
-    "independently by another pass."
+    "independently by another pass. When the request carries a "
+    "coverage_rule, the total and the split are the owner's fixed rule "
+    "and are stated exactly as the rule gives them (or zero as a recorded "
+    "request to drop the concept); your judgment is then the rationale's "
+    "coverage — which capabilities each tier's questions verify — and the "
+    "tier named in the split is the tier each question is authored at."
 )
 
 PREQUESTIONS_AUTHOR_SYSTEM = _SHARED + (
@@ -418,8 +423,11 @@ PREQUESTIONS_AUTHOR_SYSTEM = _SHARED + (
     "from this request. Author each question for the level, grade, "
     "subject, board and context named in the chapter calibration and the "
     "run instructions. answer is the complete expected answer; rationale "
-    "says what the question checks the learner can already do. Do not "
-    "label a question with a tier or a difficulty. Wrap every "
+    "says what the question checks the learner can already do. Without a "
+    "coverage_rule in the request, do not label a question with a tier "
+    "or a difficulty. When the request carries a coverage_rule, each "
+    "question also carries \"tier\", exactly the tier the coverage plan's "
+    "split assigns it, and still no difficulty. Wrap every "
     "mathematical expression exactly as [Katex] valid LaTeX [/Katex]."
 )
 
@@ -433,7 +441,11 @@ PREQUESTIONS_CRITIC_SYSTEM = _SHARED + (
     "concepts needing it demand, or does it merely justify a customary "
     "number? A thin prerequisite planned at a small total with a good "
     "reason is a CORRECT outcome, not a defect, and a plan should not "
-    "drift toward a familiar figure it cannot argue for. PROPORTION: do "
+    "drift toward a familiar figure it cannot argue for. When the request "
+    "carries a coverage_rule the totals are the owner's, not the model's: "
+    "judge ANCHORING and PROPORTION on whether each rationale's COVERAGE "
+    "is led by the evidence — which capabilities each tier verifies — "
+    "never on the number. PROPORTION: do "
     "the totals across the map track the depth of each prerequisite "
     "rather than flattening to one size? RATIONALE QUALITY: does each "
     "rationale actually explain its total and its split? For authored "

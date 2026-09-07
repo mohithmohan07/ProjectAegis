@@ -418,13 +418,19 @@ def _run_rewritten_phase3(
         except Exception:  # noqa: BLE001 - a stale artifact never blocks
             env = None
     if env is None:
+        from .phase3 import pre_coverage as p3_coverage
+
         env = p3_envelope.build(
             graph=graph,
             canonical=session.get("canonical") or {},
             skeleton_rows=list(out),
             inventory=kwargs.get("question_task_inventory") or {},
             mined_types=kwargs.get("mined_types") or {},
-            metadata=kwargs.get("meta") or {},
+            # Register Q30: the owner's Pre coverage rule is a frozen run
+            # variable, recorded on the envelope so it is inside the seal
+            # and every decision key. A reused sealed envelope keeps the
+            # rule (or the absence) it was sealed with — decide-once.
+            metadata=p3_coverage.stamp(kwargs.get("meta") or {}),
         )
         if envelope_path is not None:
             try:
