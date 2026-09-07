@@ -49,18 +49,19 @@ REFINER_POLICY_VERSION = "refiner-1"
 # the first attempt and replays individually from the decision store.
 _BATCH_SIZE = 1
 
-# Which released rows the Refiner reads (Master Governing Contract v2.0
-# §38 stage 10 — "bounded repairs and re-review of CHANGED dependents";
-# register Q26). ``flagged`` (the default) refines only the rows that
-# carry a recorded review flag — critic dissent, a Fixer decision, a
-# Polish or validator finding — which selects by the PRESENCE of a
-# recorded verdict, never by the shape of the content; ``all`` restores
-# the pre-Q26 blanket pass over every row for A/B measurement; ``off``
-# stages the rows exactly as authored. Before Q26 the blanket pass was
-# about half of every Phase 3 call on a chapter.
+# Which released rows the Refiner reads. ``all`` (the default again since
+# register Q31, 2026-09-07: the owner ruled that the §8.3 polish over every
+# released row comes before the spend it costs — about half of every
+# Phase 3 call on a chapter) polishes every row; ``flagged`` (the Q26
+# default between 4 and 7 Sep; contract §38 stage 10, "re-review of
+# CHANGED dependents") refines only the rows that carry a recorded review
+# flag — critic dissent, a Fixer decision, a Polish or validator finding —
+# which selects by the PRESENCE of a recorded verdict, never by the shape
+# of the content; ``off`` stages the rows exactly as authored. The three
+# stay selectable so the profiles can be measured on the same source.
 SCOPE_ENV = "AEGIS_CONCEPT_REFINER"
 SCOPES = ("flagged", "all", "off")
-DEFAULT_SCOPE = "flagged"
+DEFAULT_SCOPE = "all"
 
 
 def refiner_scope() -> str:

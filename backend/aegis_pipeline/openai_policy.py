@@ -97,21 +97,23 @@ def ensure_json_mode_prompt(system: str, user: str) -> tuple[str, str]:
 # recorded decision. Two named profiles exist and one environment variable
 # selects between them; nothing else in the codebase chooses an effort.
 #
-# ``tiered`` (the default since register Q26, 2026-09-04) prices each purpose
-# by what the call actually decides. Semantic AUTHORING and ADJUDICATION —
-# reading the source, deciding task membership, topology, concept content,
-# assessments, the Fixer — request ``high``. The independent advisory critic,
-# which re-reads an author's decision and may only flag (Q10), requests
-# ``medium``: its dissent is review evidence, never a gate, so a second pass
-# at author effort doubled the spend of every consequential decision for no
-# change in what ships. Transcription, outlining, metadata, refinement and
-# the offline workbook tools request ``medium``/``low`` because they render
-# or restate content the model has already decided. Every purpose still
-# goes to the same model; the tiers change how much the model deliberates,
-# never who decides (CLAUDE.md Rule 1 is untouched).
+# ``uniform-xhigh`` (register Q22, and the default again since register Q31,
+# 2026-09-07) requests ``xhigh`` for every purpose: the owner measured the
+# tiered profile's outputs against the earlier ones and ruled that the
+# writing quality of every pass — descriptions, chapter and topic prose,
+# questions, rubrics, the Refiners — comes before the per-chapter spend.
 #
-# ``uniform-xhigh`` is the former Q22 policy, kept selectable so the two can
-# be measured against each other on the same source.
+# ``tiered`` (register Q26, 2026-09-04; the default between 4 and 7 Sep)
+# prices each purpose by what the call decides. Semantic AUTHORING and
+# ADJUDICATION — reading the source, deciding task membership, topology,
+# concept content, assessments, the Fixer — request ``high``. The
+# independent advisory critic, which re-reads an author's decision and may
+# only flag (Q10), requests ``medium``. Transcription, outlining, metadata,
+# refinement and the offline workbook tools request ``medium``/``low``. It
+# stays selectable (``AEGIS_OPENAI_REASONING_PROFILE=tiered``) as the cost
+# profile, so the two can be measured against each other on the same source.
+# Every purpose still goes to the same model; the profiles change how much
+# the model deliberates, never who decides (CLAUDE.md Rule 1 is untouched).
 #
 # Whatever the profile, the value is a *request*, not an assumption. A
 # compatible endpoint may expose a lower ceiling and reject the value
@@ -120,7 +122,7 @@ def ensure_json_mode_prompt(system: str, user: str) -> tuple[str, str]:
 # an unsupported value costs one probe, not one 400 per call. Structured-
 # output recovery may also lower effort after truncation.
 UNIFORM_REASONING_EFFORT: Final[ReasoningEffort] = "xhigh"
-DEFAULT_REASONING_PROFILE: Final = "tiered"
+DEFAULT_REASONING_PROFILE: Final = "uniform-xhigh"
 TIERED_REASONING_EFFORT_BY_PURPOSE: Final[
     dict[OpenAIPurpose, ReasoningEffort]
 ] = {
@@ -152,9 +154,10 @@ REASONING_PROFILES: Final[
     "tiered": TIERED_REASONING_EFFORT_BY_PURPOSE,
     "uniform-xhigh": UNIFORM_REASONING_EFFORT_BY_PURPOSE,
 }
-# The complete purpose registry (every purpose, in the default profile). Kept
-# under its historical name because call-site audits read it as "the set of
-# purposes a request may declare".
+# The complete purpose registry (every purpose, with the tiered profile's
+# efforts as its values). Kept under its historical name because call-site
+# audits read it as "the set of purposes a request may declare"; the effort
+# a request actually carries comes from ``reasoning_policy()``.
 REASONING_EFFORT_BY_PURPOSE: Final[dict[OpenAIPurpose, ReasoningEffort]] = (
     TIERED_REASONING_EFFORT_BY_PURPOSE
 )

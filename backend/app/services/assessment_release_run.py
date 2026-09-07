@@ -2819,9 +2819,9 @@ def run_release_for_job(
 
     # Stage 11 — every group receives the complete, symmetric same-home/tier
     # sibling context. QA only flags and never changes the authored records.
-    # Opt-in since register Q26 (contract v2.0 cost policy): the joint item
-    # review and the route critic already audit every member; a further
-    # per-group pass is enabled explicitly (AEGIS_MASTER_GROUP_QA=1).
+    # On by default (register Q31); the cost profile switches it off
+    # (AEGIS_MASTER_GROUP_QA=0), in which case the joint item review and
+    # the route critic are the only audits of every member.
     qa_provider, qa_critic = _authority_pair(authorities, "qa")
     quality_groups = [_group_evidence(group) for group in groups]
     qa_groups = (
@@ -2831,10 +2831,9 @@ def run_release_for_job(
     )
     if not qa_groups and groups:
         progress.log(
-            "Assessment release: touched-group QA is opt-in under the "
-            "contract v2.0 cost policy (AEGIS_MASTER_GROUP_QA=1) and did "
-            "not run; the joint item review and route critic audited every "
-            "member."
+            "Assessment release: touched-group QA is switched off "
+            "(AEGIS_MASTER_GROUP_QA=0, the cost profile) and did not run; "
+            "the joint item review and route critic audited every member."
         )
     _observe_stage(stage_progress, "qa", 0, len(qa_groups))
     for group_index, record in enumerate(qa_groups):
@@ -3002,13 +3001,13 @@ def run_release_for_job(
             )
         )
     else:
-        # Opt-in since register Q26 (contract v2.0 cost policy): the
-        # materialized prose ships as authored; a prose polish over every
-        # finished row is enabled explicitly (AEGIS_MASTER_REFINER=1).
+        # Switched off by the cost profile (AEGIS_MASTER_REFINER=0; on by
+        # default since register Q31): the materialized prose ships as
+        # authored, and the receipt says so.
         progress.log(
-            "Assessment release: the Master Refiner is opt-in under the "
-            "contract v2.0 cost policy (AEGIS_MASTER_REFINER=1) and did not "
-            "run; authored prose ships as materialized."
+            "Assessment release: the Master Refiner is switched off "
+            "(AEGIS_MASTER_REFINER=0, the cost profile) and did not run; "
+            "authored prose ships as materialized."
         )
         refined_records = [payload]
         refinement_diff = {
@@ -3018,8 +3017,8 @@ def run_release_for_job(
             "changes": [],
             "review_flags": [],
             "summary": (
-                "Master Refiner not run (opt-in under the contract v2.0 "
-                "cost policy, register Q26); prose ships as materialized"
+                "Master Refiner not run (switched off by the cost profile, "
+                "AEGIS_MASTER_REFINER=0); prose ships as materialized"
             ),
             "resealed_after_refinement": False,
             "skipped": True,

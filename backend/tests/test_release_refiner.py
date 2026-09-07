@@ -126,22 +126,37 @@ class _Provider:
 def _blanket_refiner_scope(monkeypatch):
     """These regressions exercise the polish mechanics on unflagged rows.
 
-    Under the default scope (register Q26: flagged rows only) unflagged
-    rows ship as authored, so the mechanics are pinned under the explicit
-    ``all`` scope; the scope selection itself is pinned below.
+    They pin the mechanics under the explicit ``all`` scope (also the
+    default since register Q31); the scope selection itself is pinned
+    below.
     """
     monkeypatch.setenv(release_refiner.SCOPE_ENV, "all")
 
 
-def test_the_default_scope_refines_only_rows_carrying_a_review_flag(
+def test_the_default_scope_polishes_every_released_row(monkeypatch):
+    """Register Q31: the §8.3 polish over every row is the default again."""
+    monkeypatch.delenv(release_refiner.SCOPE_ENV, raising=False)
+    assert release_refiner.refiner_scope() == "all"
+    provider = _Provider(replace=("see how", "discover how"))
+    refined, diff, flags = release_refiner.refine_release(
+        _rows(), metadata=_METADATA, provider=provider,
+        store=kernel.DecisionStore(),
+    )
+    assert provider.calls == 2
+    assert diff["scope"] == "all"
+    assert diff["rows_shipped_as_authored"] == 0
+
+
+def test_the_flagged_scope_refines_only_rows_carrying_a_review_flag(
     monkeypatch,
 ):
-    """Contract v2.0 §38 stage 10: re-review what a recorded verdict touched.
+    """Contract v2.0 §38 stage 10 (the Q26 cost profile): re-review what a
+    recorded verdict touched.
 
     Selecting by the PRESENCE of a recorded flag is identity accounting;
     the polish itself stays a model decision on the rows it reaches.
     """
-    monkeypatch.delenv(release_refiner.SCOPE_ENV, raising=False)
+    monkeypatch.setenv(release_refiner.SCOPE_ENV, "flagged")
     assert release_refiner.refiner_scope() == "flagged"
     rows = _rows()
     rows[0]["review_flags"] = ["critic: tone drifts above grade level"]
@@ -159,7 +174,7 @@ def test_the_default_scope_refines_only_rows_carrying_a_review_flag(
 def test_a_release_with_no_flagged_row_spends_nothing_and_ships_as_authored(
     monkeypatch,
 ):
-    monkeypatch.delenv(release_refiner.SCOPE_ENV, raising=False)
+    monkeypatch.setenv(release_refiner.SCOPE_ENV, "flagged")
     provider = _Provider(replace=("see how", "discover how"))
     original = _rows()
     refined, diff, flags = release_refiner.refine_release(

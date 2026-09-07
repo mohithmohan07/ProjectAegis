@@ -326,15 +326,6 @@ def advisory_flags(review: Mapping[str, Any] | None) -> list[str]:
     return flags
 
 
-def _is_confidence_score_shortfall(defect: str) -> bool:
-    """A checker's honest sub-floor SCORE defect (``… is below …``).
-
-    The ``[confidence]`` prefix marks the whole ship-flagged class; only the
-    numeric-score member of it skips the bounded corrections (Q26).
-    """
-    return defect.startswith("[confidence] ") and " is below " in defect
-
-
 def decide(
     *,
     kind: str,
@@ -394,18 +385,12 @@ def decide(
         ]
         if not defects:
             break
-        if all(_is_confidence_score_shortfall(d) for d in defects):
-            # An honest sub-floor confidence SCORE is a judgment signal,
-            # not a structural defect. The prompts tell the model never to
-            # inflate a score to pass a threshold, so asking again for
-            # the same evidence could only buy an inflated number at the
-            # price of a full re-spend (register Q26): the decision ships
-            # after this one attempt with the shortfall recorded for review.
-            # Other ``[confidence]``-class defects (a grounding outside its
-            # topic, for one) keep their bounded corrections: the feedback
-            # names a fix the model can make, so the re-ask is not a
-            # re-spend for a number.
-            break
+        # A sub-floor confidence goes back through the bounded corrections
+        # like any other defect (register Q31 restores the pre-Q26
+        # behaviour): the feedback names the weak grounding, and the model
+        # may find better evidence or a tighter topology on the re-ask —
+        # the prompts still forbid inflating a score to pass a threshold,
+        # so a re-ask that only moves the number ships flagged below.
     else:  # pragma: no cover - loop always breaks or raises below
         pass
     confidence_only = defects and all(
@@ -485,8 +470,8 @@ def decide(
     flags: list[str] = list(fixer_flags)
     if confidence_only:
         flags.extend(
-            defect[len("[confidence] "):] + "; shipped for review "
-            "(an honest confidence is recorded, never re-asked)"
+            defect[len("[confidence] "):] + "; shipped for review after "
+            f"{attempts} bounded attempt(s)"
             for defect in defects
         )
     if critic is not None:

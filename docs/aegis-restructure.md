@@ -1759,6 +1759,67 @@ is anchored on) stand: the module holds no count; it reads the owner's.
 **Stands:** everything Q26–Q29 list except §8's "no fixed count" for the
 Pre lane, amended above.
 
+### Q31 · Decided — writing quality before spend: the Q26 cost cuts are reversed by default
+
+Owner report, 7 Sep 2026: *"since the restructure the outputs have been
+completely off … the outputs are coming out but the way they are written
+is completely off"*, narrowed by the owner to *"since the time V2.0
+contract was introduced in this PR line"* (PR 288, 4 Sep). Owner ruling
+on the causal analysis that followed: *"Can we inculcate the changes? And
+improve the prompting and intelligence as well."*
+
+**What the analysis found.** Every corrected workbook in the owner's
+correction corpus and every pre-4-Sep output on record was written under
+Q22's uniform `xhigh`, a concept Refiner over every released row, the
+Master Refiner and the touched-group QA on, a critic on every Master
+decision and three bounded corrections for a confidence shortfall. PR 288
+changed all six in one day, together with the contract's wording rules,
+and no output produced since has been measured against one produced
+before on the same source. The register recorded each cut as "one
+environment variable away for measurement"; the measurement was never
+made, and the owner's reading of the outputs is the measurement now.
+
+**What this entry decides (amends Q26's cost policy, keeps Q22 as the
+default it restores).** The writing-quality settings are the code defaults
+again, stated in `fly.toml` so a deploy cannot drift from them silently:
+
+* `AEGIS_OPENAI_REASONING_PROFILE` defaults to `uniform-xhigh` (Q22): every
+  purpose — chapter and topic descriptions, Polish, the Refiner, the
+  critics, transcription and outline — requests `xhigh`. The `tiered`
+  profile stays selectable as the cost profile; its table remains the
+  registry's stated values so the A/B the owner never ran can still be run.
+* `AEGIS_CONCEPT_REFINER` defaults to `all` (§8.3 as written before Q26:
+  every released row is refined; `flagged` and `off` stay selectable).
+* `AEGIS_MASTER_REFINER` and `AEGIS_MASTER_GROUP_QA` default on; `0`
+  switches either off.
+* `AEGIS_MASTER_CRITICS` defaults to every stage. The joint per-item review
+  after marking (contract §27 step 6, `assessment_item_review`) stays on
+  beside them — it is a contract stage, not a replacement for the critics.
+* A pure `[confidence]` shortfall goes back through the bounded
+  corrections (three attempts) like any other defect. Q26's argument — a
+  re-ask on the same evidence could only buy an inflated number — assumed
+  the feedback is contentless; it is not: the correction names the weak
+  grounding and the model may cite better evidence or rewrite the claim
+  it could not ground. The prompts still forbid inflating a score, and a
+  shortfall that survives the attempts ships flagged, as before Q26.
+
+The Q26 cost profile is one variable away in every case and is written
+beside the defaults in `fly.toml`; nothing here moves a verdict into code
+or changes a decide-once key (Rule 1; reasoning effort remains transport
+policy).
+
+**Recorded, still open for the owner.** Two v2.0 wording rules the
+analysis names as the other half of "the way they are written" are
+contract text and stand until the owner rules: Q27's verbatim Post
+questions (the source's wording ships unedited, so a source's awkward
+sentence is the learner's sentence) and §22.5's label-free Objective
+explanations. Neither is changed here. The prompt and intelligence
+improvements the owner asked for in the same breath are the next slice,
+authored against the contract and this register, never against Rule 1.
+
+**Stands:** everything Q26–Q30 list except Q26's cost-policy defaults,
+reversed above; Q26's "Recorded, not yet done" list stands unchanged.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

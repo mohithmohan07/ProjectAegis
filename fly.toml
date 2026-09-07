@@ -30,6 +30,17 @@ primary_region = 'ams'
   AEGIS_PHASE3_DECISION_WORKERS = '16'
   AEGIS_SOURCE_CHUNK_WORKERS = '10'
   AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES = '3'
+  # Writing-quality policy (register Q31, owner ruling 2026-09-07). These
+  # are the code defaults, stated here so a deploy can never drift from
+  # them silently. The Q26 cost profile is: AEGIS_OPENAI_REASONING_PROFILE
+  # = 'tiered', AEGIS_CONCEPT_REFINER = 'flagged', AEGIS_MASTER_REFINER =
+  # '0', AEGIS_MASTER_GROUP_QA = '0', AEGIS_MASTER_CRITICS =
+  # 'route,dedup,pre_claim' — measure the two on the same source.
+  AEGIS_OPENAI_REASONING_PROFILE = 'uniform-xhigh'
+  AEGIS_CONCEPT_REFINER = 'all'
+  AEGIS_MASTER_REFINER = '1'
+  AEGIS_MASTER_GROUP_QA = '1'
+  AEGIS_MASTER_CRITICS = 'all'
   PORT = '8000'
 
 [[mounts]]

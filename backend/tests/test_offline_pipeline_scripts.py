@@ -331,9 +331,9 @@ def test_call_gpt_json_builds_a_request_a_reasoning_model_accepts(
     # The modern parameter name, not the removed max_tokens.
     assert "max_completion_tokens" in request
     assert "max_tokens" not in request
-    # Register Q26: the CLI shares the app's tiered policy; assessment
-    # authoring requests ``high``.
-    assert request["reasoning_effort"] == "high"
+    # Register Q26/Q31: the CLI shares the app's reasoning policy; under the
+    # default profile (uniform-xhigh) assessment authoring requests ``xhigh``.
+    assert request["reasoning_effort"] == "xhigh"
     assert [message["role"] for message in request["messages"]] == [
         "system",
         "user",
@@ -372,9 +372,10 @@ def test_call_gpt_json_negotiates_effort_like_the_web_app(monkeypatch):
     assert [call["reasoning_effort"] for call in calls] == ["xhigh", "high"]
 
 
-def test_responses_api_concept_extraction_follows_the_tiered_policy(monkeypatch):
+def test_responses_api_concept_extraction_follows_the_reasoning_policy(monkeypatch):
     """The surviving Responses API CLI path follows the same policy table
-    as the app (register Q26: concept mapping requests ``high``)."""
+    as the app (register Q26/Q31: concept mapping requests the profile's
+    effort — ``xhigh`` under the default uniform-xhigh profile)."""
 
     calls: list[dict] = []
 
@@ -402,6 +403,7 @@ def test_responses_api_concept_extraction_follows_the_tiered_policy(monkeypatch)
     assert len(calls) == 1
     request = calls[0]
     assert request["model"] == "gpt-5.6-luna"
-    assert request["reasoning"] == {"effort": "high"}
+    # Default profile uniform-xhigh (register Q31).
+    assert request["reasoning"] == {"effort": "xhigh"}
     assert "reasoning_effort" not in request
     assert request["text"]["format"]["type"] == "json_schema"
