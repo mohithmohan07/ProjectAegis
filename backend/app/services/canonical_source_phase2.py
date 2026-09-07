@@ -69,6 +69,24 @@ _PHASE2_ADVISORY_GATE_CODES = frozenset({
     "task_anchor_extraction_failed",
     "unresolved_required_visual",
     "display_rich_text_requires_review",
+    # An explicit "Fig. X.Y" citation the Figure registry could not match,
+    # or matched to more than one figure. The compiler already emits these
+    # as WARNINGS whenever ``figure_citations_ship_for_review()`` holds —
+    # its docstring: "a single unmatched 'Fig. X.Y' citation used to block
+    # an entire chapter after the full (and expensive) verified extraction
+    # had already succeeded" — and ``_accept_gate_issues_with_flags`` names
+    # exactly this case as a review note. The codes were never added here,
+    # so the warning was re-promoted to fatal by this very split and a
+    # sealed, verified 13-page NCERT extraction was refused whole over two
+    # citations (jesc112.pdf, 2026-09-07). Contract §7.1.5 wants every
+    # unresolved reference RESOLVED BEFORE RELEASE, which the review flag
+    # carries forward; it does not ask the parse to refuse the book.
+    # Severity still governs: with the switch off they arrive as errors and
+    # stay fatal. Both the phase-2 and the legacy spellings are listed.
+    "phase2_unresolved_figure_reference",
+    "phase2_ambiguous_figure_reference",
+    "unresolved_explicit_figure_reference",
+    "ambiguous_explicit_figure_reference",
 })
 
 
