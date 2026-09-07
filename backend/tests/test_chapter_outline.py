@@ -449,6 +449,64 @@ def test_advisory_gate_issues_ship_under_review_flags():
     assert any("display_rich_text_requires_review" == f for f in flags)
 
 
+def test_unmatched_figure_citations_ship_under_review_flags():
+    # jesc112.pdf (NCERT Class 10, Magnetic Effects of Electric Current),
+    # 2026-09-07: a sealed, verified 13-page GPT extraction was reused with
+    # no model batches replayed, and the deterministic gate then refused the
+    # whole book with "phase2_unresolved_figure_reference,
+    # phase2_unresolved_figure_reference". The compiler had emitted both as
+    # WARNINGS (figure_citations_ship_for_review), but the advisory code set
+    # never received the figure-citation codes, so partition_gate_issues
+    # re-promoted them to fatal — against its own docstring. Contract §7.1.5
+    # asks for every unresolved reference to be resolved before RELEASE; the
+    # review flag is how it travels there.
+    canonical = {"tasks": [
+        {"task_id": "TASK-0004", "qid": "QINV-0004"},
+        {"task_id": "TASK-0009", "qid": "QINV-0009"},
+    ]}
+    report = {"status": "failed"}
+    issues = [
+        {"severity": "warning", "code": "phase2_unresolved_figure_reference",
+         "qid": "QINV-0004", "task_id": "TASK-0004",
+         "reference_ids": ["12.5(a)"]},
+        {"severity": "warning", "code": "phase2_unresolved_figure_reference",
+         "qid": "QINV-0009", "task_id": "TASK-0009",
+         "reference_ids": ["12.12"]},
+        {"severity": "warning", "code": "phase2_ambiguous_figure_reference",
+         "qid": "QINV-0004", "task_id": "TASK-0004",
+         "reference_ids": ["12.6"]},
+    ]
+
+    fallback._accept_gate_issues_with_flags(canonical, report, issues)
+
+    assert canonical["phase2_inventory_ready"] is True
+    assert report["status"] == "passed_with_warnings"
+    flags = canonical["source_review_flags"]
+    assert "phase2_unresolved_figure_reference (TASK-0004)" in flags
+    assert "phase2_unresolved_figure_reference (TASK-0009)" in flags
+    assert "phase2_ambiguous_figure_reference (TASK-0004)" in flags
+
+
+def test_error_severity_figure_citations_still_fail_closed():
+    # Severity still governs: with figure_citations_ship_for_review off the
+    # compiler emits these as errors, and an error is a genuine defect.
+    from app.services import canonical_source_phase2 as phase2
+
+    fatal, advisory = phase2.partition_gate_issues([
+        {"severity": "error", "code": "phase2_unresolved_figure_reference"},
+        {"severity": "warning", "code": "unresolved_explicit_figure_reference"},
+        {"severity": "warning", "code": "ambiguous_explicit_figure_reference"},
+    ])
+
+    assert [item["code"] for item in fatal] == [
+        "phase2_unresolved_figure_reference"
+    ]
+    assert [item["code"] for item in advisory] == [
+        "unresolved_explicit_figure_reference",
+        "ambiguous_explicit_figure_reference",
+    ]
+
+
 def test_real_errors_still_stop_the_pipeline():
     canonical = {"tasks": [{"task_id": "TASK-0001", "qid": "QINV-0001"}]}
     issues = [{"severity": "error", "code": "phase2_qid_order_mismatch"}]
