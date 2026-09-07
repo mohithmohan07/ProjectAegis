@@ -1578,9 +1578,11 @@ contract, and §2 forbids blending:**
 * **Pre-lane `chapter_duration`.** The Mindfulness log clears it on the
   Pre file ("360 minutes is the teaching time allotted to the Post-learning
   chapter"), while §32.1 says the chapter duration is "frozen once per
-  chapter and repeated identically across all four outputs". The contract
-  governs and the value still repeats; the owner's ruling is needed to
-  change §32.1, and until then this is a recorded conflict, not a defect.
+  chapter and repeated identically across all four outputs". **Ruled by
+  the owner, 6 Sep 2026: "let the chapter duration be as it is, as in the
+  existing code."** §32.1 stands unchanged; the value repeats on all four
+  outputs, and the Mindfulness clearing is a calibration defect under §45,
+  not a rule. Closed.
 * **Comma-delimited lists** in the older corrected Concept files
   (`keywords`, `topic_concept_labels`, `post_topics`). §16 fixes the
   delimiter as exact ` | `, the corrected *Masters* already use it, and
