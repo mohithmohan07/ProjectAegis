@@ -617,8 +617,20 @@ def _validate_concepts_workbook_bytes(
         ws = workbook[sheet_name]
         seen: dict[tuple[str, str, str, str], int] = {}
         issues: list[str] = []
+        # Contract v2.0 §14.1 / §42 gate 2 (UPD-001), the Concept File's
+        # twin of the assertion ``validate_master_file`` already makes:
+        # every ``is_update_*`` column the written layout carries reads
+        # exact ``No`` on every authored row. Addressed by name, so a
+        # legacy layout that carries none of them is simply not checked.
+        update_indices = {
+            name: fields.index(name)
+            for name in workbook_contract.UPDATE_FIELDS
+            if name in fields
+        }
 
-        for row in ws.iter_rows(min_row=3, values_only=True):
+        for row_number, row in enumerate(
+            ws.iter_rows(min_row=3, values_only=True), start=3,
+        ):
             chapter_title = strip_title_tag(
                 _cell_str(row, idx_chapter_title))
             concept_title = strip_title_tag(
@@ -626,6 +638,16 @@ def _validate_concepts_workbook_bytes(
             topic_title = strip_topic_title(
                 _cell_str(row, idx_topic_title))
             learning_kind = _cell_str(row, idx_topic_pre_post)
+            authored = bool(chapter_title or concept_title or topic_title)
+            if authored:
+                for name, index in update_indices.items():
+                    actual = _cell_str(row, index)
+                    if actual != workbook_contract.UPDATE_FIELD_VALUE:
+                        issues.append(
+                            f"row {row_number}: {name} {actual!r} != "
+                            f"{workbook_contract.UPDATE_FIELD_VALUE!r} "
+                            "(every authored data row carries exact 'No')"
+                        )
             key = (
                 normalize_question_text(chapter_title),
                 normalize_question_text(concept_title),
@@ -1692,9 +1714,64 @@ def _concept_to_row(concept: models.Concept, kind: str = "objective",
         row, expected_front, kind=kind,
         row_identity=str(concept.concept_title or ""), decisions=decisions,
     )
-    expected = len(sheet_layout.fields) + (
-        len(concept_fields) - len(sheet_layout.block_fields("concept")))
-    return row + [""] * (expected - len(row))
+    return row + _concept_row_tail(sheet_layout)
+
+
+# Contract v2.0 §14.1, as restated by register Q26 (which amends Q23 D3's
+# "populated bands" wording): the update marker is exact ``No`` on EVERY
+# authored data row, "even when the corresponding later entity band is
+# otherwise blank". On a Concept File row the Group and Question bands are
+# deliberately empty, and their two markers are the only cells in that tail
+# that still carry a value.
+_CONCEPT_ROW_TAIL_UPDATE_FIELDS = ("is_update_group", "is_update_question")
+
+
+def apply_numeric_formats(
+    ws, row_index: int, sheet_layout: layouts.SheetLayout,
+) -> None:
+    """Contract §32's ``0.##`` display on the numeric cells of one row.
+
+    The Master renderer has applied this since Q26 (``_append_record``);
+    the Concept File never set a number format at all, so its one numeric
+    cell — ``chapter_duration`` — shipped as General while the same value
+    in Outputs 02/04 carried ``0.##``. Storage is untouched: only a cell
+    that already holds a real number is formatted.
+    """
+    for column, name in enumerate(sheet_layout.fields, start=1):
+        if not workbook_contract.is_numeric_display_field(name):
+            continue
+        cell = ws.cell(row=row_index, column=column)
+        if isinstance(cell.value, bool) or not isinstance(
+            cell.value, (int, float)
+        ):
+            continue
+        cell.number_format = workbook_contract.NUMERIC_DISPLAY_FORMAT
+
+
+def _concept_row_tail(sheet_layout: layouts.SheetLayout) -> list[str]:
+    """The Group+Question tail of one Concept-File row, BY FIELD NAME.
+
+    This used to be ``[""] * (expected - len(row))`` — a blanket pad. On the
+    update-aware layout ``is_update_group`` and ``is_update_question`` sit
+    inside that pad (columns 28 and 36 of 72), so Outputs 01/03 shipped two
+    of the five markers empty while the Master renderer stamped all five
+    (``assessment_workbook._row_values``) and refused anything else at
+    read-back. [measured on the owner's corrected Concept File for Radha's
+    Letter to Mowgli] every one of the five reads ``No``.
+
+    Addressing the tail by name keeps a legacy layout that carries no
+    ``is_update_*`` column entirely blank, exactly as before.
+    """
+    front = (
+        len(sheet_layout.block_fields("chapter"))
+        + len(sheet_layout.block_fields("topic"))
+        + len(sheet_layout.block_fields("concept"))
+    )
+    return [
+        workbook_contract.UPDATE_FIELD_VALUE
+        if name in _CONCEPT_ROW_TAIL_UPDATE_FIELDS else ""
+        for name in list(sheet_layout.fields)[front:]
+    ]
 
 
 def _row_has_question(ws, row_i: int, q_start: int) -> bool:
@@ -2065,6 +2142,7 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int],
         concepts,
         export_scope,
         exact_rows=False,
+        sheet_layout=objective_layout,
     ))
     workbook_sync.atomic_save_workbook(wb, path)
     for decision in decisions:
@@ -2239,6 +2317,7 @@ def write_concepts_workbook(
                 start=1,
             ):
                 _write_cell(ws, row=next_row, column=i, value=value)
+            apply_numeric_formats(ws, next_row, sheet_layout)
             next_row += 1
     buf = io.BytesIO()
     wb.save(buf)
@@ -2252,6 +2331,12 @@ def write_concepts_workbook(
         concepts,
         export_scope,
         exact_rows=True,
+        # The bytes were written on ``sheet_layout``; without this the gate
+        # addressed the 67-column reference layout against a 72-column
+        # update-aware file and compared shifted columns (topic_title 6 vs
+        # 7, concept_title 12 vs 14), so it could neither confirm nor
+        # refute the topology it exists to check.
+        sheet_layout=sheet_layout,
     )
     return data
 

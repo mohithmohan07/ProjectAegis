@@ -539,6 +539,8 @@ def build_release_bulk_import_workbook(
                 start=1,
             ):
                 bi_writer._write_cell(ws, row=next_row, column=column, value=value)
+            # Contract §32: the same ``0.##`` display the Master applies.
+            bi_writer.apply_numeric_formats(ws, next_row, sheet_layout)
             next_row += 1
     buffer = io.BytesIO()
     wb.save(buffer)

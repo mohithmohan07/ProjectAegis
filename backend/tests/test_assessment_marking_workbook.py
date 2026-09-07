@@ -534,7 +534,8 @@ def test_single_and_multipart_descriptive_scoring_read_back_exclusively():
     single, _single_snapshot, _single_provenance = _parsed_master()
     single_row = _question_row(single, "Descriptive")
     assert single_row["answer_content_1"] == "identifies two dimensions"
-    assert single_row["answer_weightage_1"] == "1"
+    # Contract v2.0 §32: weights and marks are real numeric cells, never text.
+    assert single_row["answer_weightage_1"] == 1
     assert single_row["sub_question_1"] == ""
 
     multipart, _multipart_snapshot, _multipart_provenance = _parsed_master(
@@ -556,8 +557,8 @@ def test_single_and_multipart_descriptive_scoring_read_back_exclusively():
         "Name the number of faces of a cube."
     )
     assert multipart_row["sq1_keyword_1"] == "six faces"
-    assert multipart_row["sq1_weightage_1"] == "1"
-    assert multipart_row["sq1_weightage_2"] == "1"
+    assert multipart_row["sq1_weightage_1"] == 1
+    assert multipart_row["sq1_weightage_2"] == 1
 
 
 def test_readback_rejects_multipart_descriptive_main_rubric_duplication():
@@ -620,7 +621,8 @@ def test_subjective_answers_render_and_read_back_without_options():
     assert row["answer_1"] == "two-dimensional"
     # Contract v2.0 §23: a used slot carries the literal ``Yes``.
     assert row["answer_display_1"] == "Yes"
-    assert row["weightage_1"] == "1"
+    # Contract v2.0 §32: weights and marks are real numeric cells, never text.
+    assert row["weightage_1"] == 1
     assert row["placeholder_1"] == "a"
     assert row["answer_2"] == "three-dimensional"
     assert row["placeholder_2"] == "b"

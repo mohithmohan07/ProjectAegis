@@ -1525,6 +1525,80 @@ Owner rulings, 4 Sep 2026 (later the same day as Q26), three of them:
 **Stands:** everything Q26 lists, with §14's widths and §7.3's permitted
 column read as amended above.
 
+### Q28 · Decided — the technicality layer the corrected outputs demonstrate
+
+Owner input, 6 Sep 2026: the corrected English and Mathematics outputs for
+eleven Grade 6 MSBSHSE chapters, each with its source chapter and, for
+seven of them, an errors-and-corrections log. The instruction was to follow
+the **technicalities** of the corrected outputs against the source files and
+write only that layer. This entry records what that layer is, and — per §2
+— what in those files the contract overrules rather than blends.
+
+**Implemented (mechanics only; every one is a cell shape, never a meaning):**
+
+* **All five `is_update_*` cells read `No` on the Concept File too.**
+  §14.1's "even when the corresponding later entity band is otherwise
+  blank", restated by Q26. `writer._concept_to_row` padded everything past
+  the Concept band with `""`, so Outputs 01/03 shipped `is_update_group`
+  and `is_update_question` empty while the Master stamped all five and
+  refused anything else at read-back. The tail is now composed BY FIELD
+  NAME (`_concept_row_tail`), and the Concept File read-back gained the
+  Master's §42 gate-2 assertion. Evidence both ways: the contract, and the
+  owner's corrected Post Concept file for Radha's Letter to Mowgli, whose
+  Group and Question bands are empty beside an `is_update_*` pair of `No`.
+* **The Concept File read-back addresses the layout it wrote.**
+  `write_concepts_workbook` writes on `update-aware-master-2` (72 columns)
+  and called its validator without the layout, so the gate fell back to the
+  67-column `sop-mes-1` and compared shifted columns — `topic_title` 6
+  against 7, `concept_title` 12 against 14. Both call sites now pass it.
+* **Numeric storage, §32.** A weight, mark or duration the marking author
+  returned as JSON text reached the cell as text: the verdict is
+  deep-copied verbatim and nothing coerced it, so `answer_weightage_1`
+  shipped as the string `"1"` with General format while `marks` on the same
+  row — cast to float upstream — carried a number and `0.##`. One coercion
+  at the shared cell seam (`_numeric_cell`, in `_row_values`) converts a
+  value that ALREADY is an exact number written as text and leaves anything
+  else untouched for the existing gates to name. The written text decides
+  int or float, so `"1.0"` stays `1.0`. `chapter_duration` joins the
+  `0.##` display set — the A11-era exclusion note it carried described a
+  calibration Q26 superseded — and the Concept File applies that format
+  too (`writer.apply_numeric_formats`), which it never did.
+* **Parent lists resolve inside the file** (§13, §42 gate 4, ID-001).
+  `_dangling_reference_errors` resolves every `concept_question_labels`,
+  `group_question_labels` and BG/IG/AG token against the identities the
+  workbook itself carries. The existing aggregate checks compare a rollup
+  with the SNAPSHOT and so cannot see a token whose row is absent — the
+  defect the Love for One's Motherland log records, where a concept kept
+  listing `… Q01` after that question was gone and "the workbook now points
+  to a question label that no longer exists anywhere in the file".
+
+**Recorded, NOT implemented — the corrected files disagree with the
+contract, and §2 forbids blending:**
+
+* **Pre-lane `chapter_duration`.** The Mindfulness log clears it on the
+  Pre file ("360 minutes is the teaching time allotted to the Post-learning
+  chapter"), while §32.1 says the chapter duration is "frozen once per
+  chapter and repeated identically across all four outputs". The contract
+  governs and the value still repeats; the owner's ruling is needed to
+  change §32.1, and until then this is a recorded conflict, not a defect.
+* **Comma-delimited lists** in the older corrected Concept files
+  (`keywords`, `topic_concept_labels`, `post_topics`). §16 fixes the
+  delimiter as exact ` | `, the corrected *Masters* already use it, and
+  §45 makes an observed defect in a calibration a defect still.
+* **Rubric criteria above the 0.5/1 quantum** (a 6.0 weight in the
+  corrected Radha's Letter Master) and **untagged English Descriptive
+  criteria** beside tagged ones in the same cell block: §27.5 and §28
+  govern, and both remain enforced.
+* **Task-specific `question_category` literals** the corrected Masters
+  introduce — `Rearrange the following words`, `Identifying the following`.
+  §25 requires the profile to freeze exact legal category strings before
+  authoring, so adding them is a profile amendment the owner makes, not a
+  mechanical fix; the cell checker refuses them today.
+
+**Stands:** everything Q26 and Q27 list. Nothing here moves a semantic
+verdict into code (Rule 1): every change is a cell's type, marker or
+resolution, and no content decision changed hands.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

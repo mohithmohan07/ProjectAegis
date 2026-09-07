@@ -101,6 +101,16 @@ _UPDATE_FIELD_AFTER = {
 # carries in all five ``is_update_*`` fields.
 UPDATE_FIELD_VALUE = "No"
 
+# The five field names themselves, public because BOTH renderers must stamp
+# them and both read-backs must assert them: the Master through
+# ``_row_values`` / ``validate_master_file`` here, and the Concept File
+# through ``writer._concept_row_tail`` / ``_validate_concepts_workbook_bytes``.
+# One list, so the two lanes cannot drift on which fields the rule covers.
+UPDATE_FIELDS: tuple[str, ...] = (
+    "is_update_chapter", "is_update_topic", "is_update_concept",
+    "is_update_group", "is_update_question",
+)
+
 # Contract v2.0 §12/§14 (widths as amended by register Q27): every one of
 # the four outputs is a projection of one snapshot onto the update-aware
 # schema (72 / 440 / 149 columns, the owner's CMS template geometry). The
@@ -505,6 +515,20 @@ def _row_values(
     blank = frozenset(forced_blank)
     fields = (schema or output_schema("concept"))["fields"][sheet]
     materialized = dict(record)
+    # Contract v2.0 §32 / §42.10 (NUM-001): "Every populated
+    # chapter_duration, question_duration, marks, answer/rubric weight,
+    # sub-question mark and sub-question weight is a real numeric cell,
+    # never numeric text". The marking verdict is provider JSON carried
+    # verbatim (``assessment_marking._assemble`` deep-copies ``answers``),
+    # so a weight the author returned as the STRING "1" reached the cell as
+    # text and silently lost both numeric storage and the 0.## display,
+    # while ``marks`` on the same row — cast to float upstream — kept both.
+    # Coercing here, at the one seam both renderers share, is mechanics:
+    # a value that does not parse exactly is left untouched, so the marking
+    # and read-back gates still name it rather than seeing a guessed number.
+    for field in fields:
+        if _ONE_DECIMAL_FIELD_RE.match(field) and field in materialized:
+            materialized[field] = _numeric_cell(materialized[field])
     # Contract v2.0 §14.1 (exact update rule): every one of the five
     # ``is_update_*`` fields carries the exact text ``No`` on every authored
     # data row, even when the corresponding later entity band is blank. The
@@ -520,16 +544,61 @@ def _row_values(
     return row
 
 
-# A11 (owner audit, 2026-08-29): the numeric fields whose cells display
-# one decimal place. chapter_duration is deliberately excluded — the
-# corrected files carry it plain.
+# Contract v2.0 §32: the fields that are real numeric cells with the
+# ``0.##`` display. ``chapter_duration`` heads the contract's own list of
+# them ("Every populated chapter_duration, question_duration, marks, …"),
+# and register Q26 superseded the A11-era "1.0" display this set was first
+# written for — the exclusion note that used to stand here ("the corrected
+# files carry it plain") described that superseded calibration.
 _ONE_DECIMAL_FIELD_RE = re.compile(
-    r"^(?:marks|question_duration"
+    r"^(?:marks|question_duration|chapter_duration"
     r"|answer_weightage_\d+"
     r"|weightage_\d+"
     r"|sub_question_marks_\d+"
     r"|sq\d+_weightage_\d+)$"
 )
+
+
+def is_numeric_display_field(name: str) -> bool:
+    """Whether one field name is a contract §32 numeric cell.
+
+    Public because the Concept-File writer applies the same ``0.##``
+    display to the same fields; one predicate keeps the four outputs from
+    disagreeing about which cells are numbers.
+    """
+    return bool(_ONE_DECIMAL_FIELD_RE.match(str(name or "")))
+
+
+NUMERIC_DISPLAY_FORMAT = "0.##"
+
+
+def _numeric_cell(value: Any) -> Any:
+    """One numeric cell's stored value: a real number, or untouched.
+
+    Mechanics, not judgment (CLAUDE.md Rule 1): it converts a value that
+    ALREADY is an exact number written as text, and returns anything else
+    — blank, prose, a unit-bearing string — exactly as given, so the gates
+    that name those keep seeing what they were written to catch.
+    """
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return value
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return value
+    try:
+        number = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return value
+    if not number.is_finite():
+        return value
+    # The written text decides int or float, so the conversion changes the
+    # cell's TYPE and nothing else: "1.0" stays 1.0 and "1" stays 1. Folding
+    # "1.0" to the integer 1 would be a second, unasked change — it rewrites
+    # a value the owner's corrected Masters carry as a float (marks 10.0,
+    # weightage 1.0) and shifts every pinned rendering with it.
+    if "." in text or "e" in text.lower():
+        return float(number)
+    return int(number)
 
 
 def _append_record(
@@ -564,7 +633,9 @@ def _append_record(
             # Contract v2.0 §42.10 (supersedes the A11 "1.0" display):
             # marks, durations and weightages are stored numeric and
             # display as 0.## — 0.5, 1, 1.5, 2 — presentation only.
-            ws.cell(row=row_number, column=column).number_format = "0.##"
+            ws.cell(
+                row=row_number, column=column,
+            ).number_format = NUMERIC_DISPLAY_FORMAT
 
 
 def _write_headers(
@@ -2525,9 +2596,67 @@ def validate_master_file(
     if actual_questionless_concepts != expected_questionless_concepts:
         errors.append(
             "Objective: concept-only tail row set/order differs from the "
-            f"snapshot (expected {expected_questionless_concepts!r}, got "
-            f"{actual_questionless_concepts!r})"
+            "snapshot (expected {expected!r}, got {actual!r})".format(
+                expected=expected_questionless_concepts,
+                actual=actual_questionless_concepts,
+            )
         )
+    errors.extend(_dangling_reference_errors(parsed))
+    return errors
+
+
+# Contract v2.0 §13 ("Every parent list resolves byte-for-byte to real child
+# identities. No dangling, duplicate, cross-lane or cross-phase references
+# may ship"), §42 gate 4 and Appendix D ID-001.
+_PARENT_LIST_FIELDS = (
+    ("concept_question_labels", "question_label"),
+    ("group_question_labels", "question_label"),
+    ("basic_groups", "group_name"),
+    ("intermediate_groups", "group_name"),
+    ("advanced_groups", "group_name"),
+)
+
+
+def _dangling_reference_errors(parsed: Mapping) -> list[str]:
+    """Every parent-list token resolves to a child identity IN THIS FILE.
+
+    The existing aggregate checks compare a rollup with the SNAPSHOT, which
+    cannot see a token whose row is absent from the workbook — the failure
+    the owner's Love for One's Motherland correction log records, where a
+    concept kept listing ``… Q01`` after that question had gone and "the
+    workbook now points to a question label that no longer exists anywhere
+    in the file". This resolves each token against the identities the file
+    itself carries. Pure mechanics: set membership on exact strings, no
+    judgment about what any row means.
+    """
+    sheets = ("Objective", "Subjective", "Descriptive")
+    universe: dict[str, set[str]] = {}
+    for _list_field, child_field in _PARENT_LIST_FIELDS:
+        if child_field in universe:
+            continue
+        universe[child_field] = {
+            str(row.get(child_field) or "").strip()
+            for name in sheets
+            for row in parsed["sheets"][name]["rows"]
+            if str(row.get(child_field) or "").strip()
+        }
+    errors: list[str] = []
+    for name in sheets:
+        rows = parsed["sheets"][name]["rows"]
+        row_numbers = parsed["sheets"][name].get("row_numbers") or list(
+            range(3, 3 + len(rows))
+        )
+        for i, row in zip(row_numbers, rows):
+            for list_field, child_field in _PARENT_LIST_FIELDS:
+                for token in bi.split_multi(
+                    str(row.get(list_field) or ""), legacy_commas=False,
+                ):
+                    if token not in universe[child_field]:
+                        errors.append(
+                            f"{name} row {i}: {list_field} names "
+                            f"{token!r}, which is no {child_field} in this "
+                            "workbook"
+                        )
     return errors
 
 

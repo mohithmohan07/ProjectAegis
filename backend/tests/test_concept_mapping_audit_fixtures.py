@@ -985,6 +985,23 @@ def _normalized_cell(value: object) -> str:
     return str(value)
 
 
+def _as_written(field: str, value: object) -> object:
+    """The expected value of one cell as contract §32 has it WRITTEN.
+
+    Marks, durations and weights are real numeric cells, so the renderer
+    coerces a candidate's ``"1.0"`` to the number ``1.0``
+    (``assessment_workbook._numeric_cell``). These fixtures carry those
+    values as the strings the model authored, so the expected side is put
+    through the same coercion before comparison — otherwise the assertion
+    compares a number with its own text and fails on the very conversion
+    §32 requires. Storage type itself is asserted by
+    ``test_workbook_serialization.py``.
+    """
+    if not workbook.is_numeric_display_field(field):
+        return value
+    return workbook._numeric_cell(value)
+
+
 def _expected_question_record(
     candidate: dict, sheet: str, *, answer_slots: int
 ) -> dict[str, str]:
@@ -1701,7 +1718,9 @@ def test_normalized_master_questions_and_hierarchy_render_field_for_field(
             field: _normalized_cell(rendered_row.get(field, ""))
             for field in question_fields
         } == {
-            field: expected_question.get(field, "")
+            field: _normalized_cell(
+                _as_written(field, expected_question.get(field, ""))
+            )
             for field in question_fields
         }, (master_filename, raw_sheet, label)
 
@@ -1944,35 +1963,42 @@ def _full_rendered_master_evidence(
 # the §23 literal "Yes". Re-pinned once more for register Q27: every
 # Descriptive sheet now carries the universal 30 answer blocks (440
 # columns) of the owner's CMS template, so the three 380-column digests
-# moved; the populated cells are byte-identical.
+# moved; the populated cells are byte-identical. Re-pinned once more for
+# contract §32's numeric storage: a weight, mark or duration the model
+# authored as the STRING "1.0" is now written as the number 1.0, so its
+# normalized cell reads "1" instead of "1.0". [measured] the only cells
+# that moved are marks, question_duration, answer_weightage_N, weightage_N,
+# sub_question_marks_N and sqN_weightage_M — every one a field
+# ``is_numeric_display_field`` names — and every sheet keeps its exact row,
+# column and cell counts.
 FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
     "english_post_master.xlsx": {
-        "digest": "9abc6541bc9eb88623bcb63db321288addb12334570a51df979b65358d8b21e9",
+        "digest": "cf647d9be29322455484f429c7e6b9938c7c65ede96698220dedefc0f65f0bbb",
         "sheets": {
             "Objective": (
                 10, 72, 720,
-                "f1ed4b1b9c9d01d91f99794b24a085537d151976470246a16737ae07bccc8137",
+                "4d5e81d91bfaf1ba36a4ea930a0b6a02a7c0fd656ee3e660952773cb5a663f2e",
             ),
             "Descriptive": (
                 13, 440, 5720,
-                "c7891fd5cfd5482b251408d8c7e1c6fe7ed6d3561d61da52060ddcfaa4fcb296",
+                "7fcefa161093e0c5c92978386df6de15b3a48affbca4b33c10a4bc511ce59af8",
             ),
             "Subjective": (
                 6, 149, 894,
-                "cee17d36e5a0c97a9129369af76c389ebba8e80a5a8a15607bdf9e9502023368",
+                "5cb7fc8d44495517bde304d3b07c7d88583fa3ee0f3a45b2d451efce87d9b95d",
             ),
         },
     },
     "english_pre_master.xlsx": {
-        "digest": "daedc877b12be58bc608de6d49095dc25bf20c07cfc1863345c1434cc9d547a3",
+        "digest": "1cedf23ae9b0ddf1fb832eab8484878bcb9b0cdff8e5bb3b0a77616fd554e416",
         "sheets": {
             "Objective": (
                 5, 72, 360,
-                "75a74f5dbf5e6f7d60ac665faa60b57a64a8b85f876fc20942fc78d3f566ab96",
+                "e8bfc4cdd4fe4f0ab13a59ab7dfa11d55201795cabaf2c36b3861082bb155a73",
             ),
             "Descriptive": (
                 36, 440, 15840,
-                "531d4fbfa085520c617fc3555fdfa085c2c2ba5bf950c10f6c8b363dc7c47592",
+                "6528e519d94d245c69a3b5c3acbf241d6a099b296228acdbbd831127f699daca",
             ),
             "Subjective": (
                 0, 149, 0,
@@ -1981,12 +2007,7 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
     "math_post_master.xlsx": {
-        # Descriptive digest first re-pinned 2026-08-29 (owner decision
-        # D1): dimension row spacing (``\\[0.12 cm]``) is supported, so the
-        # legacy export no longer rewrites the gold file's 7 spaced cells
-        # to bare ``\\`` — the rendered master matches the corrected
-        # workbook's own bytes in those cells.
-        "digest": "05457e7cb6edcb91ddc4b1a6546e8ff717e1e2ed3badec75ecc6bfa903e95e05",
+        "digest": "92e8cc77c757aa979a2b8d38d1f5a68cc8829c599b5de7d7ed7bff04223eeaba",
         "sheets": {
             "Objective": (
                 47, 72, 3384,
@@ -1994,24 +2015,24 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
             ),
             "Descriptive": (
                 24, 440, 10560,
-                "7245b84185892bbcecd04442f619249c88911f36bdaa2c0a0c592f56a9dc1056",
+                "b321669946fb6b64a5963296e78870c1657e6c8610162c24c435153309d5b6ec",
             ),
             "Subjective": (
                 4, 149, 596,
-                "1afbbf1566209b36877881fc1edd913b881746657937e62b8cfaf861a1dc3372",
+                "b00dab41ca3c5d4193f82a836575e6bb07de2fd0a484e217fee211809fe29535",
             ),
         },
     },
     "math_pre_master.xlsx": {
-        "digest": "4c00cfed5d81620ba3860a59a92c9d33cb22629476df89803c06ae6986b3a72c",
+        "digest": "268d2f2a1739b0b3f4608a8a208ad897782441db3c3413b8489c82311d3e3652",
         "sheets": {
             "Objective": (
                 6, 72, 432,
-                "ee0ba1f6dffd66ce979c5cdf1daaf52d7d4262551614e07386409715dc80cb9b",
+                "a95f6faacc6098de85af878d78c32855c2ab292cfb4517a888cab3575f6f3c95",
             ),
             "Descriptive": (
                 21, 440, 9240,
-                "2568a4fa660ec02e5f91aa1f26d27231bdbc1b5b8d76a5cc7c3c4edb20ae2bc3",
+                "b535a7aa9240dbe63202e44e793c6a1d2f5051ed216b26b8db9cc596e010e25b",
             ),
             "Subjective": (
                 0, 149, 0,
