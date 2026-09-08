@@ -133,8 +133,12 @@ def test_analyse_reproduces_the_recorded_inventory_and_allotments(
     }
     # R4: every item allotted exactly once (the mapping is total).
     assert all(result["allotments"].values())
-    # A verified critic leaves no flags.
-    assert result["review_flags"] == {}
+    # Semantic replay is verified; missing pixels in the historical corpus
+    # remain explicit rather than claiming the model inspected them.
+    assert all(
+        "concept_visual_evidence_unavailable" in flag
+        for flags in result["review_flags"].values() for flag in flags
+    )
     # Item ids are the positional mint.
     assert [item["item_id"] for item in result["inventory"]] == (
         analyse.mint_item_ids(94)
@@ -232,12 +236,10 @@ def test_empty_inventory_is_legal_for_a_thin_chapter(
         provider=provider, critic=_verified_critic,
         store=kernel.DecisionStore(),
     )
-    assert result == {
-        "inventory": [],
-        "allotments": {},
-        "rationales": {},
-        "review_flags": {},
+    assert {key: result[key] for key in ("inventory", "allotments", "rationales", "review_flags")} == {
+        "inventory": [], "allotments": {}, "rationales": {}, "review_flags": {},
     }
+    assert all("concept_visual_evidence_unavailable" in flag for flag in result.get("inventory_review_flags") or [])
     assert allot_calls["n"] == 0
 
 

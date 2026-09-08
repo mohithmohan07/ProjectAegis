@@ -369,7 +369,9 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     assert payload["stage"] == "assessment.marking"
     assert payload["candidate"] == candidate
     assert payload["assessment_format_policy"] == (
-        marking.assessment_profile.assessment_format_policy(None, META)
+        marking.assessment_profile.assessment_format_policy(
+            marking.assessment_profile.resolve_for_metadata(None, META), META,
+        )
     )
     assert payload["adopted_answer_contract"] == {
         "answer_restriction": "Open",
@@ -412,7 +414,7 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     assert verdict["question_duration"] == 6.0
     assert verdict["duration_basis_count"] is None
     assert verdict["math_keyboard"] == "Yes"
-    assert verdict["flags"] == []
+    assert all("assessment_visual_evidence_unavailable" in flag for flag in verdict["flags"])
     assert verdict["blueprint_authority"] == {
         "source": "explicit_blueprint_cell",
         "cell_id": cell["cell_id"],
@@ -1413,7 +1415,7 @@ def test_msbshse_matrix_duration_rejects_a_positive_but_wrong_value(
         ("objective", "Fill in the blanks", 1, 1),
         # Contract v2.0 §21: True or False is a Subjective row with one
         # placeholder-bound answer, so it is likewise a one-subpoint cell.
-        ("subjective", "True or False", 1, 1),
+        ("subjective", "True/False", 1, 1),
         # The Subjective fixture contains two declared response slots.
         ("subjective", "Fill in the blanks", 2, 2),
     ],
@@ -1457,7 +1459,7 @@ def test_msbshse_per_subpoint_duration_uses_contract_bound_basis(
         ("objective", "Match the Following"),
         ("objective", "Fill in the blanks"),
         # Contract v2.0 §21: True or False lives on the Subjective sheet.
-        ("subjective", "True or False"),
+        ("subjective", "True/False"),
     ],
 )
 def test_msbshse_compound_subpoints_fail_before_provider(

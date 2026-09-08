@@ -34,6 +34,7 @@ import pytest
 from app import bulk_import as bi
 from app.bulk_import import assessment_workbook as workbook
 from app.services import assessment_profile
+from app.services import assessment_output_vocabulary
 from app.services import column_spec
 from app.services import identity
 from app.services import katex_rules
@@ -1506,6 +1507,13 @@ def _profile(subject: str, *, legacy_columns: bool = False) -> dict:
         None,
         {"board": "MSBSHSE", "grade": "06", "subject": subject},
     )
+    # These pinned 27-Aug workbooks carry the historical category taxonomy.
+    # The current-column comparison below isolates Q33's column projections;
+    # it does not migrate the fixture's category decisions to a new Q35 run.
+    # Remove BOTH newly bound snapshots, so legacy hashes and field literals
+    # remain exact. Fresh-run vocabulary is tested separately end to end.
+    profile.pop(assessment_output_vocabulary.POLICY_KEY)
+    profile.pop(assessment_output_vocabulary.FORMAT_SNAPSHOT_KEY)
     if legacy_columns:
         # A persisted pre-Q32 profile has resolved selector metadata but
         # no column-policy key. Re-entry must not upgrade this old run.

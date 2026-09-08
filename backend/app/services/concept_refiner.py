@@ -18,11 +18,10 @@ team requires regardless of which extractor produced them:
    share the same ``Type NN`` counter as regular concepts, in row order.
    They previously carried a separate "Miscellaneous Type NN" sequence, which
    reviewers read as a second, parallel numbering.
-3. **Type reduction for theory.** Purely theoretical concepts should not carry
-   a Types section; we drop any ``Types:`` block that has no concrete ``Case``.
-4. **Culmination description = detailed "Recap of ...".** Culmination rows keep
-   their Types and any analysis sections, but their Description is replaced
-   with "Recap of <A>, <B> and <C>" listing the topic's merged concepts.
+3. **Preserve malformed sections.** Types without Cases and repeated
+   Description markers remain intact with named API-repair findings.
+4. **Preserve authored culmination prose.** Formatting does not replace
+   consolidation teaching with a generated list of member titles.
 5. **"Achieving Mastery" statement on its own line.** A mastery statement at
    the end of a Description is normalized to a line-broken
    ``\\nAchieving Mastery: <statement>`` format.
@@ -761,19 +760,11 @@ def _renumber_reusable_block(
 
 
 def reduce_type_sections(details: str) -> str:
-    """Drop a ``Types:`` block that declares types with NO concrete Case.
+    """Compatibility entry point: preserve authored Types, including defects.
 
-    Such blocks are low-value theory placeholders; purely theoretical concepts
-    keep Description and their applicable learner-analysis section(s).
+    A missing Case is a named schema defect for the existing API repair;
+    it is not evidence that the Type contains no meaningful task.
     """
-    sections = split_sections(details)
-    idx = _find_types(sections)
-    if idx < 0:
-        return details
-    content = sections[idx][1]
-    if not content.strip() or not re.search(r"\bCase\s*0*\d+", content, re.IGNORECASE):
-        sections.pop(idx)
-        return join_sections(sections)
     return details
 
 
@@ -1037,15 +1028,15 @@ def normalize_analysis_sections(details: str) -> str:
     chosen_errors = " ".join(error_analysis_texts)
 
     ordered: list[tuple[str, str]] = []
-    hub_block: tuple[str, str] | None = None
-    types_block: tuple[str, str] | None = None
+    hub_blocks: list[tuple[str, str]] = []
+    types_blocks: list[tuple[str, str]] = []
     for label, content in cleaned:
         lower = label.strip().lower()
         if lower.startswith("type"):
-            types_block = (label, content)
+            types_blocks.append((label, content))
         elif is_activity_hub_label(label):
             if content.strip():
-                hub_block = (_ACTIVITY_HUB_LABEL, content.strip())
+                hub_blocks.append((_ACTIVITY_HUB_LABEL, content.strip()))
         else:
             ordered.append((label, content))
     if stray_masteries:
@@ -1060,10 +1051,8 @@ def normalize_analysis_sections(details: str) -> str:
             for authored in stray_masteries:
                 label, _separator, content = authored.partition(":")
                 ordered.append((label, content.strip()))
-    if hub_block:
-        ordered.append(hub_block)
-    if types_block:
-        ordered.append(types_block)
+    ordered.extend(hub_blocks)
+    ordered.extend(types_blocks)
     combined: list[str] = list(unclassified_texts)
     if "misconception" in seen_kinds:
         combined.append(
@@ -1119,15 +1108,27 @@ def activity_hub_body(details: str) -> str:
 
 
 def split_merged_description_blocks(details: str) -> str:
-    """When a cell accidentally concatenates multiple concepts, keep the first."""
-    raw = (details or "").strip()
-    if not raw:
-        return raw
-    parts = re.split(r"(?<=[.!?])\s*(?=Description\s*:)", raw, flags=re.IGNORECASE)
-    if len(parts) <= 1:
-        return raw
-    first = parts[0].strip()
-    return first if first.lower().startswith("description:") else raw
+    """Preserve concatenated Description blocks for an API-owned repair."""
+    return details
+
+
+def structure_findings(details: str) -> list[tuple[str, str]]:
+    """Exact public marker defects, never a judgment about prose meaning."""
+    findings: list[tuple[str, str]] = []
+    if len(re.findall(r"\bDescription\s*:", str(details or ""), re.IGNORECASE)) > 1:
+        findings.append((
+            "repeated_description_marker",
+            "More than one Description marker; preserve every teaching span "
+            "while repairing the section structure through the API.",
+        ))
+    for label, content in split_sections(details):
+        if label.strip().casefold() == "types" and not _CASE_TOKEN_RE.search(content):
+            findings.append((
+                "type_without_case",
+                "Types has no numbered Case; retain the authored Type/Example "
+                "and repair its hierarchy through the API.",
+            ))
+    return findings
 
 
 def _analysis_components(
@@ -1195,6 +1196,14 @@ def refine_chapter(records: list[dict]) -> list[dict]:
     for rec in records:
         if rec.get("concept_details"):
             details = split_merged_description_blocks(rec["concept_details"])
+            findings = structure_findings(details)
+            if findings:
+                rec.setdefault("_aegis_structure_original", details)
+                flags = rec.setdefault("review_flags", [])
+                for code, message in findings:
+                    flag = f"structure preserved [{code}]: {message}"
+                    if flag not in flags:
+                        flags.append(flag)
             details = reduce_type_sections(details)
             if not is_culmination(rec.get("concept_title", "")):
                 details = format_mastery_statement(details)

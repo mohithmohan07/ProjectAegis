@@ -33,6 +33,7 @@ from typing import Any, Mapping
 from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
+from .. import config
 from .. import models
 from ..bulk_import import assessment_workbook
 from . import assessment_answer_restriction as answer_restriction
@@ -371,6 +372,16 @@ def _learner_text_snapshot(candidates: list[Mapping]) -> list[tuple]:
             str(candidate.get("candidate_id") or ""),
             candidate.get("question"),
             candidate.get("question_text"),
+            # Q35: options are part of the complete, already-classified
+            # learner task. Correctness and score fields are reviewed later;
+            # option text, modality and order must remain fixed for both
+            # source-owned and finalized generated Objective questions.
+            tuple(
+                (answer.get("answer_type"), answer.get("answer_content"))
+                for answer in candidate.get("answers") or []
+                if isinstance(answer, Mapping)
+            ) if str(candidate.get("sheet_kind") or "").lower() == "objective"
+            else None,
         )
         for candidate in candidates
     ]
@@ -1686,6 +1697,19 @@ def run_release_for_job(
 
     meta = dict(bridge["metadata"])
     profile = assessment_profile.resolve_for_metadata(profile, meta)
+    if blueprint_cells is not None:
+        # Canonicalize only an already-selected, declared display label.
+        # The profile owns exact aliases; this does not classify a question
+        # or merge categories with different marks/duration contracts.
+        blueprint_cells = [
+            {
+                **copy.deepcopy(dict(cell)),
+                "question_category": assessment_profile.output_question_category(
+                    cell.get("question_category", ""), profile,
+                ),
+            }
+            for cell in blueprint_cells
+        ]
     from . import column_spec
     meta = column_spec.bind_metadata(meta, profile)
     workbook_outputs = assessment_workbook.output_identities(
@@ -2128,6 +2152,9 @@ def run_release_for_job(
                 "assessment materialization changed an obligation identity"
             )
         materialization_needs_review = _needs_review(candidate)
+        upstream = atom if atom is not None else cell.get("generated_question") or {}
+        for flag in upstream.get("flags") or []:
+            _append_warning(candidate, str(flag))
         candidate["route_evidence"] = (atom or {}).get("route_evidence") or {}
         candidate[_CELL_AUDIT_FIELD] = dict(
             cell.get(_CELL_AUDIT_FIELD) or {}
@@ -2667,12 +2694,11 @@ def run_release_for_job(
         key=lambda item: (item[0][0], tier_order[item[0][1]]),
     )
     _observe_stage(stage_progress, "clustering", 0, len(sorted_buckets))
-    for bucket_index, ((concept_key, tier), members) in enumerate(
-        sorted_buckets
-    ):
+    def cluster_bucket(item):
+        (concept_key, tier), members = item
         concept = concept_records_by_key[concept_key]
         concept_evidence = _concept_evidence(concept)
-        clustered = grouping.cluster_tier(
+        return grouping.cluster_tier(
             members,
             concept=concept_evidence,
             tier=tier,
@@ -2684,6 +2710,19 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    clustered_buckets = kernel.parallel_map_in_order(
+        sorted_buckets, cluster_bucket,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Cluster · {key} · {tier}" for (key, tier), _ in sorted_buckets],
+        announce="Assessment variant groups",
+    )
+    # Apply independent decisions in the original canonical order. No later
+    # stage sees a partial partition, regardless of response completion order.
+    for bucket_index, (((concept_key, tier), members), clustered) in enumerate(
+        zip(sorted_buckets, clustered_buckets, strict=True)
+    ):
+        concept = concept_records_by_key[concept_key]
         members_by_id = {m["candidate_id"]: m for m in members}
         machine = _label_base(concept)
         for sequence, family in enumerate(clustered["families"], start=1):
@@ -2782,14 +2821,14 @@ def run_release_for_job(
         for candidate in eligible
     }
     _observe_stage(stage_progress, "describe", 0, len(groups))
-    for group_index, record in enumerate(groups):
+    def describe_one_group(record):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
             all_members_by_id[str(candidate_id)]
             for candidate_id in record.get("member_candidate_ids") or []
         ]
-        description = grouping.describe_group(
+        return grouping.describe_group(
             _group_evidence(record),
             family_members,
             concept=_concept_evidence(concept),
@@ -2800,6 +2839,16 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    descriptions = kernel.parallel_map_in_order(
+        groups, describe_one_group,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Describe · {group['group_key']}" for group in groups],
+        announce="Assessment group descriptions",
+    )
+    for group_index, (record, description) in enumerate(
+        zip(groups, descriptions, strict=True)
+    ):
         record["semantic_description"] = str(
             description.get("description") or ""
         )
@@ -2836,7 +2885,7 @@ def run_release_for_job(
             "the joint item review and route critic audited every member."
         )
     _observe_stage(stage_progress, "qa", 0, len(qa_groups))
-    for group_index, record in enumerate(qa_groups):
+    def review_one_group(record):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
@@ -2857,7 +2906,7 @@ def run_release_for_job(
             and sibling.get("concept_key") == record.get("concept_key")
             and sibling.get("group_type") == record.get("group_type")
         ]
-        review = quality.review_group(
+        return quality.review_group(
             _group_evidence(record),
             family_members,
             siblings=siblings,
@@ -2869,6 +2918,16 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    reviews = kernel.parallel_map_in_order(
+        qa_groups, review_one_group,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Review · {group['group_key']}" for group in qa_groups],
+        announce="Assessment group quality review",
+    )
+    for group_index, (record, review) in enumerate(
+        zip(qa_groups, reviews, strict=True)
+    ):
         review_flags = [
             dict(flag) if isinstance(flag, Mapping) else str(flag)
             for flag in review.get("flags") or []

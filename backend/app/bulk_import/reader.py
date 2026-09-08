@@ -425,13 +425,22 @@ def _strict_assessment_policy_issues(
     policy_id = str(policy.get("policy_id") or "")
     if not policy_id or policy_id == "generic-cms":
         return []
+    # Import may receive an old frozen workbook or a freshly projected
+    # vocabulary. Match only the documented exact label aliases, retaining
+    # the original stored category and all local marks/duration rules.
+    from ..services import assessment_output_vocabulary as output_vocabulary
+
+    vocabulary = output_vocabulary.snapshot()
+    policy = output_vocabulary.format_policy(policy, vocabulary)
     formats = policy.get("formats_by_sheet")
     if not isinstance(formats, Mapping):
         return [
             f"{row_label}: assessment policy {policy_id!r} has no "
             "formats_by_sheet mapping"
         ]
-    category = str(question.get("question_category") or "").strip()
+    category = output_vocabulary.category_label(
+        str(question.get("question_category") or "").strip(), vocabulary,
+    )
     sheet_formats = formats.get(kind)
     rule = (
         sheet_formats.get(category)
@@ -568,6 +577,27 @@ def _strict_assessment_policy_issues(
             issues.append(
                 f"{row_label}: assessment policy {policy_id!r} has no "
                 f"positive matrix duration for difficulty {difficulty!r}"
+            )
+            expected_duration = None
+    elif duration_mode == "marks_matrix":
+        difficulty = normalize_difficulty(
+            str(question.get("level_of_difficulty") or "")
+        )
+        tiers = duration_rule.get("minutes_by_marks")
+        tier = None
+        if isinstance(tiers, Mapping) and marks is not None and marks == marks.to_integral_value():
+            # Python declarations use integer keys; persisted JSON uses
+            # strings. Both are the exact same declared marks tier.
+            tier = tiers.get(int(marks), tiers.get(str(int(marks))))
+        expected_duration = (
+            _policy_decimal(tier.get(difficulty))
+            if isinstance(tier, Mapping) else None
+        )
+        if expected_duration is None or expected_duration <= 0:
+            issues.append(
+                f"{row_label}: assessment policy {policy_id!r} has no "
+                f"positive marks-matrix duration for marks {marks!s} "
+                f"and difficulty {difficulty!r}"
             )
             expected_duration = None
     elif duration_mode == "per_subpoint":

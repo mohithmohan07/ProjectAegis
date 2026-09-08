@@ -333,8 +333,11 @@ def test_concepts_release_ignores_assessment_only_arguments_byte_for_byte():
     )
 
     assert explicit == implicit
-    assert explicit_provider.payloads == default_provider.payloads
-    assert explicit_critic_payloads == default_critic_payloads
+    # Independent calls may arrive in either worker order; compare the
+    # byte-identical per-row requests, not thread scheduling.
+    by_row = lambda values: sorted(values, key=lambda value: value["rows"][0]["row_ref"])
+    assert by_row(explicit_provider.payloads) == by_row(default_provider.payloads)
+    assert by_row(explicit_critic_payloads) == by_row(default_critic_payloads)
     assert explicit_store.keys() == default_store.keys()
     assert len(explicit_store.keys()) == len(_rows())
 

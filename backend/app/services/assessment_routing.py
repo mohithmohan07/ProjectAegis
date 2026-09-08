@@ -20,6 +20,7 @@ from typing import Any, Mapping
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 # -2: released candidate concepts and rules are now the explicit GPT-5.6
@@ -382,6 +383,7 @@ def _live_route(payload: dict[str, Any]) -> dict[str, Any]:
         ROUTER_SYSTEM,
         suffix,
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "route-author-v2",
@@ -407,6 +409,7 @@ def _live_route_critic(payload: dict[str, Any]) -> dict[str, Any]:
         ROUTE_CRITIC_SYSTEM,
         suffix,
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "route-critic-v2",
@@ -522,6 +525,7 @@ def route_candidate(
         "candidate": _candidate_payload(candidate),
         "candidate_concepts": _concept_payload(concepts),
     }
+    visual_evidence.bind(payload, candidate, payload["candidate_concepts"])
     decision = kernel.decide(
         kind="assessment.route",
         unit_id=candidate_id,
@@ -535,7 +539,7 @@ def route_candidate(
         fixer=fixer,
     )
     response = copy.deepcopy(dict(decision["response"]))
-    flags = _review_flags(decision)
+    flags = _review_flags(decision) + visual_evidence.review_flags(payload)
     return _placement(
         candidate,
         concept_key=str(response.get("concept_key") or ""),

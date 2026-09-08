@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import type { OpenAIUsage } from "../types";
 import ApiUsageSummary from "./ApiUsageSummary";
 
@@ -102,4 +102,70 @@ test("does not render an empty usage record", () => {
 test("does not render a sparse empty API usage object", () => {
   render(<ApiUsageSummary usage={{} as OpenAIUsage} cumulative />);
   expect(screen.queryByTestId("api-usage-summary")).toBeNull();
+});
+
+const ZERO_USAGE: OpenAIUsage = {
+  ...USAGE,
+  request_count: 0,
+  input_tokens: 0,
+  cached_input_tokens: 0,
+  cache_write_tokens: 0,
+  uncached_input_tokens: 0,
+  output_tokens: 0,
+  reasoning_tokens: 0,
+  total_tokens: 0,
+  estimated_cost_usd: 0,
+};
+
+test("shows attempts without usage receipts and never presents their unknown cost as free", () => {
+  render(<ApiUsageSummary usage={{
+    ...ZERO_USAGE,
+    provider_request_count: 2,
+    attempt_count: 3,
+    usage_complete: false,
+    missing_usage_response_count: 1,
+    stages: [{
+      stage: "Rubric review", lane: "Post", request_count: 0,
+      provider_request_count: 2, attempt_count: 3, usage_complete: false,
+      input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, total_tokens: 0,
+      estimated_cost_usd: 0, pricing_complete: true, first_ts: 1, last_ts: 1,
+    }],
+  }} />);
+
+  expect(screen.getByTestId("api-usage-summary")).toBeDefined();
+  expect(screen.getByText("Requests", { selector: "dt" }).parentElement?.textContent)
+    .toContain("2");
+  expect(screen.getByText("Attempts", { selector: "dt" }).parentElement?.textContent)
+    .toContain("3");
+  expect(screen.getByText("Estimated cost", { selector: "dt" }).parentElement?.textContent)
+    .toContain("Unavailable");
+  expect(screen.queryByText("$0.000000")).toBeNull();
+  expect(screen.getByText(/token usage is missing for one or more provider requests/i))
+    .toBeDefined();
+  const stageRow = screen.getByText("Rubric review").closest("tr")!;
+  const cells = within(stageRow).getAllByRole("cell");
+  expect(cells[1].textContent).toBe("2");
+  expect(cells[3].textContent).toBe("Unavailable");
+});
+
+test("shows elapsed and local processing time for a zero-API checkpoint replay", () => {
+  render(<ApiUsageSummary resumed usage={{
+    ...ZERO_USAGE,
+    provider_request_count: 0,
+    attempt_count: 0,
+    usage_complete: true,
+    elapsed_seconds: 120,
+    mechanical_wall_seconds: 90,
+    mechanical_span_count: 2,
+  }} />);
+
+  expect(screen.getByTestId("api-usage-summary")).toBeDefined();
+  expect(screen.getByText("Resumed")).toBeDefined();
+  expect(screen.getByText("Time taken", { selector: "dt" }).parentElement?.textContent)
+    .toContain("2m 0s");
+  expect(screen.getByText("Local processing", { selector: "dt" }).parentElement?.textContent)
+    .toContain("1m 30s");
+  expect(screen.getByText("Requests", { selector: "dt" }).parentElement?.textContent)
+    .toBe("Requests0");
+  expect(screen.queryByText(/token usage is missing/i)).toBeNull();
 });

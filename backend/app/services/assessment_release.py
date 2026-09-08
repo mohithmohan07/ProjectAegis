@@ -471,6 +471,29 @@ def validate_source_atom(atom: Mapping) -> list[str]:
     return errors
 
 
+def _category_label_errors(
+    record: Mapping, profile: Mapping | str | None,
+) -> list[str]:
+    """Check fresh run labels without deciding what category fits the task."""
+    from . import assessment_output_vocabulary as vocabulary
+
+    resolved = profile if isinstance(profile, Mapping) else assessment_profile.resolve(profile)
+    if vocabulary.POLICY_KEY not in resolved:
+        return []
+    category = assessment_profile.output_question_category(
+        record.get("question_category", ""), resolved,
+    )
+    allowed = assessment_profile.question_categories(resolved).get(
+        str(record.get("sheet_kind") or ""), (),
+    )
+    if category not in allowed:
+        return [
+            f"question_category must be one of {allowed} for sheet_kind "
+            f"{record.get('sheet_kind')!r} (got {record.get('question_category')!r})"
+        ]
+    return []
+
+
 def validate_blueprint_cell(
     cell: Mapping, profile: Mapping | str | None = None,
 ) -> list[str]:
@@ -484,6 +507,7 @@ def validate_blueprint_cell(
         errors.append(
             f"sheet_kind must be one of {allowed} "
             f"(got {cell.get('sheet_kind')!r})")
+    errors.extend(_category_label_errors(cell, profile))
     return errors
 
 
@@ -495,6 +519,7 @@ def validate_candidate(
     from .. import bulk_import as bi
 
     errors = [f"missing {f}" for f in _missing(candidate, _CANDIDATE_REQUIRED)]
+    errors.extend(_category_label_errors(candidate, profile))
     # Explicit, deliberate, and independent of ``_missing``'s string
     # coercion (see ``_CANDIDATE_REQUIRED``).  Identity accounting only:
     # it reads no meaning out of the ids, it just states which lane may
@@ -889,7 +914,9 @@ def validate_candidate(
     return errors
 
 
-def assessment_format_contract_errors(payload: Mapping) -> list[str]:
+def assessment_format_contract_errors(
+    payload: Mapping, profile: Mapping | str | None = None,
+) -> list[str]:
     """Validate the resolved profile policy carried by a final payload.
 
     The model chooses the category, difficulty, and represented subpoints;
@@ -898,7 +925,34 @@ def assessment_format_contract_errors(payload: Mapping) -> list[str]:
     validation path.
     """
 
+    from . import assessment_output_vocabulary as vocabulary
+
+    run_profile = assessment_profile.resolve(profile)
+    output_policy = run_profile.get(vocabulary.POLICY_KEY)
     policy = payload.get("assessment_format_policy")
+    if isinstance(output_policy, Mapping):
+        # A direct release may bypass the runner's blueprint projection.
+        # Compare the same presented values the workbook will serialize,
+        # without editing the caller's payload or reclassifying a question.
+        payload = {
+            **dict(payload),
+            **{
+                collection: [
+                    {
+                        **dict(record),
+                        "question_category": assessment_profile.output_question_category(
+                            record.get("question_category", ""), run_profile,
+                        ),
+                    } if isinstance(record, Mapping) else record
+                    for record in payload.get(collection) or []
+                ]
+                for collection in ("blueprint_cells", "candidates")
+            },
+        }
+        if policy is None and payload.get("blueprint_cells"):
+            policy = assessment_profile.assessment_format_policy(run_profile)
+        elif isinstance(policy, Mapping):
+            policy = vocabulary.format_policy(policy, output_policy)
     if policy is None:
         return []
     if not isinstance(policy, Mapping):
@@ -1069,6 +1123,19 @@ def assessment_format_contract_errors(payload: Mapping) -> list[str]:
             if candidate.get("duration_basis_count") is not None:
                 errors.append(
                     f"{candidate_id}: matrix duration must not carry a "
+                    "duration_basis_count"
+                )
+        elif mode == "marks_matrix":
+            tiers = duration_rule.get("minutes_by_marks")
+            marks = finite(candidate.get("marks"))
+            tier = None
+            if isinstance(tiers, Mapping) and marks is not None and marks == marks.to_integral_value():
+                tier = tiers.get(int(marks), tiers.get(str(int(marks))))
+            if isinstance(tier, Mapping):
+                expected = finite(tier.get(str(candidate.get("difficulty") or "")))
+            if candidate.get("duration_basis_count") is not None:
+                errors.append(
+                    f"{candidate_id}: marks-matrix duration must not carry a "
                     "duration_basis_count"
                 )
         elif mode == "per_subpoint":
@@ -1708,7 +1775,7 @@ def freeze_payload(
         errors.extend(validate_blueprint_cell(cell, profile))
     for candidate in payload.get("candidates") or []:
         errors.extend(validate_candidate(candidate, profile))
-    errors.extend(assessment_format_contract_errors(payload))
+    errors.extend(assessment_format_contract_errors(payload, profile))
     errors.extend(parent_child_candidate_errors(payload))
     for group in payload.get("groups") or []:
         errors.extend(validate_group(group))

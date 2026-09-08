@@ -45,7 +45,7 @@ from typing import Any, Mapping, Sequence
 from . import column_spec
 from .phase3 import kernel
 
-REFINER_POLICY_VERSION = "refiner-2-api-owned-analysis-mastery"
+REFINER_POLICY_VERSION = "refiner-3-complete-source-evidence"
 
 # One decision PER ROW (polish.py precedent): an isolated row converges on
 # the first attempt and replays individually from the decision store.
@@ -430,26 +430,49 @@ def _reseal(rows: list[dict[str, Any]]) -> None:
     )
 
 
-def _live_refine(payload: dict[str, Any]) -> dict[str, Any]:
+def _live_call(payload: dict[str, Any], *, critic: bool) -> dict[str, Any]:
     from . import generation
     from .phase3 import prompts
+    from . import assessment_visual_evidence
 
-    return generation._openai_json(
-        prompts.REFINER_SYSTEM,
-        prompts.render(payload),
-        purpose="concept_validation",
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload, stable_keys=("stage", "output_kind", "prompt_sha256", "rules", "metadata", "chapter_evidence"),
     )
+    rows = payload.get("rows") or []
+    return generation._openai_json(
+        prompts.CRITIC_SYSTEM if critic else prompts.REFINER_SYSTEM,
+        suffix,
+        image_urls=assessment_visual_evidence.image_inputs(payload),
+        purpose="advisory_critic" if critic else "concept_validation",
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "concept-refiner-critic" if critic else "concept-refiner",
+            prefix, shard_seed=str(rows[0].get("row_ref") if rows else ""),
+        ),
+    )
+
+
+def _live_refine(payload: dict[str, Any]) -> dict[str, Any]:
+    return _live_call(payload, critic=False)
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
-    from . import generation
-    from .phase3 import prompts
+    return _live_call(payload, critic=True)
 
-    return generation._openai_json(
-        prompts.CRITIC_SYSTEM,
-        prompts.render(payload),
-        purpose="advisory_critic",
-    )
+
+def _chapter_evidence(metadata: Mapping[str, Any], records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Lane-safe complete context for legacy rows and shared cache prefixes."""
+    if _pre_post(metadata) == "Pre":
+        # Current-chapter exercises are explicitly outside Pre authority.
+        return {"prerequisite_evidence": copy.deepcopy(metadata.get("prerequisite_evidence") or {})}
+    evidence: dict[str, Any] = {}
+    if any(not row.get("_aegis_source_evidence") for row in records):
+        # Older rows lack named packets. Keep the complete source rather than
+        # a misleading clipped excerpt; fresh rows carry only their owned units.
+        evidence["source_text"] = str(metadata.get("source_text") or "")
+        evidence["question_task_inventory"] = copy.deepcopy(metadata.get("inventory") or {})
+        evidence["mined_types"] = copy.deepcopy(metadata.get("mined_types") or {})
+    return evidence
 
 
 def _default_provider() -> kernel.Provider | None:
@@ -753,6 +776,7 @@ def _refine(
         for key in ("board", "grade", "subject", "chapter_title")
     }
     meta_block["pre_post_learning"] = _pre_post(metadata)
+    chapter_evidence = _chapter_evidence(metadata, original)
 
     refined = copy.deepcopy(original)
     flags: list[str] = []
@@ -775,6 +799,7 @@ def _refine(
             "prompt_sha256": prompt_sha256,
             "rules": rules,
             "metadata": meta_block,
+            "chapter_evidence": chapter_evidence,
             "rows": [
                 {
                     "row_ref": unit_id,
@@ -786,10 +811,23 @@ def _refine(
                         original[index].get("concept_details") or ""
                     ),
                     "keywords": str(original[index].get("keywords") or ""),
+                    "source_evidence": copy.deepcopy(
+                        original[index].get("_aegis_source_evidence") or {}
+                    ) if _pre_post(metadata) == "Post" else {},
+                    "analysis_allotments": copy.deepcopy(
+                        original[index].get("_aegis_analysis_allotments") or []
+                    ),
+                    "source_block_ids": list(original[index].get("_source_block_ids") or []),
+                    "reference_block_ids": list(original[index].get("_reference_block_ids") or []),
                 }
             ],
         }
-        return kernel.decide(
+        from . import assessment_visual_evidence
+
+        assessment_visual_evidence.bind(
+            payload, payload["rows"], chapter_evidence,
+        )
+        decision = kernel.decide(
             kind="refiner.row",
             unit_id=unit_id,
             envelope_sha256=envelope_sha,
@@ -800,6 +838,11 @@ def _refine(
             store=store,
             policy_version=REFINER_POLICY_VERSION,
         )
+        decision = copy.deepcopy(decision)
+        decision.setdefault("review_flags", []).extend(
+            assessment_visual_evidence.review_flags(payload)
+        )
+        return decision
 
     # Decisions fan out (each row is independent and content-addressed);
     # APPLICATION stays sequential in row order below, so flags, applied

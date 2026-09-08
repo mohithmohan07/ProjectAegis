@@ -246,8 +246,12 @@ def test_settle_reproduces_job_23s_validated_topology(
         row["_semantic_topic_id"] for row in golden_rows
     ]
 
-    # A verified critic leaves no flags anywhere.
-    assert not any(row.get("review_flags") for row in settled)
+    # The verified replay leaves no semantic dissent. Historical fixtures
+    # have remote-only figures, so missing pinned pixels remain explicit.
+    assert all(
+        "concept_visual_evidence_unavailable" in flag
+        for row in settled for flag in row.get("review_flags") or []
+    )
 
 
 def test_parallel_topics_produce_the_sequential_output(
@@ -450,11 +454,13 @@ def test_settle_author_policy_version_is_rekeyed_for_q1():
     assert author_policy != confidence_policy.POLICY_VERSION
 
 
-def test_authoring_checker_rejects_a_thin_description():
+def test_description_substance_is_not_a_word_count_gate():
     check = settle._authoring_checker(["C-1"])
-    row = _authored_row(concept_description="Rational numbers are p/q.")
-    defects = check({"rows": [row]})
-    assert any("too thin" in d for d in defects)
+    row = _authored_row(concept_description="A prime has two distinct positive factors.")
+    assert check({"rows": [row]}) == []
+    assert any("empty" in defect for defect in check({"rows": [
+        _authored_row(concept_description=""),
+    ]}))
 
 
 def test_authoring_checker_rejects_raw_math_outside_katex_tags():

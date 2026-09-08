@@ -44,6 +44,7 @@ from openpyxl.styles import Alignment, Font
 from . import ANSWER_TYPES
 from .. import bulk_import as bi
 from ..services import assessment_profile
+from ..services import openai_usage
 from ..services import column_spec
 from ..services import assessment_release as rel
 from ..services import identity
@@ -688,6 +689,7 @@ def _new_workbook(
     return wb
 
 
+@openai_usage.measure_mechanical("workbook.serialize")
 def _workbook_bytes(wb: openpyxl.Workbook) -> bytes:
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -855,6 +857,7 @@ def snapshot_sha256(snapshot: Mapping) -> str:
 # Output A — Concept File (spec §1, §9)
 # --------------------------------------------------------------------------- #
 
+@openai_usage.measure_mechanical("workbook.concept_projection")
 def render_concept_file(
     snapshot: Mapping, profile: Mapping | str | None = None,
     *, oversized: list[dict] | None = None,
@@ -1000,7 +1003,9 @@ def _question_record(
 
     record = {
         "question_label": candidate.get("question_label", ""),
-        "question_category": candidate.get("question_category", ""),
+        "question_category": assessment_profile.output_question_category(
+            candidate.get("question_category", ""), profile,
+        ),
         "cognitive_skills": candidate.get("cognitive_skill", ""),
         "question_source": candidate.get(
             "question_source", assessment_profile.question_source(profile)),
@@ -1223,6 +1228,7 @@ def _group_record_fields(
     }
 
 
+@openai_usage.measure_mechanical("workbook.master_projection")
 def render_master_file(
     snapshot: Mapping, profile: Mapping | str | None = None,
 ) -> tuple[bytes, dict]:
@@ -1531,6 +1537,7 @@ def render_master_file(
 # Read-back parsing and validation (spec §13.2 steps 2–4)
 # --------------------------------------------------------------------------- #
 
+@openai_usage.measure_mechanical("workbook.parse")
 def parse_workbook(data: bytes) -> dict:
     wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True,
                                 data_only=True)

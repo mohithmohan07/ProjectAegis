@@ -98,13 +98,16 @@ def test_misconception_formatter_preserves_both_qualities_for_api_review():
     assert cr.normalize_misconception_sections(out) == out
 
 
-def test_split_merged_description_blocks():
+def test_split_merged_description_blocks_preserves_authored_content():
     merged = (
         "Description: First concept body. // Types: Type 01: Direct Case 01: q1. "
         "Description: Second concept wrongly merged. // Misconceptions: oops."
     )
     out = cr.split_merged_description_blocks(merged)
-    assert "Second concept" not in out
+    assert out == merged
+    assert "repeated_description_marker" in {
+        code for code, _message in cr.structure_findings(out)
+    }
 
 
 def test_alias_related_titles_both_survive_the_cleanup_chain():

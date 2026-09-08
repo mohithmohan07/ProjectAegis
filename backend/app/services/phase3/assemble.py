@@ -1095,6 +1095,40 @@ def assemble(
         for row in env["graph"]["blocks"]
         if isinstance(row, Mapping) and str(row.get("block_id") or "")
     }
+    # Freeze the named source units at the final ownership boundary. This
+    # packet survives staging/resume and gives both final Refiner passes the
+    # same immutable evidence; it is private audit data, never a workbook cell.
+    canonical_by_id = {
+        str(block.get("block_id") or ""): dict(block)
+        for block in env["canonical"]["blocks"] if isinstance(block, Mapping)
+    }
+    inventory_by_qid = {
+        str(item.get("qid") or ""): dict(item)
+        for item in env["inventory"].get("items") or [] if isinstance(item, Mapping)
+    }
+    analysis_by_id = {
+        str(item.get("item_id") or ""): dict(item) for item in analysis_inventory
+    }
+    for row in rows:
+        qids = list(dict.fromkeys([
+            *(row.get("_aegis_release_qids") or []),
+            *(row.get("_aegis_hub_placements") or []),
+        ]))
+        source_ids = list(row.get("_source_block_ids") or [])
+        reference_ids = list(row.get("_reference_block_ids") or [])
+        row["_aegis_source_evidence"] = {
+            "source_contract_hash": str(env.get("source_contract_hash") or ""),
+            "source_blocks": [copy.deepcopy(canonical_by_id[bid]) for bid in source_ids if bid in canonical_by_id],
+            "reference_blocks": [copy.deepcopy(canonical_by_id[bid]) for bid in reference_ids if bid in canonical_by_id],
+            "missing_block_ids": [bid for bid in source_ids + reference_ids if bid not in canonical_by_id],
+            "question_task_inventory": [copy.deepcopy(inventory_by_qid[qid]) for qid in qids if qid in inventory_by_qid],
+            "analysis_allotments": list(row.get(ANALYSIS_ALLOTMENTS_FIELD) or []),
+            "learner_analysis_inventory": [
+                copy.deepcopy(analysis_by_id[item_id])
+                for item_id in row.get(ANALYSIS_ALLOTMENTS_FIELD) or []
+                if item_id in analysis_by_id
+            ],
+        }
     for number, row in enumerate(rows, start=1):
         row["_source_grounding_concept_id"] = f"CONCEPT-GROUND-{number:04d}"
         row["_source_grounding_version"] = GROUNDING_VERSION

@@ -226,11 +226,11 @@ def test_legacy_miscellaneous_rows_join_the_continuous_sequence():
     assert "Miscellaneous" not in out[1]["concept_details"]
 
 
-def test_reduce_types_drops_caseless_theory_block():
-    # A theory concept whose Types block has no concrete Case is dropped.
+def test_reduce_types_preserves_caseless_content_for_api_repair():
+    # Missing Case structure is not a license to delete authored content.
     details = "Description: theory only // Types: Type 01: Definition // Misconception: m"
     out = cr.reduce_type_sections(details)
-    assert "Types:" not in out
+    assert out == details
     assert "Description: theory only" in out
     assert "Misconception: m" in out
 
@@ -247,12 +247,11 @@ def test_refine_chapter_reduces_then_numbers_continuously():
         _rec("Solve B", "Description: b // Types: Type 01: Q Case 01: c2 Type 02: R Case 01: c3 // Misconception: m"),
     ]
     out = cr.refine_chapter(records)
-    # Theory lost its Types block.
-    assert "Types:" not in out[0]["concept_details"]
-    # Numbering is continuous across the concepts that DO have types.
-    assert "Type 01: P" in out[1]["concept_details"]
-    assert "Type 02: Q" in out[2]["concept_details"]
-    assert "Type 03: R" in out[2]["concept_details"]
+    assert "Type 01: Definition" in out[0]["concept_details"]
+    assert any("type_without_case" in flag for flag in out[0]["review_flags"])
+    assert "Type 02: P" in out[1]["concept_details"]
+    assert "Type 03: Q" in out[2]["concept_details"]
+    assert "Type 04: R" in out[2]["concept_details"]
 
 
 def test_records_without_types_are_normalized_to_one_analysis_section():

@@ -1,5 +1,6 @@
 import type { RunLine } from "../RunConsole";
 import type { StageUsageRow } from "../types";
+import { hasUsageGap, providerRequestCount } from "./apiUsage";
 
 /** One rendered stage card: a step line plus everything until the next step. */
 export interface StageGroup {
@@ -95,11 +96,11 @@ export function stageCost(
   let cachedInputTokens = 0;
   let cacheWriteTokens = 0;
   for (const row of mine) {
-    requestCount += row.request_count;
+    requestCount += providerRequestCount(row);
     totalTokens += row.total_tokens;
     cachedInputTokens += row.cached_input_tokens ?? 0;
     cacheWriteTokens += row.cache_write_tokens ?? 0;
-    if (!row.pricing_complete || row.estimated_cost_usd == null) {
+    if (!row.pricing_complete || row.estimated_cost_usd == null || hasUsageGap(row)) {
       costComplete = false;
     } else {
       cost += row.estimated_cost_usd;

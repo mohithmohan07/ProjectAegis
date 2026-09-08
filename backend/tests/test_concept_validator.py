@@ -165,7 +165,7 @@ def test_identical_analysis_under_two_authored_labels_is_not_reclassified():
 
 
 
-def test_validator_rejects_only_high_confidence_truncated_description_clause():
+def test_description_clause_completeness_is_an_api_judgment():
     broken = cv.validate_concept_rows([_rec(
         "Scientific Inquiry",
         "Description: Students observe carefully, record evidence, and use it "
@@ -183,7 +183,7 @@ def test_validator_rejects_only_high_confidence_truncated_description_clause():
         ),
     ])
 
-    assert "description_truncated_clause" in _codes(broken)
+    assert "description_truncated_clause" not in _codes(broken)
     assert "description_truncated_clause" not in _codes(complete)
 
 
@@ -609,7 +609,7 @@ def test_description_section_references_are_errors_but_decimals_are_allowed():
     } == {(0, "error"), (1, "error")}
 
 
-def test_validator_rejects_copied_source_prose_only_in_descriptions():
+def test_source_copying_and_quotation_are_api_judgments():
     source = (
         "A nation state is built when people share a sense of collective "
         "identity and decide to live together under common political institutions."
@@ -622,7 +622,7 @@ def test_validator_rejects_copied_source_prose_only_in_descriptions():
             "national identity.",
         ),
     ], source_text=source)
-    assert "verbatim_source_description" in _codes(copied)
+    assert "verbatim_source_description" not in _codes(copied)
 
     question_only = cv.validate_concept_rows([
         _rec(
@@ -659,7 +659,8 @@ def test_strict_type_hierarchy_requires_defined_cases_and_numbered_examples():
     )
     report = cv.validate_concept_rows(
         [invalid], strict_type_hierarchy=True)
-    assert {"case_question_not_definition", "example_numbering"} <= _codes(report)
+    assert "example_numbering" in _codes(report)
+    assert "case_question_not_definition" not in _codes(report)
 
     valid = _rec(
         "Equation Practice",
@@ -703,10 +704,10 @@ def test_strict_type_hierarchy_requires_a_case_for_every_type_and_real_definitio
     )
     generic_report = cv.validate_concept_rows(
         [generic_case], strict_type_hierarchy=True)
-    assert "generic_case_definition" in _codes(generic_report)
+    assert "generic_case_definition" not in _codes(generic_report)
 
 
-def test_strict_type_hierarchy_rejects_empty_task_container_case_titles():
+def test_generic_case_meaning_is_not_inferred_from_title_vocabulary():
     generic_titles = [
         "Use the given information",
         "Answer the question",
@@ -734,7 +735,7 @@ def test_strict_type_hierarchy_rejects_empty_task_container_case_titles():
         error["row_index"] for error in report["errors"]
         if error["code"] == "generic_case_definition"
     }
-    assert generic_rows == set(range(len(generic_titles)))
+    assert generic_rows == set()
 
 
 def test_strict_type_hierarchy_allows_a_meaningful_imperative_case_title():
@@ -755,7 +756,7 @@ def test_strict_type_hierarchy_allows_a_meaningful_imperative_case_title():
     )
 
 
-def test_strict_type_hierarchy_rejects_obvious_case_example_family_mismatch():
+def test_case_example_family_alignment_is_an_api_judgment():
     rows = [
         _rec(
             "Resistor Combinations",
@@ -790,10 +791,10 @@ def test_strict_type_hierarchy_rejects_obvious_case_example_family_mismatch():
         if error["code"] == "case_example_semantic_mismatch"
     }
 
-    assert mismatch_rows == {0, 1}
+    assert mismatch_rows == set()
 
 
-def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles():
+def test_only_empty_type_titles_are_mechanical_defects():
     case = (
         "Case 01: Given a linear equation, isolate its unknown using inverse "
         "operations. Example 01: Solve 3x + 2 = 14."
@@ -824,11 +825,11 @@ def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles()
         error["code"] for error in report["errors"]
         if error["row_index"] == 0
     }
-    assert "generic_type_definition" in {
+    assert "generic_type_definition" not in {
         error["code"] for error in report["errors"]
         if error["row_index"] == 1
     }
-    assert "duplicate_type_definition" in {
+    assert "duplicate_type_definition" not in {
         error["code"] for error in report["errors"]
         if error["row_index"] == 2
     }
@@ -843,7 +844,7 @@ def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles()
     assert "generic_type_definition" not in _codes(legacy_report)
 
 
-def test_strict_type_titles_are_unique_across_normal_concepts_in_each_topic():
+def test_reusable_type_meaning_is_not_inferred_from_title_overlap():
     def row(title, topic):
         return _rec(
             title,
@@ -868,10 +869,10 @@ def test_strict_type_titles_are_unique_across_normal_concepts_in_each_topic():
         error["row_index"] for error in report["errors"]
         if error["code"] == "duplicate_type_definition"
     ]
-    assert duplicate_rows == [1]
+    assert duplicate_rows == []
 
 
-def test_strict_type_hierarchy_rejects_all_named_generic_type_variants():
+def test_generic_type_meaning_is_not_inferred_from_title_vocabulary():
     generic_titles = [
         "Assessment pattern",
         "Source inventory task",
@@ -900,7 +901,7 @@ def test_strict_type_hierarchy_rejects_all_named_generic_type_variants():
         error["row_index"] for error in report["errors"]
         if error["code"] == "generic_type_definition"
     }
-    assert generic_rows == set(range(len(generic_titles)))
+    assert generic_rows == set()
 
 
 def test_strict_mastery_requires_one_canonical_terminal_description_line():

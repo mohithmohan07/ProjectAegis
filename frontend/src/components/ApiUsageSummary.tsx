@@ -1,4 +1,5 @@
 import type { OpenAIUsage } from "../types";
+import { finiteUsageNumber, hasUsageGap, providerRequestCount } from "../lib/apiUsage";
 
 interface ApiUsageSummaryProps {
   usage?: OpenAIUsage | null;
@@ -55,11 +56,19 @@ export default function ApiUsageSummary({
   cumulative = false,
   resumed = false,
 }: ApiUsageSummaryProps) {
-  const requestCount = finiteNumber(usage?.request_count);
-  const totalTokens = finiteNumber(usage?.total_tokens);
-  if (!usage || (requestCount <= 0 && totalTokens <= 0)) return null;
+  if (!usage) return null;
+  const requestCount = providerRequestCount(usage);
+  const totalTokens = finiteUsageNumber(usage.total_tokens);
+  const attemptCount = finiteUsageNumber(usage.attempt_count);
+  const elapsedSeconds = finiteUsageNumber(usage.elapsed_seconds);
+  const processingSeconds = finiteUsageNumber(usage.mechanical_wall_seconds);
+  if (requestCount <= 0 && totalTokens <= 0 && attemptCount <= 0
+    && elapsedSeconds <= 0 && processingSeconds <= 0
+    && finiteUsageNumber(usage.mechanical_span_count) <= 0) return null;
 
-  const costAvailable = usage.estimated_cost_usd != null;
+  const usageGap = hasUsageGap(usage);
+  const displayedCost = usageGap ? null : usage.estimated_cost_usd;
+  const costAvailable = typeof displayedCost === "number" && Number.isFinite(displayedCost);
   const model = usage.model || "Unknown model";
   const heading = compact
     ? cumulative ? "Cumulative model usage" : "Model usage"
@@ -85,7 +94,17 @@ export default function ApiUsageSummary({
       </div>
 
       <dl className="api-usage-grid">
-        <UsageMetric label="Requests" value={formatTokenCount(requestCount)} />
+        <UsageMetric
+          label="Requests"
+          value={formatTokenCount(requestCount)}
+          hint={usage.attempt_coverage_complete === false
+            ? "Complete request history unavailable"
+            : usageGap ? "Includes requests with missing usage" : undefined}
+        />
+        {attemptCount > requestCount && (
+          <UsageMetric label="Attempts" value={formatTokenCount(attemptCount)}
+            hint="Includes attempts that did not reach the provider" />
+        )}
         <UsageMetric label="Input tokens" value={formatTokenCount(usage.input_tokens)} />
         <UsageMetric
           label="Cached input"
@@ -107,15 +126,20 @@ export default function ApiUsageSummary({
         <UsageMetric label="Total tokens" value={formatTokenCount(usage.total_tokens)} />
         <UsageMetric
           label="Estimated cost"
-          value={formatEstimatedCost(usage.estimated_cost_usd)}
+          value={formatEstimatedCost(displayedCost)}
           emphasized={costAvailable}
         />
-        {typeof usage.elapsed_seconds === "number" && usage.elapsed_seconds > 0 && (
+        {elapsedSeconds > 0 && (
           <UsageMetric
             label="Time taken"
-            value={formatElapsedSeconds(usage.elapsed_seconds)}
+            value={formatElapsedSeconds(elapsedSeconds)}
             hint={cumulative ? "Across parsing and every attempt" : undefined}
           />
+        )}
+        {processingSeconds > 0 && (
+          <UsageMetric label="Local processing"
+            value={formatElapsedSeconds(processingSeconds)}
+            hint={elapsedSeconds > 0 ? "Included in total time" : undefined} />
         )}
       </dl>
 
@@ -138,12 +162,12 @@ export default function ApiUsageSummary({
                     {row.stage || "(unattributed)"}
                     {row.lane ? <small> {row.lane}</small> : null}
                   </td>
-                  <td>{formatTokenCount(row.request_count)}</td>
+                  <td>{formatTokenCount(providerRequestCount(row))}</td>
                   <td>{formatTokenCount(row.total_tokens)}</td>
                   <td>
-                    {row.pricing_complete
+                    {row.pricing_complete && !hasUsageGap(row)
                       ? formatEstimatedCost(row.estimated_cost_usd)
-                      : "\u2014"}
+                      : "Unavailable"}
                   </td>
                   <td>{formatElapsedSeconds(row.elapsed_seconds)}</td>
                 </tr>
@@ -153,6 +177,12 @@ export default function ApiUsageSummary({
         </div>
       )}
 
+      {usageGap && (
+        <div className="api-usage-note">
+          Token usage is missing for one or more provider requests. Token totals
+          are incomplete, and the total cost is unavailable.
+        </div>
+      )}
       {!compact && (
         <div className="api-usage-note">
           {cumulative
@@ -164,22 +194,22 @@ export default function ApiUsageSummary({
                 Totals are cumulative for this file across parsing, the
                 original attempt, and every retry; retrying does not reset
                 them.{" "}
-                {costAvailable
+                {usageGap
+                  ? "Reported usage is retained; missing usage is not counted as free."
+                  : costAvailable
                   ? "The estimate uses the active model's published rates, including cache-write charges and long-context multipliers where they apply; cached input and cache writes are already included in input tokens."
                   : "A cost estimate is unavailable because pricing is not configured for every model used."}
               </>
             )
-            : costAvailable
+            : usageGap
+              ? "Reported usage is retained; missing usage is not counted as free."
+              : costAvailable
               ? "Estimate uses the active model's published rates, including cache-write charges and long-context multipliers where they apply. Cached input and cache writes are already included in input tokens; custom or regional pricing is excluded."
               : "Token counts are available, but a cost estimate is unavailable because pricing is not configured for every model used."}
         </div>
       )}
     </section>
   );
-}
-
-function finiteNumber(value: number | null | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function UsageMetric({

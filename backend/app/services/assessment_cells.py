@@ -20,6 +20,7 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 
@@ -403,6 +404,7 @@ def _live_cell(payload: dict[str, Any]) -> dict[str, Any]:
         CELL_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -413,6 +415,7 @@ def _live_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
         CELL_CRITIC_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -423,6 +426,7 @@ def _live_generated_cell(payload: dict[str, Any]) -> dict[str, Any]:
         GENERATED_CELL_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -433,6 +437,7 @@ def _live_generated_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
         GENERATED_CELL_CRITIC_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -528,6 +533,7 @@ def decide_cells(
             "profile": copy.deepcopy(profile_evidence),
             "source_atom": source_atom,
         }
+        visual_evidence.bind(payload, source_atom)
         decision = kernel.decide(
             kind="assessment.cell",
             unit_id=source_qid,
@@ -557,7 +563,7 @@ def decide_cells(
             "source_policy": "reuse",
             "accepted_source_qids": [source_qid],
             "rationale": str(response.get("rationale") or ""),
-            "flags": _review_flags(decision),
+            "flags": _review_flags(decision) + visual_evidence.review_flags(payload),
             "authority": _decision_authority(decision),
         }
 
@@ -733,6 +739,7 @@ def decide_generated_cells(
                 dict(concepts.get(concept_key) or {})
             ),
         }
+        visual_evidence.bind(payload, question, payload["pre_concept"])
         decision = kernel.decide(
             kind="assessment.generated_cell",
             unit_id=pre_question_id,
@@ -763,7 +770,7 @@ def decide_generated_cells(
             "concept_key": concept_key,
             "accepted_source_qids": [],
             "rationale": str(response.get("rationale") or ""),
-            "flags": _review_flags(decision),
+            "flags": _review_flags(decision) + visual_evidence.review_flags(payload),
             "authority": _decision_authority(decision),
         }
 

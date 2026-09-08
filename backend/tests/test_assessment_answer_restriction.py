@@ -215,7 +215,8 @@ def test_complete_registry_and_candidate_are_passed_whole_and_content_hashed():
     assert verdict["accepted_variations"]
     assert verdict["evidence"]
     assert verdict["rationale"]
-    assert verdict["flags"] == []
+    assert all("assessment_visual_evidence_unavailable" in flag for flag in verdict["flags"])
+    assert verdict["authority"]["visual_evidence"]["images"][0]["state"] == "unavailable"
     assert verdict["registry"] == {
         key: registry[key]
         for key in (
@@ -229,7 +230,7 @@ def test_complete_registry_and_candidate_are_passed_whole_and_content_hashed():
     authority = verdict["authority"]
     assert authority["decision_key"]
     assert authority["policy_version"].startswith(
-        "assessment-answer-restriction-4-column-spec;"
+        ar.POLICY_BASE_VERSION + ";"
     )
     assert registry["markdown_sha256"] in authority["policy_version"]
     assert registry["workbook_sha256"] in authority["policy_version"]

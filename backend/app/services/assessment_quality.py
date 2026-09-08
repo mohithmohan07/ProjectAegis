@@ -20,6 +20,7 @@ import json
 from typing import Any, Mapping
 
 from . import assessment_lane_policy as lane_policy
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 QUALITY_POLICY_VERSION = "assessment-group-quality-1-column-spec"
@@ -160,6 +161,7 @@ def _live_review(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         QA_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="concept_validation",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -169,6 +171,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         QA_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -237,6 +240,7 @@ def review_group(
         "members": _member_evidence(members),
         "sibling_groups": _sibling_evidence(siblings),
     }
+    visual_evidence.bind(payload, members, concept, payload["sibling_groups"])
     decision = kernel.decide(
         kind="assessment.group_quality",
         unit_id=group_key,
@@ -255,6 +259,7 @@ def review_group(
         if isinstance(flag, Mapping)
     ]
     review_flags = [str(flag) for flag in decision.get("review_flags") or []]
+    review_flags.extend(visual_evidence.review_flags(payload))
     return {
         "flags": flags,
         "quality_review": "flagged" if flags or review_flags else "verified",

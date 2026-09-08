@@ -2037,6 +2037,70 @@ there is no measured live quality result, production provider run, Fly
 upload, merge or deployment in this amendment. Q33's universal column
 policy v2 and English-only rubric-tag exception stand unchanged.
 
+
+### Q35 — DECIDED — Complete evidence, efficient execution and exact output vocabulary
+
+**Owner ruling (8 September 2026).** The owner approved all recommendations in
+`Aegis_End_to_End_Review_and_Optimization_Proposal.md`, then clarified that the
+reported deterministic category/group regression concerns the **field values**
+(such as `Fill in the blanks`), not how a question is judged to belong to a
+category. This amendment follows merged PR #293 and its verified baseline
+`feed425adc9c8a096c7940ecec5aefba7e0d6fad`.
+
+**Approved implementation.** Supply complete specifically referenced source,
+task, prerequisite and visual evidence to existing authors and critics; preserve
+cross-page and table/figure relationships and complete crops; separate printed
+caption provenance from authored public alt text; independently review direct-MMD
+normalization without repeating the verified-PDF review. Preserve malformed
+learner-facing content and its before/after repair evidence. Replace the audited
+remaining Description/copied-prose/Type/Case meaning heuristics with the existing
+API semantic review and repair owners. Exact syntax, identity, inventory,
+arithmetic, image and KaTeX checks remain mechanical.
+
+Forward adopted answer-space contracts and accepted equivalents to rubric review;
+make exported scoring sufficient for equivalent and partial-credit responses;
+protect complete source tasks including Objective options and figures. Reconcile
+stale Open/Specific instructions with Q26; existing accepted source/language plans
+govern concept skeletons. Detect aggregate multipart capacity conflicts early,
+preserve all scoring evidence and never silently truncate or split a source task.
+
+Implement repeated-prefix caching, bounded independent parallelism, strict
+transport schemas where the complete response contract supports them, interrupted
+author/critic resume, and attributable attempt/wait/cost records. Incremental
+Master validation must preserve per-unit rollback, complete topology checks and a
+final full workbook readback; it must demonstrate parity before replacing a full
+per-unit check. Savings are measured, never inferred from a passing mock test.
+
+**Exact output vocabulary.** Restore the historically declared presentation
+labels through one versioned, deterministic serializer/allowed-value contract.
+Only explicit spelling/casing/plural aliases may map to a canonical label; no
+question text, command words, marks or meaning heuristics assign a category or
+tier. Category/difficulty judgments retain their existing API owners and carried
+blueprint decisions. `Basic`, `Intermediate`, `Advanced` are exact output labels.
+Distinct category/mark profiles retain their separate identity. Persist the
+vocabulary with new profiles and preserve the labels of already-frozen runs.
+The historical evidence and alias table are recorded separately in
+`docs/category-group-history-2026-09-08.md`.
+
+**Ratified representation interpretations.** Topics use unique
+`ChapterBaseID_TNN`, concepts use `TopicID_CNN`, display names remain plain and
+rosters reuse exact decorated titles. Subjective placeholders store `a`, stems
+store `$$a$$`, and learner text displays `____`. Correct Objective option weight
+equals the accepted item marks; distractors have zero weight. `post_topics`
+contains Post topics. The governing Pre prerequisite boundary remains earlier
+grade/year; generic assessment calibration must be explicit and must not borrow
+an unrelated institution's profile. Chapter duration keeps its separate rule.
+
+**Preserved scope.** Luna, uniform xhigh, all configured critics, all-row Concept
+refinement, Master refinement, group QA, and five Basic plus five Intermediate
+questions per retained Pre concept remain in effect. No reduction of these stages
+or coverage, interactive Batch substitution, production restart/deployment or
+unmeasured quality claim is authorized by this amendment. Implementation and dry
+acceptance can proceed autonomously; live provider/Fly acceptance depends on the
+required configured access and a separately recorded run scope. The original
+master-contract document remains a verbatim historical authority; this register
+records amendments rather than silently rewriting it.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

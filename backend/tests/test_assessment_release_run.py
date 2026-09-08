@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -310,10 +311,9 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
         refined = copy.deepcopy(payload[unit_kind])
         if unit_kind == "candidate":
             if refined["sheet_kind"] == "objective":
-                refined["answers"][0]["answer_content"] = "A cube"
                 refined["answer_explanation"] = (
                     ("a) " if payload.get("column_spec_policy", {}).get("objective_explanation_prefix") == "option_label_and_answer" else "")
-                    + "A cube occupies space in three dimensions."
+                    + "Cube. A cube occupies space in all three dimensions."
                 )
             else:
                 # §24 parity: both model-answer fields move together.
@@ -418,7 +418,8 @@ def test_full_pipeline_publishes_a_ready_release(db):
     q = objective_rows[0]
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
     assert q["answer_restriction"] == "Specific"
-    assert q["answer_content_1"] == "A cube"
+    assert q["answer_content_1"] == "Cube"
+    assert "all three dimensions" in q["answer_explanation"]
     assert q["question_duration"] == 2
     assert str(q["correct_answer_1"]) == "Yes"
     # Labels mint from the concept machine identity in source order.
@@ -517,7 +518,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
             "_aegis_assessment_answer_restriction"
         ]["authority"]
         assert restriction_authority["policy_version"].startswith(
-            "assessment-answer-restriction-4-column-spec;"
+            "assessment-answer-restriction-5-q26-evidence;"
         )
         assert candidate["_aegis_assessment_answer_restriction"][
             "registry"
@@ -530,7 +531,7 @@ def test_full_pipeline_publishes_a_ready_release(db):
         ]["decomposition_authority"] == "api_per_item_verdict"
         assert candidate["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-candidate-4-column-spec"
+        ] == "assessment-master-refiner-candidate-5-complete-task"
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
         ] == "assessment-route-2-column-spec"
@@ -1036,6 +1037,55 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
     } == first_text
 
 
+@pytest.mark.parametrize("split_tiers", [False, True])
+def test_group_stages_run_independently_with_complete_qa_context(
+    db, monkeypatch, split_tiers,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    calls = {}
+    authorities, _ = _authorities(db, chapter, calls=calls)
+    monkeypatch.setattr(run.config, "phase3_decision_workers", lambda: 2)
+    if split_tiers:
+        original_level, critic = authorities["level"]
+
+        def level(payload):
+            result = original_level(payload)
+            if payload["candidate"]["sheet_kind"] == "objective":
+                result["tier"] = "Basic"
+            return result
+
+        authorities["level"] = (level, critic)
+
+    for stage in (["cluster"] if split_tiers else []) + ["describe", "qa"]:
+        original, critic = authorities[stage]
+        barrier = threading.Barrier(2, timeout=5)
+
+        def concurrent(payload, original=original, barrier=barrier):
+            barrier.wait()
+            return original(payload)
+
+        authorities[stage] = (concurrent, critic)
+
+    release = run.run_release_for_job(
+        db, job.id, owner_sub=OWNER, authorities=authorities,
+        **_decision_context(),
+    )
+    groups = release.payload["groups"]
+    assert len(groups) == 2
+    assert [g["group_type"] for g in groups] == (
+        ["Basic", "Advanced"] if split_tiers else ["Advanced", "Advanced"]
+    )
+    assert len(calls["describe"]) == len(calls["qa"]) == 2
+    for payload in calls["qa"]:
+        siblings = payload["sibling_groups"]
+        assert len(siblings) == (0 if split_tiers else 1)
+        if siblings:
+            assert siblings[0]["group"]["semantic_description"]
+            assert siblings[0]["members"]
+            assert siblings[0]["group"]["group_key"] != payload["group"]["group_key"]
+
+
 def test_route_critic_dissent_publishes_with_review_warning(db):
     chapter = _chapter_with_concepts(db)
     job = _make_job(db, chapter)
@@ -1164,7 +1214,8 @@ def test_refiner_dissent_keeps_diff_when_required_empty_group_has_no_audit(
     diff = release.payload["refinements"]
     assert diff["changes"]
     assert any(
-        change["after"] == "A cube" for change in diff["changes"]
+        "Cube. A cube occupies space in all three dimensions."
+        in str(change["after"]) for change in diff["changes"]
     )
     empty = next(
         group for group in release.payload["groups"]

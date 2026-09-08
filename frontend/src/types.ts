@@ -91,6 +91,12 @@ export interface StageUsageRow {
   stage: string;
   lane: string;
   request_count: number;
+  /** Physical provider requests, including attempts without usage receipts. */
+  provider_request_count?: number;
+  attempt_count?: number;
+  usage_complete?: boolean;
+  attempt_coverage_complete?: boolean;
+  missing_usage_response_count?: number;
   input_tokens: number;
   cached_input_tokens?: number;
   cache_write_tokens?: number;
@@ -121,6 +127,17 @@ export interface OpenAIUsage {
     estimated_cost_usd: number | null;
   }>;
   request_count: number;
+  /** request_count remains the legacy count of usage-bearing responses. */
+  provider_request_count?: number;
+  attempt_count?: number;
+  usage_complete?: boolean;
+  attempt_coverage_complete?: boolean;
+  missing_usage_response_count?: number;
+  untracked_response_count?: number;
+  mechanical_wall_seconds?: number;
+  mechanical_thread_cpu_seconds?: number;
+  mechanical_span_count?: number;
+  mechanical_cpu_complete?: boolean;
   input_tokens: number;
   cached_input_tokens: number;
   cache_write_tokens?: number;

@@ -22,6 +22,8 @@ from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
 from . import column_spec
+from .response_schemas import advisory_critic_schema
+from . import assessment_visual_evidence as visual_evidence
 from . import assessment_release as rel
 from . import katex_rules
 from .phase3 import kernel
@@ -183,7 +185,16 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "stem. A genuinely multipart question instead ships with answers=[] "
     "and places all scoring evidence only in sub_questions[].keywords, so "
     "the main rubric and the sub-question rubric never score the same "
-    "content twice. Its main question contains only shared instruction or "
+    "content twice. workbook_capacities also gives the aggregate parent "
+    "projection capacity: it is the sum of every child keyword, not a fresh "
+    "allowance per child. Plan atomic criteria with this visible capacity. "
+    "If the genuine source demand exceeds it, retain every child and criterion "
+    "and name parent_projection_capacity in rationale; never omit content, "
+    "merge independently earned credit, or split the source task to fit. "
+    "Write allowed equivalent wording/results and partial-credit boundaries "
+    "in the exported criteria themselves, so evaluation does not depend on "
+    "hidden notes or exact phrase matching. Do not add unasked requirements. "
+    "Its main question contains only shared instruction or "
     "context; part text lives only in sub_questions[]. Each "
     "sub_questions[] text begins "
     "with its enumeration label — a), b), c)… or (i), (ii), (iii)… — "
@@ -772,6 +783,7 @@ def _live_materialize(payload: dict[str, Any]) -> dict[str, Any]:
         MATERIALIZE_SYSTEM,
         suffix,
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "materialize-author-v6",
@@ -792,6 +804,8 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
         MATERIALIZE_CRITIC_SYSTEM,
         suffix,
         purpose="advisory_critic",
+        response_schema=advisory_critic_schema(),
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "materialize-critic-v6",
@@ -984,13 +998,18 @@ def _decision_payload(
     # mechanical checker. Part of the payload, so the decision key changes
     # with the rule (a replay under another subject never reuses it).
     tag_policy = assessment_profile.rubric_tag_policy(meta)
-    return {
+    return visual_evidence.bind({
         "stage": "assessment.materialize",
+        "critic_response_schema": advisory_critic_schema().identity(),
         "rules": MATERIALIZE_SYSTEM,
         "candidate_id": candidate_id,
         "metadata": copy.deepcopy(dict(meta)),
         "workbook_capacities": {
             "descriptive_answer_slots": descriptive_answer_capacity,
+            "multipart_parent_criterion_slots": descriptive_answer_capacity,
+            "subquestion_slots": MAX_SUBQUESTIONS,
+            "criterion_slots_per_subquestion": MAX_SUBQUESTION_KEYWORDS,
+            "overflow_policy": "preserve_all_children_and_flag_parent_projection_capacity",
         },
         "rubric_tag_policy": tag_policy,
         "column_spec_policy": column_spec.from_metadata(meta),
@@ -1000,7 +1019,10 @@ def _decision_payload(
         "source_wording_authority": _source_wording_authority(atom),
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "curricular_evidence": copy.deepcopy(context),
-    }
+    # Source ownership names the item's complete visual dependencies. The
+    # released hierarchy may contain every other chapter figure; attaching
+    # those to each source question would add cost and unrelated evidence.
+    }, atom if atom is not None else cell)
 
 
 def _materialize_prepared(
@@ -1043,10 +1065,25 @@ def _materialize_prepared(
         policy_version=MATERIALIZE_POLICY_VERSION,
         fixer=fixer,
     )
-    return _assemble(
+    result = _assemble(
         decision["response"], atom, cell,
         candidate_id=candidate_id, decision=decision,
     )
+    flags = visual_evidence.review_flags(payload)
+    if column_spec.from_metadata(meta).get("multipart_parent_projection") == "ordered_child_union":
+        criterion_count = sum(len(part.get("keywords") or []) for part in result["sub_questions"])
+        if criterion_count > descriptive_answer_capacity:
+            flags.append(
+                f"parent_projection_capacity: {criterion_count} child criteria exceed "
+                f"{descriptive_answer_capacity} parent slots; all child criteria retained"
+            )
+    if flags:
+        result["flags"].extend(flags)
+        result[_AUDIT_FIELD]["flags"].extend(flags)
+        result["authority"]["review_flags"] = list(result["flags"])
+        result["assessment_eligibility"] = "flagged"
+    result[_AUDIT_FIELD]["visual_evidence"] = copy.deepcopy(payload["visual_evidence"])
+    return result
 
 
 def materialize_candidate(

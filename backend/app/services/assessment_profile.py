@@ -14,6 +14,7 @@ school is another profile, not another pipeline.
 from __future__ import annotations
 
 from . import column_spec
+from . import assessment_output_vocabulary as output_vocabulary
 
 import copy
 from typing import Any, Mapping
@@ -963,6 +964,27 @@ def resolve_for_metadata(
         # its adapter at the same boundary, while leaving legacy profiles
         # and profiles with an already-known subject unchanged.
         resolved[column_spec.POLICY_KEY] = column_spec.for_metadata(run_metadata)
+    if output_vocabulary.POLICY_KEY not in resolved and not was_resolved:
+        resolved[output_vocabulary.POLICY_KEY] = output_vocabulary.snapshot()
+    if output_vocabulary.POLICY_KEY in resolved:
+        existing_snapshot = resolved.get(output_vocabulary.FORMAT_SNAPSHOT_KEY)
+        snapshot_selectors = (
+            existing_snapshot.get("metadata", {})
+            if isinstance(existing_snapshot, Mapping) else {}
+        )
+        if not isinstance(existing_snapshot, Mapping) or any(
+            not _same_metadata_selector(
+                resolved, field, snapshot_selectors.get(field), run_metadata.get(field),
+            )
+            for field in ("board", "grade", "subject")
+        ):
+            # Freeze exact categories AND their rules. Filling previously
+            # unknown metadata is allowed above; retargeting known selectors
+            # has already failed before this point.
+            resolved[output_vocabulary.FORMAT_SNAPSHOT_KEY] = {
+                "metadata": copy.deepcopy(resolved["_resolved_metadata"]),
+                "policy": assessment_format_policy(resolved, run_metadata),
+            }
     return resolved
 
 
@@ -1195,16 +1217,26 @@ def assessment_format_policy(
     """
 
     selected = _value(profile, "assessment_format")
+    resolved_profile = resolve(profile)
     if isinstance(metadata, Mapping):
         # Supplying metadata is an explicit lookup and must not be
         # contaminated by selectors carried from a different run.
         run_metadata = metadata
     else:
-        resolved_profile = resolve(profile)
         carried_metadata = resolved_profile.get("_resolved_metadata")
         run_metadata = (
             carried_metadata if isinstance(carried_metadata, Mapping) else {}
         )
+    frozen = resolved_profile.get(output_vocabulary.FORMAT_SNAPSHOT_KEY)
+    if isinstance(frozen, Mapping) and isinstance(frozen.get("policy"), Mapping):
+        selectors = frozen.get("metadata")
+        if isinstance(selectors, Mapping) and all(
+            _same_metadata_selector(
+                resolved_profile, field, selectors.get(field), run_metadata.get(field),
+            )
+            for field in ("board", "grade", "subject")
+        ):
+            return copy.deepcopy(dict(frozen["policy"]))
     for candidate in _value(profile, "assessment_format_overrides") or ():
         if isinstance(candidate, Mapping) and _matches_metadata(
             candidate, run_metadata
@@ -1217,7 +1249,27 @@ def assessment_format_policy(
     # The aliases select a policy; they are not part of the authoring
     # contract and need not consume prompt tokens or invite reinterpretation.
     policy.pop("metadata_match", None)
+    vocabulary = resolved_profile.get(output_vocabulary.POLICY_KEY)
+    if isinstance(vocabulary, Mapping):
+        policy = output_vocabulary.format_policy(policy, vocabulary)
     return policy
+
+
+def output_question_category(
+    value: Any, profile: Mapping | str | None = None,
+) -> str:
+    """Serialize an already-selected category using the run's frozen labels.
+
+    Unknown values remain unchanged so the exact per-sheet gate reports the
+    defect. This helper never supplies a category for a missing decision.
+    """
+    # Read the immutable run snapshot directly on the per-row projection
+    # path; copying every marks/duration table for each label is unnecessary.
+    resolved = profile if isinstance(profile, Mapping) else resolve(profile)
+    vocabulary = resolved.get(output_vocabulary.POLICY_KEY)
+    return output_vocabulary.category_label(
+        value, vocabulary if isinstance(vocabulary, Mapping) else {},
+    )
 
 
 def question_formats(

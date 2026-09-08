@@ -142,7 +142,7 @@ def test_default_live_adapter_invokes_separate_advisory_request(monkeypatch):
 
     calls = []
 
-    def scripted_api(system, user, *, purpose):
+    def scripted_api(system, user, *, purpose, image_urls=None):
         calls.append((system, purpose))
         payload = json.loads(user)
         if purpose == "concept_validation":
