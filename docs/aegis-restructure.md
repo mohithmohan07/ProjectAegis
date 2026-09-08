@@ -1822,6 +1822,11 @@ reversed above; Q26's "Recorded, not yet done" list stands unchanged.
 
 ### Q32 · Decided — the 8 September owner column rules and prompt refinement
 
+**Historical implementation record:** Q33 below supersedes this entry's
+English/Mathematics-only formatting scope, `creative` spelling and fixed
+English keyboard rule for new runs. The original workbook evidence and
+v1 behavior remain recorded here; frozen v1 releases retain that behavior.
+
 Owner instruction, 8 Sep 2026: work on Project Aegis using the uploaded
 Excel specifications for how output columns are written, refine prompting
 for every API output, structure it properly and make suggestions. Evidence:
@@ -1899,6 +1904,77 @@ quality defaults, all other Q26–Q31 rulings, model author/independent critic
 ownership and the release/artefact distinction. This records an
 implementation amendment, not a claim of measured live writing quality or
 authorization to merge or deploy.
+
+### Q33 · Decided — universal column rules and owner review before step removal
+
+Owner clarification, 8 Sep 2026: the two supplied subjects are examples of
+how Aegis outputs must be written, not a restriction to those subjects.
+Only English rubric tags such as `[content]` and `[creativity]` belong in
+rubrics; other subjects must not carry them. The owner also requires
+end-to-end attention to source-topic absorption, concept decomposition,
+teaching detail, KaTeX, hosted images and usable evaluation rubrics, and
+supplied varied source PDFs for that review. The owner explicitly requires
+being consulted **before any unnecessary run step is removed**.
+
+**Universal format, with one explicit subject exception.** New profiles
+carry `owner-column-spec-2026-09-08-v2`. Every subject uses the same output
+column rules: comma-space keyword cells, correct lowercase option label
+and exact answer at the start of Objective explanations, positive
+multiples of 0.5 for Descriptive criterion weights, exact totals and
+non-additive multipart parent/child rubric views. Relationship lists keep
+their pipe delimiter. Teaching descriptions use original connected prose;
+the 3–5 chapter sentence, 2–4 topic sentence and 3–6 relevant keyword
+guidance applies across subjects. These are model writing instructions,
+not semantic count thresholds.
+
+The English-only registry is `content`, `language`, `creativity`,
+`evidence`, in exact `[tag]: criterion` syntax, restricted to textual
+English Descriptive criteria. The owner's latest `creativity` spelling
+supersedes v1's `creative`. No functional rubric tag belongs in other
+subjects, learner-facing fields, or typed Equation/Image criteria. The
+actual subject, grade, source and response demand still determine the
+pedagogy through API authoring and independent review; shared formatting
+does not mean identical content across subjects.
+
+Keyboard mode is response-dependent in every subject, authored by the API
+and checked by its critic. Objective's keyboard cell remains blank;
+Subjective/Descriptive use exact `Yes` or `No`. Q32's blanket English `No`
+is removed from new policy because the clarified subject exception is
+rubric tags, not response mechanics. This changes a column policy and
+does not remove a pipeline stage. Existing explicit category/marks/duration
+profiles continue to apply; a subject-specific example does not select or
+invent one.
+
+Each criterion must name observable evidence relevant to the actual task,
+allow valid alternatives under its adopted answer contract, and avoid
+double-credit or unasked requirements. Independent demands must not be
+bundled into an omnibus criterion. A coherent criterion may exceed one
+mark under the half-step policy; the separate existing minimum of two
+criteria for a four-mark single-part Descriptive answer stands.
+
+**Replay and evidence.** Persisted v1 snapshots keep their recorded
+delimiters, explanation prefixes, tag registry and keyboard policy.
+Persisted profiles with no column-policy snapshot keep the legacy contract.
+The author, critic, release checks and workbook projection read the same
+carried policy. Original uploaded workbook cells are retained as evidence;
+Q33 corrects their initial interpretation rather than rewriting that
+evidence. The six identity/placeholder/weight representation conflicts in
+the review remain open where this clarification does not resolve them.
+
+**Removal requires a concrete proposal and the owner's prior approval.**
+Review the whole run and identify a proposed removal's purpose, replacement
+coverage, expected effect and evidence first. Do not disable, bypass or
+delete a stage on the basis of this request alone. Existing author/critic,
+refiner and evidence-preservation stages remain in place until the owner
+approves a specific proposal. Semantic judgments remain API-driven.
+
+**Validation limit.** Cross-subject dry regressions cover author payloads,
+mechanical validation, XLSX read-back, tag containment and frozen policy
+replay. They do not establish live chapter quality, successful Fly image
+hosting or a complete live end-to-end run. Source-format diversity and
+image/KaTeX correctness must be assessed with the supplied chapter evidence
+and explicit live results before claiming those outcomes. No merge,
+deployment or production database write is authorized by this entry.
 
 ---
 

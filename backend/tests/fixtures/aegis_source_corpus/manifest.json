@@ -1,0 +1,510 @@
+{
+  "version": "aegis-source-corpus-2026-09-08",
+  "review_method": "Mechanical PDF census, text-layer inspection, and model visual review of named pages. Observations are review evidence, not production semantic heuristics or fixed topic/concept expectations.",
+  "page_numbering": "1-based PDF pages, not printed textbook pages.",
+  "source_count": 14,
+  "total_pages": 209,
+  "contains_source_bytes": false,
+  "live_acceptance_status": "not_established",
+  "first_pilot_source_ids": [
+    "aegis-source-13",
+    "aegis-source-11",
+    "aegis-source-09",
+    "aegis-source-10"
+  ],
+  "records": [
+    {
+      "id": "aegis-source-01",
+      "filename": "CH01_Characteristics_of_Living_Organisms_06_MSBSHSE(2).pdf",
+      "sha256": "199ebc576da11efc961a6328c7ae225a0cf6c1066dcc96ed53a4643108b3eafe",
+      "pages": 9,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Science",
+      "observed_chapter_titles": [
+        "Characteristics of Living Organisms"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 chapter heading",
+        "PDF pp2-7 life processes and organisms"
+      ],
+      "visually_reviewed_pdf_pages": [
+        4,
+        8
+      ],
+      "observed_features": [
+        "Narrative introduction; observation prompts embedded in teaching",
+        "Life-process subsections; growth, response, reproduction, respiration, movement and life cycle",
+        "Germination sequence, turtle photographs and excretion diagram",
+        "End exercise includes frog life-cycle ordering and multipart explanation"
+      ],
+      "test_obligations": [
+        "Retain observation tasks alongside the end exercise; distinguish breathing from respiration in concept explanations.",
+        "Keep organism images and sequence panels with the task that requires them.",
+        "Use scientifically assessable evidence, including explanations and observations; no English rubric tags."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-02",
+      "filename": "CH01_The_School_Bell_Rings_Again_06_MSBSHSE(3).pdf",
+      "sha256": "0446cf8c10cf82d9ad31f6e1a373a52a3d48e141d9a80525cf02a9f40ee6c6e0",
+      "pages": 2,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "English",
+      "observed_chapter_titles": [
+        "The School Bell Rings Again..."
+      ],
+      "verified_grade": 6,
+      "grade_note": "Grade visible in reviewed page evidence.",
+      "metadata_evidence": [
+        "PDF p1 heading and explicit Grade Six in the poem"
+      ],
+      "visually_reviewed_pdf_pages": [
+        1,
+        2
+      ],
+      "observed_features": [
+        "Two-page poem with stanza breaks and vocabulary box",
+        "MCQs continue across the page boundary",
+        "Personal reflection, rhyming words, graphic organiser and alliteration",
+        "Separate facilitator instructions"
+      ],
+      "test_obligations": [
+        "Preserve poem lines and answer options across pages, without treating facilitator notes as learner questions.",
+        "Distinguish textual comprehension, personal response and alliteration; avoid inventing many concepts from a short poem.",
+        "English rubric dimensions follow actual response demand, not a mandatory creativity criterion for every item."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-03",
+      "filename": "CH01_Three_Dimensional_Shapes_06_MSBSHSE(3).pdf",
+      "sha256": "fa20ac907eeb0211f60bc0e3a5c34cbef04d32914ffc1cafb1d1ad918ac524e7",
+      "pages": 8,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Mathematics",
+      "observed_chapter_titles": [
+        "Three-Dimensional Shapes"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 chapter heading",
+        "PDF pp4-7 named solids and properties"
+      ],
+      "visually_reviewed_pdf_pages": [
+        4,
+        7
+      ],
+      "observed_features": [
+        "Revision images classified as 2D or 3D",
+        "Construction activities for solids with numbered steps",
+        "Face/vertex/edge counts, diagrams and comparison tables",
+        "Final visual clues specify solids to draw"
+      ],
+      "test_obligations": [
+        "Keep full comparison tables and face/edge/vertex labels; preserve missing-answer boxes.",
+        "Separate conceptual properties from a physical construction procedure while retaining their relationship.",
+        "Assess the requested drawing properties and correct counts without English rubric tags."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-04",
+      "filename": "CH02_Lines_and_Angles_06_MSBSHSE(3).pdf",
+      "sha256": "0838a3b5b930db72de7a0635552184a3897e6d5d0ea28a7f4f5177e29b2d6bc5",
+      "pages": 9,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Mathematics",
+      "observed_chapter_titles": [
+        "Lines and Angles"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 chapter heading",
+        "PDF p5 angle names and arms"
+      ],
+      "visually_reviewed_pdf_pages": [
+        5,
+        9
+      ],
+      "observed_features": [
+        "Lines, rays, segments and point configurations",
+        "Angle-identification table with diagram and answer rows",
+        "Paper-fan activities and clock-angle questions",
+        "Several questions share one labelled figure; nested triangular patterns"
+      ],
+      "test_obligations": [
+        "Preserve arrowheads, vertices, labels, angle symbols and degrees through conversion and KaTeX projection.",
+        "Bind a shared figure to every dependent child without assigning a different nearby figure.",
+        "Model review must distinguish naming a ray, naming an angle and counting angles; no keyword-based concept routing."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-05",
+      "filename": "CH02_Measurement_06_MSBSHSE(2).pdf",
+      "sha256": "cfe102949b6859796f725cb0a720078a2d0d6c30d3882e52dd66824be2f3800c",
+      "pages": 11,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Science",
+      "observed_chapter_titles": [
+        "Measurement"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 chapter heading",
+        "PDF pp3-9 length and temperature measurement"
+      ],
+      "visually_reviewed_pdf_pages": [
+        3,
+        10
+      ],
+      "observed_features": [
+        "Scenes of measurement, rulers and thermometer scales",
+        "Procedural guidance for zero point, viewing position and instrument choice",
+        "Unit conversions and temperature units",
+        "Fill blanks, matching, true/false and explanation exercises"
+      ],
+      "test_obligations": [
+        "Retain scale ticks, zero marks, unit signs and instrument diagrams as usable visual evidence.",
+        "Keep measurement procedure, instrument selection and unit interpretation conceptually distinct.",
+        "Award reasoning, readings and units appropriately; do not add English tags to Science criteria."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-06",
+      "filename": "CH02_Self_Help_is_the_Only_Way_06_MSBSHSE(4).pdf",
+      "sha256": "24983b6ff1be119f8b028524af9b115cdec7619cce25f5130b74ba434028cef2",
+      "pages": 3,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "English",
+      "observed_chapter_titles": [
+        "Self Help is the Only Way"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 story title",
+        "PDF p3 articles table and alternate-ending task"
+      ],
+      "visually_reviewed_pdf_pages": [
+        2,
+        3
+      ],
+      "observed_features": [
+        "Fable with dialogue, character decisions and illustrated narrative",
+        "Sequencing diagram, vocabulary and character interpretation",
+        "Alternative ending, articles a/an/the, sentence writing and poster task",
+        "External-news research activity"
+      ],
+      "test_obligations": [
+        "Retain the distinction between narrative comprehension and independently taught grammar.",
+        "Allow defensible alternative endings with criteria for coherence and task fulfilment; do not grade one model ending as the sole answer.",
+        "Flag external-news evidence as external rather than inventing a source article."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-07",
+      "filename": "CH03_In_the_World_of_Numbers_06_MSBSHSE(3).pdf",
+      "sha256": "a0b4cd74606fa1a95a26c471668c47034ecd249b51d529895d211db54bae391f",
+      "pages": 9,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Mathematics",
+      "observed_chapter_titles": [
+        "In the World of Numbers"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 chapter heading",
+        "PDF pp2-9 number systems and integer operations"
+      ],
+      "visually_reviewed_pdf_pages": [
+        5,
+        8
+      ],
+      "observed_features": [
+        "Indian place-value notation, natural/whole numbers and integers",
+        "Number lines, signed counters, stairs, dice game and set diagram",
+        "Practice sets, true/false, money application and partially filled magic square",
+        "Source statement on PDF p5 says zero does not have an opposite number"
+      ],
+      "test_obligations": [
+        "Preserve Indian digit grouping, negative signs, inequalities and numeric diagrams.",
+        "Keep an opposite-number source inconsistency visible for independent mathematical review; do not silently copy it into new teaching or alter the source record.",
+        "Distinguish conceptual model from calculation variants; evaluate equivalent valid calculations without English tags."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-08",
+      "filename": "CH03_Lets_Separate_the_Components_06_MSBSHSE(1).pdf",
+      "sha256": "98e7a3e541a0fda33c309a1f03e59b9be05569338b01ed209a68dc88b1f27e61",
+      "pages": 9,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Science",
+      "observed_chapter_titles": [
+        "Let’s Separate the Components"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 chapter heading",
+        "PDF pp2-7 separation methods"
+      ],
+      "visually_reviewed_pdf_pages": [
+        4,
+        9
+      ],
+      "observed_features": [
+        "Opening oil/water investigation across pages",
+        "Separation methods with apparatus photos and procedural sequences",
+        "Word-search grid with an already circled example",
+        "Triangular matching puzzle with rotated labels",
+        "Page 7 summary combines sedimentation and decantation although page 5 distinguishes them"
+      ],
+      "test_obligations": [
+        "Capture rotated puzzle labels and grid positions, not just a text list.",
+        "Preserve the investigation and distinguish methods by the relevant material property and desired outcome.",
+        "Keep the page 5/page 7 terminology inconsistency as source evidence for independent review.",
+        "Rubrics assess choice plus mechanism and conditions, without English tags."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-09",
+      "filename": "Chapter_06_Triangles.pdf",
+      "sha256": "95b6b18f80e7962ae741f69bf6ba9ee57250b768fb634869cbf815d672579e04",
+      "pages": 26,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Mathematics",
+      "observed_chapter_titles": [
+        "Triangles"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 Chapter 6 title",
+        "PDF p8 NCERT watermark and theorem 6.1"
+      ],
+      "visually_reviewed_pdf_pages": [
+        8,
+        23
+      ],
+      "observed_features": [
+        "Numbered headings on similarity, theorems, proofs, worked examples and exercises",
+        "Proof with construction lines, fractions, parallel and perpendicular symbols",
+        "Many labelled diagrams within one figure number",
+        "Final note mentions RHS similarity and a different chapter"
+      ],
+      "test_obligations": [
+        "Preserve correspondence order, constructions, ratios, angle labels and proof dependencies in KaTeX and assets.",
+        "Separate theorem meaning, application and proof skill only where the source supports distinct teaching capabilities.",
+        "Use proof criteria with reasons and valid alternative constructions; avoid rewarding the conclusion twice.",
+        "Do not invent missing topics from another edition or import the referenced Chapter 8."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-10",
+      "filename": "Class 10 Chapter 5 Electricity.pdf",
+      "sha256": "b6592ca57745a1a74ef0f2dc049e5b110bf775f2e91bc971f3e6ecce380c4530",
+      "pages": 24,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Science",
+      "observed_chapter_titles": [
+        "Electricity"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 printed CHAPTER 11 conflicts with filename Chapter 5",
+        "PDF p6 printed Science footer and NCERT watermark"
+      ],
+      "visually_reviewed_pdf_pages": [
+        6,
+        23
+      ],
+      "observed_features": [
+        "Circuit symbols, circuit diagrams and V-I graph",
+        "Activities, worked numericals, derivations and grouped questions",
+        "Greek letters, subscripts, powers and physical units",
+        "Selectable text repeats some headings although the rendered page is clean",
+        "Table of current/voltage values in an exercise"
+      ],
+      "test_obligations": [
+        "Resolve metadata from the printed source; do not trust the filename chapter number.",
+        "Reconcile repeated extraction-layer headings against page evidence.",
+        "Preserve the circuit topology, graph axes, table values and equations such as V=IR through assets and KaTeX.",
+        "Rubrics distinguish law/model choice, substitution, calculation, units and interpretation; no English tags."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-11",
+      "filename": "English Ch1.pdf",
+      "sha256": "b2f4a723188a37d000f8a20072c9da51b586f838ec006402499cee7db67d808c",
+      "pages": 32,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "English",
+      "observed_chapter_titles": [
+        "How I Taught My Grandmother to Read",
+        "Bharat Our Land"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 first prose title",
+        "PDF p23 second poem title",
+        "PDF pp10-32 printed Kaveri footer"
+      ],
+      "visually_reviewed_pdf_pages": [
+        9,
+        24,
+        31
+      ],
+      "observed_features": [
+        "Prose and its exercises on PDF pp.1-22; poem and its exercises on pp23-32",
+        "Embedded comprehension checkpoints and quoted extracts",
+        "Vocabulary, idioms, past/past-perfect grammar and formal letter task",
+        "Poetry devices, suffix table, illustrations and speaking tasks",
+        "Listening tasks refer to teacher transcripts on printed pp.259-260, outside this upload"
+      ],
+      "test_obligations": [
+        "Absorb both literary units and preserve their task ownership instead of assuming one filename equals one chapter.",
+        "Preserve stanza breaks, extract scope, glosses and response-table structure.",
+        "Carry unavailable listening transcript dependencies visibly; never fabricate exact heard words or speaker assignments.",
+        "Keep factual comprehension, supported interpretation, grammar and creative/formal writing criteria distinct."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-12",
+      "filename": "RNE.pdf",
+      "sha256": "fc74e39616606ae295f768812b366d44cb72bbe3ada8101c19613b7dad54c2b6",
+      "pages": 26,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "History",
+      "observed_chapter_titles": [
+        "The Rise of Nationalism in Europe"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 chapter title",
+        "PDF p4 printed Europe-after-Vienna map",
+        "PDF p22 historical symbolism table and image captions"
+      ],
+      "visually_reviewed_pdf_pages": [
+        4,
+        22,
+        26
+      ],
+      "observed_features": [
+        "Numbered topic/subtopic hierarchy with narrative and Source A/B/C material",
+        "Maps, political cartoons, paintings, sideboxes, captions and activities",
+        "Final brief answers, discussion questions and project",
+        "PDF p.22 activity cites Fig. 17 next to caption Fig. 18"
+      ],
+      "test_obligations": [
+        "Keep historical source viewpoints and chronology connected to the relevant topic rather than promoting all captions or boxes into topics.",
+        "Bind map/cartoon/painting evidence using context, not a figure-number-only match.",
+        "Rubrics evaluate causation, comparison, historically grounded claims and visual evidence without English tags.",
+        "Retain the figure-reference inconsistency as an advisory source finding."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-13",
+      "filename": "Social Ch1.pdf",
+      "sha256": "58dc133e933012c1679fb169d70af35bf31d3479d5153a977e40064cfd7a2590",
+      "pages": 17,
+      "text_layer": "none",
+      "observed_subject": "Social Science",
+      "observed_chapter_titles": [
+        "Understanding Social Science"
+      ],
+      "verified_grade": 9,
+      "grade_note": "Grade visible in reviewed page evidence.",
+      "metadata_evidence": [
+        "PDF p2 Chapter 1 title and concept roster",
+        "PDF pp3-17 printed Class 9 footer"
+      ],
+      "visually_reviewed_pdf_pages": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "observed_features": [
+        "Image-only scan: zero extractable text on all 17 pages",
+        "Introductory overview then seven numbered sections with callouts and illustrations",
+        "Glossary and summary followed by exercises and a separate worksheet",
+        "Printed answer keys among exercises; competency labels and assertion/reason sets",
+        "Passage-based and picture-based questions; enrichment projects"
+      ],
+      "test_obligations": [
+        "Use the configured PDF conversion/vision path; zero selectable text must not be treated as empty content.",
+        "Recover image reading order, section hierarchy, option text and answer-key associations.",
+        "Keep printed answer keys out of learner stems while retaining them as reviewed source answer evidence.",
+        "Keep competency badges as source annotations rather than uncritically assigning assessment difficulty.",
+        "Assess interdisciplinary relationships with specific evidence and no English rubric tags."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    },
+    {
+      "id": "aegis-source-14",
+      "filename": "jemh105 (1).pdf",
+      "sha256": "1367857e5cd3206b1862655d17bf31778e6af768821d8dfc8c71d3ea0e19274c",
+      "pages": 24,
+      "text_layer": "present_not_quality_approved",
+      "observed_subject": "Mathematics",
+      "observed_chapter_titles": [
+        "Arithmetic Progressions"
+      ],
+      "verified_grade": null,
+      "grade_note": "Grade not established from reviewed source pages; filename is not confirmation.",
+      "metadata_evidence": [
+        "PDF p1 Chapter 5 title",
+        "PDF p10 NCERT watermark and AP formula"
+      ],
+      "visually_reviewed_pdf_pages": [
+        10,
+        22
+      ],
+      "observed_features": [
+        "Everyday patterns; AP definition, common difference, nth term and sum",
+        "Worked examples, multi-part exercises and optional exercise 5.4",
+        "Subscripts, stacked fractions, negative values and aligned derivations",
+        "Spiral semicircles, stacked logs and potato-race diagram with cross-page context"
+      ],
+      "test_obligations": [
+        "Preserve formula structure and distinctions between term index, term value and number of terms.",
+        "Keep cross-page diagram hints with the correct task, including journey-return distances.",
+        "Retain optional tasks with explicit status instead of dropping them automatically.",
+        "Assess model setup, term count and justified arithmetic, accepting equivalent solutions without English tags."
+      ],
+      "live_pipeline_status": "not_run_in_this_review"
+    }
+  ]
+}

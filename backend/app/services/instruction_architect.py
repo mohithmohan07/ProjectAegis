@@ -122,6 +122,7 @@ _FROZEN_CORE_PHASE3_CONSTANTS = (
     # Q14 — the Type-ownership consolidation verdict.
     "TYPE_OWNER_SYSTEM",
     "POLISH_SYSTEM",
+    "POLISH_CRITIC_SYSTEM",
     "CRITIC_SYSTEM",
     "FIXER_SYSTEM",
     "PRELEARN_CAPTURE_SYSTEM",

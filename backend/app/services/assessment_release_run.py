@@ -2415,9 +2415,9 @@ def run_release_for_job(
     )
 
     # Stage 6.5 — the joint per-item review (contract v2.0 §27 step 6,
-    # register Q26): ONE independent critic over the finished item — cell,
-    # materialization, answer space and marking together — replacing the
-    # four per-decision critics that audited the same item in fragments.
+    # register Q26, with Q31 restoring per-decision critics by default):
+    # one additional independent critic over the finished item — cell,
+    # materialization, answer space and marking together.
     # An auditor only (Q10): dissent rides the candidate as review flags.
     if lane_policy.item_review_enabled():
         _observe_stage(stage_progress, "item_review", 0, len(candidates))

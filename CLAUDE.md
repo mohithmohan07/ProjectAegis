@@ -1,18 +1,27 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q32 (8 September 2026).** Read Rule 0 with
-[Q32](docs/aegis-restructure.md#q32--decided--the-8-september-owner-column-rules-and-prompt-refinement)
+**Latest owner amendment: Q33 (8 September 2026).** Read Rule 0 with
+[Q33](docs/aegis-restructure.md#q33--decided--universal-column-rules-and-owner-review-before-step-removal)
 and the [column-spec review](docs/column-spec-review-2026-09-08.md).
-For new policy-bound runs, English keywords use comma-space, English
-Objective explanations include the correct option label and answer, the
-English rubric registry is `content/language/creative/evidence`, English
-and Mathematics criterion weights permit positive multiples of 0.5,
-generated question source is `UpSchool DB`, valid Objective/Subjective
-answers are `Specific`, and English `math_keyboard` is `No`. Multipart
+The two example subjects define the shared output format for **all
+subjects**. For new policy-bound runs, keyword cells use comma-space,
+Objective explanations include the correct lowercase option label and
+exact answer, and criterion weights permit positive multiples of 0.5.
+Only functional rubric tags are English-specific: the registry is
+`content/language/creativity/evidence`, permitted solely in textual English
+Descriptive criteria. Every other subject writes untagged criteria. Keyboard
+need is an API decision from the requested response in every subject;
+Objective retains its blank keyboard cell. Generated question source is
+`UpSchool DB`, and valid Objective/Subjective answers are `Specific`. Multipart
 workbooks show the parent rubric as the ordered, non-additive copy of child
 criteria required by contract §24. Fresh
 generation keeps update flags `No`; an existing-entity update is a separate
-explicit workflow. Persisted profiles keep their carried policy. The
+explicit workflow. The current policy is `owner-column-spec-2026-09-08-v2`;
+persisted v1 and legacy profiles keep their carried policy. Q32's initial
+subject limits, `creative` spelling and English keyboard default are
+superseded for new runs. **Run every proposed pipeline-step removal by the
+owner before removing it.** Audit and propose concrete changes first; this
+instruction does not authorize deleting a stage. The
 review names contradictory identity/placeholder/weight examples that have
 not been adopted. These amendments take precedence over the older field
 defaults listed below; Rule 1 and the verbatim master-contract file stand.

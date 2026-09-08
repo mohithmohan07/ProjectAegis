@@ -1181,6 +1181,14 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
             f"payload does not record: {text}"
         )
     defects.extend(_pre_lane_verdict_defects(payload))
+    from . import katex_render_validation, source_asset_publication
+
+    for checker in (source_asset_publication, katex_render_validation):
+        report = payload.get(checker.REPORT_FIELD)
+        if payload.get("output_validation_version") == 1 and not isinstance(report, Mapping):
+            defects.append(f"{checker.REPORT_FIELD}_missing: this release requires its frozen output validation report")
+        elif isinstance(report, Mapping):
+            defects.extend(checker.readiness_defects(payload))
     return defects
 
 
@@ -3043,6 +3051,13 @@ def stage_release(
         "source_book": str(job.source_book or ""),
     })
     issues.extend(qc_issues)
+    from . import katex_render_validation, source_asset_publication
+
+    exported_content = {"records": record_rows, "chapter_meta": chapter_meta}
+    asset_publication = source_asset_publication.inspect_assets(exported_content)
+    math_render = katex_render_validation.inspect_render(exported_content)
+    issues.extend(source_asset_publication.release_findings(asset_publication))
+    issues.extend(katex_render_validation.release_findings(math_render))
     # Q13/R4: public Examples whose wording has no exact owner in the
     # source inventory are adjudicated by one recorded decision and ride
     # this same ledger. Decided HERE, beside the QC audit, so every exit
@@ -3143,6 +3158,9 @@ def stage_release(
             final_grounding_certificate or {}
         ),
         "chapter_meta": _json_safe(chapter_meta),
+        source_asset_publication.REPORT_FIELD: _json_safe(asset_publication),
+        katex_render_validation.REPORT_FIELD: _json_safe(math_render),
+        "output_validation_version": 1,
         # The Architect's assembled instruction set for this run
         # (docs/aegis-restructure.md §8.1): version, hash, authored slots,
         # and the critic's advisory flags, for the reviewer's audit. The
@@ -4155,6 +4173,13 @@ def stage_pre_release(
         authority_defects=staged_authority_defects,
     )
     issues.extend(qc_issues)
+    from . import katex_render_validation, source_asset_publication
+
+    exported_content = {"records": raw_rows, "chapter_meta": chapter_meta}
+    asset_publication = source_asset_publication.inspect_assets(exported_content)
+    math_render = katex_render_validation.inspect_render(exported_content)
+    issues.extend(source_asset_publication.release_findings(asset_publication))
+    issues.extend(katex_render_validation.release_findings(math_render))
     annotated = _annotate_records(raw_rows, issues, {})
     summary = _release_summary(annotated, issues)
     source_document_hash = "sha256:" + hashlib.sha256(
@@ -4214,6 +4239,9 @@ def stage_pre_release(
         # hold it without putting it in a Pre artefact.
         "question_task_inventory": {},
         "chapter_meta": _json_safe(chapter_meta),
+        source_asset_publication.REPORT_FIELD: _json_safe(asset_publication),
+        katex_render_validation.REPORT_FIELD: _json_safe(math_render),
+        "output_validation_version": 1,
         "snapshot_defects": _json_safe(
             [_normal(defect) for defect in snapshot_defects if _normal(defect)]
         ),

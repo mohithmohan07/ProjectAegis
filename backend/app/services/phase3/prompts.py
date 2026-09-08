@@ -616,6 +616,26 @@ POLISH_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
     "concept's meaning, and never rename it."
 )
 
+POLISH_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
+    " Task: independently audit the proposed Polish repair against each "
+    "original row, its named defects, allotted learner analysis and full "
+    "source/reference blocks. Verify that the changed teaching is correct, "
+    "original, sufficiently explained for the stated level, and within the "
+    "settled concept's scope. Check that the mastery capability follows from "
+    "the teaching; no analysis insight was invented, lost or re-allotted; "
+    "and unaffected sections, Type/Case/Example wording, QIDs, identities and "
+    "mappings were preserved. Check mathematical meaning, units, canonical "
+    "[Katex] wrappers and unchanged image URLs/alt text; never infer that an "
+    "asset was uploaded from its appearance in prose. Judge distinct learner "
+    "issues by their meaning, never by shared vocabulary or a preferred verb. "
+    "A mechanically accepted repair can still be wrong: assess it independently. "
+    "Response schema: {\"verdict\": \"verified|rejected\", \"confidence\": "
+    "<number>, \"issues\": [<string>]}. Each issue names row_ref, the affected "
+    "field and the concrete source evidence or preserved text showing the "
+    "problem. Use no issue for a supported repair. This is an advisory review: "
+    "record dissent without blocking, re-authoring or requesting a rerun."
+)
+
 FIXER_SYSTEM = _SHARED + (
     " Task: you are The Fixer (docs/aegis-restructure.md §8.2, Q13). You "
     "are invoked at a blocked point in a content pipeline that must always "

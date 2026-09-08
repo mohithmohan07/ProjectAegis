@@ -1,5 +1,14 @@
 # Owner column specifications and API prompt review — 8 September 2026
 
+**Current rule: Q33, universal policy v2.** The owner clarified that the
+English and Mathematics workbooks demonstrate the output format for **all
+subjects**. Only functional rubric tags are English-only; the current
+registry is `content/language/creativity/evidence`. The initial Q32
+interpretation that limited some formats to English or Mathematics, used
+`creative`, and fixed English keyboard mode to `No` is superseded for new
+runs. Frozen v1 releases preserve their recorded policy. Original file
+hashes and cell references below remain the workbook evidence.
+
 The two supplied workbooks amend the output contract on the fields where
 their completed **YOUR RULE** cells give a clear instruction. This change
 implements those instructions in prompts, versioned run policy, workbook
@@ -8,9 +17,13 @@ between teaching prose, learner answers, evaluator rubrics and review
 findings. It does not assert that a live chapter has demonstrated better
 writing yet.
 
-The ruling is recorded as [Q32](aegis-restructure.md#q32--decided--the-8-september-owner-column-rules-and-prompt-refinement).
-The master contract remains verbatim; Q32 names the amendments instead of
-quietly blending conflicting rules.
+The current ruling is recorded as
+[Q33](aegis-restructure.md#q33--decided--universal-column-rules-and-owner-review-before-step-removal);
+[Q32](aegis-restructure.md#q32--decided--the-8-september-owner-column-rules-and-prompt-refinement)
+retains the initial implementation record. The master contract remains
+verbatim; the register states the amendments instead of blending conflicting
+rules. **Every proposed pipeline-step removal must be reviewed and approved
+by the owner before implementation.** No stage removal is authorized here.
 
 ## Evidence and scope
 
@@ -26,12 +39,13 @@ is explicitly labelled `EXAMPLE (delete me)` and is excluded from the
 owner's decisions. Column H is unfilled on the substantive rule rows; it
 does not authorize moving semantic decisions into code.
 
-The policy selects English or Mathematics from the run's subject metadata.
-Science examples in the Math workbook and English examples in both
-workbooks are examples, not an instruction to change the run's subject or
-copy their chapter facts. Other subjects retain their existing subject
-rules. Common question-source and closed-answer instructions apply to new
-runs; subject-specific formatting applies through the selected adapter.
+The current policy supplies common column formats for every subject.
+Explicit run metadata selects only the English rubric-tag exception.
+Examples in either workbook never change the run's subject or supply its
+chapter facts. Existing explicit category/marks/duration profiles still
+apply; a format example does not select a different curriculum profile.
+Content and keyboard requirements follow the actual task through API
+authoring and independent review.
 
 The four deliverables retain their current order: **01 Pre Concept, 02 Pre
 Master, 03 Post Concept, 04 Post Master**. Registered output schemas stay
@@ -43,22 +57,24 @@ cells, already reconciled by Q27; they are not a new schema migration.
 
 | Field or writing rule | Owner evidence | Implementation and limit |
 | --- | --- | --- |
-| English keywords | English `1 Chapter-Topic-Concept!F24` | Model chooses 3–6 short terms actually taught, in textual order. English workbook cells use comma-space. Internal lists and relationship rosters retain pipes. Count and relevance are writing instructions, not semantic length gates. |
-| English Objective explanation | English `3 Answer blocks!F7:G7` | Begins with the correct lowercase option label and exact answer content, then the supported rationale. This replaces the label-free rule for new English runs. Other subjects retain their current prefix rule. |
-| English rubric tags | English `3 Answer blocks!F19`, `F26` | Exactly `content`, `language`, `creative`, `evidence`, using `[tag]: criterion`. This replaces the previous seven-tag registry for new English runs. Tags remain forbidden outside textual English criteria, including Equation/Image cells. |
-| Descriptive criterion weights | Both `3 Answer blocks!F18`, `F25` | Positive multiples of 0.5 are allowed, including 1.5 and 2, with exact parent/child totals. This replaces the 0.5-or-1-only quantum on new English and Mathematics runs. Numeric cells and blank unused slots remain mandatory. |
+| Keywords | English `1 Chapter-Topic-Concept!F24`; universal scope clarified by Q33 | In every subject, the model chooses 3–6 short terms actually taught, in textual order. Workbook keyword cells use comma-space. Internal lists and relationship rosters retain pipes. Count and relevance are writing instructions, not semantic length gates. |
+| Objective explanation | English `3 Answer blocks!F7:G7`; universal scope clarified by Q33 | Begins with the correct lowercase option label and exact answer content, then the supported rationale. This replaces the label-free rule for every new subject run. |
+| English rubric tags | English `3 Answer blocks!F19`, `F26`; Q33's latest spelling | Exactly `content`, `language`, `creativity`, `evidence`, using `[tag]: criterion`. The workbook's original `creative` spelling remains recorded in Q32; Q33 supersedes it for new English runs. Tags remain forbidden outside textual English criteria, including Equation/Image cells and every other subject. |
+| Descriptive criterion weights | Both `3 Answer blocks!F18`, `F25`; universal scope clarified by Q33 | Positive multiples of 0.5 are allowed, including 1.5 and 2, with exact parent/child totals in every subject. Numeric cells and blank unused slots remain mandatory. Independently creditable demands cannot be bundled into an omnibus criterion; a coherent criterion may exceed one mark. |
 | Authored question source | Both `2 Group-Question!F16` | Generated items use exact `UpSchool DB`; source-drawn items use the run publication. Concept source and chapter publication remain the run publication. This amends Q27 for generated question source only. |
 | Answer restriction | Both `2 Group-Question!F20` | Objective and valid Subjective rows are `Specific`; the model still determines whether a Descriptive task is Open or Specific. An unbounded task must be routed correctly, not rewritten to conceal a routing problem. |
-| Keyboard | English `2 Group-Question!F25`; Math same cell | English uses exact `No`; Mathematics follows the actual response requirement. |
-| Description quality | English `1 Chapter-Topic-Concept!F10`, `F18`, `F23`; Math same cells | Chapter prose is original and connected; English specifies 3–5 sentences and topics 2–4. Concept Description teaches the idea and Achieving Mastery names an observable capability. Optional material is supplied by its owning stage. No invented learner analysis or copied example storyline. |
+| Keyboard | English `2 Group-Question!F25`; Math same cell; Q33 clarification | In every subject, the API author determines actual response need and the critic checks it. Objective remains blank; Subjective/Descriptive use exact `Yes` or `No`. The prior blanket English `No` interpretation does not apply to new runs because the clarified subject exception is rubric tags. |
+| Description quality | English `1 Chapter-Topic-Concept!F10`, `F18`, `F23`; Math same cells; Q33 scope | Chapter prose is original and connected: 3–5 chapter sentences and 2–4 topic sentences guide writing in every subject. Concept Description teaches the idea and Achieving Mastery names an observable capability. Optional material is supplied by its owning stage. No invented learner analysis or copied example storyline. |
 | Group description | Both `2 Group-Question!F6` | One original evaluator-facing sentence names the exact capability assessed and how the questions assess it. It should explain their assessed similarity, not repeat the concept description. |
 | Multipart rubric projection | Contract §24; both `3 Answer blocks!F18`, `F23`, `F25` | Restores the required parent rubric as the ordered union of all child criteria. The internal child-scoring authority remains single; the workbook shows equivalent, non-additive parent/child views. Readback and import verify the equivalence rather than counting both views as marks. Frozen legacy profiles retain their prior projection. A union exceeding the registered 30 parent slots blocks readiness; child content and the complete omitted projection remain reviewable rather than being truncated. |
 | Answer and rubric separation | Both `3 Answer blocks!F16:F20`; English `F14` | A model answer explains the solution to the learner. Each rubric criterion describes observable credit-bearing evidence for the evaluator. Descriptive answer/explanation equivalence remains required. Subjective explanations begin with the accepted answer. |
 | Response discipline | Owner request to refine every API output; field-specific rows throughout both workbooks | Changed prompt families state exact schema ownership, real JSON number types, evidence boundaries, completeness and uncertainty handling. Critics identify a concrete field, defect and evidence independently. Examples never supply facts or extra response fields. |
 
 `backend/app/services/column_spec.py` owns the versioned rules, labelled
-`owner-column-spec-2026-09-08`. Newly resolved assessment profiles carry a
-policy snapshot. A persisted resolved profile without this policy remains
+`owner-column-spec-2026-09-08-v2`. Newly resolved assessment profiles carry a
+policy snapshot. Persisted v1 profiles retain their exact snapshot,
+including their old subject scope, `creative` tag and keyboard policy.
+A persisted resolved profile without this policy remains
 under its previous contract, so replay does not silently reinterpret an old
 release. Changed assessment prompts have new policy versions; Phase 3's
 shared prompt text also changes its content-addressed prompt identity.
@@ -124,13 +140,13 @@ not give a refiner permission to alter another stage's fields.
 | Phase 3 topology, grounding, inventory/allotment and all critics (`services/phase3/prompts.py`) | Shared exact-schema, evidence and uncertainty instructions apply to every system prompt. Semantic verdicts remain model decisions. |
 | Pre capture/merge/map/needed-for, empty-Pre review and Pre question planning/authoring/critic (same module) | Shared response discipline; teaching guidance on Pre mapping. Retains run binding and 5 Basic + 5 Intermediate per-concept plan. |
 | Hosting, Type ownership, placement, Polish, Fixer and final Refiner/critic (same module) | Shared discipline; substantive teaching guidance for Polish/Refiner. Optional learner analysis is not invented to fill a section; protected field whitelists stand. |
-| Chapter/topic metadata (`services/generation.py`) | Original prose, required chapter/topic roles, English topic 2–4 sentence guidance, no example chapter leakage. Remaining legacy/auxiliary surfaces are covered by the separate full prompt audit below. |
+| Chapter/topic metadata (`services/generation.py`) | Original prose, required chapter/topic roles, universal topic 2–4 sentence guidance, no example chapter leakage. Remaining legacy/auxiliary surfaces are covered by the separate full prompt audit below. |
 | Routing and Pre-claim review (`assessment_routing.py`, `assessment_prelearning_claim.py`) | Exact role/schema and evidence ownership, independent concrete criticism. |
 | Level, variants, group description, dedup and touched-group QA (`assessment_grouping.py`, `assessment_dedup.py`, `assessment_quality.py`) | Shared response and review discipline; precise assessed-capability group prose. |
 | Cell definition and answer restriction (`assessment_cells.py`, `assessment_answer_restriction.py`) | Removes impossible instructions to split a one-cell result; preserves generated tier ownership; closed answers use Specific without hiding a misrouted open task. |
-| Materialization (`assessment_materialization.py`) | Subject policy, complete learner rendering, English explanation prefix, typed values, accepted answers, model answer/rubric separation and arithmetic. |
-| Marking and joint review (`assessment_marking.py`, `assessment_item_review.py`) | Policy-aware tags, positive half-step weights, exact totals, English keyboard No; independent whole-item review. |
-| Master refinement (`assessment_master_refiner.py`) | Clarifies permitted answer/rubric changes and protected source question fields; uses the same subject policy. |
+| Materialization (`assessment_materialization.py`) | Universal carried policy, complete learner rendering, labelled explanation prefix, typed values, accepted answers, model answer/rubric separation and arithmetic. |
+| Marking and joint review (`assessment_marking.py`, `assessment_item_review.py`) | English-only tags, universal positive half-step weights, exact totals and response-dependent keyboard choice; independent whole-item review. |
+| Master refinement (`assessment_master_refiner.py`) | Clarifies permitted answer/rubric changes and protected source question fields; uses the same carried column policy. |
 | Source normalization, Phase 2 task inventory/adjudication, PDF extraction and chapter outline | Reviewed. Existing strict schemas, verbatim evidence, complete task/visual accounting and independent verification already serve these transcription stages; CMS formatting is applied downstream. |
 | Legacy assessment builder (`assessment_prompts.py`, `generation.py`) | Corrected Subjective placeholders and bounded answers, complete rich question text, numeric examples, metadata-derived policy, source labels and non-additive multipart rubric instructions. |
 | Create Workbooks (`subject_prompts.py`, `gpt_writer.py`) | All four API calls receive schema/evidence discipline and supplied board/publication. Removed assumed NCERT/General Science context and filler quotas while retaining renderer limits. Plan/resume caches now key the effective prompts, source, metadata, model policy and plan; old content is retained. |
@@ -140,7 +156,7 @@ not give a refiner permission to alter another stage's fields.
 1. **Resolve the six representation conflicts above.** The proposed
    resolutions preserve stable IDs and make the two workbook examples
    internally consistent.
-2. **Review a matched English and Mathematics chapter before deployment.**
+2. **Review representative chapters across the supplied subjects before deployment.**
    Compare the same source and profile before/after, inspecting all four
    outputs for correctness, teaching prose, model answers, rubric coverage
    and total provider cost. Dry tests prove mechanics; they cannot establish
@@ -148,11 +164,12 @@ not give a refiner permission to alter another stage's fields.
 3. **Provide an update example if updates are part of this workflow.**
    Identify the existing chapter/topic/concept/group/question IDs and which
    cells should change. Generation should not guess targets or flip flags.
-4. **Retire the revision-workbook pipeline's partial-output fallback.**
+4. **Propose a replacement for the revision-workbook partial-output fallback.**
    This separate feature still has a legacy fallback after repeated truncation
    and lacks the assessment pipeline's independent semantic critic. Add a
-   completeness review and visible incomplete status before treating that
-   feature as having the same release guarantees.
+   concrete proposal for completeness review and visible incomplete status.
+   Obtain the owner's approval before removing or bypassing any existing
+   step; this remains a suggestion, not an implemented removal.
 5. **Review saved Admin prompt overrides.** Refined defaults and shared policy
    apply to new calls, but explicit saved overrides remain user-controlled.
    Inspect any older custom blocks for conflicting field instructions.
@@ -161,7 +178,13 @@ not give a refiner permission to alter another stage's fields.
    corrections should update the policy, affected prompts, export checks
    and a representative workbook regression together.
 
-Validation: the integrated targeted regression command collected 1,144
+Q33 policy verification: **286 tests passed**, including 48 focused
+owner-column tests. These cover English, Mathematics, Science, History and
+Geography authoring/export paths, additional non-English tag containment,
+real XLSX read-back, and frozen v1/legacy replay. The run used dry providers,
+not live chapter APIs. `git diff --check` also passed.
+
+Historical Q32 validation: the integrated targeted regression command collected 1,144
 tests and completed with exit status 0. It covered owner-column and
 multipart regressions, assessment stages, MES release/export, all Phase 3
 passes, Pre coverage/run binding, release gates, prompt administration,

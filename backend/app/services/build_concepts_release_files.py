@@ -1554,6 +1554,10 @@ def build_diagnostics_zip(
         "routing, original upload, and canonical-source artifacts. "
         "The release is not proof that every highlighted row is "
         "error-free. See Release Issues.\n"
+        "context/source_asset_publication.json distinguishes local image "
+        "pinning from verified public delivery; context/katex_render_validation.json "
+        "records the staged KaTeX engine check. The immutable Master manifest "
+        "also records these checks against the actual serialized workbook cells.\n"
     )
     if payload is None:
         readme += (
@@ -1576,6 +1580,12 @@ def build_diagnostics_zip(
         )
         archive.writestr("context/run_report.json", _json_bytes(run_report))
         archive.writestr("context/coverage_ledger.json", _json_bytes(coverage))
+        for report_field in ("source_asset_publication", "katex_render_validation"):
+            if isinstance(payload_view.get(report_field), Mapping):
+                archive.writestr(
+                    f"context/{report_field}.json",
+                    _json_bytes(payload_view[report_field]),
+                )
         if pre_map_snapshot is not None:
             archive.writestr(
                 "context/pre_learning_map.json",

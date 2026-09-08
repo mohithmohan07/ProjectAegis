@@ -25,6 +25,7 @@ from app.services import assessment_master_refiner as refiner
 from app.services import assessment_profile
 from app.services import assessment_release as rel
 from app.services import assessment_release_service as release_service
+from app.services import column_spec
 from app.services import katex_rules
 from app.services.phase3 import kernel
 
@@ -42,6 +43,16 @@ BASIC_GROUP = f"({MACHINE_ID}) BG01"
 INTERMEDIATE_GROUP = f"({MACHINE_ID}) IG01"
 ADVANCED_GROUP = f"({MACHINE_ID}) AG01"
 
+# This recorded corpus asserts the legacy contract (including label-free
+# explanations and legacy Subjective display fields). Carry that contract
+# explicitly when replaying it; current-policy behavior is covered by the
+# owner-column and full release-run tests.
+_LEGACY_PROFILE = assessment_profile.resolve_for_metadata(
+    assessment_profile.DEFAULT_PROFILE,
+    {"board": "MSBSHSE", "grade": "6", "subject": "Mathematics"},
+)
+_LEGACY_PROFILE.pop(column_spec.POLICY_KEY)
+
 _METADATA = {
     "board": "MSBSHSE",
     "grade": "6",
@@ -49,7 +60,7 @@ _METADATA = {
     "unit": "Geometry",
     "chapter_title": "Three-Dimensional Shapes",
     "chapter_code": "06MSMA01",
-    "profile": assessment_profile.DEFAULT_PROFILE,
+    "profile": _LEGACY_PROFILE,
 }
 
 _OBJECTIVE_RATIONALE = (

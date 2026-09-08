@@ -65,7 +65,9 @@ MARKING_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUALITY 
     "unit; never seconds — and the response-appropriate "
     "math_keyboard value without a local default: Objective requires the "
     "authored empty string; Subjective and Descriptive require exactly Yes "
-    "or No, with exact No on English runs under column_spec_policy. "
+    "or No, chosen from the response requirement in every subject. Follow "
+    "column_spec_policy.math_keyboard if it carries a fixed value from an "
+    "earlier frozen run. Subject name alone never decides keyboard need. "
     "Obey the supplied assessment_format_policy duration table. For "
     "a per-subpoint rule, author duration_basis_count from the represented "
     "subpoints and make duration its exact prescribed multiple; otherwise "
@@ -1009,7 +1011,7 @@ def _checker(
         if not _nonempty_text(response.get("rationale")):
             defects.append("rationale must be a non-empty string")
         if kind in {"subjective", "descriptive"} and column_policy.get("math_keyboard") == "No" and keyboard != "No":
-            defects.append("English math_keyboard must be exactly No")
+            defects.append("math_keyboard must be exactly No under the carried column policy")
 
         defects.extend(
             _weight_defects(

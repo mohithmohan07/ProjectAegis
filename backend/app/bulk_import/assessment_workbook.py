@@ -2618,7 +2618,7 @@ def validate_master_file(
             if column_policy and name in {"Objective", "Subjective"} and restriction != "Specific":
                 errors.append(f"{label}: {name} answer_restriction must be Specific")
             if name in {"Subjective", "Descriptive"} and column_policy.get("math_keyboard") == "No" and row.get("math_keyboard") != "No":
-                errors.append(f"{label}: English math_keyboard must be exactly No")
+                errors.append(f"{label}: math_keyboard must be exactly No under the carried column policy")
             duration = _readback_decimal(row.get("question_duration"))
             if duration is None or duration <= 0:
                 errors.append(

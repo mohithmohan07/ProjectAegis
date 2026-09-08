@@ -57,7 +57,8 @@ STANDARD VALUES (use EXACTLY these):
   source-derived question_source is the run publication. A frozen legacy
   policy with no source override retains the run publication. Never invent it.
 - Relationship lists use the exact " | " separator (space, pipe, space).
-  English concept keyword cells use comma-space under column_spec_policy;
+  Concept keyword cells use the separator carried by column_spec_policy
+  (comma-space for new runs in every subject);
   this question-author stage does not rewrite concept keywords or rosters.
 
 UNIVERSAL QUALITY RULES:

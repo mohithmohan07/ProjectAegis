@@ -160,9 +160,10 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
                      "correct_answer": "No", "answer_weightage": "0"},
                 ],
                 "sub_questions": [],
-                # Contract v2.0 §22.5: the explanation opens with the exact
-                # correct-option text, never a letter or number.
-                "answer_explanation": "Cube. A cube is three-dimensional.",
+                # Follow the run's carried prefix contract.
+                "answer_explanation": (
+                    "a) " if payload.get("column_spec_policy", {}).get("objective_explanation_prefix") == "option_label_and_answer" else ""
+                ) + "Cube. A cube is three-dimensional.",
                 "requires_visual": False,
                 "rationale": "preserves the source question and answer",
             }
@@ -311,7 +312,8 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             if refined["sheet_kind"] == "objective":
                 refined["answers"][0]["answer_content"] = "A cube"
                 refined["answer_explanation"] = (
-                    "A cube occupies space in three dimensions."
+                    ("a) " if payload.get("column_spec_policy", {}).get("objective_explanation_prefix") == "option_label_and_answer" else "")
+                    + "A cube occupies space in three dimensions."
                 )
             else:
                 # §24 parity: both model-answer fields move together.

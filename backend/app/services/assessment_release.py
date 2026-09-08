@@ -146,9 +146,10 @@ GENERATED_SOURCE_POLICY = "generate"
 # registry. A tag is REQUIRED at the head of every populated textual rubric
 # criterion of an English Descriptive item and FORBIDDEN everywhere else:
 # every other field of an English item, and every rubric of every other
-# subject (§28.3). ``[creative]`` is the deprecated spelling (§2.1) and is
-# invalid everywhere. The historical registry (method/working/diagram/…) is
-# superseded by this contract.
+# subject (§28.3). These defaults serve legacy profiles; an explicitly
+# carried column policy supplies its own registry. The v1 owner snapshot
+# uses ``creative`` and v2 uses ``creativity``. Both spellings are recognised
+# by the leakage detector so neither can enter learner-facing fields.
 RUBRIC_TAGS = (
     "content", "evidence", "reasoning", "organisation", "language",
     "creativity", "accuracy",
@@ -881,7 +882,7 @@ def validate_candidate(
     if kind in {"objective", "subjective"} and column_policy and candidate.get("answer_restriction") != "Specific":
         errors.append(f"{kind} answer_restriction must be Specific")
     if kind in {"subjective", "descriptive"} and column_policy.get("math_keyboard") == "No" and keyboard != "No":
-        errors.append("English math_keyboard must be exactly No")
+        errors.append("math_keyboard must be exactly No under the carried column policy")
     # Contract v2.0 §28.3 / Appendix C.3 (RUB-004): no rubric tag in any
     # question, option, accepted answer, model answer or explanation.
     errors.extend(model_answer_leak_defects(candidate, sheet_kind=str(kind)))

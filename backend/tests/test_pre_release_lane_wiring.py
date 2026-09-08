@@ -856,6 +856,9 @@ _POST_PAYLOAD_KEYS = {
     "type_case_rows", "question_task_inventory", "extraction_provenance",
     "mined_types", "pending_decision_snapshot", "final_grounding_certificate",
     "chapter_meta", "instruction_set", "summary",
+    # Fresh outputs record render/delivery evidence; historical snapshots
+    # without the version marker retain their original release semantics.
+    "output_validation_version", "source_asset_publication", "katex_render_validation",
     # Restructure A (2026-08-29): the run's terminal verdict, decided once
     # at staging and recorded explicitly so no later consumer re-derives it
     # from checkpoint echoes. Deliberately OUTSIDE the Master seal's key

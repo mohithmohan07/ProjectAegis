@@ -51,6 +51,11 @@ def _isolated_polishing_state(tmp_path, monkeypatch):
 
 def _api_polish(system, user, **kwargs):
     payload = json.loads(user)
+    if kwargs.get("purpose") == "advisory_critic":
+        return {"items": [
+            {"qid": question["qid"], "verdict": "verified", "issues": []}
+            for question in payload["questions"]
+        ]}
     items = []
     for question in payload["questions"]:
         if question["qid"] == "QINV-0001":
@@ -491,3 +496,195 @@ def test_prompt_carries_the_hard_requirements():
     assert "Never answer the question" in prompt
     assert "NEVER split a question" in prompt
     assert "stays one question" in prompt
+
+
+def test_independent_dissent_is_advisory_and_carries_source_evidence():
+    source = _item(
+        "QINV-0091", "Explain the figure above.",
+        image_urls=["https://assets.example/diagram.png"],
+        image_ids=["IMG-0042"], block_ids=["BLK-0041"], page_hint="8",
+        shared_context="The diagram labels a leaf and a stem.",
+    )
+    proposed = "Explain how the provided figure shows photosynthesis."
+    calls = []
+
+    def author_and_critic(system, user, **kwargs):
+        payload = json.loads(user)
+        calls.append((system, payload, kwargs["purpose"]))
+        if kwargs["purpose"] == "source_extraction":
+            return {"items": [{
+                "qid": source["qid"], "polished_task": proposed,
+                "note": "The figure establishes photosynthesis.",
+            }]}
+        return {"items": [{
+            "qid": source["qid"], "verdict": "dissent", "issues": [
+                "The original ask and shared context do not establish photosynthesis.",
+            ],
+        }]}
+
+    result = question_polishing.polish_inventory(
+        {"items": [source]}, meta=META, api_call=author_and_critic,
+    )
+
+    assert [call[2] for call in calls] == ["source_extraction", "advisory_critic"]
+    assert calls[0][0] != calls[1][0]
+    review_question = calls[1][1]["questions"][0]
+    assert review_question["task"] == source["raw_task"]
+    assert review_question["proposed_task"] == proposed
+    assert "note" not in review_question  # independent of the author's rationale
+    assert review_question["image_urls"] == source["image_urls"]
+    assert review_question["source_evidence"]["image_ids"] == ["IMG-0042"]
+    assert review_question["source_evidence"]["block_ids"] == ["BLK-0041"]
+    item = result["items"][0]
+    assert item["raw_task"] == source["raw_task"]
+    assert item["polished_task"] == proposed  # dissent cannot gate or rewrite
+    assert item["polish_review_required"] is True
+    assert item["polish_audit"]["critic"]["verdict"] == "dissent"
+    assert item["polish_audit"]["source_evidence"]["shared_context"] == source["shared_context"]
+    assert item["polish_audit"]["author"]["note"] == "The figure establishes photosynthesis."
+
+
+def test_oral_pronunciation_retains_modality_and_supersedes_old_written_polish():
+    original = "Read these words aloud to your partner, paying attention to pronunciation."
+    source = _item(
+        "QINV-0021", original, source_kind="grammar_task",
+        polished_task="Write the meaning of these words.",
+        polish_flag=question_polishing.FLAG_POLISHED,
+    )
+    seen = []
+
+    def author_and_critic(system, user, **kwargs):
+        seen.append(system)
+        if kwargs["purpose"] == "source_extraction":
+            return {"items": [{
+                "qid": source["qid"], "polished_task": original,
+                "note": "Retained oral pronunciation and partner response modality.",
+            }]}
+        assert json.loads(user)["questions"][0]["proposed_task"] == original
+        return {"items": [{"qid": source["qid"], "verdict": "verified", "issues": []}]}
+
+    result = question_polishing.polish_inventory(
+        {"items": [source]}, meta={**META, "subject": "English"},
+        api_call=author_and_critic,
+    )
+
+    item = result["items"][0]
+    assert item["raw_task"] == item["normalized_task"] == original
+    assert "polished_task" not in item and "polish_flag" not in item
+    assert generation._inventory_task_text(item) == original
+    assert item["polish_audit"]["author"]["note"].startswith("Retained oral")
+    assert item["polish_review_required"] is False
+    assert "nearest written-assessable" not in seen[0]
+    assert "original ask and response modality" in seen[0]
+    assert all("pronunciation" in system and "Q27" in system for system in seen)
+
+
+@pytest.mark.parametrize("failure", [
+    RuntimeError("provider unavailable"), RuntimeError("insufficient_quota"),
+])
+def test_critic_failure_is_visible_without_losing_authored_output(failure):
+    def author_and_critic(system, user, **kwargs):
+        if kwargs["purpose"] == "advisory_critic":
+            raise failure
+        return _api_polish(system, user, **kwargs)
+
+    result = question_polishing.polish_inventory(
+        _inventory(), meta=META, api_call=author_and_critic,
+    )
+
+    item = result["items"][0]
+    assert item["polish_flag"] == question_polishing.FLAG_POLISHED
+    assert item["polish_review_required"] is True
+    assert item["polish_audit"]["critic"]["verdict"] == "unavailable"
+    assert len(result["items"]) == 4
+
+
+def test_missing_or_duplicate_critic_verdicts_are_visible():
+    def author_and_critic(system, user, **kwargs):
+        if kwargs["purpose"] == "advisory_critic":
+            return {"items": [
+                {"qid": "QINV-0001", "verdict": "verified", "issues": []},
+                {"qid": "QINV-0001", "verdict": "dissent", "issues": ["conflict"]},
+            ]}
+        return _api_polish(system, user, **kwargs)
+
+    result = question_polishing.polish_inventory(
+        _inventory(), meta=META, api_call=author_and_critic,
+    )
+
+    for item in result["items"][:3]:
+        assert item["polish_audit"]["critic"]["verdict"] == "malformed"
+        assert item["polish_review_required"] is True
+    assert result["items"][0]["polished_task"]
+
+
+def test_author_only_v2_cache_cannot_skip_independent_review():
+    source = _item("QINV-0001", LOOK_AT_FIGURE)
+    sha = question_polishing._sha256_text
+    from app.services import prompts
+
+    old_key = sha("\0".join((
+        "question-polishing-v2", config.OPENAI_MODEL,
+        sha(prompts.get_text("concepts.question_polishing.system")),
+        sha(json.dumps([[source["qid"], source["raw_task"]]], ensure_ascii=False)),
+    )))[:32]
+    question_polishing._store_cached(old_key, {
+        source["qid"]: {"polished_task": "An old unreviewed adaptation.",
+                        "flag": question_polishing.FLAG_POLISHED},
+    })
+    calls = []
+
+    def record(system, user, **kwargs):
+        calls.append(kwargs["purpose"])
+        return _api_polish(system, user, **kwargs)
+
+    result = question_polishing.polish_inventory(
+        {"items": [source]}, meta=META, api_call=record,
+    )
+
+    assert calls == ["source_extraction", "advisory_critic"]
+    assert "old unreviewed" not in result["items"][0]["polished_task"]
+    assert result["items"][0]["polish_audit"]["critic"]["verdict"] == "verified"
+
+
+def test_cache_changes_with_shared_context_assets_metadata_and_critic_prompt(monkeypatch):
+    from app.services import prompts
+
+    source = _item("QINV-0001", "Explain the figure above.")
+    key = question_polishing._cache_key([source], META)
+    assert question_polishing._cache_key([
+        {**source, "shared_context": "A circuit with two parallel branches."},
+    ], META) != key
+    assert question_polishing._cache_key([
+        {**source, "image_urls": ["https://assets.example/circuit.png"]},
+    ], META) != key
+    assert question_polishing._cache_key([source], {**META, "grade": "6"}) != key
+    original_get = prompts.get_text
+    monkeypatch.setattr(prompts, "get_text", lambda name: (
+        original_get(name) + " Changed review instruction."
+        if name == "concepts.question_polishing.critic" else original_get(name)
+    ))
+    assert question_polishing._cache_key([source], META) != key
+
+
+def test_dropped_inline_image_reverts_mechanically_and_records_review():
+    image_url = "https://assets.example/diagram.png"
+    original = f"Explain this diagram. <img src='{image_url}'>"
+    source = _item("QINV-0001", original, image_urls=[image_url])
+
+    def author_and_critic(system, user, **kwargs):
+        if kwargs["purpose"] == "source_extraction":
+            return {"items": [{"qid": source["qid"], "polished_task": "Explain this diagram."}]}
+        assert json.loads(user)["questions"][0]["proposed_task"] == original
+        return {"items": [{"qid": source["qid"], "verdict": "verified", "issues": []}]}
+
+    result = question_polishing.polish_inventory(
+        {"items": [source]}, meta=META, api_call=author_and_critic,
+    )
+
+    item = result["items"][0]
+    assert "polished_task" not in item
+    assert item["image_urls"] == [image_url]
+    assert item["polish_flag"] == question_polishing.FLAG_KEPT
+    assert item["polish_note"] == "dropped inline source image URL"
+    assert item["polish_audit"]["critic"]["verdict"] == "verified"

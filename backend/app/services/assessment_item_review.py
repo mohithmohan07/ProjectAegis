@@ -11,9 +11,9 @@ the arithmetic.
 
 It is an AUDITOR (register Q10): its dissent becomes review flags on the
 candidate and rides the release for the reviewer; it never rewrites,
-retries or gates anything.  It replaces the four separate per-decision
-critics that used to audit the same item piecemeal (register Q26), so the
-item is audited once, whole, rather than four times in fragments.
+retries or gates anything. Q31 restores per-decision critics by default;
+this review additionally checks their combined final item. No critic is
+removed by this module.
 
 Mechanics only in code: the response shape is checked, the verdict is an
 enum, and a review that cannot run leaves a named flag rather than a
@@ -67,8 +67,8 @@ ITEM_REVIEW_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY 
     "display_answer and answer_explanation for Descriptive items, and free "
     "of rubric narration, criterion tags, marks or evaluator instructions; "
     "an Objective explanation uses the exact correct-answer text and the "
-    "option-label prefix required by column_spec_policy (English includes "
-    "the lowercase label); (6) every criterion is one observable, "
+    "option-label prefix required by column_spec_policy (the universal "
+    "format includes the lowercase label); (6) every criterion is one observable, "
     "question-specific credit-bearing demand with its permitted weight "
     "increment from column_spec_policy, nothing asked "
     "is unscored, nothing unasked is credited, nothing is double-counted, "
@@ -77,7 +77,16 @@ ITEM_REVIEW_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY 
     "the supplied rubric_tag_policy exactly; (8) the arithmetic — option, "
     "slot, parent and child sums reconcile to the item marks; (9) the "
     "duration follows the supplied assessment_format_policy for the "
-    "category and difficulty. Judge only this item on its own evidence; "
+    "category and difficulty. Apply the rubric to a fully correct response, "
+    "a valid equivalent or alternative method, a partly correct response, "
+    "and a plausible but incorrect or irrelevant response. Verify that an "
+    "evaluator using only the exported item and criteria can distinguish "
+    "them without hidden author notes or exact phrase matching. If a "
+    "method, reason, unit or diagram feature is required, its credit must "
+    "be explicit; do not invent such requirements when the task does not "
+    "ask for them. Do not invent a new partial-credit scale or new output "
+    "fields: name ambiguous or missing scoring evidence in issues with "
+    "the affected criterion. Judge only this item on its own evidence; "
     "never infer from length, position, neighbours or quotas. There is no "
     "quota for issues: return every genuine, evidence-bound concern and an "
     "empty list when there is none. You do not rewrite, retry, or gate "

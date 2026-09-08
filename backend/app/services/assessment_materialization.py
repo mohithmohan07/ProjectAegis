@@ -43,6 +43,7 @@ from .phase3 import kernel
 # explanations (§22), identical Descriptive model answers (§24), the True or
 # False Subjective projection (§23.1) and English-only rubric tags (§28).
 MATERIALIZE_POLICY_VERSION = "assessment-materialize-15-column-spec"
+SOURCE_WORDING_AUTHORITY_VERSION = "source-master-raw-1"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -99,6 +100,16 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "marks are fixed and are not yours to change. There is no quota.\n"
     "For a source-owned item the question is the source task's own "
     "wording, VERBATIM (owner ruling, 2026-09-04, register Q27): copy the "
+    "authoritative raw text named by source_wording_authority, specifically "
+    "source_atom.raw_text. source_atom.normalized_public_text is derived "
+    "Concept Example context only; it may be a polished or adapted version "
+    "and must NEVER override raw_text for a source-owned Master question. "
+    "The explicit authority object repeats the raw text and its supplied "
+    "context, options, assets and subpart identities so you can project the "
+    "original task completely. Do not use a source_context or a polished "
+    "Example as a replacement authority. If raw text or necessary source "
+    "evidence is missing, name the gap in rationale for recorded repair; "
+    "never silently promote derived wording to source evidence. Copy the "
     "task exactly as the book prints it — its words, order, numbers, "
     "names and punctuation — and never rephrase, simplify, expand, "
     "modernise, correct or 'polish' it; a grammar slip in the source "
@@ -117,15 +128,27 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "its procedure, materials, sequence, context and required assets as "
     "the source states them. Never add a requirement, constraint, "
     "example count, hint or sub-question the source does not carry, and "
-    "never create an item the source does not contain. With no source "
+    "never create an item the source does not contain. Preserve the source "
+    "response modality and assessed skill: an oral pronunciation, listening, "
+    "discussion or practical task remains that task, never a written recall "
+    "substitute suggested by normalized_public_text. With no source "
     "atom (the Pre lane), stay strictly inside the supplied curricular "
     "evidence. Never invent facts, values, or constraints.\n"
-    "When the source is a poem, story, or other literary passage, the "
-    "question quotes ONLY the exact lines or stanza it actually asks "
-    "about (owner ruling, 2026-08-21) — never the whole poem or passage, "
-    "and never a long extract repeated as preamble. Name the location "
-    "instead (e.g. 'in the second stanza') when the learner needs it; "
-    "the learner has the chapter.\n"
+    "For a poem, story, dialogue or other passage, carry the minimum "
+    "complete source-verbatim excerpt and context needed to answer every "
+    "asked part (Master Contract §§19.2, 20 and 35). The final question_text "
+    "must stand alone: never assume the learner has the chapter or can "
+    "retrieve an omitted stimulus. A location such as 'in the second stanza' "
+    "may identify supplied lines but never replaces the required excerpt. "
+    "Do not paste an unrelated whole chapter, an unnecessary whole poem, "
+    "or duplicate extracts; include a complete poem or passage when the "
+    "task actually depends on that complete text. For a listening task, "
+    "preserve its original modality and supplied audio; a transcript must "
+    "not silently replace listening with reading. If a required passage, "
+    "audio or source transcript is missing, preserve the source ask and "
+    "record the missing stimulus in rationale for review and recorded "
+    "repair. Never invent a passage or transcript, silently omit essential "
+    "source material, or adapt the task to hide the gap.\n"
     "For Objective cells, return no more than six canonical options with "
     "exactly one correct marker: each answers[] entry is an object whose "
     "answer_content carries the option text (never empty, never a "
@@ -168,7 +191,7 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "each part maps to its marking cleanly.\n"
     "For an Objective item, follow column_spec_policy.objective_explanation_prefix: "
     "option_label_and_answer means the correct lowercase option label followed "
-    "by its exact answer text, then the evidence-based reason (English example: "
+    "by its exact answer text, then the evidence-based reason (illustration: "
     "'b) Sleepy. The words curled up and slept support this meaning.'). "
     "Otherwise begin with the exact answer text and then the reason, without "
     "an option label. A label alone never replaces the answer. "
@@ -200,8 +223,10 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "subquestion keyword) is ONE observable, question-specific, "
     "credit-bearing demand. When column_spec_policy.rubric_half_step is true, "
     "weights may be positive multiples of 0.5; otherwise they are 0.5 or 1. "
-    "Choose independently observable criteria before weights; never write a single "
-    "undivided multi-mark criterion, and never pad with generic filler "
+    "Choose independently observable criteria before weights. Do not bundle "
+    "independently creditable demands into one omnibus criterion; a coherent "
+    "criterion may carry more than one mark when the supplied policy permits "
+    "it. Never pad with generic filler "
     "such as 'correct content' or 'uses language well'. Every criterion "
     "appears in the model answer and every required model-answer "
     "component is scored. Follow the supplied rubric_tag_policy exactly: "
@@ -262,6 +287,15 @@ MATERIALIZE_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_Q
     "You are the independent advisory critic for one Aegis assessment "
     "materialization decision. Audit the exact proposed item against the "
     "complete source atom, curricular evidence, assets, and blueprint cell: "
+    "for a source-owned Master item, source_wording_authority identifies "
+    "source_atom.raw_text as the wording authority. Compare the proposal "
+    "directly with that raw text and its supplied context, options, assets "
+    "and subpart identities. normalized_public_text is derived Concept "
+    "Example context only, even when it reads more fluently; agreement with "
+    "that polished version is not evidence of source fidelity. Specifically "
+    "flag a changed oral/listening/practical modality or a silently corrected "
+    "printed grammar error. Keep source errors as printed and recorded in "
+    "rationale; do not ask the author to correct them. Judge "
     "source wording (a source-owned question that is not the book's own "
     "wording verbatim, apart from the four permitted mechanical changes — "
     "apparatus dropped, an outside pointer replaced by the referenced "
@@ -280,9 +314,14 @@ MATERIALIZE_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_Q
     "(required at the head of every English textual criterion, forbidden "
     "everywhere else), criterion atomicity (each criterion one "
     "credit-bearing demand with weight permitted by column_spec_policy, no generic filler, "
-    "bidirectional coverage with the model answer), literary over-quoting "
-    "(a whole poem "
-    "or passage quoted where only the asked-about lines belong), "
+    "bidirectional coverage with the model answer), stimulus completeness "
+    "(the minimum complete source-verbatim excerpt and context needed for "
+    "every asked part must travel with the item; a book location is not "
+    "a substitute). Never assume the learner has the chapter. Flag a "
+    "missing required passage, audio or source transcript, and any invented "
+    "replacement or change from listening to reading. Also flag unnecessary "
+    "whole-chapter copying or duplicated extracts, but do not demand removal "
+    "of a complete poem or passage needed to answer the task. Check "
     "lowercase paper-option order with no label duplicated inside option "
     "content, declared answer-cell medium purity, table/image integrity "
     "(a source figure the item depends on that no field carries, or an "
@@ -901,6 +940,36 @@ def _assemble(
     }
 
 
+def _source_wording_authority(atom: Mapping | None) -> dict[str, Any] | None:
+    """Name the source field and its evidence; never choose or rewrite wording."""
+    if atom is None:
+        return None
+    return {
+        "version": SOURCE_WORDING_AUTHORITY_VERSION,
+        "authoritative_field": "source_atom.raw_text",
+        "raw_text": copy.deepcopy(atom.get("raw_text")),
+        "source_qid": copy.deepcopy(atom.get("source_qid")),
+        "derived_context_only": {
+            "field": "source_atom.normalized_public_text",
+            "text": copy.deepcopy(atom.get("normalized_public_text")),
+        },
+        "supporting_source": {
+            key: copy.deepcopy(atom[key])
+            for key in (
+                "shared_context", "source_context", "source_answer", "options",
+                "assets", "image_urls", "image_manifest", "content_objects",
+                "tables", "block_ids", "page", "source_document_hash",
+            )
+            if key in atom
+        },
+        "subparts": {
+            key: copy.deepcopy(atom[key])
+            for key in ("parent_qid", "subpart", "sub_questions", "alternative_set_id")
+            if key in atom
+        },
+    }
+
+
 def _decision_payload(
     atom: Mapping | None,
     cell: Mapping,
@@ -926,6 +995,9 @@ def _decision_payload(
         "rubric_tag_policy": tag_policy,
         "column_spec_policy": column_spec.from_metadata(meta),
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
+        # Both this versioned authority and the actual prompt rules are part
+        # of the kernel's decision identity, invalidating pre-authority caches.
+        "source_wording_authority": _source_wording_authority(atom),
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "curricular_evidence": copy.deepcopy(context),
     }
