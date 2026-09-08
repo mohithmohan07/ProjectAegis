@@ -549,6 +549,38 @@ def test_decide_once_replays_without_a_provider_invocation():
     assert second_diff["changes"] == first_diff["changes"]
 
 
+@pytest.mark.parametrize("prompt_name", ["REFINER_SYSTEM", "CRITIC_SYSTEM"])
+def test_changed_author_or_critic_policy_does_not_replay_old_verdict(
+    monkeypatch, prompt_name,
+):
+    from app.services.phase3 import prompts
+
+    provider = _Provider()
+    store = kernel.DecisionStore()
+    reviews = []
+
+    def critic(payload):
+        reviews.append(payload)
+        return {"verdict": "verified", "confidence": 1, "issues": []}
+
+    for _ in range(2):
+        release_refiner.refine_release(
+            _rows(), metadata=_METADATA, provider=provider,
+            critic=critic, store=store,
+        )
+    assert provider.calls == len(reviews) == 2
+    monkeypatch.setattr(
+        prompts, prompt_name,
+        getattr(prompts, prompt_name) + "\nAdditional source-review instruction.",
+    )
+    release_refiner.refine_release(
+        _rows(), metadata=_METADATA, provider=provider,
+        critic=critic, store=store,
+    )
+    assert provider.calls == len(reviews) == 4
+    assert len(store.keys()) == 4
+
+
 def test_the_refiner_never_edits_identity_fields_mechanically():
     # Even a provider that also returns renamed fields cannot move them:
     # only the whitelist is ever applied.

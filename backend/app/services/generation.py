@@ -12120,7 +12120,10 @@ def _has_mastery_line(details: str) -> bool:
 
 
 def _has_valid_terminal_mastery(details: str) -> bool:
-    """Whether Description has one substantive canonical mastery ending."""
+    """Whether Description has one nonempty canonical mastery ending.
+
+    Semantic adequacy belongs to the API author and independent critic.
+    """
     description = _concept_description_only(details)
     matches = list(cr._MASTERY_LABEL_RE.finditer(description))
     if len(matches) != 1:
@@ -12132,7 +12135,6 @@ def _has_valid_terminal_mastery(details: str) -> bool:
         and "\n" not in statement
         and "\r" not in statement
         and description.endswith(f"\nAchieving Mastery: {statement}")
-        and cv._is_substantive_mastery_statement(statement)
     )
 
 
@@ -13346,9 +13348,6 @@ _FATAL_CODES = {
     "empty_error_analysis", "duplicate_misconception",
     "duplicate_error_analysis", "missing_misconception_or_error_analysis",
     "issue_section_order", "noncanonical_issue_label",
-    "generic_misconception", "misconception_framing",
-    "generic_error_analysis", "error_analysis_framing",
-    "issue_section_overlap",
     "analysis_section_format", "missing_learner_analysis",
     # Q1 marker accounting: a learner-analysis section on a row the
     # chapter inventory never allotted an item to.
@@ -13362,7 +13361,7 @@ _FATAL_CODES = {
     "verbatim_source_description",
     "missing_type_definition", "generic_type_definition",
     "duplicate_type_definition", "missing_mastery_statement",
-    "mastery_statement_format", "mastery_statement_not_substantive",
+    "mastery_statement_format",
     "duplicate_mastery_statement", "mastery_marker_outside_description",
 }
 
@@ -13379,6 +13378,8 @@ _FATAL_CODES = {
 # 0.8``) while a duplicate QID published without complaint — the exact
 # inversion of Rule 1 and T9. Identity, arithmetic, exactly-once and schema
 # blocking lives at the publication act (T9's closed set), not here.
+# Q34 later removed the analysis wording/overlap and mastery-substance
+# classifiers themselves; this paragraph records the earlier inversion.
 # A LITERAL, pinned by its own test, so "just add one more code to the
 # fatal set" is no longer a one-line change anyone can make quietly.
 _BLOCKING_CODES = frozenset({

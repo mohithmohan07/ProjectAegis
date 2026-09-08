@@ -52,7 +52,7 @@ GROUNDING_SYSTEM = _SHARED + (
     "review. Never return an empty source_block_ids."
 )
 
-ANALYSIS_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
+ANALYSIS_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: author each concept's learner-facing content in one pass. "
     "Response schema: {\"rows\": [{\"concept_id\", "
     "\"concept_description\", \"achieving_mastery\"}]}. "
@@ -89,7 +89,7 @@ ANALYSIS_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
     "do with them combined — never a list of concept names."
 )
 
-ANALYSE_INVENTORY_SYSTEM = _SHARED + (
+ANALYSE_INVENTORY_SYSTEM = _SHARED + column_spec.CONCEPT_QUALITY + (
     " Task: Phase 2.4 — build the chapter's inventory of DISTINCT "
     "Misconceptions and Error Analyses from the chapter-wide evidence "
     "(source blocks + question/task inventory). Response schema: "
@@ -97,14 +97,12 @@ ANALYSE_INVENTORY_SYSTEM = _SHARED + (
     "\"misconception|error_analysis\", \"text\", \"evidence\", "
     "\"rationale\"}]}. item_id is the positional mint LA-0001, "
     "LA-0002, … in listing order. A misconception is a plausible "
-    "incorrect learner belief about this chapter's content, phrased as "
-    "the learner's belief ('The learner may believe that …' / "
-    "'Students may think that …'); an error analysis is a concrete "
-    "process error — 'Students' or 'The learner' performing a faulty "
-    "action or reasoning step, with an 'instead of'/'rather than' "
-    "contrast — typically surfacing around practical/experimental "
-    "work (entries marked practical_evidence are named evidence for "
-    "it). The two meanings are distinct; an item is never filler and "
+    "incorrect learner belief about this chapter's content; an error "
+    "analysis is a concrete faulty application or reasoning step. Choose "
+    "each kind from the meaning, with natural wording and no required actor "
+    "prefix, verb or contrast phrase. Practical/experimental work can supply "
+    "evidence (entries marked practical_evidence identify it), but is not "
+    "required for a genuine error. The two meanings are distinct; an item is never filler and "
     "never a paraphrase of another item. Each item must be a genuine, "
     "strong addition to the chapter's learning, grounded on the "
     "evidence it cites, with the specific quantity, step, or claim "
@@ -113,7 +111,7 @@ ANALYSE_INVENTORY_SYSTEM = _SHARED + (
     "item to fill space. An empty items list is a legitimate answer."
 )
 
-ANALYSE_ALLOT_SYSTEM = _SHARED + (
+ANALYSE_ALLOT_SYSTEM = _SHARED + column_spec.CONCEPT_QUALITY + (
     " Task: Phase 4.3 — allot each misconception/error-analysis "
     "inventory item to the ONE settled concept it belongs to. Response "
     "schema: {\"allotments\": [{\"item_id\", \"concept_id\", "
@@ -128,7 +126,7 @@ ANALYSE_ALLOT_SYSTEM = _SHARED + (
     "content-to-teaching basis of the allotment."
 )
 
-ANALYSE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
+ANALYSE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: independently audit a proposed misconception/error-analysis "
     "decision (a chapter inventory build, or an allotment of items to "
     "concepts). For an inventory: judge each item's genuineness (a real "
@@ -220,7 +218,7 @@ PRELEARN_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     "not block the run."
 )
 
-PREMAP_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
+PREMAP_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: Phase 03 — build the chapter's PRE-LEARNING concept map from "
     "the run's captured prerequisite set. Response schema: {\"topics\": "
     "[{\"pre_topic_id\", \"title\", \"concepts\": [{\"pre_concept_id\", "
@@ -267,7 +265,7 @@ PREMAP_NEEDED_FOR_SYSTEM = _SHARED + (
     "not corrected away."
 )
 
-PREMAP_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
+PREMAP_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: independently audit a proposed Phase 03 Pre-Learning "
     "decision (a concept map built from the captured prerequisite set, "
     "or a set of needed-for links). Judge four things and state each "
@@ -325,7 +323,7 @@ PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     "block the run or overturn the verdict."
 )
 
-PREANALYSE_INVENTORY_SYSTEM = _SHARED + (
+PREANALYSE_INVENTORY_SYSTEM = _SHARED + column_spec.CONCEPT_QUALITY + (
     " Task: Phase 2.4, PRE-LEARNING lane — build the inventory of "
     "DISTINCT Misconceptions and Error Analyses for this chapter's "
     "PREREQUISITES, from the captured prerequisite set and the "
@@ -333,12 +331,11 @@ PREANALYSE_INVENTORY_SYSTEM = _SHARED + (
     "[{\"item_id\", \"kind\": \"misconception|error_analysis\", "
     "\"text\", \"evidence\", \"rationale\"}]}. item_id is the positional "
     "mint PLA-0001, PLA-0002, … in listing order. A misconception is a "
-    "plausible incorrect learner belief about the prerequisite itself, "
-    "phrased as the learner's belief ('The learner may believe that …' / "
-    "'Students may think that …'); an error analysis is a concrete "
-    "process error — 'Students' or 'The learner' performing a faulty "
-    "action or reasoning step while APPLYING the prerequisite, with an "
-    "'instead of'/'rather than' contrast. The two meanings are distinct; "
+    "plausible incorrect learner belief about the prerequisite itself; an "
+    "error analysis is a concrete faulty action or reasoning step while "
+    "APPLYING the prerequisite. Choose each kind from the meaning, with "
+    "natural wording and no required actor prefix, verb or contrast phrase. "
+    "The two meanings are distinct; "
     "never restate one as the other, and never let an item be a "
     "paraphrase of another. The current chapter's own content is "
     "deliberately absent from this request: an item about what this "
@@ -351,7 +348,7 @@ PREANALYSE_INVENTORY_SYSTEM = _SHARED + (
     "legitimate answer."
 )
 
-PREANALYSE_ALLOT_SYSTEM = _SHARED + (
+PREANALYSE_ALLOT_SYSTEM = _SHARED + column_spec.CONCEPT_QUALITY + (
     " Task: Phase 4.3, PRE-LEARNING lane — allot each prerequisite "
     "misconception/error-analysis item to the ONE pre-learning concept "
     "it belongs to. Response schema: {\"allotments\": [{\"item_id\", "
@@ -365,7 +362,7 @@ PREANALYSE_ALLOT_SYSTEM = _SHARED + (
     "sentence naming the content-to-teaching basis of the allotment."
 )
 
-PREANALYSE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
+PREANALYSE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: independently audit a proposed PRE-LEARNING "
     "misconception/error-analysis decision (a prerequisite inventory "
     "build, or an allotment of items to pre-learning concepts). For an "
@@ -598,25 +595,26 @@ PLACE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     "for human review and does not block the run."
 )
 
-POLISH_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
+POLISH_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: repair concept rows that failed the terminal content gate. "
     "Response schema: {\"rows\": [{\"row_ref\", \"concept_title\", "
     "\"concept_details\", \"keywords\"}]}. Echo each row_ref exactly as "
     "given and return every requested row. Fix ONLY what the row's "
     "validation_errors name: a Description must teach in original "
     "language (never repeat a long contiguous source passage), "
-    "Misconceptions must name a concept-specific incorrect belief, "
-    "Error Analysis must name the learner and a concrete faulty action "
-    "or reasoning step, and no sentence may end truncated. The learner "
+    "mastery must name the supported capability, learner analysis keeps "
+    "its authored meaning and kind, and no sentence may end truncated. "
+    "Do not impose a stock learner prefix or preferred verb. The learner "
     "analysis is optional: when none was allotted, do not add a section "
     "or invent an insight to satisfy a validation message. When present, "
     "Misconceptions and Error Analysis carry distinct supported insights, "
-    "never one restating the other. Keep every other section — the "
-    "'Achieving Mastery:' line, Types — intact and in place, keep the "
+    "never one restating the other. Keep unaffected sections and the Types "
+    "intact and in place; change the 'Achieving Mastery:' line only when "
+    "its named finding requires repair. Keep the "
     "concept's meaning, and never rename it."
 )
 
-POLISH_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
+POLISH_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: independently audit the proposed Polish repair against each "
     "original row, its named defects, allotted learner analysis and full "
     "source/reference blocks. Verify that the changed teaching is correct, "
@@ -657,7 +655,7 @@ FIXER_SYSTEM = _SHARED + (
     "honestly, never optimistically."
 )
 
-REFINER_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
+REFINER_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: you are The Refiner (docs/aegis-restructure.md §8.3). You read "
     "ONE released concept row exactly as the rendered workbook will carry "
     "it — after assembly, before staging — and refine it to expectation: "
@@ -680,7 +678,7 @@ REFINER_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
     "improved and why."
 )
 
-CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
+CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + column_spec.CONCEPT_QUALITY + (
     " Task: independently audit the proposed_decision in the request "
     "against the source blocks. Response schema: {\"verdict\": "
     "\"verified|rejected\", \"confidence\", \"issues\": [..]}. You are an "

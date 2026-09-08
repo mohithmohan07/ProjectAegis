@@ -26,10 +26,10 @@ team requires regardless of which extractor produced them:
 5. **"Achieving Mastery" statement on its own line.** A mastery statement at
    the end of a Description is normalized to a line-broken
    ``\\nAchieving Mastery: <statement>`` format.
-6. **Learner analysis is always present on normal concepts.** Each normal
-   concept ends with exactly one ``Misconception/ Error Analysis`` section.
-   That section contains both a commonly held incorrect belief and a plausible
-   procedural, computational, representational, or reasoning mistake.
+6. **Learner analysis keeps its authored content and kind.** Existing
+   labelled sections are formatted as one ``Misconception/ Error Analysis``
+   section. The chapter inventory and API critics own whether insights exist,
+   their classification and quality; formatting never invents or drops them.
 
 ``concept_details`` is the canonical
 ``Description: ... // Activity/Info Hub: ... // Types: ... //
@@ -617,8 +617,6 @@ def carry_type_origin_metadata(before: dict, after: dict) -> dict:
     return after
 
 
-
-
 def _durable_rendered_type_origins(records: list[dict]) -> dict[tuple, str]:
     """Recover a previously rendered cross-topic Type identity.
 
@@ -896,82 +894,23 @@ _NEWLINE_COMBINED_ANALYSIS_RE = re.compile(
 _ORPHAN_ANALYSIS_PREFIX_RE = re.compile(
     r"(?im)^[ \t]*Misconceptions?[ \t]*/[ \t]*(?:\r?\n|$)",
 )
-# Generic legacy fallback text; normalization drops a duplicate copy when a
-# more specific learner misconception exists.
-_GENERIC_MISCONCEPTION_RE = re.compile(
-    r"^Students may apply .+ as a memorized rule without checking "
-    r"the conditions, context, or representation given in the problem\.?$",
-    re.IGNORECASE,
-)
-_LEARNER_FALSE_BELIEF_RE = re.compile(
-    r"\b(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
-    r"(?:(?:incorrectly|wrongly|mistakenly)\s+)?"
-    r"(?:believe|think|assume|expect|confuse|mistake|treat|interpret|"
-    r"misunderstand|misinterpret|regard|consider)\b",
-    re.IGNORECASE,
-)
-_DECLARATIVE_NEGATION_RE = re.compile(
-    r"^\s*(?:a|an|the|this|that)\b.{0,120}\b(?:is|are|does|do|can)\s+not\b",
-    re.IGNORECASE,
-)
-_CORRECTION_AFTER_BELIEF_RE = re.compile(
-    r"(?:[.!?;,]\s*)(?:but\s+)?(?:"
-    r"in\s+fact\b|actually\b|instead\s*,|remember\s+that\b|"
-    r"the\s+correct\s+(?:idea|rule|answer|method)\b|"
-    r"(?:students?|learners?|children)\s+(?:should|must)\b|"
-    r"(?:a|an|the|this|that)\b.{0,120}\b"
-    r"(?:is|are|does|do|can)\s+not\b)",
-    re.IGNORECASE,
-)
-_EXPLICIT_BELIEF_CUE_RE = re.compile(
-    r"\b(?:believ\w*|think\w*|assum\w*|expect\w*|confus\w*|"
-    r"mistak\w*|interpret\w*|misunderstand\w*|misinterpret\w*|"
-    r"treat\w*|always|never|all|only)\b",
-    re.IGNORECASE,
-)
-_APPLICATION_ERROR_CUE_RE = re.compile(
-    r"\b(?:appl\w*|calculat\w*|comput\w*|substitut\w*|omit\w*|"
-    r"skip\w*|revers\w*|swap\w*|round\w*|invert\w*|misread\w*|"
-    r"cop\w*|draw\w*|label\w*|plot\w*|convert\w*|simplif\w*|"
-    r"solv\w*|add\w*|subtract\w*|multip\w*|divid\w*|use\w*)\b",
-    re.IGNORECASE,
-)
-_ANALYSIS_ERROR_ACTOR_RE = re.compile(
-    r"\b(?:students?|learners?|children)\b|"
-    r"\b(?:a\s+)?common\s+(?:error|mistake|misstep)\b",
-    re.IGNORECASE,
-)
-
-
 def format_mastery_statement(details: str) -> str:
-    """Put the Description's mastery statement on its own line.
+    """Canonicalize each authored mastery label without choosing its content.
 
-    ``... Achieving Mastery: <statement>`` (any label variant, any spacing)
-    becomes ``...\\nAchieving Mastery: <statement>``. Only the Description
-    section is touched; nothing is invented when no mastery label exists.
-
-    When the model wrote TWO mastery statements (review feedback: one before
-    Misconceptions and one after), the SECOND is kept — the first tends to be
-    a formulaic "applying X to problems" line, while the second is written
-    with the concept's actual content in view.
+    Duplicate or empty mastery statements remain visible to the mechanical
+    validator and the API author/critic. A formatter cannot infer that the
+    later statement is better and discard the earlier one.
     """
     sections = split_sections(details)
     for i, (label, content) in enumerate(sections):
         if not label.strip().lower().startswith("description"):
             continue
-        matches = list(_MASTERY_LABEL_RE.finditer(content))
-        matches = [m for m in matches if content[m.end():].strip()]
-        if not matches:
-            break
-        first, last = matches[0], matches[-1]
-        body = content[:first.start()].rstrip()
-        statement = content[last.end():].strip()
-        if not statement:
-            statement = content[first.end():last.start()].strip()
-        sections[i] = (label, f"{body}\nAchieving Mastery: {statement}")
-        return join_sections(sections)
-    return details
+        if not _MASTERY_LABEL_RE.search(content):
+            continue
+        sections[i] = (
+            label, _MASTERY_LABEL_RE.sub("\nAchieving Mastery: ", content)
+        )
+    return join_sections(sections)
 
 
 def _misconception_index(sections: list[tuple[str, str]]) -> int:
@@ -988,51 +927,6 @@ def _error_analysis_index(sections: list[tuple[str, str]]) -> int:
     return -1
 
 
-def _is_generic_misconception(text: str) -> bool:
-    return bool(_GENERIC_MISCONCEPTION_RE.match((text or "").strip()))
-
-
-def _is_correction_shaped_misconception(text: str) -> bool:
-    """True when text teaches the correction instead of naming a false belief."""
-    value = (text or "").strip()
-    if not value:
-        return False
-    # Modal words such as "must" or "should" can be part of the false belief
-    # itself ("Students may believe the denominator must also be added"). Only
-    # correction language introduced after a clause/sentence boundary is
-    # treated as teacher-facing repair prose.
-    if not _LEARNER_FALSE_BELIEF_RE.search(value):
-        return True
-    return bool(_CORRECTION_AFTER_BELIEF_RE.search(value))
-
-
-def _strip_misconception_correction_tail(text: str) -> str:
-    """Keep the false belief while removing a following teacher correction."""
-    value = (text or "").strip()
-    if not _LEARNER_FALSE_BELIEF_RE.search(value):
-        return value
-    correction = _CORRECTION_AFTER_BELIEF_RE.search(value)
-    if not correction:
-        return value
-    belief = value[:correction.start()].rstrip()
-    if belief and not re.search(r"[.!?]\s*$", belief):
-        belief += "."
-    return belief
-
-
-def _needs_misconception_rewrite(text: str) -> bool:
-    return (
-        not (text or "").strip()
-        or _is_generic_misconception(text)
-        or _is_correction_shaped_misconception(text)
-    )
-
-
-def _analysis_text_key(text: str) -> str:
-    """Case- and punctuation-insensitive identity for exact content dedupe."""
-    return re.sub(r"\W+", " ", (text or "").lower()).strip()
-
-
 def _trim_analysis_marker_separator(text: str) -> str:
     """Drop the semicolon that separates the two canonical components.
 
@@ -1044,34 +938,13 @@ def _trim_analysis_marker_separator(text: str) -> str:
     return re.sub(r"\s*;\s*$", "", (text or "").strip()).strip()
 
 
-def _duplicate_belongs_to_misconceptions(text: str) -> bool:
-    """Choose the more appropriate section for an exact cross-section copy."""
-    # Explicit learner-belief syntax is the strongest signal. A broad word
-    # such as "mistake" is not enough on its own: "Students may make the
-    # mistake of dropping the sign" names an action and belongs in Error
-    # Analysis, while "Students may mistake the sign for ..." names a belief.
-    if _LEARNER_FALSE_BELIEF_RE.search(text or ""):
-        return True
-    if _APPLICATION_ERROR_CUE_RE.search(text or ""):
-        return False
-    if _EXPLICIT_BELIEF_CUE_RE.search(text or ""):
-        return True
-    return not _needs_misconception_rewrite(text)
-
-
 def normalize_analysis_sections(details: str) -> str:
-    """Normalize learner analysis into one combined canonical section.
+    """Format existing learner-analysis labels without judging their meaning.
 
-    Learner-analysis text can appear inline in Description and in repeated
-    sections. Inline copies are removed, repeated sections of the same kind are
-    consolidated, while their two different meanings remain explicitly
-    labelled inside one public section.
-
-    Misconceptions are commonly held but incorrect beliefs or interpretations.
-    Error Analysis captures plausible procedural, computational,
-    representational, or reasoning mistakes made while applying the concept.
-    Legacy split sections are accepted as input. Output contains at most one
-    ``Misconception/ Error Analysis`` section after Types.
+    Keep every authored statement under its supplied kind, including repeats,
+    correction tails and overlapping wording. Bare combined-section content
+    stays unlabelled; an API author/critic owns classification and quality.
+    Empty labels remain available to the mechanical shape validator.
     """
     sections = split_sections(details)
     if not sections:
@@ -1079,7 +952,10 @@ def normalize_analysis_sections(details: str) -> str:
 
     misconception_texts: list[str] = []
     error_analysis_texts: list[str] = []
-    stray_mastery = ""
+    unclassified_texts: list[str] = []
+    stray_masteries: list[str] = []
+    seen_kinds: set[str] = set()
+    saw_analysis = False
 
     def _kind_for_label(label: str) -> str | None:
         if is_misconception_label(label):
@@ -1088,36 +964,35 @@ def normalize_analysis_sections(details: str) -> str:
             return "error_analysis"
         return None
 
-    def _collect(kind: str, text: str) -> None:
-        nonlocal stray_mastery
+    def _collect(kind: str | None, text: str) -> None:
+        if kind:
+            seen_kinds.add(kind)
         text = _trim_analysis_marker_separator(text)
+        # A labelled mastery span belongs in Description. Move its complete
+        # authored tail without selecting one statement over another.
+        marker = _MASTERY_LABEL_RE.search(text)
+        if marker:
+            stray_masteries.append(_MASTERY_LABEL_RE.sub(
+                "\nAchieving Mastery: ", text[marker.start():]
+            ).strip())
+            text = text[:marker.start()].strip()
         if not text:
             return
-        # A mastery statement drifted into the misconception text (review:
-        # mastery appearing again after Misconceptions) — pull it back out.
-        m = _MASTERY_LABEL_RE.search(text)
-        if m:
-            tail = text[m.end():].strip()
-            if tail:
-                stray_mastery = tail
-            text = text[:m.start()].strip()
-        if text and kind == "misconception":
+        if kind == "misconception":
             misconception_texts.append(text)
-        elif text and kind == "error_analysis":
+        elif kind == "error_analysis":
             error_analysis_texts.append(text)
+        else:
+            unclassified_texts.append(text)
 
     def _collect_inline(text: str, default_kind: str | None = None) -> None:
-        """Collect multiple inline labels without merging their meanings."""
         value = (text or "").strip()
-        if not value:
-            return
         matches = list(_INLINE_ANALYSIS_RE.finditer(value))
         if not matches:
-            if default_kind:
-                _collect(default_kind, value)
+            _collect(default_kind, value)
             return
         prefix = value[:matches[0].start()].strip()
-        if prefix and default_kind:
+        if prefix:
             _collect(default_kind, prefix)
         for index, marker in enumerate(matches):
             end = (
@@ -1125,126 +1000,41 @@ def normalize_analysis_sections(details: str) -> str:
                 if index + 1 < len(matches)
                 else len(value)
             )
-            kind = _kind_for_label(marker.group("label"))
-            if kind:
-                _collect(kind, value[marker.end():end])
+            _collect(_kind_for_label(marker.group("label")), value[marker.end():end])
 
     cleaned: list[tuple[str, str]] = []
     for label, content in sections:
         lower = label.strip().lower()
         if is_combined_analysis_label(label):
-            matches = list(_INLINE_ANALYSIS_RE.finditer(content or ""))
-            if matches:
-                _collect_inline(content)
-            elif _LEARNER_FALSE_BELIEF_RE.search(content or ""):
-                _collect("misconception", content)
-            else:
-                _collect("error_analysis", content)
+            saw_analysis = True
+            _collect_inline(content)
             continue
         kind = _kind_for_label(label)
         if kind:
+            saw_analysis = True
             _collect_inline(content, kind)
             continue
         if lower.startswith("description"):
             body = content
-            # Treat a newline-prefixed combined label as a separate semantic
-            # section so a stray ``Misconception/`` cannot survive in the
-            # public Description when the canonical delimiter was omitted.
             newline_combined = _NEWLINE_COMBINED_ANALYSIS_RE.search(body)
             if newline_combined:
-                combined_content = body[newline_combined.end():]
-                matches = list(_INLINE_ANALYSIS_RE.finditer(combined_content))
-                if matches:
-                    _collect_inline(combined_content)
-                elif _LEARNER_FALSE_BELIEF_RE.search(combined_content):
-                    _collect("misconception", combined_content)
-                else:
-                    _collect("error_analysis", combined_content)
+                saw_analysis = True
+                _collect_inline(body[newline_combined.end():])
                 body = body[:newline_combined.start()].rstrip()
             body = _ORPHAN_ANALYSIS_PREFIX_RE.sub("", body).rstrip()
-            # Remove one or more inline analysis blocks before or after mastery.
             inline = _INLINE_ANALYSIS_RE.search(body)
             if inline:
+                saw_analysis = True
                 _collect_inline(body[inline.start():])
                 body = body[:inline.start()].rstrip()
             cleaned.append((label, body))
             continue
         cleaned.append((label, content))
 
-    # Keep every distinct specific misconception; generic filler survives only
-    # when no specific one exists.
-    specific: list[str] = []
-    unclassified_misconceptions: list[str] = []
-    seen: set[str] = set()
-    for text in misconception_texts:
-        key = _analysis_text_key(text)
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        if (
-            not _is_generic_misconception(text)
-            and not _is_correction_shaped_misconception(text)
-        ):
-            specific.append(text)
-        elif _ANALYSIS_ERROR_ACTOR_RE.search(text):
-            # Preserve legacy procedural mistakes that were stored under the
-            # old Misconception-only contract. The final semantic boundary
-            # validates or reclassifies the content without losing it.
-            error_analysis_texts.append(text)
-        else:
-            unclassified_misconceptions.append(text)
-    if not specific and unclassified_misconceptions:
-        specific = [unclassified_misconceptions[0]]
-
-    # Error Analysis follows a different semantic contract, so retain concise
-    # mistake descriptions without requiring learner-belief phrasing.
-    distinct_errors: list[str] = []
-    seen_errors: set[str] = set()
-    for text in error_analysis_texts:
-        key = _analysis_text_key(text)
-        if key and key not in seen_errors:
-            seen_errors.add(key)
-            distinct_errors.append(text)
-    specific_errors = [
-        text for text in distinct_errors if not _is_generic_misconception(text)
-    ]
-    if specific_errors:
-        distinct_errors = specific_errors
-
-    # If the model copied the exact same statement into both sections, retain
-    # one copy under the category suggested by its wording. Do not deduplicate
-    # merely similar texts: a related belief and application error may both be
-    # instructionally useful.
-    duplicate_keys = (
-        {_analysis_text_key(text) for text in specific}
-        & {_analysis_text_key(text) for text in distinct_errors}
-    )
-    for key in duplicate_keys:
-        duplicate_text = next(
-            text for text in specific if _analysis_text_key(text) == key
-        )
-        if _duplicate_belongs_to_misconceptions(duplicate_text):
-            distinct_errors = [
-                text for text in distinct_errors
-                if _analysis_text_key(text) != key
-            ]
-        else:
-            specific = [
-                text for text in specific if _analysis_text_key(text) != key
-            ]
-
-    def _join_items(items: list[str]) -> str:
-        if not items:
-            return ""
-        joined = items[0].strip()
-        for item in items[1:]:
-            if joined and not re.search(r"[.!?;]\s*$", joined):
-                joined += "."
-            joined += f" {item.strip()}"
-        return joined
-
-    chosen_misconceptions = _join_items(specific)
-    chosen_errors = _join_items(distinct_errors)
+    # The upstream inventory decided each item's identity and kind. Repeated
+    # text is not proof of duplicate identity or a reason to move/drop it.
+    chosen_misconceptions = " ".join(misconception_texts)
+    chosen_errors = " ".join(error_analysis_texts)
 
     ordered: list[tuple[str, str]] = []
     hub_block: tuple[str, str] | None = None
@@ -1258,34 +1048,30 @@ def normalize_analysis_sections(details: str) -> str:
                 hub_block = (_ACTIVITY_HUB_LABEL, content.strip())
         else:
             ordered.append((label, content))
-    # A mastery statement extracted from either analysis section replaces the
-    # Description's existing one (the reviewers prefer the later statement).
-    if stray_mastery:
+    if stray_masteries:
         for i, (label, content) in enumerate(ordered):
             if not label.strip().lower().startswith("description"):
                 continue
-            m = _MASTERY_LABEL_RE.search(content)
-            body = content[:m.start()].rstrip() if m else content.rstrip()
-            ordered[i] = (label, f"{body}\nAchieving Mastery: {stray_mastery}")
+            ordered[i] = (label, content.rstrip() + "\n" + "\n".join(stray_masteries))
             break
-    # Canonical order: Description (+ mastery), Activity/Info Hub, Types,
-    # one combined learner-analysis section. The hub stays before assessable
-    # Cases.
+        else:
+            # No Description exists: retain the exact labelled content so
+            # the required-field check/API repair sees what was supplied.
+            for authored in stray_masteries:
+                label, _separator, content = authored.partition(":")
+                ordered.append((label, content.strip()))
     if hub_block:
         ordered.append(hub_block)
     if types_block:
         ordered.append(types_block)
-    combined: list[str] = []
-    if chosen_misconceptions:
+    combined: list[str] = list(unclassified_texts)
+    if "misconception" in seen_kinds:
         combined.append(
-            "Misconceptions: "
-            + strip_analysis_label_echo(chosen_misconceptions)
+            "Misconceptions: " + strip_analysis_label_echo(chosen_misconceptions)
         )
-    if chosen_errors:
-        combined.append(
-            "Error Analysis: " + strip_analysis_label_echo(chosen_errors)
-        )
-    if combined:
+    if "error_analysis" in seen_kinds:
+        combined.append("Error Analysis: " + strip_analysis_label_echo(chosen_errors))
+    if saw_analysis:
         ordered.append((_ANALYSIS_LABEL, "; ".join(combined)))
     return join_sections(ordered)
 

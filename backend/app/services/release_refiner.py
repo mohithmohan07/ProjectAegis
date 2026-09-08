@@ -37,13 +37,15 @@ whitelist mechanics apply to them verbatim.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import re
 from typing import Any, Mapping, Sequence
 
+from . import column_spec
 from .phase3 import kernel
 
-REFINER_POLICY_VERSION = "refiner-1"
+REFINER_POLICY_VERSION = "refiner-2-api-owned-analysis-mastery"
 
 # One decision PER ROW (polish.py precedent): an isolated row converges on
 # the first attempt and replays individually from the decision store.
@@ -738,7 +740,14 @@ def _refine(
         ),
         "",
     )
-    rules = _RULES + _instruction_suffix(instruction_set)
+    from .phase3 import prompts
+
+    rules = _RULES + column_spec.CONCEPT_QUALITY + _instruction_suffix(instruction_set)
+    # Saved verdicts belong to the exact author/reviewer instructions. A
+    # changed review must run even when the rendered row is byte-identical.
+    prompt_sha256 = hashlib.sha256(
+        (prompts.REFINER_SYSTEM + "\n" + prompts.CRITIC_SYSTEM).encode("utf-8")
+    ).hexdigest()
     meta_block = {
         key: str(metadata.get(key) or "")
         for key in ("board", "grade", "subject", "chapter_title")
@@ -763,6 +772,7 @@ def _refine(
         payload = {
             "stage": "refine_release",
             "output_kind": output_kind,
+            "prompt_sha256": prompt_sha256,
             "rules": rules,
             "metadata": meta_block,
             "rows": [

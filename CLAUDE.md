@@ -1,6 +1,16 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q33 (8 September 2026).** Read Rule 0 with
+**Latest owner amendment: Q34 (8 September 2026).**
+[Q34](docs/aegis-restructure.md#q34--decided--api-owned-learner-analysis-and-mastery-quality)
+records the owner's approval to remove learner-analysis wording/overlap
+heuristics and mastery-substance length thresholds, including mirrored
+normalizer behavior. Existing API authors and independent advisory critics
+own those judgments for every subject and both learning lanes. Preserve
+authored content, kind and review evidence through mechanical formatting;
+retain exact schema, identity, rich-text and scoring checks. This specific
+removal is authorized; other proposed removals still need owner approval.
+
+Read Rule 0 with
 [Q33](docs/aegis-restructure.md#q33--decided--universal-column-rules-and-owner-review-before-step-removal)
 and the [column-spec review](docs/column-spec-review-2026-09-08.md).
 The two example subjects define the shared output format for **all

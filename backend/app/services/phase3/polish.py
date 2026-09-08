@@ -1,8 +1,8 @@
-"""Pass 2.5 — Polish: converge row content on the terminal quality gate.
+"""Pass 2.5 — Polish: repair named terminal findings with API review.
 
-The terminal validators reject generic learner analysis, verbatim
-source Descriptions, and truncated clauses — content-quality judgments
-only the model can repair. This pass validates every row against those
+Mastery substance and learner-analysis meaning are owned by the existing
+API authors and independent critics (Q34), never nominated by wording,
+length or overlap tests. This pass validates every row against its remaining
 exact codes BEFORE Assemble seals anything, sends only the failing rows
 through the kernel (bounded corrections, decide-once store), and swaps
 in the repaired ``concept_details``/``keywords`` alone: row identity,
@@ -28,7 +28,7 @@ _BATCH_SIZE = 1
 
 # Prompt text also participates: a resumed repair must not replay a verdict
 # made before the independent review or revised evidence instructions.
-POLICY_VERSION = "polish-2-evidence-advisory"
+POLICY_VERSION = "polish-3-api-owned-analysis-mastery"
 
 # The subset of the deposit gate's fatal codes that are row-local content
 # quality (repairable by rewriting concept_details alone).
@@ -44,10 +44,6 @@ POLICY_VERSION = "polish-2-evidence-advisory"
 # must never replay against the allotment-scoped checker.
 CONTENT_CODES = {
     "verbatim_source_description",
-    "generic_misconception",
-    "generic_error_analysis",
-    "misconception_framing",
-    "error_analysis_framing",
     "description_truncated_clause",
     # A row can reach the boundary with no (or malformed) learner
     # analysis: the old path papered that over with a deterministic
@@ -60,7 +56,9 @@ CONTENT_CODES = {
     # path backfilled a template line the gate forbids; authoring the
     # real capability statement is model work.
     "missing_mastery_statement",
-    "mastery_statement_not_substantive",
+    "mastery_statement_format",
+    "duplicate_mastery_statement",
+    "mastery_marker_outside_description",
 }
 
 
@@ -73,11 +71,8 @@ def _failures(
 ) -> dict[int, list[dict[str, str]]]:
     from .. import concept_validator as cv
 
-    # Measure the shape the gate actually judges: the terminal boundary
-    # normalizes learner analysis BEFORE validating, and normalization
-    # changes the verdict (4 failing rows raw vs 34 normalized, dress
-    # rehearsals 5-6). Normalize first, then apply the gate's strict
-    # analysis yardstick.
+    # Use the terminal boundary's mechanical formatting. Q34 preserves
+    # every authored analysis statement and its kind through normalization.
     from .. import concept_refiner as _cr
 
     normalized_rows = cv.ensure_valid_learner_analysis(
@@ -85,8 +80,8 @@ def _failures(
     )
     for row in normalized_rows:
         # The terminal boundary normalizes mastery-line FORMAT before it
-        # validates; measure the same shape so only genuinely missing or
-        # non-substantive mastery (model work) reaches the repair pass.
+        # validates; only missing, empty, duplicate or misplaced markers
+        # reach this repair pass. Substance is an independent API judgment.
         if not _cr.is_culmination(str(row.get("concept_title") or "")):
             row["concept_details"] = _cr.format_mastery_statement(
                 str(row.get("concept_details") or "")
@@ -117,7 +112,9 @@ def _failures(
                 }
                 if entry["code"] in (
                     "missing_mastery_statement",
-                    "mastery_statement_not_substantive",
+                    "mastery_statement_format",
+                    "duplicate_mastery_statement",
+                    "mastery_marker_outside_description",
                 ):
                     entry["repair_guidance"] = (
                         "End the Description with one line-broken "
@@ -126,8 +123,6 @@ def _failures(
                         "the capability in the supplied teaching evidence."
                     )
                 elif entry["code"] in (
-                    "generic_misconception", "misconception_framing",
-                    "generic_error_analysis", "error_analysis_framing",
                     "analysis_section_format", "missing_learner_analysis",
                 ):
                     entry["repair_guidance"] = (
@@ -136,8 +131,8 @@ def _failures(
                         "incorrect belief or faulty action clearly, preserving "
                         "its evidence and ownership. Do not invent an insight "
                         "or force a second component to satisfy this finding. "
-                        "The legacy validator still checks belief/action "
-                        "framing; the normalizer preserves authored wording."
+                        "Quality and classification are API judgments; "
+                        "formatting preserves authored wording and kinds."
                     )
                 failures.setdefault(index, []).append(entry)
     return failures
@@ -219,9 +214,8 @@ def _checker(
         for position, codes in remaining.items():
             ref = candidates[position][0]
             title = _normal(candidates[position][1].get("concept_title"))
-            # Show the model (and the failure log) the exact text the
-            # gate judged, post-normalization — the normalizer may have
-            # replaced or dropped what the model wrote.
+            # Show the model the mechanically formatted text the remaining
+            # checks received. No normalizer judges or deletes its meaning.
             from .. import concept_validator as cv
 
             judged = cv.ensure_valid_learner_analysis(
@@ -239,18 +233,6 @@ def _checker(
                     f"this normalized analysis text: "
                     f"{analysis_tail.strip()[:300]!r}"
                 )
-                if code["code"] in (
-                    "generic_error_analysis", "error_analysis_framing",
-                    "misconception_framing", "generic_misconception",
-                ):
-                    message += (
-                        "; the legacy terminal validator still checks "
-                        "belief/action framing. The normalizer did not "
-                        "delete or replace your authored text. Preserve the "
-                        "actual supported insight while clarifying it; "
-                        "do not evade this finding by inventing an insight "
-                        "or changing its meaning"
-                    )
                 defects.append(message)
         return defects
 

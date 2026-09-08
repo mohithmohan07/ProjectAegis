@@ -1976,6 +1976,67 @@ image/KaTeX correctness must be assessed with the supplied chapter evidence
 and explicit live results before claiming those outcomes. No merge,
 deployment or production database write is authorized by this entry.
 
+### Q34 · Decided — API-owned learner analysis and mastery quality
+
+Owner approval, 8 Sep 2026: **“Yes, please.”**, answering the concrete
+proposal to replace the remaining concept learner-analysis word-list and
+80% word-overlap checks with model author/critic review while preserving
+formatting, identity and scoring checks. The proposal also identified the
+mastery-text substance thresholds. This is the specific prior approval
+required by Q33, not authorization for other stage removals.
+
+**Approved removal, in both learning lanes and every subject.** Retire the
+generic-misconception/error vocabularies, required belief/action framing,
+80% analysis token overlap, and the four-word/twelve-character mastery
+substance test. Delete the corresponding predicates and semantic finding
+codes rather than leaving them disabled. The deeper trace found mirrored
+behavior in `concept_refiner.normalize_analysis_sections`: it filtered,
+reclassified and deduplicated authored insights by their wording. Remove
+that behavior too. Preserve unclassified content for review, preserve
+explicitly selected kinds, and retain every authored mastery statement
+instead of choosing the last one as “more substantive.”
+
+**Replacement coverage.** Strengthen the existing Settle, Analyse,
+Premap/Preanalyse, Polish and final Refiner author/critic instructions.
+Review misconception versus faulty application by meaning, duplication by
+the claim and consequence, usefulness against supplied evidence, and
+mastery as an observable supported capability. A concise statement can be
+complete. An empty inventory can be justified. Neither preferred verbs nor
+shared vocabulary determines the verdict. Source-backed authors/critics
+see their existing chapter or prerequisite evidence; the final Refiner
+reviews the assembled teaching row and must not pretend it saw source
+material absent from its request. No extra routine concept-quality pass
+is added; conditional Polish remains conditional and Q31's all-row Refiner
+remains in place.
+
+**Content and review preservation.** Empty-inventory dissent and reviewer
+unavailability must survive at inventory scope and on the affected map's
+rows, even when there is no item ID to carry a flag. Existing historical
+semantic flags remain visible. An explicit model-driven instruction round
+now receives one independent advisory critic with the original and
+proposed records, instruction, and lane-appropriate source evidence.
+Its dissent/unavailability is recorded without rejecting an applicable
+author proposal. Exact manual edits remain user-owned and API-free.
+
+**Mechanical checks remain.** Keep required fields, exact section shape,
+nonempty explicitly present analysis components, mastery marker presence,
+location and count, identity/allotment accounting, protected fields,
+KaTeX/image format, rubric tags and score arithmetic. Missing or duplicate
+mastery markers can still nominate an API repair; the validator cannot
+decide that a nonempty statement is too short to mean enough. Stored
+decisions remain immutable; changed author/critic instructions use distinct
+decision identities rather than masquerading as previously reviewed work.
+
+**Bounded scope and evidence.** Other inherited semantic heuristics,
+including Description length/placeholder/copied-source checks, Type/Case
+checks and Settle's identical mastery-string check across concepts, are
+outside this approved removal. Do not claim all deterministic semantic
+heuristics have been purged. Their removal needs a separate concrete
+proposal under Q33. The associated review records dry regression results;
+there is no measured live quality result, production provider run, Fly
+upload, merge or deployment in this amendment. Q33's universal column
+policy v2 and English-only rubric-tag exception stand unchanged.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

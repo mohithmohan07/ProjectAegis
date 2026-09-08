@@ -74,6 +74,33 @@ REVIEW_QUALITY = (
     "authority for an incorrect new explanation or scoring criterion.\n"
 )
 
+CONCEPT_QUALITY = (
+    "\nCONCEPT QUALITY (API judgment, owner-approved Q34): Within the fields "
+    "this stage owns, judge mastery and learner analysis from the complete "
+    "teaching, source evidence, grade and task context. A mastery statement "
+    "names an observable capability supported by this concept; decide whether "
+    "it is specific and complete from its meaning, never its word or character "
+    "count. A concise statement can be complete. A misconception names a "
+    "plausible incorrect belief or interpretation; Error Analysis names a "
+    "specific faulty application, representation or reasoning step. Judge "
+    "these meanings without requiring a learner-actor prefix, a particular "
+    "verb, a contrast phrase or a stock sentence form. Reject generic filler "
+    "on evidence, not a forbidden-word list. Decide whether two insights "
+    "duplicate the same underlying issue by comparing their claims, conditions "
+    "and consequences; shared terminology or high word overlap is not proof "
+    "of duplication. A belief and its application error may use the same "
+    "terms while teaching different things. Preserve the owning inventory's "
+    "item IDs, chosen kinds, allotments and content; later formatting cannot "
+    "delete or reclassify them. An empty inventory is legitimate when the "
+    "evidence supports no useful insight, but an independent critic must "
+    "still report a supported omission. Authors resolve only their assigned "
+    "decision. Critics state concrete issues with the affected concept/item "
+    "and source evidence in the existing review fields. If needed source "
+    "evidence is absent, name the verification limit instead of claiming "
+    "source confirmation. Dissent and unavailable "
+    "review remain visible without deleting content or blocking the run.\n"
+)
+
 ASSESSMENT_QUALITY = (
     "\nWRITING TARGET: Solve the complete task before writing its model answer "
     "and scoring criteria. An explanation tells the learner why the answer "

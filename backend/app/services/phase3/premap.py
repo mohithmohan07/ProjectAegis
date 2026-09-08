@@ -121,30 +121,18 @@ omissions:
   ``require_culmination=False`` and ``strict_type_hierarchy=False``.
 * **The validator's findings are advisory here.** They are stamped onto
   their row as review flags; nothing is dropped and nothing raises.
-  Five of the reachable codes are inherited Rule 1 residues in the
-  SHARED validator, recorded here rather than authored around:
+  Three reachable codes remain inherited Rule 1 residues in the
+  shared validator, outside Q34's approved removal:
   ``description_length`` is a word-count band and ``thin_description`` a
   word-count floor (both decide meaning by counting words);
   ``placeholder`` is a keyword vocabulary — ``PLACEHOLDERS`` contains
-  the word "none", tested as a whole-word scan over the whole detailing,
+  the word "none", tested as a whole-word scan over the other detailing,
   so ordinary English ("faces none at all") is classified as placeholder
-  text; it fires on 2 of the golden chapter's 15 Pre rows. Since the Pre
-  lane grew its own Q1 inventory (``preanalyse.py``) two more are
-  reachable, both VERB vocabularies over the rendered analysis section:
-  ``misconception_framing`` (``_MISCONCEPTION_BELIEF_RE``'s verb list
-  does not contain "take … to mean") and ``error_analysis_framing``
-  (``_ERROR_ANALYSIS_ACTION_RE``'s does not contain "carry a claim …
-  across"); each fires on 1 of the golden chapter's 15 Pre rows over a
-  well-framed item. All five can fire on a perfectly well-authored
-  prerequisite row, which is why promoting Pre warnings to fatals
-  wholesale would fail exactly the rows the format asks for. They are
-  NOT scoped away here — hiding a Rule 1 defect is not purging it (spec
-  T4's §3 purge doctrine) — and no authored item is ever reworded to
-  satisfy one, which would hide it just as effectively. They are not
-  fixed here either: all five are pre-existing shared Post-lane
-  machinery whose real purge is replacing each with a model verdict,
-  which moves the Post lane and belongs to its own change. The deposit
-  gate is a later slice's, and it inherits these recorded flags.
+  text; it fires on 2 of the golden chapter's 15 Pre rows. Q34 removes
+  the learner-analysis verb vocabularies and mastery-substance thresholds
+  from the shared validator and formatter in both lanes. The remaining
+  Description checks are not authored around or promoted to gates; their
+  separate removal still needs an explicit owner-approved proposal.
 * **The four verifications are ADVISORY (Q10, spec T4c).** Necessity,
   grade boundary, non-duplication and zero current-chapter content
   leakage are critic dimensions whose dissent becomes a review flag —
@@ -162,6 +150,7 @@ omissions:
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Callable, Mapping
 
@@ -226,6 +215,17 @@ def keywords_cell(value: object) -> str:
     return _normal(value)
 
 POLICY_VERSION = "premap-1"
+
+
+def _policy_version(author_system: str) -> str:
+    """Bind saved judgments to the exact author and independent critic."""
+    from . import prompts
+
+    digest = hashlib.sha256((
+        getattr(prompts, author_system) + "\n" + prompts.PREMAP_CRITIC_SYSTEM
+    ).encode("utf-8")).hexdigest()
+    return POLICY_VERSION + ";prompts:" + digest
+
 
 # --------------------------------------------------------------------------- #
 # The empty-capture verdict (spec-step8 D8.3 / S9)
@@ -294,13 +294,9 @@ _LINK_BATCH_SIZE = 8
 #   would gate Pre rows on the absence of something the lane is forbidden
 #   to have. ``allow_types=False`` is the check that actually belongs
 #   here.
-# * ``strict_mastery_statement=False`` — DECIDED OFF because of what it
-#   activates: ``mastery_statement_not_substantive`` is decided by
-#   ``_is_substantive_mastery_statement``, which is a word-count and
-#   character-count threshold (four words, twelve characters) deciding
-#   whether a sentence means enough. The Pre lane will not adopt a
-#   word-count judgment (Rule 1). The canonical
-#   ``\nAchieving Mastery: <text>`` shape that flag also checks is
+# * ``strict_mastery_statement=False`` — retained from the Pre contract.
+#   Q34 removed the old word/character-count substance judgment. The
+#   canonical ``\nAchieving Mastery: <text>`` shape is already
 #   guaranteed here by construction — this module mints the line — which
 #   is a stronger guarantee than a validator flag.
 # * ``strict_analysis_section=False`` and ``analysis_allotted_keys`` —
@@ -311,11 +307,10 @@ _LINK_BATCH_SIZE = 8
 #   (``validate_rows``) rather than pinned empty here: it scopes the
 #   existence codes to the allotted rows and keeps
 #   ``unallotted_analysis_section`` live as marker accounting over the
-#   rest. ``strict_analysis_section`` stays DECIDED OFF: it activates the
-#   shared validator's Post-lane analysis QUALITY codes, and the Pre
-#   lane's validation is advisory in this slice, so turning them on would
-#   add Post-flavoured prose judgments to a prerequisite row without
-#   gating anything. The canonical section SHAPE is guaranteed here by
+#   rest. ``strict_analysis_section`` stays DECIDED OFF under the existing
+#   Pre contract. Q34 removed the shared semantic quality codes rather
+#   than merely disabling them in this lane. Canonical section shape is
+#   guaranteed here by
 #   construction — ``preanalyse.stamp`` mints it — which is the stronger
 #   guarantee.
 # * ``source_text=""`` — the verbatim-source check compares against the
@@ -1288,7 +1283,7 @@ def build(
         checker=_map_checker(prerequisite_ids),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION,
+        policy_version=_policy_version("PREMAP_SYSTEM"),
         fixer=fixer,
     )
     map_flags = list(decision.get("review_flags") or [])
@@ -1459,7 +1454,7 @@ def build(
                 ),
                 critic=critic,
                 store=store,
-                policy_version=POLICY_VERSION,
+                policy_version=_policy_version("PREMAP_NEEDED_FOR_SYSTEM"),
                 fixer=fixer,
             )
             decided = {
@@ -1602,7 +1597,7 @@ def build(
             "analysis": {
                 key: value
                 for key, value in analysis.items()
-                if key != "review_flags"
+                if key not in {"review_flags", "inventory_review_flags"}
             },
         },
         qids,

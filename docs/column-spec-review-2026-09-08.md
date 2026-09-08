@@ -25,6 +25,11 @@ verbatim; the register states the amendments instead of blending conflicting
 rules. **Every proposed pipeline-step removal must be reviewed and approved
 by the owner before implementation.** No stage removal is authorized here.
 
+The later [Q34 approval](aegis-restructure.md#q34--decided--api-owned-learner-analysis-and-mastery-quality)
+authorizes the specific learner-analysis wording/overlap and mastery-length
+heuristic removal. It strengthens existing semantic reviews without changing
+the universal column policy or the English-only rubric-tag exception.
+
 ## Evidence and scope
 
 | Evidence | SHA-256 of the uploaded file |

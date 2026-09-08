@@ -236,6 +236,12 @@ def stamp_analysis_allotments(
         items_by_row.setdefault(id(row), []).append(item_by_id[item_id])
 
     for row in ordered_rows:
+        # A zero-item inventory can still receive a substantive critic
+        # finding. It has no item owner, so retain it at chapter scope on
+        # every output row without inventing or allotting an insight.
+        for flag in result.get("inventory_review_flags") or []:
+            if flag not in row.setdefault("review_flags", []):
+                row["review_flags"].append(flag)
         details = str(row.get("concept_details") or "")
         sections = cr.split_sections(details)
         existing = [
@@ -1119,6 +1125,8 @@ def assemble(
             "learner_analysis": {
                 "inventory": [dict(item) for item in analysis_inventory],
                 "allotments": dict(analysis_allotments),
+                **({"inventory_review_flags": list(analysis["inventory_review_flags"])}
+                   if analysis and analysis.get("inventory_review_flags") else {}),
             },
             # Q2 accounting: every per-destination Case identity split,
             # and the deterministic uniqueness audit's findings.

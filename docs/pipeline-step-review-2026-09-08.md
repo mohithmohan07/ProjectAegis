@@ -3,9 +3,11 @@
 This is a source-code audit against `95a1c6e8e4f7c2ecc82b80a3256c3e8651d6664b`,
 with the owner's latest clarification: the two column spreadsheets express the
 general output contract; subject-specific rubric tags apply to English only.
-It records the existing execution path and possible simplifications. **No step
-has been removed or disabled. Any proposed removal must be presented to the
-owner and approved before implementation.**
+It records the baseline execution path and possible simplifications.
+**Q34 follow-up:** the owner approved the specific learner-analysis
+wording/overlap and mastery-substance heuristic removal. That bounded change
+is now implemented; no model stage has been removed. Other proposals still
+require the owner's prior approval.
 
 Code and prompt inspection establishes intended behavior, not successful live
 execution. This review did not call production providers, upload assets to Fly,
@@ -167,13 +169,14 @@ not merely assume the stronger system prompt always wins.
 
 ## Steps considered for simplification — approval required
 
-These are proposals to measure, not changes already made. An optimization
+The primary proposal was approved in Q34; other entries remain proposals.
+An optimization
 must preserve the owner-required API author/independent critic boundary,
 content coverage, output files and visible failure evidence.
 
 | Candidate | Why it may duplicate work | Required replacement/evidence | Quality risk and recommendation |
 |---|---|---|---|
-| **Primary owner-approval proposal: retire semantic wording and overlap heuristics in `concept_validator.py`** | Active belief/action vocabularies, an 80% token-overlap rule and mastery-text heuristics judge meaning from wording. They can reject a sound explanation or steer prompts toward formulaic sentences. | Replace these semantic decisions with recorded API author and independent critic judgments using the complete concept and source evidence. Retain mechanical schema, identity, field ownership and rich-text checks. Compare accepted/rejected examples across the supplied subjects. | **Await owner approval before removing any of these active checks.** This proposes a change in who judges meaning; it does not remove the independent review or formatting gates. No such check is removed by this audit. |
+| **Approved and implemented in Q34: retire learner-analysis wording/overlap and mastery-substance heuristics** | Belief/action vocabularies, an 80% token-overlap rule and mastery-length thresholds judged meaning from wording. The normalizer also filtered and reclassified authored insights. | Existing API authors and independent critics judge supported meaning; mechanical schema, identity, field ownership and rich-text checks remain. Behavioral regressions preserve concise mastery, shared-vocabulary insights, selected kinds and advisory review evidence. | Owner replied **“Yes, please.”** to this bounded proposal. No model review stage is removed and no extra routine quality pass is added. Live cross-subject quality remains unmeasured. |
 | Full Concept Refiner after conditional Polish | Both can edit teaching prose, although Polish handles named defects and Refiner audits final quality. | Compare the same source, same initial rows and same provider settings with current all-row refinement versus a reviewed subset selected by an API quality decision. Retain independent review and before/after evidence. | Subtle teaching weaknesses may have no mechanical flag. **Keep current Q31 default; do not remove on inspection alone.** |
 | Per-decision assessment critics plus the joint item review | The complete-item reviewer revisits answer/rubric consistency already reviewed in fragments. | Prove the joint reviewer receives every source, decision rationale, protected identity and criterion, and independently covers each removed review responsibility. Measure the same Math/English/Science/Social items. | A late review can identify an error after dependent decisions are made. Q31 explicitly restored both. **Keep until the owner approves a measured alternative.** |
 | Four prerequisite captures plus merge | Some prerequisites are repeated across stage captures. | Preserve all four stages' evidence in any proposed single inventory; compare missed/duplicated prerequisites and resulting Pre questions. | Host/Place/Analyse reveal prerequisites not present at Settle. **No removal recommendation without corpus evidence.** |
@@ -248,10 +251,16 @@ unperformed in this code-only change.
   mathematical expressions, options and images remain protected. This is the
   derived Concept Example pass, not permission to rewrite source-owned Master
   questions.
-- **G3, partial closure:** the Polish prompt and independent review have been
-  strengthened. Active semantic vocabulary/overlap/mastery checks in
-  `concept_validator.py` remain in place pending the explicit owner approval
-  proposal above; this is a remaining conflict, not a completed removal.
+- **G3, Q34 closure within the approved scope:** the learner-analysis
+  vocabulary/framing/80% overlap and mastery-substance length checks are
+  removed from the validator, formatter and mirrored generation checks.
+  Existing author/critic prompts now judge these dimensions by meaning.
+  The deeper trace corrected the earlier normalizer assessment: its caller
+  preserved text, but the nested formatter could still filter or reclassify
+  it. That behavior is removed. Canonical formatting preserves all authored
+  insights, selected kinds and mastery statements; exact blank/duplicate
+  marker defects remain reviewable. Empty inventories retain dissent and
+  unavailable-review flags. No additional normal-run quality pass is added.
 - **G4:** the target KaTeX engine now produces a bounded validation report for
   staged concept fields and for actual serialized Concept/Master workbook
   cells. Unsupported syntax or an unavailable engine prevents new outputs
@@ -297,4 +306,36 @@ Provider credentials and Fly deployment access are not configured in this
 workspace. No fresh source completed a live API run, no new source image was
 verified on Fly, and no evaluator-quality improvement has been measured.
 Docker is unavailable here, so the two updated runtime images were not built.
-The changes remain a draft, with no merge, deployment or step removal.
+The changes remain a draft, with no merge or deployment. The subsequent Q34
+change removes only the explicitly approved semantic checks described above.
+
+## Q34 follow-up and remaining boundary
+
+API-driven instruction rounds now receive one independent advisory critic
+with the original rows, proposed rows, owner instruction and lane-correct
+evidence. Its report is recorded in the round diff and on affected rows;
+critic dissent or unavailability cannot discard an applicable proposal.
+Exact manual edits remain API-free. Strengthened author/critic prompts are
+bound to saved-decision identities; unchanged decisions still replay.
+
+The golden source replay retains all 53 Post rows, 15 Pre rows and the same
+QID accounting. Its retired belief/action vocabulary findings disappear
+without rewriting the source fixture. This does not establish live API
+quality: replay providers supply recorded answers.
+
+Description word-count/placeholder/copied-source checks, Type/Case meaning
+checks and Settle's identical mastery-string check across concepts are
+outside this removal. They remain documented candidates for a separate
+proposal. Formatting, identity, score arithmetic, KaTeX validation and asset
+publication evidence checks remain in place.
+
+Q34 verification: **626 targeted integration tests passed**, including
+concept validation/formatting, author/critic behavior, saved-decision replay,
+the golden runner, instruction rounds, release lifecycle, universal column
+rules, KaTeX and Instruction Architect. The separate database-publication
+suite passed **48 tests** in an isolated database. The initial combined run
+exposed stale retired-flag expectations, a test regex matching `quota` inside
+`quotation`, and publication-fixture database contamination; expectations
+and the regex were corrected, and publication was rerun independently.
+No production identity or score gate was weakened. These are offline
+regressions with recorded or injected providers, not live quality results.
