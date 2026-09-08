@@ -13,15 +13,18 @@ Rubric placement follows the REAL assessment workbooks (inspected from the
 six production sheets):
   * display_answer    = clean final/model answer (student-facing)
   * answer_content_N  = one rubric/marking point per block
-                        ("Student explains that ..." / "1 mark: ...")
+                        (an observable credit-bearing criterion)
   * answer_weightage_N= marks for that rubric point; the SUM equals marks
-  * answer_explanation= aligned with / same as the display answer
+  * answer_explanation= same model answer as display_answer for Descriptive
   * sub_question_N    = descriptive subparts (a), (b), (c) stay IN-SHEET
 """
 from __future__ import annotations
 
+import json
 import math
+from typing import Any, Mapping
 
+from . import column_spec
 from . import katex_rules as kr
 from . import prompts
 
@@ -30,7 +33,8 @@ from . import prompts
 # --------------------------------------------------------------------------- #
 
 BASE_BLOCK = """\
-You are an expert school-assessment author for Indian boards (ICSE/CBSE).
+You are an expert school-assessment author for the supplied board, grade,
+subject, publication and chapter. Never assume a board from an example.
 You write exam-grade questions that are concept-aligned, grade-appropriate,
 unambiguous, and evaluable by an AI evaluator using mark-wise rubrics.
 
@@ -40,16 +44,21 @@ EVIDENCE AND DECISION BOUNDARY:
   assumptions, or a familiar textbook question that the evidence does not
   support.
 - Resolve ordinary ambiguity by choosing the least-distorting, evidence-bound
-  wording. Never return a placeholder, "needs review", or an explanation in
+  wording. Never return a placeholder question, "needs review", or an explanation in
   place of the requested question object.
 
 STANDARD VALUES (use EXACTLY these):
 - cognitive_skills: one of Remember / Understand / Apply / Analyse / Evaluate / Create
 - level_of_difficulty: one of Less / Moderate / High
-- answer_type: Phrases | Equation | Image
-- question_source: the run's publication, supplied in the metadata (never invent one)
-- Multi-value fields use the exact " | " separator (space, pipe, space);
-  a comma is ordinary content, never a separator.
+- answer_type: Objective/Descriptive use Phrases, Equation or Image;
+  Subjective textual accepted answers use Words.
+- Provenance and identity fields are owned by the caller, not this response.
+  Generated question_source is the supplied policy's generated_question_source;
+  source-derived question_source is the run publication. A frozen legacy
+  policy with no source override retains the run publication. Never invent it.
+- Relationship lists use the exact " | " separator (space, pipe, space).
+  English concept keyword cells use comma-space under column_spec_policy;
+  this question-author stage does not rewrite concept keywords or rosters.
 
 UNIVERSAL QUALITY RULES:
 - The question must directly test the given concept; never drift off-syllabus.
@@ -58,9 +67,15 @@ UNIVERSAL QUALITY RULES:
 - Never reveal the answer in the stem. No ambiguity, no trick wording.
 - The expected answer must match the question exactly; include all essential
   keywords, formulae, units, steps or examples.
-- question_text: plain-text version of the question PLUS any context the AI
-  evaluator needs (passage, conversation, data, diagram description). Never
-  empty, never HTML.
+- question contains the learner-facing stem or shared instruction only.
+  question_text is a complete standalone learner/evaluator rendering with
+  the required passage, data or visual and all options or labelled children.
+  Use <br> for line breaks and the supplied rich-text/KaTeX rules. Do not
+  replace a required visual with an invented description or lose its asset.
+- A task's actual response demand determines its mechanics. True/False and
+  bounded unoptioned blanks belong to Subjective; explanation and creative
+  responses belong to Descriptive. Author a valid task for the recorded lane;
+  do not disguise an open task as a one-word answer to fit a lane.
 """
 
 CONTENT_FORMAT_BLOCK = kr.PROMPT_PREAMBLE
@@ -71,7 +86,7 @@ CONTENT_FORMAT_BLOCK = kr.PROMPT_PREAMBLE
 
 TYPE_BLOCKS = {
     "objective": """\
-QUESTION TYPE: OBJECTIVE (MCQ / Fill-in-the-blank).
+QUESTION TYPE: OBJECTIVE (a closed, supplied option set).
 MCQ rules: clear stem; exactly ONE correct option; distractors plausible and
 from the same conceptual family (typical student errors make the best
 distractors); options similar in length and grammatical fit; no overlapping
@@ -79,31 +94,50 @@ or vague options; avoid "all/none of the above"; negative stems only when
 necessary and visually flagged ("... is NOT ..."). The answers array is the
 display order and maps to lowercase paper labels a), b), c), d), e), f) —
 never uppercase A), B), C), D). Do not put those labels inside answer_content;
-the workbook adds them. Correct option weightage = 1 (or the marks), wrong
-options = 0. answer_explanation BEGINS with the exact text of the correct
-option and then explains why it is right and briefly why key distractors
-are wrong; it never contains the option letter or number (no "b)", no
-"option 2").
-FIB rules: the blank tests a meaningful term/value; the sentence stays
-grammatically clear; list accepted alternatives " | "-separated only when
-several answers are genuinely valid.""",
+the workbook adds them. question_text includes the complete stem followed by
+every labelled option on <br> lines. Correct option weightage = the recorded
+item marks; wrong options = 0, so option weights total the item marks exactly.
+answer_explanation BEGINS with the exact correct-answer content. When
+column_spec_policy.objective_explanation_prefix is option_label_and_answer,
+precede it with the corresponding lowercase label (for example b)); otherwise
+do not add a label. Then explain the evidence/reasoning and, where useful,
+why a plausible distractor fails. Never call an unoptioned blank or True/False
+item Objective. A valid Objective answer is Specific; the downstream stage
+owns that field.""",
     "subjective": """\
-QUESTION TYPE: SUBJECTIVE (short answer).
-Answerable in a few words/sentences; marks align with answer length
-(1 mark = one keyword/fact/formula; 2 marks = two points or point +
-explanation; 3 marks = three points or concept + explanation + example).
-The expected answer is concise but complete; rubric identifies the required
-keywords/points; include accepted variations where multiple phrasings are
-valid.""",
+QUESTION TYPE: SUBJECTIVE (bounded placeholder-bound accepted answers).
+Use no option list. Put contiguous $$a$$, $$b$$, ... exactly once each in
+question and matching visible blanks in question_text. Each answer slot uses
+answer_type, answer, answer_display, weightage and placeholder. Textual
+accepted values use Words; Equation and Image use their genuine typed media.
+answer_display is literal Yes for every used slot; placeholder is the bare
+letter without dollar signs. Each slot has bounded accepted values, never
+a rubric or an explanatory model answer. Positive numeric slot weights total
+the recorded marks. Do not infer marks from response length.
+For True/False use one placeholder, accepted answer True or False, full item
+weight and answer_display Yes. Begin answer_explanation with the accepted
+answer, then the source-grounded reason. An open, explanatory or creative
+task requires Descriptive; never manufacture an exact-key answer for it.
+Every valid Subjective answer is Specific; the downstream stage owns that
+field.""",
     "descriptive": """\
-QUESTION TYPE: DESCRIPTIVE (long answer).
+QUESTION TYPE: DESCRIPTIVE (a constructed response scored by criteria).
 The task verb must be explicit (explain / justify / derive / compare /
 analyse / evaluate / design). Marks must match the required depth. Rubrics
-are MARK-WISE and evaluation-ready, never vague. If the question has
-subparts (a), (b), (c), keep them inside this SAME question using the
-sub-question slots — never as separate questions — with per-subpart marks,
-and make the rubric cover every subpart. Overall rubric weightage must equal
-the total marks.""",
+are MARK-WISE and evaluation-ready, never vague. Genuine dependent parts
+sharing a passage, scenario or integrated task stay in one question with
+structured sub-question slots. Independent exercise items remain separate
+questions; printed labels alone do not decide parentage. For true multipart,
+question carries shared context/instruction; question_text includes it and
+every labelled child in order, with identical wording in sub_questions.
+Each child's keyword criteria total that child's marks. Parent marks equal
+the sum of child marks. For true multipart return answers=[]: child keywords
+are the single internal scoring source. The workbook exporter mechanically
+projects their ordered union into the parent rubric cells; those parent and
+child workbook views are equivalent and NON-ADDITIVE. Do not return a second
+copy of the criteria in this API response. For a single task sub_questions is [].
+display_answer and answer_explanation are identical complete learner-facing
+model answers, with all requested parts and no rubric instructions.""",
 }
 
 # --------------------------------------------------------------------------- #
@@ -223,7 +257,7 @@ UNNATURAL_COMBOS = {
     ("objective", "Create"): "Objective + Create is usually not ideal — "
         "Create-level tasks are better as Descriptive.",
     ("objective", "Evaluate"): "High-level Evaluate tasks are usually better "
-        "as Subjective or Descriptive.",
+        "as Descriptive when they require a reasoned written judgment.",
 }
 
 # --------------------------------------------------------------------------- #
@@ -283,19 +317,33 @@ PURPOSE_BLOCKS = {
 
 RUBRIC_BLOCK = """\
 RUBRIC PLACEMENT (existing supported columns ONLY):
-- display_answer: the clean final/model answer (student-facing). Never put
-  long rubrics here.
-- answer_content blocks: ONE rubric/marking point per block, mark-wise
-  ("1 mark: identifies the correct principle." or "Student explains that
-  ..."). Never a single vague paragraph; never the model answer alone.
-- A 4-mark Descriptive answer has at least TWO rubric blocks; one block with
-  weightage 4 is invalid.
+- These criterion rules apply to Descriptive answers/child keywords only.
+  Objective answer_content holds option content; Subjective answer holds an
+  accepted value, never an evaluator criterion.
+- display_answer: the complete clean model answer (student-facing), including
+  all parts and reasoning the task asks for. No rubric narration or marks.
+- answer_content blocks: ONE observable credit-bearing criterion per block.
+  State what evidence earns credit and preserve valid alternative methods or
+  wording. Put numeric credit in answer_weightage, not a "1 mark:" label.
+- A single-part 4-mark Descriptive answer has at least TWO rubric blocks;
+  one block with weightage 4 is invalid. For true multipart keep answers=[]
+  and provide complete scoring criteria in each child's keywords instead.
 - Each typed block uses exactly one whole-cell medium. Equation is full raw
   LaTeX with no [Katex] wrapper (words, when needed, stay inside \\text{...}).
   Phrases is wholly plain text with no TeX or [Katex]. Never mix media.
-- answer_weightage per block: marks for that point. The SUM of weightages
-  MUST equal the question marks — never exceed, never invent extra marks.
-- answer_explanation: explains/matches the display answer.
+- Under column_spec_policy.rubric_half_step, criterion weights are positive
+  multiples of 0.5 (including 1.5, 2 and larger); otherwise each is 0.5 or 1.
+- Use only column_spec_policy.rubric_tags for textual English Descriptive
+  criteria, with the exact bracket tag at the start. Never put criterion tags
+  in an answer, model answer, explanation, stem, Equation or Image cell.
+  An explicit empty tag list means untagged criteria. A frozen legacy policy
+  with no tag key retains English tags content, evidence, reasoning,
+  organisation, language, creativity, accuracy; other subjects stay untagged.
+- Single-part answer_weightage values are marks for each point and sum to
+  item marks. In multipart, each child's keyword weightage values sum to
+  that child's marks, and child marks sum to item marks. Never invent credit.
+- answer_explanation: exactly the same learner-facing model answer as
+  display_answer for Descriptive, including multipart.
 - Evaluation-only rubric content never appears in the student-facing
   question field.
 Rubric shape varies by question intent — explanation (concept point /
@@ -304,8 +352,8 @@ process / answer+unit), analysis (identify parts / explain relationship /
 inference), evaluation (judgment / reasoning / evidence / conclusion),
 creation (relevance / correctness / completeness / structure) — but is
 always mark-wise and totals the marks exactly.
-Grammar/punctuation slips never cost marks unless meaning changes; allow
-alternate valid wording where conceptually correct."""
+Do not score grammar/punctuation unless the question actually assesses it;
+allow alternate valid wording where conceptually correct."""
 
 VARIETY_BLOCK = """\
 CREATIVITY AND VARIETY (controlled, never at the cost of correctness):
@@ -326,24 +374,47 @@ off-syllabus."""
 
 OUTPUT_BLOCK = """\
 OUTPUT CONTRACT — return one valid JSON object and no prose or code fence.
-Every question object uses these complete top-level fields (empty arrays, not
-omitted fields, where a section does not apply). This example shows the
-Objective/Descriptive answer-block shape:
-{"questions":[{"question":"","question_text":"","question_category":"","cognitive_skills":"","level_of_difficulty":"","marks":1,"display_answer":"","answer_explanation":"","answers":[{"answer_type":"Phrases","answer_content":"","correct_answer":"Yes","answer_weightage":"1"}],"sub_questions":[{"text":"a) ...","marks":"1","keywords":[{"answer_type":"Phrases","weightage":"1","keyword":""}]}]}]}
+The outer object is {"questions": [...]} with the exact requested count.
+Every question uses these complete top-level fields. This is a shape guide,
+not a sample question: fill the empty strings, echo the actual recorded marks
+and axes, and populate the appropriate answer shape below. Keep unused
+sections as empty arrays, not omitted fields.
+{"question":"","question_text":"","question_category":"","cognitive_skills":"","level_of_difficulty":"","marks":1,"display_answer":"","answer_explanation":"","answers":[],"sub_questions":[]}
+
+Objective answer shape (one per option, in display order):
+{"answer_type":"Phrases","answer_content":"","correct_answer":"Yes","answer_weightage":1}
+Subjective answer shape (one per placeholder):
+{"answer_type":"Words","answer":"","answer_display":"Yes","weightage":1,"placeholder":"a"}
+Single-part Descriptive criterion shape (one per credit-bearing point):
+{"answer_type":"Phrases","answer_content":"","answer_weightage":0.5}
+Descriptive child shape (true multipart only; its criteria must be complete):
+{"text":"a) ...","marks":1,"keywords":[{"answer_type":"Phrases","weightage":0.5,"keyword":""},{"answer_type":"Phrases","weightage":0.5,"keyword":""}]}
 
 Field rules:
-- question is student-facing rich text; question_text is a complete plain-text
-  evaluator copy including all necessary context and is never empty.
+- question is the learner-facing stem/shared instruction; question_text is
+  the complete rendering including all necessary context and is never empty.
+  Use <br> line breaks and the supplied rich-text/KaTeX rules in both.
+- marks, answer_weightage, weightage and child marks are JSON numbers, never
+  numeric strings. The shown numbers illustrate types, not required marks.
 - cognitive_skills and level_of_difficulty exactly echo the requested values.
 - Objective answers are options in a,b,c,d display order with exactly one
   correct_answer="Yes"; all others are "No". Labels are not part of content.
 - Descriptive answers are rubric blocks using answer_content. Subjective
   answers instead use the supported keys answer_type, answer, answer_display,
   weightage, and placeholder.
-- sub_questions contains only genuine printed parts and otherwise is []. Use
+- For true multipart Descriptive, answers is [] and sub_questions contains
+  all scored children. The parent rubric is a workbook projection and is
+  never duplicated in this API response.
+- sub_questions contains only genuine dependent parts and otherwise is []. Use
   lowercase a), b), c), d) labels (or the source's lowercase roman scheme).
-- Every answer, rubric, subquestion, and keyword weightage sums exactly to the
-  question marks under the applicable contract."""
+- Objective option weights and Subjective slot weights each total item marks.
+  Single-part Descriptive criterion weights total item marks. For multipart,
+  child criterion weights total child marks and child marks total item marks.
+  The workbook's derived parent view totals the same item marks; never sum
+  the equivalent parent and child rubric projections together.
+- Do not emit provenance, IDs, routing, restriction or keyboard fields owned
+  by later stages. Do not return alternatives such as Phrases|Equation as a
+  literal enum, or copy these illustrative blanks/labels into real content."""
 
 # --------------------------------------------------------------------------- #
 # Registration — every block above becomes an editable prompt in the Admin tab.
@@ -406,11 +477,14 @@ def build_prompt(
     *, question_type: str, difficulty: str, skill: str,
     subject: str = "", grade: str = "", board: str = "",
     marks: float | None = None, category: str = "", purpose: str = "",
+    metadata: Mapping[str, Any] | None = None,
 ) -> str:
     """Assemble the per-batch system prompt from the modular blocks.
 
     Every block is read fresh from the prompt registry, so Admin-tab edits take
-    effect on the next generation without a restart.
+    effect on the next generation without a restart. Optional metadata carries
+    a frozen column policy; explicit context arguments take precedence over
+    its board/grade/subject values.
     """
     if question_type not in TYPE_BLOCKS:
         raise ValueError(f"unknown recorded question_type {question_type!r}")
@@ -431,7 +505,15 @@ def build_prompt(
         raise ValueError("marks must be a recorded finite positive number")
     diff_key = difficulty
     skill_key = skill
+    policy_metadata = dict(metadata or {})
+    subject = str(subject or policy_metadata.get("subject") or "")
+    grade = str(grade or policy_metadata.get("grade") or "")
+    board = str(board or policy_metadata.get("board") or "")
+    policy_metadata.update(subject=subject, grade=grade, board=board)
+    policy = column_spec.from_metadata(policy_metadata)
     parts = [
+        column_spec.OUTPUT_DISCIPLINE,
+        column_spec.ASSESSMENT_QUALITY,
         prompts.get_text("assessment.base"),
         prompts.get_text(f"assessment.type.{question_type}"),
         prompts.get_text(f"assessment.difficulty.{diff_key}"),
@@ -455,10 +537,12 @@ def build_prompt(
         prompts.get_text("assessment.output"),
         prompts.render(
             "assessment.context_footer",
-            board=board or "CBSE/ICSE", grade=grade or "school",
-            subject=subject or "general", category=category,
+            board=board or "not supplied", grade=grade or "not supplied",
+            subject=subject or "not supplied", category=category,
             marks=f"{recorded_marks:g}",
         ),
+        "COLUMN SPECIFICATION POLICY (applies to the explicitly named fields):\n"
+        "column_spec_policy = " + json.dumps(policy, ensure_ascii=False, sort_keys=True),
     ]
     return "\n\n".join(parts)
 
@@ -485,6 +569,7 @@ def review_question(rec: dict) -> list[str]:
         problems.append(f"non-standard difficulty {diff!r}")
     marks = float(rec.get("marks") or 0)
     answers = rec.get("answers") or []
+    sub_questions = rec.get("sub_questions") or []
     kind = rec.get("sheet_kind", "")
     if kind == "objective":
         correct = [a for a in answers if str(a.get("correct_answer", "")).lower() == "yes"]
@@ -498,7 +583,10 @@ def review_question(rec: dict) -> list[str]:
                 problems.append(f"rubric weightage sum {total:g} != marks {marks:g}")
         except (TypeError, ValueError):
             problems.append("non-numeric rubric weightage")
-    if kind == "descriptive" and marks == 4 and len(answers) < 2:
+    if (
+        kind == "descriptive" and marks == 4
+        and not sub_questions and len(answers) < 2
+    ):
         problems.append(
             "4-mark descriptive requires at least two rubric blocks"
         )

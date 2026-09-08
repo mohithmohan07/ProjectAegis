@@ -1820,6 +1820,86 @@ authored against the contract and this register, never against Rule 1.
 **Stands:** everything Q26–Q30 list except Q26's cost-policy defaults,
 reversed above; Q26's "Recorded, not yet done" list stands unchanged.
 
+### Q32 · Decided — the 8 September owner column rules and prompt refinement
+
+Owner instruction, 8 Sep 2026: work on Project Aegis using the uploaded
+Excel specifications for how output columns are written, refine prompting
+for every API output, structure it properly and make suggestions. Evidence:
+`English_Aegis_column_spec_fill_in.xlsx` and
+`Math_Aegis_column_spec_fill_in.xlsx`. Exact cell references, file hashes,
+implementation scope, prompt-family audit and unresolved examples are in
+[the column-spec review](column-spec-review-2026-09-08.md).
+
+**What changes, stated rather than blended (Rule 0).** Completed owner
+rules in column F amend the following fields for new policy-bound runs:
+
+* English keywords use comma-space and 3–6 short terms actually taught, in
+  textual order. Relationship rosters remain space-pipe-space. The model
+  chooses terms; code projects the already-authored list.
+* English Objective explanations start with the correct lowercase option
+  label and exact answer, then the supported rationale. This resolves
+  Q31's open question about label-free explanations **for English only**.
+* English textual rubric criteria use only `content`, `language`,
+  `creative`, `evidence` in exact `[tag]: criterion` syntax. The former
+  seven-tag registry remains a legacy policy. Tags remain forbidden in
+  non-English rubrics, typed Equation/Image criteria and learner answers.
+* English and Mathematics Descriptive criterion weights permit positive
+  multiples of 0.5 rather than only 0.5 or 1. Exact parent/child sums,
+  real numeric storage, blank unused slots and the separate four-mark
+  criterion-count safeguard remain.
+* Generated question source is exact `UpSchool DB`; source-drawn question
+  source remains the run publication. This amends Q27's one-source rule
+  **only for authored questions**. Concept source and chapter publication
+  do not change.
+* Objective and valid Subjective rows are `Specific`. Descriptive
+  restriction remains a model decision from the real task. English
+  `math_keyboard` is exact `No`; Mathematics remains demand-dependent.
+
+Subject adapters are chosen from run metadata, never the subject of an
+example in either workbook. The shared policy is
+`owner-column-spec-2026-09-08`, carried by newly resolved profiles. A
+persisted resolved profile without it keeps the legacy contract; a replay
+does not silently acquire this amendment.
+
+**Writing scope.** Prompts distinguish teaching description from mastery,
+learner explanation from evaluator criteria, and source evidence from
+instructions. Chapter/topic descriptions use original connected prose;
+English specifies 3–5 chapter sentences and 2–4 topic sentences. Optional
+learner analysis is omitted when irrelevant rather than fabricated. Group
+descriptions name the exact assessed capability in one evaluator-facing
+sentence. Changed author and critic prompts retain their exact response
+schemas and protected fields. No prose-quality judgment moves into code.
+
+**Explicitly held open.** English topic-title rules omit the topic suffix
+used by their concept examples. Math topic title/display rules and concept
+ID grammar disagree with their examples; its placeholder example includes
+an entire question; its 0/1 Objective weights conflict with exact totals
+above one mark; its `post_topics` instruction says pre topics. Current
+canonical identities, display names, bare placeholder letters, marks sums
+and Post roster behavior stand pending the focused rulings in the review.
+Examples do not authorize copying unrelated chapter facts or stale assets.
+
+The update cells distinguish fresh content (`No`) from intentional changes
+to existing content (`Yes`). Fresh generation still emits `No`; this
+amendment does not invent an update workflow or infer existing entity IDs.
+Raw template duplicate-header counts do not change Q27's registered
+72/440/149 output schema.
+
+**Q32 export correction:** Contract §24 and both supplied sheets' Answer
+blocks F18/F23/F25 require equivalent, non-additive parent and child rubric
+views. Existing code incorrectly removed the parent view. Current column
+policy restores it by mechanically projecting the ordered child criteria
+into the main rubric columns and validating exact equivalence. Internal
+scoring remains child-owned; no semantic judgment or second award is added.
+Legacy frozen profiles retain their recorded export behavior.
+
+**Stands:** Q27's verbatim Post source questions, Q29's run binding, Q30's
+five Basic and five Intermediate Pre questions per concept, Q31's restored
+quality defaults, all other Q26–Q31 rulings, model author/independent critic
+ownership and the release/artefact distinction. This records an
+implementation amendment, not a claim of measured live writing quality or
+authorization to merge or deploy.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

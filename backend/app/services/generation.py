@@ -33,6 +33,7 @@ from aegis_pipeline.openai_policy import (
 
 from .. import bulk_import as bi
 from .. import config, models
+from . import column_spec
 from . import concept_cleanup
 from . import concept_validator as cv
 from . import containers
@@ -326,7 +327,7 @@ def generate_questions_for_concept(
             "question_label": question_label(concept, idx),
             "question_category": category,
             "cognitive_skills": cognitive_skill,
-            "question_source": _concept_publication(concept),
+            "question_source": column_spec.for_metadata({"subject": concept.topic.chapter.subject})["generated_question_source"],
             "level_of_difficulty": difficulty,
             "marks": marks,
             "question_duration": question_duration,
@@ -444,7 +445,7 @@ def _live_questions_for_concept(
                 "question_label": question_label(concept, start_index + n),
                 "question_category": category,
                 "cognitive_skills": cognitive_skill,
-                "question_source": _concept_publication(concept),
+                "question_source": column_spec.for_metadata({"subject": concept.topic.chapter.subject})["generated_question_source"],
                 "level_of_difficulty": difficulty,
                 # The blueprint-cell kernel owns these three semantic values.
                 # Model output cannot silently replace or default them.
@@ -2540,9 +2541,13 @@ Rules:
   given in the metadata block; when none is given return 0. The duration is a
   registry/upload value, never an estimate — do not invent one.
 - topics: one entry per provided topic, using the EXACT same topic strings.
-- topic_description: 2-3 sentences specific to that topic — what it teaches,
+- topic_description: 2-4 original sentences specific to that topic — what it teaches,
   the key ideas/skills among its concepts, and how it connects to the
   neighbouring topics. NEVER just list the concept names.
+- Distinguish narrative development from a mathematical or scientific
+  progression. Explain the relationship between the actual concepts, using
+  the supplied source and settled topology; never borrow a sample chapter's
+  plot, formula, terminology, duration, or number of topics.
 - No source artifacts (Example 3, Exercise 1.2, Fig 4, page numbers) and never
   the words "MMD"/"MMDs".
 """)

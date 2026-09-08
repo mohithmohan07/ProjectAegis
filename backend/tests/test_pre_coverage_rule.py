@@ -345,6 +345,7 @@ def test_the_master_groups_by_the_authored_tier_without_a_level_verdict(db):
     assert "level" not in calls
     candidates = released.payload["candidates"]
     assert len(candidates) == TOTAL
+    assert {candidate["question_source"] for candidate in candidates} == {"UpSchool DB"}
     by_tier: dict[str, int] = {}
     for candidate in candidates:
         audit = candidate[run._LEVEL_AUDIT_FIELD]

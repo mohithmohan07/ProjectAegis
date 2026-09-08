@@ -298,14 +298,14 @@ def test_figure_placement_forbids_repeats_and_generic_captions():
     assert "Source visual" in phase3_prompts.PLACE_SYSTEM
 
 
-def test_descriptive_rubric_weights_are_exactly_half_or_one():
-    """Contract v2.0 §27.5/§32 retires P9's "uniform 1.0 default": every
-    Descriptive rubric criterion carries exactly 0.5 or 1 mark."""
+def test_descriptive_rubric_weights_follow_the_carried_owner_policy():
+    """Q32 allows half-step awards; old profiles retain the prior quantum."""
     from app.services import assessment_marking
 
     prompt = assessment_marking.MARKING_SYSTEM
-    assert "EXACTLY 0.5 or 1 mark" in prompt
-    assert "number of criteria satisfied" in prompt
+    assert "exactly 0.5 or 1" in prompt
+    assert "positive multiple of 0.5" in prompt
+    assert "sum of the awarded criterion weights" in prompt
 
 
 # --------------------------------------------------------------------------- #

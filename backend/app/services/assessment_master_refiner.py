@@ -26,6 +26,7 @@ from .. import config
 from ..bulk_import import assessment_workbook
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import column_spec
 from . import katex_rules
 from . import assessment_release as rel
 from . import assessment_release_service as release_service
@@ -33,9 +34,9 @@ from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-4"
-CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-4"
-GROUP_POLICY_VERSION = "assessment-master-refiner-group-1"
+MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-4-column-spec"
+CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-4-column-spec"
+GROUP_POLICY_VERSION = "assessment-master-refiner-group-1-column-spec"
 CANDIDATE_KIND = "assessment.master_refiner.candidate"
 GROUP_KIND = "assessment.master_refiner.group"
 AUDIT_FIELD = "_aegis_assessment_master_refinement"
@@ -96,7 +97,7 @@ _PROTECTED_TOKEN_RE = re.compile(
 )
 
 CANDIDATE_SYSTEM = (
-    "You are the Aegis assessment Master Refiner. Polish ONE already-final "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment Master Refiner. Polish ONE already-final "
     "assessment row only around its settled identity. The clustered question "
     "wording is immutable: never alter question or question_text. You may "
     "polish only answer_explanation, every answers[].answer_content, "
@@ -105,10 +106,12 @@ CANDIDATE_SYSTEM = (
     "marks, all weightages, subquestion text/decomposition, duration, keyboard "
     "mode, QIDs, URLs, image/KaTeX tokens, assets, provenance, routing, tier, "
     "labels, audits, flags, and every other field byte-for-byte and type-for-"
-    "type. [Katex] wraps only genuine mathematical notation: a plain "
-    "numeral, digit-grouped number, or currency amount standing in prose "
-    "stays plain text — unwrap one only where doing so changes no other "
-    "byte of meaning. Preserve each typed answer_content/keyword medium exactly: "
+    "type. Preserve the protected KaTeX tokens exactly; a formatting issue "
+    "inside a protected token is a review finding, not permission to unwrap "
+    "or rewrite it. Keep ordinary numerals and currency amounts as prose; "
+    "new KaTeX is only for genuine mathematical notation in an editable "
+    "rich-text field, never a textual rubric. Preserve each typed "
+    "answer_content/keyword medium exactly: "
     "Equation is one full raw-LaTeX cell without [Katex] and with any words "
     "inside \\text{...}; Phrases is wholly plain text without TeX. Never "
     "introduce tabular, Markdown-table, or noncanonical array markup; a "
@@ -128,13 +131,18 @@ CANDIDATE_SYSTEM = (
     "subquestion keyword rubrics. Only a single-part 4-mark Descriptive "
     "candidate requires at least two main rubric blocks. Subjective question "
     "placeholders such as $$a$$ are immutable CMS tokens, not raw math. If no "
+    "other improvement is needed, keep fluent, precise prose unchanged. "
+    "Use column_spec_policy for the explanation prefix and rubric-tag registry. "
+    "Keep Descriptive display_answer and answer_explanation identical, and "
+    "make each rubric criterion independently observable without changing "
+    "its demand or weight. If no "
     "polish is warranted, echo the record unchanged. Return only "
     "strict JSON with record_kind='candidate', the exact row_ref, the complete "
-    "record, and a non-empty rationale."
+    "record, and a non-empty rationale.")
 )
 
 GROUP_SYSTEM = (
-    "You are the Aegis assessment Master Refiner. Polish ONE already-final "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment Master Refiner. Polish ONE already-final "
     "occupied assessment group's semantic_description only. Preserve its "
     "group/concept identity, tier, family, sequence, visible names, member "
     "candidate IDs and their order, status, audits, flags, assets, tokens and "
@@ -142,17 +150,17 @@ GROUP_SYSTEM = (
     "level, clustering, membership, or any question. If no polish is warranted, "
     "echo the record unchanged. Return only strict JSON with "
     "record_kind='group', the exact row_ref, the complete record, and a "
-    "non-empty rationale."
+    "non-empty rationale.")
 )
 
 CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one assessment Master "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one assessment Master "
     "Refiner proposal. Audit prose quality, meaning preservation, grade fit, "
     "and the immutable identity boundary against the rendered Master evidence. "
     "Never rewrite, gate, retry, adjudicate, or choose alternate content. A "
     "mechanically valid author decision always stands; dissent is recorded for "
     "review. Return only strict JSON: "
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}.'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}.')
 )
 
 
@@ -321,7 +329,10 @@ def _locked_group(group: Mapping[str, Any]) -> dict[str, Any]:
 
 def _response_checker(
     *, unit_kind: str, unit_id: str, original: Mapping[str, Any],
+    profile: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
+    column_policy = column_spec.from_profile(profile)
+    tags_required = assessment_profile.rubric_tags_required(profile) if profile is not None else None
     expected_locked = (
         _locked_candidate(original)
         if unit_kind == "candidate"
@@ -408,6 +419,8 @@ def _response_checker(
                     )
                 if sheet_kind == "descriptive" and rel.malformed_rubric_tag(
                     answer.get("answer_content"), answer.get("answer_type"),
+                    tags_required=tags_required,
+                    allowed_tags=column_policy.get("rubric_tags") or None,
                 ):
                     defects.append(
                         f"descriptive rubric {answer_index} does not start "
@@ -435,6 +448,8 @@ def _response_checker(
                         )
                     if rel.malformed_rubric_tag(
                         keyword.get("keyword"), keyword.get("answer_type"),
+                        tags_required=tags_required,
+                        allowed_tags=column_policy.get("rubric_tags") or None,
                     ):
                         defects.append(
                             f"subquestion {sub_index} keyword "
@@ -945,6 +960,7 @@ def _unit_payload(
         "rules": rules + _instruction_suffix(instruction_set),
         "critic_rules": CRITIC_SYSTEM,
         "metadata": _content_evidence(metadata),
+        "column_spec_policy": column_spec.from_metadata(metadata),
         "rendered_master_rows": _content_evidence(list(rendered_rows)),
         "context": _content_evidence(context),
     }
@@ -1059,6 +1075,7 @@ def refine_master(
             metadata.get("assessment_profile") or metadata.get("profile"),
             metadata,
         )
+        metadata = column_spec.bind_metadata(metadata, profile)
         baseline = _validation_state(original, profile)
         if baseline["errors"]:
             return _global_fallback(
@@ -1337,6 +1354,7 @@ def refine_master(
                             unit_kind=entry["unit_kind"],
                             unit_id=entry["unit_id"],
                             original=entry["decision_record"],
+                            profile=profile,
                         ),
                         critic=critic,
                         store=decision_store,

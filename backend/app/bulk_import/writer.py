@@ -36,6 +36,7 @@ from . import workbook_sync
 from .. import models
 from ..services import (
     assessment_release as release_contract,
+    column_spec,
     directory,
     identity,
     katex_rules,
@@ -591,7 +592,7 @@ def _validate_concepts_workbook_bytes(
     idx_concept_title = fields.index("concept_title")
     labels_index = fields.index("topic_concept_labels")
     description_index = fields.index("topic_description")
-    expected: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    expected: dict[tuple[str, str, str, str], dict[str, object]] = {}
     for concept in concepts:
         for topic in _concept_placements(concept):
             key = (
@@ -613,6 +614,7 @@ def _validate_concepts_workbook_bytes(
                 "topic_title": str(front[idx_topic_title] or ""),
                 "concept_labels": str(front[labels_index] or ""),
                 "topic_description": str(front[description_index] or ""),
+                "column_policy": column_spec.for_metadata({"subject": topic.chapter.subject}),
             }
 
     workbook = openpyxl.load_workbook(
@@ -639,7 +641,7 @@ def _validate_concepts_workbook_bytes(
         list_indices = {
             name: fields.index(name)
             for name in workbook_contract.MULTI_VALUE_FIELDS
-            if name in fields
+            if name in fields and name != "keywords"
         }
         list_issues: list[str] = []
 
@@ -678,6 +680,11 @@ def _validate_concepts_workbook_bytes(
                 continue
             seen[key] = seen.get(key, 0) + 1
             contract = expected[key]
+            if "keywords" in fields:
+                for defect in column_spec.keyword_defects(
+                    _cell_str(row, fields.index("keywords")), contract["column_policy"],
+                ):
+                    list_issues.append(f"row {row_number}: keywords {defect}")
             if _cell_str(row, idx_topic_title) != contract["topic_title"]:
                 issues.append(
                     f"{concept_title}: noncanonical topic number/title")
@@ -850,7 +857,9 @@ def _concept_field_value(
     if field == "concept_details":
         return concept.concept_details
     if field == "keywords":
-        return _list_cell(concept.keywords)
+        return column_spec.keyword_cell(
+            concept.keywords, column_spec.for_metadata({"subject": topic.chapter.subject}),
+        )
     if field == "digicards":
         return _list_cell(concept.digicards)
     if field == "related_concepts":
@@ -1177,9 +1186,10 @@ def _question_band_values(
             values[field] = katex_rules.lowercase_objective_option_labels(
                 str(values.get(field) or ""), option_capacity,
             )
-    # A Descriptive item's subquestions own the complete scoring contract.
-    # Some historical ORM rows also retain the old shared main rubric; omit
-    # that residue from the workbook projection without mutating the JSON.
+    # Child criteria are the one internal scoring source. A fresh DB export
+    # projects their ordered union into the parent rubric as a second,
+    # equivalent, non-additive view. Historical ORM parent residue stays
+    # untouched; only this workbook projection changes.
     has_scoring_subquestions = (
         sheet_layout.kind == "descriptive"
         and len(sub_questions) <= len(sheet_layout.sub_question_numbers)
@@ -1193,10 +1203,30 @@ def _question_band_values(
         and _complete_subquestion_scoring(
             sub_questions, q.marks,
             main_question=str(values.get("question") or ""),
-            main_question_text=str(values.get("question_text") or ""),
         )
     )
-    answers = [] if has_scoring_subquestions else answers
+    if has_scoring_subquestions:
+        if column_spec.for_metadata({}).get("multipart_parent_projection") == (
+            "ordered_child_union"
+        ):
+            try:
+                answers = workbook_contract.multipart_parent_answers(
+                    sub_questions,
+                )
+            except ValueError as exc:
+                raise WorkbookCapacityError(
+                    f"question {q.question_label!r} cannot project its "
+                    f"multipart parent rubric: {exc}"
+                ) from exc
+            if len(answers) > len(sheet_layout.answer_block_numbers):
+                raise WorkbookCapacityError(
+                    f"question {q.question_label!r} needs {len(answers)} "
+                    "parent rubric slots for its complete ordered child "
+                    f"union, but {sheet_layout.sheet_name!r} can represent "
+                    f"only {len(sheet_layout.answer_block_numbers)}"
+                )
+        else:
+            answers = []
     for n in sheet_layout.answer_block_numbers:
         answer = answers[n - 1] if n - 1 < len(answers) else {}
         exported_answer = dict(answer or {})
@@ -1380,10 +1410,10 @@ def _complete_subquestion_scoring(
             if weight is None:
                 return False
             weights.append(weight)
-        if sum(weights, Decimal(0)) != marks:
+        if release_contract.exact_weight_sum(weights) != marks:
             return False
         part_marks.append(marks)
-    return sum(part_marks, Decimal(0)) == expected_total
+    return release_contract.exact_weight_sum(part_marks) == expected_total
 
 
 def _complete_row_subquestion_scoring(

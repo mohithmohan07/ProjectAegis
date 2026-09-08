@@ -768,7 +768,7 @@ def _generate_session(
             "sheet_kind": q.sheet_kind, "question": q.question,
             "question_text": q.question_text, "cognitive_skills": q.cognitive_skills,
             "level_of_difficulty": q.level_of_difficulty, "marks": q.marks,
-            "answers": q.answers,
+            "answers": q.answers, "sub_questions": q.sub_questions,
         }):
             problems.append(f"{q.question_label}: {p}")
     monotony = ap.stem_monotony_report([q.question for q in created])

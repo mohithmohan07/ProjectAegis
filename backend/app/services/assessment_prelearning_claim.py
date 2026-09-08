@@ -28,16 +28,18 @@ build.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 from typing import Any, Mapping
 
 from . import assessment_lane_policy as lane_policy
 from .phase3 import kernel
 
-PRE_CLAIM_POLICY_VERSION = "assessment-pre-claim-1"
+PRE_CLAIM_POLICY_VERSION = "assessment-pre-claim-1-column-spec"
 
 PRE_CLAIM_SYSTEM = (
-    "You are the Aegis pre-learning claim judge. You are given every "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis pre-learning claim judge. You are given every "
     "SOURCE question of one textbook chapter (id, source label, kind, and "
     "full text) plus the chapter metadata. Identify the questions that "
     "belong to PREREQUISITE-RECAP material: revision of earlier-class "
@@ -55,18 +57,18 @@ PRE_CLAIM_SYSTEM = (
     "Respond with a single JSON object and nothing else:\n"
     '{"claimed":[{"source_qid":"","reason":"why this question is '
     'prerequisite recap, grounded in its own text"}],'
-    '"confidence":0.0,"rationale":"evidence-bound reason"}'
+    '"confidence":0.0,"rationale":"evidence-bound reason"}')
 )
 
 PRE_CLAIM_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis pre-learning "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis pre-learning "
     "claim decision. Audit the claimed set against the actual question "
     "texts: is any claimed question genuinely THIS chapter's own teaching "
     "mislabelled as recap (the chapter-opener trap), and is any obvious "
     "earlier-class revision drill missed? Position in the chapter is "
     "never evidence either way. Dissent must name the source_qid(s). "
     "Respond with a single JSON object: "
-    '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}'
+    '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}')
 )
 
 

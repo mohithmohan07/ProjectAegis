@@ -502,46 +502,46 @@ def test_full_pipeline_publishes_a_ready_release(db):
         authority = candidate[
             "_aegis_assessment_level_verdict"]["authority"]
         assert authority["decision_key"]
-        assert authority["policy_version"] == "assessment-level-1"
+        assert authority["policy_version"] == "assessment-level-1-column-spec"
         assert "created_at" not in authority
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
-        ] == "assessment-cell-3"
+        ] == "assessment-cell-3-column-spec"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-14"
+        ] == "assessment-materialize-15-column-spec"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
         assert restriction_authority["policy_version"].startswith(
-            "assessment-answer-restriction-3;"
+            "assessment-answer-restriction-4-column-spec;"
         )
         assert candidate["_aegis_assessment_answer_restriction"][
             "registry"
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-8"
+        ] == "assessment-marking-9-column-spec"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
         ]["decomposition_authority"] == "api_per_item_verdict"
         assert candidate["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-candidate-4"
+        ] == "assessment-master-refiner-candidate-4-column-spec"
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
-        ] == "assessment-route-2"
+        ] == "assessment-route-2-column-spec"
     for group in occupied:
         assert group["_aegis_assessment_variant_cluster"]["authority"][
-            "policy_version"] == "assessment-variant-cluster-1"
+            "policy_version"] == "assessment-variant-cluster-1-column-spec"
         assert group["_aegis_assessment_group_description"]["authority"][
-            "policy_version"] == "assessment-group-description-1"
+            "policy_version"] == "assessment-group-description-1-column-spec"
         assert group["_aegis_assessment_group_quality"]["authority"][
-            "policy_version"] == "assessment-group-quality-1"
+            "policy_version"] == "assessment-group-quality-1-column-spec"
         assert group["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-group-1"
+        ] == "assessment-master-refiner-group-1-column-spec"
         assert group["semantic_description"].endswith(
             "precise grade-level wording."
         )
@@ -1091,7 +1091,7 @@ def test_master_refiner_delegate_failure_stages_unrefined_rows_with_warning(
         svc.RELEASED_WITH_WARNINGS
     )
     assert release.payload["refinements"]["policy_version"] == (
-        "assessment-master-refiner-4"
+        "assessment-master-refiner-4-column-spec"
     )
     assert release.payload["refinements"]["changes"] == []
     for record in [
@@ -1281,4 +1281,4 @@ def test_explicit_subjective_cell_binds_under_its_profile_contract():
     assert bound[0]["accepted_source_qids"] == ["QINV-0001"]
     assert bound[0]["appears_in"] == ["Pre/Post-Worksheet/Test"]
     assert bound[0]["source_policy"] == "reuse"
-    assert bound[0]["authority"]["policy_version"] == "assessment-cell-3"
+    assert bound[0]["authority"]["policy_version"] == "assessment-cell-3-column-spec"

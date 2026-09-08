@@ -25,16 +25,18 @@ is never also removed, no question is ruled twice.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 from typing import Any, Mapping
 
 from . import assessment_lane_policy as lane_policy
 from .phase3 import kernel
 
-GENERATED_DEDUP_POLICY_VERSION = "assessment-generated-dedup-1"
+GENERATED_DEDUP_POLICY_VERSION = "assessment-generated-dedup-1-column-spec"
 
 GENERATED_DEDUP_SYSTEM = (
-    "You are the Aegis duplicate-question judge. You are given every "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis duplicate-question judge. You are given every "
     "GENERATED pre-learning question authored for ONE pre-learning "
     "concept. Identify sets that are the same question re-worded — a "
     "paraphrase, a number or a name changed, the same ask with a "
@@ -47,18 +49,18 @@ GENERATED_DEDUP_SYSTEM = (
     '{"duplicate_sets":[{"survivor_pre_question_id":"",'
     '"removed":[{"pre_question_id":"","reason":"why it is the same '
     'question as the survivor"}]}],"confidence":0.0,'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 GENERATED_DEDUP_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis "
     "duplicate-question decision. Audit the proposed duplicate sets "
     "against the actual question texts and answers: is any removed "
     "question genuinely a DIFFERENT ask (different answer, different "
     "skill) mislabelled as a duplicate, and is any obvious re-wording "
     "pair missed? Dissent must name the pre_question_id(s). Respond "
     'with a single JSON object: {"verdict":"concur|dissent",'
-    '"confidence":0.0,"issues":["..."]}'
+    '"confidence":0.0,"issues":["..."]}')
 )
 
 
@@ -258,10 +260,10 @@ def decide_generated_duplicates(
 # Source-lane duplicate coverage (P3, owner audit 2026-08-29)
 # --------------------------------------------------------------------------- #
 
-SOURCE_DEDUP_POLICY_VERSION = "assessment-source-dedup-1"
+SOURCE_DEDUP_POLICY_VERSION = "assessment-source-dedup-1-column-spec"
 
 SOURCE_DEDUP_SYSTEM = (
-    "You are the Aegis duplicate-question judge for one Post-Learning "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis duplicate-question judge for one Post-Learning "
     "Master. You are given EVERY chapter-teaching source question headed "
     "into this Master file, after compound sub-parts have already folded "
     "into their parents. Identify sets that ship the same assessment more "
@@ -282,18 +284,18 @@ SOURCE_DEDUP_SYSTEM = (
     '{"duplicate_sets":[{"survivor_source_qid":"",'
     '"removed":[{"source_qid":"","reason":"why it ships the same '
     'assessment as the survivor"}]}],"confidence":0.0,'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 SOURCE_DEDUP_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis source-lane "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis source-lane "
     "duplicate decision. Audit the proposed duplicate sets against the "
     "actual question texts and answers: is any removed question genuinely "
     "a DIFFERENT ask (different answer, different skill) mislabelled as a "
     "duplicate, is a recorded alternative-set pair being wrongly removed, "
     "and is any obvious double-ship missed? Dissent must name the "
     'source_qid(s). Respond with a single JSON object: '
-    '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}'
+    '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}')
 )
 
 

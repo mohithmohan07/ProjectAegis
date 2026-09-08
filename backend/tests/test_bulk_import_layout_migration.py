@@ -912,8 +912,11 @@ def test_incomplete_or_duplicated_part_scoring_keeps_main_rubric(db, defect):
         question, writer._target_sheet("descriptive"),
     )
 
+    # Complete question_text intentionally contains every child. It does
+    # not duplicate scoring or prevent the current parent projection.
     assert values["answer_content_1"] == (
-        "[content]: retained fallback rubric"
+        "[content]: result" if defect == "duplicate-question-text"
+        else "[content]: retained fallback rubric"
     )
 
 

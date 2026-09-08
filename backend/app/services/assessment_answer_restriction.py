@@ -28,6 +28,7 @@ from typing import Any, Mapping
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
+from . import column_spec
 from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
@@ -36,7 +37,7 @@ REGISTRY_ID = "registry-v2.0"
 # -3: the complete registry/rules/metadata prefix is now an explicit-only
 # GPT-5.6 cache prefix; the candidate remains complete in the varying suffix.
 # This changes provider-input identity without changing semantic ownership.
-POLICY_BASE_VERSION = "assessment-answer-restriction-3"
+POLICY_BASE_VERSION = "assessment-answer-restriction-4-column-spec"
 REGISTRY_MARKDOWN_FILENAME = "open-specific-registry-v2.md"
 REGISTRY_WORKBOOK_FILENAME = "open-specific-registry-v2.xlsx"
 
@@ -60,7 +61,7 @@ REGISTRY_DIRECTORY_CANDIDATES = (
 
 
 ANSWER_RESTRICTION_SYSTEM = (
-    "You are the Aegis Open/Specific author. Decide answer_restriction for "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis Open/Specific author. Decide answer_restriction for "
     "ONE semantically complete, unweighted assessment candidate. This pass "
     "runs after semantic question, expected-answer, and rubric authoring and "
     "before the later marking allocation. The supplied unweighted rubric "
@@ -83,16 +84,23 @@ ANSWER_RESTRICTION_SYSTEM = (
     "code supplies no subject branch.\n"
     "Describe the actual full-credit answer space, required elements, and "
     "accepted variations. Cite the decisive item/scoring evidence.\n"
+    "A valid Objective or Subjective response contract is Specific: verify "
+    "the closed option key or bounded accepted-answer set and state it, "
+    "rather than merely citing the sheet name. If a task actually allows "
+    "open responses, name the lane mismatch in review_reason; never narrow "
+    "its answer space to excuse a routing error. For Descriptive items, "
+    "equivalent methods or synonymous wording alone do not make the task "
+    "Open: decide whether the full-credit result is bounded.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","answer_restriction":"Open|Specific",'
     '"restriction_reason":"","answer_space_contract":"",'
     '"required_elements":[],"accepted_variations":[],"evidence":"",'
-    '"rationale":"","review_required":false,"review_reason":""}'
+    '"rationale":"","review_required":false,"review_reason":""}')
 )
 
 
 ANSWER_RESTRICTION_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis Open/Specific "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis Open/Specific "
     "verdict. Independently audit the proposed verdict against the complete "
     "semantically authored, unweighted candidate, rubric/scoring evidence, "
     "source evidence, metadata, and complete supplied policy registry. This "
@@ -108,7 +116,7 @@ ANSWER_RESTRICTION_CRITIC_SYSTEM = (
     "author's verdict. Dissent ships only as review evidence and the recorded "
     "Open/Specific verdict stands. State honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 

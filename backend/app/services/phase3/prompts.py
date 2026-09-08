@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import json
 from typing import Any, Mapping
+from .. import column_spec
 
-_SHARED = (
+_SHARED = column_spec.OUTPUT_DISCIPLINE + (
     "You are part of Aegis, an unattended concept-extraction pipeline for "
     "school textbooks. Respond with a single JSON object and nothing else. "
     "Decide every unit you are given: 'needs review' is not an available "
@@ -51,7 +52,7 @@ GROUNDING_SYSTEM = _SHARED + (
     "review. Never return an empty source_block_ids."
 )
 
-ANALYSIS_SYSTEM = _SHARED + (
+ANALYSIS_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
     " Task: author each concept's learner-facing content in one pass. "
     "Response schema: {\"rows\": [{\"concept_id\", "
     "\"concept_description\", \"achieving_mastery\"}]}. "
@@ -127,7 +128,7 @@ ANALYSE_ALLOT_SYSTEM = _SHARED + (
     "content-to-teaching basis of the allotment."
 )
 
-ANALYSE_CRITIC_SYSTEM = _SHARED + (
+ANALYSE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit a proposed misconception/error-analysis "
     "decision (a chapter inventory build, or an allotment of items to "
     "concepts). For an inventory: judge each item's genuineness (a real "
@@ -200,7 +201,7 @@ PRELEARN_MERGE_SYSTEM = _SHARED + (
     "be taught on its own and covering what all its captures assume."
 )
 
-PRELEARN_CRITIC_SYSTEM = _SHARED + (
+PRELEARN_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit a proposed Phase 03 prerequisite "
     "decision (a stage capture, or the chapter-wide merge). For a "
     "capture: judge whether each element is genuinely PRIOR to this "
@@ -219,7 +220,7 @@ PRELEARN_CRITIC_SYSTEM = _SHARED + (
     "not block the run."
 )
 
-PREMAP_SYSTEM = _SHARED + (
+PREMAP_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
     " Task: Phase 03 — build the chapter's PRE-LEARNING concept map from "
     "the run's captured prerequisite set. Response schema: {\"topics\": "
     "[{\"pre_topic_id\", \"title\", \"concepts\": [{\"pre_concept_id\", "
@@ -266,7 +267,7 @@ PREMAP_NEEDED_FOR_SYSTEM = _SHARED + (
     "not corrected away."
 )
 
-PREMAP_CRITIC_SYSTEM = _SHARED + (
+PREMAP_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit a proposed Phase 03 Pre-Learning "
     "decision (a concept map built from the captured prerequisite set, "
     "or a set of needed-for links). Judge four things and state each "
@@ -310,7 +311,7 @@ PREMAP_EMPTY_CAPTURE_SYSTEM = _SHARED + (
     "names in one or two sentences what in the source decided it."
 )
 
-PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM = _SHARED + (
+PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit a proposed Phase 03 verdict on an EMPTY "
     "prerequisite capture. Judge two things and state each plainly. "
     "SOURCE INTEGRITY: does the source in the request read as a complete, "
@@ -364,7 +365,7 @@ PREANALYSE_ALLOT_SYSTEM = _SHARED + (
     "sentence naming the content-to-teaching basis of the allotment."
 )
 
-PREANALYSE_CRITIC_SYSTEM = _SHARED + (
+PREANALYSE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit a proposed PRE-LEARNING "
     "misconception/error-analysis decision (a prerequisite inventory "
     "build, or an allotment of items to pre-learning concepts). For an "
@@ -422,8 +423,12 @@ PREQUESTIONS_AUTHOR_SYSTEM = _SHARED + (
     "into it, and the chapter's own questions are deliberately absent "
     "from this request. Author each question for the level, grade, "
     "subject, board and context named in the chapter calibration and the "
-    "run instructions. answer is the complete expected answer; rationale "
-    "says what the question checks the learner can already do. Without a "
+    "run instructions. Solve each task before returning it. question_text "
+    "contains the complete learner task, including any data, options or "
+    "parts it needs, and never its answer or evaluator commentary. answer "
+    "is the complete expected answer, with the reasoning needed to verify "
+    "it; rationale says what the question checks the learner can already "
+    "do. Do not award or imply credit for an unasked demand. Without a "
     "coverage_rule in the request, do not label a question with a tier "
     "or a difficulty. When the request carries a coverage_rule, each "
     "question also carries \"tier\", exactly the tier the coverage plan's "
@@ -431,7 +436,7 @@ PREQUESTIONS_AUTHOR_SYSTEM = _SHARED + (
     "mathematical expression exactly as [Katex] valid LaTeX [/Katex]."
 )
 
-PREQUESTIONS_CRITIC_SYSTEM = _SHARED + (
+PREQUESTIONS_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit a proposed Phase 03 generated-question "
     "decision (a coverage plan across the pre-learning concepts, or one "
     "concept's authored questions). For a PLAN, judge three things and "
@@ -445,10 +450,13 @@ PREQUESTIONS_CRITIC_SYSTEM = _SHARED + (
     "carries a coverage_rule the totals are the owner's, not the model's: "
     "judge ANCHORING and PROPORTION on whether each rationale's COVERAGE "
     "is led by the evidence — which capabilities each tier verifies — "
-    "never on the number. PROPORTION: do "
-    "the totals across the map track the depth of each prerequisite "
-    "rather than flattening to one size? RATIONALE QUALITY: does each "
-    "rationale actually explain its total and its split? For authored "
+    "never on the number; identical fixed totals and splits are correct. "
+    "Only when no coverage_rule is supplied, judge PROPORTION: do the "
+    "totals across the map track the depth of each prerequisite rather "
+    "than flattening to one size? RATIONALE QUALITY: with a coverage_rule, "
+    "does the rationale name the distinct capabilities covered within "
+    "the required split; without one, does it explain its chosen total "
+    "and split? For authored "
     "QUESTIONS, judge three things. PARAPHRASE: does any question read "
     "as a question of this chapter reworded rather than one written "
     "fresh for the prerequisite — is it about the chapter's own content "
@@ -568,7 +576,7 @@ PLACE_SYSTEM = _SHARED + (
     "SHOWS, never a generic label such as 'Source visual'."
 )
 
-PLACE_CRITIC_SYSTEM = _SHARED + (
+PLACE_CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit proposed Activity/Info Hub and figure "
     "placements. Do not defer to the proposal and do not infer that an "
     "allowed concept is necessarily a good semantic fit. For each "
@@ -590,7 +598,7 @@ PLACE_CRITIC_SYSTEM = _SHARED + (
     "for human review and does not block the run."
 )
 
-POLISH_SYSTEM = _SHARED + (
+POLISH_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
     " Task: repair concept rows that failed the terminal content gate. "
     "Response schema: {\"rows\": [{\"row_ref\", \"concept_title\", "
     "\"concept_details\", \"keywords\"}]}. Echo each row_ref exactly as "
@@ -600,8 +608,9 @@ POLISH_SYSTEM = _SHARED + (
     "Misconceptions must name a concept-specific incorrect belief, "
     "Error Analysis must name the learner and a concrete faulty action "
     "or reasoning step, and no sentence may end truncated. The learner "
-    "analysis needs at least ONE genuine section — Misconceptions or "
-    "Error Analysis; both only when they carry different insight, and "
+    "analysis is optional: when none was allotted, do not add a section "
+    "or invent an insight to satisfy a validation message. When present, "
+    "Misconceptions and Error Analysis carry distinct supported insights, "
     "never one restating the other. Keep every other section — the "
     "'Achieving Mastery:' line, Types — intact and in place, keep the "
     "concept's meaning, and never rename it."
@@ -628,7 +637,7 @@ FIXER_SYSTEM = _SHARED + (
     "honestly, never optimistically."
 )
 
-REFINER_SYSTEM = _SHARED + (
+REFINER_SYSTEM = _SHARED + column_spec.TEACHING_QUALITY + (
     " Task: you are The Refiner (docs/aegis-restructure.md §8.3). You read "
     "ONE released concept row exactly as the rendered workbook will carry "
     "it — after assembly, before staging — and refine it to expectation: "
@@ -651,7 +660,7 @@ REFINER_SYSTEM = _SHARED + (
     "improved and why."
 )
 
-CRITIC_SYSTEM = _SHARED + (
+CRITIC_SYSTEM = _SHARED + column_spec.REVIEW_QUALITY + (
     " Task: independently audit the proposed_decision in the request "
     "against the source blocks. Response schema: {\"verdict\": "
     "\"verified|rejected\", \"confidence\", \"issues\": [..]}. You are an "

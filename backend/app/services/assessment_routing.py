@@ -12,6 +12,8 @@ answer as topical evidence and never carries distractors.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 from typing import Any, Mapping
 
@@ -22,7 +24,7 @@ from .phase3 import kernel
 
 # -2: released candidate concepts and rules are now the explicit GPT-5.6
 # cache prefix; the routed candidate is the complete varying suffix.
-ROUTE_POLICY_VERSION = "assessment-route-2"
+ROUTE_POLICY_VERSION = "assessment-route-2-column-spec"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -34,7 +36,7 @@ _PROMPT_CACHE_STABLE_KEYS = (
 )
 
 ROUTER_SYSTEM = (
-    "You are the Aegis assessment router. Choose the ONE released concept "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment router. Choose the ONE released concept "
     "whose teaching content this question assesses: its canonical home. "
     "Judge from the complete question, expected answer or rubric, source "
     "and routing evidence, assets, and every candidate concept's released "
@@ -46,11 +48,11 @@ ROUTER_SYSTEM = (
     "question assesses.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","concept_key":"","evidence":"decisive released '
-    'teaching content","rationale":"evidence-bound reason"}'
+    'teaching content","rationale":"evidence-bound reason"}')
 )
 
 ROUTE_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis home-concept "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis home-concept "
     "route. Audit the proposed route against the complete question, answer "
     "or rubric, source and routing evidence, assets, and every released "
     "candidate concept description. Flag a concept that does not teach what "
@@ -60,7 +62,7 @@ ROUTE_CRITIC_SYSTEM = (
     "the proposed route stands and your concerns ship for review. State your "
     "honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 

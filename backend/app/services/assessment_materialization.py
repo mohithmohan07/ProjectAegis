@@ -21,6 +21,7 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import column_spec
 from . import assessment_release as rel
 from . import katex_rules
 from .phase3 import kernel
@@ -41,7 +42,7 @@ from .phase3 import kernel
 # ``-13`` adopts Master Governing Contract v2.0: label-free Objective
 # explanations (§22), identical Descriptive model answers (§24), the True or
 # False Subjective projection (§23.1) and English-only rubric tags (§28).
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-14"
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-15-column-spec"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -91,7 +92,7 @@ def _descriptive_answer_capacity(
     return max(MAX_DESCRIPTIVE_ANSWERS, capacity)
 
 
-MATERIALIZE_SYSTEM = (
+MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUALITY + (
     "You are the Aegis assessment materialization author. Materialize ONE "
     "complete assessment item from the supplied source atom and blueprint "
     "cell. The cell's sheet kind, category, cognitive skill, difficulty, and "
@@ -138,6 +139,9 @@ MATERIALIZE_SYSTEM = (
     "restates \"a) ... b) ...\" is a defect. For Subjective cells, return "
     "one answer object per response blank, in blank order, with "
     "answer_content, answer_display, answer_type, and a lowercase "
+    "single-letter placeholder. answer_display is a visibility flag, exactly "
+    "Yes for every used slot, never the expected answer or the blank text. "
+    "Use a lowercase "
     "single-letter placeholder. The question uses the matching tokens "
     "$$a$$, $$b$$, ...; correct_answer is the empty string because these "
     "are expected responses rather than options, and the item carries no "
@@ -162,11 +166,15 @@ MATERIALIZE_SYSTEM = (
     "with its enumeration label — a), b), c)… or (i), (ii), (iii)… — "
     "using the same scheme and order the item itself uses (SOP §5.4), so "
     "each part maps to its marking cleanly.\n"
-    "For an Objective item, answer_explanation BEGINS with the exact text "
-    "of the correct option and then explains why it is correct; it never "
-    "contains the option letter or number — no leading \"b)\", no "
-    "\"option 2\" (e.g. \"Sleepy. The clue 'curled up and slept' shows that "
-    "drowsy means sleepy.\"). For Descriptive cells, display_answer and "
+    "For an Objective item, follow column_spec_policy.objective_explanation_prefix: "
+    "option_label_and_answer means the correct lowercase option label followed "
+    "by its exact answer text, then the evidence-based reason (English example: "
+    "'b) Sleepy. The words curled up and slept support this meaning.'). "
+    "Otherwise begin with the exact answer text and then the reason, without "
+    "an option label. A label alone never replaces the answer. "
+    "For every Subjective item, open the explanation with the accepted answer "
+    "or the ordered labelled answers for multiple blanks, then explain why. "
+    "For Descriptive cells, display_answer and "
     "answer_explanation are the SAME complete learner-facing model answer, "
     "byte for byte: the answer only — no rubric narration, criterion tags, "
     "step labels with marks, or evaluator instructions. For a True or "
@@ -190,16 +198,18 @@ MATERIALIZE_SYSTEM = (
     "plain text with no TeX or [Katex]. Never mix the two. Every "
     "Descriptive rubric criterion (a main answer/rubric block, or a "
     "subquestion keyword) is ONE observable, question-specific, "
-    "credit-bearing demand worth exactly 0.5 or 1 mark: split a larger "
-    "award into discrete non-overlapping criteria, never write a single "
+    "credit-bearing demand. When column_spec_policy.rubric_half_step is true, "
+    "weights may be positive multiples of 0.5; otherwise they are 0.5 or 1. "
+    "Choose independently observable criteria before weights; never write a single "
     "undivided multi-mark criterion, and never pad with generic filler "
     "such as 'correct content' or 'uses language well'. Every criterion "
     "appears in the model answer and every required model-answer "
     "component is scored. Follow the supplied rubric_tag_policy exactly: "
     "when it is REQUIRED (an English run), every textual criterion opens "
     "with exactly one approved tag from its registry in the syntax "
-    "'[tag]: criterion' (lowercase tag, closing bracket, colon, one space; "
-    "[creative] is invalid — use [creativity]); when it is not required "
+    "'[tag]: criterion' (lowercase tag, closing bracket, colon, one space). "
+    "Use only this run's registry, including its exact creative/creativity "
+    "spelling; when it is not required "
     "(every other subject), write the criterion directly with NO bracket "
     "tag. A tag never appears in the question, options, accepted answers, "
     "display answer or explanation. A 4-mark single-part Descriptive item "
@@ -248,7 +258,7 @@ MATERIALIZE_SYSTEM = (
     '"requires_visual":false,"rationale":"evidence-bound reason"}'
 )
 
-MATERIALIZE_CRITIC_SYSTEM = (
+MATERIALIZE_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + (
     "You are the independent advisory critic for one Aegis assessment "
     "materialization decision. Audit the exact proposed item against the "
     "complete source atom, curricular evidence, assets, and blueprint cell: "
@@ -263,13 +273,13 @@ MATERIALIZE_CRITIC_SYSTEM = (
     "that enumerates its own options), invented subquestions (a part "
     "the source item does not itself carry), explanation/answer "
     "consistency (an Objective explanation begins with the exact correct "
-    "answer text and never an option letter or number; a Descriptive "
+    "answer text, including the option label when column_spec_policy requires it; a Descriptive "
     "display answer and explanation are the same complete model answer; "
     "a True or False item is Subjective with one True/False slot), "
     "rubric-tag containment against the supplied rubric_tag_policy "
     "(required at the head of every English textual criterion, forbidden "
     "everywhere else), criterion atomicity (each criterion one "
-    "credit-bearing demand worth 0.5 or 1, no generic filler, "
+    "credit-bearing demand with weight permitted by column_spec_policy, no generic filler, "
     "bidirectional coverage with the model answer), literary over-quoting "
     "(a whole poem "
     "or passage quoted where only the asked-about lines belong), "
@@ -407,11 +417,12 @@ def _duplicated_option_label(value: Any) -> bool:
 
 def _malformed_rubric_tag(
     value: Any, answer_type: Any, *, tags_required: bool | None = None,
+    allowed_tags: list[str] | None = None,
 ) -> bool:
     """Rubric-tag containment is a wire format, not a judgment (§28)."""
 
     return rel.malformed_rubric_tag(
-        value, answer_type, tags_required=tags_required,
+        value, answer_type, tags_required=tags_required, allowed_tags=allowed_tags,
     )
 
 
@@ -422,9 +433,11 @@ def _proposal_defects(
     *,
     descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
     tags_required: bool | None = None,
+    column_policy: Mapping | None = None,
 ) -> list[str]:
     """Validate response mechanics only; semantic quality belongs to models."""
 
+    column_policy = column_policy or {}
     if not isinstance(proposal, Mapping):
         return ["response is not an object"]
     defects: list[str] = []
@@ -529,6 +542,7 @@ def _proposal_defects(
             # correct-answer text, never an option letter or number.
             defects.extend(rel.objective_explanation_defects(
                 answers, proposal.get("answer_explanation"),
+                include_option_label=column_policy.get("objective_explanation_prefix") == "option_label_and_answer",
             ))
     elif kind == "subjective":
         if not 1 <= len(answers) <= MAX_SUBJECTIVE_ANSWERS:
@@ -548,6 +562,8 @@ def _proposal_defects(
                 defects.append(
                     f"subjective answer {position} needs answer_display"
                 )
+            elif column_policy and display != "Yes":
+                defects.append(f"subjective answer {position} answer_display must be Yes")
             expected = chr(ord("a") + position - 1)
             if answer.get("placeholder") != expected:
                 defects.append(
@@ -600,6 +616,7 @@ def _proposal_defects(
             if _malformed_rubric_tag(
                 answer.get("answer_content"), answer.get("answer_type"),
                 tags_required=tags_required,
+                allowed_tags=column_policy.get("rubric_tags") if tags_required else None,
             ):
                 defects.append(
                     f"answer/rubric block {position} breaks English "
@@ -668,6 +685,7 @@ def _proposal_defects(
                 if _malformed_rubric_tag(
                     keyword.get("keyword"), keyword_type,
                     tags_required=tags_required,
+                    allowed_tags=column_policy.get("rubric_tags") if tags_required else None,
                 ):
                     defects.append(
                         f"subquestion {position} keyword {keyword_position} "
@@ -689,6 +707,7 @@ def _checker(
     *,
     descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
     tags_required: bool | None = None,
+    column_policy: Mapping | None = None,
 ) -> kernel.Checker:
     def check(response: Mapping[str, Any]) -> list[str]:
         return _proposal_defects(
@@ -697,6 +716,7 @@ def _checker(
             candidate_id,
             descriptive_answer_capacity=descriptive_answer_capacity,
             tags_required=tags_required,
+            column_policy=column_policy,
         )
 
     return check
@@ -904,6 +924,7 @@ def _decision_payload(
             "descriptive_answer_slots": descriptive_answer_capacity,
         },
         "rubric_tag_policy": tag_policy,
+        "column_spec_policy": column_spec.from_metadata(meta),
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "curricular_evidence": copy.deepcopy(context),
@@ -943,6 +964,7 @@ def _materialize_prepared(
             candidate_id,
             descriptive_answer_capacity=descriptive_answer_capacity,
             tags_required=bool(payload["rubric_tag_policy"]["required"]),
+            column_policy=payload["column_spec_policy"],
         ),
         critic=critic,
         store=store,
@@ -978,6 +1000,7 @@ def materialize_candidate(
     """
 
     run_profile = assessment_profile.resolve_for_metadata(profile, meta)
+    meta = column_spec.bind_metadata(meta, run_profile)
     descriptive_answer_capacity = _descriptive_answer_capacity(
         run_profile,
         learning_phase=learning_phase,
@@ -1029,6 +1052,7 @@ def materialize_candidates(
         raise MaterializationError("materialization metadata is not an object")
     envelope_sha = _envelope_hash(envelope_sha256)
     run_profile = assessment_profile.resolve_for_metadata(profile, meta)
+    meta = column_spec.bind_metadata(meta, run_profile)
     descriptive_answer_capacity = _descriptive_answer_capacity(
         run_profile,
         learning_phase=learning_phase,

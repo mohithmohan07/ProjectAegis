@@ -9,6 +9,7 @@ builder cannot quietly skip material.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -90,29 +91,84 @@ class GPTWriter:
 
     # ---- planner pass ---------------------------------------------------
 
+    def _cache_identity(
+        self, stage: str, mmd: str, meta: dict, systems: list[str],
+        *, plan: dict | None = None,
+    ) -> str:
+        """Cache only the exact source, calibration, prompts and model policy."""
+        payload = {
+            "version": "workbook-prompt-cache-1",
+            "stage": stage,
+            "source_sha256": hashlib.sha256(mmd.encode("utf-8")).hexdigest(),
+            "metadata": meta,
+            "systems": systems,
+            "plan": plan,
+            "provider": getattr(self, "base_url", None),
+            "policy": chat_request_policy(
+                "workbook_planning" if stage == "plan" else "workbook_authoring",
+                model=self.model,
+            ),
+        }
+        return hashlib.sha256(json.dumps(
+            payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _keyed_cache_path(path: Path, identity: str) -> Path:
+        # Old filename-only files remain available for inspection, but are
+        # never mistaken for a cache certified against the effective prompts.
+        return path.parent / "_prompt_cache" / f"{path.stem}.{identity}{path.suffix}"
+
+    @staticmethod
+    def _publish_plan(path: Path, plan: dict) -> None:
+        """Keep the public plain-JSON plan used by coverage tools; retain history."""
+        text = json.dumps(plan, ensure_ascii=False, indent=2)
+        if path.exists():
+            previous = path.read_bytes()
+            if previous != text.encode("utf-8"):
+                digest = hashlib.sha256(previous).hexdigest()
+                archive = GPTWriter._keyed_cache_path(path, f"previous-{digest}")
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                if not archive.exists():
+                    archive.write_bytes(previous)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
     def _plan(self, mmd: str, meta: dict, plan_cache_path: Path | None) -> dict:
-        if plan_cache_path and plan_cache_path.exists():
+        system = planner_system()
+        identity = self._cache_identity("plan", mmd, meta, [system])
+        keyed_path = (
+            self._keyed_cache_path(plan_cache_path, identity)
+            if plan_cache_path else None
+        )
+        if keyed_path and keyed_path.exists():
             try:
-                return json.loads(plan_cache_path.read_text(encoding="utf-8"))
-            except Exception:
-                pass
+                cached = json.loads(keyed_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                cached = None
+            if isinstance(cached, dict):
+                self._publish_plan(plan_cache_path, cached)
+                return cached
 
         user = (
             f"Subject: {meta['subject']}\nGrade: {meta['grade']}\n"
+            f"Board: {meta.get('board') or 'Not supplied'}\n"
+            f"Publication: {meta.get('publication') or 'Not supplied'}\n"
             f"Chapter title hint: {meta['chapter_title']}\n"
             f"Chapter number: {meta['chapter_number']}\n\n"
             "--- MMD START ---\n" + mmd + "\n--- MMD END ---"
         )
         plan_raw = self._chat(
-            planner_system(),
+            system,
             user,
             max_tokens=self.MAX_PLANNER_OUTPUT_TOKENS,
             purpose="workbook_planning",
         )
         plan = _parse_json(plan_raw, "planner")
-        if plan_cache_path:
-            plan_cache_path.parent.mkdir(parents=True, exist_ok=True)
-            plan_cache_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        if keyed_path:
+            keyed_path.parent.mkdir(parents=True, exist_ok=True)
+            keyed_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+            self._publish_plan(plan_cache_path, plan)
         return plan
 
     # ---- builder pass ---------------------------------------------------
@@ -143,7 +199,9 @@ class GPTWriter:
         user = (
             f"Chapter {meta['chapter_number']}: {meta['chapter_title']}\n"
             f"Subject: {meta['subject']} | Grade: {meta['grade']}\n"
-            f"Discipline: {discipline or 'General Science'}\n\n"
+            f"Board: {meta.get('board') or 'Not supplied'}\n"
+            f"Publication: {meta.get('publication') or 'Not supplied'}\n"
+            f"Discipline: {discipline or 'Not supplied'}\n\n"
             f"PLAN SUMMARY:\n{plan.get('summary', '')}\n\n"
             f"STUDY STRATEGY HINTS:\n"
             f"{json.dumps(plan.get('study_strategy') or [], ensure_ascii=False)}\n\n"
@@ -176,7 +234,9 @@ class GPTWriter:
         user = (
             f"Chapter {meta['chapter_number']}: {meta['chapter_title']}\n"
             f"Subject: {meta['subject']} | Grade: {meta['grade']}\n"
-            f"Discipline: {discipline or 'General Science'}\n\n"
+            f"Board: {meta.get('board') or 'Not supplied'}\n"
+            f"Publication: {meta.get('publication') or 'Not supplied'}\n"
+            f"Discipline: {discipline or 'Not supplied'}\n\n"
             f"TOPIC PLAN:\n{json.dumps(topic_plan, ensure_ascii=False, indent=2)}\n\n"
             f"PROBLEMS FOR THIS TOPIC (Mathematics — cover all in problem_set blocks):\n"
             f"{json.dumps(problems, ensure_ascii=False, indent=2)}\n\n"
@@ -271,6 +331,16 @@ class GPTWriter:
         topic_plans = plan.get("topics") or []
         n = len(topic_plans)
         progress_path = self._progress_path(raw_dump_path)
+        if progress_path:
+            discipline = meta.get("discipline", "")
+            identity = self._cache_identity(
+                "chunked", mmd, meta,
+                [chapter_shell_system(meta["subject"], discipline),
+                 topic_builder_system(meta["subject"], discipline),
+                 _CONCISE_TOPIC_NOTE],
+                plan=plan,
+            )
+            progress_path = self._keyed_cache_path(progress_path, identity)
         progress = self._load_progress(progress_path) if progress_path else None
 
         if progress and len(progress.get("topics") or []) >= n:
@@ -358,6 +428,8 @@ class GPTWriter:
         plan_json = json.dumps(plan, indent=2)
         user = (
             f"Subject: {meta['subject']}\nGrade: {meta['grade']}\n"
+            f"Board: {meta.get('board') or 'Not supplied'}\n"
+            f"Publication: {meta.get('publication') or 'Not supplied'}\n"
             f"Chapter number: {meta['chapter_number']}\n"
             f"Chapter title: {meta['chapter_title']}\n\n"
             "--- PLAN JSON START ---\n" + plan_json + "\n--- PLAN JSON END ---\n\n"

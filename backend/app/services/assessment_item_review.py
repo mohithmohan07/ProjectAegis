@@ -26,9 +26,10 @@ from typing import Any, Mapping
 
 from .. import config
 from . import assessment_profile
+from . import column_spec
 from .phase3 import kernel
 
-ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-2"
+ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-3-column-spec"
 AUDIT_FIELD = "_aegis_assessment_item_review"
 WARNING = "assessment_item_review"
 UNAVAILABLE_WARNING = "assessment_item_review_unavailable"
@@ -41,7 +42,7 @@ _PROMPT_CACHE_STABLE_KEYS = (
     "rubric_tag_policy",
 )
 
-ITEM_REVIEW_SYSTEM = (
+ITEM_REVIEW_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + (
     "You are the independent joint reviewer of ONE finished Aegis "
     "assessment item (Master Governing Contract v2.0 §27 step 6). You see "
     "the source atom (when the item is source-owned), the recorded blueprint "
@@ -65,9 +66,11 @@ ITEM_REVIEW_SYSTEM = (
     "model answer is complete and learner-facing, identical in "
     "display_answer and answer_explanation for Descriptive items, and free "
     "of rubric narration, criterion tags, marks or evaluator instructions; "
-    "an Objective explanation opens with the exact correct answer text and "
-    "no option letter or number; (6) every criterion is one observable, "
-    "question-specific credit-bearing demand worth 0.5 or 1, nothing asked "
+    "an Objective explanation uses the exact correct-answer text and the "
+    "option-label prefix required by column_spec_policy (English includes "
+    "the lowercase label); (6) every criterion is one observable, "
+    "question-specific credit-bearing demand with its permitted weight "
+    "increment from column_spec_policy, nothing asked "
     "is unscored, nothing unasked is credited, nothing is double-counted, "
     "every criterion appears in the model answer and every required "
     "model-answer component is scored; (7) rubric-tag containment follows "
@@ -156,6 +159,7 @@ def _payload(
         "metadata": copy.deepcopy(dict(meta)),
         "assessment_format_policy": copy.deepcopy(dict(format_policy)),
         "rubric_tag_policy": assessment_profile.rubric_tag_policy(meta),
+        "column_spec_policy": column_spec.from_metadata(meta),
         "candidate_id": str(candidate.get("candidate_id") or ""),
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
@@ -187,6 +191,7 @@ def review_items(
         raise ItemReviewError("item review requires an envelope hash")
     metadata = dict(meta) if isinstance(meta, Mapping) else {}
     run_profile = assessment_profile.resolve_for_metadata(profile, metadata)
+    metadata = column_spec.bind_metadata(metadata, run_profile)
     format_policy = assessment_profile.assessment_format_policy(
         run_profile, metadata,
     )

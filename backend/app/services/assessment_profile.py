@@ -13,6 +13,8 @@ school is another profile, not another pipeline.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 from typing import Any, Mapping
 
@@ -890,6 +892,7 @@ def resolve_for_metadata(
     """Resolve one run profile and apply only conclusive metadata overrides."""
 
     resolved = resolve(profile)
+    was_resolved = "_resolved_metadata" in resolved
     # A resolved profile is persisted with its selector metadata and can pass
     # through this boundary again during release/build orchestration.  Start
     # with those carried selectors so an absent (or empty) metadata payload
@@ -948,6 +951,18 @@ def resolve_for_metadata(
         for key in ("board", "grade", "subject")
         if _metadata_token(run_metadata.get(key))
     }
+    current_policy = resolved.get(column_spec.POLICY_KEY)
+    completing_subject = (
+        isinstance(current_policy, Mapping)
+        and current_policy.get("version") == column_spec.VERSION
+        and not _metadata_token((carried_metadata or {}).get("subject"))
+        and bool(_metadata_token(run_metadata.get("subject")))
+    )
+    if (column_spec.POLICY_KEY not in resolved and not was_resolved) or completing_subject:
+        # Completing a previously unknown selector is supported above. Bind
+        # its adapter at the same boundary, while leaving legacy profiles
+        # and profiles with an already-known subject unchanged.
+        resolved[column_spec.POLICY_KEY] = column_spec.for_metadata(run_metadata)
     return resolved
 
 
@@ -1406,7 +1421,9 @@ def rubric_tag_policy(
     required = _subject_is_english(subject)
     return {
         "required": required,
-        "tags": list(ENGLISH_RUBRIC_TAGS) if required else [],
+        "tags": list(
+            column_spec.from_metadata(metadata).get("rubric_tags", ENGLISH_RUBRIC_TAGS)
+        ) if required else [],
         "syntax": "[tag]: <observable credit-bearing criterion>",
     }
 
