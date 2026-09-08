@@ -439,6 +439,8 @@ def test_wrong_model_legacy_outline_falls_through_as_a_miss(
     def model_outline(*_args, **_kwargs):
         nonlocal model_calls
         model_calls += 1
+        if _kwargs["response_schema"]["name"] == "aegis_chapter_outline_review":
+            return {"verdict": "verified", "issues": []}
         return {
             "chapter_title": "Electricity",
             "topics": [{
@@ -464,17 +466,17 @@ def test_wrong_model_legacy_outline_falls_through_as_a_miss(
 
     outline = fallback.derive_chapter_outline(page_acsd)
 
-    assert model_calls == 1
+    assert model_calls == 2
     assert outline is not None
     assert outline["chapter_title"] == "Electricity"
 
 
-def test_legacy_batch_and_outline_caches_upgrade_without_model_replay(
+def test_legacy_pages_upgrade_for_free_but_author_only_outline_gets_reviewed(
     lane,
     tmp_path,
     monkeypatch,
 ):
-    """A missing seal may reuse both paid 2.4 caches under the new contract."""
+    """Reuse paid 2.4 page evidence; old outlines need the new semantic pass."""
     monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
     source_path = tmp_path / "source.pdf"
     source_path.write_bytes(b"%PDF-fake")
@@ -546,13 +548,30 @@ def test_legacy_batch_and_outline_caches_upgrade_without_model_replay(
             "result": legacy_outline,
         },
     )
-    monkeypatch.setattr(
-        fallback.phase22,
-        "_openai_multimodal_json",
-        lambda *_args, **_kwargs: pytest.fail(
-            "a verified legacy outline must not be re-billed"
-        ),
+    # Formatting migration itself remains mechanical and preserves decisions.
+    migrated_outline = copy.deepcopy(legacy_outline)
+    assert fallback._canonicalize_outline_render_text_atoms(migrated_outline)
+    assert migrated_outline["task_partitions"][0]["independent_parts"][0]["text"] == (
+        r"Find energy in 1\ \text{kW h}."
     )
+    outline_calls = []
+
+    def semantic_response(**kwargs):
+        outline_calls.append(kwargs)
+        if kwargs["response_schema"]["name"] == "aegis_chapter_outline_review":
+            return {"verdict": "verified", "issues": []}
+        return {
+            "chapter_title": "Electricity",
+            "topics": [{"title": "Electricity", "kind": "content",
+                        "start_page_id": "PDF-PAGE-0001", "start_reading_order": 1}],
+            "task_partitions": [],
+            "whole_tasks": [{"page_id": "PDF-PAGE-0001", "reading_order": 1,
+                             "task_kind": "question"}],
+            "notes": [],
+        }
+
+    monkeypatch.setattr(fallback.phase22, "_openai_multimodal_json", semantic_response)
+
 
     result = fallback.extract_pdf_to_page_acsd(
         source_path,
@@ -569,18 +588,10 @@ def test_legacy_batch_and_outline_caches_upgrade_without_model_replay(
     assert outline["ingestion_contract_version"] == (
         fallback.INGESTION_CONTRACT_VERSION
     )
-    assert outline["task_partitions"][0]["independent_parts"] == [
-        {
-            "label": "(a)",
-            "stem": r"Use 1\ \text{kW h}.",
-            "text": r"Find energy in 1\ \text{kW h}.",
-        },
-        {
-            "label": "(b)",
-            "stem": "",
-            "text": r"State the answer in \text{J}/\text{s}.",
-        },
-    ]
+    assert len(outline_calls) == 2
+    assert outline["review_provenance"]["status"] == "verified"
+    assert outline["task_partitions"] == []
+    assert json.loads(outline_calls[1]["prompt"])["source_pages"] == result["pages"]
     current_outline_cache = fallback._read_verified_batch_cache(
         fallback._outline_cache_key(lane["sha"])
     )

@@ -492,8 +492,8 @@ def test_append_concepts_migrates_a_legacy_workbook_then_refreshes_its_fields(
     before_max_row = before_ws.max_row
 
     concept.concept_details = "Corrected legacy concept details"
-    # Contract v2.0 §16: keywords are a " | " list; a stored value is
-    # rendered on that delimiter, so the fixture stores it the same way.
+    # Keep a legacy stored delimiter: Q33 refreshes its keywords into the
+    # universal comma-space representation without changing their contents.
     concept.keywords = "corrected | searchable | keywords"
     concept.related_concepts = "Current Legacy Relation"
     basic.group_name = "Legacy Basic Updated"
@@ -517,7 +517,8 @@ def test_append_concepts_migrates_a_legacy_workbook_then_refreshes_its_fields(
 
     for _, row in rows:
         assert writer._cell_str(row, details_col) == concept.concept_details
-        assert writer._cell_str(row, keywords_col) == concept.keywords
+        assert writer._cell_str(row, keywords_col) == (
+            "corrected, searchable, keywords")
         # The legacy "parent: X" marker is gone with the column itself, so
         # related_concepts carries only genuine relations now.
         assert writer._cell_str(row, related_col) == "Current Legacy Relation"

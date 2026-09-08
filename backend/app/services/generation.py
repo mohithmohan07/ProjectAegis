@@ -33,6 +33,7 @@ from aegis_pipeline.openai_policy import (
 
 from .. import bulk_import as bi
 from .. import config, models
+from . import column_spec
 from . import concept_cleanup
 from . import concept_validator as cv
 from . import containers
@@ -326,7 +327,7 @@ def generate_questions_for_concept(
             "question_label": question_label(concept, idx),
             "question_category": category,
             "cognitive_skills": cognitive_skill,
-            "question_source": _concept_publication(concept),
+            "question_source": column_spec.for_metadata({"subject": concept.topic.chapter.subject})["generated_question_source"],
             "level_of_difficulty": difficulty,
             "marks": marks,
             "question_duration": question_duration,
@@ -444,7 +445,7 @@ def _live_questions_for_concept(
                 "question_label": question_label(concept, start_index + n),
                 "question_category": category,
                 "cognitive_skills": cognitive_skill,
-                "question_source": _concept_publication(concept),
+                "question_source": column_spec.for_metadata({"subject": concept.topic.chapter.subject})["generated_question_source"],
                 "level_of_difficulty": difficulty,
                 # The blueprint-cell kernel owns these three semantic values.
                 # Model output cannot silently replace or default them.
@@ -2540,9 +2541,13 @@ Rules:
   given in the metadata block; when none is given return 0. The duration is a
   registry/upload value, never an estimate — do not invent one.
 - topics: one entry per provided topic, using the EXACT same topic strings.
-- topic_description: 2-3 sentences specific to that topic — what it teaches,
+- topic_description: 2-4 original sentences specific to that topic — what it teaches,
   the key ideas/skills among its concepts, and how it connects to the
   neighbouring topics. NEVER just list the concept names.
+- Distinguish narrative development from a mathematical or scientific
+  progression. Explain the relationship between the actual concepts, using
+  the supplied source and settled topology; never borrow a sample chapter's
+  plot, formula, terminology, duration, or number of topics.
 - No source artifacts (Example 3, Exercise 1.2, Fig 4, page numbers) and never
   the words "MMD"/"MMDs".
 """)
@@ -12115,7 +12120,10 @@ def _has_mastery_line(details: str) -> bool:
 
 
 def _has_valid_terminal_mastery(details: str) -> bool:
-    """Whether Description has one substantive canonical mastery ending."""
+    """Whether Description has one nonempty canonical mastery ending.
+
+    Semantic adequacy belongs to the API author and independent critic.
+    """
     description = _concept_description_only(details)
     matches = list(cr._MASTERY_LABEL_RE.finditer(description))
     if len(matches) != 1:
@@ -12127,7 +12135,6 @@ def _has_valid_terminal_mastery(details: str) -> bool:
         and "\n" not in statement
         and "\r" not in statement
         and description.endswith(f"\nAchieving Mastery: {statement}")
-        and cv._is_substantive_mastery_statement(statement)
     )
 
 
@@ -13341,9 +13348,6 @@ _FATAL_CODES = {
     "empty_error_analysis", "duplicate_misconception",
     "duplicate_error_analysis", "missing_misconception_or_error_analysis",
     "issue_section_order", "noncanonical_issue_label",
-    "generic_misconception", "misconception_framing",
-    "generic_error_analysis", "error_analysis_framing",
-    "issue_section_overlap",
     "analysis_section_format", "missing_learner_analysis",
     # Q1 marker accounting: a learner-analysis section on a row the
     # chapter inventory never allotted an item to.
@@ -13357,7 +13361,7 @@ _FATAL_CODES = {
     "verbatim_source_description",
     "missing_type_definition", "generic_type_definition",
     "duplicate_type_definition", "missing_mastery_statement",
-    "mastery_statement_format", "mastery_statement_not_substantive",
+    "mastery_statement_format",
     "duplicate_mastery_statement", "mastery_marker_outside_description",
 }
 
@@ -13374,6 +13378,8 @@ _FATAL_CODES = {
 # 0.8``) while a duplicate QID published without complaint — the exact
 # inversion of Rule 1 and T9. Identity, arithmetic, exactly-once and schema
 # blocking lives at the publication act (T9's closed set), not here.
+# Q34 later removed the analysis wording/overlap and mastery-substance
+# classifiers themselves; this paragraph records the earlier inversion.
 # A LITERAL, pinned by its own test, so "just add one more code to the
 # fatal set" is no longer a one-line change anyone can make quietly.
 _BLOCKING_CODES = frozenset({

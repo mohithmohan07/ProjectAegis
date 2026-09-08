@@ -24,6 +24,7 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import column_spec
 from . import katex_rules
 from . import assessment_release as rel
 from . import semantic_confidence_policy as confidence_policy
@@ -37,7 +38,7 @@ from .phase3 import kernel
 # and mutually exclusive main-vs-subquestion rubrics.
 # ``-8`` adopts Master Governing Contract v2.0 §27.5/§32: every Descriptive
 # rubric criterion carries exactly 0.5 or 1 mark.
-MARKING_POLICY_VERSION = "assessment-marking-8"
+MARKING_POLICY_VERSION = "assessment-marking-9-column-spec"
 _ANSWER_RESTRICTION_AUDIT_FIELD = "_aegis_assessment_answer_restriction"
 
 _PROMPT_CACHE_STABLE_KEYS = (
@@ -48,7 +49,7 @@ _PROMPT_CACHE_STABLE_KEYS = (
     "assessment_format_policy",
 )
 
-MARKING_SYSTEM = (
+MARKING_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUALITY + (
     "You are the Aegis assessment marking author. Author the marking for ONE "
     "finalized assessment candidate after its Open/Specific answer-space "
     "contract has been adopted. The supplied explicit blueprint cell is the "
@@ -64,7 +65,10 @@ MARKING_SYSTEM = (
     "unit; never seconds — and the response-appropriate "
     "math_keyboard value without a local default: Objective requires the "
     "authored empty string; Subjective and Descriptive require exactly Yes "
-    "or No. Obey the supplied assessment_format_policy duration table. For "
+    "or No, chosen from the response requirement in every subject. Follow "
+    "column_spec_policy.math_keyboard if it carries a fixed value from an "
+    "earlier frozen run. Subject name alone never decides keyboard need. "
+    "Obey the supplied assessment_format_policy duration table. For "
     "a per-subpoint rule, author duration_basis_count from the represented "
     "subpoints and make duration its exact prescribed multiple; otherwise "
     "return duration_basis_count as null. For a marks-matrix rule, read the "
@@ -90,10 +94,11 @@ MARKING_SYSTEM = (
     "increments consistent with the represented scoring evidence; never "
     "use token slivers such as 0.1 merely to force a sum. Every Descriptive "
     "rubric criterion — a main answer/rubric block or a subquestion "
-    "keyword — carries EXACTLY 0.5 or 1 mark, never more: marks equal the "
-    "number of criteria satisfied, and an award larger than 1 is split "
-    "into discrete, non-overlapping criteria by the materialized rubric "
-    "(never manufactured here). A single undivided multi-mark criterion "
+    "keyword — carries a positive multiple of 0.5 when "
+    "column_spec_policy.rubric_half_step is true, and exactly 0.5 or 1 "
+    "otherwise. Marks are the sum of the awarded criterion weights, not "
+    "the number of criteria. Choose weights from the represented demands "
+    "without changing or manufacturing criteria here. A single undivided 4-mark criterion "
     "is invalid — the audited failure put all 4 marks on one criterion "
     "(owner audit, 2026-08-29; Master Governing Contract v2.0 §27).\n"
     "Return ONLY strict JSON:\n"
@@ -103,7 +108,7 @@ MARKING_SYSTEM = (
     '"math_keyboard":"Yes|No|","rationale":"evidence-bound reason"}'
 )
 
-MARKING_CRITIC_SYSTEM = (
+MARKING_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + (
     "You are the independent advisory critic for one Aegis assessment "
     "marking verdict. Audit the proposed mark decomposition, duration, and "
     "keyboard mode against the complete finalized candidate, its adopted "
@@ -543,6 +548,7 @@ def _semantic_subquestions(value: Any) -> list[dict[str, Any]] | None:
 def _weight_defects(
     response: Mapping[str, Any], *, kind: str, total_marks: Decimal,
     marks_rule: Mapping[str, Any],
+    half_step: bool = False,
 ) -> list[str]:
     defects: list[str] = []
     answers = response.get("answers")
@@ -641,6 +647,7 @@ def _weight_defects(
             answer_weights.append(weight)
             quantum = rel.rubric_weight_quantum_defect(
                 weight, what=f"descriptive rubric {position}",
+                half_step=half_step,
             )
             if quantum:
                 defects.append(quantum)
@@ -652,7 +659,7 @@ def _weight_defects(
     if (
         score_in_main_answers
         and len(answer_weights) == len(answers)
-        and sum(answer_weights, Decimal(0)) != total_marks
+        and rel.exact_weight_sum(answer_weights) != total_marks
     ):
         defects.append(
             f"answer weights must sum exactly to total marks {total_marks}"
@@ -698,19 +705,22 @@ def _weight_defects(
             quantum = rel.rubric_weight_quantum_defect(
                 weight,
                 what=f"subquestion {position} keyword {keyword_position}",
+                half_step=half_step,
             )
             if quantum:
                 defects.append(quantum)
-        if len(keyword_weights) == len(keywords) and sum(
-            keyword_weights, Decimal(0)
-        ) != sub_mark:
+        if (
+            len(keyword_weights) == len(keywords)
+            and rel.exact_weight_sum(keyword_weights) != sub_mark
+        ):
             defects.append(
                 f"subquestion {position} keyword weights must sum exactly "
                 "to its marks"
             )
-    if len(sub_marks) == len(subquestions) and sum(
-        sub_marks, Decimal(0)
-    ) != total_marks:
+    if (
+        len(sub_marks) == len(subquestions)
+        and rel.exact_weight_sum(sub_marks) != total_marks
+    ):
         defects.append(
             f"subquestion marks must sum exactly to total marks {total_marks}"
         )
@@ -814,7 +824,9 @@ def _checker(
     total_marks: Decimal,
     duration_rule: Mapping[str, Any],
     marks_rule: Mapping[str, Any],
+    column_policy: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
+    column_policy = column_policy or {}
     candidate_evidence = _content_evidence(candidate)
     expected_answers = _semantic_answers(candidate_evidence.get("answers"))
     expected_subquestions = _semantic_subquestions(
@@ -998,6 +1010,8 @@ def _checker(
             )
         if not _nonempty_text(response.get("rationale")):
             defects.append("rationale must be a non-empty string")
+        if kind in {"subjective", "descriptive"} and column_policy.get("math_keyboard") == "No" and keyboard != "No":
+            defects.append("math_keyboard must be exactly No under the carried column policy")
 
         defects.extend(
             _weight_defects(
@@ -1005,6 +1019,7 @@ def _checker(
                 kind=kind,
                 total_marks=total_marks,
                 marks_rule=marks_rule,
+                half_step=bool(column_policy.get("rubric_half_step")),
             )
         )
         return defects
@@ -1199,6 +1214,7 @@ def _payload(
         "critic_rules": MARKING_CRITIC_SYSTEM,
         "metadata": _content_evidence(meta),
         "assessment_format_policy": _content_evidence(format_policy),
+        "column_spec_policy": column_spec.from_metadata(meta),
         "candidate": _content_evidence(candidate),
         "adopted_answer_contract": _content_evidence(contract),
         "blueprint_evidence": {
@@ -1275,6 +1291,7 @@ def decide_markings(
     envelope_sha = _envelope_hash(envelope_sha256)
     metadata = _metadata(meta)
     run_profile = assessment_profile.resolve_for_metadata(profile, metadata)
+    metadata = column_spec.bind_metadata(metadata, run_profile)
     format_policy = assessment_profile.assessment_format_policy(
         run_profile, metadata,
     )
@@ -1330,6 +1347,7 @@ def decide_markings(
                 candidate_id=candidate_id,
                 kind=str(cell["sheet_kind"]),
                 total_marks=total_marks,
+                column_policy=column_spec.from_profile(run_profile),
                 duration_rule=(
                     _format_rule(
                         format_policy,

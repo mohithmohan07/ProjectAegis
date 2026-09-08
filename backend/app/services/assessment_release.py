@@ -17,11 +17,12 @@ import json
 import math
 import re
 import uuid
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 from typing import Any, Iterable, Mapping
 
 from .. import bulk_import as bi
 from . import assessment_profile
+from . import column_spec
 # Aliased: three functions in this module use ``identity`` as a local.
 from . import identity as identity_mod
 from . import katex_rules
@@ -145,9 +146,10 @@ GENERATED_SOURCE_POLICY = "generate"
 # registry. A tag is REQUIRED at the head of every populated textual rubric
 # criterion of an English Descriptive item and FORBIDDEN everywhere else:
 # every other field of an English item, and every rubric of every other
-# subject (§28.3). ``[creative]`` is the deprecated spelling (§2.1) and is
-# invalid everywhere. The historical registry (method/working/diagram/…) is
-# superseded by this contract.
+# subject (§28.3). These defaults serve legacy profiles; an explicitly
+# carried column policy supplies its own registry. The v1 owner snapshot
+# uses ``creative`` and v2 uses ``creativity``. Both spellings are recognised
+# by the leakage detector so neither can enter learner-facing fields.
 RUBRIC_TAGS = (
     "content", "evidence", "reasoning", "organisation", "language",
     "creativity", "accuracy",
@@ -201,6 +203,7 @@ def rubric_tag_of(value: Any) -> tuple[str, str] | None:
 def malformed_rubric_tag(
     value: Any, answer_type: Any = "Phrases", *,
     tags_required: bool | None = None,
+    allowed_tags: Iterable[str] | None = None,
 ) -> bool:
     """Whether a Descriptive textual rubric criterion breaks tag containment.
 
@@ -242,7 +245,8 @@ def malformed_rubric_tag(
         # refuses only the shapes that are malformed under every rule.
         return False
     lowered = tag.casefold()
-    if lowered in DEPRECATED_RUBRIC_TAGS or lowered not in RUBRIC_TAGS:
+    registry = tuple(allowed_tags) if allowed_tags is not None else RUBRIC_TAGS
+    if lowered not in registry:
         return True
     return tag != lowered  # exact lowercase spelling (§28.2)
 
@@ -262,20 +266,23 @@ def rubric_tag_leaks(value: Any) -> list[str]:
     ]
 
 
-def _answer_prefix_key(value: Any) -> str:
+def _answer_prefix_key(value: Any, *, case_sensitive: bool = False) -> str:
     """Whitespace/punctuation-insensitive comparison key for a leading answer."""
 
-    text = str(value or "").replace("\n", " ").strip().casefold()
+    text = str(value or "").replace("\n", " ").strip()
+    if not case_sensitive:
+        text = text.casefold()
     text = re.sub(r"\s+", " ", text)
     return text.rstrip(" .;:,!?")
 
 
 def objective_explanation_defects(
-    answers: list[Mapping], explanation: Any,
+    answers: list[Mapping], explanation: Any, *,
+    include_option_label: bool = False,
 ) -> list[str]:
     """Contract v2.0 §22.5 (QST-003): the Objective explanation opens with the
-    exact correct-answer text, then the rationale; never an option letter,
-    number or "option b".
+    exact correct-answer text, then the rationale. The current English
+    column policy instead requires the lowercase option label first.
 
     Mechanics only: the correct option is the model's recorded marker and
     the comparison is a normalized prefix test — the contract's own gate
@@ -304,19 +311,34 @@ def objective_explanation_defects(
     medium = str(key.get("answer_type") or "").strip().lower()
     if medium == "image":
         return []
-    accepted = {_answer_prefix_key(content)}
+    accepted = {_answer_prefix_key(content, case_sensitive=include_option_label)}
     if medium == "equation":
         from . import katex_rules
 
         accepted.add(_answer_prefix_key(
-            katex_rules.rich_answer_display("Equation", content)
+            katex_rules.rich_answer_display("Equation", content),
+            case_sensitive=include_option_label,
         ))
     accepted.discard("")
-    actual = _answer_prefix_key(text)
-    if accepted and not any(actual.startswith(head) for head in accepted):
+    if include_option_label:
+        index = next(i for i, answer in enumerate(answers) if answer is key)
+        label = f"{chr(ord('a') + index)}) "
+        accepted = {label + value for value in accepted}
+    actual = _answer_prefix_key(text, case_sensitive=include_option_label)
+
+    def matches(head: str) -> bool:
+        if not actual.startswith(head):
+            return False
+        if not include_option_label:
+            return True
+        tail = actual[len(head):]
+        return not tail or tail[0].isspace() or tail[0] in ".:;!?—–"
+
+    if accepted and not any(matches(head) for head in accepted):
         return [
-            "answer_explanation must begin with the exact correct "
-            f"answer text {content.strip()!r}"
+            "answer_explanation must begin with "
+            + ("the option label and " if include_option_label else "")
+            + f"the exact correct answer text {content.strip()!r}"
         ]
     return []
 
@@ -349,12 +371,40 @@ def descriptive_answer_parity_defects(
 RUBRIC_CRITERION_WEIGHTS = (Decimal("0.5"), Decimal("1"))
 
 
-def rubric_weight_quantum_defect(weight: Decimal | None, *, what: str) -> str:
+def exact_weight_sum(weights: Iterable[Decimal]) -> Decimal:
+    """Sum validated finite weights without rounding away a small award.
+
+    The owner policy permits weights above one mark. Decimal's ambient
+    precision must therefore not make, for example, ``1E50 + 0.5 == 1E50``
+    pass an exact arithmetic gate. Reserve every represented decimal place
+    and enough leading digits for a carry across the complete sum.
+    """
+
+    values = list(weights)
+    if not values:
+        return Decimal(0)
+    lowest_place = min(value.as_tuple().exponent for value in values)
+    highest_place = max(value.adjusted() for value in values)
+    carry_places = len(str(len(values)))
+    with localcontext() as context:
+        context.prec = max(
+            context.prec, highest_place - lowest_place + carry_places + 1,
+        )
+        return sum(values, Decimal(0))
+
+
+def rubric_weight_quantum_defect(
+    weight: Decimal | None, *, what: str, half_step: bool = False,
+) -> str:
     """Contract v2.0 §27.5 / §32 (RUB-002): a rubric criterion carries
     exactly ``0.5`` or ``1``; a larger award is split into discrete
     criteria.  Returns the defect text, or ``""`` when the weight is legal
     (or unparsable — that is reported by the numeric gate, not here)."""
 
+    if half_step:
+        if weight is None or column_spec.half_step(weight):
+            return ""
+        return f"{what} weight {weight:g} must be a positive multiple of 0.5"
     if weight is None or weight in RUBRIC_CRITERION_WEIGHTS:
         return ""
     return (
@@ -471,6 +521,7 @@ def validate_candidate(
     # of every textual Descriptive rubric criterion; every other run forbids
     # one. Read from the run's frozen subject metadata (mechanics).
     tags_required = assessment_profile.rubric_tags_required(profile)
+    column_policy = column_spec.from_profile(assessment_profile.resolve(profile))
     restriction = candidate.get("answer_restriction")
     if restriction not in ANSWER_RESTRICTIONS:
         # Never silently default an unknown restriction (spec §3.5).
@@ -548,6 +599,7 @@ def validate_candidate(
         if kind == "descriptive" and malformed_rubric_tag(
             answer.get("answer_content"), answer_type,
             tags_required=tags_required,
+            allowed_tags=column_policy.get("rubric_tags") if tags_required else None,
         ):
             errors.append(
                 f"descriptive rubric {position} breaks English rubric-tag "
@@ -626,6 +678,7 @@ def validate_candidate(
             errors.append("objective candidate must not have subquestions")
         errors.extend(objective_explanation_defects(
             answers, candidate.get("answer_explanation"),
+            include_option_label=column_policy.get("objective_explanation_prefix") == "option_label_and_answer",
         ))
     elif kind == "subjective":
         if keyboard not in {"Yes", "No"}:
@@ -662,11 +715,11 @@ def validate_candidate(
                 weights.append(weight)
         if (
             len(weights) == len(answers)
-            and sum(weights, Decimal(0)) != marks
+            and exact_weight_sum(weights) != marks
         ):
             errors.append(
                 f"subjective answer weightage sum "
-                f"{sum(weights, Decimal(0)):g} != marks {marks:g}"
+                f"{exact_weight_sum(weights):g} != marks {marks:g}"
             )
     elif kind == "descriptive":
         if keyboard not in {"Yes", "No"}:
@@ -699,10 +752,11 @@ def validate_candidate(
                 weights.append(weight)
                 quantum = rubric_weight_quantum_defect(
                     weight, what=f"descriptive rubric {position}",
+                    half_step=bool(column_policy.get("rubric_half_step")),
                 )
                 if quantum:
                     errors.append(quantum)
-        weight_sum = sum(weights, Decimal(0))
+        weight_sum = exact_weight_sum(weights)
         if (
             not subquestions
             and len(weights) == len(answers)
@@ -780,6 +834,7 @@ def validate_candidate(
                     if malformed_rubric_tag(
                         keyword.get("keyword"), keyword_type,
                         tags_required=tags_required,
+                        allowed_tags=column_policy.get("rubric_tags") if tags_required else None,
                     ):
                         errors.append(
                             f"subquestion {position} keyword "
@@ -801,28 +856,33 @@ def validate_candidate(
                                 f"subquestion {position} keyword "
                                 f"{keyword_position}"
                             ),
+                            half_step=bool(column_policy.get("rubric_half_step")),
                         )
                         if quantum:
                             errors.append(quantum)
                 if (
                     len(keyword_weights) == len(keywords)
-                    and sum(keyword_weights, Decimal(0)) != sub_mark
+                    and exact_weight_sum(keyword_weights) != sub_mark
                 ):
                     errors.append(
                         f"subquestion {position} keyword weightage sum "
-                        f"{sum(keyword_weights, Decimal(0)):g} != "
+                        f"{exact_weight_sum(keyword_weights):g} != "
                         "subquestion marks "
                         f"{sub_mark:g}"
                     )
             if (
                 len(sub_marks) == len(subquestions)
-                and sum(sub_marks, Decimal(0)) != marks
+                and exact_weight_sum(sub_marks) != marks
             ):
                 errors.append(
-                    f"subquestion marks sum {sum(sub_marks, Decimal(0)):g} "
+                    f"subquestion marks sum {exact_weight_sum(sub_marks):g} "
                     "!= marks "
                     f"{marks:g}"
                 )
+    if kind in {"objective", "subjective"} and column_policy and candidate.get("answer_restriction") != "Specific":
+        errors.append(f"{kind} answer_restriction must be Specific")
+    if kind in {"subjective", "descriptive"} and column_policy.get("math_keyboard") == "No" and keyboard != "No":
+        errors.append("math_keyboard must be exactly No under the carried column policy")
     # Contract v2.0 §28.3 / Appendix C.3 (RUB-004): no rubric tag in any
     # question, option, accepted answer, model answer or explanation.
     errors.extend(model_answer_leak_defects(candidate, sheet_kind=str(kind)))

@@ -13,6 +13,8 @@ their explicit ``NA`` description without spending a model call.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 import json
 from typing import Any, Mapping
@@ -25,12 +27,12 @@ from .phase3 import kernel
 
 TIER_CODES = identity.GROUP_TIER_CODES
 
-LEVEL_POLICY_VERSION = "assessment-level-1"
-VARIANT_CLUSTER_POLICY_VERSION = "assessment-variant-cluster-1"
-GROUP_DESCRIPTION_POLICY_VERSION = "assessment-group-description-1"
+LEVEL_POLICY_VERSION = "assessment-level-1-column-spec"
+VARIANT_CLUSTER_POLICY_VERSION = "assessment-variant-cluster-1-column-spec"
+GROUP_DESCRIPTION_POLICY_VERSION = "assessment-group-description-1-column-spec"
 
 LEVEL_SYSTEM = (
-    "You are the Aegis assessment-level author. Decide whether this one "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-level author. Decide whether this one "
     "question belongs in Basic, Intermediate, or Advanced by reading the "
     "complete question, expected answer and rubric, source and routing "
     "evidence, assets, and the home concept's teaching description. The "
@@ -40,11 +42,11 @@ LEVEL_SYSTEM = (
     "balance, spread, or infer a tier from how many questions exist.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","tier":"Basic|Intermediate|Advanced",'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 LEVEL_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one assessment-level "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one assessment-level "
     "verdict. Audit the proposed tier against the complete question, answer "
     "and rubric, source and route evidence, assets, and home-concept "
     "description. Do not substitute a blueprint difficulty label, balance "
@@ -52,11 +54,11 @@ LEVEL_CRITIC_SYSTEM = (
     "advisory: the proposed verdict stands and your concerns ship for "
     "review. State your honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 CLUSTER_SYSTEM = (
-    "You are the Aegis variant-clustering author. Partition the supplied "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis variant-clustering author. Partition the supplied "
     "assessment questions (all sharing one concept and one authored tier) "
     "into semantic variant families. One family means: the same "
     "atomic assessed idea, the same questioning intent, materially "
@@ -76,11 +78,11 @@ CLUSTER_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"concept_key":"","tier":"Basic|Intermediate|Advanced",'
     '"families":[{"existing_group_key":"","family":"short name",'
-    '"member_candidate_ids":[""]}],"rationale":"evidence-bound reason"}'
+    '"member_candidate_ids":[""]}],"rationale":"evidence-bound reason"}')
 )
 
 CLUSTER_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis variant-family "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis variant-family "
     "verdict. Audit the proposed partition against the complete questions, "
     "answers and rubrics, source and route evidence, assets, and the home "
     "concept. Flag families that mix different assessed ideas, intents, "
@@ -89,12 +91,12 @@ CLUSTER_CRITIC_SYSTEM = (
     "gate the partition; dissent ships as review evidence. State your honest "
     "confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 DESCRIBE_SYSTEM = (
-    "You are the Aegis group-description author. Write ONE concise "
-    "description of this assessment group from ALL of its member "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis group-description author. Write ONE original, concise "
+    "sentence in evaluator-facing language about this group from ALL of its member "
     "questions. It must state HOW the learner is assessed and WHAT "
     "capability is assessed — for example 'Visual classification of "
     "everyday objects as two- or three-dimensional shapes' or 'Solving a "
@@ -105,18 +107,18 @@ DESCRIBE_SYSTEM = (
     "generic difficulty prose ('Basic assessments for Shapes').\n"
     "Return ONLY strict JSON:\n"
     '{"group_key":"","description":"",'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 DESCRIBE_CRITIC_SYSTEM = (
-    "You are the independent advisory Aegis group-description critic. "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory Aegis group-description critic. "
     "Audit the description against the complete member questions: it "
     "must state HOW and WHAT is assessed, be true of every member, and "
     "contain no label lists, counts, membership history, or generic "
     "difficulty prose. Do not revise or gate the description; dissent ships "
     "as review evidence. State your honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 

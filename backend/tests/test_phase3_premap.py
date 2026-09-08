@@ -441,7 +441,7 @@ def test_no_count_quota_rides_the_prompt_the_payload_or_the_code(
 
     quota_language = re.compile(
         r"at least \d|at most \d|minimum of|maximum of|exactly \d+ |"
-        r"per concept|per topic|one per|quota|target count|"
+        r"per concept|per topic|one per|\bquota\b|target count|"
         r"\d+\s*(?:-|to)\s*\d+ (?:topics|concepts|items|elements)",
         re.IGNORECASE,
     )

@@ -70,6 +70,7 @@ which lane allotted it.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Callable, Mapping
 
@@ -79,6 +80,17 @@ from ... import config
 from .. import progress
 
 POLICY_VERSION = "pre-analysis-1"
+
+
+def _policy_version(author_system: str) -> str:
+    """Bind saved judgments to the exact author and independent critic."""
+    from . import prompts
+
+    digest = hashlib.sha256((
+        getattr(prompts, author_system) + "\n" + prompts.PREANALYSE_CRITIC_SYSTEM
+    ).encode("utf-8")).hexdigest()
+    return POLICY_VERSION + ";prompts:" + digest
+
 
 ITEM_KINDS = ("misconception", "error_analysis")
 
@@ -386,7 +398,7 @@ def analyse(
         checker=_inventory_checker(),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION,
+        policy_version=_policy_version("PREANALYSE_INVENTORY_SYSTEM"),
         fixer=fixer,
     )
     inventory: list[dict[str, Any]] = []
@@ -412,6 +424,8 @@ def analyse(
         "(model-judged; a thin pre-learning map is never padded)."
     )
     if not inventory:
+        if build_flags:
+            empty["inventory_review_flags"] = build_flags
         return empty
 
     # ---- 4.3 Allot: every item to exactly one pre-concept ------------
@@ -475,7 +489,7 @@ def analyse(
             ),
             critic=critic,
             store=store,
-            policy_version=POLICY_VERSION,
+            policy_version=_policy_version("PREANALYSE_ALLOT_SYSTEM"),
             fixer=fixer,
         )
         decided = {
@@ -559,6 +573,15 @@ def stamp(
         str(row.get("_pre_concept_id") or ""): row for row in rows
     }
     row_flags: dict[str, list[str]] = {}
+    inventory_flags = [
+        str(flag) for flag in result.get("inventory_review_flags") or []
+        if str(flag).strip()
+    ]
+    if inventory_flags:
+        # The empty inventory's review concerns the Pre map as a whole;
+        # it is not an invented item or an analysis allotment.
+        for pre_id in row_by_id:
+            row_flags[pre_id] = list(inventory_flags)
 
     unallotted = sorted(set(item_by_id) - set(allotments))
     if unallotted:

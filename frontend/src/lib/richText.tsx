@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 
 /**
  * Pure rendering of the house `concept_details` format.
@@ -6,14 +8,14 @@ import type { ReactNode } from "react";
  * The string is " // "-joined sections: the first is the description, later
  * ones carry a "Label:" prefix. Inside a section, three inline tokens exist:
  *
- *   [Katex] ... [/Katex]              raw LaTeX (typeset later — recorded
- *                                     follow-up; shown verbatim in <code>)
+ *   [Katex] ... [/Katex]              LaTeX rendered with the target KaTeX engine
  *   [img src="https://…" alt="…"]     an image, https only
  *   [text](https://url)               a link, https only
  *
- * Everything is built as React elements from plain strings — no HTML parsing,
- * no innerHTML — so source content can never inject markup (XSS is
- * structurally impossible). A token that does not qualify (http image, http
+ *   <br>                             the canonical workbook line break
+ *
+ * Source HTML is never parsed. Only math is handed to KaTeX, with trust off,
+ * bounded expansion and fresh per-expression macros. A token that does not qualify (http image, http
  * link) is rendered as its literal text rather than dropped: the reviewer
  * must see exactly what the release carries.
  *
@@ -51,7 +53,27 @@ export function splitSections(details: string): DetailSection[] {
 // link pattern and [img …] is distinguished by its attribute shape. Capture
 // groups: 1 = katex body, 2/3 = img src/alt, 4/5 = link text/url.
 const TOKEN_RE =
-  /\[Katex\]([\s\S]*?)\[\/Katex\]|\[img src="([^"]*)" alt="([^"]*)"\]|\[([^\]]*)\]\(([^()\s]+)\)/g;
+  /\[Katex\]([\s\S]*?)\[\/Katex\]|\[img src="([^"]*)" alt="([^"]*)"\]|\[([^\]]*)\]\(([^()\s]+)\)|(<br>)/g;
+
+/** Render mathematics without interpreting any surrounding source as HTML. */
+function MathExpression({ latex }: { latex: string }) {
+  const target = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!target.current) return;
+    // Malformed input stays visible in KaTeX's error rendering. Preview must
+    // not silently lose a formula or crash the rest of the review page.
+    katex.render(latex, target.current, {
+      throwOnError: false,
+      trust: false,
+      strict: "warn",
+      output: "htmlAndMathml",
+      maxSize: 20,
+      maxExpand: 1000,
+      macros: {},
+    });
+  }, [latex]);
+  return <span className="katex-inline" ref={target} />;
+}
 
 export function renderInline(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
@@ -61,13 +83,9 @@ export function renderInline(text: string): ReactNode[] {
   for (let m = TOKEN_RE.exec(text); m !== null; m = TOKEN_RE.exec(text)) {
     if (m.index > last) nodes.push(text.slice(last, m.index));
     const matched = m[0];
-    const [, katex, imgSrc, imgAlt, linkText, linkUrl] = m;
-    if (katex !== undefined) {
-      nodes.push(
-        <code className="katex-inline" key={key++}>
-          {katex}
-        </code>,
-      );
+    const [, mathBody, imgSrc, imgAlt, linkText, linkUrl, lineBreak] = m;
+    if (mathBody !== undefined) {
+      nodes.push(<MathExpression latex={mathBody} key={key++} />);
     } else if (imgSrc !== undefined) {
       if (imgSrc.startsWith("https://")) {
         nodes.push(<img src={imgSrc} alt={imgAlt} loading="lazy" key={key++} />);
@@ -80,6 +98,8 @@ export function renderInline(text: string): ReactNode[] {
           {linkText}
         </a>,
       );
+    } else if (lineBreak !== undefined) {
+      nodes.push(<br key={key++} />);
     } else {
       nodes.push(matched);
     }

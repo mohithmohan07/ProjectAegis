@@ -151,12 +151,6 @@ _MASTERY_MARKER_RE = re.compile(
 _CANONICAL_MASTERY_LINE_RE = re.compile(
     r"\nAchieving Mastery: (?P<statement>[^\r\n]+)$",
 )
-_GENERIC_MASTERY_STATEMENT_RE = re.compile(
-    r"^(?:applying|using|understanding|mastering|doing)\s+"
-    r"(?:the|this)\s+(?:concept|topic|idea|material)"
-    r"(?:\s+correctly|\s+well|\s+independently)?\.?$",
-    re.IGNORECASE,
-)
 _DESCRIPTION_LABEL_RE = re.compile(r"\bDescription\s*:", re.IGNORECASE)
 _IMAGE_URL_RE = re.compile(
     r"!\[[^\]]*\]\(https?://[^)]+\)|"
@@ -261,208 +255,6 @@ _SOURCE_ARTIFACT_NO_FIGURE_RE = re.compile(
     r"pages?\.?\s*(?:no\.?\s*)?\d+|p\.?\s*\d+)\b",
     re.IGNORECASE,
 )
-
-# A misconception is a commonly held incorrect belief or interpretation.  It
-# therefore needs explicit learner-belief framing, rather than merely naming a
-# step that a learner might perform incorrectly.  The latter belongs in Error
-# Analysis.
-_MISCONCEPTION_BELIEF_RE = re.compile(
-    r"\b(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
-    r"(?:(?:incorrectly|wrongly|mistakenly)\s+)?"
-    r"(?:believe|think|assume|expect|interpret|misinterpret|misunderstand|"
-    r"regard|consider|"
-    r"confuse|mistake|treat)\b",
-    re.IGNORECASE,
-)
-_GENERIC_MISCONCEPTION_TEXT_RE = re.compile(
-    r"^(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
-    r"(?:misunderstand|misinterpret|be confused (?:about|by))\s+"
-    r"(?:the|this)\s+(?:concept|topic|idea|material)\.?$",
-    re.IGNORECASE,
-)
-_GENERIC_BELIEF_OBJECT_RE = re.compile(
-    r"^(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
-    r"(?:(?:incorrectly|wrongly|mistakenly)\s+)?"
-    r"(?:believe|think|assume|expect|interpret|regard|consider|treat)\s+"
-    r"(?:this|that|it|something|(?:the|this)\s+"
-    r"(?:concept|topic|idea|material))\.?$",
-    re.IGNORECASE,
-)
-_INCOMPLETE_BELIEF_RE = re.compile(
-    r"^(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
-    r"(?:(?:incorrectly|wrongly|mistakenly)\s+)?"
-    r"(?:believe|think|assume|expect|interpret|regard|consider|treat)\s*\.?$",
-    re.IGNORECASE,
-)
-_BARE_MISUNDERSTANDING_RE = re.compile(
-    r"^(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
-    r"(?:(?:incorrectly|wrongly|mistakenly)\s+)?"
-    r"(?:misunderstand|misinterpret|confuse|mistake|treat|interpret)\s+"
-    r"(?P<object>.+?)\.?$",
-    re.IGNORECASE,
-)
-_MISUNDERSTANDING_SPECIFICITY_RE = re.compile(
-    r"\b(?:that|how|why|when|whether|as|for|with|and|versus|vs\.?|"
-    r"always|never|only|means?|requires?)\b",
-    re.IGNORECASE,
-)
-_LEARNER_ACTOR_RE = re.compile(
-    r"\b(?:students?|learners?|children)\b",
-    re.IGNORECASE,
-)
-
-# Error Analysis names a plausible mistake made while applying a concept.  It
-# may be procedural, computational, representational, or reasoning based, but
-# it must not be a belief statement or a disguised correction.
-_ERROR_ANALYSIS_BELIEF_RE = re.compile(
-    r"\b(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|often|sometimes|commonly)\s+)?"
-    r"(?:(?:incorrectly|wrongly|mistakenly)\s+)?"
-    r"(?:believe|think|assume|expect|interpret|misinterpret|misunderstand|"
-    r"regard|consider|"
-    r"confuse|mistake|treat)\b",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_ACTION_RE = re.compile(
-    r"\b(?:omit(?:s|ted|ting)?|skip(?:s|ped|ping)?|"
-    r"drop(?:s|ped|ping)?|reverse(?:s|d|ing)?|swap(?:s|ped|ping)?|"
-    r"misread(?:s|ing)?|miscop(?:y|ies|ied|ying)|"
-    r"miscalculat(?:e|es|ed|ing)|mislabel(?:s|led|ling)?|"
-    r"misplac(?:e|es|ed|ing)|misappl(?:y|ies|ied|ying)|"
-    r"los(?:e|es|t|ing)|ignor(?:e|es|ed|ing)|"
-    r"overlook(?:s|ed|ing)?|fail(?:s|ed|ing)?\s+to|"
-    r"forget(?:s|ting)?\s+to|forgot(?:ten)?\s+to)\b",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_ACTOR_RE = re.compile(
-    r"\b(?:students?|learners?|children)\b|\b(?:a\s+)?common\s+"
-    r"(?:error|mistake|misstep)\b",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_SPECIFIC_MISTAKE_RE = re.compile(
-    r"\b(?:instead\s+of|rather\s+than|incorrectly|wrong(?:ly)?|"
-    r"too\s+(?:early|late|many|few|much|little))\b|"
-    r"\bwithout\s+(?:first\s+)?[a-z]+ing\b|"
-    r"\bas\s+(?:an?\s+)?(?:final|complete|conclusive)\s+"
-    r"(?:answer|explanation|proof|conclusion)\b|"
-    r"\bthat\s+(?:cannot|does\s+not|do\s+not|fails?\s+to)\b|"
-    r"\bfrom\s+(?:only\s+)?(?:one|a\s+single)\b",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_PROCEDURAL_MISTAKE_RE = re.compile(
-    r"\b(?:change|vary|alter|control)"
-    r"(?:s|d|ed|ing|ies|ied)?\s+"
-    r"(?:more\s+than\s+one|multiple|two\s+(?:variables?|factors?|"
-    r"conditions?)\s+(?:at\s+once|simultaneously))\b|"
-    r"\b(?:record|measure|label|plot|classify)"
-    r"(?:s|d|ed|ing|ies|ied)?\s+"
-    r"(?:an?\s+|the\s+)?(?:incomplete|inaccurate|wrong)\b|"
-    r"\b(?:compare|combine|group|classify)"
-    r"(?:s|d|ed|ing|ies|ied)?\s+"
-    r"(?:unlike|incompatible|unrelated)\b|"
-    r"\b(?:draw|reach|make)(?:s|d|es|ed|ing)?\s+"
-    r"(?:an?\s+|the\s+)?conclusion\s+"
-    r"(?:after|from|using)\s+(?:only\s+)?(?:one|a\s+single)\b",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_CONTEXTUAL_PROCEDURAL_RE = re.compile(
-    r"\b(?:instead\s+of|rather\s+than)\b|"
-    r"\bwithout\s+(?:first\s+)?[a-z]+ing\b|"
-    r"\bas\s+(?:an?\s+)?(?:final|complete|conclusive)\s+"
-    r"(?:answer|explanation|proof|conclusion)\b|"
-    r"\bthat\s+(?:cannot|does\s+not|do\s+not|fails?\s+to)\b|"
-    r"\bfrom\s+(?:only\s+)?(?:one|a\s+single)\b",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_ONLY_ACTION_RE = re.compile(
-    r"\b(?:add|subtract|multiply|divide|copy|quote|use|apply|compare|"
-    r"analy[sz]e|select|choose|read|write|label|plot|draw|count|combine|"
-    r"interpret|paraphrase|translate|test|check|record|measure|infer|"
-    r"conclude|explain|classify|identify|observe)"
-    r"(?:s|d|ed|ing|ies|ied)?\s+"
-    r"only\s+(?:the\s+|a\s+|an\s+)?[a-z]",
-    re.IGNORECASE,
-)
-# The generation contract also permits concise arithmetic/procedural actions
-# when the sentence names both the faulty execution and its consequence.  Keep
-# this narrower than the bare verb list: "Students may add the values" remains
-# generic, while "add ... before ..., producing an incorrect ..." is a
-# concrete, testable learner error.
-_ERROR_ANALYSIS_ACTION_CONSEQUENCE_RE = re.compile(
-    r"\b(?:add|subtract|multiply|divide|count|group)"
-    r"(?:s|d|ed|ing|ies|ied)?\b"
-    r"[^.!?]{0,180}?"
-    r"(?:\btwice\b[^.!?]{0,120}?(?:caus|produc|result|increas|decreas)"
-    r"(?:e|es|ed|ing)?\b|"
-    r"\b(?:before|after)\b[^.!?]{0,120}?(?:caus|produc|result)"
-    r"(?:e|es|ed|ing)?\b|"
-    r"\b(?:caus|produc|result)(?:e|es|ed|ing)?\b[^.!?]{0,120}?"
-    r"\b(?:incorrect|wrong|invalid|extra|missing|reversed?)\b)",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_CORRECTION_RE = re.compile(
-    r"\b(?:should|must|correct(?:ly)?|remember\s+that|"
-    r"in\s+fact|actually|the\s+correct\s+(?:idea|rule|answer|method))\b",
-    re.IGNORECASE,
-)
-_ERROR_ANALYSIS_NEGATED_ACTION_RE = re.compile(
-    r"^\s*(?:a\s+)?common\s+(?:error|mistake|misstep)\s+"
-    r"(?:is|would\s+be)\s+not\s+(?:to\s+)?[a-z]+(?:ing)?\b",
-    re.IGNORECASE,
-)
-_GENERIC_ERROR_ANALYSIS_RE = re.compile(
-    r"^(?:(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|can|often|sometimes)\s+)?"
-    r"(?:make|commit|have)\s+(?:a\s+)?"
-    r"(?:mistake|mistakes|error|errors|calculation errors?|procedural errors?)|"
-    r"(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|can|often|sometimes)\s+)?"
-    r"(?:apply|use)\s+(?:the|this)\s+(?:concept|method|rule)\s+incorrectly|"
-    r"(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|can|often|sometimes)\s+)?get\s+(?:a\s+)?wrong answer|"
-    r"(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|can|often|sometimes)\s+)?"
-    r"(?:[a-z]+ly\s+)*[a-z]+\s+"
-    r"(?:(?:(?:the|this|a)\s+)?(?:concept|method|rule|formula|task|"
-    r"problem|question|calculation|value|answer)\s+)?"
-    r"(?:incorrectly|wrongly)|"
-    r"(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|can|often|sometimes)\s+)?"
-    r"(?:[a-z]+ly\s+)*"
-    r"(?:choose|select|give|write|calculate|compute|produce|reach)\s+"
-    r"(?:a\s+|the\s+)?wrong\s+(?:answer|option|response|result|conclusion)|"
-    r"errors?\s+(?:may|might|can)\s+occur|"
-    r"(?:students?|learners?|children)\s+"
-    r"(?:(?:may|might|can|often|sometimes)\s+)?"
-    r"(?:struggle\b.*|encounter\s+difficult(?:y|ies)\b.*|"
-    r"have\s+difficult(?:y|ies)\b.*|find\b.*\bdifficult\b.*))\.?$",
-    re.IGNORECASE,
-)
-_TERMINAL_GENERIC_ANALYSIS_FILLER_RE = re.compile(
-    r"^Students\s+may\s+(?:"
-    r"assume\s+.+?\s+is\s+a\s+rule\s+that\s+always\s+applies\s+without\s+"
-    r"checking\s+its\s+conditions,\s*context,\s*or\s+representation"
-    r"|apply\s+.+?\s+as\s+a\s+memorized\s+rule\s+without\s+checking\s+"
-    r"the\s+conditions,\s*context,\s*or\s+representation\s+given\s+in\s+"
-    r"the\s+problem"
-    r")\.?$",
-    re.IGNORECASE,
-)
-
-_ISSUE_COMPARISON_STOP_WORDS = {
-    "a", "an", "and", "are", "as", "at", "be", "believe", "believes",
-    "by", "can", "children", "commonly", "consider", "do", "does", "for",
-    "from", "in", "interpret", "is", "it", "learner", "learners", "may",
-    "might", "mistake", "of", "often", "or", "regard", "student", "students",
-    "that", "the", "their", "think", "thinks", "this", "to", "when", "while",
-    "will", "with", "wrong",
-}
-
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().lower())
@@ -578,12 +370,8 @@ def _is_forbidden_name(title: str) -> bool:
 
 
 def _description_words(details: str) -> int:
-    desc = ""
-    for label, content in concept_refiner.split_sections(details):
-        if label.lower().startswith("description"):
-            desc = content
-            break
-    return len(re.findall(r"\w+", desc))
+    # Existing Description-only checks must not judge mastery by its length.
+    return len(re.findall(r"\w+", _description_prose(details)))
 
 
 def _has_types(details: str) -> bool:
@@ -607,6 +395,11 @@ def _description_text(details: str) -> str:
     return ""
 
 
+def _description_prose(details: str) -> str:
+    """Separate the named mastery field from its Description container."""
+    return _description_text(details).split("\nAchieving Mastery:", 1)[0].rstrip()
+
+
 def _type_definition(type_body: str) -> str:
     """Return the reusable Type title before its first Case."""
     case_match = _CASE_ANY_RE.search(type_body or "")
@@ -621,18 +414,6 @@ def _normalized_type_definition(value: str) -> str:
     """Normalize superficial Type-title differences for duplicate checks."""
     normalized = unicodedata.normalize("NFKC", value or "")
     return _norm(normalized).rstrip(" .,:;!?")
-
-
-def _is_substantive_mastery_statement(value: str) -> bool:
-    """Reject empty, placeholder, or generic final mastery claims."""
-    statement = re.sub(r"\s+", " ", value or "").strip()
-    words = re.findall(r"\w+", statement, re.UNICODE)
-    return bool(
-        len(words) >= 4
-        and len(statement) >= 12
-        and _norm(statement).rstrip(".") not in PLACEHOLDERS
-        and not _GENERIC_MASTERY_STATEMENT_RE.fullmatch(statement)
-    )
 
 
 def _source_word_windows(source_text: str, *, width: int = 18) -> set[str]:
@@ -692,230 +473,22 @@ def _issue_sections(
     return matches
 
 
-def _is_generic_misconception(text: str) -> bool:
-    value = (text or "").strip()
-    bare_misunderstanding = _BARE_MISUNDERSTANDING_RE.match(value)
-    return (
-        _norm(value) in PLACEHOLDERS
-        or bool(_GENERIC_MISCONCEPTION_TEXT_RE.match(value))
-        or bool(_GENERIC_BELIEF_OBJECT_RE.match(value))
-        or bool(_INCOMPLETE_BELIEF_RE.match(value))
-        or bool(
-            bare_misunderstanding
-            and not _MISUNDERSTANDING_SPECIFICITY_RE.search(
-                bare_misunderstanding.group("object")
-            )
-        )
-        or concept_refiner._is_generic_misconception(value)
-    )
-
-
-def _has_mixed_learner_statement(text: str) -> bool:
-    """Return True when any learner-led statement is not belief-framed."""
-    for statement in _learner_analysis_statements(text):
-        if (
-            _LEARNER_ACTOR_RE.match(statement)
-            and not _MISCONCEPTION_BELIEF_RE.search(statement)
-        ):
-            return True
-    return False
-
-
-def _is_error_analysis_belief(text: str) -> bool:
-    return bool(_ERROR_ANALYSIS_BELIEF_RE.search((text or "").strip()))
-
-
-def _is_correction_shaped_error_analysis(text: str) -> bool:
-    value = (text or "").strip()
-    declarative_negation = concept_refiner._DECLARATIVE_NEGATION_RE.search(value)
-    return bool(
-        value
-        and (
-            _ERROR_ANALYSIS_CORRECTION_RE.search(value)
-            or (
-                declarative_negation
-                and not _ERROR_ANALYSIS_NEGATED_ACTION_RE.search(value)
-            )
-        )
-    )
-
-
-def _is_generic_error_analysis(text: str) -> bool:
-    value = (text or "").strip()
-    return (
-        not value
-        or _norm(value) in PLACEHOLDERS
-        or bool(_GENERIC_ERROR_ANALYSIS_RE.match(value))
-    )
-
-
-def is_terminal_generic_analysis_filler(text: str) -> bool:
-    """Whether text is the title-substitution fallback forbidden at final."""
-    return bool(_TERMINAL_GENERIC_ANALYSIS_FILLER_RE.fullmatch(
-        (text or "").strip()))
-
-
-def _is_plausible_error_analysis(text: str) -> bool:
-    value = (text or "").strip()
-    return bool(
-        value
-        and _ERROR_ANALYSIS_ACTOR_RE.search(value)
-        and (
-            _ERROR_ANALYSIS_ACTION_RE.search(value)
-            or _ERROR_ANALYSIS_SPECIFIC_MISTAKE_RE.search(value)
-            or _ERROR_ANALYSIS_PROCEDURAL_MISTAKE_RE.search(value)
-            or _ERROR_ANALYSIS_ONLY_ACTION_RE.search(value)
-            or _ERROR_ANALYSIS_ACTION_CONSEQUENCE_RE.search(value)
-            or _ERROR_ANALYSIS_NEGATED_ACTION_RE.search(value)
-        )
-    )
-
-
-def is_valid_misconception(text: str) -> bool:
-    """Return whether text states a specific learner belief/interpretation."""
-    value = (text or "").strip()
-    return bool(
-        value
-        and not _is_generic_misconception(value)
-        and _MISCONCEPTION_BELIEF_RE.search(value)
-        and not _has_mixed_learner_statement(value)
-        and not concept_refiner._is_correction_shaped_misconception(value)
-    )
-
-
-def is_valid_error_analysis(text: str) -> bool:
-    """Return whether text states a specific application mistake, not a belief."""
-    value = (text or "").strip()
-    specific_mistake = bool(
-        _ERROR_ANALYSIS_SPECIFIC_MISTAKE_RE.search(value)
-    )
-    contextual_procedural_mistake = bool(
-        _ERROR_ANALYSIS_CONTEXTUAL_PROCEDURAL_RE.search(value)
-    )
-    return bool(
-        value
-        and not _is_generic_error_analysis(value)
-        and (
-            not _is_error_analysis_belief(value)
-            # Some source-specific procedural errors contain an ambiguous
-            # verb such as "confuse" or "treat". Preserve them as Error
-            # Analysis when the same sentence also names the concrete faulty
-            # condition or inference, rather than collapsing them into a
-            # belief and replacing their original meaning with boilerplate.
-            or contextual_procedural_mistake
-        )
-        and not _is_correction_shaped_error_analysis(value)
-        and _is_plausible_error_analysis(value)
-    )
-
-
-def _issue_comparison_tokens(text: str) -> set[str]:
-    """Reduce issue prose to content tokens for cross-section overlap checks."""
-    tokens: set[str] = set()
-    for raw in re.findall(r"[a-z0-9]+", (text or "").lower()):
-        if raw in _ISSUE_COMPARISON_STOP_WORDS:
-            continue
-        token = raw
-        # Lightweight stemming is deliberately narrow.  It catches common
-        # restatements such as add/added/adding and fraction/fractions without
-        # making unrelated concept vocabulary look equivalent.
-        if len(token) > 5 and token.endswith("ing"):
-            token = token[:-3]
-            if len(token) > 2 and token[-1:] == token[-2:-1]:
-                token = token[:-1]
-        elif len(token) > 4 and token.endswith("ed"):
-            token = token[:-2]
-            if len(token) > 2 and token[-1:] == token[-2:-1]:
-                token = token[:-1]
-        elif len(token) > 4 and token.endswith("s"):
-            token = token[:-1]
-        if token and token not in _ISSUE_COMPARISON_STOP_WORDS:
-            tokens.add(token)
-    return tokens
-
-
-def issue_sections_overlap(misconception: str, error_analysis: str) -> bool:
-    """Return whether both sections restate the same underlying learner issue."""
-    if _norm(misconception) == _norm(error_analysis):
-        return True
-    misconception_tokens = _issue_comparison_tokens(misconception)
-    error_tokens = _issue_comparison_tokens(error_analysis)
-    if not misconception_tokens or not error_tokens:
-        return False
-    shared = misconception_tokens & error_tokens
-    shorter = min(len(misconception_tokens), len(error_tokens))
-    return len(shared) >= 2 and len(shared) / shorter >= 0.8
-
-
-_ANALYSIS_STATEMENT_BOUNDARY_RE = re.compile(
-    r"(?<=[.!?;])\s+(?=(?:students?|learners?|children|"
-    r"(?:a\s+)?common\s+(?:error|mistake|misstep))\b)",
-    re.IGNORECASE,
-)
-
-
-def _learner_analysis_statements(text: str) -> list[str]:
-    """Split only at punctuation-delimited learner/error statement starts."""
-    value = (text or "").strip()
-    if not value:
-        return []
-    return [
-        statement.strip()
-        for statement in _ANALYSIS_STATEMENT_BOUNDARY_RE.split(value)
-        if statement.strip()
-    ]
-
-
 def ensure_valid_learner_analysis(records: list[dict]) -> list[dict]:
     """Canonicalize the learner-analysis section, preserving authored text.
 
-    Learner analysis is authored by Settle and repaired by Polish — both
-    model passes judged by the terminal gate. This final-boundary helper
-    only FORMATS that content into the canonical combined section; it never
-    drops a statement or substitutes deterministic filler (the filler is
-    forbidden at the gate, and a missing analysis is the Polish pass's to
-    author with a real model call). Culminations remain optional.
+    Learner analysis is authored and reviewed through API passes. This
+    final-boundary helper only FORMATS that content into the canonical
+    combined section; it never drops, reclassifies or judges a statement.
+    Missing analysis belongs to the authoring pass, not a local fallback.
+    Culminations remain optional.
     """
     for rec in records:
         details = rec.get("concept_details") or ""
         if not details.strip():
             continue
-        normalized = concept_refiner.normalize_analysis_sections(details)
-        sections = concept_refiner.split_sections(normalized)
-        misconception_body, error_analysis_body = (
-            concept_refiner.analysis_components(normalized)
-        )
-        # Keep the authored component text VERBATIM: splitting into
-        # statements and re-joining subtly re-spaces punctuation
-        # (e.g. "12,..." -> "12, ..."), which the rich-text
-        # canonicalizer then collapses on the next pass — an
-        # oscillation the sealed-row fixpoint correctly refuses.
-        misconception = misconception_body.strip()
-        error_analysis = error_analysis_body.strip()
-        kept = [
-            (label, content)
-            for label, content in sections
-            if not concept_refiner.is_learner_analysis_label(label)
-        ]
-        if misconception or error_analysis:
-            combined: list[str] = []
-            if misconception:
-                combined.append(
-                    "Misconceptions: "
-                    + concept_refiner.strip_analysis_label_echo(
-                        misconception)
-                )
-            if error_analysis:
-                combined.append(
-                    "Error Analysis: "
-                    + concept_refiner.strip_analysis_label_echo(
-                        error_analysis)
-                )
-            kept.append((
-                "Misconception/ Error Analysis",
-                "; ".join(combined),
-            ))
-        rec["concept_details"] = concept_refiner.join_sections(kept)
+        # Keep unresolved/unlabelled analysis too. Reconstructing only the
+        # known components would silently delete evidence before API review.
+        rec["concept_details"] = concept_refiner.normalize_analysis_sections(details)
     return records
 
 
@@ -1030,8 +603,8 @@ def validate_concept_rows(
     # ``missing_misconception_or_error_analysis``) to allotted rows
     # only, and a row OUTSIDE the set that carries a section gets the
     # fatal ``unallotted_analysis_section`` (marker accounting). The
-    # QUALITY codes (generic/framing/overlap/shape/order) keep their
-    # meaning for any section that exists, allotted or not.
+    # Format, order and duplicate-section checks apply to every section
+    # that exists; the API author and independent critic judge its meaning.
     analysis_allotted_keys: Collection[int] | None = None,
 ) -> dict:
     """Return a structured validation report for concept-map records."""
@@ -1128,22 +701,14 @@ def validate_concept_rows(
                     errors, i, "concept_details",
                     "missing_mastery_statement",
                     "normal concept Description requires one terminal "
-                    "'Achieving Mastery: <substantive text>' line",
+                    "'Achieving Mastery: <nonempty text>' line",
                 )
-            elif canonical_mastery is None:
+            elif canonical_mastery is None or not canonical_mastery.group("statement").strip():
                 _add(
                     errors, i, "concept_details",
                     "mastery_statement_format",
                     "Achieving Mastery must be the final Description line in "
                     "canonical '\\nAchieving Mastery: <text>' format",
-                )
-            elif not _is_substantive_mastery_statement(
-                    canonical_mastery.group("statement")):
-                _add(
-                    errors, i, "concept_details",
-                    "mastery_statement_not_substantive",
-                    "Achieving Mastery must state a substantive, "
-                    "concept-specific learner capability",
                 )
             if len(all_markers) > 1:
                 _add(
@@ -1158,8 +723,15 @@ def validate_concept_rows(
                     "mastery markers are allowed only at the end of "
                     "Description",
                 )
-        if _norm(details) in PLACEHOLDERS or any(
-            f" {p} " in f" {_norm(details)} " for p in PLACEHOLDERS
+        # The retained legacy placeholder check belongs to other prose
+        # sections. Analysis and mastery specificity are now API judgments.
+        placeholder_prose = concept_refiner.join_sections([
+            (label, content.split("\nAchieving Mastery:", 1)[0])
+            for label, content in concept_refiner.split_sections(details)
+            if not concept_refiner.is_learner_analysis_label(label)
+        ])
+        if _norm(placeholder_prose) in PLACEHOLDERS or any(
+            f" {p} " in f" {_norm(placeholder_prose)} " for p in PLACEHOLDERS
         ):
             _add(errors, i, "concept_details", "placeholder",
                  "placeholder description text is not allowed")
@@ -1218,7 +790,11 @@ def validate_concept_rows(
             ):
                 canonical_match = _CANONICAL_ANALYSIS_CONTENT_RE.fullmatch(
                     analysis_sections[0][1] or "")
-            if canonical_match is None or orphan_analysis_prefix:
+            empty_component = bool(canonical_match) and any(
+                content is not None and not content.strip()
+                for content in canonical_match.groupdict().values()
+            )
+            if canonical_match is None or orphan_analysis_prefix or empty_component:
                 _add(
                     errors, i, "concept_details", "analysis_section_format",
                     "normal concepts require exactly one canonical "
@@ -1297,70 +873,15 @@ def validate_concept_rows(
                     "warning",
                 )
 
-        misconception = misconception_sections[0][2] if misconception_sections else ""
-        error_analysis = error_analysis_sections[0][2] if error_analysis_sections else ""
-        misconception_is_generic = bool(
-            misconception
-            and (
-                _is_generic_misconception(misconception)
-                or (
-                    strict_analysis_section
-                    and is_terminal_generic_analysis_filler(misconception)
-                )
-            )
-        )
-        if misconception_is_generic:
-            _add(errors, i, "concept_details", "generic_misconception",
-                 "Misconceptions must name a concept-specific incorrect belief or interpretation")
-        if (
-            misconception
-            and not misconception_is_generic
-            and not is_valid_misconception(misconception)
-        ):
-            _add(
-                errors, i, "concept_details", "misconception_framing",
-                "Misconceptions must state a learner's incorrect belief or interpretation, not a correction or application mistake",
-            )
-
-        error_analysis_is_generic = bool(
-            error_analysis
-            and (
-                _is_generic_error_analysis(error_analysis)
-                or (
-                    strict_analysis_section
-                    and is_terminal_generic_analysis_filler(error_analysis)
-                )
-            )
-        )
-        if error_analysis_is_generic:
-            _add(
-                errors, i, "concept_details", "generic_error_analysis",
-                "Error Analysis must name a concept-specific mistake",
-            )
-        if (
-            error_analysis
-            and not error_analysis_is_generic
-            and not is_valid_error_analysis(error_analysis)
-        ):
-            _add(
-                errors, i, "concept_details", "error_analysis_framing",
-                "Error Analysis must state a plausible procedural, computational, representational, or reasoning mistake made while applying the concept, not a belief or correction",
-            )
-        if (
-            misconception
-            and error_analysis
-            and issue_sections_overlap(misconception, error_analysis)
-        ):
-            _add(
-                errors, i, "concept_details", "issue_section_overlap",
-                "Misconceptions and Error Analysis must describe distinct learner issues",
-            )
+        # Learner-analysis specificity, framing and distinctness are API
+        # author/critic judgments. This boundary validates the authored
+        # section shape and allotment without reclassifying its prose.
         if details:
             words = _description_words(details)
             if not is_culm and (words < 4 or words > 120):
                 _add(errors, i, "concept_details", "description_length",
                      "description length is outside reasonable bounds", "warning")
-            desc = _description_text(details)
+            desc = _description_prose(details)
             if (
                 not is_culm
                 and _has_types(details)

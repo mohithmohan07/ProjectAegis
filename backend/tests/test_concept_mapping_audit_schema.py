@@ -106,10 +106,10 @@ def _objective(label: str) -> dict:
         "question": f"Choose the correct audit option for {label}.",
         "question_text": f"Choose the correct audit option for {label}.",
         "marks": 1,
-        # Contract §22.5: the explanation opens with the exact correct
-        # option text, never an option letter or number.
+        # Q33: newly resolved profiles require the lowercase option label
+        # followed by the exact correct option text and its explanation.
         "answer_explanation": (
-            "correct option is the answer because it satisfies the audit."
+            "a) correct option is the answer because it satisfies the audit."
         ),
         "answers": [
             {
@@ -267,6 +267,7 @@ def test_msbshse_grade6_master_has_one_clean_update_schema() -> None:
                 "Objective": 72, "Descriptive": 440, "Subjective": 149,
             },
             "descriptive_answer_slots": 30,
+            "required_descriptive_answer_slots": 0,
         },
     }
 

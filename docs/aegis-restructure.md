@@ -1820,6 +1820,223 @@ authored against the contract and this register, never against Rule 1.
 **Stands:** everything Q26–Q30 list except Q26's cost-policy defaults,
 reversed above; Q26's "Recorded, not yet done" list stands unchanged.
 
+### Q32 · Decided — the 8 September owner column rules and prompt refinement
+
+**Historical implementation record:** Q33 below supersedes this entry's
+English/Mathematics-only formatting scope, `creative` spelling and fixed
+English keyboard rule for new runs. The original workbook evidence and
+v1 behavior remain recorded here; frozen v1 releases retain that behavior.
+
+Owner instruction, 8 Sep 2026: work on Project Aegis using the uploaded
+Excel specifications for how output columns are written, refine prompting
+for every API output, structure it properly and make suggestions. Evidence:
+`English_Aegis_column_spec_fill_in.xlsx` and
+`Math_Aegis_column_spec_fill_in.xlsx`. Exact cell references, file hashes,
+implementation scope, prompt-family audit and unresolved examples are in
+[the column-spec review](column-spec-review-2026-09-08.md).
+
+**What changes, stated rather than blended (Rule 0).** Completed owner
+rules in column F amend the following fields for new policy-bound runs:
+
+* English keywords use comma-space and 3–6 short terms actually taught, in
+  textual order. Relationship rosters remain space-pipe-space. The model
+  chooses terms; code projects the already-authored list.
+* English Objective explanations start with the correct lowercase option
+  label and exact answer, then the supported rationale. This resolves
+  Q31's open question about label-free explanations **for English only**.
+* English textual rubric criteria use only `content`, `language`,
+  `creative`, `evidence` in exact `[tag]: criterion` syntax. The former
+  seven-tag registry remains a legacy policy. Tags remain forbidden in
+  non-English rubrics, typed Equation/Image criteria and learner answers.
+* English and Mathematics Descriptive criterion weights permit positive
+  multiples of 0.5 rather than only 0.5 or 1. Exact parent/child sums,
+  real numeric storage, blank unused slots and the separate four-mark
+  criterion-count safeguard remain.
+* Generated question source is exact `UpSchool DB`; source-drawn question
+  source remains the run publication. This amends Q27's one-source rule
+  **only for authored questions**. Concept source and chapter publication
+  do not change.
+* Objective and valid Subjective rows are `Specific`. Descriptive
+  restriction remains a model decision from the real task. English
+  `math_keyboard` is exact `No`; Mathematics remains demand-dependent.
+
+Subject adapters are chosen from run metadata, never the subject of an
+example in either workbook. The shared policy is
+`owner-column-spec-2026-09-08`, carried by newly resolved profiles. A
+persisted resolved profile without it keeps the legacy contract; a replay
+does not silently acquire this amendment.
+
+**Writing scope.** Prompts distinguish teaching description from mastery,
+learner explanation from evaluator criteria, and source evidence from
+instructions. Chapter/topic descriptions use original connected prose;
+English specifies 3–5 chapter sentences and 2–4 topic sentences. Optional
+learner analysis is omitted when irrelevant rather than fabricated. Group
+descriptions name the exact assessed capability in one evaluator-facing
+sentence. Changed author and critic prompts retain their exact response
+schemas and protected fields. No prose-quality judgment moves into code.
+
+**Explicitly held open.** English topic-title rules omit the topic suffix
+used by their concept examples. Math topic title/display rules and concept
+ID grammar disagree with their examples; its placeholder example includes
+an entire question; its 0/1 Objective weights conflict with exact totals
+above one mark; its `post_topics` instruction says pre topics. Current
+canonical identities, display names, bare placeholder letters, marks sums
+and Post roster behavior stand pending the focused rulings in the review.
+Examples do not authorize copying unrelated chapter facts or stale assets.
+
+The update cells distinguish fresh content (`No`) from intentional changes
+to existing content (`Yes`). Fresh generation still emits `No`; this
+amendment does not invent an update workflow or infer existing entity IDs.
+Raw template duplicate-header counts do not change Q27's registered
+72/440/149 output schema.
+
+**Q32 export correction:** Contract §24 and both supplied sheets' Answer
+blocks F18/F23/F25 require equivalent, non-additive parent and child rubric
+views. Existing code incorrectly removed the parent view. Current column
+policy restores it by mechanically projecting the ordered child criteria
+into the main rubric columns and validating exact equivalence. Internal
+scoring remains child-owned; no semantic judgment or second award is added.
+Legacy frozen profiles retain their recorded export behavior.
+
+**Stands:** Q27's verbatim Post source questions, Q29's run binding, Q30's
+five Basic and five Intermediate Pre questions per concept, Q31's restored
+quality defaults, all other Q26–Q31 rulings, model author/independent critic
+ownership and the release/artefact distinction. This records an
+implementation amendment, not a claim of measured live writing quality or
+authorization to merge or deploy.
+
+### Q33 · Decided — universal column rules and owner review before step removal
+
+Owner clarification, 8 Sep 2026: the two supplied subjects are examples of
+how Aegis outputs must be written, not a restriction to those subjects.
+Only English rubric tags such as `[content]` and `[creativity]` belong in
+rubrics; other subjects must not carry them. The owner also requires
+end-to-end attention to source-topic absorption, concept decomposition,
+teaching detail, KaTeX, hosted images and usable evaluation rubrics, and
+supplied varied source PDFs for that review. The owner explicitly requires
+being consulted **before any unnecessary run step is removed**.
+
+**Universal format, with one explicit subject exception.** New profiles
+carry `owner-column-spec-2026-09-08-v2`. Every subject uses the same output
+column rules: comma-space keyword cells, correct lowercase option label
+and exact answer at the start of Objective explanations, positive
+multiples of 0.5 for Descriptive criterion weights, exact totals and
+non-additive multipart parent/child rubric views. Relationship lists keep
+their pipe delimiter. Teaching descriptions use original connected prose;
+the 3–5 chapter sentence, 2–4 topic sentence and 3–6 relevant keyword
+guidance applies across subjects. These are model writing instructions,
+not semantic count thresholds.
+
+The English-only registry is `content`, `language`, `creativity`,
+`evidence`, in exact `[tag]: criterion` syntax, restricted to textual
+English Descriptive criteria. The owner's latest `creativity` spelling
+supersedes v1's `creative`. No functional rubric tag belongs in other
+subjects, learner-facing fields, or typed Equation/Image criteria. The
+actual subject, grade, source and response demand still determine the
+pedagogy through API authoring and independent review; shared formatting
+does not mean identical content across subjects.
+
+Keyboard mode is response-dependent in every subject, authored by the API
+and checked by its critic. Objective's keyboard cell remains blank;
+Subjective/Descriptive use exact `Yes` or `No`. Q32's blanket English `No`
+is removed from new policy because the clarified subject exception is
+rubric tags, not response mechanics. This changes a column policy and
+does not remove a pipeline stage. Existing explicit category/marks/duration
+profiles continue to apply; a subject-specific example does not select or
+invent one.
+
+Each criterion must name observable evidence relevant to the actual task,
+allow valid alternatives under its adopted answer contract, and avoid
+double-credit or unasked requirements. Independent demands must not be
+bundled into an omnibus criterion. A coherent criterion may exceed one
+mark under the half-step policy; the separate existing minimum of two
+criteria for a four-mark single-part Descriptive answer stands.
+
+**Replay and evidence.** Persisted v1 snapshots keep their recorded
+delimiters, explanation prefixes, tag registry and keyboard policy.
+Persisted profiles with no column-policy snapshot keep the legacy contract.
+The author, critic, release checks and workbook projection read the same
+carried policy. Original uploaded workbook cells are retained as evidence;
+Q33 corrects their initial interpretation rather than rewriting that
+evidence. The six identity/placeholder/weight representation conflicts in
+the review remain open where this clarification does not resolve them.
+
+**Removal requires a concrete proposal and the owner's prior approval.**
+Review the whole run and identify a proposed removal's purpose, replacement
+coverage, expected effect and evidence first. Do not disable, bypass or
+delete a stage on the basis of this request alone. Existing author/critic,
+refiner and evidence-preservation stages remain in place until the owner
+approves a specific proposal. Semantic judgments remain API-driven.
+
+**Validation limit.** Cross-subject dry regressions cover author payloads,
+mechanical validation, XLSX read-back, tag containment and frozen policy
+replay. They do not establish live chapter quality, successful Fly image
+hosting or a complete live end-to-end run. Source-format diversity and
+image/KaTeX correctness must be assessed with the supplied chapter evidence
+and explicit live results before claiming those outcomes. No merge,
+deployment or production database write is authorized by this entry.
+
+### Q34 · Decided — API-owned learner analysis and mastery quality
+
+Owner approval, 8 Sep 2026: **“Yes, please.”**, answering the concrete
+proposal to replace the remaining concept learner-analysis word-list and
+80% word-overlap checks with model author/critic review while preserving
+formatting, identity and scoring checks. The proposal also identified the
+mastery-text substance thresholds. This is the specific prior approval
+required by Q33, not authorization for other stage removals.
+
+**Approved removal, in both learning lanes and every subject.** Retire the
+generic-misconception/error vocabularies, required belief/action framing,
+80% analysis token overlap, and the four-word/twelve-character mastery
+substance test. Delete the corresponding predicates and semantic finding
+codes rather than leaving them disabled. The deeper trace found mirrored
+behavior in `concept_refiner.normalize_analysis_sections`: it filtered,
+reclassified and deduplicated authored insights by their wording. Remove
+that behavior too. Preserve unclassified content for review, preserve
+explicitly selected kinds, and retain every authored mastery statement
+instead of choosing the last one as “more substantive.”
+
+**Replacement coverage.** Strengthen the existing Settle, Analyse,
+Premap/Preanalyse, Polish and final Refiner author/critic instructions.
+Review misconception versus faulty application by meaning, duplication by
+the claim and consequence, usefulness against supplied evidence, and
+mastery as an observable supported capability. A concise statement can be
+complete. An empty inventory can be justified. Neither preferred verbs nor
+shared vocabulary determines the verdict. Source-backed authors/critics
+see their existing chapter or prerequisite evidence; the final Refiner
+reviews the assembled teaching row and must not pretend it saw source
+material absent from its request. No extra routine concept-quality pass
+is added; conditional Polish remains conditional and Q31's all-row Refiner
+remains in place.
+
+**Content and review preservation.** Empty-inventory dissent and reviewer
+unavailability must survive at inventory scope and on the affected map's
+rows, even when there is no item ID to carry a flag. Existing historical
+semantic flags remain visible. An explicit model-driven instruction round
+now receives one independent advisory critic with the original and
+proposed records, instruction, and lane-appropriate source evidence.
+Its dissent/unavailability is recorded without rejecting an applicable
+author proposal. Exact manual edits remain user-owned and API-free.
+
+**Mechanical checks remain.** Keep required fields, exact section shape,
+nonempty explicitly present analysis components, mastery marker presence,
+location and count, identity/allotment accounting, protected fields,
+KaTeX/image format, rubric tags and score arithmetic. Missing or duplicate
+mastery markers can still nominate an API repair; the validator cannot
+decide that a nonempty statement is too short to mean enough. Stored
+decisions remain immutable; changed author/critic instructions use distinct
+decision identities rather than masquerading as previously reviewed work.
+
+**Bounded scope and evidence.** Other inherited semantic heuristics,
+including Description length/placeholder/copied-source checks, Type/Case
+checks and Settle's identical mastery-string check across concepts, are
+outside this approved removal. Do not claim all deterministic semantic
+heuristics have been purged. Their removal needs a separate concrete
+proposal under Q33. The associated review records dry regression results;
+there is no measured live quality result, production provider run, Fly
+upload, merge or deployment in this amendment. Q33's universal column
+policy v2 and English-only rubric-tag exception stand unchanged.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

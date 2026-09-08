@@ -803,6 +803,13 @@ def _blocking_content_issues(wb, identified) -> list[str]:
                 # carry larger criterion awards, and the run's subject (and
                 # so the English tag rule) is not known here.
                 marking_kwargs["rubric_quantum"] = False
+                marking_kwargs["column_policy"] = {
+                    "multipart_parent_projection": "ordered_child_union",
+                }
+                marking_kwargs["allow_child_only"] = True
+                marking_kwargs["answer_slots"] = max(
+                    sheet_layout.answer_block_numbers, default=0,
+                )
             for issue in marking_validator(marking_row, **marking_kwargs):
                 flag(issue)
             keyboard = str(question.get("math_keyboard") or "")
@@ -1454,10 +1461,22 @@ def import_workbook(
                 if total is not None and abs(total - marks) > 0.01:
                     _flag(f"{label}: answer weightage sum {total:g} != marks {marks:g}")
             if kind == "descriptive" and answers and sub_questions:
-                _flag(
-                    f"{label}: multipart descriptive duplicates scoring in "
-                    "main answer/rubric blocks"
+                projection_defects = (
+                    workbook_contract.multipart_parent_projection_defects(
+                        answers, sub_questions,
+                    )
                 )
+                if projection_defects:
+                    _flag(
+                        f"{label}: multipart descriptive duplicates scoring "
+                        "in main answer/rubric blocks: "
+                        + "; ".join(projection_defects)
+                    )
+                if not projection_defects:
+                    # The two wire views are equivalent and non-additive.
+                    # Persist one scoring source so downstream evaluation
+                    # cannot add the projected parent awards a second time.
+                    answers = []
             if (
                 kind == "descriptive"
                 and marks == 4

@@ -28,6 +28,7 @@ into Assemble, which stamps the allotted items onto their rows.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Callable, Mapping
 
@@ -41,6 +42,17 @@ from .. import progress
 _ALLOT_BATCH_SIZE = 8
 
 POLICY_VERSION = "analysis-1"
+
+
+def _policy_version(author_system: str) -> str:
+    """Bind saved judgments to the exact author and independent critic."""
+    from . import prompts
+
+    digest = hashlib.sha256((
+        getattr(prompts, author_system) + "\n" + prompts.ANALYSE_CRITIC_SYSTEM
+    ).encode("utf-8")).hexdigest()
+    return POLICY_VERSION + ";prompts:" + digest
+
 
 ITEM_KINDS = ("misconception", "error_analysis")
 
@@ -304,7 +316,7 @@ def analyse(
         checker=_inventory_checker(),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION,
+        policy_version=_policy_version("ANALYSE_INVENTORY_SYSTEM"),
         fixer=fixer,
     )
     inventory: list[dict[str, Any]] = []
@@ -343,6 +355,10 @@ def analyse(
             "allotments": {},
             "rationales": {},
             "review_flags": {},
+            # A critic can identify a missed insight precisely when there
+            # is no item ID to attach it to. Preserve that chapter-scope
+            # evidence; an empty author's list never erases its review.
+            **({"inventory_review_flags": build_flags} if build_flags else {}),
         }
 
     # ---- 4.3 Allot: every item to exactly one settled concept --------
@@ -403,7 +419,7 @@ def analyse(
             ),
             critic=critic,
             store=store,
-            policy_version=POLICY_VERSION,
+            policy_version=_policy_version("ANALYSE_ALLOT_SYSTEM"),
             fixer=fixer,
         )
         decided = {

@@ -1686,6 +1686,8 @@ def run_release_for_job(
 
     meta = dict(bridge["metadata"])
     profile = assessment_profile.resolve_for_metadata(profile, meta)
+    from . import column_spec
+    meta = column_spec.bind_metadata(meta, profile)
     workbook_outputs = assessment_workbook.output_identities(
         profile, bridge["snapshot"],
     )
@@ -2276,15 +2278,13 @@ def run_release_for_job(
             "(Objective options keep their own images)."
         )
 
-    # Contract v2.0 §18: ``question_source`` is a mandatory per-run scalar
-    # naming the publication — the staged release's frozen source book —
-    # stamped on every candidate here, never defaulted by the renderer. A
-    # run whose publication is unknown ships the cell blank and the
-    # read-back records it as a blocker (never a borrowed value).
+    # Q32: generated questions name UpSchool DB; source questions retain
+    # the frozen publication. Old profiles have no generated-source override.
     publication = str(bridge.get("source_book") or "").strip()
+    generated_source = column_spec.from_profile(profile).get("generated_question_source")
     for candidate in candidates:
-        candidate["question_source"] = publication
-    if not publication:
+        candidate["question_source"] = generated_source if generate_lane and generated_source else publication
+    if not publication and not (generate_lane and generated_source):
         progress.log(
             "Assessment release: the run has no publication (source book); "
             "question_source ships blank and the release read-back records "
@@ -2415,9 +2415,9 @@ def run_release_for_job(
     )
 
     # Stage 6.5 — the joint per-item review (contract v2.0 §27 step 6,
-    # register Q26): ONE independent critic over the finished item — cell,
-    # materialization, answer space and marking together — replacing the
-    # four per-decision critics that audited the same item in fragments.
+    # register Q26, with Q31 restoring per-decision critics by default):
+    # one additional independent critic over the finished item — cell,
+    # materialization, answer space and marking together.
     # An auditor only (Q10): dissent rides the candidate as review flags.
     if lane_policy.item_review_enabled():
         _observe_stage(stage_progress, "item_review", 0, len(candidates))

@@ -33,18 +33,32 @@ issues; that round-trip is the acceptance check.
 
 ## Pipeline harness
 
-Drive one chapter PDF through convert → generate → release against the
-services directly (no HTTP/auth in the way). Requires `OPENAI_API_KEY` in the
-environment; both scripts refuse to start without it.
+Drive one chapter PDF through conversion, Concept generation and a Post Concept
+workbook export against the services directly. These scripts do **not** invoke
+the complete four-output assessment run and cannot establish end-to-end Master
+quality. Use the normal four-output run for the multi-subject acceptance pilots.
+The scripts require `OPENAI_API_KEY` in the
+environment and an explicit `AEGIS_PUBLIC_BASE_URL`; both scripts refuse to
+start without a valid public HTTPS origin. Run against the filesystem served
+by that origin. Setting a local process's origin to the Fly hostname does
+not upload its images or make its local files public.
 
 ```
 export OPENAI_API_KEY=sk-...
-python3 run_chapter.py --pdf chapter.pdf --chapter-id 42 --out release.xlsx
+export AEGIS_PUBLIC_BASE_URL=https://your-aegis-service.example.org
+python3 run_chapter.py --pdf chapter.pdf --chapter-id 42 --source-book "Actual publication" --out release.xlsx
 python3 resume_chapter.py --job-id 7 --chapter-id 42 --out release.xlsx
 ```
 
-Two details that make the harness faithful to production — both were learned
-the hard way:
+The chapter ID supplies board, grade and subject. `--source-book` is the actual
+publication, never a subject-specific default; if omitted, the source-grounded
+Architect can identify it. The harness reports the staged public image-delivery
+check separately from successful file creation. Missing/unverified delivery
+keeps files downloadable but prevents a ready-for-database verdict. The
+report records local pin status, the exact probed URL, content-type/hash
+results and any bounded-probe limitation.
+
+Two shared Concept-generation mechanics retained from production:
 
 * generation is invoked through `uploads.run_with_openai_usage`, which
   performs `phase2.activate`; calling the service directly skips it and the

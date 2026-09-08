@@ -13,6 +13,8 @@ across a concept's groups and blueprint-coverage arithmetic.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 import json
 from typing import Any, Mapping
@@ -20,10 +22,10 @@ from typing import Any, Mapping
 from . import assessment_lane_policy as lane_policy
 from .phase3 import kernel
 
-QUALITY_POLICY_VERSION = "assessment-group-quality-1"
+QUALITY_POLICY_VERSION = "assessment-group-quality-1-column-spec"
 
 QA_SYSTEM = (
-    "You are the Aegis touched-group QA reviewer. Review ONE assessment "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis touched-group QA reviewer. Review ONE assessment "
     "group holistically against its member questions and its home "
     "concept: question correctness; answer/rubric consistency; whether "
     "the home concept actually entails every member; internal cohesion "
@@ -37,11 +39,11 @@ QA_SYSTEM = (
     '{"group_key":"","flags":[{"code":"","member_candidate_id":"",'
     '"detail":""}]}\n'
     "group_key must echo the reviewed group exactly. A flag may leave "
-    "member_candidate_id empty when it concerns the group as a whole."
+    "member_candidate_id empty when it concerns the group as a whole.")
 )
 
 QA_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one touched-group quality "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one touched-group quality "
     "review. Audit the proposed flags against the complete group, concept, "
     "member, and sibling evidence. You must not revise the group or the "
     "questions. Your dissent is advisory: the proposed review stands and "
@@ -50,7 +52,7 @@ QA_CRITIC_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"verdict":"verified","confidence":0.0,"issues":[]} or '
     '{"verdict":"dissent","confidence":0.0,"issues":["evidence-bound '
-    'concern"]}'
+    'concern"]}')
 )
 
 

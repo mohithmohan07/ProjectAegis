@@ -367,7 +367,7 @@ def test_runner_produces_publication_ready_output(
         for link in row["_aegis_needed_for"]:
             assert link["post_concept_id"] in post_ids
             assert link["post_concept_title"]
-    # Exactly four flagged pre-concepts on the golden chapter, and every
+    # Exactly three flagged pre-concepts on the golden chapter, and every
     # flag is honest:
     #  * PRC-0015 ("Finding Information Beyond the Textbook") is linked to
     #    nothing — no post concept of this chapter genuinely requires
@@ -377,31 +377,19 @@ def test_runner_produces_publication_ready_output(
     #    code, whose PLACEHOLDERS vocabulary contains the word "none" and
     #    fires on the ordinary English "faces none at all" / "almost
     #    none".
-    #  * PRC-0003 trips `misconception_framing` and PRC-0013 also trips
-    #    `error_analysis_framing`. Both are decided by VERB VOCABULARIES
-    #    in the shared validator: a belief framed as "may take 'utopian'
-    #    to mean …" is not in _MISCONCEPTION_BELIEF_RE's list, and an
-    #    error framed as "carry a claim … across a whole continent" is
-    #    not in _ERROR_ANALYSIS_ACTION_RE's. Both items are well-framed
-    #    prerequisite analysis; the vocabulary simply does not contain
-    #    their verbs.
-    #
-    # All three codes are keyword vocabularies classifying content in the
-    # SHARED validator (Rule 1). They are recorded here, NOT authored
-    # around: rewording a recorded fixture item to satisfy a verb list
-    # would hide the defect rather than purge it (premap.py's §3 purge
-    # doctrine), and their real purge is replacing each with a model
-    # verdict, which moves the Post lane and belongs to its own change.
-    # In this lane they are advisory, so none of them can gate a row.
+    # Q34 removes the belief/action vocabulary classifiers that previously
+    # flagged PRC-0003 and PRC-0013. The authored fixture remains unchanged.
+    # The two Description placeholder findings are outside that approved
+    # removal and remain visible; no advisory finding can gate a Pre row.
     assert sorted(pre_map["review_flags"]) == [
-        "PRC-0001", "PRC-0003", "PRC-0013", "PRC-0015",
+        "PRC-0001", "PRC-0013", "PRC-0015",
     ]
     assert any(
         "its necessity needs review" in flag
         for flag in pre_map["review_flags"]["PRC-0015"]
     )
     assert {finding["code"] for finding in pre_map["validation"]} == {
-        "placeholder", "misconception_framing", "error_analysis_framing",
+        "placeholder",
     }
     # Advisory means advisory: every flagged row still ships, with its
     # analysis section intact.
@@ -409,7 +397,7 @@ def test_runner_produces_publication_ready_output(
         row for row in pre_map["rows"]
         if row["_pre_concept_id"] in pre_map["review_flags"]
     ]
-    assert len(flagged_pre_rows) == 4
+    assert len(flagged_pre_rows) == 3
     # No decision drew a critic dissent on the golden replay.
     assert pre_map["decision_flags"] == {}
     # And the Pre map rides its own key: no Pre row leaks into the Post

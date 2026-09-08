@@ -13,6 +13,7 @@ analysis mechanism, and Assemble stamps its allotments onto the rows.
 from __future__ import annotations
 
 import copy
+import hashlib
 import re
 from typing import Any, Callable, Mapping
 
@@ -46,6 +47,20 @@ _PLANNED_CULMINATION_ROLES = frozenset({
 # house string. The suffix re-keys every stored authoring decision so a
 # pre-Q1 record can never replay its stale schema past the new checker.
 AUTHOR_POLICY_SUFFIX = "-q1"
+
+
+def _policy_version(author_system: str) -> str:
+    """Bind each Settle decision to its author and independent critic."""
+    from . import prompts
+
+    digest = hashlib.sha256((
+        getattr(prompts, author_system) + "\n" + prompts.CRITIC_SYSTEM
+    ).encode("utf-8")).hexdigest()
+    base = confidence_policy.POLICY_VERSION
+    if author_system == "ANALYSIS_SYSTEM":
+        base += AUTHOR_POLICY_SUFFIX
+    return base + ";prompts:" + digest
+
 
 _ANALYSIS_SPLIT = re.compile(
     r"\s*//\s*Misconception/?\s*Error Analysis:\s*", re.IGNORECASE
@@ -719,7 +734,6 @@ def settle(
         )
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    policy = confidence_policy.POLICY_VERSION
     from . import prompts as prompts_mod
 
     # The Architect's run instructions ride the sealed envelope metadata;
@@ -856,7 +870,7 @@ def settle(
                 checker=_topology_checker(batch),
                 critic=critic,
                 store=store,
-                policy_version=policy,
+                policy_version=_policy_version("TOPOLOGY_SYSTEM"),
                 fixer=fixer,
             )
 
@@ -983,7 +997,7 @@ def settle(
                 ),
                 critic=critic,
                 store=store,
-                policy_version=policy,
+                policy_version=_policy_version("GROUNDING_SYSTEM"),
                 fixer=fixer,
             )
 
@@ -1173,7 +1187,7 @@ def settle(
                 store=store,
                 # Q1 re-key: the authoring schema lost its analysis field,
                 # so stored pre-Q1 decisions must never replay here.
-                policy_version=policy + AUTHOR_POLICY_SUFFIX,
+                policy_version=_policy_version("ANALYSIS_SYSTEM"),
                 fixer=fixer,
             )
 

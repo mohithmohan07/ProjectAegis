@@ -11,9 +11,9 @@ the arithmetic.
 
 It is an AUDITOR (register Q10): its dissent becomes review flags on the
 candidate and rides the release for the reviewer; it never rewrites,
-retries or gates anything.  It replaces the four separate per-decision
-critics that used to audit the same item piecemeal (register Q26), so the
-item is audited once, whole, rather than four times in fragments.
+retries or gates anything. Q31 restores per-decision critics by default;
+this review additionally checks their combined final item. No critic is
+removed by this module.
 
 Mechanics only in code: the response shape is checked, the verdict is an
 enum, and a review that cannot run leaves a named flag rather than a
@@ -26,9 +26,10 @@ from typing import Any, Mapping
 
 from .. import config
 from . import assessment_profile
+from . import column_spec
 from .phase3 import kernel
 
-ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-2"
+ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-3-column-spec"
 AUDIT_FIELD = "_aegis_assessment_item_review"
 WARNING = "assessment_item_review"
 UNAVAILABLE_WARNING = "assessment_item_review_unavailable"
@@ -41,7 +42,7 @@ _PROMPT_CACHE_STABLE_KEYS = (
     "rubric_tag_policy",
 )
 
-ITEM_REVIEW_SYSTEM = (
+ITEM_REVIEW_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + (
     "You are the independent joint reviewer of ONE finished Aegis "
     "assessment item (Master Governing Contract v2.0 §27 step 6). You see "
     "the source atom (when the item is source-owned), the recorded blueprint "
@@ -65,16 +66,27 @@ ITEM_REVIEW_SYSTEM = (
     "model answer is complete and learner-facing, identical in "
     "display_answer and answer_explanation for Descriptive items, and free "
     "of rubric narration, criterion tags, marks or evaluator instructions; "
-    "an Objective explanation opens with the exact correct answer text and "
-    "no option letter or number; (6) every criterion is one observable, "
-    "question-specific credit-bearing demand worth 0.5 or 1, nothing asked "
+    "an Objective explanation uses the exact correct-answer text and the "
+    "option-label prefix required by column_spec_policy (the universal "
+    "format includes the lowercase label); (6) every criterion is one observable, "
+    "question-specific credit-bearing demand with its permitted weight "
+    "increment from column_spec_policy, nothing asked "
     "is unscored, nothing unasked is credited, nothing is double-counted, "
     "every criterion appears in the model answer and every required "
     "model-answer component is scored; (7) rubric-tag containment follows "
     "the supplied rubric_tag_policy exactly; (8) the arithmetic — option, "
     "slot, parent and child sums reconcile to the item marks; (9) the "
     "duration follows the supplied assessment_format_policy for the "
-    "category and difficulty. Judge only this item on its own evidence; "
+    "category and difficulty. Apply the rubric to a fully correct response, "
+    "a valid equivalent or alternative method, a partly correct response, "
+    "and a plausible but incorrect or irrelevant response. Verify that an "
+    "evaluator using only the exported item and criteria can distinguish "
+    "them without hidden author notes or exact phrase matching. If a "
+    "method, reason, unit or diagram feature is required, its credit must "
+    "be explicit; do not invent such requirements when the task does not "
+    "ask for them. Do not invent a new partial-credit scale or new output "
+    "fields: name ambiguous or missing scoring evidence in issues with "
+    "the affected criterion. Judge only this item on its own evidence; "
     "never infer from length, position, neighbours or quotas. There is no "
     "quota for issues: return every genuine, evidence-bound concern and an "
     "empty list when there is none. You do not rewrite, retry, or gate "
@@ -156,6 +168,7 @@ def _payload(
         "metadata": copy.deepcopy(dict(meta)),
         "assessment_format_policy": copy.deepcopy(dict(format_policy)),
         "rubric_tag_policy": assessment_profile.rubric_tag_policy(meta),
+        "column_spec_policy": column_spec.from_metadata(meta),
         "candidate_id": str(candidate.get("candidate_id") or ""),
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
@@ -187,6 +200,7 @@ def review_items(
         raise ItemReviewError("item review requires an envelope hash")
     metadata = dict(meta) if isinstance(meta, Mapping) else {}
     run_profile = assessment_profile.resolve_for_metadata(profile, metadata)
+    metadata = column_spec.bind_metadata(metadata, run_profile)
     format_policy = assessment_profile.assessment_format_policy(
         run_profile, metadata,
     )

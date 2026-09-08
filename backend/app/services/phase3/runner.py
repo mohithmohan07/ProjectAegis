@@ -420,6 +420,7 @@ def run(
                 env,
                 copy.deepcopy(stage_rows),
                 provider=injected.get("polish"),
+                critic=injected.get("critic"),
                 store=store,
                 fixer=injected.get("fixer"),
             )

@@ -19,14 +19,8 @@ from pathlib import Path
 SCRATCH = Path(__file__).resolve().parent
 BACKEND = SCRATCH.parents[1]
 
-# Credential comes from the environment and is never written into the tree.
-if not os.environ.get("OPENAI_API_KEY"):
-    raise SystemExit("OPENAI_API_KEY is not set")
-# _public_base_url() requires an https:// origin before it will publish source
-# assets. Nothing fetches these URLs in a local run, but they are stamped into
-# the canonical source, so it has to be a well-formed https origin.
-os.environ.setdefault("AEGIS_PUBLIC_BASE_URL", "https://aegis.local")
-os.environ.setdefault("AEGIS_SOURCE_ASSET_SECRET", "local-run-secret")
+# Credentials and a real serving origin come from the operator's environment.
+# An invented HTTPS hostname would stamp unusable URLs into every output.
 
 # Production's pipeline behaviour comes from fly.toml's [env]. Read it rather
 # than hand-copying (the rewritten Phase 3 is now the only post-81% path, so
@@ -65,6 +59,7 @@ from app.services import progress  # noqa: E402
 from app.services import build_concepts as svc  # noqa: E402
 from app.services import uploads  # noqa: E402
 from app.services import build_concepts_release_files as release_files  # noqa: E402
+from app.services import source_asset_publication  # noqa: E402
 
 _START = time.time()
 
@@ -88,7 +83,12 @@ def main() -> int:
     ap.add_argument("--chapter-id", type=int, required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--label", default="")
+    ap.add_argument("--source-book", default="", help="Actual publication label; omit to let the source-grounded Architect identify it")
     args = ap.parse_args()
+    if not os.environ.get("OPENAI_API_KEY"):
+        ap.error("OPENAI_API_KEY is not set")
+    if not source_asset_publication.valid_public_origin(source_asset_publication.configured_origin()):
+        ap.error("Set AEGIS_PUBLIC_BASE_URL to the real HTTPS origin serving this run's asset store. Local bytes are not uploaded to Fly by assigning its URL.")
 
     progress._sink.set(_sink)
     init_db()
@@ -109,7 +109,7 @@ def main() -> int:
             db,
             filename=pdf.name,
             raw_bytes=pdf.read_bytes(),
-            source_book="Balbharati Std 6 Mathematics",
+            source_book=args.source_book.strip(),
             owner_sub=None,
         )
         job_id = int(job.id)
@@ -152,6 +152,9 @@ def main() -> int:
         # Summary counts straight off the staged release.
         from app.services.build_concepts_release import release_payload
         payload = release_payload(job) or {}
+        asset_report = payload.get(source_asset_publication.REPORT_FIELD) or {}
+        print(f"== public image delivery: {asset_report.get('state', 'unverified')} "
+              "(local pinning and public delivery are separate)", flush=True)
         records = [r for r in payload.get("records") or [] if isinstance(r, dict)]
         topics = sorted({str(r.get("topic") or "").strip() for r in records} - {""})
         print(f"== concepts: {len(records)}", flush=True)
