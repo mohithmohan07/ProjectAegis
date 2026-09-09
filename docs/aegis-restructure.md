@@ -2494,3 +2494,40 @@ Local verification: 231 backend catalogue/import/source/identity checks and
 all 164 frontend tests pass; the frontend production build succeeds. All
 2,774 rows from the five existing bundled workbooks compare unchanged, and
 the NCF addition contributes exactly 18 rows. Full PR CI is the merge gate.
+
+### Q43 — DECIDED — collapsible log usage and provider cost breakdown
+
+**Owner ruling (9 September 2026).** The detailed usage box at the top of the
+log column must collapse to leave room for the logs. Show separate GPT,
+Gemini and total estimated charges in INR. Start the detailed metrics folded
+on desktop and mobile, retain the reader's toggle choice during live updates,
+and keep the compact cost breakdown visible. Expanded metrics must leave a
+usable scrolling log area.
+
+**Accounting.** GPT combines OpenAI models, including Luna and mini; Gemini
+is separate. Aggregate recorded charges, with their recorded INR conversions,
+across parsing, Concept work, human review, corrected-file uploads, retries
+and Master continuation. Compact live events and persisted summaries carry
+the same provider breakdown. Pending calls and incomplete receipts remain
+explicit; their eventual costs must not appear as free usage. Historical
+charges that cannot be attributed stay visible as unattributed, and an
+unavailable historical breakdown must not be invented. No exchange-rate or
+token-price recalculation applies to already recorded charges.
+
+**Scope.** Preserve individual request costs, cumulative processing/review/wall
+time, logs and progress, and all previous content/model policies. Verify the
+folding interaction, mixed-provider subtotals and resumed history before the
+existing authorized merge workflow.
+
+Local verification: all 167 frontend tests pass and the production build
+succeeds. All 110 targeted backend accounting, currency, checkpoint and run
+journal tests pass, including mixed-provider resumes at different frozen
+exchange rates and conservative attribution of incomplete historical ledgers.
+The owner's final follow-up requests Copy beside the console title and corrects
+the two Grade 01 NCF Maths mappings: Time and Measurement → Measurement;
+Playing with Numbers → Numbers Beyond 20. Preserve the original workbook as
+source evidence, apply the correction on import and update matching existing
+chapter rows while retaining their IDs and attached content. Update the
+catalogue expectations accordingly. The owner expressly requests no further
+testing and immediate PR update/merge; the checks above preceded these final
+Copy/catalogue changes.

@@ -1,5 +1,5 @@
-import type { OpenAIUsage, ProviderRequestUsage } from "../types";
-import { finiteUsageNumber, providerRequestCount, usageCost, usageCostInr, usageCostInrNotes } from "../lib/apiUsage";
+import type { OpenAIUsage, ProviderRequestUsage, ProviderUsageSummary } from "../types";
+import { finiteUsageNumber, hasUsageGap, providerRequestCount, usageCost, usageCostInr, usageCostInrNotes } from "../lib/apiUsage";
 
 interface ApiUsageSummaryProps {
   usage?: OpenAIUsage | null;
@@ -8,6 +8,9 @@ interface ApiUsageSummaryProps {
   fileLabel?: string;
   cumulative?: boolean;
   resumed?: boolean;
+  /** Omit the cost metric from a secondary detail view that already shows
+   * the provider strip. The main summary keeps all cost detail by default. */
+  hideCosts?: boolean;
 }
 
 const TOKEN_FORMATTER = new Intl.NumberFormat("en-US", {
@@ -56,6 +59,7 @@ export default function ApiUsageSummary({
   fileLabel = "Generated file",
   cumulative = false,
   resumed = false,
+  hideCosts = false,
 }: ApiUsageSummaryProps) {
   if (!usage) return null;
   const requestCount = providerRequestCount(usage);
@@ -69,10 +73,12 @@ export default function ApiUsageSummary({
     usage.wall_elapsed_seconds,
   );
   const processingSeconds = finiteUsageNumber(usage.mechanical_wall_seconds);
+  const hasProviderUsage = (usage.providers ?? []).some(providerSummaryHasData);
   if (requestCount <= 0 && totalTokens <= 0 && attemptCount <= 0
     && elapsedSeconds <= 0 && reviewWaitSeconds <= 0
     && wallElapsedSeconds <= 0 && processingSeconds <= 0
-    && finiteUsageNumber(usage.mechanical_span_count) <= 0) return null;
+    && finiteUsageNumber(usage.mechanical_span_count) <= 0
+    && !hasProviderUsage) return null;
 
   const cost = usageCostInr(usage);
   const dollars = usageCost(usage);
@@ -102,6 +108,8 @@ export default function ApiUsageSummary({
           <span className="badge accent mono">{model}</span>
         </div>
       </div>
+
+      {!hideCosts && <ProviderCostStrip usage={usage} />}
 
       <dl className="api-usage-grid">
         <UsageMetric
@@ -135,14 +143,14 @@ export default function ApiUsageSummary({
             : undefined}
         />
         <UsageMetric label="Total tokens" value={formatTokenCount(usage.total_tokens)} />
-        <UsageMetric
+        {!hideCosts && <UsageMetric
           label={cost.recordedOnly && costAvailable ? "Recorded estimate" : "Estimated cost"}
           value={formatEstimatedCost(cost.value, "INR")}
           hint={dollars.value !== null
             ? `${formatEstimatedCost(dollars.value)} USD${dollars.recordedOnly ? " recorded" : ""}`
             : cost.recordedOnly && costAvailable ? "Reported, priced usage only" : undefined}
           emphasized={costAvailable}
-        />
+        />}
         {latestRequest && <UsageMetric
           label="Latest request"
           value={formatEstimatedCost(latestRequest.estimated_cost_inr, "INR")}
@@ -263,6 +271,147 @@ export default function ApiUsageSummary({
       )}
     </section>
   );
+}
+
+type ProviderKey = "openai" | "gemini" | "unknown";
+
+/**
+ * A small provider ledger shared by the page summary and the console. It is
+ * deliberately based on recorded INR fields from the server; no historical
+ * USD amount is converted or re-priced here.
+ */
+export function ProviderCostStrip({
+  usage,
+  className = "",
+}: {
+  usage: OpenAIUsage;
+  className?: string;
+}) {
+  const providers = Array.isArray(usage.providers) ? usage.providers : [];
+  const hasBreakdown = providers.length > 0;
+  const completeBreakdown = Array.isArray(usage.providers)
+    && !hasUsageGap(usage)
+    && usage.attempt_coverage_complete !== false;
+  const byKey = new Map<ProviderKey, ProviderUsageSummary>();
+  for (const provider of providers) {
+    const key = normalizedProviderKey(provider);
+    if (!byKey.has(key)) byKey.set(key, provider);
+  }
+  const unknown = byKey.get("unknown");
+  const rows: Array<{ key: ProviderKey | "total"; label: string; data?: ProviderUsageSummary | OpenAIUsage }> = [
+    { key: "openai", label: "GPT", data: byKey.get("openai")
+      ?? (completeBreakdown ? emptyProvider("openai") : undefined) },
+    { key: "gemini", label: "Gemini", data: byKey.get("gemini")
+      ?? (completeBreakdown ? emptyProvider("gemini") : undefined) },
+    { key: "total", label: "Total", data: usage },
+  ];
+  if (unknown && providerSummaryHasData(unknown)) {
+    rows.splice(2, 0, { key: "unknown", label: "Unattributed", data: unknown });
+  }
+
+  return (
+    <section
+      className={`provider-cost-strip${className ? ` ${className}` : ""}`}
+      data-testid="provider-cost-strip"
+      aria-label="Estimated cost by provider"
+    >
+      <div className="provider-cost-strip-head">
+        <strong>Estimated cost by provider</strong>
+        <span>INR</span>
+      </div>
+      <div className="provider-cost-strip-grid">
+        {rows.map((row) => (
+          <ProviderCostMetric
+            key={row.key}
+            label={row.label}
+            data={row.data}
+            breakdownAvailable={hasBreakdown || completeBreakdown}
+            noRequests={completeBreakdown && (row.key === "openai" || row.key === "gemini")
+              && !byKey.has(row.key)}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function ProviderCostMetric({
+  label,
+  data,
+  breakdownAvailable,
+  noRequests,
+}: {
+  label: string;
+  data?: ProviderUsageSummary | OpenAIUsage;
+  breakdownAvailable: boolean;
+  noRequests?: boolean;
+}) {
+  if (!data) {
+    return (
+      <div className="provider-cost-metric provider-cost-missing">
+        <span>{label}</span>
+        <strong>Breakdown unavailable</strong>
+      </div>
+    );
+  }
+  const inr = usageCostInr(data);
+  const usd = usageCost(data);
+  const details: string[] = [];
+  if (inr.recordedOnly && inr.value !== null) details.push("recorded");
+  if (inr.conversionMissing) details.push("INR conversion incomplete");
+  if (usd.value !== null && inr.value === null) {
+    details.push(`${formatEstimatedCost(usd.value)} USD${usd.recordedOnly ? " recorded" : ""}`);
+  }
+  if (inr.pendingCount > 0) details.push(`${inr.pendingCount} pending`);
+  if (inr.usageGap) details.push("Usage incomplete");
+  if (inr.pricingMissing) details.push("Pricing incomplete");
+  const value = inr.value !== null
+    ? formatEstimatedCost(inr.value, "INR")
+    : breakdownAvailable ? "INR unavailable" : "Breakdown unavailable";
+  return (
+    <div className={`provider-cost-metric${inr.value !== null && !inr.recordedOnly ? " provider-cost-known" : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+      {(details.length > 0 || noRequests) && (
+        <small>{noRequests ? "No requests yet" : details.join(" · ")}</small>
+      )}
+    </div>
+  );
+}
+
+function normalizedProviderKey(provider: ProviderUsageSummary): ProviderKey {
+  const raw = String(provider.provider ?? "").toLowerCase();
+  if (raw === "openai" || raw === "gpt") return "openai";
+  if (raw === "gemini" || raw === "google") return "gemini";
+  return "unknown";
+}
+
+function emptyProvider(provider: ProviderKey): ProviderUsageSummary {
+  return {
+    provider,
+    request_count: 0,
+    input_tokens: 0,
+    cached_input_tokens: 0,
+    output_tokens: 0,
+    reasoning_tokens: 0,
+    total_tokens: 0,
+    estimated_cost_usd: 0,
+    estimated_cost_inr: 0,
+    pricing_complete: true,
+    inr_conversion_complete: true,
+  };
+}
+
+function providerSummaryHasData(provider: ProviderUsageSummary): boolean {
+  return providerRequestCount(provider) > 0
+    || finiteUsageNumber(provider.attempt_count) > 0
+    || finiteUsageNumber(provider.pending_request_count) > 0
+    || finiteUsageNumber(provider.unresolved_usage_request_count) > 0
+    || finiteUsageNumber(provider.total_tokens) > 0
+    || typeof provider.estimated_cost_usd === "number"
+    || typeof provider.known_usage_estimated_cost_usd === "number"
+    || typeof provider.estimated_cost_inr === "number"
+    || typeof provider.known_usage_estimated_cost_inr === "number";
 }
 
 function RequestCostRow({ request }: { request: ProviderRequestUsage }) {

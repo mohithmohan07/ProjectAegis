@@ -11,17 +11,10 @@ import type { StageUsageRow } from "../types";
 import ApiUsageSummary, {
   formatEstimatedCost,
   formatTokenCount,
+  ProviderCostStrip,
 } from "./ApiUsageSummary";
 import { usageCost, usageCostInr, usageCostInrNotes } from "../lib/apiUsage";
 import { downloadConsoleSnapshot } from "../lib/runSnapshot";
-
-/* On a phone the console is a bottom sheet: the log needs the room, so
-   the usage block starts FOLDED there (one line, tap to open) and the
-   sheet can expand to full screen. Desktop keeps everything open. */
-const SMALL_SCREEN =
-  typeof window !== "undefined"
-  && typeof window.matchMedia === "function"
-  && window.matchMedia("(max-width: 960px)").matches;
 
 const LEVEL_CLASS: Record<string, string> = {
   info: "log-info",
@@ -72,6 +65,7 @@ export default function RunConsolePanel() {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [view, setView] = useState<View>("stages");
+  const [usageDetailsOpen, setUsageDetailsOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [follow, setFollow] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -164,35 +158,43 @@ export default function RunConsolePanel() {
   return (
     <aside className={`console${expanded ? " console-expanded" : ""}`}>
       <div className="console-head">
-        <span className={`status-dot ${statusDot}`} />
-        <strong className="console-title">{state.title || "Activity log"}</strong>
-        <div className="spacer" />
-        <button className="ghost console-btn" onClick={copyLog} disabled={state.lines.length === 0}>
-          {copied ? "Copied" : "Copy"}
-        </button>
-        <button
-          className="ghost console-btn"
-          title="Download the current console snapshot: retained log, run state and latest usage. Available while running; excludes full server diagnostics."
-          disabled={state.lines.length === 0 && !state.usage && !state.active}
-          onClick={() => {
-            try {
-              downloadConsoleSnapshot(state);
-              setSnapshotError(false);
-            } catch {
-              setSnapshotError(true);
-            }
-          }}
-        >
-          Download snapshot
-        </button>
-        <button className="ghost console-btn" onClick={clear} disabled={state.active}>Clear</button>
-        <button
-          className="ghost console-btn console-expand-btn"
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? "Shrink" : "Expand"}
-        </button>
-        <button className="ghost console-btn" onClick={() => setOpen(false)}>Hide</button>
+        <div className="console-head-main">
+          <span className={`status-dot ${statusDot}`} />
+          <strong className="console-title">{state.title || "Activity log"}</strong>
+          <button
+            className="ghost console-btn console-copy-btn"
+            aria-label={copied ? "Console log copied" : "Copy console log"}
+            onClick={copyLog}
+            disabled={state.lines.length === 0}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <div className="console-head-actions">
+          <button
+            className="ghost console-btn"
+            title="Download the current console snapshot: retained log, run state and latest usage. Available while running; excludes full server diagnostics."
+            disabled={state.lines.length === 0 && !state.usage && !state.active}
+            onClick={() => {
+              try {
+                downloadConsoleSnapshot(state);
+                setSnapshotError(false);
+              } catch {
+                setSnapshotError(true);
+              }
+            }}
+          >
+            Download snapshot
+          </button>
+          <button className="ghost console-btn" onClick={clear} disabled={state.active}>Clear</button>
+          <button
+            className="ghost console-btn console-expand-btn"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? "Shrink" : "Expand"}
+          </button>
+          <button className="ghost console-btn" onClick={() => setOpen(false)}>Hide</button>
+        </div>
       </div>
 
       {snapshotError && <div role="alert">The console snapshot could not be downloaded. Please try again.</div>}
@@ -219,32 +221,53 @@ export default function RunConsolePanel() {
       )}
 
       {state.usage && (
-        <details className="console-usage-fold" open={!SMALL_SCREEN}>
-          <summary>
-            Model usage ({usageState})
-            {" · "}
-            {formatTokenCount(state.usage.total_tokens)} tokens
-            {currentCost?.value != null && <>
-              {" · "}{formatEstimatedCost(currentCost.value, "INR")}{currentCost.recordedOnly ? " recorded" : ""}
-            </>}
-            {currentCost?.value == null && <> · INR unavailable</>}
-            {currentCost?.conversionMissing && currentCost.value !== null && <> · INR conversion incomplete</>}
-            {currentCost?.conversionMissing && currentCostUsd?.value != null && <>
-              {" ("}{formatEstimatedCost(currentCostUsd.value)}{currentCostUsd.recordedOnly ? " recorded" : ""}{")"}
-            </>}
-            {currentCost?.pendingCount ? <> · {currentCost.pendingCount} pending</> : null}
-            {currentCost?.usageGap && <> · Usage incomplete</>}
-            {currentCost?.pricingMissing && <> · Pricing incomplete</>}
-          </summary>
-          <ApiUsageSummary
-            usage={state.usage}
-            compact
-            cumulative={state.usagePresentation?.cumulative}
-            resumed={state.usagePresentation?.resumed}
-            filename={state.usagePresentation?.filename}
-            fileLabel={state.usagePresentation?.fileLabel}
-          />
-        </details>
+        <div className="console-usage-overview">
+          <button
+            type="button"
+            className="console-usage-toggle"
+            aria-expanded={usageDetailsOpen}
+            aria-controls="console-usage-details"
+            onClick={() => setUsageDetailsOpen((open) => !open)}
+          >
+            <span className="console-usage-toggle-label">
+              {usageDetailsOpen ? "Hide usage details" : "Show usage details"}
+            </span>
+            <span className="console-usage-toggle-state">
+              Model usage ({usageState})
+              {" · "}
+              {formatTokenCount(state.usage.total_tokens)} tokens
+              {currentCost?.value != null && <>
+                {" · "}{formatEstimatedCost(currentCost.value, "INR")}{currentCost.recordedOnly ? " recorded" : ""}
+              </>}
+              {currentCost?.value == null && <> · INR unavailable</>}
+              {currentCost?.conversionMissing && currentCost.value !== null && <> · INR conversion incomplete</>}
+              {currentCost?.conversionMissing && currentCostUsd?.value != null && <>
+                {" ("}{formatEstimatedCost(currentCostUsd.value)}{currentCostUsd.recordedOnly ? " recorded" : ""}{")"}
+              </>}
+              {currentCost?.pendingCount ? <> · {currentCost.pendingCount} pending</> : null}
+              {currentCost?.usageGap && <> · Usage incomplete</>}
+              {currentCost?.pricingMissing && <> · Pricing incomplete</>}
+            </span>
+          </button>
+          <ProviderCostStrip usage={state.usage} className="console-provider-costs" />
+          <div
+            id="console-usage-details"
+            className="console-usage-details"
+            hidden={!usageDetailsOpen}
+          >
+            {usageDetailsOpen && (
+              <ApiUsageSummary
+                usage={state.usage}
+                compact
+                hideCosts
+                cumulative={state.usagePresentation?.cumulative}
+                resumed={state.usagePresentation?.resumed}
+                filename={state.usagePresentation?.filename}
+                fileLabel={state.usagePresentation?.fileLabel}
+              />
+            )}
+          </div>
+        </div>
       )}
 
       {state.lines.length > 0 && (

@@ -473,8 +473,8 @@ def test_supplied_ncf_catalogue_preserves_all_eighteen_rows():
     assert [(r.grade, r.subject, r.unit, r.chapter) for r in rows] == [
         ("01", "English", "Prose", "Thank You Taffy"),
         ("01", "English", "Prose", "Monsoon Birthday"),
-        ("01", "Mathematics", "Measurement", "Time and Measurement"),
-        ("01", "Mathematics", "Numbers Beyond 20", "Playing with Numbers"),
+        ("01", "Mathematics", "Time and Measurement", "Measurement"),
+        ("01", "Mathematics", "Playing with Numbers", "Numbers Beyond 20"),
         ("01", "Environmental Studies", "Animals", "Animals Around Us"),
         ("01", "Environmental Studies", "Seasons and Months", "Seasons"),
         ("02", "English", "Prose", "Isn't It Magical"),

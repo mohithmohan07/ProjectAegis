@@ -143,6 +143,10 @@ test("uses clean display names and hides hierarchy identity tags", async () => {
 
   const onScope = vi.fn();
   render(<DirectoryPicker onScope={onScope} />);
+  // The controls exist before the asynchronous directory request resolves.
+  // Wait for its option before selecting; changing an empty select loses the
+  // value on slower CI runners and prevents the remaining hierarchy loading.
+  await screen.findByRole("option", { name: "NCF" });
   const selects = await screen.findAllByRole("combobox");
   fireEvent.change(selects[0], { target: { value: "NCF" } });
   fireEvent.change(selects[1], { target: { value: "01" } });
