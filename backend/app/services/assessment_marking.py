@@ -25,6 +25,8 @@ from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
 from . import column_spec
+from .response_schemas import advisory_critic_schema
+from . import assessment_visual_evidence as visual_evidence
 from . import katex_rules
 from . import assessment_release as rel
 from . import semantic_confidence_policy as confidence_policy
@@ -1043,6 +1045,7 @@ def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
         MARKING_SYSTEM,
         suffix,
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "marking-author-v5",
@@ -1068,6 +1071,8 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
         MARKING_CRITIC_SYSTEM,
         suffix,
         purpose="advisory_critic",
+        response_schema=advisory_critic_schema(),
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "marking-critic-v5",
@@ -1208,8 +1213,9 @@ def _payload(
     meta: Mapping[str, Any],
     format_policy: Mapping[str, Any],
 ) -> dict[str, Any]:
-    return {
+    return visual_evidence.bind({
         "stage": "assessment.marking",
+        "critic_response_schema": advisory_critic_schema().identity(),
         "rules": MARKING_SYSTEM,
         "critic_rules": MARKING_CRITIC_SYSTEM,
         "metadata": _content_evidence(meta),
@@ -1229,7 +1235,7 @@ def _payload(
                 "expected."
             ),
         },
-    }
+    }, candidate)
 
 
 def _assemble(
@@ -1330,17 +1336,12 @@ def decide_markings(
         ],
     ) -> dict[str, Any]:
         candidate_id, candidate, cell, total_marks, contract = unit
+        payload = _payload(candidate, cell, contract, meta=metadata, format_policy=format_policy)
         decision = kernel.decide(
             kind="assessment.marking",
             unit_id=candidate_id,
             envelope_sha256=envelope_sha,
-            payload=_payload(
-                candidate,
-                cell,
-                contract,
-                meta=metadata,
-                format_policy=format_policy,
-            ),
+            payload=payload,
             provider=provider,
             checker=_checker(
                 candidate,
@@ -1370,12 +1371,16 @@ def decide_markings(
             policy_version=MARKING_POLICY_VERSION,
             fixer=fixer,
         )
-        return _assemble(
+        result = _assemble(
             decision["response"],
             candidate_id=candidate_id,
             cell=cell,
             decision=decision,
         )
+        result["flags"].extend(visual_evidence.review_flags(payload))
+        result["authority"]["review_flags"] = list(result["flags"])
+        result["authority"]["visual_evidence"] = copy.deepcopy(payload["visual_evidence"])
+        return result
 
     verdicts = kernel.parallel_map_in_order(
         prepared,

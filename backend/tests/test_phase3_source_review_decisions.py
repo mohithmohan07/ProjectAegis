@@ -1672,7 +1672,11 @@ def test_pending_source_review_preserves_usage_and_repeat_generate_is_free(
         key: job.pending_decision["cumulative_usage"][key]
         for key in expected
     } == expected
-    assert job.openai_usage == durable_before
+    # A free replay preserves charges while recording the time spent serving it.
+    assert {key: value for key, value in job.openai_usage.items() if key != "elapsed_seconds"} == {
+        key: value for key, value in durable_before.items() if key != "elapsed_seconds"
+    }
+    assert job.openai_usage["elapsed_seconds"] >= durable_before["elapsed_seconds"]
 
 
 def test_source_candidate_submission_is_exact_api_free_and_nonportable(

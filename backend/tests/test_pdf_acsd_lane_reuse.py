@@ -141,6 +141,10 @@ def test_legacy_sealed_bundle_is_upgraded_without_provider_spend(
     page render carriers and duplicated outline boundary text are then
     mechanically upgraded and resealed under the new identity.
     """
+    # Exercise the historical formatting-only migration. The 2.6 source
+    # relationship/crop contract intentionally requires new verification.
+    monkeypatch.setattr(fallback, "FALLBACK_VERSION", "2.5.0")
+    monkeypatch.setattr(fallback, "PAGE_ACSD_SCHEMA_VERSION", "1.2.0")
     monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
     source_path = tmp_path / "source.pdf"
     source_path.write_bytes(b"%PDF-fake")
@@ -477,6 +481,8 @@ def test_legacy_pages_upgrade_for_free_but_author_only_outline_gets_reviewed(
     monkeypatch,
 ):
     """Reuse paid 2.4 page evidence; old outlines need the new semantic pass."""
+    monkeypatch.setattr(fallback, "FALLBACK_VERSION", "2.5.0")
+    monkeypatch.setattr(fallback, "PAGE_ACSD_SCHEMA_VERSION", "1.2.0")
     monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
     source_path = tmp_path / "source.pdf"
     source_path.write_bytes(b"%PDF-fake")

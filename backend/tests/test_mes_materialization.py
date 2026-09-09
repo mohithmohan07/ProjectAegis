@@ -844,6 +844,10 @@ def test_english_post_materialization_honors_thirty_answer_master_capacity():
 
     assert seen["workbook_capacities"] == {
         "descriptive_answer_slots": 30,
+        "multipart_parent_criterion_slots": 30,
+        "subquestion_slots": 15,
+        "criterion_slots_per_subquestion": 6,
+        "overflow_policy": "preserve_all_children_and_flag_parent_projection_capacity",
     }
     assert len(candidate["answers"]) == 30
     assert candidate["assessment_eligibility"] == "accepted"

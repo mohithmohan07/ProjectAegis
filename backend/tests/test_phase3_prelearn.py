@@ -879,17 +879,24 @@ def test_no_unrelated_existing_pass_was_re_keyed_by_this_slice():
     # return exactly one of concept_id or disposition.
     assert place.POLICY_VERSION == "place-2"
     assert analyse.POLICY_VERSION == "analysis-1"
-    # Polish keys off its content-code list; the constant is pinned so a
-    # change there is deliberate rather than a side effect of this slice.
+    # Q35 separately approved replacing semantic length/copying heuristics
+    # with API review and preserving malformed structure for repair. Capture
+    # still does not own these decisions; pin the resulting mechanical list.
     assert sorted(polish.CONTENT_CODES) == [
         "analysis_section_format",
-        "description_truncated_clause",
+        "case_without_example",
+        "case_without_type",
         "duplicate_mastery_statement",
+        "example_numbering",
         "mastery_marker_outside_description",
         "mastery_statement_format",
+        "missing_case_definition",
         "missing_learner_analysis",
         "missing_mastery_statement",
-        "verbatim_source_description",
+        "missing_type_definition",
+        "repeated_description_marker",
+        "type_without_case",
+        "types_format",
     ]
     assert prelearn.POLICY_VERSION == "prelearn-1"
 

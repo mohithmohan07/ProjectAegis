@@ -15,6 +15,9 @@ from tests.test_assessment_master_refiner import _payload
 
 def _candidate(scoring: str, large_weight: str = "1E+50") -> dict:
     candidate = _payload()["candidates"][1]
+    # This test deliberately uses no board matrix; its category must be the
+    # generic profile's exact label, not the source fixture's local 4-mark one.
+    candidate["question_category"] = "Long Answer"
     candidate["marks"] = large_weight
     candidate["answers"] = []
     candidate["sub_questions"] = []

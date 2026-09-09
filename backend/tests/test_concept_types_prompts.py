@@ -1147,6 +1147,8 @@ def test_skeleton_chunk_checkpoint_resumes_after_completed_chunks(monkeypatch):
             "chunk_index": index,
             "chunk_count": len(chunks),
             "chunk_sha256": g._chunk_checkpoint_sha256(chunks[index - 1]),
+            "skeleton_contract_sha256": g._skeleton_contract_sha256(
+                g._metadata(subject="Science")),
             "records": [{
                 "topic": "T",
                 "parent_concept": "P",

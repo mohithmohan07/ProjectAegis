@@ -12,6 +12,7 @@ import ApiUsageSummary, {
   formatEstimatedCost,
   formatTokenCount,
 } from "./ApiUsageSummary";
+import { hasUsageGap } from "../lib/apiUsage";
 
 /* On a phone the console is a bottom sheet: the log needs the room, so
    the usage block starts FOLDED there (one line, tap to open) and the
@@ -202,7 +203,9 @@ export default function RunConsolePanel() {
             Model usage ({usageState})
             {" · "}
             {formatTokenCount(state.usage.total_tokens)} tokens
-            {state.usage.estimated_cost_usd != null && (
+            {hasUsageGap(state.usage) ? (
+              <> · Usage incomplete · Cost unavailable</>
+            ) : state.usage.estimated_cost_usd != null && (
               <> · {formatEstimatedCost(state.usage.estimated_cost_usd)}</>
             )}
           </summary>

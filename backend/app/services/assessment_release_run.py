@@ -33,6 +33,7 @@ from typing import Any, Mapping
 from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
+from .. import config
 from .. import models
 from ..bulk_import import assessment_workbook
 from . import assessment_answer_restriction as answer_restriction
@@ -371,6 +372,16 @@ def _learner_text_snapshot(candidates: list[Mapping]) -> list[tuple]:
             str(candidate.get("candidate_id") or ""),
             candidate.get("question"),
             candidate.get("question_text"),
+            # Q35: options are part of the complete, already-classified
+            # learner task. Correctness and score fields are reviewed later;
+            # option text, modality and order must remain fixed for both
+            # source-owned and finalized generated Objective questions.
+            tuple(
+                (answer.get("answer_type"), answer.get("answer_content"))
+                for answer in candidate.get("answers") or []
+                if isinstance(answer, Mapping)
+            ) if str(candidate.get("sheet_kind") or "").lower() == "objective"
+            else None,
         )
         for candidate in candidates
     ]
@@ -1396,13 +1407,44 @@ def _label_base(concept: Mapping[str, Any]) -> str:
 
 
 def _next_label_index(db: Session, base: str) -> int:
-    """Continue numbering after every label already committed for this base.
-
-    The body moved to ``identity.next_label_index`` (T5-3) so the Build
-    Assessments lane runs the identical max-scan instead of its own count.
-    This name is kept as the local seam.
-    """
+    """Compatibility peek; minting requires a durable range reservation."""
     return identity.next_label_index(db, base)
+
+
+def _require_master_allocation_session(db: Session) -> None:
+    """Avoid waiting on our own SQLite transaction or committing caller edits."""
+    bind = db.get_bind()
+    engine = bind.engine
+    if engine.dialect.name == "sqlite":
+        # A second writer cannot proceed behind our own uncommitted writer.
+        # Name a caller transaction defect rather than waiting for ourselves
+        # or implicitly committing unrelated caller edits.
+        if db.connection().connection.driver_connection.in_transaction:
+            raise ReleaseRunError(
+                "Master label reservation requires no active SQLite database "
+                "transaction; commit or roll back the preceding operation before the run"
+            )
+
+
+def _reserve_master_labels(
+    db: Session, counts: dict[str, int], *, reservation_key: str,
+) -> dict[str, int]:
+    """Commit issued numbers before external Refiner work, without committing db.
+
+    The runner reads the accepted source in its caller's session. This short
+    independent transaction releases its write lock before any provider call
+    or snapshot write. A later failed Master can leave a gap, never reuse.
+    """
+    if not any(counts.values()):
+        return {}
+    _require_master_allocation_session(db)
+    engine = db.get_bind().engine
+    with Session(bind=engine) as allocator:
+        starts = identity.reserve_label_indices(
+            allocator, counts, reservation_key=reservation_key,
+        )
+        allocator.commit()
+    return starts
 
 
 # --------------------------------------------------------------------------- #
@@ -1445,6 +1487,9 @@ def run_pre_release_for_job(
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     db.refresh(job)
+    # Check the short independent reservation can run before any provider
+    # spend, and check again at allocation if a callback changed the session.
+    _require_master_allocation_session(db)
     generation_recovery.require_mutation_allowed(
         job, operation="build the pre Master file"
     )
@@ -1523,6 +1568,7 @@ def run_release_for_job(
     generation_recovery.require_mutation_allowed(
         job, operation="build a Master file"
     )
+    _require_master_allocation_session(db)
     authorities = dict(authorities or {})
     generate_lane = generated_questions is not None
     profile = assessment_profile.resolve(profile)
@@ -1547,7 +1593,8 @@ def run_release_for_job(
             )
         )
     try:
-        bridge = release_snapshot.build(db, job, staged_release)
+        with db.no_autoflush:
+            bridge = release_snapshot.build(db, job, staged_release)
     except release_snapshot.SnapshotError as exc:
         raise ReleaseRunError(str(exc)) from exc
     inventory = bridge["question_task_inventory"]
@@ -1686,6 +1733,19 @@ def run_release_for_job(
 
     meta = dict(bridge["metadata"])
     profile = assessment_profile.resolve_for_metadata(profile, meta)
+    if blueprint_cells is not None:
+        # Canonicalize only an already-selected, declared display label.
+        # The profile owns exact aliases; this does not classify a question
+        # or merge categories with different marks/duration contracts.
+        blueprint_cells = [
+            {
+                **copy.deepcopy(dict(cell)),
+                "question_category": assessment_profile.output_question_category(
+                    cell.get("question_category", ""), profile,
+                ),
+            }
+            for cell in blueprint_cells
+        ]
     from . import column_spec
     meta = column_spec.bind_metadata(meta, profile)
     workbook_outputs = assessment_workbook.output_identities(
@@ -2128,6 +2188,9 @@ def run_release_for_job(
                 "assessment materialization changed an obligation identity"
             )
         materialization_needs_review = _needs_review(candidate)
+        upstream = atom if atom is not None else cell.get("generated_question") or {}
+        for flag in upstream.get("flags") or []:
+            _append_warning(candidate, str(flag))
         candidate["route_evidence"] = (atom or {}).get("route_evidence") or {}
         candidate[_CELL_AUDIT_FIELD] = dict(
             cell.get(_CELL_AUDIT_FIELD) or {}
@@ -2667,12 +2730,11 @@ def run_release_for_job(
         key=lambda item: (item[0][0], tier_order[item[0][1]]),
     )
     _observe_stage(stage_progress, "clustering", 0, len(sorted_buckets))
-    for bucket_index, ((concept_key, tier), members) in enumerate(
-        sorted_buckets
-    ):
+    def cluster_bucket(item):
+        (concept_key, tier), members = item
         concept = concept_records_by_key[concept_key]
         concept_evidence = _concept_evidence(concept)
-        clustered = grouping.cluster_tier(
+        return grouping.cluster_tier(
             members,
             concept=concept_evidence,
             tier=tier,
@@ -2684,6 +2746,19 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    clustered_buckets = kernel.parallel_map_in_order(
+        sorted_buckets, cluster_bucket,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Cluster · {key} · {tier}" for (key, tier), _ in sorted_buckets],
+        announce="Assessment variant groups",
+    )
+    # Apply independent decisions in the original canonical order. No later
+    # stage sees a partial partition, regardless of response completion order.
+    for bucket_index, (((concept_key, tier), members), clustered) in enumerate(
+        zip(sorted_buckets, clustered_buckets, strict=True)
+    ):
+        concept = concept_records_by_key[concept_key]
         members_by_id = {m["candidate_id"]: m for m in members}
         machine = _label_base(concept)
         for sequence, family in enumerate(clustered["families"], start=1):
@@ -2782,14 +2857,14 @@ def run_release_for_job(
         for candidate in eligible
     }
     _observe_stage(stage_progress, "describe", 0, len(groups))
-    for group_index, record in enumerate(groups):
+    def describe_one_group(record):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
             all_members_by_id[str(candidate_id)]
             for candidate_id in record.get("member_candidate_ids") or []
         ]
-        description = grouping.describe_group(
+        return grouping.describe_group(
             _group_evidence(record),
             family_members,
             concept=_concept_evidence(concept),
@@ -2800,6 +2875,16 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    descriptions = kernel.parallel_map_in_order(
+        groups, describe_one_group,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Describe · {group['group_key']}" for group in groups],
+        announce="Assessment group descriptions",
+    )
+    for group_index, (record, description) in enumerate(
+        zip(groups, descriptions, strict=True)
+    ):
         record["semantic_description"] = str(
             description.get("description") or ""
         )
@@ -2836,7 +2921,7 @@ def run_release_for_job(
             "the joint item review and route critic audited every member."
         )
     _observe_stage(stage_progress, "qa", 0, len(qa_groups))
-    for group_index, record in enumerate(qa_groups):
+    def review_one_group(record):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
@@ -2857,7 +2942,7 @@ def run_release_for_job(
             and sibling.get("concept_key") == record.get("concept_key")
             and sibling.get("group_type") == record.get("group_type")
         ]
-        review = quality.review_group(
+        return quality.review_group(
             _group_evidence(record),
             family_members,
             siblings=siblings,
@@ -2869,6 +2954,16 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    reviews = kernel.parallel_map_in_order(
+        qa_groups, review_one_group,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Review · {group['group_key']}" for group in qa_groups],
+        announce="Assessment group quality review",
+    )
+    for group_index, (record, review) in enumerate(
+        zip(qa_groups, reviews, strict=True)
+    ):
         review_flags = [
             dict(flag) if isinstance(flag, Mapping) else str(flag)
             for flag in review.get("flags") or []
@@ -2893,15 +2988,37 @@ def run_release_for_job(
     )
 
     # Stage 8.5 — labels from accepted source order, append-only.
-    label_cursor: dict[str, int] = {}
+    label_counts: dict[str, int] = {}
+    for candidate in candidates:
+        concept_key = str(candidate.get("concept_key") or "")
+        if concept_key:
+            base = _label_base(concept_records_by_key[concept_key])
+            label_counts[base] = label_counts.get(base, 0) + 1
+    # Replaying the exact same accepted work retains its labels and cached
+    # Refiner decisions. Different jobs, lanes or accepted content reserve new
+    # ranges. The receipt and counter advance commit atomically, so interruption
+    # between numbering and release creation cannot cause reuse or extra spend.
+    reservation_key = rel.sha256_json({
+        "policy": "master-label-reservation-v1",
+        "owner_sub": owner_sub,
+        "job_id": job.id,
+        "lane": staged_lane,
+        "envelope_sha256": envelope_sha,
+        "source_concept_release_sha256": source_release_sha,
+        "profile": profile,
+        "candidates": candidates,
+        "groups": groups,
+        "placements": placements,
+    })
+    label_cursor = _reserve_master_labels(
+        db, label_counts, reservation_key=reservation_key,
+    )
     for candidate in candidates:
         concept_key = str(candidate.get("concept_key") or "")
         if not concept_key:
             continue
         concept = concept_records_by_key[concept_key]
         base = _label_base(concept)
-        if base not in label_cursor:
-            label_cursor[base] = _next_label_index(db, base)
         candidate["question_label"] = f"{base} Q{label_cursor[base]:02d}"
         label_cursor[base] += 1
 

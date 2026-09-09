@@ -133,5 +133,5 @@ def test_post_questions_are_the_sources_wording_verbatim_by_rule():
     assert "VERBATIM" in review
     assert "any rephrasing, simplification" in review
     assert assessment_item_review.ITEM_REVIEW_POLICY_VERSION == (
-        "assessment-item-review-3-column-spec"
+        "assessment-item-review-4-adopted-evidence"
     )

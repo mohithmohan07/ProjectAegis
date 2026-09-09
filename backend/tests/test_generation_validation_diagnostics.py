@@ -290,7 +290,7 @@ def test_final_repair_renormalizes_api_returned_newline_analysis(monkeypatch):
     bad = _strict_normal_row(question=question)
     bad["concept_details"] = bad["concept_details"].replace(
         "Applying the current relationship",
-        "Assessment pattern",
+        "",  # Exact missing-title structure nominates repair; meaning is API-owned.
         1,
     )
     api_row = _strict_normal_row(question=question)
@@ -807,7 +807,7 @@ def test_final_repair_loop_receives_type_and_stray_mastery_defects(
     bad = _strict_normal_row(question=question)
     bad["concept_details"] = bad["concept_details"].replace(
         "Applying the current relationship",
-        "Assessment pattern",
+        "",  # Exact missing-title structure nominates repair; meaning is API-owned.
         1,
     ).replace(
         " // Misconception/ Error Analysis:",
@@ -837,12 +837,13 @@ def test_final_repair_loop_receives_type_and_stray_mastery_defects(
     )
 
     assert len(prompts) == 1
-    assert "generic_type_definition" in prompts[0]
+    assert "missing_type_definition" in prompts[0]
+    assert "generic_type_definition" not in prompts[0]
     assert "mastery_marker_outside_description" in prompts[0]
     assert out[0]["concept_details"] == repaired["concept_details"]
 
 
-def test_generic_mined_type_title_is_replaced_from_its_source_example():
+def test_mined_type_title_is_not_reclassified_by_its_vocabulary():
     source_question = (
         "Calculate current from the supplied charge and elapsed time."
     )
@@ -860,12 +861,11 @@ def test_generic_mined_type_title_is_replaced_from_its_source_example():
     body, next_number = g._mined_type_to_body(mined_type, 0)
 
     assert next_number == 1
-    assert "Assessment pattern" not in body
-    assert "Type 01: Calculating Current from the Supplied Charge" in body
+    assert "Type 01: Assessment pattern" in body
     assert source_question in body
 
 
-def test_generic_mined_type_title_supports_legacy_string_case_prompt():
+def test_authored_type_title_survives_legacy_string_case_rendering():
     source_question = (
         "Calculate current from the supplied charge and elapsed time."
     )
@@ -878,8 +878,7 @@ def test_generic_mined_type_title_supports_legacy_string_case_prompt():
     )
 
     assert next_number == 1
-    assert "Assessment pattern" not in body
-    assert "Type 01: Calculating Current from the Supplied Charge" in body
+    assert "Type 01: Assessment pattern" in body
     assert source_question in body
 
 

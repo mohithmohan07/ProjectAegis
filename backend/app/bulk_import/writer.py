@@ -34,6 +34,7 @@ from . import layouts
 from . import assessment_workbook as workbook_contract
 from . import workbook_sync
 from .. import models
+from ..services import openai_usage
 from ..services import (
     assessment_release as release_contract,
     column_spec,
@@ -2195,7 +2196,8 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int],
             index.concept_titles.add(key[0])
             result["written"] += 1
     serialized = io.BytesIO()
-    wb.save(serialized)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(serialized)
     # T10-4 (S11): a read-back disagreement is one recorded decision and
     # the workbook still lands — the raise that used to sit here gated the
     # mid-run deposit after the model budget was spent, and nothing ever
@@ -2328,7 +2330,8 @@ def write_workbook(db: Session, dest: Path | None = None,
                     )
                 next_row["objective"] += 1
     buf = io.BytesIO()
-    wb.save(buf)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(buf)
     data = buf.getvalue()
     if dest:
         dest.write_bytes(data)
@@ -2383,7 +2386,8 @@ def write_concepts_workbook(
             apply_numeric_formats(ws, next_row, sheet_layout)
             next_row += 1
     buf = io.BytesIO()
-    wb.save(buf)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(buf)
     data = buf.getvalue()
     # T10-4 (S11): findings are recorded (the helper logs the full
     # decision — this path returns bytes and has no decisions list), and
@@ -2473,7 +2477,8 @@ def write_subject_workbook(
                 next_row["objective"] += 1
 
     buf = io.BytesIO()
-    wb.save(buf)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(buf)
     return buf.getvalue()
 
 

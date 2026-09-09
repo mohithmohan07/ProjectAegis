@@ -44,7 +44,9 @@ def test_no_outline_means_the_pass_behaves_exactly_as_before():
         assert contract._assessment_sections() == ()
 
 
-def test_the_reader_is_told_which_banners_not_to_promote(monkeypatch):
+def test_the_reader_is_told_which_banners_not_to_promote(monkeypatch, tmp_path):
+    monkeypatch.setattr(chapter_reading.config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(chapter_reading, "_memory_cache", {})
     seen: dict = {}
 
     def fake_call(system, user, **_kwargs):

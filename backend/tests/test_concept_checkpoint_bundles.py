@@ -689,3 +689,26 @@ def test_a_finished_run_is_not_offered_for_resume_again(db):
     job.status = "converted"
     db.commit()
     assert job.checkpoint_available is True
+
+
+def test_versioned_attempt_and_mechanical_telemetry_round_trip_without_repricing(db):
+    from types import SimpleNamespace
+
+    original = _job(db)
+    with openai_usage.track():
+        with openai_usage.mechanical_span("workbook.serialize"):
+            pass
+        with openai_usage.request_attempt(requested_model="gpt-5.6-luna", reasoning_effort="xhigh"):
+            openai_usage.record_service_started()
+            openai_usage.record_response(SimpleNamespace(
+                id="recorded-response", _request_id="recorded-request", model="gpt-5.6-luna",
+                usage=SimpleNamespace(prompt_tokens=100, completion_tokens=20, total_tokens=120),
+            ))
+            openai_usage.record_service_ended()
+        historical = openai_usage.current_summary()
+    assert historical["usage_schema_version"] == 2
+    original.openai_usage = historical
+    db.commit()
+    _, raw_bytes = checkpoints.export_bundle(db, original.id)
+    restored = checkpoints.import_bundle(db, raw_bytes)
+    assert restored.openai_usage == historical

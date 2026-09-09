@@ -17,6 +17,7 @@ from typing import Any, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from .evidence import block_context, block_text, decide_with_visual_evidence, image_inputs
 from .. import katex_rules, progress
 
 # One decision PER ROW: batching couples unrelated rows through the
@@ -43,8 +44,14 @@ POLICY_VERSION = "polish-3-api-owned-analysis-mastery"
 # version below (the "q1-allotment" prefix): a pre-Q1 stored repair
 # must never replay against the allotment-scoped checker.
 CONTENT_CODES = {
-    "verbatim_source_description",
-    "description_truncated_clause",
+    "repeated_description_marker",
+    "type_without_case",
+    "case_without_type",
+    "missing_type_definition",
+    "missing_case_definition",
+    "case_without_example",
+    "types_format",
+    "example_numbering",
     # A row can reach the boundary with no (or malformed) learner
     # analysis: the old path papered that over with a deterministic
     # fallback the gate forbids; authoring real analysis is model work.
@@ -176,8 +183,29 @@ def _checker(
                 )
             # Asset conservation is exact syntax/accounting, not a judgment
             # of what the figure teaches. The critic owns that judgment.
+            original_details = str(original.get("concept_details") or "")
+            before_qids = Counter(re.findall(r"\bQINV-\d+\b", original_details))
+            after_qids = Counter(re.findall(r"\bQINV-\d+\b", details))
+            if before_qids != after_qids:
+                defects.append(f"row_ref {ref} must preserve every source QID exactly")
+            from .. import concept_refiner as cr
+            from .. import concept_validator as cv
+
+            def source_examples(value: str) -> list[str]:
+                return [
+                    _normal(match.group(2))
+                    for label, body in cr.split_sections(value)
+                    if label.strip().casefold() == "types"
+                    for match in cv._EXAMPLE_SEGMENT_RE.finditer(body)
+                ]
+
+            if source_examples(original_details) != source_examples(details):
+                defects.append(
+                    f"row_ref {ref} must preserve every original source Example "
+                    "in order while repairing its markers"
+                )
             before_images = Counter(katex_rules._IMAGE_TAG_RE.findall(
-                str(original.get("concept_details") or "")
+                original_details
             ))
             after_images = Counter(katex_rules._IMAGE_TAG_RE.findall(details))
             if before_images - after_images:
@@ -246,7 +274,7 @@ def _live_polish(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.POLISH_SYSTEM,
         prompts.render(payload),
-        purpose="concept_validation",
+        purpose="concept_validation", image_urls=image_inputs(payload),
     )
 
 
@@ -257,7 +285,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.POLISH_CRITIC_SYSTEM,
         prompts.render(payload),
-        purpose="advisory_critic",
+        purpose="advisory_critic", image_urls=image_inputs(payload),
     )
 
 
@@ -287,10 +315,12 @@ def polish(
     """Return rows with every terminal content failure repaired in place."""
 
     env = envelope_mod.validate(env)
+    context_by_id = {
+        str(block.get("block_id") or ""): block_context(block)
+        for block in env["canonical"]["blocks"] if isinstance(block, Mapping)
+    }
     text_by_id = {
-        str(block.get("block_id") or ""): str(
-            block.get("display_text") or ""
-        )
+        str(block.get("block_id") or ""): block_text(block)
         for block in env["canonical"]["blocks"]
         if isinstance(block, Mapping)
     }
@@ -348,7 +378,8 @@ def polish(
                 "normalizer preserves authored wording; it does not remove "
                 "sentences by vocabulary overlap. "
                 "Keep all other sections, their order and ownership, Type/"
-                "Case/Example wording, source QIDs, topic/concept identities "
+                "Case/Example wording (except exact marker repairs named by "
+                "a hierarchy defect), source QIDs, topic/concept identities "
                 "and mappings unchanged. Preserve every supplied image tag "
                 "with its exact URL and alt text; do not replace assets or "
                 "claim an upload occurred. Preserve mathematical meaning, "
@@ -378,6 +409,7 @@ def polish(
                         {
                             "block_id": block_id,
                             "text": text_by_id.get(block_id, ""),
+                            **context_by_id.get(block_id, {}),
                         }
                         for block_id in (
                             out[index].get("_source_block_ids") or []
@@ -387,6 +419,7 @@ def polish(
                         {
                             "block_id": block_id,
                             "text": text_by_id.get(block_id, ""),
+                            **context_by_id.get(block_id, {}),
                         }
                         for block_id in (
                             out[index].get("_reference_block_ids") or []
@@ -396,7 +429,7 @@ def polish(
                 for index in batch_indexes
             ],
         }
-        return kernel.decide(
+        return decide_with_visual_evidence(
             kind="polish.rows",
             unit_id=f"rows#{start}",
             envelope_sha256=envelope_sha,
@@ -433,9 +466,17 @@ def polish(
             ref = row.get("row_ref")
             if ref not in set(batch_indexes):
                 continue
-            out[ref]["concept_details"] = str(
-                row.get("concept_details") or ""
-            )
+            before = str(out[ref].get("concept_details") or "")
+            after = str(row.get("concept_details") or "")
+            out[ref]["concept_details"] = after
+            if before != after:
+                out[ref].setdefault("_aegis_polish_repairs", []).append({
+                    "findings": failures[ref], "before": before, "after": after,
+                })
+                out[ref].setdefault("review_flags", []).append(
+                    "API structural/content repair recorded with original and "
+                    "repaired text: " + ", ".join(v["code"] for v in failures[ref])
+                )
             if _normal(row.get("keywords")):
                 out[ref]["keywords"] = _normal(row.get("keywords"))
         flags = list(decision.get("review_flags") or [])

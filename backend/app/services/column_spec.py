@@ -3,7 +3,8 @@
 The selected subject is explicit run metadata. Examples in the supplied
 workbooks never select a subject or supply chapter facts. A resolved profile
 carries its rule snapshot, so a legacy frozen release keeps its old rules.
-See docs/column-spec-review-2026-09-08.md for conflicting rows held open.
+See docs/column-spec-review-2026-09-08.md and Q35 for the ratified
+interpretation of contradictory example cells.
 """
 from __future__ import annotations
 
@@ -35,6 +36,13 @@ OUTPUT_DISCIPLINE = (
     "rubric tags are English-only. Apply the carried column_spec_policy where "
     "provided, including when it preserves an earlier frozen run. "
     "Never create a missing fact to fill a cell. "
+    "Titles use the caller's decorated identity; display names are plain "
+    "names, and relationship rosters reuse the exact decorated titles. "
+    "For a Subjective blank the placeholder field is the letter a (then "
+    "b, c in order), the stored question uses $$a$$ and the learner text "
+    "shows ____. Objective correct-option weight equals the accepted item "
+    "marks, with zero on distractors; do not impose one mark on a profile "
+    "that permits another value. post_topics lists Post topics. "
     "Check completeness, source support, exact IDs, and the response shape "
     "before returning; report uncertainty in the stage's existing reason or "
     "issue fields, without inventing a new response field.\n"
@@ -136,6 +144,20 @@ def for_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
         "multipart_parent_projection": "ordered_child_union",
         "generated_question_source": "UpSchool DB",
         "source_question_source": "run_publication",
+        "representation_version": "owner-column-interpretations-2026-09-08",
+        "identity_projection": {
+            "topic_id": "lane-qualified ChapterBaseID_TNN",
+            "concept_id": "TopicID_CNN",
+            "titles": "decorated name plus caller-owned ID",
+            "display_names": "plain names",
+            "rosters": "exact decorated titles of the referenced entities",
+        },
+        "subjective_blank": {
+            "placeholder": "a", "stored_question_token": "$$a$$",
+            "learner_text": "____", "subsequent_placeholders": "b through t in order",
+        },
+        "objective_option_weights": {"correct": "accepted item marks", "distractors": 0},
+        "post_topics": "Post topic roster",
     }
 
 

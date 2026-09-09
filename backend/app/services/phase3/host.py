@@ -14,6 +14,7 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from .evidence import block_context, block_text, decide_with_visual_evidence, image_inputs
 from ... import config
 from .. import progress
 from .. import semantic_confidence_policy as confidence_policy
@@ -356,7 +357,7 @@ def _live_host(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.HOST_SYSTEM, prompts.render(payload), purpose="concept_mapping"
+        prompts.HOST_SYSTEM, prompts.render(payload), purpose="concept_mapping", image_urls=image_inputs(payload)
     )
 
 
@@ -366,7 +367,7 @@ def _live_type_owner(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.TYPE_OWNER_SYSTEM, prompts.render(payload),
-        purpose="concept_mapping",
+        purpose="concept_mapping", image_urls=image_inputs(payload),
     )
 
 
@@ -376,7 +377,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.CRITIC_SYSTEM, prompts.render(payload),
-        purpose="advisory_critic",
+        purpose="advisory_critic", image_urls=image_inputs(payload),
     )
 
 
@@ -455,8 +456,12 @@ def host(
     # A create_new decision must cite exact source blocks, so the model
     # sees every block it may cite (job 24 failed closed here because the
     # payload carried none and the model could only fabricate).
+    context_by_id = {
+        str(block.get("block_id") or ""): block_context(block)
+        for block in env["canonical"]["blocks"] if isinstance(block, Mapping)
+    }
     text_by_id = {
-        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        str(row.get("block_id") or ""): block_text(row)
         for row in env["canonical"]["blocks"]
         if isinstance(row, Mapping)
     }
@@ -465,7 +470,8 @@ def host(
             "block_id": str(row.get("block_id") or ""),
             "topic_id": str(row.get("topic_id") or ""),
             "kind": str(row.get("kind") or ""),
-            "text": text_by_id.get(str(row.get("block_id") or ""), "")[:400],
+            "text": text_by_id.get(str(row.get("block_id") or ""), ""),
+            **context_by_id.get(str(row.get("block_id") or ""), {}),
         }
         for row in env["graph"]["blocks"]
         if isinstance(row, Mapping) and str(row.get("block_id") or "")
@@ -482,12 +488,9 @@ def host(
         qid = str(item.get("qid") or "").strip()
         if not qid:
             continue
-        text = str(
-            item.get("polished_task")
-            or item.get("normalized_task")
-            or item.get("raw_task")
-            or ""
-        )
+        from .. import generation
+
+        text = generation._inventory_task_text(item)
         question_info[qid] = {
             "qid": qid,
             "kind": str(item.get("source_kind") or ""),
@@ -497,7 +500,7 @@ def host(
                 or ""
             ),
             "chapter_wide": bool(item.get("_chapter_wide_task")),
-            "text": text[:600],
+            "text": text,
         }
 
     def _decide_units_batch(
@@ -594,7 +597,7 @@ def host(
             "settled_concepts": concepts_payload,
             "source_blocks": blocks_payload,
         }
-        decision = kernel.decide(
+        decision = decide_with_visual_evidence(
             kind="host.units",
             unit_id=f"units#{start}",
             envelope_sha256=envelope_sha,
@@ -851,10 +854,10 @@ def consolidate_type_ownership(
         for mined in env["mined_types"].get("types") or []
         if isinstance(mined, Mapping)
     }
+    from .. import generation
+
     question_text_by_qid = {
-        str(item.get("qid") or ""): _normal(
-            str(item.get("raw_task") or item.get("question") or "")
-        )[:400]
+        str(item.get("qid") or ""): generation._inventory_task_text(item)
         for item in (env.get("inventory") or {}).get("items") or []
         if isinstance(item, Mapping)
     }
@@ -977,7 +980,7 @@ def consolidate_type_ownership(
                     defects.append("confidence must be numeric")
                 return defects
 
-            decision = kernel.decide(
+            decision = decide_with_visual_evidence(
                 kind="host.type_owner",
                 unit_id=type_id,
                 envelope_sha256=envelope_sha,

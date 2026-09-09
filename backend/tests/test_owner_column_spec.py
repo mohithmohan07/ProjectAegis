@@ -182,6 +182,8 @@ def test_non_english_runs_share_column_rules_but_reject_rubric_tags(subject):
     assert policy["rubric_tags"] == []
 
     candidate = _english_snapshot(subject)["candidates"][1]
+    # _profile supplies no board, so this is the generic format vocabulary.
+    candidate["question_category"] = "Long Answer"
     criteria = candidate["sub_questions"][0]["keywords"]
     criteria[0]["weightage"], criteria[1]["weightage"] = "1.5", "0.5"
     assert release.validate_candidate(candidate, profile) == []
@@ -229,6 +231,7 @@ def test_frozen_v1_keeps_its_creative_tag_and_fixed_english_keyboard():
         "math_keyboard": "No",
     })
     candidate = _english_snapshot()["candidates"][1]
+    candidate["question_category"] = "Long Answer"
     criterion = candidate["sub_questions"][0]["keywords"][0]
     criterion["keyword"] = "[creative]: Supplies an original example."
     assert release.validate_candidate(candidate, profile) == []

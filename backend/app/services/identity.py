@@ -565,7 +565,7 @@ def machine_id_for_concept(
 
 
 # --------------------------------------------------------------------------- #
-# Label numbering (spec-step8 T5-3, R5) — ONE max-scan, both lanes
+# Label numbering (Q36, spec-step8 T5-3, R5) — durable counters, both lanes
 # --------------------------------------------------------------------------- #
 
 # The separator ``generation.question_label`` composes with: ``<base> Q##``
@@ -595,66 +595,23 @@ def label_family_base(question_label: str) -> str:
 
 
 def next_label_index(db, base: str) -> int:
-    """Continue numbering after every label already committed for ``base``.
+    """Peek after durable issued history and live labels, including blank bases.
 
-    A MAX-SCAN, never a count. A count breaks numbering the moment anything is
-    deleted: ``len(questions) + 1`` hands the next mint the number of EVERY
-    question ever removed from the family, including numbers already published
-    on rows a learner has seen. The scan reads the highest number actually
-    present and continues past it, so a deletion leaves a gap.
-
-    **The guarantee, stated exactly.** A count reissues every deleted number;
-    the max-scan reissues only the TOP of the range — delete the highest label
-    of a family and the next mint takes it back. That residual is a property of
-    scanning live rows, and closing it needs a durable record of retired labels
-    (the uploaded release snapshots are the obvious one), which no slice up to
-    here builds. So R5 — *a ``question_label``, once uploaded, is never
-    reassigned* — is held here for every interior deletion and NOT for the top
-    of a range; ``test_deleting_the_highest_label_of_a_family_still_reissues_
-    its_number`` pins the open case rather than letting the name of the
-    interior test imply the general guarantee.
-
-    Promoted out of ``assessment_release_run`` (T5-3) so the Build Assessments
-    lane and the release lane continue the SAME family. That is only correct
-    because S4 left one minter: ``base`` is the concept's PERSISTED
-    ``machine_id``, not a re-derived slug that collides across chapters.
-
-    A grandfathered legacy label is not a counterexample — it carries a
-    different prefix, so it falls outside this family and is neither scanned
-    nor reassigned. ``legacy_label_family`` says so out loud.
-
-    **A blank ``base`` is scanned, not short-circuited to 1.**
-    ``machine_id_for_concept`` legitimately returns ``""`` for a concept whose
-    topic has no resolvable chapter — genuine impossibility, left blank and
-    surfaced by the caller, never guessed — and ``generation.question_label``
-    then composes ``" Q##"``. Returning 1 for that base restarts the family on
-    every run, so the second run re-mints ``" Q01"`` and the partial unique
-    index turns it into an ``IntegrityError`` escaping mid-generation: the
-    whole batch of generated questions is lost with no record, which is both a
-    mid-run halt Q13 forbids and the R4 loss this slice exists to close. The
-    blank family is a family like any other; scanning it keeps numbering
-    monotonic, and the missing identity is caught where it belongs — at the
-    publication act, as T9-1 B1's "a staged row whose concept still has no
-    ``machine_id``".
+    This does not reserve a number. Writers use ``reserve_label_indices`` so
+    concurrent runs share one atomic counter for the persisted machine-id base.
     """
-    from .. import models
+    from .question_label_sequences import next_label_index as peek
 
-    prefix = label_family_prefix(base)
-    highest = 0
-    rows = db.query(models.Question.question_label).filter(
-        # ``autoescape`` matters: a machine id is full of ``_``, which LIKE
-        # reads as "any single character" — without it the scan pulls in
-        # sibling concepts' families.
-        models.Question.question_label.startswith(prefix, autoescape=True)
-    )
-    for (label,) in rows:
-        text = str(label or "")
-        if not text.startswith(prefix):
-            continue
-        tail = text[len(prefix):]
-        if tail.isdigit():
-            highest = max(highest, int(tail))
-    return highest + 1
+    return peek(db, base)
+
+
+def reserve_label_indices(
+    db, counts: dict[str, int], *, reservation_key: str | None = None,
+) -> dict[str, int]:
+    """Reserve complete ranges in the caller's transaction; do not commit it."""
+    from .question_label_sequences import reserve_label_indices as reserve
+
+    return reserve(db, counts, reservation_key=reservation_key)
 
 
 def legacy_label_family(labels, base: str) -> dict | None:

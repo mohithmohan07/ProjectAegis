@@ -34,6 +34,7 @@ import copy
 from typing import Any, Mapping
 
 from . import assessment_lane_policy as lane_policy
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 PRE_CLAIM_POLICY_VERSION = "assessment-pre-claim-1-column-spec"
@@ -47,6 +48,9 @@ PRE_CLAIM_SYSTEM = (
     "begins (a 'let us recall' / 'what you already know' exercise, a "
     "revision drill of prior-grade skills). Those are pre-learning's "
     "territory and are claimed OUT of the Post assessment.\n"
+    "Earlier-class means an earlier grade/year. Revision of an earlier "
+    "chapter in the same grade alone is not sufficient for a Pre claim. "
+    "Do not invent curriculum history from a chapter title or position.\n"
     "POSITION IS NEVER EVIDENCE: a question is recap because of what it "
     "asks, not because it appears early. A chapter opener that teaches "
     "THIS chapter's own content — a source analysis, an introduction "
@@ -83,6 +87,7 @@ def _live_claim(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         PRE_CLAIM_SYSTEM, prompts.render(payload),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -93,6 +98,7 @@ def _live_claim_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         PRE_CLAIM_CRITIC_SYSTEM, prompts.render(payload),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -176,6 +182,7 @@ def decide_pre_learning_claims(
             if str(atom.get("source_qid") or "")
         ],
     }
+    visual_evidence.bind(payload, rows)
     decision = kernel.decide(
         kind="assessment.pre_learning_claim",
         unit_id="chapter",
@@ -190,6 +197,7 @@ def decide_pre_learning_claims(
     )
     response = decision["response"]
     decision_flags = list(decision.get("review_flags") or [])
+    decision_flags.extend(visual_evidence.review_flags(payload))
 
     claimed_records: list[dict[str, Any]] = []
     claimed_qids: set[str] = set()
@@ -206,10 +214,20 @@ def decide_pre_learning_claims(
             ] + decision_flags,
         })
     kept = [
-        atom for atom in atoms
+        copy.deepcopy(atom) for atom in atoms
         if (
             str(atom.get("source_qid") or "")
             if isinstance(atom, Mapping) else ""
         ) not in claimed_qids
     ]
+    for atom in kept:
+        if not isinstance(atom, dict) or not decision_flags:
+            continue
+        existing = atom.get("flags") or []
+        if not isinstance(existing, list):
+            existing = [str(existing)]
+        atom["flags"] = list(dict.fromkeys([
+            *existing,
+            *[f"assessment.pre_learning_claim: {flag}" for flag in decision_flags if str(flag).strip()],
+        ]))
     return kept, claimed_records

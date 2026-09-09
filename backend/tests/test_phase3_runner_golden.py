@@ -185,10 +185,27 @@ def test_runner_produces_publication_ready_output(
     #    purged word-count nomination safe to remove: a section banner the
     #    extractor mistook for a task now arrives at a reviewer instead of
     #    quietly becoming an Example.
-    assert summary["flagged_row_count"] == 7
-    flagged_rows = [
-        row for row in result["records"] if row.get("review_flags")
+    actual_flagged = [row for row in result["records"] if row.get("review_flags")]
+    assert summary["flagged_row_count"] == len(actual_flagged)
+    visual_flags = [
+        flag for row in actual_flagged for flag in row["review_flags"]
+        if "concept_visual_evidence_unavailable" in flag
     ]
+    # This recorded corpus supplies remote-only Mathpix figures, with no
+    # pinned pixels. Those explicit evidence limits are new diagnostics;
+    # the historic learner output and original seven ownership/repair rows
+    # must remain unchanged.
+    assert visual_flags
+    assert all("not_an_authorized_pinned_source_asset" in flag for flag in visual_flags)
+    flagged_rows = [
+        {**row, "review_flags": [
+            flag for flag in row["review_flags"]
+            if "concept_visual_evidence_unavailable" not in flag
+        ]}
+        for row in actual_flagged
+        if any("concept_visual_evidence_unavailable" not in flag for flag in row["review_flags"])
+    ]
+    assert len(flagged_rows) == 7
     # Re-baselined for Q14 (owner ruling, 21 Aug 2026): this chapter's
     # six reusable cross-topic Types each consolidated onto one owning
     # concept, so the moved Cases' rows now carry the Q14 move flags and

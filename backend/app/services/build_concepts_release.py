@@ -176,6 +176,11 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # release for the reviewer's audit (every LA-id accounted, allotted
     # to exactly one concept) and is stripped before DB upload.
     "_aegis_analysis_allotments",
+    # Q35: complete immutable evidence and lossless structural repair history
+    # accompany the staged row, but are not learner-facing database columns.
+    "_aegis_source_evidence",
+    "_aegis_structure_original",
+    "_aegis_polish_repairs",
     # The Phase 03 Pre-Learning map's row-private records (doc §4,
     # phase3/premap.py): the captured prerequisites a pre-concept teaches,
     # and its explicit needed-for links to the Post concepts that require
@@ -3312,6 +3317,17 @@ def _refine_pre_records(
             "pre_post": "Pre",
             # Contract v2.0 §18: the publication only, never a filename.
             "source_book": job.source_book or "",
+            # These are the map's already-redacted captured fundamentals,
+            # not current-chapter exercises or the finished Post map.
+            "prerequisite_evidence": [
+                {
+                    "pre_concept_id": row.get("_pre_concept_id", ""),
+                    "prerequisites": copy.deepcopy(
+                        row.get("_aegis_pre_prerequisites") or []
+                    ),
+                }
+                for row in records
+            ],
             # Deliberately absent: the chapter's question/task inventory,
             # its mined Types, AND its source text — all three of which
             # the Post hook passes. The Pre lane extracts no question

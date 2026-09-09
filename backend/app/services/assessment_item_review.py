@@ -27,9 +27,11 @@ from typing import Any, Mapping
 from .. import config
 from . import assessment_profile
 from . import column_spec
+from .response_schemas import item_review_schema
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
-ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-3-column-spec"
+ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-4-adopted-evidence"
 AUDIT_FIELD = "_aegis_assessment_item_review"
 WARNING = "assessment_item_review"
 UNAVAILABLE_WARNING = "assessment_item_review_unavailable"
@@ -140,6 +142,8 @@ def _live_review(payload: dict[str, Any]) -> dict[str, Any]:
         ITEM_REVIEW_SYSTEM,
         suffix,
         purpose="advisory_critic",
+        response_schema=item_review_schema(),
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "item-review-v2",
@@ -158,12 +162,22 @@ def _payload(
     format_policy: Mapping[str, Any],
 ) -> dict[str, Any]:
     item = copy.deepcopy(dict(candidate))
-    # The item's own audit records are not evidence for the review.
+    # Prior self-evaluation is not evidence. The adopted answer contract IS
+    # a settled decision input, independent of the author's confidence/claims.
     for key in list(item):
-        if key.startswith("_aegis_"):
+        if key.startswith("_aegis_") or key in {"authority", "flags", "assessment_eligibility"}:
             item.pop(key, None)
-    return {
+    raw_contract = candidate.get("_aegis_assessment_answer_restriction")
+    contract = raw_contract if isinstance(raw_contract, Mapping) else {}
+    missing_contract_fields = [
+        field for field, expected_type in (
+            ("answer_restriction", str), ("answer_space_contract", str),
+            ("required_elements", list), ("accepted_variations", list),
+        ) if not isinstance(contract.get(field), expected_type)
+    ]
+    return visual_evidence.bind({
         "stage": "assessment.item_review",
+        "response_schema_contract": item_review_schema().identity(),
         "rules": ITEM_REVIEW_SYSTEM,
         "metadata": copy.deepcopy(dict(meta)),
         "assessment_format_policy": copy.deepcopy(dict(format_policy)),
@@ -173,7 +187,16 @@ def _payload(
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "item": item,
-    }
+        "adopted_answer_contract": {
+            key: copy.deepcopy(contract[key])
+            for key in (
+                "answer_restriction", "answer_space_contract",
+                "required_elements", "accepted_variations",
+            ) if key in contract
+        },
+        "answer_contract_availability": "recorded" if not missing_contract_fields else "missing",
+        "answer_contract_missing_fields": missing_contract_fields,
+    }, atom, item)
 
 
 def review_items(
@@ -284,6 +307,9 @@ def review_items(
         ]
         verdict = str(response.get("verdict") or "")
         flags = [f"item review: {issue}" for issue in issues]
+        flags.extend(visual_evidence.review_flags(payload))
+        if payload["answer_contract_availability"] == "missing":
+            flags.append("assessment_answer_contract_unavailable: joint review lacks the adopted answer-space contract")
         if verdict == "dissent" and not flags:
             flags.append("item review: dissent recorded without detail")
         return {
@@ -295,6 +321,7 @@ def review_items(
             "authority": {
                 "decision_key": str(decision.get("key") or ""),
                 "policy_version": str(decision.get("policy_version") or ""),
+                "visual_evidence": copy.deepcopy(payload["visual_evidence"]),
             },
         }
 

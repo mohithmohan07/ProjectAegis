@@ -64,7 +64,10 @@ _LOGGER = logging.getLogger(__name__)
 # still hold their verified pages, and reseals with the digest). A bump
 # here would instead discard every paid page transcription for a change
 # that altered none of their content.
-FALLBACK_VERSION = "2.5.0"
+# 2.6.0 changes semantic evidence (qualified relationships, table ownership,
+# crop review and captions). Older paid records remain readable, but cannot be
+# upgraded mechanically into a verification under this new contract.
+FALLBACK_VERSION = "2.6.0"
 FALLBACK_COMPILER = "gpt-pdf-to-acsd-2"
 FALLBACK_ORIGIN = "gpt_pdf_acsd_fallback"
 # Independent identity for deterministic ingestion canonicalization. It is
@@ -83,7 +86,7 @@ MMD_SOURCE_ORIGIN = "gpt-pdf-to-acsd"
 # validates against this exact constant, so producer and consumer can never
 # drift apart again (a hardcoded mismatch previously made that cache dead and
 # re-entered this lane on every Phase 3 rebuild).
-PAGE_ACSD_SCHEMA_VERSION = "1.2.0"
+PAGE_ACSD_SCHEMA_VERSION = "1.3.0"
 GPT_PAGE_ACSD_FILENAME = "source.gpt-page-acsd.json"
 ASSET_DIRNAME = "assets"
 # Artifacts this module used to publish and no longer does. They stay in the
@@ -323,6 +326,14 @@ def collect_pdf_pages(
         document.close()
 
 
+def _block_reference_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {"page_id": {"type": "string"}, "reading_order": {"type": "integer"}},
+        "required": ["page_id", "reading_order"], "additionalProperties": False,
+    }
+
+
 def _block_schema() -> dict[str, Any]:
     return {
         "type": "object",
@@ -352,13 +363,30 @@ def _block_schema() -> dict[str, Any]:
                 "type": "array",
                 "items": {"type": "integer"},
             },
+            "linked_visual_refs": {"type": "array", "items": _block_reference_schema()},
+            "linked_context_refs": {"type": "array", "items": _block_reference_schema()},
+            "table_cell_visual_refs": {
+                "type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "row_index": {"type": "integer"}, "column_index": {"type": "integer"},
+                        "figure_ref": _block_reference_schema(),
+                    },
+                    "required": ["row_index", "column_index", "figure_ref"],
+                    "additionalProperties": False,
+                },
+            },
             "caption": {"type": "string"},
+            "source_caption": {"type": "string"},
+            "public_alt": {"type": "string"},
             "confidence": {"type": "number"},
         },
         "required": [
             "reading_order", "kind", "bbox", "text", "heading_level",
             "source_label", "latex", "table_rows", "linked_visual_orders",
             "linked_context_orders", "caption", "confidence",
+            "linked_visual_refs", "linked_context_refs", "table_cell_visual_refs",
+            "source_caption", "public_alt",
         ],
         "additionalProperties": False,
     }
@@ -477,6 +505,10 @@ Block rules:
   is a drawing carries no cell text: leave it empty, keep the drawing as its
   own figure block, and never describe it in words ("triangle figure"),
   substitute a lookalike character or emoji, or mark it ▯.
+  Record its position in the table block's table_cell_visual_refs as zero-based
+  row_index/column_index and a figure_ref {page_id, reading_order}. A mixed cell
+  retains all printed text plus its figure reference. The same figure stays a
+  single source block; the cell reference records placement, not another figure.
 - A task block's text is never just its cue: a bare banner word ("Do it.",
   "Activity", "Discuss.") is not a task — attach the cue to the instruction
   that follows it in source_label, or emit no task at all.
@@ -496,14 +528,28 @@ Block rules:
 - source_label must be empty on heading, paragraph, list, table, figure, math,
   and other blocks. Never attach a source-box cue to an ordinary paragraph.
 - table: return every visible cell in table_rows.
-- figure: return a tight normalized bbox around the visual, plus its exact
-  visible caption; do not invent a caption.
+- figure: return a complete normalized bbox around the visual INCLUDING all
+  required labels, arrows, units, legends, axes, panel letters and dependent
+  panels. Tight means removing unrelated margin, never clipping these elements.
+  source_caption is the exact printed caption, empty when none is printed;
+  caption repeats source_caption for legacy consumers. public_alt is a neutral
+  accessibility description, never an answer or an inferred interpretation.
+  Keep every visible label/caption in the source even if it reveals an answer;
+  report such exposure for assessment review instead of erasing source evidence.
 - math: return exact LaTeX in latex. In ordinary text, preserve inline maths with
   canonical [Katex] ... [/Katex] wrappers.
 - linked_visual_orders: for a task, list only figure reading_order values visibly
   owned by that task on the page.
 - linked_context_orders: for a task, list visible table, list, paragraph, source,
   or math block reading_order values required to understand or answer the task.
+- linked_visual_refs and linked_context_refs are the authoritative page-qualified
+  {page_id, reading_order} relationships, including dependencies across supplied
+  pages. Include same-page dependencies too; legacy *_orders repeat same-page
+  orders only. Never guess a block ID on an unseen page. Preserve the visible
+  cross-page cue in the task so later full-chapter review can resolve it.
+  All relationship arrays are empty on kinds they do not apply to;
+  table_cell_visual_refs belongs only to tables. Caption fields are empty on
+  non-figures. page_id means the supplied PDF-PAGE ID, never printed pagination.
 - bbox coordinates are normalized 0..1000 as [x0,y0,x1,y1].
 If a page is unreadable, still return the page with low confidence rather than
 inventing content. Output strict JSON only.
@@ -547,7 +593,18 @@ twice. A table cell whose printed content is a drawing correctly has empty
 cell text with the drawing kept as its own figure block: do not require a
 worded description, a lookalike character, or ▯ in that cell. A printed
 conversation or speech-bubble exchange posing one activity is correctly ONE
-task block. A task whose text is only its bare cue ("Do it.") is a defect. An
+task block. Qualified linked_visual_refs/linked_context_refs identify the
+owning page and block and may cross supplied pages; verify them against both
+pages. Table drawings must also have table_cell_visual_refs placing each
+figure in its actual zero-based row and column; textual cells remain verbatim.
+source_caption is immutable printed wording, while public_alt may describe
+the visible figure neutrally. Never erase visible source information to hide
+an answer; flag answer-revealing source apparatus for downstream assessment.
+Compare supplied FIGURE-CROP evidence with its full original page: every
+required label, arrow, unit, axis, legend and dependent panel must remain
+inside the crop. A narrow crop that loses these is incomplete even if the
+central drawing is visible. If crop evidence is unavailable, name that limit.
+A task whose text is only its bare cue ("Do it.") is a defect. An
 activity's numbered steps must stay one task block. Do not rewrite or repair
 the candidate. Return needs_correction or ambiguous when any material defect
 remains. Output strict JSON only.
@@ -555,7 +612,7 @@ remains. Output strict JSON only.
 
 
 def _correction_system_prompt() -> str:
-    return """
+    return _extraction_system_prompt() + "\n\n" + """
 You are the bounded Aegis PDF-to-ACSD correction reviewer. Compare the supplied
 candidate and deterministic validation failure against the original PDF page
 images. Return the complete corrected page batch, changing only fields or block
@@ -614,7 +671,54 @@ def _page_prompt(pages: list[PdfPage], *, candidate: dict[str, Any] | None = Non
     else:
         payload["instruction"] = "Verify this candidate without rewriting it."
         payload["candidate"] = candidate
+        payload["crop_evidence_identity"] = (
+            "Extra evidence IDs end in FIGURE-CROP-<reading_order>. These are "
+            "the candidate bbox crops of that original page, for completeness comparison."
+        )
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _figure_crop_review_pages(
+    pages: list[PdfPage], candidate: dict[str, Any],
+) -> list[phase22.EvidencePage]:
+    """Materialize the proposed boundaries for the existing independent verifier.
+
+    This is geometry only. The model judges whether any source information was
+    clipped; no bbox padding or semantic label detection is performed here.
+    """
+    import io
+    from PIL import Image
+
+    source_pages = {page.page_id: page for page in pages}
+    crops: list[phase22.EvidencePage] = []
+    for row in candidate.get("pages") or []:
+        source = source_pages.get(str(row.get("page_id") or ""))
+        if source is None:
+            continue
+        for block in row.get("blocks") or []:
+            if block.get("kind") != "figure":
+                continue
+            order = int(block.get("reading_order") or 0)
+            try:
+                data = base64.b64decode(source.image_data_url.split(",", 1)[1])
+                with Image.open(io.BytesIO(data)) as original:
+                    x0, y0, x1, y1 = block["bbox"]
+                    box = (round(x0 * original.width / 1000), round(y0 * original.height / 1000),
+                           round(x1 * original.width / 1000), round(y1 * original.height / 1000))
+                    cropped = original.crop(box).convert("RGB")
+                    output = io.BytesIO()
+                    cropped.save(output, format="JPEG", quality=88)
+                crops.append(phase22.EvidencePage(
+                    evidence_id=f"{source.page_id}-FIGURE-CROP-{order:04d}",
+                    page_number=source.page_number, text="Candidate figure crop; compare with full page.",
+                    image_data_url="data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii"),
+                    score=1.0,
+                ))
+            except (ValueError, KeyError, TypeError, IndexError, OSError) as exc:
+                row.setdefault("review_flags", []).append(
+                    f"{source.page_id}: crop review evidence unavailable for block {order}: {type(exc).__name__}"
+                )
+    return crops
 
 
 def _pdf_sha256(path: Path) -> str:
@@ -765,6 +869,10 @@ def _legacy_cache_envelope_matches(
     altered cache row is a miss, never an input whose identity we repair while
     promoting it to the current contract.
     """
+    # The old migration proves only formatting-equivalence with 2.5.0. It
+    # cannot certify new semantic review requirements introduced by 2.6.0.
+    if FALLBACK_VERSION != "2.5.0":
+        return False
     if (
         cached.get("version") != fallback_version
         or cached.get("model") != config.OPENAI_MODEL
@@ -1063,7 +1171,7 @@ def _tokens(value: str) -> set[str]:
 # model verdict, never a label vocabulary (Rule 1; §4 Phase 1.2).
 # 9: full block evidence and an independent advisory critic. Page extraction
 # caches stay valid; only the semantic outline must be re-read/reviewed.
-OUTLINE_VERSION = "chapter-outline-9"
+OUTLINE_VERSION = "chapter-outline-10"
 OUTLINE_REVIEW_VERSION = "chapter-outline-review-1"
 # The MMD rendering shape, independent of the extraction contract: bumped
 # when the renderer changes what the same page ACSD looks like as MMD (so
@@ -1292,10 +1400,23 @@ def _outline_schema() -> dict[str, Any]:
                     },
                 },
                 "notes": {"type": "array", "items": {"type": "string"}},
+                "task_dependency_links": {
+                    "type": "array", "items": {
+                        "type": "object",
+                        "properties": {
+                            "page_id": {"type": "string"}, "reading_order": {"type": "integer"},
+                            "linked_visual_refs": {"type": "array", "items": _block_reference_schema()},
+                            "linked_context_refs": {"type": "array", "items": _block_reference_schema()},
+                            "source_evidence": {"type": "string"},
+                        },
+                        "required": ["page_id", "reading_order", "linked_visual_refs", "linked_context_refs", "source_evidence"],
+                        "additionalProperties": False,
+                    },
+                },
             },
             "required": [
                 "chapter_title", "topics", "task_partitions", "whole_tasks",
-                "notes",
+                "notes", "task_dependency_links",
             ],
             "additionalProperties": False,
         },
@@ -1398,6 +1519,16 @@ name the page/block and uncertainty in notes; do not invent a repair.
      enrichment instead of a question.
    Judge by what the content asks of the learner, never by the cue word
    alone.
+
+5. task_dependency_links — resolve a task's necessary visual/context dependencies
+   from the COMPLETE chapter, including across extraction-batch boundaries.
+   Use exact page_id + reading_order identities; linked_visual_refs targets
+   figure blocks and linked_context_refs targets source/paragraph/list/table/math
+   blocks. source_evidence quotes the visible cue or wording supporting the link.
+   Add only source-supported relationships; no proximity guessing or unseen block
+   inventions. Preserve all previously recorded dependencies. An empty array
+   means no additional links were supported; uncertainty belongs in notes.
+   Table-cell figure ownership stays in table_cell_visual_refs and must survive.
 
 Return JSON per the schema. notes: anything you judged worth flagging.
 """.strip()
@@ -1669,6 +1800,9 @@ def _normalize_chapter_outline(
         "chapter_title": title,
         "topics": topics,
         "task_partitions": partitions,
+        # The page-qualified link ledger remains available in full. Application
+        # checks only typed identity; the independent outline critic owns meaning.
+        "task_dependency_links": copy.deepcopy(candidate.get("task_dependency_links") or []),
         "ruled_task_kinds": [
             [ref[0], ref[1], kind]
             for ref, kind in sorted(ruled_kinds.items())
@@ -1822,6 +1956,9 @@ normalization changed or left unruled. Every original task and teaching passage
 must remain available. Never justify omission by its size, typography, cue word,
 filename, assumed subject, or assumed board. Check long blocks and table rows,
 and preserve equations, units, KaTeX, image references and shared visual context.
+Check task_dependency_links against the full chapter: cross-page and cross-batch
+dependencies must point to the actual source block, with a source-supported cue;
+existing dependencies and table-cell figure ownership must remain available.
 
 Verify from supplied evidence only. You did not inspect original PDF pixels;
 flag missing or ambiguous transcription evidence rather than claiming a visual
@@ -2194,6 +2331,11 @@ def validate_page_extraction(
                 flags.append("dropped a non-object block")
                 continue
             raw = copy.deepcopy(_canonicalize_source_cue_block(raw))
+            if raw.get("kind") == "figure":
+                # Preserve source wording separately from public accessibility
+                # prose. Legacy records have only caption and remain readable.
+                raw.setdefault("source_caption", str(raw.get("caption") or ""))
+                raw.setdefault("public_alt", "")
             order = int(raw.get("reading_order") or 0)
             kind = str(raw.get("kind") or "")
             bbox = raw.get("bbox")
@@ -2407,6 +2549,7 @@ def validate_page_extraction(
             "page_number": page.page_number,
             "confidence": confidence,
             "blocks": normalized_blocks,
+            "dropped_furniture": copy.deepcopy(row.get("dropped_furniture") or []),
         }
         if flags:
             normalized_page["review_flags"] = [
@@ -2498,10 +2641,11 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
             )
             continue
 
+        crop_evidence = _figure_crop_review_pages(pages, normalized)
         verification = phase22._openai_multimodal_json(
             system=_verification_system_prompt(),
             prompt=_page_prompt(pages, candidate=normalized),
-            pages=evidence_pages,
+            pages=evidence_pages + crop_evidence,
             response_schema=verification_schema(pages),
             purpose="page_transcription",
             max_tokens=6000,
@@ -3330,7 +3474,7 @@ def _render_page_acsd_parts(
                 url = str(block.get("asset_url") or "").strip()
                 if url:
                     emit(
-                        _markdown_image(url, str(block.get("caption") or "")),
+                        _markdown_image(url, str(block.get("source_caption", block.get("caption")) or "")),
                         {**ref, "role": "body"},
                     )
             elif kind == "heading":
@@ -3500,6 +3644,11 @@ def _canonical_block_text(block: dict[str, Any]) -> str:
 
 
 def _page_block_match_key(block: dict[str, Any]) -> str:
+    if block.get("kind") == "table":
+        # Match the same mechanical table rendering on both sides. A picture
+        # cell has no text; comparing its pipe placeholder against the parser's
+        # flattened grid previously lost the entire table's canonical identity.
+        return _normal(structure.flatten_table_markup(_render_table(block.get("table_rows") or [])))
     return _normal(_page_context_text(block))
 
 
@@ -3580,12 +3729,94 @@ def _without_asset_tags(value: object, asset_urls: set[str]) -> str:
 
 
 
-def _page_context_text(block: dict[str, Any]) -> str:
+def _qualified_block_refs(block: dict[str, Any], field: str, page_id: str) -> list[tuple[str, int]]:
+    """Read explicit qualified identities plus legacy page-local order fields."""
+    refs: list[tuple[str, int]] = []
+    for value in block.get(field + "_refs") or []:
+        if not isinstance(value, dict):
+            continue
+        order = value.get("reading_order")
+        if isinstance(order, int) and not isinstance(order, bool) and order > 0 and value.get("page_id"):
+            ref = (str(value["page_id"]), order)
+            if ref not in refs:
+                refs.append(ref)
+    for order in block.get(field + "_orders") or []:
+        if isinstance(order, int) and not isinstance(order, bool) and order > 0:
+            ref = (page_id, order)
+            if ref not in refs:
+                refs.append(ref)
+    return refs
+
+
+def _page_block_index(page_acsd: dict[str, Any]) -> dict[tuple[str, int], dict[str, Any]]:
+    return {
+        (str(page.get("page_id") or ""), int(block.get("reading_order") or 0)): block
+        for page in page_acsd.get("pages") or [] if isinstance(page, dict)
+        for block in page.get("blocks") or [] if isinstance(block, dict)
+    }
+
+
+def _table_cell_figures(
+    block: dict[str, Any], block_index: dict[tuple[str, int], dict[str, Any]],
+) -> list[tuple[int, int, tuple[str, int], dict[str, Any]]]:
+    """Resolve exact cell coordinates. Unresolved records remain on the source."""
+    rows = block.get("table_rows") or []
+    resolved = []
+    for cell in block.get("table_cell_visual_refs") or []:
+        if not isinstance(cell, dict):
+            continue
+        row, column, ref = cell.get("row_index"), cell.get("column_index"), cell.get("figure_ref")
+        if not isinstance(ref, dict) or not all(isinstance(n, int) and not isinstance(n, bool) for n in (row, column)):
+            continue
+        if row < 0 or row >= len(rows) or column < 0 or column >= len(rows[row]):
+            continue
+        if not isinstance(ref.get("reading_order"), int) or isinstance(ref.get("reading_order"), bool):
+            continue
+        key = (str(ref.get("page_id") or ""), ref["reading_order"])
+        figure = block_index.get(key)
+        if figure and figure.get("kind") == "figure":
+            resolved.append((row, column, key, figure))
+    return resolved
+
+
+def _record_relationship_reference_issues(page_acsd: dict[str, Any]) -> None:
+    """Record unresolved typed links without guessing or deleting their target."""
+    index = _page_block_index(page_acsd)
+    for page in page_acsd.get("pages") or []:
+        for block in page.get("blocks") or []:
+            prefix = f"{page.get('page_id')}-BLOCK-{int(block.get('reading_order') or 0):04d}"
+            issues = []
+            for field, allowed in (("linked_visual", {"figure"}), ("linked_context", {"table", "list", "paragraph", "source", "math", "other"})):
+                for ref in _qualified_block_refs(block, field, str(page.get("page_id") or "")):
+                    if index.get(ref, {}).get("kind") not in allowed:
+                        issues.append(f"{prefix}: unresolved {field} reference {ref[0]} block {ref[1]}; source record retained")
+            if block.get("table_cell_visual_refs"):
+                resolved = _table_cell_figures(block, index)
+                if len(resolved) != len(block["table_cell_visual_refs"]):
+                    issues.append(f"{prefix}: unresolved table cell/figure identity or cell coordinate; source record retained")
+            flags = page.setdefault("review_flags", [])
+            for issue in issues:
+                if issue not in flags:
+                    flags.append(issue)
+
+
+def _page_context_text(
+    block: dict[str, Any], block_index: dict[tuple[str, int], dict[str, Any]] | None = None,
+) -> str:
     kind = str(block.get("kind") or "")
     if kind == "table":
+        cells = [[str(cell or "").strip() for cell in row] for row in block.get("table_rows") or [] if isinstance(row, list)]
+        for row, column, _ref, figure in _table_cell_figures(block, block_index or {}):
+            url = str(figure.get("asset_url") or "")
+            if url:
+                try:
+                    tag = kr.image(url, str(figure.get("public_alt") or figure.get("source_caption") or figure.get("caption") or "Source visual"))
+                    cells[row][column] = " ".join(value for value in (cells[row][column], tag) if value)
+                except ValueError:
+                    pass  # Source URL/record survives for named publication checks.
         rows = [
             " | ".join(str(cell or "").strip() for cell in row)
-            for row in block.get("table_rows") or []
+            for row in cells
             if isinstance(row, list)
         ]
         return "\n".join(row for row in rows if row.strip()).strip()
@@ -3749,6 +3980,15 @@ def _attach_task_figure(
         ownership.setdefault(figure_id, []).append(task_id)
 
 
+def _preserve_source_figure_metadata(
+    figure: dict[str, Any], source_block: dict[str, Any],
+) -> None:
+    """Both compilers retain printed caption bytes separately from public alt."""
+    figure["source_caption"] = str(source_block.get("source_caption", source_block.get("caption")) or "")
+    figure["public_alt"] = str(source_block.get("public_alt") or "")
+    figure["caption_raw"] = figure["source_caption"]
+
+
 def _compose_task_display_prompt(
     verified_prompt: str,
     fallback_urls: set[str],
@@ -3779,6 +4019,7 @@ def apply_page_acsd_relationships(
     Figure/context references, and applies page-local ownership links.
     """
     _scrub_page_acsd_escape_artifacts(page_acsd)
+    _record_relationship_reference_issues(page_acsd)
     # R4 — the ACSD furniture ledger: every line the page transcriber
     # omitted (repeated running headers, footers, bare page numbers) rides
     # the canonical verbatim, so the containers projection, the coverage
@@ -3792,11 +4033,23 @@ def apply_page_acsd_relationships(
         if str(line or "").strip()
     ]
     figure_payload = _figure_payload_from_canonical(canonical)
+    page_block_index = _page_block_index(page_acsd)
     figures_by_id = {
         str(figure.get("figure_id") or ""): figure
         for figure in canonical.get("figures") or []
         if isinstance(figure, dict) and figure.get("figure_id")
     }
+    # Caption ownership does not change source assets or their proofs. The
+    # compiler's legacy caption field remains immutable source wording.
+    for source_block in page_block_index.values():
+        if source_block.get("kind") != "figure":
+            continue
+        payload = figure_payload.get(str(source_block.get("asset_url") or ""))
+        if payload is None:
+            continue
+        figure = figures_by_id.get(payload[0])
+        if figure is not None:
+            _preserve_source_figure_metadata(figure, source_block)
     fallback_urls = {
         str(block.get("asset_url") or "")
         for page in page_acsd.get("pages") or []
@@ -3814,6 +4067,49 @@ def apply_page_acsd_relationships(
     canonical_blocks = [
         block for block in canonical.get("blocks") or [] if isinstance(block, dict)
     ]
+    # Table placement is source evidence even when no task owns the table.
+    # Keep original text/grid and add exact visual identities for downstream
+    # concept authors, rather than describing a drawing as invented cell text.
+    canonical_tables_by_ref: dict[tuple[str, int], dict[str, Any]] = {}
+    used_table_blocks: set[str] = set()
+    _rendered, rendered_spans = render_page_acsd_to_mmd_with_spans(page_acsd)
+    table_starts = {
+        (str(span["page_id"]), int(span["reading_order"])): int(span["start"])
+        for span in rendered_spans if span.get("page_kind") == "table" and span.get("role") == "body"
+    }
+    for (owner_page, order), table in page_block_index.items():
+        if table.get("kind") != "table":
+            continue
+        canonical_table = next((
+            candidate for candidate in canonical_blocks
+            if candidate.get("kind") == "table"
+            and candidate.get("source_start") == table_starts.get((owner_page, order))
+            and _normal(_canonical_block_text(candidate)) == _page_block_match_key(table)
+            and str(candidate.get("block_id") or "") not in used_table_blocks
+        ), None)
+        if canonical_table is None:
+            # Historical source-reader header stamps can change offsets.
+            # Exact grid text plus unused source occurrence keeps them readable.
+            canonical_table = _match_canonical_block(
+                canonical_blocks, table, allowed_kinds={"table"}, used_block_ids=used_table_blocks,
+            )
+        if canonical_table is None:
+            continue
+        used_table_blocks.add(str(canonical_table.get("block_id") or ""))
+        canonical_tables_by_ref[(owner_page, order)] = canonical_table
+        canonical_table["source_page_block_ref"] = {"page_id": owner_page, "reading_order": order}
+        if not table.get("table_cell_visual_refs"):
+            continue
+        canonical_table["table_cell_visual_refs"] = copy.deepcopy(table["table_cell_visual_refs"])
+        canonical_table["display_text_with_visuals"] = _page_context_text(table, page_block_index)
+        canonical_table["table_cell_visuals"] = [
+            {"row_index": row, "column_index": column,
+             "figure_ref": {"page_id": ref[0], "reading_order": ref[1]},
+             "asset_url": figure.get("asset_url"), "asset_filename": figure.get("asset_filename"),
+             "source_caption": figure.get("source_caption", figure.get("caption")),
+             "public_alt": figure.get("public_alt", "")}
+            for row, column, ref, figure in _table_cell_figures(table, page_block_index)
+        ]
     sections = {
         str(section.get("section_id") or ""): section
         for section in canonical.get("sections") or []
@@ -3849,6 +4145,17 @@ def apply_page_acsd_relationships(
     outline_partitions = _outline_task_partitions(outline)
     outline_task_kinds = _outline_ruled_task_kinds(outline)
     outline_starts, _in_assessment_span = _outline_assessment_ruler(page_acsd)
+    outline_dependencies: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for link in outline.get("task_dependency_links") or []:
+        if not isinstance(link, dict) or not isinstance(link.get("reading_order"), int):
+            continue
+        ref = (str(link.get("page_id") or ""), link["reading_order"])
+        if page_block_index.get(ref, {}).get("kind") != "task":
+            canonical.setdefault("source_review_flags", []).append(
+                f"outline dependency has unresolved task identity {ref}; original decision retained"
+            )
+            continue
+        outline_dependencies.setdefault(ref, []).append(link)
 
     def add_figure(
         figure_id: str,
@@ -4024,9 +4331,20 @@ def apply_page_acsd_relationships(
             # A verified page-local link controls teacher-facing display when it
             # points at a different visual on the same page. Explicit Figures on
             # another page remain visible alongside any local visual.
-            local_link_orders = [
-                int(value) for value in block.get("linked_visual_orders") or []
-            ]
+            visual_refs = _qualified_block_refs(block, "linked_visual", str(page.get("page_id") or ""))
+            context_refs = _qualified_block_refs(block, "linked_context", str(page.get("page_id") or ""))
+            task_ref = (str(page.get("page_id") or ""), int(block.get("reading_order") or 0))
+            for links in outline_dependencies.get(task_ref, []):
+                for field, target in (("linked_visual", visual_refs), ("linked_context", context_refs)):
+                    for ref in _qualified_block_refs(links, field, task_ref[0]):
+                        if ref not in target:
+                            target.append(ref)
+            for context_ref in context_refs:
+                context_block = page_block_index.get(context_ref, {})
+                for _row, _column, visual_ref, _figure in _table_cell_figures(context_block, page_block_index):
+                    if visual_ref not in visual_refs:
+                        visual_refs.append(visual_ref)
+            local_link_orders = [order for owner, order in visual_refs if owner == str(page.get("page_id") or "")]
             explicit_reference_ids = {
                 str(value)
                 for field in (
@@ -4066,9 +4384,12 @@ def apply_page_acsd_relationships(
                         display_captions,
                     )
 
-            for linked in local_link_orders:
-                figure_block = figures_by_order.get(linked)
-                if not figure_block:
+            for visual_ref in visual_refs:
+                figure_block = page_block_index.get(visual_ref)
+                if not figure_block or figure_block.get("kind") != "figure":
+                    task.setdefault("source_relationship_review_flags", []).append({
+                        "code": "unresolved_visual_reference", "page_id": visual_ref[0], "reading_order": visual_ref[1],
+                    })
                     continue
                 url = str(figure_block.get("asset_url") or "").strip()
                 payload = figure_payload.get(url)
@@ -4076,7 +4397,7 @@ def apply_page_acsd_relationships(
                     continue
                 figure_id, _urls, canonical_caption = payload
                 preferred_caption = (
-                    str(figure_block.get("caption") or "").strip()
+                    str(figure_block.get("source_caption", figure_block.get("caption")) or "").strip()
                     or canonical_caption
                 )
                 add_figure(
@@ -4093,7 +4414,7 @@ def apply_page_acsd_relationships(
                     display_urls,
                     display_figure_ids,
                     display_captions,
-                    preferred_caption=preferred_caption,
+                    preferred_caption=str(figure_block.get("public_alt") or preferred_caption),
                 )
 
             task["figure_refs"] = list(display_figure_ids)
@@ -4110,48 +4431,65 @@ def apply_page_acsd_relationships(
             linked_context_orders = [
                 int(value) for value in block.get("linked_context_orders") or []
             ]
-            if linked_context_orders:
-                context_objects: list[dict[str, Any]] = []
-                context_parts: list[str] = []
-                for linked in linked_context_orders:
-                    context_block = blocks_by_order.get(linked)
-                    if context_block is None:
+            if context_refs:
+                content_objects = task.get("content_objects")
+                if not isinstance(content_objects, dict):
+                    content_objects = {}
+                # Capture pre-existing recorded dependencies once. A local link
+                # never supplies evidence that an earlier cross-page link ceased
+                # to matter. Re-applying the ledger stays idempotent.
+                prior = task.setdefault("gpt_pdf_acsd_prior_context", {
+                    "shared_context": str(task.get("shared_context") or ""),
+                    "shared_context_blocks": copy.deepcopy(content_objects.get("shared_context_blocks") or []),
+                })
+                context_objects: list[dict[str, Any]] = copy.deepcopy(prior.get("shared_context_blocks") or [])
+                context_parts: list[str] = [str(prior.get("shared_context") or "")]
+                for owner_page, linked in context_refs:
+                    context_block = page_block_index.get((owner_page, linked))
+                    if context_block is None or context_block.get("kind") in {"figure", "task", "heading"}:
+                        task.setdefault("source_relationship_review_flags", []).append({
+                            "code": "unresolved_context_reference", "page_id": owner_page, "reading_order": linked,
+                        })
                         continue
-                    display_text = _page_context_text(context_block)
+                    display_text = _page_context_text(context_block, page_block_index)
                     if not display_text:
                         continue
-                    canonical_context = _match_canonical_block(
-                        canonical_blocks,
-                        context_block,
-                        allowed_kinds={"paragraph", "source", "list", "table", "math", "other"},
-                    )
-                    context_parts.append(display_text)
+                    canonical_context = canonical_tables_by_ref.get((owner_page, linked))
+                    if canonical_context is None:
+                        canonical_context = _match_canonical_block(
+                            canonical_blocks,
+                            context_block,
+                            allowed_kinds={"paragraph", "source", "list", "table", "math", "other"},
+                        )
+                    if display_text not in context_parts:
+                        context_parts.append(display_text)
                     context_object = {
                         "source_id": (
-                            f"{page.get('page_id') or 'PDF-PAGE'}-"
+                            f"{owner_page}-"
                             f"BLOCK-{linked:04d}"
                         ),
-                        "page_id": page.get("page_id"),
+                        "page_id": owner_page,
                         "reading_order": linked,
                         "kind": context_block.get("kind"),
                         "display_text": display_text,
+                        "table_cell_visual_refs": copy.deepcopy(context_block.get("table_cell_visual_refs") or []),
                     }
                     if canonical_context is not None:
                         context_object["block_id"] = canonical_context.get("block_id")
+                        if context_block.get("table_cell_visual_refs"):
+                            canonical_context["table_cell_visual_refs"] = copy.deepcopy(context_block["table_cell_visual_refs"])
                         ids = canonical_context.setdefault(
                             "gpt_pdf_acsd_context_task_ids", []
                         )
                         if task_id not in ids:
                             ids.append(task_id)
-                    context_objects.append(context_object)
+                    if not any(obj.get("source_id") == context_object["source_id"] for obj in context_objects if isinstance(obj, dict)):
+                        context_objects.append(context_object)
                 shared_context = kr.canonicalize_rich_text(
                     "\n".join(context_parts).strip()
                 ).strip()
                 task["shared_context"] = shared_context
                 task["requires_context"] = bool(shared_context)
-                content_objects = task.get("content_objects")
-                if not isinstance(content_objects, dict):
-                    content_objects = {}
                 if context_objects:
                     content_objects["shared_context_blocks"] = context_objects
                 else:
@@ -4173,7 +4511,22 @@ def apply_page_acsd_relationships(
                     int(value) for value in block.get("linked_visual_orders") or []
                 ],
                 "linked_context_orders": linked_context_orders,
+                "linked_visual_refs": [{"page_id": owner, "reading_order": order} for owner, order in visual_refs],
+                "linked_context_refs": [{"page_id": owner, "reading_order": order} for owner, order in context_refs],
             }
+            # Inventory and assessment adapters intentionally preserve the
+            # content_objects packet, not arbitrary task audit keys. Put the
+            # exact dependency/caption records on that carried boundary too.
+            carried_context = task.setdefault("content_objects", {})
+            carried_context["source_relationships"] = copy.deepcopy(task["gpt_pdf_acsd_relationship"])
+            carried_context["source_visuals"] = [
+                {"figure_ref": {"page_id": ref[0], "reading_order": ref[1]},
+                 "asset_url": figure.get("asset_url"), "asset_filename": figure.get("asset_filename"),
+                 "source_caption": figure.get("source_caption", figure.get("caption")),
+                 "public_alt": figure.get("public_alt", "")}
+                for ref in visual_refs
+                if (figure := page_block_index.get(ref)) is not None and figure.get("kind") == "figure"
+            ]
             task_ref = (
                 str(page.get("page_id") or ""),
                 int(block.get("reading_order") or 0),
@@ -4351,7 +4704,11 @@ def _reconstruction_manifest(
         "version": FALLBACK_VERSION,
         "compiler": FALLBACK_COMPILER,
         "ingestion_contract_version": INGESTION_CONTRACT_VERSION,
-        "status": "verified",
+        "status": (
+            "accepted_with_review_flags"
+            if any(batch.get("status") == "accepted_with_review_flags" for batch in page_acsd.get("batches") or [])
+            else "verified"
+        ),
         "source_origin": FALLBACK_ORIGIN,
         "fallback_reason": reasons,
         "model": str(page_acsd.get("model") or config.OPENAI_MODEL),
@@ -4361,6 +4718,7 @@ def _reconstruction_manifest(
         "asset_count": asset_count,
         "verified_task_visual_relationships": relationship_count,
         "raw_pdf_changed": False,
+        "review_flags": [str(flag) for page in pages for flag in page.get("review_flags") or []],
         "page_acsd_sha256": _sha256_text(
             canonical_source._json_text(page_acsd)
         ),
@@ -4385,6 +4743,11 @@ def _attach_reconstruction_metadata(
         source_filename
     )
     report["source_reconstruction"] = copy.deepcopy(reconstruction)
+    for destination in (canonical, report):
+        flags = destination.setdefault("source_review_flags", [])
+        for flag in reconstruction.get("review_flags") or []:
+            if flag not in flags:
+                flags.append(flag)
     report.setdefault("summary", {})["source_reconstruction_pages"] = (
         reconstruction["page_count"]
     )
