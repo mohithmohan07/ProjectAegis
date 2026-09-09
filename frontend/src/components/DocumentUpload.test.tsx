@@ -119,6 +119,7 @@ test("restores and displays a portable checkpoint with saved diagnostics", async
   expect(await screen.findByText("Saved checkpoint at 91%")).toBeDefined();
   expect(screen.getByText(/next run resumes automatically/i)).toBeDefined();
   expect(screen.getByText(/Target: cbse \/ 10 \/ science/i)).toBeDefined();
+  expect(screen.queryByText(/ch-11/)).toBeNull();
   expect(screen.queryByRole("link", {
     name: "Open Google Drive backup folder",
   })).toBeNull();

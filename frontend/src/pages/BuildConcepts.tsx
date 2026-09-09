@@ -21,6 +21,7 @@ import {
   fourOutputCompletionFromResult,
   fourOutputResultFields,
 } from "../fourOutputCompletion";
+import { displayLabel } from "../lib/displayLabels";
 import type {
   DurableRunState,
   GenerationRecovery,
@@ -895,13 +896,18 @@ function formatCheckpointTarget(
     "board",
     "grade",
     "subject",
-    "unit",
-    "chapter_title",
-    "chapter_code",
   ];
   const values = fields
     .map((field) => identity[field]?.trim())
     .filter((value): value is string => Boolean(value));
+  const unit = displayLabel("", identity.unit, "");
+  if (unit) values.push(unit);
+  const chapter = displayLabel(
+    identity.chapter_display_name,
+    identity.chapter_title,
+    "",
+  );
+  if (chapter) values.push(chapter);
   return values.length ? values.join(" / ") : "Select the matching chapter";
 }
 

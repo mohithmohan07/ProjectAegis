@@ -6,6 +6,7 @@ import ApiUsageSummary, {
   formatEstimatedCost,
   formatTokenCount,
 } from "../components/ApiUsageSummary";
+import { displayLabel } from "../lib/displayLabels";
 import type { WorkbookResult } from "../types";
 
 export default function Workbooks() {
@@ -90,7 +91,7 @@ export default function Workbooks() {
         <div className="card success-card mt-16">
           <div className="row">
             <strong>
-              {result.meta.chapter_title} — {result.meta.subject} ·{" "}
+              {displayLabel("", result.meta.chapter_title, "Chapter")} — {result.meta.subject} ·{" "}
               {result.meta.grade}
             </strong>
             <span className={`badge ${result.mode === "live" ? "green" : "accent"}`}>

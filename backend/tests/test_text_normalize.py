@@ -45,3 +45,13 @@ def test_subject_spelling_variants_collapse_to_one_name():
     assert normalize_subject("Rythmic Activities") == "Rhythmic Activities"
     assert normalize_subject("Rhythmic Activities") == "Rhythmic Activities"
     assert normalize_subject("rythmic activities") == "Rhythmic Activities"
+
+
+def test_ncf_catalogue_metadata_is_removed_without_losing_title_text():
+    assert normalize_board("ncf") == "NCF"
+    assert normalize_board("", filename="Unit-Chapter List_ NCF(1).xlsx") == "NCF"
+    assert normalize_unit("Prose (01_NCF)") == "Prose"
+    assert normalize_chapter("Seasons(01_EVS_NCF)") == "Seasons"
+    assert normalize_chapter("Isn't It Magical (02_English_NCF)") == "Isn't It Magical"
+    assert normalize_chapter("Our Earth (Part 1)").casefold() == "our earth (part 1)"
+    assert normalize_chapter("IT Tools") == "IT Tools"

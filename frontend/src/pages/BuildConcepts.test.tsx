@@ -362,6 +362,7 @@ test("offers a resumable checkpoint and Resume restores setup without generating
   expect(dialog.textContent).toContain("post type assignment");
   expect(dialog.textContent).toContain("91%");
   expect(dialog.textContent).toContain("electricity");
+  expect(dialog.textContent).not.toContain("ch-11");
 
   fireEvent.click(screen.getByRole("button", { name: "Resume" }));
 

@@ -2,9 +2,9 @@ import { useId } from "react";
 
 /**
  * The run's publication: free text with suggestions (NCERT, Balbharati, …).
- * Contract v2.0 §18 / register Q27: this one value is printed as
- * ``concept_source`` and ``question_source`` on every row of all four
- * outputs. Concepts arriving from a second book still merge into existing
+ * It becomes the Concept Source and the extracted Post-Learning Question
+ * Source. Generated Pre-Learning questions use UpSchool DB as their Question
+ * Source. Concepts arriving from a second book still merge into existing
  * entries with their provenance accumulated in the database.
  */
 export default function SourceBookInput({
@@ -40,9 +40,10 @@ export default function SourceBookInput({
         ))}
       </datalist>
       <div className="hint mt-4">
-        Printed as the concept source and question source on every row of
-        the four outputs. Leave it blank and the database upload is blocked
-        until one is supplied.
+        Your selected publication is used as the Concept Source and the
+        extracted Post-Learning Question Source. Generated Pre-Learning
+        questions use UpSchool DB as their Question Source. Leave it blank and
+        the database upload is blocked until one is supplied.
       </div>
     </div>
   );

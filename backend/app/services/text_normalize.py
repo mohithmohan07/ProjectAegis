@@ -14,6 +14,7 @@ _SMALL_WORDS = {
 _CANONICAL = {
     "cbse": "CBSE",
     "icse": "ICSE",
+    "ncf": "NCF",
     "kstate": "Karnataka",
     "karnataka": "Karnataka",
     "maharashtra": "Maharashtra",
@@ -58,7 +59,7 @@ _CANONICAL = {
 }
 
 # Acronyms that should stay fully uppercased when detected as a token.
-_ACRONYMS = {"CBSE", "ICSE", "NCERT", "EVS", "IT", "AI", "DNA", "RNA", "pH"}
+_ACRONYMS = {"CBSE", "ICSE", "NCF", "NCERT", "EVS", "IT", "AI", "DNA", "RNA", "pH"}
 
 
 def _collapse_whitespace(text: str) -> str:
@@ -68,7 +69,9 @@ def _collapse_whitespace(text: str) -> str:
 def _title_word(word: str, *, is_first: bool, is_last: bool) -> str:
     if not word:
         return word
-    if word.upper() in _ACRONYMS:
+    # The pronoun in titles such as "Isn't It Magical" is not an IT code.
+    # Preserve the acronym only when the source actually capitalizes it.
+    if word.upper() in _ACRONYMS and not (word.upper() == "IT" and word != "IT"):
         return word.upper()
     if re.fullmatch(r"[IVXLCDM]+", word, re.IGNORECASE):
         return word.upper()
@@ -109,6 +112,7 @@ def normalize_board(raw: str, *, filename: str = "") -> str:
         ("kstate", "Karnataka"), ("karnataka", "Karnataka"),
         ("maharashtra", "Maharashtra"), ("msbshse", "Maharashtra"),
         ("icse", "ICSE"), ("cbse", "CBSE"),
+        ("ncf", "NCF"),
     ):
         if key in probe or key in name:
             return canonical
@@ -145,6 +149,13 @@ def normalize_chapter(raw: str) -> str:
     if not text:
         return ""
     text = re.sub(r"[:;,\s]+$", "", text)
+    # Catalogue identity suffixes are metadata, not part of the displayed
+    # chapter name. Keep ordinary parentheticals, including (Part 1).
+    text = re.sub(
+        r"\s*\((?:0[1-9]|1[0-2])_(?:[A-Za-z0-9]+_)*"
+        r"(?:NCF|CBSE|ICSE|KSTATE|MSBSHSE)(?:_[A-Za-z0-9]+)*\)\s*$",
+        "", text, flags=re.IGNORECASE,
+    )
     # Remove leading enumeration like "1.", "01 -", "Chapter 3:"
     text = re.sub(r"^(?:chapter\s*)?\d+\s*[-.:)]\s*", "", text, flags=re.IGNORECASE)
     return title_case_phrase(_collapse_whitespace(text))

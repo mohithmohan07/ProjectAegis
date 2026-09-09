@@ -457,3 +457,74 @@ def test_refresh_migrates_a_refiled_chapter_and_keeps_its_work(
     assert result["migrated"] == 1
     assert result["pruned"] == 0
     assert isolated_db.query(models.Chapter).count() == 1
+
+
+def test_supplied_ncf_catalogue_preserves_all_eighteen_rows():
+    """Use the actual owner attachment, not a synthetic replacement workbook."""
+    import hashlib
+
+    path = Path(__file__).resolve().parents[1] / "data/syllabus/UnitChapter_List__NCF.xlsx"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == (
+        "2e644fea147a7cfd547e67affed8d5285b5e77cf5d7fc897f073cba9f6055f59"
+    )
+    rows = svc.parse_workbook(path, **svc._infer_file_options(path.name))
+    assert len(rows) == 18
+    assert {r.board for r in rows} == {"NCF"}
+    assert [(r.grade, r.subject, r.unit, r.chapter) for r in rows] == [
+        ("01", "English", "Prose", "Thank You Taffy"),
+        ("01", "English", "Prose", "Monsoon Birthday"),
+        ("01", "Mathematics", "Measurement", "Time and Measurement"),
+        ("01", "Mathematics", "Numbers Beyond 20", "Playing with Numbers"),
+        ("01", "Environmental Studies", "Animals", "Animals Around Us"),
+        ("01", "Environmental Studies", "Seasons and Months", "Seasons"),
+        ("02", "English", "Prose", "Isn't It Magical"),
+        ("02", "English", "Poem", "Don't"),
+        ("02", "Mathematics", "Playing with Numbers", "Division"),
+        ("02", "Mathematics", "Ratio and Proportion", "Fractions"),
+        ("02", "Environmental Studies", "Matrials", "Matrials Around Us"),
+        ("02", "Environmental Studies", "Health and Hygiene", "Hygiene and Cleanliness"),
+        ("03", "English", "Prose", "The Smart Chimp"),
+        ("03", "English", "Prose", "The Happy Pirnce"),
+        ("03", "Environmental Studies", "Solar System", "Our Solar System"),
+        ("03", "Environmental Studies", "Our Earth", "Continents and Oceans"),
+        ("03", "Mathematics", "Ratio and Proportion", "Fractions"),
+        ("03", "Mathematics", "Time and Measurement", "Time"),
+    ]
+    # The re-exported filename supplied by the owner must work through the
+    # syllabus-upload path too, without a missing/unknown Board.
+    assert svc._infer_file_options("Unit-Chapter List_ NCF(1).xlsx") == {
+        "default_board": "NCF"
+    }
+
+
+def test_bootstrap_adds_ncf_once_and_exposes_clean_chapter_deposit_labels(
+    isolated_db, monkeypatch,
+):
+    from app import config
+    from app.services import directory
+
+    bundled = Path(__file__).resolve().parents[1] / "data/syllabus"
+    monkeypatch.setattr(config, "syllabus_workbook_dirs", lambda: [bundled])
+    first = svc.bootstrap_syllabus(isolated_db)
+    assert first["missing_files"] == []
+    chapters = isolated_db.query(models.Chapter).filter_by(board="NCF").all()
+    assert len(chapters) == 18
+    ids = {chapter.id for chapter in chapters}
+    assert {chapter.grade for chapter in chapters} == {"01", "02", "03"}
+    assert all("_" not in chapter.chapter_display_name for chapter in chapters)
+    assert all("_" not in chapter.unit for chapter in chapters)
+    assert all(directory.parse_code_prefix(chapter.chapter_code)[1] == "NCF"
+               for chapter in chapters)
+    ncf = next(board for board in directory.tree(isolated_db) if board["board"] == "NCF")
+    listed = [chapter for grade in ncf["grades"] for subject in grade["subjects"]
+              for unit in subject["units"] for chapter in unit["chapters"]]
+    assert len(listed) == 18
+    assert all("_" not in chapter["chapter_title"] for chapter in listed)
+
+    # A deployment restart neither duplicates NCF nor expands its supplied
+    # scope into the unrelated shared Grades 6–10 English Language catalogue.
+    again = svc.bootstrap_syllabus(isolated_db)
+    assert again["created"] == 0
+    assert again["pruned"] == 0
+    assert {chapter.id for chapter in isolated_db.query(models.Chapter).filter_by(board="NCF")} == ids
+    assert "NCF" not in svc.ALL_SYLLABUS_BOARDS

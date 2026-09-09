@@ -155,15 +155,15 @@ SECTION_BANDS: dict[str, list[dict]] = _REFERENCE.bands_by_kind()
 # Controlled vocabularies (used by the Blueprint UI and column mapping)
 # --------------------------------------------------------------------------- #
 
-BOARDS = ["CBSE", "ICSE", "Maharashtra", "Karnataka"]
-GRADES = ["06", "07", "08", "09", "10"]
+BOARDS = ["CBSE", "ICSE", "Maharashtra", "Karnataka", "NCF"]
+GRADES = ["01", "02", "03", "06", "07", "08", "09", "10"]
 QUESTION_TYPES = ["objective", "subjective", "descriptive"]
 GROUP_TYPES = ["Basic", "Intermediate", "Advanced"]
 
 # Common book sources for multi-source tagging (free text is also allowed).
 BOOK_SOURCES = [
     "NCERT", "Balbharati", "RD Sharma", "RS Aggarwal", "S Chand", "Arihant",
-    "Selina", "Frank", "Together With", "Oswaal", "Xam Idea",
+    "Selina", "Frank", "Together With", "Oswaal", "Xam Idea", "Seed to Plant",
 ]
 
 
@@ -568,7 +568,7 @@ QUESTION_CATEGORIES = {
 }
 
 # Board / subject codes embedded in chapter & label IDs, e.g. 10CBMA_... .
-BOARD_CODE = {"CB": "CBSE", "IC": "ICSE", "MS": "Maharashtra", "KS": "Karnataka"}
+BOARD_CODE = {"CB": "CBSE", "IC": "ICSE", "MS": "Maharashtra", "KS": "Karnataka", "NC": "NCF"}
 BOARD_CODE_INV = {v: k for k, v in BOARD_CODE.items()}
 SUBJECT_CODE = {
     "MA": "Mathematics", "PH": "Physics", "BI": "Biology",
