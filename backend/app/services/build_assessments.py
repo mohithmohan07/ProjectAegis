@@ -705,13 +705,8 @@ def _generate_session(
                 "scope selection changed while questions were generated"
             )
 
-        # Per-concept running index keeps question labels unique and ordered,
-        # continuing after every question committed by earlier sessions.
-        # A MAX-SCAN, not a count (T5-3): counting reissues the number of every
-        # deleted question, and R5 says an uploaded label is never reassigned.
-        # ``identity.next_label_index`` is the same helper the release lane
-        # calls, keyed on the same persisted ``machine_id`` the label is minted
-        # from, so the two lanes continue one family instead of two.
+        # One durable reservation per persisted base, for the complete batch.
+        # The database serializes competing processes as well as local jobs.
         label_bases: dict[int, str] = {
             concept.id: identity.machine_id_for_concept(concept)
             for concept in refreshed_concepts
@@ -726,10 +721,11 @@ def _generate_session(
         # duplicate persisted ``machine_id`` — the T9-1 B1 defect the
         # publication act blocks, which the generation run must survive rather
         # than crash on.
-        counters: dict[str, int] = {
-            base: identity.next_label_index(db, base)
-            for base in set(label_bases.values())
-        }
+        label_counts: dict[str, int] = {}
+        for concept_id, _cell_id, records in generated_batches:
+            base = label_bases[concept_id]
+            label_counts[base] = label_counts.get(base, 0) + len(records)
+        counters = identity.reserve_label_indices(db, label_counts)
         label_family_notes = _legacy_label_family_notes(
             refreshed_concepts, label_bases)
         created_ids: list[int] = []
@@ -768,7 +764,7 @@ def _generate_session(
             "sheet_kind": q.sheet_kind, "question": q.question,
             "question_text": q.question_text, "cognitive_skills": q.cognitive_skills,
             "level_of_difficulty": q.level_of_difficulty, "marks": q.marks,
-            "answers": q.answers,
+            "answers": q.answers, "sub_questions": q.sub_questions,
         }):
             problems.append(f"{q.question_label}: {p}")
     monotony = ap.stem_monotony_report([q.question for q in created])
@@ -788,9 +784,8 @@ def _generate_session(
 def _legacy_label_family_notes(concepts, bases: dict[int, str]) -> list[dict]:
     """Say out loud that a concept carries two label conventions (T5/R5).
 
-    A grandfathered label is never re-minted, so the max-scan legitimately
-    ignores it — it belongs to a different family. Reporting both prefixes is
-    the difference between "the scan is scoped" and "the scan missed rows".
+    Labels with an older prefix keep their own counter. Report both prefixes
+    so reviewers can see why new identifiers continue a different family.
     """
     notes: list[dict] = []
     for concept in concepts:
@@ -1110,18 +1105,30 @@ def generate_from_upload(
 
         created_ids: list[int] = []
         merged_ids: list[int] = []
-        # The same max-scan as the generation path and the release lane
-        # (T5-3/R5): a count reissues a deleted question's number.
         label_bases: dict[int, str] = {
             c.id: identity.machine_id_for_concept(c) for c in concepts
         }
-        # Keyed by BASE for the same reason as ``_generate_session``: one
-        # family, one counter, or a shared base mints one label twice inside a
-        # single run.
-        counters: dict[str, int] = {
-            base: identity.next_label_index(db, base)
-            for base in set(label_bases.values())
-        }
+        # Preserve supplied labels and merge duplicate sources as before.
+        # Reserve only the new rows that actually need an identifier. Supplied
+        # labels in this same batch advance the floor before any allocation.
+        label_counts: dict[str, int] = {}
+        supplied_labels = []
+        seen_texts = set(existing_by_text)
+        for i, rec in enumerate(records):
+            norm = bi.normalize_question_text(rec.get("question", ""))
+            if norm and norm in seen_texts:
+                continue
+            if norm:
+                seen_texts.add(norm)
+            if "question_label" in rec:
+                supplied_labels.append(rec["question_label"])
+            else:
+                base = label_bases[routed_concept_ids[i]]
+                label_counts[base] = label_counts.get(base, 0) + 1
+        from .question_label_sequences import record_issued_labels
+        db.flush()
+        record_issued_labels(db.connection(), supplied_labels)
+        counters = identity.reserve_label_indices(db, label_counts)
         label_family_notes = _legacy_label_family_notes(concepts, label_bases)
         # Deposit each question into its routed home concept. Placement was
         # decided above (model judgment in live mode; mechanical only for a
@@ -1144,11 +1151,9 @@ def generate_from_upload(
                 merged_ids.append(dup.id)
                 continue
             base = label_bases[concept.id]
-            rec.setdefault(
-                "question_label",
-                generation.question_label(concept, counters[base]),
-            )
-            counters[base] += 1
+            if "question_label" not in rec:
+                rec["question_label"] = generation.question_label(concept, counters[base])
+                counters[base] += 1
             group = _group_for_recorded_tier(
                 db, concept, recorded_tier_by_candidate[candidate_id]
             )

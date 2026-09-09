@@ -20,6 +20,7 @@ from . import (
     generation,
     grounding_certificate,
     uploads,
+    usage_schema,
 )
 
 
@@ -97,6 +98,7 @@ _USAGE_INTS = {
     "total_tokens": MAX_TOKEN_COUNT,
 }
 _USAGE_TOP_KEYS = {
+    *usage_schema.TOP_EXTENSION_FIELDS,
     "model", "models", *_USAGE_INTS, "estimated_cost_usd", "currency",
     "pricing_complete", "pricing_as_of", "pricing_source",
     # Cumulative run wall-clock and the per-(stage, lane) ledger — added
@@ -107,6 +109,7 @@ _USAGE_TOP_KEYS = {
 _USAGE_MODEL_KEYS = {
     "model", *_USAGE_INTS, "estimated_cost_usd",
     "pricing_complete", "pricing_source",
+    "known_usage_estimated_cost_usd",
 }
 _USAGE_STAGE_INTS = {
     key: maximum
@@ -114,6 +117,7 @@ _USAGE_STAGE_INTS = {
     if key != "uncached_input_tokens"
 }
 _USAGE_STAGE_KEYS = {
+    *usage_schema.STAGE_EXTENSION_FIELDS,
     "stage", "lane", *_USAGE_STAGE_INTS, "estimated_cost_usd",
     "pricing_complete", "first_ts", "last_ts", "elapsed_seconds",
 }
@@ -1438,7 +1442,7 @@ def _validate_usage_row(
         # schema. Older exports remain valid and are interpreted as zero
         # cache-write tokens by the usage merger.
         required=(
-            allowed - {"cache_write_tokens"}
+            allowed - {"cache_write_tokens", "known_usage_estimated_cost_usd"}
             if model_row
             else set()
         ),
@@ -1459,6 +1463,8 @@ def _validate_usage_row(
             f"{path}.estimated_cost_usd",
             MAX_ESTIMATED_COST_USD,
         )
+    if "known_usage_estimated_cost_usd" in value:
+        _number(value["known_usage_estimated_cost_usd"], f"{path}.known_usage_estimated_cost_usd", MAX_ESTIMATED_COST_USD)
     if "pricing_complete" in value and not isinstance(
         value["pricing_complete"], bool
     ):
@@ -1496,6 +1502,7 @@ def _validate_stage_row(value: Any, path: str) -> None:
     if not isinstance(value, dict):
         raise ValueError(f"{path} must be an object")
     _exact_keys(value, _USAGE_STAGE_KEYS, path, required=set())
+    usage_schema.validate_stage_extensions(value, path)
     for name in ("stage", "lane"):
         if name in value:
             _string(value[name], f"{path}.{name}", 512, nonempty=False)
@@ -1528,6 +1535,14 @@ def _validate_stage_row(value: Any, path: str) -> None:
 
 def _validate_usage(value: Any, path: str) -> None:
     _validate_usage_row(value, path, model_row=False)
+    if "usage_schema_version" in value:
+        _integer(value["usage_schema_version"], f"{path}.usage_schema_version", usage_schema.SCHEMA_VERSION, minimum=usage_schema.SCHEMA_VERSION)
+    usage_schema.validate_extensions(value, path)
+    for index, row in enumerate(value.get("cost_by_stage_lane_model") or []):
+        _validate_usage_row(
+            {key: item for key, item in row.items() if key not in {"stage", "lane"}},
+            f"{path}.cost_by_stage_lane_model[{index}]", model_row=True,
+        )
     if "elapsed_seconds" in value:
         _number(
             value["elapsed_seconds"],

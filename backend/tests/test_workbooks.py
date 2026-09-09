@@ -96,7 +96,10 @@ def test_api_generate_library_and_download(client, source_pdf):
     assert body["openai_usage"]["estimated_cost_usd"] == 0.0
 
     lib = client.get("/workbooks/library").json()
-    entry = next(e for e in lib if e["name"] == f"{source_pdf.stem}.pdf")
+    # Several runs may share a source filename. Compare the exact artifact
+    # just generated, including its own persisted timing/usage snapshot.
+    output_rel = str(Path(body["output_pdf"]).relative_to(workbooks.WORKBOOK_ROOT))
+    entry = next(e for e in lib if e["rel"] == output_rel)
     assert entry["class_folder"] == "Class 08"
     assert entry["subject"] == "Mathematics"
     assert entry["openai_usage"] == body["openai_usage"]

@@ -12,7 +12,7 @@ from app.services import assessment_release as rel
 from tests.test_mes_dual_output import _snapshot
 
 
-def _conform_to_contract(snapshot: dict) -> None:
+def _conform_to_contract(snapshot: dict, *, labelled_objective: bool = False) -> None:
     """Contract v2.0 fixture requirements applied over the shared snapshot.
 
     §18: ``question_source`` is the run's publication (``source_book``);
@@ -26,12 +26,13 @@ def _conform_to_contract(snapshot: dict) -> None:
     for candidate in snapshot["candidates"]:
         kind = candidate.get("sheet_kind")
         if kind == "objective":
-            correct = next(
-                a["answer_content"] for a in candidate["answers"]
+            index, correct = next(
+                (i, a["answer_content"]) for i, a in enumerate(candidate["answers"])
                 if str(a.get("correct_answer")) == "1"
             )
+            prefix = f"{chr(ord('a') + index)}) " if labelled_objective else ""
             candidate["answer_explanation"] = (
-                f"{correct} is flat, so it is two-dimensional; a sphere "
+                f"{prefix}{correct} is flat, so it is two-dimensional; a sphere "
                 "is a solid."
             )
         elif kind == "descriptive":
@@ -147,7 +148,9 @@ def _add_subjective(snapshot: dict) -> None:
 
 def _parsed_master(*, multipart: bool = False, subjective: bool = False):
     snapshot = _snapshot()
-    _conform_to_contract(snapshot)
+    # Subjective fixtures resolve a fresh profile below, so every sheet in
+    # that workbook follows the universal Q33 explanation-prefix policy.
+    _conform_to_contract(snapshot, labelled_objective=subjective)
     if multipart:
         _multipart_descriptive(snapshot)
     else:

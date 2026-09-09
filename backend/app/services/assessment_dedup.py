@@ -25,16 +25,19 @@ is never also removed, no question is ruled twice.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 from typing import Any, Mapping
 
 from . import assessment_lane_policy as lane_policy
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
-GENERATED_DEDUP_POLICY_VERSION = "assessment-generated-dedup-1"
+GENERATED_DEDUP_POLICY_VERSION = "assessment-generated-dedup-1-column-spec"
 
 GENERATED_DEDUP_SYSTEM = (
-    "You are the Aegis duplicate-question judge. You are given every "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis duplicate-question judge. You are given every "
     "GENERATED pre-learning question authored for ONE pre-learning "
     "concept. Identify sets that are the same question re-worded — a "
     "paraphrase, a number or a name changed, the same ask with a "
@@ -47,18 +50,18 @@ GENERATED_DEDUP_SYSTEM = (
     '{"duplicate_sets":[{"survivor_pre_question_id":"",'
     '"removed":[{"pre_question_id":"","reason":"why it is the same '
     'question as the survivor"}]}],"confidence":0.0,'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 GENERATED_DEDUP_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis "
     "duplicate-question decision. Audit the proposed duplicate sets "
     "against the actual question texts and answers: is any removed "
     "question genuinely a DIFFERENT ask (different answer, different "
     "skill) mislabelled as a duplicate, and is any obvious re-wording "
     "pair missed? Dissent must name the pre_question_id(s). Respond "
     'with a single JSON object: {"verdict":"concur|dissent",'
-    '"confidence":0.0,"issues":["..."]}'
+    '"confidence":0.0,"issues":["..."]}')
 )
 
 
@@ -73,6 +76,7 @@ def _live_dedup(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         GENERATED_DEDUP_SYSTEM, prompts.render(payload),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -83,6 +87,7 @@ def _live_dedup_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         GENERATED_DEDUP_CRITIC_SYSTEM, prompts.render(payload),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -155,6 +160,23 @@ def _dedup_checker(
     return check
 
 
+def _survivor_with_review_flags(
+    question: Any, decision_flags: list, *, stage: str,
+) -> Any:
+    """Retain set-review dissent even when that decision removes nothing."""
+    copied = copy.deepcopy(question)
+    if not isinstance(copied, dict) or not decision_flags:
+        return copied
+    existing = copied.get("flags") or []
+    if not isinstance(existing, list):
+        existing = [str(existing)]
+    copied["flags"] = list(dict.fromkeys([
+        *existing,
+        *[f"{stage}: {flag}" for flag in decision_flags if str(flag).strip()],
+    ]))
+    return copied
+
+
 def decide_generated_duplicates(
     questions: list[Mapping],
     *,
@@ -208,6 +230,7 @@ def decide_generated_duplicates(
             if str(q.get("pre_question_id") or "")
         ],
     }
+    visual_evidence.bind(payload, rows, concept_evidence)
     decision = kernel.decide(
         kind="assessment.generated_dedup",
         unit_id=concept_id,
@@ -222,6 +245,7 @@ def decide_generated_duplicates(
     )
     response = decision["response"]
     decision_flags = list(decision.get("review_flags") or [])
+    decision_flags.extend(visual_evidence.review_flags(payload))
 
     removed_records: list[dict[str, Any]] = []
     removed_ids: set[str] = set()
@@ -245,7 +269,8 @@ def decide_generated_duplicates(
                 ] + decision_flags,
             })
     survivors = [
-        q for q in questions
+        _survivor_with_review_flags(q, decision_flags, stage="assessment.generated_dedup")
+        for q in questions
         if str(
             (q or {}).get("pre_question_id") if isinstance(q, Mapping)
             else ""
@@ -258,10 +283,10 @@ def decide_generated_duplicates(
 # Source-lane duplicate coverage (P3, owner audit 2026-08-29)
 # --------------------------------------------------------------------------- #
 
-SOURCE_DEDUP_POLICY_VERSION = "assessment-source-dedup-1"
+SOURCE_DEDUP_POLICY_VERSION = "assessment-source-dedup-1-column-spec"
 
 SOURCE_DEDUP_SYSTEM = (
-    "You are the Aegis duplicate-question judge for one Post-Learning "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis duplicate-question judge for one Post-Learning "
     "Master. You are given EVERY chapter-teaching source question headed "
     "into this Master file, after compound sub-parts have already folded "
     "into their parents. Identify sets that ship the same assessment more "
@@ -282,18 +307,18 @@ SOURCE_DEDUP_SYSTEM = (
     '{"duplicate_sets":[{"survivor_source_qid":"",'
     '"removed":[{"source_qid":"","reason":"why it ships the same '
     'assessment as the survivor"}]}],"confidence":0.0,'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 SOURCE_DEDUP_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis source-lane "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis source-lane "
     "duplicate decision. Audit the proposed duplicate sets against the "
     "actual question texts and answers: is any removed question genuinely "
     "a DIFFERENT ask (different answer, different skill) mislabelled as a "
     "duplicate, is a recorded alternative-set pair being wrongly removed, "
     "and is any obvious double-ship missed? Dissent must name the "
     'source_qid(s). Respond with a single JSON object: '
-    '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}'
+    '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}')
 )
 
 
@@ -304,6 +329,7 @@ def _live_source_dedup(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         SOURCE_DEDUP_SYSTEM, prompts.render(payload),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -314,6 +340,7 @@ def _live_source_dedup_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         SOURCE_DEDUP_CRITIC_SYSTEM, prompts.render(payload),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -370,7 +397,9 @@ def decide_source_duplicates(
                     or ""
                 ),
                 "answer": str(a.get("source_answer") or ""),
-                "shared_context": str(a.get("shared_context") or "")[:600],
+                "shared_context": copy.deepcopy(a.get("shared_context") or ""),
+                "options": copy.deepcopy(a.get("options") or []),
+                "source_figures": copy.deepcopy(a.get("source_figures") or []),
                 "alternative_set_id": str(
                     a.get("alternative_set_id") or ""
                 ),
@@ -379,6 +408,7 @@ def decide_source_duplicates(
             if str(a.get("source_qid") or "")
         ],
     }
+    visual_evidence.bind(payload, rows)
     decision = kernel.decide(
         kind="assessment.source_dedup",
         unit_id="post-master-source-set",
@@ -397,6 +427,7 @@ def decide_source_duplicates(
     )
     response = decision["response"]
     decision_flags = list(decision.get("review_flags") or [])
+    decision_flags.extend(visual_evidence.review_flags(payload))
 
     represented: list[dict[str, Any]] = []
     removed_ids: set[str] = set()
@@ -420,7 +451,8 @@ def decide_source_duplicates(
                 ] + decision_flags,
             })
     kept = [
-        a for a in atoms
+        _survivor_with_review_flags(a, decision_flags, stage="assessment.source_dedup")
+        for a in atoms
         if str(
             (a or {}).get("source_qid") if isinstance(a, Mapping) else ""
         ) not in removed_ids

@@ -139,6 +139,10 @@ def test_shadow_matches_on_a_clean_conversion(tmp_path: Path, monkeypatch):
     assert payload["status"] == "match"
     assert payload["divergences"] == []
     assert payload["compiler_version"] == block_first.BLOCK_FIRST_COMPILER
+    source_caption = "Fig. 1 - Odd-number pattern."
+    assert result["canonical"]["figures"][0]["source_caption"] == source_caption
+    assert payload["block_first_canonical"]["figures"][0]["source_caption"] == source_caption
+    assert payload["block_first_canonical"]["figures"][0]["caption_raw"] == source_caption
 
 
 def test_shadow_matches_under_a_content_topic_outline(tmp_path: Path, monkeypatch):

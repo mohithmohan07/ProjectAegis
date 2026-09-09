@@ -242,14 +242,39 @@ def _legacy_or_pipe_parts(value: str, *, legacy_commas: bool = True) -> list[str
     return [part.strip() for part in parts if part.strip()]
 
 
-def list_token_defects(value: str) -> list[str]:
-    """Contract §16 (DEL-001): a literal pipe inside one list token blocks."""
+# A serialized array standing where a ``" | "`` list belongs — the cell
+# reads ``['a', 'b']`` (register Q29: a Pre ``keywords`` answer the model
+# returned as JSON was ``str()``-ed into every row of a run). Shape only:
+# an opening bracket followed by a quote, a closing quote followed by a
+# closing bracket. A ``[Katex]`` wrapper opens with a letter and never
+# matches; a title in brackets carries no quotes and never matches.
+_BRACKETED_LITERAL_RE = _re_tags.compile(
+    r"^\[\s*['\"].*['\"]\s*\]$", _re_tags.DOTALL
+)
 
-    return [
+
+def list_token_defects(value: str) -> list[str]:
+    """Contract §16: the two list-cell shapes the read-back names.
+
+    DEL-001 — a literal pipe inside one list token; and (register Q29) a
+    cell that is a bracketed, quoted list literal rather than a ``" | "``
+    list. Both are recorded, never guessed around: a repr is not split
+    into tokens on the reader's behalf.
+    """
+
+    text = str(value or "").strip()
+    defects: list[str] = []
+    if _BRACKETED_LITERAL_RE.match(text):
+        defects.append(
+            f"cell {text!r} is a bracketed list literal, not a "
+            f"{LIST_DELIMITER.strip()!r}-delimited list"
+        )
+    defects.extend(
         f"list token {token!r} contains a literal pipe"
         for token in split_multi(value, legacy_commas=False)
         if "|" in token
-    ]
+    )
+    return defects
 
 
 def merge_sources(existing: str, new: str) -> str:

@@ -94,20 +94,25 @@ question, and the critic can judge that from the prerequisite evidence it
 does hold. Stated plainly so it is not mistaken for a stronger guarantee
 than it is.
 
-**The tier/difficulty axis is not conflated, and the level verdict is not
-pre-empted.** Q4's original "20 Basic and 20 Intermediate" — and every
-later calibration of it, Q20's split-left-to-the-model included — names
-the GROUP TIER (``assessment_grouping.TIER_CODES``),
-which is decided per question by an independent level verdict in the
-assessment lane that is explicitly told no other label has authority
-over it. The workbook's
+**The tier/difficulty axis is not conflated.** Q4's original "20 Basic
+and 20 Intermediate" — and every later calibration of it — names the
+GROUP TIER (``assessment_grouping.TIER_CODES``). The workbook's
 ``level_of_difficulty`` (``bulk_import.DIFFICULTY_LEVELS`` —
-Less/Moderate/High) is a different vocabulary entirely. So: the plan's
-split is an authored statement of the COVERAGE it intends, read in the
-tier vocabulary (taken from its one owner, never re-typed here), and an
-authored question carries **no tier and no difficulty field at all**.
-Each question's tier is the assessment lane's to decide, later,
-independently.
+Less/Moderate/High) is a different vocabulary entirely, and no authored
+question ever carries a difficulty. The tier vocabulary is taken from its
+one owner, never re-typed here.
+
+**Under the owner's coverage rule (register Q30, ``pre_coverage``), the
+tier IS authored.** An envelope that records the rule fixes every
+pre-concept's plan at the rule's split, and each question is written AT
+its tier and carries a ``tier`` field; the assessment lane groups it by
+that authored tier and does not re-decide it (a second verdict could
+only break the five-and-five the owner fixed). An envelope that records
+no rule keeps the earlier posture in full: the plan's split is a
+statement of intended coverage, an authored question carries no tier,
+and each question's tier is the assessment lane's to decide, later,
+independently. Which posture a run executed under is a recorded fact of
+its envelope, logged when the pass starts.
 
 **Calibration is evidence, never a branch** (steer point 2). Each
 question is authored for the level, grade, context, subject and board of
@@ -126,11 +131,13 @@ hat.
 """
 from __future__ import annotations
 
+import copy
 import re
 from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from . import pre_coverage
 from ... import config
 from .. import progress
 
@@ -233,17 +240,48 @@ def concept_evidence(row: Mapping[str, Any]) -> dict[str, Any]:
 # mechanics-only checkers
 
 
+def _rule_plan_defects(
+    concept_id: str,
+    total: int,
+    counts_by_tier: Mapping[str, int],
+    rule: Mapping[str, Any],
+) -> list[str]:
+    """The owner's rule (register Q30) against one plan — mechanics.
+
+    Exactly the rule's split, or a total of zero with no split (the
+    recorded request to drop the concept, Q29). Comparison of recorded
+    numbers; no judgment about the prerequisite.
+    """
+
+    if total == 0 and not counts_by_tier:
+        return []
+    if total == pre_coverage.total(rule) and dict(counts_by_tier) == dict(
+        rule["per_tier"]
+    ):
+        return []
+    stated = ", ".join(
+        f"{count} {tier}" for tier, count in counts_by_tier.items()
+    ) or "no split"
+    return [
+        f"{concept_id} plans {total} ({stated}) but the owner's coverage "
+        f"rule {rule['version']} fixes every pre-learning concept at "
+        f"{pre_coverage.describe(rule)}; state exactly that, or a total "
+        "of zero with no split as a recorded request to drop the concept"
+    ]
+
+
 def _plan_checker(
     pre_concept_ids: list[str],
+    rule: Mapping[str, Any] | None = None,
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     """Mechanics only: every concept planned once, the plan self-consistent.
 
-    What total any pre-concept's evidence supports, and how it splits, is
-    entirely the model's judgment — nothing here bounds, floors, ceilings
-    or compares a count to any external number, and there is no external
-    number in this function to compare one to. The three things checked
-    are marker accounting and arithmetic between numbers the model itself
-    wrote:
+    Without a coverage rule, what total any pre-concept's evidence
+    supports, and how it splits, is entirely the model's judgment —
+    nothing here bounds, floors, ceilings or compares a count to any
+    external number, and there is no external number in this function to
+    compare one to. The three things checked are marker accounting and
+    arithmetic between numbers the model itself wrote:
 
     * every pre-concept in the request is decided exactly once (R4 — a
       pre-concept nobody planned is a learner's questions lost silently);
@@ -252,6 +290,11 @@ def _plan_checker(
     * **the rationale is required unconditionally** (spec T6). Every
       plan says why it is the size it is. That is what makes a
       comparison against a norm unnecessary anywhere in this codebase.
+
+    With the owner's coverage rule recorded on the envelope (register
+    Q30, ``pre_coverage``) one comparison is added, against the ONE
+    external number the owner fixed: every plan states exactly the rule's
+    split, or zero as a recorded drop request (``_rule_plan_defects``).
     """
 
     expected = set(pre_concept_ids)
@@ -293,6 +336,7 @@ def _plan_checker(
                 split = []
             planned = 0
             named: set[str] = set()
+            counts_by_tier: dict[str, int] = {}
             for entry in split:
                 if not isinstance(entry, Mapping):
                     defects.append(f"{concept_id} has a split entry that is "
@@ -322,12 +366,18 @@ def _plan_checker(
                     )
                 else:
                     planned += count
+                    if tier in named:
+                        counts_by_tier[tier] = count
             if total is not None and planned != total:
                 # Arithmetic between the model's OWN two numbers.
                 defects.append(
                     f"{concept_id} split sums to {planned} but its own total "
                     f"says {total}; the split accounts for the total you "
                     "authored"
+                )
+            if rule is not None and total is not None:
+                defects.extend(
+                    _rule_plan_defects(concept_id, total, counts_by_tier, rule)
                 )
             if not _normal(row.get("rationale")):
                 # Unconditional, by design (Q4 per spec T6): EVERY plan
@@ -350,6 +400,9 @@ def _plan_checker(
 def _author_checker(
     concept_id: str,
     planned_total: int,
+    *,
+    rule: Mapping[str, Any] | None = None,
+    split: Mapping[str, int] | None = None,
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     """Mechanics only: positional ids, non-empty fields, plan↔output.
 
@@ -360,7 +413,15 @@ def _author_checker(
     close routes to The Fixer, and if that fails too the caller records
     the concept as blocked and the run completes; it never raises a
     chapter down.
+
+    Under the owner's coverage rule (register Q30) each question also
+    carries the tier the plan's ``split`` assigns it, and the per-tier
+    counts match that split — the plan checker already held the split to
+    the rule, so this is again the model's own plan against its own
+    questions, tier by tier.
     """
+
+    expected_by_tier = dict(split or {}) if rule is not None else {}
 
     def check(response: Mapping[str, Any]) -> list[str]:
         defects: list[str] = []
@@ -368,11 +429,23 @@ def _author_checker(
         if not isinstance(rows, list):
             return ["response has no questions array"]
         expected = mint_question_ids(len(rows))
+        seen_by_tier: dict[str, int] = {}
         for position, row in enumerate(rows):
             if not isinstance(row, Mapping):
                 defects.append("a question entry is not an object")
                 continue
             label = expected[position]
+            if expected_by_tier:
+                tier = str(row.get("tier") or "").strip()
+                if tier not in expected_by_tier:
+                    defects.append(
+                        f"question at position {position + 1} carries tier "
+                        f"{tier or '<empty>'}; each question carries exactly "
+                        "one tier from the coverage plan's split ("
+                        + "/".join(expected_by_tier) + ")"
+                    )
+                else:
+                    seen_by_tier[tier] = seen_by_tier.get(tier, 0) + 1
             # The defect text names the POSITION and the id this pipeline
             # expects there — never the id the model sent. A defect string
             # becomes ``blocked[concept_id]`` and a review flag, and both
@@ -398,6 +471,15 @@ def _author_checker(
                 "exactly that many — the plan is already decided and "
                 "cannot be amended from here"
             )
+        for tier, count in expected_by_tier.items():
+            if seen_by_tier.get(tier, 0) != count:
+                defects.append(
+                    f"{concept_id} was authored {seen_by_tier.get(tier, 0)} "
+                    f"{tier} question(s) but its coverage plan asks for "
+                    f"{count} at that tier; author exactly that many at "
+                    "each tier — the split is already decided and cannot "
+                    "be amended from here"
+                )
         return defects
 
     return check
@@ -447,7 +529,57 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 # plan carries a rationale" stands unchanged: the rationale is required
 # unconditionally, so no code ever compares a plan to anything, and a
 # regression pins that over the whole validator surface.
-def _plan_rules(rules_suffix: str) -> str:
+def _rule_plan_rules(rules_suffix: str, rule: Mapping[str, Any]) -> str:
+    """The plan rules under the owner's coverage rule (register Q30).
+
+    Every number in this prose is read off the rule object; the module
+    itself holds none. The model's judgment is the RATIONALE — which
+    capabilities of the Mastery each tier's questions verify — and the
+    one exception is the recorded drop request of Q29.
+    """
+
+    tier_list = list(pre_coverage.tiers(rule))
+    split_text = ", ".join(
+        f"{count} {tier}" for tier, count in rule["per_tier"].items()
+    )
+    per_tier_asks = " and ".join(
+        f"which the {tier} questions verify" for tier in tier_list
+    )
+    return (
+        "Phase 03: author a coverage plan for the generated questions of "
+        "EACH pre-learning concept in this request. These questions are "
+        "GENERATED for the prerequisite itself — never taken from this "
+        "chapter, which is why none of its questions appear anywhere in "
+        "this request. COVERAGE RULE (owner ruling, register Q30, rule "
+        f"{rule['version']}): the owner fixes the coverage of EVERY "
+        f"pre-learning concept at exactly {pre_coverage.describe(rule)} — "
+        f"state total {pre_coverage.total(rule)} and a split of exactly "
+        f"{split_text} for each pre_concept_id; no other total and no "
+        "other tier. The counts are not yours to judge; the COVERAGE is. "
+        "Your rationale says which capabilities of THIS prerequisite's "
+        f"Mastery {per_tier_asks}, so that together they diagnose "
+        "completely what a learner must already hold before this chapter "
+        "starts — and it says so whatever the concept's "
+        "depth, because every plan carries one. The one exception is a "
+        "total of zero with no split: that is never coverage for a "
+        "concept that ships, it is your recorded request to DROP the "
+        "concept from the Pre map, because a prerequisite with no Mastery "
+        "worth verifying before this chapter should not have become a "
+        "pre-learning concept; state that judgment in the rationale, the "
+        "run records it as a blocking finding on the Pre lane for a "
+        "reviewer, and never ships the concept as if it were assessed. "
+        "Naming a tier here states the tier each question is AUTHORED at "
+        "(the Master's group tiers); the assessment lane groups the "
+        "questions by that authored tier. Decide EVERY pre_concept_id in "
+        "the request exactly once." + rules_suffix
+    )
+
+
+def _plan_rules(
+    rules_suffix: str, rule: Mapping[str, Any] | None = None,
+) -> str:
+    if rule is not None:
+        return _rule_plan_rules(rules_suffix, rule)
     return (
         "Phase 03: author a coverage plan for the generated questions of "
         "EACH pre-learning concept in this request. These questions are "
@@ -481,10 +613,16 @@ def _plan_rules(rules_suffix: str) -> str:
         "is a single definition the learner either holds or does not is "
         "planned at one; both are correct answers, not shortfalls. Every "
         "shipped pre-learning concept carries at least one diagnostic "
-        "question, so a plan of zero says the concept has no Mastery worth "
-        "verifying before this chapter — plan zero only when that is "
-        "true, and say so in the rationale so the reviewer can act on "
-        "it. Naming a tier here states the coverage you intend; it is not "
+        "question (Master Governing Contract v2.0 §8.6), so a total of "
+        "zero is never a coverage plan for a concept that ships: it is "
+        "your recorded request to DROP the concept from the Pre map, "
+        "because a prerequisite with no Mastery worth verifying before "
+        "this chapter should not have become a pre-learning concept. "
+        "State that judgment in the rationale. The run does not drop the "
+        "concept itself — it records your request as a blocking finding "
+        "on the Pre lane so a reviewer removes the concept or re-runs, "
+        "and never ships the concept as if it were assessed. Naming a "
+        "tier here states the coverage you intend; it is not "
         "a verdict on any question, and each question's own level is "
         "decided later and independently. Decide EVERY pre_concept_id in "
         "the request exactly once, and make the split account for the "
@@ -492,7 +630,66 @@ def _plan_rules(rules_suffix: str) -> str:
     )
 
 
-def _author_rules(rules_suffix: str) -> str:
+def _rule_author_rules(rules_suffix: str, rule: Mapping[str, Any]) -> str:
+    """The authoring rules under the owner's coverage rule (register Q30).
+
+    The tier is authored, not decided later: each question carries the
+    tier the plan's split assigns it, and the tiers are described in the
+    assessment lane's own terms (what capability and construction the
+    question actually requires), never as a difficulty label.
+    """
+
+    tier_list = list(pre_coverage.tiers(rule))
+    split_text = ", then ".join(
+        f"{count} {tier}" for tier, count in rule["per_tier"].items()
+    )
+    first, rest = tier_list[0], tier_list[1:]
+    tier_meaning = (
+        f"{first} questions verify that the learner holds the fundamental "
+        "as this concept states it — recall, recognition and direct use in "
+        "the form the Mastery names. "
+    )
+    if rest:
+        tier_meaning += (
+            f"{' and '.join(rest)} questions verify that the learner can "
+            "apply the fundamental in a situation the post-learning "
+            "concepts named as needing it will depend on — a step of "
+            "transfer, never this chapter's own new teaching. "
+        )
+    return (
+        "Phase 03: write this pre-learning concept's questions. Every "
+        "question is GENERATED for the fundamental this concept teaches — "
+        "no question of this chapter is ever lifted, reworded or "
+        "paraphrased into a pre-learning artefact, and the chapter's own "
+        "questions are deliberately absent from this request. COVERAGE "
+        f"RULE (owner ruling, register Q30, rule {rule['version']}): write "
+        f"exactly the coverage plan's split — {split_text} — and give "
+        f"every question its tier field ({'|'.join(tier_list)}) exactly "
+        "as the split assigns it; never pad, never trim, and never move a "
+        "question between tiers to balance anything. " + tier_meaning
+        + "Author every question for the level, grade, subject, board and "
+        "context named in the chapter calibration and the run "
+        "instructions: the same fundamental asked of a younger class in "
+        "one subject and of an older class in another is two different "
+        "questions, in vocabulary, in framing and in what counts as a "
+        "complete answer. Each question tests whether the learner already "
+        "holds the prerequisite, never what this chapter goes on to "
+        "teach. answer is the complete expected answer; rationale says "
+        "what the question checks the learner can do and why it sits at "
+        "its tier. Vary the questions genuinely — never the same question "
+        "with a number or a name changed. Do not label a question with a "
+        "difficulty. Mint question_id positionally as PRQ-0001, PRQ-0002, "
+        f"… in listing order across the whole list, {first} first. Wrap "
+        "every mathematical expression exactly as [Katex] valid LaTeX "
+        "[/Katex]." + rules_suffix
+    )
+
+
+def _author_rules(
+    rules_suffix: str, rule: Mapping[str, Any] | None = None,
+) -> str:
+    if rule is not None:
+        return _rule_author_rules(rules_suffix, rule)
     return (
         "Phase 03: write this pre-learning concept's questions. Every "
         "question is GENERATED for the fundamental this concept teaches — "
@@ -549,7 +746,11 @@ def build(
 
     An empty Pre map returns without spending a decision, and so does a
     pre-concept the model planned at zero — a chapter whose prerequisites
-    the evidence supports thinly is never padded.
+    the evidence supports thinly is never padded. A zero plan is the
+    model's recorded request to drop that concept (register Q29): nothing
+    here drops it, the concept reaches release staging with no question,
+    and ``release_qc`` names it there as a blocking finding on the Pre
+    lane (contract v2.0 §8.6) so a reviewer acts on the recorded rationale.
     """
     from . import fixer as fixer_mod
     from . import premap as premap_mod
@@ -598,19 +799,41 @@ def build(
     evidence = [concept_evidence(row) for row in rows]
     concept_ids = [entry["pre_concept_id"] for entry in evidence]
 
+    # Register Q30: which coverage posture this run executes under is a
+    # recorded fact of its envelope, and it is said out loud either way.
+    rule = pre_coverage.rule_for(env)
+    if rule is not None:
+        progress.log(
+            "Pre-Learning questions: the owner's coverage rule "
+            f"{rule['version']} is in force — every pre-concept is planned "
+            f"at {pre_coverage.describe(rule)}, and each question is "
+            "authored at its tier (register Q30)."
+        )
+    else:
+        progress.log(
+            "Pre-Learning questions: this envelope records no coverage "
+            "rule, so the plan is the model's under contract v2.0 §8 "
+            "(register Q26: no quota)."
+        )
+
     # ---- the coverage plan: one decision over the whole Pre map -------
     #
     # Chapter-wide on purpose. Seeing every pre-concept at once is what
     # lets the model say "this fundamental is a single definition, six
     # questions; that one carries three distinct procedures, thirty" —
     # a judgment about relative depth that a per-concept decision cannot
-    # make. It is still one plan per concept, decided once each.
+    # make. It is still one plan per concept, decided once each. Under
+    # the owner's rule the numbers are fixed and the judgment is the
+    # rationale's coverage; the payload carries the rule explicitly so
+    # the decision key moves with it.
     plan_payload = {
         "stage": "prequestions.plan",
-        "rules": _plan_rules(rules_suffix),
+        "rules": _plan_rules(rules_suffix, rule),
         "chapter": calibration,
         "pre_concepts": evidence,
     }
+    if rule is not None:
+        plan_payload["coverage_rule"] = copy.deepcopy(rule)
     # The pre-spend post-condition of the Pre lane's redaction discipline
     # (premap._redact_ids): everything in this payload was either authored
     # by the Pre lane behind premap's own fail-closed guard or redacted
@@ -644,7 +867,7 @@ def build(
             envelope_sha256=envelope_sha,
             payload=plan_payload,
             provider=provider,
-            checker=_plan_checker(concept_ids),
+            checker=_plan_checker(concept_ids, rule),
             critic=critic,
             store=store,
             policy_version=POLICY_VERSION,
@@ -673,7 +896,7 @@ def build(
             "pre-concept(s) are flagged for review: " + block,
             level="error",
         )
-        return {
+        return _with_rule({
             "plans": {},
             "questions": {},
             "blocked": {concept_id: block for concept_id in concept_ids},
@@ -686,7 +909,7 @@ def build(
                 for concept_id in concept_ids
             },
             "decision_flags": {},
-        }
+        }, rule)
     plan_flags = list(plan_decision.get("review_flags") or [])
     decision_flags: dict[str, list[str]] = {}
     if plan_flags:
@@ -749,11 +972,13 @@ def build(
         plan = plans[concept_id]
         payload = {
             "stage": "prequestions.author",
-            "rules": _author_rules(rules_suffix),
+            "rules": _author_rules(rules_suffix, rule),
             "chapter": calibration,
             "coverage_plan": plan,
             "pre_concept": evidence_by_id[concept_id],
         }
+        if rule is not None:
+            payload["coverage_rule"] = copy.deepcopy(rule)
         premap_mod._refuse_source_qids(
             payload, qids,
             where="the pre-learning question authoring payload",
@@ -765,7 +990,15 @@ def build(
                 envelope_sha256=envelope_sha,
                 payload=payload,
                 provider=author_provider,
-                checker=_author_checker(concept_id, int(plan["total"])),
+                checker=_author_checker(
+                    concept_id, int(plan["total"]),
+                    rule=rule,
+                    split={
+                        str(entry.get("tier") or ""): int(entry.get("count") or 0)
+                        for entry in plan.get("split") or []
+                        if isinstance(entry, Mapping)
+                    },
+                ),
                 critic=critic,
                 store=store,
                 policy_version=POLICY_VERSION,
@@ -793,14 +1026,19 @@ def build(
             if not isinstance(row, Mapping):
                 continue
             question_id = str(row.get("question_id") or "")
-            authored.append({
+            entry = {
                 "pre_question_id": pre_question_id(concept_id, question_id),
                 "question_id": question_id,
                 "pre_concept_id": concept_id,
                 "question_text": _normal(row.get("question_text")),
                 "answer": _normal(row.get("answer")),
                 "rationale": _normal(row.get("rationale")),
-            })
+            }
+            if rule is not None:
+                # Register Q30: the tier is authored, and it rides the
+                # question into the assessment lane, which groups by it.
+                entry["tier"] = _normal(row.get("tier"))
+            authored.append(entry)
         return concept_id, authored, "", list(decision.get("review_flags") or [])
 
     workers = config.phase3_decision_workers()
@@ -899,10 +1137,25 @@ def build(
         + ".",
         level="success",
     )
-    return {
+    return _with_rule({
         "plans": plans,
         "questions": questions,
         "blocked": blocked,
         "review_flags": review_flags,
         "decision_flags": decision_flags,
-    }
+    }, rule)
+
+
+def _with_rule(
+    result: dict[str, Any], rule: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Record the coverage rule the questions were authored under.
+
+    Present only when a rule was in force (register Q30): the release
+    audit reads it back to hold the staged questions to the rule, and its
+    absence is the legacy shape — no rule recorded — never a verdict.
+    """
+
+    if rule is not None:
+        result["coverage_rule"] = copy.deepcopy(dict(rule))
+    return result

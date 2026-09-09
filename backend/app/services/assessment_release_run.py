@@ -33,6 +33,7 @@ from typing import Any, Mapping
 from sqlalchemy.orm import Session
 
 from .. import bulk_import as bi
+from .. import config
 from .. import models
 from ..bulk_import import assessment_workbook
 from . import assessment_answer_restriction as answer_restriction
@@ -371,6 +372,16 @@ def _learner_text_snapshot(candidates: list[Mapping]) -> list[tuple]:
             str(candidate.get("candidate_id") or ""),
             candidate.get("question"),
             candidate.get("question_text"),
+            # Q35: options are part of the complete, already-classified
+            # learner task. Correctness and score fields are reviewed later;
+            # option text, modality and order must remain fixed for both
+            # source-owned and finalized generated Objective questions.
+            tuple(
+                (answer.get("answer_type"), answer.get("answer_content"))
+                for answer in candidate.get("answers") or []
+                if isinstance(answer, Mapping)
+            ) if str(candidate.get("sheet_kind") or "").lower() == "objective"
+            else None,
         )
         for candidate in candidates
     ]
@@ -1125,6 +1136,12 @@ def _bind_generated_cells(
             "answer": str(question.get("answer") or ""),
             "rationale": str(question.get("rationale") or ""),
         }
+        authored_tier = str(question.get("tier") or "").strip()
+        if authored_tier:
+            # Register Q30: a question authored AT a tier under the owner's
+            # Pre coverage rule carries it into the level stage, which
+            # transports the authoring decision rather than re-deciding.
+            cell["generated_question"]["tier"] = authored_tier
         cell["flags"] = list(decided_flags)
         cell["authority"] = authority
         cell[_CELL_AUDIT_FIELD] = {
@@ -1390,13 +1407,44 @@ def _label_base(concept: Mapping[str, Any]) -> str:
 
 
 def _next_label_index(db: Session, base: str) -> int:
-    """Continue numbering after every label already committed for this base.
-
-    The body moved to ``identity.next_label_index`` (T5-3) so the Build
-    Assessments lane runs the identical max-scan instead of its own count.
-    This name is kept as the local seam.
-    """
+    """Compatibility peek; minting requires a durable range reservation."""
     return identity.next_label_index(db, base)
+
+
+def _require_master_allocation_session(db: Session) -> None:
+    """Avoid waiting on our own SQLite transaction or committing caller edits."""
+    bind = db.get_bind()
+    engine = bind.engine
+    if engine.dialect.name == "sqlite":
+        # A second writer cannot proceed behind our own uncommitted writer.
+        # Name a caller transaction defect rather than waiting for ourselves
+        # or implicitly committing unrelated caller edits.
+        if db.connection().connection.driver_connection.in_transaction:
+            raise ReleaseRunError(
+                "Master label reservation requires no active SQLite database "
+                "transaction; commit or roll back the preceding operation before the run"
+            )
+
+
+def _reserve_master_labels(
+    db: Session, counts: dict[str, int], *, reservation_key: str,
+) -> dict[str, int]:
+    """Commit issued numbers before external Refiner work, without committing db.
+
+    The runner reads the accepted source in its caller's session. This short
+    independent transaction releases its write lock before any provider call
+    or snapshot write. A later failed Master can leave a gap, never reuse.
+    """
+    if not any(counts.values()):
+        return {}
+    _require_master_allocation_session(db)
+    engine = db.get_bind().engine
+    with Session(bind=engine) as allocator:
+        starts = identity.reserve_label_indices(
+            allocator, counts, reservation_key=reservation_key,
+        )
+        allocator.commit()
+    return starts
 
 
 # --------------------------------------------------------------------------- #
@@ -1439,6 +1487,9 @@ def run_pre_release_for_job(
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     db.refresh(job)
+    # Check the short independent reservation can run before any provider
+    # spend, and check again at allocation if a callback changed the session.
+    _require_master_allocation_session(db)
     generation_recovery.require_mutation_allowed(
         job, operation="build the pre Master file"
     )
@@ -1517,6 +1568,7 @@ def run_release_for_job(
     generation_recovery.require_mutation_allowed(
         job, operation="build a Master file"
     )
+    _require_master_allocation_session(db)
     authorities = dict(authorities or {})
     generate_lane = generated_questions is not None
     profile = assessment_profile.resolve(profile)
@@ -1541,7 +1593,8 @@ def run_release_for_job(
             )
         )
     try:
-        bridge = release_snapshot.build(db, job, staged_release)
+        with db.no_autoflush:
+            bridge = release_snapshot.build(db, job, staged_release)
     except release_snapshot.SnapshotError as exc:
         raise ReleaseRunError(str(exc)) from exc
     inventory = bridge["question_task_inventory"]
@@ -1680,6 +1733,21 @@ def run_release_for_job(
 
     meta = dict(bridge["metadata"])
     profile = assessment_profile.resolve_for_metadata(profile, meta)
+    if blueprint_cells is not None:
+        # Canonicalize only an already-selected, declared display label.
+        # The profile owns exact aliases; this does not classify a question
+        # or merge categories with different marks/duration contracts.
+        blueprint_cells = [
+            {
+                **copy.deepcopy(dict(cell)),
+                "question_category": assessment_profile.output_question_category(
+                    cell.get("question_category", ""), profile,
+                ),
+            }
+            for cell in blueprint_cells
+        ]
+    from . import column_spec
+    meta = column_spec.bind_metadata(meta, profile)
     workbook_outputs = assessment_workbook.output_identities(
         profile, bridge["snapshot"],
     )
@@ -2120,6 +2188,9 @@ def run_release_for_job(
                 "assessment materialization changed an obligation identity"
             )
         materialization_needs_review = _needs_review(candidate)
+        upstream = atom if atom is not None else cell.get("generated_question") or {}
+        for flag in upstream.get("flags") or []:
+            _append_warning(candidate, str(flag))
         candidate["route_evidence"] = (atom or {}).get("route_evidence") or {}
         candidate[_CELL_AUDIT_FIELD] = dict(
             cell.get(_CELL_AUDIT_FIELD) or {}
@@ -2270,15 +2341,13 @@ def run_release_for_job(
             "(Objective options keep their own images)."
         )
 
-    # Contract v2.0 §18: ``question_source`` is a mandatory per-run scalar
-    # naming the publication — the staged release's frozen source book —
-    # stamped on every candidate here, never defaulted by the renderer. A
-    # run whose publication is unknown ships the cell blank and the
-    # read-back records it as a blocker (never a borrowed value).
+    # Q32: generated questions name UpSchool DB; source questions retain
+    # the frozen publication. Old profiles have no generated-source override.
     publication = str(bridge.get("source_book") or "").strip()
+    generated_source = column_spec.from_profile(profile).get("generated_question_source")
     for candidate in candidates:
-        candidate["question_source"] = publication
-    if not publication:
+        candidate["question_source"] = generated_source if generate_lane and generated_source else publication
+    if not publication and not (generate_lane and generated_source):
         progress.log(
             "Assessment release: the run has no publication (source book); "
             "question_source ships blank and the release read-back records "
@@ -2409,9 +2478,9 @@ def run_release_for_job(
     )
 
     # Stage 6.5 — the joint per-item review (contract v2.0 §27 step 6,
-    # register Q26): ONE independent critic over the finished item — cell,
-    # materialization, answer space and marking together — replacing the
-    # four per-decision critics that audited the same item in fragments.
+    # register Q26, with Q31 restoring per-decision critics by default):
+    # one additional independent critic over the finished item — cell,
+    # materialization, answer space and marking together.
     # An auditor only (Q10): dissent rides the candidate as review flags.
     if lane_policy.item_review_enabled():
         _observe_stage(stage_progress, "item_review", 0, len(candidates))
@@ -2532,7 +2601,43 @@ def run_release_for_job(
 
     _observe_stage(stage_progress, "levels")
     level_provider, level_critic = _authority_pair(authorities, "level")
-    level_rows = grouping.decide_levels(
+    # Register Q30: a generated question authored AT a tier under the
+    # owner's Pre coverage rule carries that tier on its
+    # ``generated_question``; its level row transports that recorded
+    # authoring decision instead of asking for a second verdict (which
+    # could only break the split the owner fixed). Every other candidate
+    # — the source lane, and generated questions authored before the rule
+    # — keeps the independent model verdict exactly as before.
+    authored_level_rows: list[dict[str, Any]] = []
+    undecided: list[dict] = []
+    for candidate in eligible:
+        generated = candidate.get("generated_question")
+        authored_tier = (
+            str(generated.get("tier") or "").strip()
+            if generate_lane and isinstance(generated, Mapping) else ""
+        )
+        if authored_tier in grouping.TIER_CODES:
+            authored_level_rows.append({
+                "candidate_id": str(candidate.get("candidate_id") or ""),
+                "tier": authored_tier,
+                "rationale": (
+                    "authored at this tier under the owner's Pre-Learning "
+                    "coverage rule (register Q30); the tier is the "
+                    "authoring decision recorded on the generated "
+                    "question, not a second verdict"
+                ),
+                "flags": [],
+                "authority": {
+                    "decision_key": "",
+                    "policy_version": grouping.LEVEL_POLICY_VERSION,
+                    "review_flags": [],
+                    "fixer": False,
+                    "mechanical_basis": "authored_tier",
+                },
+            })
+        else:
+            undecided.append(candidate)
+    level_rows = authored_level_rows + grouping.decide_levels(
         [
             {
                 "candidate": candidate,
@@ -2540,7 +2645,7 @@ def run_release_for_job(
                     concept_records_by_key[str(candidate["concept_key"])]
                 ),
             }
-            for candidate in eligible
+            for candidate in undecided
         ],
         meta=meta,
         envelope_sha256=envelope_sha,
@@ -2625,12 +2730,11 @@ def run_release_for_job(
         key=lambda item: (item[0][0], tier_order[item[0][1]]),
     )
     _observe_stage(stage_progress, "clustering", 0, len(sorted_buckets))
-    for bucket_index, ((concept_key, tier), members) in enumerate(
-        sorted_buckets
-    ):
+    def cluster_bucket(item):
+        (concept_key, tier), members = item
         concept = concept_records_by_key[concept_key]
         concept_evidence = _concept_evidence(concept)
-        clustered = grouping.cluster_tier(
+        return grouping.cluster_tier(
             members,
             concept=concept_evidence,
             tier=tier,
@@ -2642,6 +2746,19 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    clustered_buckets = kernel.parallel_map_in_order(
+        sorted_buckets, cluster_bucket,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Cluster · {key} · {tier}" for (key, tier), _ in sorted_buckets],
+        announce="Assessment variant groups",
+    )
+    # Apply independent decisions in the original canonical order. No later
+    # stage sees a partial partition, regardless of response completion order.
+    for bucket_index, (((concept_key, tier), members), clustered) in enumerate(
+        zip(sorted_buckets, clustered_buckets, strict=True)
+    ):
+        concept = concept_records_by_key[concept_key]
         members_by_id = {m["candidate_id"]: m for m in members}
         machine = _label_base(concept)
         for sequence, family in enumerate(clustered["families"], start=1):
@@ -2740,14 +2857,14 @@ def run_release_for_job(
         for candidate in eligible
     }
     _observe_stage(stage_progress, "describe", 0, len(groups))
-    for group_index, record in enumerate(groups):
+    def describe_one_group(record):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
             all_members_by_id[str(candidate_id)]
             for candidate_id in record.get("member_candidate_ids") or []
         ]
-        description = grouping.describe_group(
+        return grouping.describe_group(
             _group_evidence(record),
             family_members,
             concept=_concept_evidence(concept),
@@ -2758,6 +2875,16 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    descriptions = kernel.parallel_map_in_order(
+        groups, describe_one_group,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Describe · {group['group_key']}" for group in groups],
+        announce="Assessment group descriptions",
+    )
+    for group_index, (record, description) in enumerate(
+        zip(groups, descriptions, strict=True)
+    ):
         record["semantic_description"] = str(
             description.get("description") or ""
         )
@@ -2777,9 +2904,9 @@ def run_release_for_job(
 
     # Stage 11 — every group receives the complete, symmetric same-home/tier
     # sibling context. QA only flags and never changes the authored records.
-    # Opt-in since register Q26 (contract v2.0 cost policy): the joint item
-    # review and the route critic already audit every member; a further
-    # per-group pass is enabled explicitly (AEGIS_MASTER_GROUP_QA=1).
+    # On by default (register Q31); the cost profile switches it off
+    # (AEGIS_MASTER_GROUP_QA=0), in which case the joint item review and
+    # the route critic are the only audits of every member.
     qa_provider, qa_critic = _authority_pair(authorities, "qa")
     quality_groups = [_group_evidence(group) for group in groups]
     qa_groups = (
@@ -2789,13 +2916,12 @@ def run_release_for_job(
     )
     if not qa_groups and groups:
         progress.log(
-            "Assessment release: touched-group QA is opt-in under the "
-            "contract v2.0 cost policy (AEGIS_MASTER_GROUP_QA=1) and did "
-            "not run; the joint item review and route critic audited every "
-            "member."
+            "Assessment release: touched-group QA is switched off "
+            "(AEGIS_MASTER_GROUP_QA=0, the cost profile) and did not run; "
+            "the joint item review and route critic audited every member."
         )
     _observe_stage(stage_progress, "qa", 0, len(qa_groups))
-    for group_index, record in enumerate(qa_groups):
+    def review_one_group(record):
         concept_key = str(record["concept_key"])
         concept = concept_records_by_key[concept_key]
         family_members = [
@@ -2816,7 +2942,7 @@ def run_release_for_job(
             and sibling.get("concept_key") == record.get("concept_key")
             and sibling.get("group_type") == record.get("group_type")
         ]
-        review = quality.review_group(
+        return quality.review_group(
             _group_evidence(record),
             family_members,
             siblings=siblings,
@@ -2828,6 +2954,16 @@ def run_release_for_job(
             store=store,
             fixer=fixer,
         )
+
+    reviews = kernel.parallel_map_in_order(
+        qa_groups, review_one_group,
+        max_workers=config.phase3_decision_workers(),
+        labels=[f"Review · {group['group_key']}" for group in qa_groups],
+        announce="Assessment group quality review",
+    )
+    for group_index, (record, review) in enumerate(
+        zip(qa_groups, reviews, strict=True)
+    ):
         review_flags = [
             dict(flag) if isinstance(flag, Mapping) else str(flag)
             for flag in review.get("flags") or []
@@ -2852,15 +2988,37 @@ def run_release_for_job(
     )
 
     # Stage 8.5 — labels from accepted source order, append-only.
-    label_cursor: dict[str, int] = {}
+    label_counts: dict[str, int] = {}
+    for candidate in candidates:
+        concept_key = str(candidate.get("concept_key") or "")
+        if concept_key:
+            base = _label_base(concept_records_by_key[concept_key])
+            label_counts[base] = label_counts.get(base, 0) + 1
+    # Replaying the exact same accepted work retains its labels and cached
+    # Refiner decisions. Different jobs, lanes or accepted content reserve new
+    # ranges. The receipt and counter advance commit atomically, so interruption
+    # between numbering and release creation cannot cause reuse or extra spend.
+    reservation_key = rel.sha256_json({
+        "policy": "master-label-reservation-v1",
+        "owner_sub": owner_sub,
+        "job_id": job.id,
+        "lane": staged_lane,
+        "envelope_sha256": envelope_sha,
+        "source_concept_release_sha256": source_release_sha,
+        "profile": profile,
+        "candidates": candidates,
+        "groups": groups,
+        "placements": placements,
+    })
+    label_cursor = _reserve_master_labels(
+        db, label_counts, reservation_key=reservation_key,
+    )
     for candidate in candidates:
         concept_key = str(candidate.get("concept_key") or "")
         if not concept_key:
             continue
         concept = concept_records_by_key[concept_key]
         base = _label_base(concept)
-        if base not in label_cursor:
-            label_cursor[base] = _next_label_index(db, base)
         candidate["question_label"] = f"{base} Q{label_cursor[base]:02d}"
         label_cursor[base] += 1
 
@@ -2960,13 +3118,13 @@ def run_release_for_job(
             )
         )
     else:
-        # Opt-in since register Q26 (contract v2.0 cost policy): the
-        # materialized prose ships as authored; a prose polish over every
-        # finished row is enabled explicitly (AEGIS_MASTER_REFINER=1).
+        # Switched off by the cost profile (AEGIS_MASTER_REFINER=0; on by
+        # default since register Q31): the materialized prose ships as
+        # authored, and the receipt says so.
         progress.log(
-            "Assessment release: the Master Refiner is opt-in under the "
-            "contract v2.0 cost policy (AEGIS_MASTER_REFINER=1) and did not "
-            "run; authored prose ships as materialized."
+            "Assessment release: the Master Refiner is switched off "
+            "(AEGIS_MASTER_REFINER=0, the cost profile) and did not run; "
+            "authored prose ships as materialized."
         )
         refined_records = [payload]
         refinement_diff = {
@@ -2976,8 +3134,8 @@ def run_release_for_job(
             "changes": [],
             "review_flags": [],
             "summary": (
-                "Master Refiner not run (opt-in under the contract v2.0 "
-                "cost policy, register Q26); prose ships as materialized"
+                "Master Refiner not run (switched off by the cost profile, "
+                "AEGIS_MASTER_REFINER=0); prose ships as materialized"
             ),
             "resealed_after_refinement": False,
             "skipped": True,

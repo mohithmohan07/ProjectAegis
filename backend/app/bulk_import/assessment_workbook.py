@@ -44,6 +44,8 @@ from openpyxl.styles import Alignment, Font
 from . import ANSWER_TYPES
 from .. import bulk_import as bi
 from ..services import assessment_profile
+from ..services import openai_usage
+from ..services import column_spec
 from ..services import assessment_release as rel
 from ..services import identity
 from ..services import katex_rules
@@ -276,6 +278,23 @@ def output_schema(
         profile,
         learning_phase=_snapshot_learning_phase(snapshot),
     )
+    required_descriptive_slots = 0
+    projection_policy = column_spec.from_profile(assessment_profile.resolve(profile))
+    for candidate in (snapshot or {}).get("candidates") or []:
+        if not isinstance(candidate, Mapping) or candidate.get("sheet_kind") != "descriptive":
+            continue
+        effective_answers = candidate.get("answers") or []
+        if (
+            projection_policy.get("multipart_parent_projection") == "ordered_child_union"
+            and candidate.get("sub_questions")
+        ):
+            try:
+                effective_answers = multipart_parent_answers(candidate["sub_questions"])
+            except ValueError:
+                # Shape failures are recorded by rendering and read-back.
+                continue
+        if isinstance(effective_answers, list):
+            required_descriptive_slots = max(required_descriptive_slots, len(effective_answers))
     fields_by_sheet = _master_fields(contract)
     return {
         "role": "master",
@@ -286,6 +305,7 @@ def output_schema(
             contract.get("descriptive_answer_slots")
             or MAX_DESCRIPTIVE_ANSWERS
         ),
+        "required_descriptive_answer_slots": required_descriptive_slots,
         "natural_label_aggregates": bool(
             contract.get("natural_label_aggregates", False)
         ),
@@ -669,6 +689,7 @@ def _new_workbook(
     return wb
 
 
+@openai_usage.measure_mechanical("workbook.serialize")
 def _workbook_bytes(wb: openpyxl.Workbook) -> bytes:
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -776,7 +797,7 @@ def _titled_concept(concept: Mapping) -> str:
     return identity.titled(title, machine_id) if machine_id else title
 
 
-def _bands_record(entry: Mapping) -> dict:
+def _bands_record(entry: Mapping, profile: Mapping | str | None = None) -> dict:
     record: dict = {}
     record.update(entry["chapter"])
     record.update({
@@ -801,6 +822,10 @@ def _bands_record(entry: Mapping) -> dict:
             record[field] = bi.join_multi(
                 bi.split_multi(record[field], legacy_commas=False)
             )
+    if "keywords" in record:
+        record["keywords"] = column_spec.keyword_cell(
+            record["keywords"], column_spec.from_profile(assessment_profile.resolve(profile)),
+        )
     # Contract v2.0 §32: the chapter duration is a real numeric cell, never
     # unit-bearing text; a value the registry/upload never supplied stays
     # blank (and is a release blocker), never a guess.
@@ -818,6 +843,10 @@ _MULTI_VALUE_FIELDS = (
     "pre_topics", "post_topics", "topic_concept_labels", "related_topics",
     "keywords", "digicards", "related_concepts",
 )
+# The Concept File read-back (``writer._validate_concepts_workbook_bytes``)
+# checks the same cells with the same ``bi.list_token_defects`` (register
+# Q29), so the two read-backs cannot disagree on which cells are lists.
+MULTI_VALUE_FIELDS = _MULTI_VALUE_FIELDS
 
 
 def snapshot_sha256(snapshot: Mapping) -> str:
@@ -828,6 +857,7 @@ def snapshot_sha256(snapshot: Mapping) -> str:
 # Output A — Concept File (spec §1, §9)
 # --------------------------------------------------------------------------- #
 
+@openai_usage.measure_mechanical("workbook.concept_projection")
 def render_concept_file(
     snapshot: Mapping, profile: Mapping | str | None = None,
     *, oversized: list[dict] | None = None,
@@ -845,7 +875,7 @@ def render_concept_file(
     wb = _new_workbook(schema)
     ws = wb["Objective"]
     for entry in _concept_rows(snapshot):
-        record = _bands_record(entry)
+        record = _bands_record(entry, profile)
         # A clean catalogue: Group and Question bands stay blank, and the
         # concept-band group labels stay blank too — groups do not exist in
         # Output A (spec §1: "no populated Group fields").
@@ -862,6 +892,53 @@ def render_concept_file(
 # --------------------------------------------------------------------------- #
 # Output B — Master File (spec §1, §10)
 # --------------------------------------------------------------------------- #
+
+def multipart_parent_answers(sub_questions: Any) -> list[dict]:
+    """Project the ordered child criteria as a non-additive parent view."""
+
+    if not isinstance(sub_questions, list):
+        raise ValueError("sub_questions must be an array")
+    answers = []
+    for position, subquestion in enumerate(sub_questions, start=1):
+        if not isinstance(subquestion, Mapping):
+            raise ValueError(f"subquestion {position} must be an object")
+        keywords = subquestion.get("keywords")
+        if not isinstance(keywords, list):
+            raise ValueError(f"subquestion {position} keywords must be an array")
+        for keyword_position, keyword in enumerate(keywords, start=1):
+            if not isinstance(keyword, Mapping):
+                raise ValueError(f"subquestion {position} keyword {keyword_position} must be an object")
+            answers.append({
+                "answer_type": keyword.get("answer_type", ""),
+                "answer_content": keyword.get("keyword", ""),
+                "answer_weightage": keyword.get("weightage", ""),
+            })
+    return answers
+
+
+def multipart_parent_projection_defects(answers: Any, sub_questions: Any) -> list[str]:
+    """Compare the two authored views without combining their mark totals."""
+
+    try:
+        expected = multipart_parent_answers(sub_questions)
+    except ValueError as exc:
+        return [str(exc)]
+    if not isinstance(answers, list) or len(answers) != len(expected):
+        return ["multipart parent rubric must be the complete ordered child union"]
+    defects = []
+    for position, (actual, wanted) in enumerate(zip(answers, expected), start=1):
+        if not isinstance(actual, Mapping) or any(
+            actual.get(field) != wanted.get(field)
+            for field in ("answer_type", "answer_content")
+        ):
+            defects.append(f"multipart parent criterion {position} must match the ordered child type and content")
+            continue
+        actual_weight = _readback_decimal(actual.get("answer_weightage"))
+        expected_weight = _readback_decimal(wanted.get("answer_weightage"))
+        if actual_weight is None or expected_weight is None or actual_weight != expected_weight:
+            defects.append(f"multipart parent criterion {position} weight must match its child weight")
+    return defects
+
 
 def _question_record(
     candidate: Mapping, sheet: str, profile: Mapping | str | None = None,
@@ -926,7 +1003,9 @@ def _question_record(
 
     record = {
         "question_label": candidate.get("question_label", ""),
-        "question_category": candidate.get("question_category", ""),
+        "question_category": assessment_profile.output_question_category(
+            candidate.get("question_category", ""), profile,
+        ),
         "cognitive_skills": candidate.get("cognitive_skill", ""),
         "question_source": candidate.get(
             "question_source", assessment_profile.question_source(profile)),
@@ -1019,6 +1098,27 @@ def _question_record(
     else:  # Descriptive
         record["math_keyboard"] = candidate.get("math_keyboard", "")
         record["display_answer"] = candidate.get("display_answer", "")
+        sub_questions = _mapping_array("sub_questions", candidate.get("sub_questions"))
+        column_policy = column_spec.from_profile(assessment_profile.resolve(profile))
+        if sub_questions and column_policy.get("multipart_parent_projection") == "ordered_child_union":
+            try:
+                answers = multipart_parent_answers(sub_questions)
+            except ValueError as exc:
+                _record_shape("multipart_parent_projection", str(exc))
+                answers = []
+            if len(answers) > descriptive_answer_slots:
+                if truncated is not None:
+                    truncated.append({
+                        "candidate_id": str(candidate.get("candidate_id") or ""),
+                        "question_label": str(candidate.get("question_label") or ""),
+                        "field": "multipart_parent_projection",
+                        "reason": "parent_projection_capacity",
+                        "cap": descriptive_answer_slots,
+                        "actual": len(answers),
+                        "omitted_projection": answers,
+                    })
+                # Retain complete child scoring; never ship a partial parent view.
+                answers = []
         for n, answer in enumerate(
             _cap("answers", answers, descriptive_answer_slots), start=1
         ):
@@ -1032,9 +1132,6 @@ def _question_record(
                 answer.get("answer_type", ""),
                 answer.get("answer_content", ""),
             )
-        sub_questions = _mapping_array(
-            "sub_questions", candidate.get("sub_questions"),
-        )
         # Contract §19.1/§20: for a true multipart item the parent
         # ``question`` carries only the shared context, while the complete
         # ``question_text`` carries that context followed by EVERY labelled
@@ -1131,6 +1228,7 @@ def _group_record_fields(
     }
 
 
+@openai_usage.measure_mechanical("workbook.master_projection")
 def render_master_file(
     snapshot: Mapping, profile: Mapping | str | None = None,
 ) -> tuple[bytes, dict]:
@@ -1312,7 +1410,7 @@ def render_master_file(
         concept_key = str(candidate.get("concept_key") or "")
         group_key = str(candidate.get("group_key") or "")
         entry = concept_entries[concept_key]
-        record = _bands_record(entry)
+        record = _bands_record(entry, profile)
         record["concept_question_labels"] = bi.join_multi(
             concept_labels.get(concept_key, []))
         _apply_rollups(record, concept_key)
@@ -1375,7 +1473,7 @@ def render_master_file(
         if placed_by_concept.get(concept_key):
             continue
         entry = concept_entries[concept_key]
-        record = _bands_record(entry)
+        record = _bands_record(entry, profile)
         record["concept_question_labels"] = ""
         for field in rollup_field.values():
             record[field] = ""
@@ -1439,6 +1537,7 @@ def render_master_file(
 # Read-back parsing and validation (spec §13.2 steps 2–4)
 # --------------------------------------------------------------------------- #
 
+@openai_usage.measure_mechanical("workbook.parse")
 def parse_workbook(data: bytes) -> dict:
     wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True,
                                 data_only=True)
@@ -1633,7 +1732,7 @@ def _objective_marking_errors(
     if (
         marks is not None
         and len(weights) == populated_options
-        and sum(weights, Decimal(0)) != marks
+        and rel.exact_weight_sum(weights) != marks
     ):
         errors.append(
             f"{label}: option weights must sum exactly to marks {marks}"
@@ -1735,7 +1834,7 @@ def _subjective_marking_errors(
     if (
         marks is not None
         and len(weights) == populated
-        and sum(weights, Decimal(0)) != marks
+        and rel.exact_weight_sum(weights) != marks
     ):
         errors.append(
             f"{label}: subjective weights must sum exactly to marks {marks}"
@@ -1749,21 +1848,26 @@ def _descriptive_marking_errors(
     tags_required: bool | None = None,
     rubric_quantum: bool = True,
     lane_literal: bool = True,
+    column_policy: Mapping | None = None,
+    allow_child_only: bool = False,
 ) -> list[str]:
     """Descriptive read-back marking gate.
 
     ``lane_literal`` enforces contract v2.0 §24 (a textual criterion or
     keyword cell carries exactly ``Phrases``); off for the legacy importer.
 
-    ``rubric_quantum`` enforces contract v2.0 §27.5 (each criterion 0.5 or
-    1). The generated outputs are always read back with it on; the legacy
+    ``rubric_quantum`` enforces the carried rule: v2.0 allows 0.5 or 1;
+    the September owner policy allows any positive multiple of 0.5. The generated outputs are always read back with it on; the legacy
     workbook importer passes ``False`` because pre-v2.0 rows may carry
     larger criterion awards and the importer is not an authoring gate.
     """
+    column_policy = column_policy or {}
     errors: list[str] = []
     answer_weights: list[Decimal] = []
     populated_answers = 0
     complete_answers = 0
+    parent_answers: list[dict] = []
+    child_questions: list[dict] = []
     populated_answer_numbers: list[int] = []
     for n in range(1, answer_slots + 1):
         fields = (
@@ -1780,6 +1884,10 @@ def _descriptive_marking_errors(
         answer_content = bi.from_workbook_rich_text(
             str(row.get(f"answer_content_{n}") or "")
         )
+        parent_answers.append({
+            "answer_type": answer_type, "answer_content": answer_content,
+            "answer_weightage": row.get(f"answer_weightage_{n}"),
+        })
         if answer_type not in ANSWER_TYPES:
             errors.append(
                 f"{label}: answer/rubric block {n} has unsupported "
@@ -1800,6 +1908,7 @@ def _descriptive_marking_errors(
             )
         malformed_tag = rel.malformed_rubric_tag(
             answer_content, answer_type, tags_required=tags_required,
+            allowed_tags=column_policy.get("rubric_tags") if tags_required else None,
         )
         if malformed_tag:
             errors.append(
@@ -1823,6 +1932,7 @@ def _descriptive_marking_errors(
         answer_weights.append(weight)
         quantum = rel.rubric_weight_quantum_defect(
             weight, what=f"{label}: answer/rubric block {n}",
+            half_step=bool(column_policy.get("rubric_half_step")),
         ) if rubric_quantum else ""
         if quantum:
             errors.append(quantum)
@@ -1876,6 +1986,7 @@ def _descriptive_marking_errors(
             sub_marks.append(sub_mark)
 
         keyword_weights: list[Decimal] = []
+        child_keywords: list[dict] = []
         populated_keywords = 0
         populated_keyword_numbers: list[int] = []
         for m in range(1, MAX_SUBQUESTION_KEYWORDS + 1):
@@ -1893,6 +2004,10 @@ def _descriptive_marking_errors(
             keyword_content = bi.from_workbook_rich_text(
                 str(row.get(f"sq{n}_keyword_{m}") or "")
             )
+            child_keywords.append({
+                "answer_type": keyword_type, "keyword": keyword_content,
+                "weightage": row.get(f"sq{n}_weightage_{m}"),
+            })
             if keyword_type not in ANSWER_TYPES:
                 errors.append(
                     f"{label}: subquestion {n} keyword {m} has unsupported "
@@ -1921,6 +2036,7 @@ def _descriptive_marking_errors(
                 )
             if rel.malformed_rubric_tag(
                 keyword_content, keyword_type, tags_required=tags_required,
+                allowed_tags=column_policy.get("rubric_tags") if tags_required else None,
             ):
                 errors.append(
                     f"{label}: subquestion {n} keyword {m} breaks English "
@@ -1936,15 +2052,17 @@ def _descriptive_marking_errors(
             keyword_weights.append(weight)
             quantum = rel.rubric_weight_quantum_defect(
                 weight, what=f"{label}: subquestion {n} keyword {m}",
+                half_step=bool(column_policy.get("rubric_half_step")),
             ) if rubric_quantum else ""
             if quantum:
                 errors.append(quantum)
+        child_questions.append({"keywords": child_keywords})
         if (
             populated_keywords
             and sub_mark is not None
             and sub_mark > 0
             and len(keyword_weights) == populated_keywords
-            and sum(keyword_weights, Decimal(0)) != sub_mark
+            and rel.exact_weight_sum(keyword_weights) != sub_mark
         ):
             errors.append(
                 f"{label}: subquestion {n} keyword weights must sum exactly "
@@ -1963,7 +2081,21 @@ def _descriptive_marking_errors(
             )
     if populated_answers == 0 and populated_subquestions == 0:
         errors.append(f"{label}: descriptive has no answer/rubric blocks")
-    if populated_answers and populated_subquestions:
+    parent_projection = column_policy.get("multipart_parent_projection") == "ordered_child_union"
+    if populated_subquestions and parent_projection:
+        required_slots = len(multipart_parent_answers(child_questions))
+        if required_slots > answer_slots and not (allow_child_only and not populated_answers):
+            errors.append(
+                f"{label}: multipart parent projection capacity {answer_slots} "
+                f"cannot hold {required_slots} ordered child criteria"
+            )
+        if not (allow_child_only and not populated_answers):
+            errors.extend(
+                f"{label}: {error}" for error in multipart_parent_projection_defects(
+                    parent_answers, child_questions,
+                )
+            )
+    elif populated_answers and populated_subquestions:
         errors.append(
             f"{label}: multipart descriptive duplicates scoring in main "
             "answer/rubric blocks"
@@ -1992,10 +2124,10 @@ def _descriptive_marking_errors(
             "answer/rubric blocks"
         )
     if (
-        populated_subquestions == 0
+        (populated_subquestions == 0 or (parent_projection and populated_answers))
         and marks is not None
         and len(answer_weights) == populated_answers
-        and sum(answer_weights, Decimal(0)) != marks
+        and rel.exact_weight_sum(answer_weights) != marks
     ):
         errors.append(
             f"{label}: answer/rubric weights must sum exactly to marks {marks}"
@@ -2004,7 +2136,7 @@ def _descriptive_marking_errors(
         populated_subquestions
         and marks is not None
         and len(sub_marks) == populated_subquestions
-        and sum(sub_marks, Decimal(0)) != marks
+        and rel.exact_weight_sum(sub_marks) != marks
     ):
         errors.append(
             f"{label}: subquestion marks must sum exactly to marks {marks}"
@@ -2019,6 +2151,7 @@ def validate_concept_file(
     errors = _header_errors(parsed, output_schema("concept", profile, snapshot))
     if errors:
         return errors
+    column_policy = column_spec.from_profile(assessment_profile.resolve(profile))
     rows = parsed["sheets"]["Objective"]["rows"]
     expected = [
         _titled_concept(e["concept"]) for e in _concept_rows(snapshot)
@@ -2048,6 +2181,8 @@ def validate_concept_file(
         *assessment_profile.forced_blank_fields(profile),
     )
     for i, row in enumerate(rows, start=3):
+        for defect in column_spec.keyword_defects(row.get("keywords"), column_policy):
+            errors.append(f"Objective row {i}: keywords {defect}")
         populated = [
             field for field in must_be_blank
             if str(row.get(field) or "").strip()
@@ -2073,6 +2208,7 @@ def validate_master_file(
     # Contract v2.0 §28: the run's subject decides whether textual rubric
     # criteria carry English tags (required) or none (forbidden).
     tags_required = assessment_profile.rubric_tags_required(profile)
+    column_policy = column_spec.from_profile(assessment_profile.resolve(profile))
     errors = _header_errors(parsed, schema)
     if errors:
         return errors
@@ -2437,6 +2573,14 @@ def validate_master_file(
             for field in forced_blank:
                 if str(row.get(field) or "").strip():
                     errors.append(f"{name} row {i}: {field} must be blank")
+            for field in _MULTI_VALUE_FIELDS:
+                defects = (
+                    column_spec.keyword_defects(row.get(field), column_policy)
+                    if field == "keywords"
+                    else bi.list_token_defects(str(row.get(field) or ""))
+                )
+                for defect in defects:
+                    errors.append(f"{name} row {i}: {field} {defect}")
             if not has_question_band:
                 if has_group_band:
                     errors.append(
@@ -2474,17 +2618,14 @@ def validate_master_file(
                 errors.append(
                     f"{label}: question_source must name the run's "
                     "publication (contract v2.0 §18)")
-            # Contract v2.0 §16 (DEL-001): a literal pipe inside one list
-            # token blocks; the read-back records it rather than guess.
-            for field in _MULTI_VALUE_FIELDS:
-                for defect in bi.list_token_defects(
-                    str(row.get(field) or "")
-                ):
-                    errors.append(f"{label}: {field} {defect}")
             restriction = str(row.get("answer_restriction") or "")
             if restriction not in rel.ANSWER_RESTRICTIONS:
                 errors.append(
                     f"{label}: answer_restriction {restriction!r} invalid")
+            if column_policy and name in {"Objective", "Subjective"} and restriction != "Specific":
+                errors.append(f"{label}: {name} answer_restriction must be Specific")
+            if name in {"Subjective", "Descriptive"} and column_policy.get("math_keyboard") == "No" and row.get("math_keyboard") != "No":
+                errors.append(f"{label}: math_keyboard must be exactly No under the carried column policy")
             duration = _readback_decimal(row.get("question_duration"))
             if duration is None or duration <= 0:
                 errors.append(
@@ -2542,6 +2683,17 @@ def validate_master_file(
                 errors.extend(_objective_marking_errors(
                     row, label=label, marks=marks,
                 ))
+                answers = [{
+                    "answer_type": bi.normalize_answer_type(row.get(f"answer_type_{n}")),
+                    "answer_content": bi.from_workbook_rich_text(row.get(f"answer_content_{n}")),
+                    "correct_answer": row.get(f"correct_answer_{n}"),
+                } for n in range(1, MAX_OBJECTIVE_OPTIONS + 1)
+                    if row.get(f"answer_content_{n}") is not None]
+                if column_policy:
+                    errors.extend(f"{label}: {error}" for error in rel.objective_explanation_defects(
+                        answers, bi.from_workbook_rich_text(row.get("answer_explanation")),
+                        include_option_label=column_policy.get("objective_explanation_prefix") == "option_label_and_answer",
+                    ))
             elif name == "Subjective":
                 errors.extend(_subjective_marking_errors(
                     row, label=label, marks=marks,
@@ -2551,6 +2703,7 @@ def validate_master_file(
                     row, label=label, marks=marks,
                     answer_slots=descriptive_answer_slots,
                     tags_required=tags_required,
+                    column_policy=column_policy,
                 ))
 
     # Every concept (questionless included) and every created group appears.
@@ -2701,6 +2854,9 @@ def build_dual_output(
                 },
                 "descriptive_answer_slots": master_schema[
                     "descriptive_answer_slots"
+                ],
+                "required_descriptive_answer_slots": master_schema[
+                    "required_descriptive_answer_slots"
                 ],
             },
         },

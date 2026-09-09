@@ -441,7 +441,7 @@ def test_no_count_quota_rides_the_prompt_the_payload_or_the_code(
 
     quota_language = re.compile(
         r"at least \d|at most \d|minimum of|maximum of|exactly \d+ |"
-        r"per concept|per topic|one per|quota|target count|"
+        r"per concept|per topic|one per|\bquota\b|target count|"
         r"\d+\s*(?:-|to)\s*\d+ (?:topics|concepts|items|elements)",
         re.IGNORECASE,
     )
@@ -1168,12 +1168,12 @@ def test_require_culmination_is_explicitly_off_for_the_pre_lane(
     ] == ["culmination_count"]
 
 
-def test_validator_findings_flag_the_row_and_never_gate(golden_envelope):
-    """``description_length`` is a word-count band deciding meaning, and a
-    full teaching paragraph — which is exactly what "the same detailing
-    standard as Post-Learning" asks for — falls outside its upper bound.
-    The Pre lane records validator findings as review flags: it never
-    promotes them to fatals and never drops the row."""
+def test_long_pre_teaching_is_preserved_without_word_count_judgment(golden_envelope):
+    """Q35: length and repetition quality belong to the API reviewer.
+
+    This deliberate repetition must reach that reviewer intact; a local
+    word-count band neither rewrites it nor creates a semantic finding.
+    """
     long_paragraph = " ".join(
         "Sovereignty is the highest law-making authority in a state and "
         "the learner needs it before this chapter begins."
@@ -1186,10 +1186,11 @@ def test_validator_findings_flag_the_row_and_never_gate(golden_envelope):
     )
     assert len(result["rows"]) == 2  # nothing dropped
     codes = {finding["code"] for finding in result["validation"]}
-    assert "description_length" in codes
-    assert any(
+    assert "description_length" not in codes
+    assert long_paragraph in result["rows"][0]["concept_details"]
+    assert not any(
         flag.startswith("Pre validator [description_length]")
-        for flag in result["rows"][0]["review_flags"]
+        for flag in result["rows"][0].get("review_flags", [])
     )
 
 

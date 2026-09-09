@@ -425,13 +425,22 @@ def _strict_assessment_policy_issues(
     policy_id = str(policy.get("policy_id") or "")
     if not policy_id or policy_id == "generic-cms":
         return []
+    # Import may receive an old frozen workbook or a freshly projected
+    # vocabulary. Match only the documented exact label aliases, retaining
+    # the original stored category and all local marks/duration rules.
+    from ..services import assessment_output_vocabulary as output_vocabulary
+
+    vocabulary = output_vocabulary.snapshot()
+    policy = output_vocabulary.format_policy(policy, vocabulary)
     formats = policy.get("formats_by_sheet")
     if not isinstance(formats, Mapping):
         return [
             f"{row_label}: assessment policy {policy_id!r} has no "
             "formats_by_sheet mapping"
         ]
-    category = str(question.get("question_category") or "").strip()
+    category = output_vocabulary.category_label(
+        str(question.get("question_category") or "").strip(), vocabulary,
+    )
     sheet_formats = formats.get(kind)
     rule = (
         sheet_formats.get(category)
@@ -568,6 +577,27 @@ def _strict_assessment_policy_issues(
             issues.append(
                 f"{row_label}: assessment policy {policy_id!r} has no "
                 f"positive matrix duration for difficulty {difficulty!r}"
+            )
+            expected_duration = None
+    elif duration_mode == "marks_matrix":
+        difficulty = normalize_difficulty(
+            str(question.get("level_of_difficulty") or "")
+        )
+        tiers = duration_rule.get("minutes_by_marks")
+        tier = None
+        if isinstance(tiers, Mapping) and marks is not None and marks == marks.to_integral_value():
+            # Python declarations use integer keys; persisted JSON uses
+            # strings. Both are the exact same declared marks tier.
+            tier = tiers.get(int(marks), tiers.get(str(int(marks))))
+        expected_duration = (
+            _policy_decimal(tier.get(difficulty))
+            if isinstance(tier, Mapping) else None
+        )
+        if expected_duration is None or expected_duration <= 0:
+            issues.append(
+                f"{row_label}: assessment policy {policy_id!r} has no "
+                f"positive marks-matrix duration for marks {marks!s} "
+                f"and difficulty {difficulty!r}"
             )
             expected_duration = None
     elif duration_mode == "per_subpoint":
@@ -803,6 +833,13 @@ def _blocking_content_issues(wb, identified) -> list[str]:
                 # carry larger criterion awards, and the run's subject (and
                 # so the English tag rule) is not known here.
                 marking_kwargs["rubric_quantum"] = False
+                marking_kwargs["column_policy"] = {
+                    "multipart_parent_projection": "ordered_child_union",
+                }
+                marking_kwargs["allow_child_only"] = True
+                marking_kwargs["answer_slots"] = max(
+                    sheet_layout.answer_block_numbers, default=0,
+                )
             for issue in marking_validator(marking_row, **marking_kwargs):
                 flag(issue)
             keyboard = str(question.get("math_keyboard") or "")
@@ -1454,10 +1491,22 @@ def import_workbook(
                 if total is not None and abs(total - marks) > 0.01:
                     _flag(f"{label}: answer weightage sum {total:g} != marks {marks:g}")
             if kind == "descriptive" and answers and sub_questions:
-                _flag(
-                    f"{label}: multipart descriptive duplicates scoring in "
-                    "main answer/rubric blocks"
+                projection_defects = (
+                    workbook_contract.multipart_parent_projection_defects(
+                        answers, sub_questions,
+                    )
                 )
+                if projection_defects:
+                    _flag(
+                        f"{label}: multipart descriptive duplicates scoring "
+                        "in main answer/rubric blocks: "
+                        + "; ".join(projection_defects)
+                    )
+                if not projection_defects:
+                    # The two wire views are equivalent and non-additive.
+                    # Persist one scoring source so downstream evaluation
+                    # cannot add the projected parent awards a second time.
+                    answers = []
             if (
                 kind == "descriptive"
                 and marks == 4

@@ -13,6 +13,9 @@ their explicit ``NA`` description without spending a model call.
 """
 from __future__ import annotations
 
+from . import column_spec
+from . import assessment_visual_evidence as visual_evidence
+
 import copy
 import json
 from typing import Any, Mapping
@@ -21,42 +24,58 @@ from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
 from . import identity
+from .assessment_output_vocabulary import GROUP_LABELS
+from .response_schemas import advisory_critic_schema
 from .phase3 import kernel
 
 TIER_CODES = identity.GROUP_TIER_CODES
 
-LEVEL_POLICY_VERSION = "assessment-level-1"
-VARIANT_CLUSTER_POLICY_VERSION = "assessment-variant-cluster-1"
-GROUP_DESCRIPTION_POLICY_VERSION = "assessment-group-description-1"
+LEVEL_POLICY_VERSION = "assessment-level-1-column-spec"
+VARIANT_CLUSTER_POLICY_VERSION = "assessment-variant-cluster-1-column-spec"
+GROUP_DESCRIPTION_POLICY_VERSION = "assessment-group-description-1-column-spec"
+
+LEVEL_CALIBRATION = (
+    "Calibrate to the stated grade, home concept and supplied scaffolding. "
+    "Basic checks an essential idea or familiar application with the support "
+    "the learner has been taught. Intermediate requires selecting or connecting "
+    "ideas and adapting them within a supported context. Advanced requires "
+    "substantial transfer, synthesis, evaluation or independent reasoning for "
+    "that grade. These are qualitative anchors, not a lookup from Bloom, marks, "
+    "question length, step count or the blueprint difficulty. A short question "
+    "can demand deep reasoning; a long supported task can remain Basic. "
+    "Use only the exact labels Basic, Intermediate, Advanced; their spelling "
+    "is fixed, while deciding which label fits remains your judgment.\n"
+)
 
 LEVEL_SYSTEM = (
-    "You are the Aegis assessment-level author. Decide whether this one "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-level author. Decide whether this one "
     "question belongs in Basic, Intermediate, or Advanced by reading the "
     "complete question, expected answer and rubric, source and routing "
     "evidence, assets, and the home concept's teaching description. The "
     "blueprint difficulty label is deliberately absent and has no authority "
     "over this verdict. Judge the capability and construction actually "
     "required by the question. There is no quota for the three tiers; never "
-    "balance, spread, or infer a tier from how many questions exist.\n"
+    "balance, spread, or infer a tier from how many questions exist.\n" +
+    LEVEL_CALIBRATION +
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","tier":"Basic|Intermediate|Advanced",'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 LEVEL_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one assessment-level "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one assessment-level "
     "verdict. Audit the proposed tier against the complete question, answer "
     "and rubric, source and route evidence, assets, and home-concept "
     "description. Do not substitute a blueprint difficulty label, balance "
     "tiers, or revise the verdict. There is no quota. Your dissent is "
     "advisory: the proposed verdict stands and your concerns ship for "
-    "review. State your honest confidence.\n"
+    "review. State your honest confidence.\n" + LEVEL_CALIBRATION +
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 CLUSTER_SYSTEM = (
-    "You are the Aegis variant-clustering author. Partition the supplied "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis variant-clustering author. Partition the supplied "
     "assessment questions (all sharing one concept and one authored tier) "
     "into semantic variant families. One family means: the same "
     "atomic assessed idea, the same questioning intent, materially "
@@ -76,11 +95,11 @@ CLUSTER_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"concept_key":"","tier":"Basic|Intermediate|Advanced",'
     '"families":[{"existing_group_key":"","family":"short name",'
-    '"member_candidate_ids":[""]}],"rationale":"evidence-bound reason"}'
+    '"member_candidate_ids":[""]}],"rationale":"evidence-bound reason"}')
 )
 
 CLUSTER_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis variant-family "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis variant-family "
     "verdict. Audit the proposed partition against the complete questions, "
     "answers and rubrics, source and route evidence, assets, and the home "
     "concept. Flag families that mix different assessed ideas, intents, "
@@ -89,12 +108,12 @@ CLUSTER_CRITIC_SYSTEM = (
     "gate the partition; dissent ships as review evidence. State your honest "
     "confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 DESCRIBE_SYSTEM = (
-    "You are the Aegis group-description author. Write ONE concise "
-    "description of this assessment group from ALL of its member "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis group-description author. Write ONE original, concise "
+    "sentence in evaluator-facing language about this group from ALL of its member "
     "questions. It must state HOW the learner is assessed and WHAT "
     "capability is assessed — for example 'Visual classification of "
     "everyday objects as two- or three-dimensional shapes' or 'Solving a "
@@ -105,18 +124,18 @@ DESCRIBE_SYSTEM = (
     "generic difficulty prose ('Basic assessments for Shapes').\n"
     "Return ONLY strict JSON:\n"
     '{"group_key":"","description":"",'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 DESCRIBE_CRITIC_SYSTEM = (
-    "You are the independent advisory Aegis group-description critic. "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory Aegis group-description critic. "
     "Audit the description against the complete member questions: it "
     "must state HOW and WHAT is assessed, be true of every member, and "
     "contain no label lists, counts, membership history, or generic "
     "difficulty prose. Do not revise or gate the description; dissent ships "
     "as review evidence. State your honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 
@@ -339,6 +358,7 @@ def _live_level(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         LEVEL_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -348,6 +368,8 @@ def _live_level_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         LEVEL_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
+        response_schema=advisory_critic_schema(),
     )
 
 
@@ -357,6 +379,7 @@ def _live_cluster(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         CLUSTER_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -366,6 +389,8 @@ def _live_cluster_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         CLUSTER_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
+        response_schema=advisory_critic_schema(),
     )
 
 
@@ -375,6 +400,7 @@ def _live_description(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         DESCRIBE_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="concept_detailing",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -384,6 +410,8 @@ def _live_description_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         DESCRIBE_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
+        response_schema=advisory_critic_schema(),
     )
 
 
@@ -424,7 +452,7 @@ def _level_checker(candidate_id: str) -> kernel.Checker:
         defects: list[str] = []
         if str(response.get("candidate_id") or "") != candidate_id:
             defects.append(f"candidate_id must echo {candidate_id!r}")
-        if str(response.get("tier") or "").strip() not in TIER_CODES:
+        if response.get("tier") not in GROUP_LABELS:
             defects.append(
                 "tier must be Basic, Intermediate, or Advanced")
         if not str(response.get("rationale") or "").strip():
@@ -488,7 +516,10 @@ def decide_levels(
             "metadata": copy.deepcopy(dict(meta)),
             "candidate": _member_payload([candidate])[0],
             "concept": _concept_payload(concept),
+            "allowed_tier_labels": list(GROUP_LABELS),
+            "critic_response_schema": advisory_critic_schema().identity(),
         }
+        visual_evidence.bind(payload, payload["candidate"], payload["concept"])
         decision = kernel.decide(
             kind="assessment.level",
             unit_id=candidate_id,
@@ -502,7 +533,7 @@ def decide_levels(
             fixer=fixer,
         )
         response = copy.deepcopy(dict(decision["response"]))
-        flags = _review_flags(decision)
+        flags = _review_flags(decision) + visual_evidence.review_flags(payload)
         return {
             "candidate_id": candidate_id,
             "tier": str(response.get("tier") or ""),
@@ -648,6 +679,7 @@ def cluster_tier(
     store = store or kernel.DecisionStore()
     payload = {
         "stage": "assessment.variant_cluster",
+        "critic_response_schema": advisory_critic_schema().identity(),
         "rules": CLUSTER_SYSTEM,
         "metadata": copy.deepcopy(dict(meta)),
         "concept": _concept_payload(concept),
@@ -666,6 +698,7 @@ def cluster_tier(
             for group in existing
         ],
     }
+    visual_evidence.bind(payload, payload["candidates"], payload["concept"])
     decision = kernel.decide(
         kind="assessment.variant_cluster",
         unit_id=f"{concept_key}|{tier}",
@@ -695,7 +728,7 @@ def cluster_tier(
     return {
         "families": families,
         "decision": response,
-        "flags": _review_flags(decision),
+        "flags": _review_flags(decision) + visual_evidence.review_flags(payload),
         "authority": _decision_authority(decision),
     }
 
@@ -808,12 +841,14 @@ def describe_group(
     store = store or kernel.DecisionStore()
     payload = {
         "stage": "assessment.group_description",
+        "critic_response_schema": advisory_critic_schema().identity(),
         "rules": DESCRIBE_SYSTEM,
         "metadata": copy.deepcopy(dict(meta)),
         "group": copy.deepcopy(dict(group)),
         "concept": _concept_payload(concept),
         "members": _member_payload(members),
     }
+    visual_evidence.bind(payload, payload["members"], payload["concept"])
     decision = kernel.decide(
         kind="assessment.group_description",
         unit_id=group_key,
@@ -832,7 +867,7 @@ def describe_group(
     return {
         "description": str(response.get("description") or ""),
         "decision": response,
-        "flags": _review_flags(decision),
+        "flags": _review_flags(decision) + visual_evidence.review_flags(payload),
         "authority": _decision_authority(decision),
     }
 

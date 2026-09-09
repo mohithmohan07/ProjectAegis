@@ -28,6 +28,9 @@ from typing import Any, Mapping
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
+from . import column_spec
+from .response_schemas import advisory_critic_schema
+from . import assessment_visual_evidence as visual_evidence
 from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
@@ -36,7 +39,7 @@ REGISTRY_ID = "registry-v2.0"
 # -3: the complete registry/rules/metadata prefix is now an explicit-only
 # GPT-5.6 cache prefix; the candidate remains complete in the varying suffix.
 # This changes provider-input identity without changing semantic ownership.
-POLICY_BASE_VERSION = "assessment-answer-restriction-3"
+POLICY_BASE_VERSION = "assessment-answer-restriction-5-q26-evidence"
 REGISTRY_MARKDOWN_FILENAME = "open-specific-registry-v2.md"
 REGISTRY_WORKBOOK_FILENAME = "open-specific-registry-v2.xlsx"
 
@@ -60,7 +63,7 @@ REGISTRY_DIRECTORY_CANDIDATES = (
 
 
 ANSWER_RESTRICTION_SYSTEM = (
-    "You are the Aegis Open/Specific author. Decide answer_restriction for "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis Open/Specific author. Decide answer_restriction for "
     "ONE semantically complete, unweighted assessment candidate. This pass "
     "runs after semantic question, expected-answer, and rubric authoring and "
     "before the later marking allocation. The supplied unweighted rubric "
@@ -78,21 +81,30 @@ ANSWER_RESTRICTION_SYSTEM = (
     "There is no adjudicator, classification_unresolved value, deferral, or "
     "third public state. If the evidence cannot support a confident choice, "
     "make the least-distorting evidence-bound choice, set review_required to "
-    "true, and explain the uncertainty in review_reason. The Math/Physics "
-    "method-equivalence carve-out lives only in the supplied evidence; local "
-    "code supplies no subject branch.\n"
+    "true, and explain the uncertainty in review_reason. Q26 supersedes the "
+    "older Q11 Math/Physics method-equivalence carve-out in registry evidence: "
+    "equivalent methods, units and synonymous wording for a bounded full-credit "
+    "result do not make an item Open. Apply the same answer-space reasoning "
+    "across all subjects; no subject has a standing Open default.\n"
     "Describe the actual full-credit answer space, required elements, and "
     "accepted variations. Cite the decisive item/scoring evidence.\n"
+    "A valid Objective or Subjective response contract is Specific: verify "
+    "the closed option key or bounded accepted-answer set and state it, "
+    "rather than merely citing the sheet name. If a task actually allows "
+    "open responses, name the lane mismatch in review_reason; never narrow "
+    "its answer space to excuse a routing error. For Descriptive items, "
+    "equivalent methods or synonymous wording alone do not make the task "
+    "Open: decide whether the full-credit result is bounded.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","answer_restriction":"Open|Specific",'
     '"restriction_reason":"","answer_space_contract":"",'
     '"required_elements":[],"accepted_variations":[],"evidence":"",'
-    '"rationale":"","review_required":false,"review_reason":""}'
+    '"rationale":"","review_required":false,"review_reason":""}')
 )
 
 
 ANSWER_RESTRICTION_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis Open/Specific "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis Open/Specific "
     "verdict. Independently audit the proposed verdict against the complete "
     "semantically authored, unweighted candidate, rubric/scoring evidence, "
     "source evidence, metadata, and complete supplied policy registry. This "
@@ -106,9 +118,11 @@ ANSWER_RESTRICTION_CRITIC_SYSTEM = (
     "mentions adjudication or classification_unresolved: there is no "
     "adjudicator or third value. Do not rewrite, replace, gate, or retry the "
     "author's verdict. Dissent ships only as review evidence and the recorded "
-    "Open/Specific verdict stands. State honest confidence.\n"
+    "Open/Specific verdict stands. Q26 supersedes the older subject carve-out: "
+    "equivalent methods alone do not make a bounded result Open, in any subject. "
+    "State honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 
@@ -347,6 +361,7 @@ def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
         ANSWER_RESTRICTION_SYSTEM,
         suffix,
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "answer-restriction-author-v3",
@@ -372,6 +387,8 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
         ANSWER_RESTRICTION_CRITIC_SYSTEM,
         suffix,
         purpose="advisory_critic",
+        response_schema=advisory_critic_schema(),
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "answer-restriction-critic-v3",
@@ -504,8 +521,9 @@ def _decision_payload(
     meta: Mapping[str, Any],
     registry: Mapping[str, str],
 ) -> dict[str, Any]:
-    return {
+    return visual_evidence.bind({
         "stage": "assessment.answer_restriction",
+        "critic_response_schema": advisory_critic_schema().identity(),
         "rules": ANSWER_RESTRICTION_SYSTEM,
         "critic_rules": ANSWER_RESTRICTION_CRITIC_SYSTEM,
         "metadata": _content_evidence(meta),
@@ -516,7 +534,7 @@ def _decision_payload(
             "markdown_text": registry["markdown_text"],
         },
         "candidate": _content_evidence(candidate),
-    }
+    }, candidate)
 
 
 def _assemble(
@@ -613,12 +631,16 @@ def decide_restrictions(
             policy_version=policy_version,
             fixer=fixer,
         )
-        return _assemble(
+        result = _assemble(
             decision["response"],
             candidate_id=candidate_id,
             decision=decision,
             registry=registry,
         )
+        result["flags"].extend(visual_evidence.review_flags(payload))
+        result["authority"]["review_flags"] = list(result["flags"])
+        result["authority"]["visual_evidence"] = copy.deepcopy(payload["visual_evidence"])
+        return result
 
     verdicts = kernel.parallel_map_in_order(
         prepared,

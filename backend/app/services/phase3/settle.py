@@ -13,11 +13,13 @@ analysis mechanism, and Assemble stamps its allotments onto the rows.
 from __future__ import annotations
 
 import copy
+import hashlib
 import re
 from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from .evidence import block_context, block_text, decide_with_visual_evidence, image_inputs
 from ... import config
 from .. import concept_refiner as cr
 from .. import katex_rules as kr
@@ -47,6 +49,20 @@ _PLANNED_CULMINATION_ROLES = frozenset({
 # pre-Q1 record can never replay its stale schema past the new checker.
 AUTHOR_POLICY_SUFFIX = "-q1"
 
+
+def _policy_version(author_system: str) -> str:
+    """Bind each Settle decision to its author and independent critic."""
+    from . import prompts
+
+    digest = hashlib.sha256((
+        getattr(prompts, author_system) + "\n" + prompts.CRITIC_SYSTEM
+    ).encode("utf-8")).hexdigest()
+    base = confidence_policy.POLICY_VERSION
+    if author_system == "ANALYSIS_SYSTEM":
+        base += AUTHOR_POLICY_SUFFIX
+    return base + ";prompts:" + digest
+
+
 _ANALYSIS_SPLIT = re.compile(
     r"\s*//\s*Misconception/?\s*Error Analysis:\s*", re.IGNORECASE
 )
@@ -67,12 +83,14 @@ def _normal(value: object) -> str:
 
 
 def _description_of(details: object) -> str:
-    match = re.search(
-        r"Description:\s*(.*?)(?=\n[A-Z][A-Za-z ]{2,24}:|//|$)",
-        str(details or ""),
-        re.DOTALL,
+    # Only the canonical section delimiter ends a Description. Internal
+    # headings (Worked Example, Conditions, etc.) are teaching, not boundaries.
+    from .. import concept_refiner
+
+    return "\n".join(
+        content for label, content in concept_refiner.split_sections(str(details or ""))
+        if label.strip().casefold() == "description"
     )
-    return _normal(match.group(1)) if match else ""
 
 
 def _strip_analysis(details: str) -> str:
@@ -104,8 +122,12 @@ def _topic_rows(env: Mapping[str, Any]) -> list[dict[str, Any]]:
 
 
 def _blocks_by_topic(env: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    context_by_id = {
+        str(block.get("block_id") or ""): block_context(block)
+        for block in env["canonical"]["blocks"] if isinstance(block, Mapping)
+    }
     text_by_id = {
-        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        str(row.get("block_id") or ""): block_text(row)
         for row in env["canonical"]["blocks"]
         if isinstance(row, Mapping)
     }
@@ -122,13 +144,14 @@ def _blocks_by_topic(env: Mapping[str, Any]) -> dict[str, list[dict[str, Any]]]:
             "subtopic_id": str(row.get("subtopic_id") or ""),
             "kind": str(row.get("kind") or ""),
             "text": text_by_id.get(block_id, ""),
+            **context_by_id.get(block_id, {}),
         })
     return grouped
 
 
 def _block_texts(env: Mapping[str, Any]) -> dict[str, str]:
     return {
-        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        str(row.get("block_id") or ""): block_text(row)
         for row in env["canonical"]["blocks"]
         if isinstance(row, Mapping)
     }
@@ -469,12 +492,8 @@ def _authoring_checker(
                     continue
                 culm_seen.add(culm_id)
                 prose = _normal(row.get("consolidation"))
-                if len(prose.split()) < 15:
-                    defects.append(
-                        f"{culm_id} consolidation is too thin — write a "
-                        "short teaching paragraph tying the topic's "
-                        "concepts together, not a name list"
-                    )
+                if not prose:
+                    defects.append(f"{culm_id} consolidation is empty")
             missing_culms = sorted(expected_culms - culm_seen)
             if missing_culms:
                 defects.append(
@@ -497,12 +516,8 @@ def _authoring_checker(
             description = _FIELD_LABEL.sub(
                 "", _normal(row.get("concept_description"))
             )
-            if len(description.split()) < 30:
-                defects.append(
-                    f"{concept_id} concept_description is too thin — write "
-                    "the full teaching paragraph a writer could author book "
-                    "sections, worksheets, notes, and slides from"
-                )
+            if not description:
+                defects.append(f"{concept_id} concept_description is empty")
             if re.search(
                 r"(?:Achieving Mastery|Misconceptions?|Error Analysis)\s*:",
                 description,
@@ -551,28 +566,28 @@ def _authoring_checker(
 # live API adapters (production defaults; tests inject providers)
 
 
-def _api_json(system: str, user: str) -> dict[str, Any]:
+def _api_json(system: str, user: str, *, payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
     from .. import generation
 
-    return generation._openai_json(system, user, purpose="concept_mapping")
+    return generation._openai_json(system, user, purpose="concept_mapping", image_urls=image_inputs(payload or {}))
 
 
 def _live_topology(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
 
-    return _api_json(prompts.TOPOLOGY_SYSTEM, prompts.render(payload))
+    return _api_json(prompts.TOPOLOGY_SYSTEM, prompts.render(payload), payload=payload)
 
 
 def _live_grounding(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
 
-    return _api_json(prompts.GROUNDING_SYSTEM, prompts.render(payload))
+    return _api_json(prompts.GROUNDING_SYSTEM, prompts.render(payload), payload=payload)
 
 
 def _live_analysis(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
 
-    return _api_json(prompts.ANALYSIS_SYSTEM, prompts.render(payload))
+    return _api_json(prompts.ANALYSIS_SYSTEM, prompts.render(payload), payload=payload)
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
@@ -581,7 +596,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.CRITIC_SYSTEM, prompts.render(payload),
-        purpose="advisory_critic",
+        purpose="advisory_critic", image_urls=image_inputs(payload),
     )
 
 
@@ -632,7 +647,7 @@ def _fix_topic_resolution(
             "topic": row.get("topic"),
             "parent_concept": row.get("parent_concept"),
             "concept_title": row.get("concept_title"),
-            "concept_details": str(row.get("concept_details") or "")[:1200],
+            "concept_details": str(row.get("concept_details") or ""),
             "keywords": row.get("keywords"),
         },
         "topics": [
@@ -657,7 +672,7 @@ def _fix_topic_resolution(
         return defects
 
     try:
-        decision = kernel.decide(
+        decision = decide_with_visual_evidence(
             kind="fixer.topic_resolution",
             unit_id=f"skeleton-row#{row_index}",
             envelope_sha256=envelope_sha,
@@ -719,7 +734,6 @@ def settle(
         )
     store = store or kernel.DecisionStore()
     envelope_sha = str(env.get("envelope_sha256") or "")
-    policy = confidence_policy.POLICY_VERSION
     from . import prompts as prompts_mod
 
     # The Architect's run instructions ride the sealed envelope metadata;
@@ -730,6 +744,10 @@ def settle(
     blocks_by_topic = _blocks_by_topic(env)
     known_blocks = _known_block_ids(env)
     block_texts = _block_texts(env)
+    context_by_id = {
+        str(block.get("block_id") or ""): block_context(block)
+        for block in env["canonical"]["blocks"] if isinstance(block, Mapping)
+    }
 
     normal_rows: list[dict[str, Any]] = []
     culmination_rows: list[dict[str, Any]] = []
@@ -847,7 +865,7 @@ def settle(
                 ],
                 "source_blocks": topic_blocks,
             }
-            return kernel.decide(
+            return decide_with_visual_evidence(
                 kind="settle.topology",
                 unit_id=f"{topic_id}#batch{batch_index}",
                 envelope_sha256=envelope_sha,
@@ -856,7 +874,7 @@ def settle(
                 checker=_topology_checker(batch),
                 critic=critic,
                 store=store,
-                policy_version=policy,
+                policy_version=_policy_version("TOPOLOGY_SYSTEM"),
                 fixer=fixer,
             )
 
@@ -963,14 +981,15 @@ def settle(
                         "block_id": row["block_id"],
                         "topic_id": other_topic_id,
                         "kind": row["kind"],
-                        "text": row["text"][:400],
+                        "text": row["text"],
+                        **context_by_id.get(row["block_id"], {}),
                     }
                     for other_topic_id, rows in blocks_by_topic.items()
                     if other_topic_id != topic_id
                     for row in rows
                 ],
             }
-            return kernel.decide(
+            return decide_with_visual_evidence(
                 kind="settle.grounding",
                 unit_id=f"{topic_id}#ground{offset_batch[0]}",
                 envelope_sha256=envelope_sha,
@@ -983,7 +1002,7 @@ def settle(
                 ),
                 critic=critic,
                 store=store,
-                policy_version=policy,
+                policy_version=_policy_version("GROUNDING_SYSTEM"),
                 fixer=fixer,
             )
 
@@ -1084,9 +1103,10 @@ def settle(
                 f"#{row['_phase32_segment_order']}"
                 for row in batch_rows
             ]
-            # Culminations ride the topic's first authoring decision: their
-            # consolidation prose needs the same grounded context, and one
-            # decision keeps the multi-user API budget flat.
+            # Keep the existing owning decision/call count. When several
+            # batches exist, this first batch runs after the others finish;
+            # its recap sees their completed teaching plus the concepts it
+            # authors in this response.
             batch_culm_ids = (
                 [f"CULM#{i}" for i in range(len(topic_culms))]
                 if offset_batch[0] == 0 and topic_culms
@@ -1096,7 +1116,8 @@ def settle(
                 "stage": "content_authoring",
                 "rules": (
                     "Author each concept's learner-facing content in ONE "
-                    "pass, grounded only on its source_blocks. "
+                    "pass, grounded on its source_blocks, using reference_blocks "
+                    "only for supporting context without changing ownership. "
                     "concept_description: the full teaching paragraph in "
                     "original language — this text is the basis for books, "
                     "worksheets, notes, slides, and interactive content, so "
@@ -1121,7 +1142,11 @@ def settle(
                     "language) tying the topic's member concepts together — "
                     "what the learner can now do with them combined — "
                     "never a list of concept names and never a repeat of "
-                    "any single concept's description." + rules_suffix
+                    "any single concept's description. Author this response's "
+                    "ordinary concepts first, then consolidate those completed "
+                    "descriptions with every member marked completed in the "
+                    "request; do not consolidate from titles or stale drafts."
+                    + rules_suffix
                 ),
                 "topic": {"topic_id": topic_id, "title": topic_title},
                 "concepts": [
@@ -1133,10 +1158,15 @@ def settle(
                             {
                                 "block_id": block_id,
                                 "text": block_texts.get(block_id, ""),
+                                **context_by_id.get(block_id, {}),
                             }
                             for block_id in (
                                 row.get("_source_block_ids") or []
                             )
+                        ],
+                        "reference_blocks": [
+                            {"block_id": block_id, "text": block_texts.get(block_id, ""), **context_by_id.get(block_id, {})}
+                            for block_id in row.get("_reference_block_ids") or []
                         ],
                     }
                     for concept_id, row in zip(concept_ids, batch_rows)
@@ -1149,8 +1179,18 @@ def settle(
                                 "culmination_title": _normal(
                                     culm.get("concept_title")
                                 ),
-                                "member_concepts": [
-                                    r["concept_title"] for r in topic_settled
+                                "member_concepts": [r["concept_title"] for r in topic_settled],
+                                "member_teaching": [
+                                    {
+                                        "concept_id": f"{r['_phase32_origin_concept_id']}#{r['_phase32_segment_order']}",
+                                        "concept_title": r["concept_title"],
+                                        "concept_details": r["concept_details"],
+                                        "teaching_status": (
+                                            "author_in_this_response" if position in offset_batch
+                                            else "completed"
+                                        ),
+                                    }
+                                    for position, r in enumerate(topic_settled)
                                 ],
                             }
                             for culm_id, culm in zip(
@@ -1162,7 +1202,7 @@ def settle(
                     else {}
                 ),
             }
-            return kernel.decide(
+            return decide_with_visual_evidence(
                 kind="settle.author",
                 unit_id=f"{topic_id}#author{offset_batch[0]}",
                 envelope_sha256=envelope_sha,
@@ -1173,62 +1213,68 @@ def settle(
                 store=store,
                 # Q1 re-key: the authoring schema lost its analysis field,
                 # so stored pre-Q1 decisions must never replay here.
-                policy_version=policy + AUTHOR_POLICY_SUFFIX,
+                policy_version=_policy_version("ANALYSIS_SYSTEM"),
                 fixer=fixer,
             )
 
-        authoring_decisions = kernel.parallel_map_in_order(
-            authoring_batches,
-            _decide_authoring,
-            max_workers=config.phase3_decision_workers(),
-            labels=[
-                f"Settle {topic_title} · authoring {pos + 1}/"
-                f"{len(authoring_batches)}"
-                for pos in range(len(authoring_batches))
-            ],
+        authoring_phases = (
+            [authoring_batches[1:], authoring_batches[:1]]
+            if topic_culms and len(authoring_batches) > 1
+            else [authoring_batches]
         )
-        for offset_batch, decision in zip(
-            authoring_batches, authoring_decisions
-        ):
-            batch_rows = [topic_settled[i] for i in offset_batch]
-            concept_ids = [
-                f"{row['_phase32_origin_concept_id']}"
-                f"#{row['_phase32_segment_order']}"
-                for row in batch_rows
-            ]
-            for position, concept_id in zip(offset_batch, concept_ids):
-                flags = _pin_flags(
-                    list(decision.get("review_flags") or []),
-                    concept_ids,
-                    concept_id,
-                )
-                if flags:
-                    local_flags.setdefault(position, []).extend(flags)
-            authored_by_id = {
-                str(row.get("concept_id") or ""): row
-                for row in decision["response"].get("rows") or []
-                if isinstance(row, Mapping)
-            }
-            for row in decision["response"].get("culminations") or []:
-                if isinstance(row, Mapping):
-                    culm_consolidations[str(row.get("concept_id") or "")] = (
-                        _normal(row.get("consolidation"))
+        for phase_batches in authoring_phases:
+            authoring_decisions = kernel.parallel_map_in_order(
+                phase_batches,
+                _decide_authoring,
+                max_workers=config.phase3_decision_workers(),
+                labels=[
+                    f"Settle {topic_title} · authoring {pos + 1}/"
+                    f"{len(phase_batches)}"
+                    for pos in range(len(phase_batches))
+                ],
+            )
+            for offset_batch, decision in zip(
+                phase_batches, authoring_decisions
+            ):
+                batch_rows = [topic_settled[i] for i in offset_batch]
+                concept_ids = [
+                    f"{row['_phase32_origin_concept_id']}"
+                    f"#{row['_phase32_segment_order']}"
+                    for row in batch_rows
+                ]
+                for position, concept_id in zip(offset_batch, concept_ids):
+                    flags = _pin_flags(
+                        list(decision.get("review_flags") or []),
+                        concept_ids,
+                        concept_id,
                     )
-            for concept_id, row in zip(concept_ids, batch_rows):
-                authored = authored_by_id[concept_id]
-                description = _FIELD_LABEL.sub(
-                    "", _normal(authored.get("concept_description"))
-                )
-                mastery = _FIELD_LABEL.sub(
-                    "", _normal(authored.get("achieving_mastery"))
-                )
-                # Q1: Settle mints Description + Achieving Mastery only.
-                # The Misconception/ Error Analysis section is stamped by
-                # Assemble from the chapter inventory's allotments.
-                row["concept_details"] = kr.repair_unwrapped_math(
-                    "Description: " + description
-                    + "\nAchieving Mastery: " + mastery
-                )
+                    if flags:
+                        local_flags.setdefault(position, []).extend(flags)
+                authored_by_id = {
+                    str(row.get("concept_id") or ""): row
+                    for row in decision["response"].get("rows") or []
+                    if isinstance(row, Mapping)
+                }
+                for row in decision["response"].get("culminations") or []:
+                    if isinstance(row, Mapping):
+                        culm_consolidations[str(row.get("concept_id") or "")] = (
+                            _normal(row.get("consolidation"))
+                        )
+                for concept_id, row in zip(concept_ids, batch_rows):
+                    authored = authored_by_id[concept_id]
+                    description = _FIELD_LABEL.sub(
+                        "", _normal(authored.get("concept_description"))
+                    )
+                    mastery = _FIELD_LABEL.sub(
+                        "", _normal(authored.get("achieving_mastery"))
+                    )
+                    # Q1: Settle mints Description + Achieving Mastery only.
+                    # The Misconception/ Error Analysis section is stamped by
+                    # Assemble from the chapter inventory's allotments.
+                    row["concept_details"] = kr.repair_unwrapped_math(
+                        "Description: " + description
+                        + "\nAchieving Mastery: " + mastery
+                    )
 
         topic_flag_count = sum(1 for flags in local_flags.values() if flags)
         progress.log(

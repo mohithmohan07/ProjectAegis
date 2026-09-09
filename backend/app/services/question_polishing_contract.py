@@ -14,9 +14,10 @@ Two patches:
   predate this pass — passes through byte-identical.
 
 A run resumed from a pre-polishing checkpoint has no ``polished_task``
-fields, so its sealed text identities keep matching. Fragments recorded by
-the pass (``polish_fragments``) are carried but not yet placed — placement
-lands with the Pass 5 rewire.
+fields, so its sealed text identities keep matching. Legacy fragments remain
+compatible with their persisted checkpoints; current polishing never splits
+an item. The per-item ``polish_audit`` carries source evidence and the
+independent advisory review through extraction without changing source fields.
 """
 from __future__ import annotations
 
@@ -43,8 +44,8 @@ def install(generation: ModuleType | None = None) -> None:
             polished = question_polishing.polish_inventory(
                 inventory, meta=kwargs.get("meta") or {}
             )
-            # Splitting changes the item count, so the extraction's stats
-            # snapshot is recomputed over the expanded items.
+            # Legacy fragment healing may change the item count, so recompute
+            # the extraction's stats over its resulting inventory.
             polished["stats"] = generation._inventory_stats([
                 item for item in polished.get("items") or []
                 if isinstance(item, dict)

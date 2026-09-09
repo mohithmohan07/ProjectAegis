@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import io
+import json
 from pathlib import Path
 
 import pytest
@@ -271,7 +272,7 @@ def test_mechanically_invalid_edits_are_refused(db):
 
 
 # --------------------------------------------------------------------------- #
-# Instruction rounds — one bounded model pass, failures recorded
+# Instruction rounds — one author, one advisory critic, failures recorded
 # --------------------------------------------------------------------------- #
 
 def _scripted(response):
@@ -340,6 +341,97 @@ def test_an_instruction_round_applies_the_change_list(db):
     assert len(provider.calls) == 1
     assert "REC-0003" in provider.calls[0]["prompt"]
     assert view["summary"]["row_count"] == 4
+
+
+@pytest.mark.parametrize("critic_response", [
+    {"verdict": "rejected", "issues": [
+        "REC-0002: the mastery does not identify what the learner can do with the source idea."
+    ]},
+    RuntimeError("critic unavailable"),
+    {"verdict": "verified"},  # malformed review is not a quality pass
+])
+def test_instruction_review_records_dissent_or_outage_without_rewriting(db, critic_response):
+    job = _staged_job(db)
+    proposed = "Description: Supported teaching.\nAchieving Mastery: Understand it."
+    author = _scripted({
+        "change_summary": "Updated Beta.",
+        "changes": [{"record_id": "REC-0002", "field": "concept_details",
+                     "after": proposed, "reason": "requested revision"}],
+        "additions": [],
+    })
+    critic = _scripted(critic_response)
+    review.apply_instruction_round(
+        db, job, lane="post", staged_release_uid=_uid(job),
+        instruction="Clarify Beta's mastery.", provider=author, critic=critic,
+    )
+    records = _slot(job)["records"]
+    assert records[1]["concept_details"] == proposed
+    assert len(records) == 3
+    assert len(author.calls) == len(critic.calls) == 1
+    packet = json.loads(critic.calls[0]["prompt"])
+    assert critic.calls[0]["purpose"] == "advisory_critic"
+    assert packet["instruction"] == "Clarify Beta's mastery."
+    assert packet["source_evidence"]["text"] == job.mmd_text
+    assert packet["original_records"][1]["concept_details"] == _records()[1]["concept_details"]
+    assert packet["proposed_records"][1]["concept_details"] == proposed
+    assert packet["proposed_records"][2]["concept_title"] == "Released Concept Gamma"
+    report = _version_rows(db, job)[-1].diff["independent_review"]
+    assert report["verdict"] == ("rejected" if isinstance(critic_response, dict)
+                                  and "issues" in critic_response else "unavailable")
+    assert report["issues"]
+    assert any("independent critic instruction round:" in flag
+               for flag in records[1]["review_flags"])
+    assert not any("instruction round:" in flag for flag in records[0].get("review_flags", []))
+
+
+def test_default_live_instruction_critic_is_a_separate_call(db, monkeypatch):
+    job = _staged_job(db)
+    author = _scripted({
+        "change_summary": "A concise capability.",
+        "changes": [{"record_id": "REC-0001", "field": "concept_details",
+                     "after": "Description: An equality remains true when both sides are changed equally.\nAchieving Mastery: Solve linear equations.",
+                     "reason": "specific concise mastery"}],
+        "additions": [],
+    })
+    critic = _scripted({"verdict": "verified", "issues": []})
+    monkeypatch.setattr(review.config, "use_live_generation", lambda: True)
+    monkeypatch.setattr(review, "_default_provider", critic)
+    review.apply_instruction_round(
+        db, job, lane="post", staged_release_uid=_uid(job),
+        instruction="Make Alpha's mastery concise.", provider=author,
+    )
+    assert len(author.calls) == len(critic.calls) == 1
+    assert critic.calls[0]["purpose"] == "advisory_critic"
+    assert _version_rows(db, job)[-1].diff["independent_review"]["verdict"] == "verified"
+
+
+def test_instruction_pre_evidence_excludes_current_chapter_exercises():
+    job = models.UploadJob(mmd_text="QINV-0001: a current-chapter exercise")
+    records = [{"_aegis_pre_prerequisites": [
+        {"prerequisite_id": "PR-0001", "text": "Compare whole numbers."}
+    ]}]
+    packet = review._instruction_source(job, release.LANE_PRE, records)
+    assert packet["available"] is True
+    assert packet["kind"] == "captured_prerequisites"
+    assert "Compare whole numbers." in json.dumps(packet)
+    assert "QINV-0001" not in json.dumps(packet)
+    assert review._instruction_source(job, release.LANE_PRE, [{}])["available"] is False
+
+
+def test_verbatim_manual_edit_does_not_call_an_api(db, monkeypatch):
+    job = _staged_job(db)
+    def unexpected_api(**kwargs):
+        pytest.fail("manual edits must remain API-free")
+    monkeypatch.setattr(review, "_default_provider", unexpected_api)
+    monkeypatch.setattr(review.config, "use_live_generation", lambda: True)
+    exact = "  Reviewer wording: keep these spaces.  "
+    review.apply_manual_edits(
+        db, job, lane="post", staged_release_uid=_uid(job),
+        edits=[{"record_index": 0, "field": "concept_details",
+                "before": _records()[0]["concept_details"], "after": exact}],
+    )
+    assert _slot(job)["records"][0]["concept_details"] == exact
+    assert "independent_review" not in _version_rows(db, job)[-1].diff
 
 
 def test_a_failed_instruction_round_is_recorded_not_lost(db):

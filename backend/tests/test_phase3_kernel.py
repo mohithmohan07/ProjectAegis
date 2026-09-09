@@ -195,13 +195,13 @@ def test_envelope_rejects_missing_fields_and_broken_seals():
         envelope_mod.validate(tampered)
 
 
-def test_pure_confidence_shortfall_ships_flagged_after_one_attempt():
+def test_pure_confidence_shortfall_ships_flagged_after_the_bounded_attempts():
     """An honest sub-floor confidence must not kill a run (staging: one
     0.880 grounding failed a whole chapter). Structural defects still
-    fail closed; confidence-only shortfalls ship with review flags — and
-    after ONE attempt (register Q26): the prompts forbid inflating a score
-    to pass a threshold, so a re-ask on the same evidence could only buy
-    an inflated number for a full re-spend."""
+    fail closed; a confidence-only shortfall goes back through the bounded
+    corrections like any other defect (register Q31 restores this: the
+    feedback names the weak grounding and the model may find better
+    evidence) and, still short, ships with review flags."""
     calls = 0
 
     def provider(_request: dict) -> dict:
@@ -221,10 +221,11 @@ def test_pure_confidence_shortfall_ships_flagged_after_one_attempt():
         store=kernel.DecisionStore(),
     )
 
-    assert calls == 1
+    assert calls == kernel.MAX_ATTEMPTS
     assert decision["response"] == {"confidence": 0.88}
     assert any(
-        "0.880 is below 0.920" in flag and "shipped for review" in flag
+        "0.880 is below 0.920" in flag
+        and f"shipped for review after {kernel.MAX_ATTEMPTS} bounded" in flag
         for flag in decision["review_flags"]
     )
 

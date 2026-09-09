@@ -103,7 +103,7 @@ def test_v6_wrapper_forwards_explicit_prompt_cache_transport(monkeypatch):
         prompt_cache_key="aegis:marking-author-v5:0123456789abcdef:2",
     )
 
-    assert phase35._CONTRACT_VERSION == 6
+    assert phase35._CONTRACT_VERSION == 7
     assert result == {"ok": True}
     assert captured["prompt_cache_prefix"] == (
         '{"stage":"assessment.marking",'

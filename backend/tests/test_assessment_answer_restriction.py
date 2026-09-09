@@ -215,7 +215,8 @@ def test_complete_registry_and_candidate_are_passed_whole_and_content_hashed():
     assert verdict["accepted_variations"]
     assert verdict["evidence"]
     assert verdict["rationale"]
-    assert verdict["flags"] == []
+    assert all("assessment_visual_evidence_unavailable" in flag for flag in verdict["flags"])
+    assert verdict["authority"]["visual_evidence"]["images"][0]["state"] == "unavailable"
     assert verdict["registry"] == {
         key: registry[key]
         for key in (
@@ -229,7 +230,7 @@ def test_complete_registry_and_candidate_are_passed_whole_and_content_hashed():
     authority = verdict["authority"]
     assert authority["decision_key"]
     assert authority["policy_version"].startswith(
-        "assessment-answer-restriction-3;"
+        ar.POLICY_BASE_VERSION + ";"
     )
     assert registry["markdown_sha256"] in authority["policy_version"]
     assert registry["workbook_sha256"] in authority["policy_version"]
@@ -374,7 +375,7 @@ def test_tightened_response_contract_cannot_replay_a_v1_decision(monkeypatch):
     )
     stale = _decide(provider=provider, critic=None, store=store)[0]
     monkeypatch.setattr(
-        ar, "POLICY_BASE_VERSION", "assessment-answer-restriction-3"
+        ar, "POLICY_BASE_VERSION", "assessment-answer-restriction-4-column-spec"
     )
     current = _decide(provider=provider, critic=None, store=store)[0]
 
@@ -387,7 +388,7 @@ def test_tightened_response_contract_cannot_replay_a_v1_decision(monkeypatch):
         "assessment-answer-restriction-1;"
     )
     assert current["authority"]["policy_version"].startswith(
-        "assessment-answer-restriction-3;"
+        "assessment-answer-restriction-4-column-spec;"
     )
 
 

@@ -109,17 +109,22 @@ def test_the_final_gate_uses_the_same_blocking_set_as_the_deposit_gate():
 # 2. Judgment codes ship flagged; identity mechanics still fail closed
 # --------------------------------------------------------------------------- #
 
-def test_a_generic_misconception_ships_flagged_not_blocked(db):
+def test_historic_semantic_findings_remain_visible_without_reclassifying(db):
     rows = [
         _strict_row(
             misconception="Students may misunderstand the concept."),
         _culmination(),
     ]
     g._validate_final_or_raise(rows)
-    assert any(
+    assert not any(
         "validation: generic_misconception" in flag
         for flag in rows[0].get("review_flags") or []
     )
+    # Q34 retires the local classifier without erasing earlier evidence.
+    historic_flag = "validation: generic_misconception — earlier review"
+    rows[0].setdefault("review_flags", []).append(historic_flag)
+    g._validate_final_or_raise(rows)
+    assert historic_flag in rows[0]["review_flags"]
 
     # The release issue exists: the audit transcribes the recorded flag.
     job, chapter = _job(db)

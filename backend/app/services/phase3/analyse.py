@@ -28,11 +28,13 @@ into Assemble, which stamps the allotted items onto their rows.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from .evidence import block_context, block_text, decide_with_visual_evidence, image_inputs
 from ... import config
 from .. import progress
 
@@ -41,6 +43,17 @@ from .. import progress
 _ALLOT_BATCH_SIZE = 8
 
 POLICY_VERSION = "analysis-1"
+
+
+def _policy_version(author_system: str) -> str:
+    """Bind saved judgments to the exact author and independent critic."""
+    from . import prompts
+
+    digest = hashlib.sha256((
+        getattr(prompts, author_system) + "\n" + prompts.ANALYSE_CRITIC_SYSTEM
+    ).encode("utf-8")).hexdigest()
+    return POLICY_VERSION + ";prompts:" + digest
+
 
 ITEM_KINDS = ("misconception", "error_analysis")
 
@@ -63,12 +76,14 @@ def mint_item_ids(count: int) -> list[str]:
 
 
 def _description_of(details: object) -> str:
-    match = re.search(
-        r"Description:\s*(.*?)(?=\n[A-Z][A-Za-z ]{2,24}:|//|$)",
-        str(details or ""),
-        re.DOTALL,
+    # Only the canonical section delimiter ends a Description. Internal
+    # headings (Worked Example, Conditions, etc.) are teaching, not boundaries.
+    from .. import concept_refiner
+
+    return "\n".join(
+        content for label, content in concept_refiner.split_sections(str(details or ""))
+        if label.strip().casefold() == "description"
     )
-    return _normal(match.group(1)) if match else ""
 
 
 def build_evidence(env: Mapping[str, Any]) -> dict[str, Any]:
@@ -92,13 +107,18 @@ def build_evidence(env: Mapping[str, Any]) -> dict[str, Any]:
         for row in env["graph"]["blocks"]
         if isinstance(row, Mapping) and str(row.get("block_id") or "")
     ]
+    context_by_id = {
+        str(block.get("block_id") or ""): block_context(block)
+        for block in env["canonical"]["blocks"] if isinstance(block, Mapping)
+    }
     text_by_id = {
-        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        str(row.get("block_id") or ""): block_text(row)
         for row in env["canonical"]["blocks"]
         if isinstance(row, Mapping)
     }
     for row in blocks:
         row["text"] = text_by_id.get(row["block_id"], "")
+        row.update(context_by_id.get(row["block_id"], {}))
 
     tasks: list[dict[str, Any]] = []
     for item in (env.get("inventory") or {}).get("items") or []:
@@ -113,7 +133,7 @@ def build_evidence(env: Mapping[str, Any]) -> dict[str, Any]:
             "source_kind": kind,
             "practical_evidence": kind in _PRACTICAL_KINDS
             or bool(item.get("_activity_origin")),
-            "text": generation._inventory_task_text(item)[:600],
+            "text": generation._inventory_task_text(item),
         })
     return {"source_blocks": blocks, "question_task_inventory": tasks}
 
@@ -205,28 +225,35 @@ def _live_build(payload: dict[str, Any]) -> dict[str, Any]:
 
     return generation._openai_json(
         prompts.ANALYSE_INVENTORY_SYSTEM, prompts.render(payload),
-        purpose="concept_mapping",
+        purpose="concept_mapping", image_urls=image_inputs(payload),
+    )
+
+
+def _cached_call(payload: dict[str, Any], *, critic: bool) -> dict[str, Any]:
+    from . import prompts
+    from .. import generation
+
+    prefix, suffix = generation._json_prompt_cache_parts(
+        payload, stable_keys=("stage", "rules", "settled_concepts", "evidence"),
+    )
+    return generation._openai_json(
+        prompts.ANALYSE_CRITIC_SYSTEM if critic else prompts.ANALYSE_ALLOT_SYSTEM,
+        suffix, purpose="advisory_critic" if critic else "concept_mapping",
+        image_urls=image_inputs(payload),
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "analyse-critic" if critic else "analyse-allot",
+            prefix, shard_seed=str((payload.get("items") or [{}])[0].get("item_id") or "chapter"),
+        ),
     )
 
 
 def _live_allot(payload: dict[str, Any]) -> dict[str, Any]:
-    from . import prompts
-    from .. import generation
-
-    return generation._openai_json(
-        prompts.ANALYSE_ALLOT_SYSTEM, prompts.render(payload),
-        purpose="concept_mapping",
-    )
+    return _cached_call(payload, critic=False)
 
 
 def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
-    from . import prompts
-    from .. import generation
-
-    return generation._openai_json(
-        prompts.ANALYSE_CRITIC_SYSTEM, prompts.render(payload),
-        purpose="advisory_critic",
-    )
+    return _cached_call(payload, critic=True)
 
 
 def analyse(
@@ -295,7 +322,7 @@ def analyse(
         ),
         "evidence": evidence,
     }
-    build_decision = kernel.decide(
+    build_decision = decide_with_visual_evidence(
         kind="analyse.inventory",
         unit_id="chapter",
         envelope_sha256=envelope_sha,
@@ -304,7 +331,7 @@ def analyse(
         checker=_inventory_checker(),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION,
+        policy_version=_policy_version("ANALYSE_INVENTORY_SYSTEM"),
         fixer=fixer,
     )
     inventory: list[dict[str, Any]] = []
@@ -343,6 +370,10 @@ def analyse(
             "allotments": {},
             "rationales": {},
             "review_flags": {},
+            # A critic can identify a missed insight precisely when there
+            # is no item ID to attach it to. Preserve that chapter-scope
+            # evidence; an empty author's list never erases its review.
+            **({"inventory_review_flags": build_flags} if build_flags else {}),
         }
 
     # ---- 4.3 Allot: every item to exactly one settled concept --------
@@ -392,7 +423,7 @@ def analyse(
                 for item in batch
             ],
         }
-        decision = kernel.decide(
+        decision = decide_with_visual_evidence(
             kind="analyse.allot",
             unit_id=f"items#{start}",
             envelope_sha256=envelope_sha,
@@ -403,7 +434,7 @@ def analyse(
             ),
             critic=critic,
             store=store,
-            policy_version=POLICY_VERSION,
+            policy_version=_policy_version("ANALYSE_ALLOT_SYSTEM"),
             fixer=fixer,
         )
         decided = {

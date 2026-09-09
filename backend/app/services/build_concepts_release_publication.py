@@ -41,8 +41,11 @@ def _refuse_a_moved_seal(
     job: models.UploadJob,
     payload: Mapping[str, Any],
     lane: str,
-) -> None:
+) -> list[str]:
     """Refuse publication when the staged draft moved under its frozen Master.
+
+    Returns the advisory lineage notes the caller records on the receipt
+    (register Q29) — empty when the live Master is this draft's.
 
     S10-g, the concept lane's only tamper gate: before this, a semantically
     edited but well-shaped payload published without complaint — the lane
@@ -75,6 +78,8 @@ def _refuse_a_moved_seal(
     judges no content.
     """
 
+    from . import release_core
+
     current_uid = str(
         payload.get(STAGED_RELEASE_UID_FIELD) or ""
     ).strip()
@@ -87,6 +92,33 @@ def _refuse_a_moved_seal(
         .order_by(models.AssessmentRelease.id.desc())
         .all()
     )
+    # Register Q29: a lineage mismatch on the LIVE Master used to be a
+    # silent ``continue`` — the one gate that could notice a Master frozen
+    # from an earlier staging skipped it without a word. It is now the
+    # recorded finding this function returns: the publication proceeds
+    # (the draft is sound; the Master is simply not this draft's) and the
+    # receipt says which Master it was and what to do about it. Older,
+    # superseded rows in the chain still skip silently — every re-stage
+    # mints a new uid, so their mismatch is the ordinary shape of history.
+    notes: list[str] = []
+    try:
+        live = release_core.latest_release_for_lane(db, job.id, lane)
+    except Exception:  # noqa: BLE001 - the note is advisory, never a gate
+        live = None
+    live_uid = str(
+        ((live.provider_identity if live is not None else None) or {})
+        .get("staged_release_uid") or ""
+    ).strip()
+    if live is not None and live_uid and current_uid and live_uid != current_uid:
+        notes.append(
+            f"the live Master (release {live.release_uid} v{live.version}) "
+            f"records staged draft lineage {live_uid}, but this staged "
+            f"draft carries lineage {current_uid}: that Master was frozen "
+            "from an EARLIER staging of this lane and is not this draft's "
+            "Master, so its seal was not compared and the manifest does not "
+            "serve it as this run's output; rebuild the Master from this "
+            "staged release"
+        )
     recomputed = ""
     for row in rows:
         recorded_uid = str(
@@ -123,6 +155,7 @@ def _refuse_a_moved_seal(
                 "publication is refused — re-stage the release to record "
                 "the change"
             )
+    return notes
 
 
 def upload_release_to_database(
@@ -200,7 +233,17 @@ def upload_release_to_database(
         raise ValueError("; ".join(defects))
     # S10-g: a tampered payload refuses BEFORE the zero-row branch — an
     # in-place edit that emptied the records is still an in-place edit.
-    _refuse_a_moved_seal(db, job, payload, resolved)
+    lineage_notes = _refuse_a_moved_seal(db, job, payload, resolved)
+
+    def _record_lineage_notes(summary_row: dict[str, Any]) -> None:
+        # Register Q29: the lineage finding rides the receipt's identity
+        # flags, in both the zero-row and the written branch.
+        if not lineage_notes:
+            return
+        summary_row["identity_review_flags"] = list(dict.fromkeys(
+            list(summary_row.get("identity_review_flags") or [])
+            + lineage_notes
+        ))
     # Round 10 (audit finding 9c): the ``database_uploaded`` idempotency
     # latch runs AFTER the structural gate and the seal, never before.
     # [measured] with the latch first, one successful publication turned
@@ -281,6 +324,7 @@ def upload_release_to_database(
         })
         if resolved == LANE_PRE:
             summary["concept_ids"] = []
+        _record_lineage_notes(summary)
         payload["summary"] = summary
         inventory = copy.deepcopy(dict(job.question_inventory or {}))
         inventory[release_key] = copy.deepcopy(payload)
@@ -632,6 +676,7 @@ def upload_release_to_database(
                     + review_flags
                 )
             )
+        _record_lineage_notes(summary)
         if resolved == LANE_PRE:
             # The Pre lane records its OWN published ids inside its own
             # payload. ``job.result_ids`` stays the Post lane's, because

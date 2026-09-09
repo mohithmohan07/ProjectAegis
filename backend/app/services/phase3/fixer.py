@@ -71,6 +71,12 @@ def live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
 
     from . import prompts
     from .. import generation
+    from .. import assessment_visual_evidence
+
+    image_urls = list(dict.fromkeys([
+        *assessment_visual_evidence.image_inputs(payload),
+        *assessment_visual_evidence.image_inputs(payload.get("original_payload") or {}),
+    ]))
 
     return generation._openai_json(
         prompts.FIXER_SYSTEM,
@@ -80,6 +86,7 @@ def live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
         # a critic pass.
         purpose="semantic_resolution",
         model=fixer_model(),
+        **({"image_urls": image_urls} if image_urls else {}),
     )
 
 

@@ -16,7 +16,8 @@ the whole Master with it. Three fixes, each pinned here:
    Fixer blocks ITSELF, recorded loudly; the Master ships the rest.
 
 The run-level fixtures here follow the Master Governing Contract v2.0
-(register Q26): the staged release names its publication (§18), the
+(register Q26): the staged release names its source publication (§18),
+while Q33 attributes newly generated questions to UpSchool DB. The
 Descriptive proposal carries one model answer twice (§24) with untagged
 criteria worth exactly 1 mark each in a non-English run (§27.5, §28), and
 the joint item review (§27 step 6) is a scripted verified auditor.
@@ -45,8 +46,8 @@ from tests.test_assessment_pre_release_lane import (
 from tests.test_pre_release_lane_wiring import _both_lanes_job
 
 ENVELOPE = "e" * 64
-# Contract v2.0 §18: ``question_source`` is the run's publication, stamped
-# from the staged release's frozen ``source_book`` — never a filename.
+# The frozen source publication remains the curricular provenance; Q33
+# gives newly generated questions their separate UpSchool DB attribution.
 PUBLICATION = "NCERT"
 
 _PROFILE = {
@@ -274,9 +275,9 @@ def test_output_02_builds_with_no_blueprint_anywhere(db):
     assert released.payload["pre_post_learning"] == "Pre"
     assert len(cell_calls) == 2, "one recorded verdict per question"
     assert len(released.payload["candidates"]) == 2
+    assert job.source_book == PUBLICATION
     for candidate in released.payload["candidates"]:
-        # Contract v2.0 §18: the publication rides every row.
-        assert candidate["question_source"] == PUBLICATION
+        assert candidate["question_source"] == "UpSchool DB"
     for cell in released.payload["blueprint_cells"]:
         assert cell["source_policy"] == "generate"
         # The recorded verdict's audit survives the binder (Q10: the

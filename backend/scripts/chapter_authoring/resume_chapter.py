@@ -18,10 +18,8 @@ from pathlib import Path
 SCRATCH = Path(__file__).resolve().parent
 BACKEND = SCRATCH.parents[1]
 
-if not os.environ.get("OPENAI_API_KEY"):
-    raise SystemExit("OPENAI_API_KEY is not set")
-os.environ.setdefault("AEGIS_PUBLIC_BASE_URL", "https://aegis.local")
-os.environ.setdefault("AEGIS_SOURCE_ASSET_SECRET", "local-run-secret")
+# Resume uses the operator's actual serving origin; it cannot publish local
+# bytes merely by changing a hostname in the saved output.
 
 sys.path.insert(0, str(BACKEND))
 os.chdir(BACKEND)
@@ -31,6 +29,7 @@ from app.services import progress  # noqa: E402
 from app.services import build_concepts as svc  # noqa: E402
 from app.services import uploads  # noqa: E402
 from app.services import build_concepts_release_files as release_files  # noqa: E402
+from app.services import source_asset_publication  # noqa: E402
 
 _START = time.time()
 
@@ -54,6 +53,10 @@ def main() -> int:
     ap.add_argument("--chapter-id", type=int, required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
+    if not os.environ.get("OPENAI_API_KEY"):
+        ap.error("OPENAI_API_KEY is not set")
+    if not source_asset_publication.valid_public_origin(source_asset_publication.configured_origin()):
+        ap.error("Set AEGIS_PUBLIC_BASE_URL to the real HTTPS origin serving this run's asset store. Local bytes are not uploaded to Fly by assigning its URL.")
 
     progress._sink.set(_sink)
     init_db()
@@ -90,6 +93,9 @@ def main() -> int:
         import json as _json
         from app.services.build_concepts_release import release_payload
         payload = release_payload(job) or {}
+        asset_report = payload.get(source_asset_publication.REPORT_FIELD) or {}
+        print(f"== public image delivery: {asset_report.get('state', 'unverified')} "
+              "(local pinning and public delivery are separate)", flush=True)
         records = [r for r in payload.get("records") or [] if isinstance(r, dict)]
         release_topics = sorted(
             {str(r.get("topic") or "").strip() for r in records} - {""}

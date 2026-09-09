@@ -83,10 +83,20 @@ def test_prepare_final_routes_through_the_rewrite(
         )
 
     assert rows == [{"concept_title": "Stub Row"}]
-    # The seam sealed the exact same envelope the golden fixture records.
-    assert captured["env"]["envelope_sha256"] == fixture_env[
-        "envelope_sha256"
-    ]
+    # The seam sealed the exact envelope the golden fixture records, plus
+    # the ONE frozen run variable a production envelope carries since
+    # register Q30: the owner's Pre coverage rule, stamped into the
+    # metadata and therefore inside the seal. The golden fixture predates
+    # the ruling and records no rule.
+    from app.services.phase3 import pre_coverage
+
+    expected = copy.deepcopy(fixture_env)
+    expected["metadata"] = pre_coverage.stamp(expected["metadata"])
+    expected["envelope_sha256"] = envelope_mod.seal_sha256(expected)
+    assert captured["env"]["metadata"][pre_coverage.RULE_FIELD] == (
+        pre_coverage.owner_rule()
+    )
+    assert captured["env"]["envelope_sha256"] == expected["envelope_sha256"]
     assert captured["env"]["skeleton_rows"] == fixture_env["skeleton_rows"]
     # The decision store lives in the job's durable artifact directory.
     assert str(captured["store_dir"]).endswith("phase3-decisions")

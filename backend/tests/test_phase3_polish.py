@@ -128,7 +128,7 @@ def test_a_repair_that_still_fails_the_gate_fails_closed():
             {
                 "row_ref": row["row_ref"],
                 "concept_title": row["concept_title"],
-                # Still verbatim: the checker must refuse it.
+                # Still missing the required mastery marker: refuse shape.
                 "concept_details": "Description: " + _SOURCE,
             }
             for row in request["rows"]
@@ -139,7 +139,7 @@ def test_a_repair_that_still_fails_the_gate_fails_closed():
             _env(), rows, provider=provider, store=kernel.DecisionStore(),
         )
     assert calls == 3
-    assert "verbatim_source_description" in str(failed.value)
+    assert "missing_mastery_statement" in str(failed.value)
 
 
 def test_polish_decisions_replay_free_from_the_store(tmp_path):

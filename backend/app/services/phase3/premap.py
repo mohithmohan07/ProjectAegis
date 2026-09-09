@@ -121,30 +121,18 @@ omissions:
   ``require_culmination=False`` and ``strict_type_hierarchy=False``.
 * **The validator's findings are advisory here.** They are stamped onto
   their row as review flags; nothing is dropped and nothing raises.
-  Five of the reachable codes are inherited Rule 1 residues in the
-  SHARED validator, recorded here rather than authored around:
+  Three reachable codes remain inherited Rule 1 residues in the
+  shared validator, outside Q34's approved removal:
   ``description_length`` is a word-count band and ``thin_description`` a
   word-count floor (both decide meaning by counting words);
   ``placeholder`` is a keyword vocabulary — ``PLACEHOLDERS`` contains
-  the word "none", tested as a whole-word scan over the whole detailing,
+  the word "none", tested as a whole-word scan over the other detailing,
   so ordinary English ("faces none at all") is classified as placeholder
-  text; it fires on 2 of the golden chapter's 15 Pre rows. Since the Pre
-  lane grew its own Q1 inventory (``preanalyse.py``) two more are
-  reachable, both VERB vocabularies over the rendered analysis section:
-  ``misconception_framing`` (``_MISCONCEPTION_BELIEF_RE``'s verb list
-  does not contain "take … to mean") and ``error_analysis_framing``
-  (``_ERROR_ANALYSIS_ACTION_RE``'s does not contain "carry a claim …
-  across"); each fires on 1 of the golden chapter's 15 Pre rows over a
-  well-framed item. All five can fire on a perfectly well-authored
-  prerequisite row, which is why promoting Pre warnings to fatals
-  wholesale would fail exactly the rows the format asks for. They are
-  NOT scoped away here — hiding a Rule 1 defect is not purging it (spec
-  T4's §3 purge doctrine) — and no authored item is ever reworded to
-  satisfy one, which would hide it just as effectively. They are not
-  fixed here either: all five are pre-existing shared Post-lane
-  machinery whose real purge is replacing each with a model verdict,
-  which moves the Post lane and belongs to its own change. The deposit
-  gate is a later slice's, and it inherits these recorded flags.
+  text; it fires on 2 of the golden chapter's 15 Pre rows. Q34 removes
+  the learner-analysis verb vocabularies and mastery-substance thresholds
+  from the shared validator and formatter in both lanes. The remaining
+  Description checks are not authored around or promoted to gates; their
+  separate removal still needs an explicit owner-approved proposal.
 * **The four verifications are ADVISORY (Q10, spec T4c).** Necessity,
   grade boundary, non-duplication and zero current-chapter content
   leakage are critic dimensions whose dissent becomes a review flag —
@@ -162,16 +150,82 @@ omissions:
 """
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from ... import bulk_import as bi
 from ... import config
 from .. import katex_rules as kr
 from .. import progress
 
+# The run the map belongs to, stamped on the map itself (register Q29).
+# ``generation.PRE_RUN_IDENTITY_FIELD`` names the same key on the release
+# bundle; a regression pins the two literals equal.
+RUN_IDENTITY_FIELD = "run_identity"
+
+
+def run_identity(env: Mapping[str, Any]) -> dict[str, Any]:
+    """The frozen identity of the run this Pre map was authored for.
+
+    Read off the sealed envelope, never off any content: the chapter the
+    envelope's metadata froze at stage 0 (§38), the source contract the
+    rows are sealed on, and the envelope seal every decision key carries.
+    Release staging compares the chapter against the job it is staging
+    into (``build_concepts_release.stage_pre_release_from_run``) and the
+    sidecar restore compares the hashes against the envelope in the same
+    directory (``concept_topology_contract.restored_pre_release``). Pure
+    identity accounting — it decides nothing about what the map means.
+    """
+
+    metadata = env.get("metadata") if isinstance(env, Mapping) else None
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    raw_chapter_id = metadata.get("chapter_id")
+    try:
+        chapter_id: int | None = (
+            int(raw_chapter_id)
+            if raw_chapter_id not in (None, "") else None
+        )
+    except (TypeError, ValueError):
+        chapter_id = None
+    return {
+        "chapter_id": chapter_id,
+        "chapter_code": _normal(metadata.get("chapter_code")),
+        "source_contract_hash": _normal(env.get("source_contract_hash")),
+        "envelope_sha256": _normal(env.get("envelope_sha256")),
+    }
+
+
+def keywords_cell(value: object) -> str:
+    """The ``keywords`` cell exactly as contract §16 writes a list.
+
+    The prompt asks for ONE ``" | "``-delimited string, and a model that
+    answers with a JSON array is still answering the same question: the
+    tokens are joined on the exact delimiter, mechanically. Before this
+    seam existed the array was ``str()``-ed into the cell, so every Pre
+    row of a run shipped ``['a', 'b']`` while its Post sibling shipped
+    ``a | b`` (register Q29). A string passes through untouched — a
+    comma list is left as the one token the writer already treats it as.
+    """
+
+    if isinstance(value, (list, tuple)):
+        return bi.join_multi([_normal(item) for item in value])
+    return _normal(value)
+
 POLICY_VERSION = "premap-1"
+
+
+def _policy_version(author_system: str) -> str:
+    """Bind saved judgments to the exact author and independent critic."""
+    from . import prompts
+
+    digest = hashlib.sha256((
+        getattr(prompts, author_system) + "\n" + prompts.PREMAP_CRITIC_SYSTEM
+    ).encode("utf-8")).hexdigest()
+    return POLICY_VERSION + ";prompts:" + digest
+
 
 # --------------------------------------------------------------------------- #
 # The empty-capture verdict (spec-step8 D8.3 / S9)
@@ -240,13 +294,9 @@ _LINK_BATCH_SIZE = 8
 #   would gate Pre rows on the absence of something the lane is forbidden
 #   to have. ``allow_types=False`` is the check that actually belongs
 #   here.
-# * ``strict_mastery_statement=False`` — DECIDED OFF because of what it
-#   activates: ``mastery_statement_not_substantive`` is decided by
-#   ``_is_substantive_mastery_statement``, which is a word-count and
-#   character-count threshold (four words, twelve characters) deciding
-#   whether a sentence means enough. The Pre lane will not adopt a
-#   word-count judgment (Rule 1). The canonical
-#   ``\nAchieving Mastery: <text>`` shape that flag also checks is
+# * ``strict_mastery_statement=False`` — retained from the Pre contract.
+#   Q34 removed the old word/character-count substance judgment. The
+#   canonical ``\nAchieving Mastery: <text>`` shape is already
 #   guaranteed here by construction — this module mints the line — which
 #   is a stronger guarantee than a validator flag.
 # * ``strict_analysis_section=False`` and ``analysis_allotted_keys`` —
@@ -257,11 +307,10 @@ _LINK_BATCH_SIZE = 8
 #   (``validate_rows``) rather than pinned empty here: it scopes the
 #   existence codes to the allotted rows and keeps
 #   ``unallotted_analysis_section`` live as marker accounting over the
-#   rest. ``strict_analysis_section`` stays DECIDED OFF: it activates the
-#   shared validator's Post-lane analysis QUALITY codes, and the Pre
-#   lane's validation is advisory in this slice, so turning them on would
-#   add Post-flavoured prose judgments to a prerequisite row without
-#   gating anything. The canonical section SHAPE is guaranteed here by
+#   rest. ``strict_analysis_section`` stays DECIDED OFF under the existing
+#   Pre contract. Q34 removed the shared semantic quality codes rather
+#   than merely disabling them in this lane. Canonical section shape is
+#   guaranteed here by
 #   construction — ``preanalyse.stamp`` mints it — which is the stronger
 #   guarantee.
 # * ``source_text=""`` — the verbatim-source check compares against the
@@ -966,7 +1015,12 @@ def _map_rules(rules_suffix: str) -> str:
         "a fundamental the chapter assumes the learner already holds — "
         "something taught in a previous year, vocabulary the chapter uses "
         "as if already known, or a basic needed to follow one of its "
-        "lines or concepts. Group the captured prerequisites into "
+        "lines or concepts. Preserve the earlier-grade/year boundary: "
+        "learning only in an earlier chapter of the same grade does not "
+        "qualify solely because of its position. If a carried capture's "
+        "prior-grade provenance is unsupported, retain its identity and "
+        "record that concern in the review evidence; do not silently "
+        "drop it or invent a curriculum history. Group the captured prerequisites into "
         "concepts, and the concepts into topics, purely by what they "
         "MEAN: prerequisites that one lesson would teach together belong "
         "to one concept, and concepts a teacher would teach in one "
@@ -1090,6 +1144,7 @@ def build(
         "review_flags": {},
         "decision_flags": {},
         "validation": [],
+        RUN_IDENTITY_FIELD: run_identity(env),
     }
     if not captured:
         # D8.3 / S9 — ONE verdict, not an inference. This branch used to
@@ -1233,7 +1288,7 @@ def build(
         checker=_map_checker(prerequisite_ids),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION,
+        policy_version=_policy_version("PREMAP_SYSTEM"),
         fixer=fixer,
     )
     map_flags = list(decision.get("review_flags") or [])
@@ -1294,7 +1349,7 @@ def build(
                 "parent_concept": "",
                 "concept_title": _normal(entry.get("concept_title")),
                 "concept_details": details,
-                "keywords": _normal(entry.get("keywords")),
+                "keywords": keywords_cell(entry.get("keywords")),
                 "_semantic_topic_id": topic_id,
                 # A Pre concept has no current-chapter grounding by
                 # definition (spec T4); the contract says so explicitly
@@ -1404,7 +1459,7 @@ def build(
                 ),
                 critic=critic,
                 store=store,
-                policy_version=POLICY_VERSION,
+                policy_version=_policy_version("PREMAP_NEEDED_FOR_SYSTEM"),
                 fixer=fixer,
             )
             decided = {
@@ -1547,7 +1602,7 @@ def build(
             "analysis": {
                 key: value
                 for key, value in analysis.items()
-                if key != "review_flags"
+                if key not in {"review_flags", "inventory_review_flags"}
             },
         },
         qids,
@@ -1587,6 +1642,7 @@ def build(
         "review_flags": review_flags,
         "decision_flags": decision_flags,
         "validation": validation,
+        RUN_IDENTITY_FIELD: run_identity(env),
     }
 
 

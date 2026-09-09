@@ -9,6 +9,8 @@ response without inventing a local semantic fallback.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 import json
 import math
@@ -18,13 +20,14 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 
-CELL_POLICY_VERSION = "assessment-cell-3"
+CELL_POLICY_VERSION = "assessment-cell-3-column-spec"
 
 CELL_SYSTEM = (
-    "You are the Aegis assessment-cell author. For ONE source-owned question "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-cell author. For ONE source-owned question "
     "or task, decide the blueprint cell it fulfils when reused as an "
     "assessment item: sheet kind, question category, cognitive skill "
     "(Bloom), difficulty, and marks. Read the complete task, answer evidence, "
@@ -41,9 +44,10 @@ CELL_SYSTEM = (
     "paraphrase it. Apply that category's marks contract. A fixed contract "
     "permits only its listed value; a per-subpoint contract sets total marks "
     "from the number of represented subpoints and its marks-per-subpoint. "
-    "When that rule supplies max_subpoints, split a larger compound task "
-    "into separate cells rather than exceeding the wire's representable "
-    "subpoint count. "
+    "Respect max_subpoints. This response owns ONE cell and cannot split "
+    "a source task, invent a child, or drop a subpoint: if the task exceeds "
+    "a format's capacity, choose another genuinely compatible allowed "
+    "format or name the incompatibility in the rationale for recovery. "
     "cognitive_skill is Remember, Understand, "
     "Apply, Analyse, Evaluate, or Create. difficulty is Less, Moderate, or "
     "High; Bloom and difficulty are independent. marks is a realistic "
@@ -51,16 +55,18 @@ CELL_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"source_qid":"","sheet_kind":"","question_category":"",'
     '"cognitive_skill":"","difficulty":"","marks":1,'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
-GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-3"
+GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-3-column-spec"
 
 GENERATED_CELL_SYSTEM = (
-    "You are the Aegis assessment-cell author for ONE GENERATED "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-cell author for ONE GENERATED "
     "pre-learning question. The question was authored for a prerequisite "
-    "concept and deliberately carries no tier or difficulty of its own — "
-    "this verdict is that later, independent decision. From the complete "
+    "concept. It may carry an already-authored tier under the owner's Pre "
+    "coverage rule; keep that requested demand in view when deciding "
+    "difficulty and never contradict it to balance the batch. Bloom, marks, "
+    "and category still require their own task-based judgment. From the complete "
     "question, its answer, its rationale, and the pre-learning concept it "
     "checks, decide the blueprint cell it fulfils as an assessment item: "
     "sheet kind, question category, cognitive skill (Bloom), difficulty, "
@@ -85,11 +91,11 @@ GENERATED_CELL_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"pre_question_id":"","sheet_kind":"","question_category":"",'
     '"cognitive_skill":"","difficulty":"","marks":1,'
-    '"rationale":"evidence-bound reason"}'
+    '"rationale":"evidence-bound reason"}')
 )
 
 GENERATED_CELL_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis assessment-cell "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis assessment-cell "
     "verdict over a GENERATED pre-learning question. Audit the proposed "
     "sheet kind, category, cognitive skill, difficulty, and marks against "
     "the complete question, its answer, its rationale, the pre-learning "
@@ -99,11 +105,11 @@ GENERATED_CELL_CRITIC_SYSTEM = (
     "evidence while the recorded verdict stands. State your honest "
     "confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 CELL_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis assessment-cell "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis assessment-cell "
     "verdict. Audit the proposed sheet kind, category, cognitive skill, "
     "difficulty, and marks against the complete source task, answer evidence, "
     "shared context, alternatives, multipart relationships, assets, metadata, "
@@ -112,7 +118,7 @@ CELL_CRITIC_SYSTEM = (
     "retry, or replace the verdict; dissent ships as review evidence while the "
     "recorded verdict stands. State your honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 
@@ -398,6 +404,7 @@ def _live_cell(payload: dict[str, Any]) -> dict[str, Any]:
         CELL_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -408,6 +415,7 @@ def _live_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
         CELL_CRITIC_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -418,6 +426,7 @@ def _live_generated_cell(payload: dict[str, Any]) -> dict[str, Any]:
         GENERATED_CELL_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -428,6 +437,7 @@ def _live_generated_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
         GENERATED_CELL_CRITIC_SYSTEM,
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -523,6 +533,7 @@ def decide_cells(
             "profile": copy.deepcopy(profile_evidence),
             "source_atom": source_atom,
         }
+        visual_evidence.bind(payload, source_atom)
         decision = kernel.decide(
             kind="assessment.cell",
             unit_id=source_qid,
@@ -552,7 +563,7 @@ def decide_cells(
             "source_policy": "reuse",
             "accepted_source_qids": [source_qid],
             "rationale": str(response.get("rationale") or ""),
-            "flags": _review_flags(decision),
+            "flags": _review_flags(decision) + visual_evidence.review_flags(payload),
             "authority": _decision_authority(decision),
         }
 
@@ -728,6 +739,7 @@ def decide_generated_cells(
                 dict(concepts.get(concept_key) or {})
             ),
         }
+        visual_evidence.bind(payload, question, payload["pre_concept"])
         decision = kernel.decide(
             kind="assessment.generated_cell",
             unit_id=pre_question_id,
@@ -758,7 +770,7 @@ def decide_generated_cells(
             "concept_key": concept_key,
             "accepted_source_qids": [],
             "rationale": str(response.get("rationale") or ""),
-            "flags": _review_flags(decision),
+            "flags": _review_flags(decision) + visual_evidence.review_flags(payload),
             "authority": _decision_authority(decision),
         }
 

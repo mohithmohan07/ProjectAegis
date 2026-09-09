@@ -683,7 +683,7 @@ def test_the_release_issues_projection_carries_the_reissued_note(db, client):
 
 
 # --------------------------------------------------------------------------- #
-# The max-scan: the blank family, the shared base, and the open residue.
+# Durable numbering: blank families, shared bases and highest-row deletion.
 # --------------------------------------------------------------------------- #
 
 def test_a_blank_label_base_is_scanned_not_restarted_at_one(
@@ -760,21 +760,6 @@ def test_two_concepts_sharing_one_label_base_do_not_mint_one_label_twice(
     db.commit()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "OPEN RESIDUE, named rather than implied. T5-3's max-scan reads LIVE "
-        "rows, so it reissues the TOP of a range: delete the highest label of "
-        "a family and the next mint takes that number back. R5 is therefore "
-        "held for every interior deletion and NOT for the top of a range. "
-        "Closing it needs a durable record of retired labels — the uploaded "
-        "release snapshots are the obvious one — which no slice up to S5 "
-        "builds; it belongs with the converged publication (S10) and the "
-        "release-audit surface (step 9). This case is pinned so that "
-        "test_deleting_a_question_does_not_reissue_its_number, which deletes "
-        "an INTERIOR row, cannot be read as the general guarantee."
-    ),
-)
 def test_deleting_the_highest_label_of_a_family_does_not_reissue_its_number(
     db, client,
 ):

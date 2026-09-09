@@ -226,11 +226,11 @@ def test_legacy_miscellaneous_rows_join_the_continuous_sequence():
     assert "Miscellaneous" not in out[1]["concept_details"]
 
 
-def test_reduce_types_drops_caseless_theory_block():
-    # A theory concept whose Types block has no concrete Case is dropped.
+def test_reduce_types_preserves_caseless_content_for_api_repair():
+    # Missing Case structure is not a license to delete authored content.
     details = "Description: theory only // Types: Type 01: Definition // Misconception: m"
     out = cr.reduce_type_sections(details)
-    assert "Types:" not in out
+    assert out == details
     assert "Description: theory only" in out
     assert "Misconception: m" in out
 
@@ -247,12 +247,11 @@ def test_refine_chapter_reduces_then_numbers_continuously():
         _rec("Solve B", "Description: b // Types: Type 01: Q Case 01: c2 Type 02: R Case 01: c3 // Misconception: m"),
     ]
     out = cr.refine_chapter(records)
-    # Theory lost its Types block.
-    assert "Types:" not in out[0]["concept_details"]
-    # Numbering is continuous across the concepts that DO have types.
-    assert "Type 01: P" in out[1]["concept_details"]
-    assert "Type 02: Q" in out[2]["concept_details"]
-    assert "Type 03: R" in out[2]["concept_details"]
+    assert "Type 01: Definition" in out[0]["concept_details"]
+    assert any("type_without_case" in flag for flag in out[0]["review_flags"])
+    assert "Type 02: P" in out[1]["concept_details"]
+    assert "Type 03: Q" in out[2]["concept_details"]
+    assert "Type 04: R" in out[2]["concept_details"]
 
 
 def test_records_without_types_are_normalized_to_one_analysis_section():
@@ -329,7 +328,7 @@ def test_refine_chapter_accepts_either_analysis_section_or_both():
         assert cr.analysis_components(details) == components
 
 
-def test_normalization_collapses_duplicate_cross_category_analysis():
+def test_normalization_keeps_cross_category_duplicates_for_api_review():
     details = (
         "Description: retain signs during substitution. // "
         "Misconceptions: Students may omit the negative sign while substituting. // "
@@ -338,13 +337,15 @@ def test_normalization_collapses_duplicate_cross_category_analysis():
 
     out = cr.normalize_analysis_sections(details)
 
-    assert out.count("Students may omit the negative sign") == 1
+    assert out.count("Students may omit the negative sign") == 2
     assert "Misconception/ Error Analysis:" in out
-    assert "Error Analysis:" in out
-    assert not cr.analysis_components(out)[0]
+    assert cr.analysis_components(out) == (
+        "Students may omit the negative sign while substituting.",
+        "Students may omit the negative sign while substituting.",
+    )
 
 
-def test_normalization_reclassifies_separate_legacy_mistake_without_data_loss():
+def test_normalization_preserves_each_legacy_authored_kind_without_data_loss():
     belief = "Students may believe that every scale factor enlarges a figure."
     mistake = "Students may omit the negative sign during substitution."
     details = (
@@ -356,7 +357,8 @@ def test_normalization_reclassifies_separate_legacy_mistake_without_data_loss():
 
     assert "Misconception/ Error Analysis:" in out
     assert f"Misconceptions: {belief}" in out
-    assert f"Error Analysis: {mistake}" in out
+    assert f"Misconceptions: {belief} {mistake}" in out
+    assert f"Error Analysis: {mistake}" not in out
 
 
 def test_normalization_extracts_newline_combined_analysis_without_orphan_prefix():

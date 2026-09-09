@@ -50,7 +50,7 @@ def _assert_exact_figure_attachment(item, registry, figure_ids):
         assert " alt=\"" in rendered
 
 
-def test_misconception_dedup_keeps_one_section():
+def test_misconception_aggregation_preserves_repeated_authored_statements():
     details = (
         "Description: Layers are studied indirectly.\n"
         "Achieving Mastery: Explaining indirect evidence. // "
@@ -63,7 +63,9 @@ def test_misconception_dedup_keeps_one_section():
         if cr.is_learner_analysis_label(label)
     ] == ["Misconception/ Error Analysis"]
     assert "Achieving Mastery:" in out
-    assert cr.analysis_components(out)[0] == "Students confuse crust and mantle."
+    assert cr.analysis_components(out)[0] == (
+        "Students confuse crust and mantle. Students confuse crust and mantle."
+    )
 
 
 def test_misconception_strips_inline_after_mastery():
@@ -73,10 +75,11 @@ def test_misconception_strips_inline_after_mastery():
     )
     out = cr.normalize_misconception_sections(details)
     assert "// Misconception:" not in out.split("Misconceptions:")[0]
-    assert "Error Analysis: A common error." in out
+    assert "Misconceptions: A common error." in out
+    assert "Error Analysis: A common error." not in out
 
 
-def test_misconception_prefers_specific_over_generic_duplicate():
+def test_misconception_formatter_preserves_both_qualities_for_api_review():
     details = (
         "Description: BPT applies only under a parallel-line condition.\n"
         "Achieving Mastery: Checking the parallel condition before using BPT. // "
@@ -91,16 +94,20 @@ def test_misconception_prefers_specific_over_generic_duplicate():
         if cr.is_learner_analysis_label(label)
     ] == ["Misconception/ Error Analysis"]
     assert "ignore the parallel-line condition" in out
-    assert "memorized rule" not in out
+    assert "memorized rule" in out
+    assert cr.normalize_misconception_sections(out) == out
 
 
-def test_split_merged_description_blocks():
+def test_split_merged_description_blocks_preserves_authored_content():
     merged = (
         "Description: First concept body. // Types: Type 01: Direct Case 01: q1. "
         "Description: Second concept wrongly merged. // Misconceptions: oops."
     )
     out = cr.split_merged_description_blocks(merged)
-    assert "Second concept" not in out
+    assert out == merged
+    assert "repeated_description_marker" in {
+        code for code, _message in cr.structure_findings(out)
+    }
 
 
 def test_alias_related_titles_both_survive_the_cleanup_chain():
@@ -532,7 +539,7 @@ def test_concise_math_case_with_source_expression_is_allowed():
     assert not any(e["code"] == "short_case_example" for e in report["errors"])
 
 
-def test_generic_only_misconception_warns_for_review_quality():
+def test_generic_only_misconception_has_no_local_semantic_verdict():
     rows = [{
         "topic": "Triangles",
         "parent_concept": "Similarity",
@@ -546,18 +553,16 @@ def test_generic_only_misconception_warns_for_review_quality():
         "keywords": "",
     }]
     report = concept_validator.validate_concept_rows(rows, allow_types=True)
-    assert any(e["code"] == "generic_misconception" for e in report["errors"])
+    assert not any(e["code"] == "generic_misconception" for e in report["errors"])
+    assert "memorized rule" in cr.refine_chapter(copy.deepcopy(rows))[0]["concept_details"]
 
 
-def test_correction_shaped_misconception_is_rejected_as_review_input():
+def test_correction_shaped_misconception_keeps_its_authored_kind_for_api_review():
     correction = (
         "A nation is not simply a territory, dynasty, ethnic group, or people "
         "sharing a common language."
     )
-    assert cr._is_correction_shaped_misconception(correction)
-    assert not cr._is_correction_shaped_misconception(
-        "Students may believe that a nation has always existed with a fixed identity."
-    )
+    assert not hasattr(cr, "_is_correction_shaped_misconception")
     rows = [{
         "topic": "Nation States",
         "parent_concept": "National Identity",
@@ -569,8 +574,10 @@ def test_correction_shaped_misconception_is_rejected_as_review_input():
         "keywords": "",
     }]
     report = concept_validator.validate_concept_rows(rows, allow_types=True)
-    assert any(
+    assert not any(
         e["code"] == "misconception_framing" for e in report["errors"])
+    normalized = cr.normalize_analysis_sections(rows[0]["concept_details"])
+    assert cr.analysis_components(normalized) == (correction, "")
 
 
 def test_metadata_has_no_subject_specific_prompt_supplements():
@@ -1763,7 +1770,7 @@ def test_multiple_specific_misconceptions_are_kept():
     assert "confuse resistance with resistivity" in out
 
 
-def test_duplicate_mastery_statements_keep_the_second():
+def test_duplicate_mastery_statements_preserve_both_for_api_repair():
     details = (
         "Description: A concept body.\n"
         "Achieving Mastery: Applying Resistance correctly in new problems. "
@@ -1771,12 +1778,14 @@ def test_duplicate_mastery_statements_keep_the_second():
         "for the given circuit values."
     )
     out = cr.format_mastery_statement(details)
-    assert out.count("Achieving Mastery:") == 1
+    assert out.count("Achieving Mastery:") == 2
     assert "Selecting and rearranging R = V/I" in out
-    assert "Applying Resistance correctly in new problems" not in out
+    assert "Applying Resistance correctly in new problems" in out
+    assert not g._has_valid_terminal_mastery(out)
+    assert cr.format_mastery_statement(out) == out
 
 
-def test_mastery_after_misconceptions_replaces_the_earlier_statement():
+def test_mastery_after_misconceptions_is_moved_without_replacing_authored_text():
     details = (
         "Description: A concept body.\n"
         "Achieving Mastery: Applying the concept to problems. // "
@@ -1784,9 +1793,11 @@ def test_mastery_after_misconceptions_replaces_the_earlier_statement():
         "Achieving Mastery: Explaining resistance from V-I data."
     )
     out = cr.normalize_misconception_sections(details)
-    assert out.count("Achieving Mastery:") == 1
+    assert out.count("Achieving Mastery:") == 2
     assert "Explaining resistance from V-I data" in out
-    assert "Error Analysis: A real learner error." in out
+    assert "Applying the concept to problems" in out
+    assert "Misconceptions: A real learner error." in out
+    assert cr.normalize_analysis_sections(out) == out
 
 
 def test_topic_headings_prefer_main_sections_over_subtopics():
@@ -1852,10 +1863,9 @@ def test_no_learner_analysis_rewrite_machinery_survives():
     assert hits == []
 
 
-def test_terminal_validation_rejects_both_title_substitution_fallbacks():
-    """The refine pass never authors the title-substitution filler anymore
-    (a missing analysis stays missing), and the terminal gate still rejects
-    both filler shapes wherever they appear."""
+def test_historical_title_substitution_fallbacks_are_left_to_api_quality_review():
+    """Formatting adds no filler and makes no local quality judgment about
+    historical text; the API author/critic owns that content review."""
     records = cr.ensure_analysis_sections([{
         "topic": "Inquiry",
         "parent_concept": "Scientific Method",
@@ -1870,8 +1880,8 @@ def test_terminal_validation_rejects_both_title_substitution_fallbacks():
 
     title = "Science as Evolving Inquiry"
     # The deterministic filler generators are deleted from the codebase;
-    # the terminal gate still rejects their historical output shapes when a
-    # legacy row carries them.
+    # their historical text remains visible for the API quality review when
+    # a legacy row carries it.
     assert not hasattr(cr, "_fallback_misconception")
     assert not hasattr(cr, "_fallback_error_analysis")
     misconception = (
@@ -1882,10 +1892,7 @@ def test_terminal_validation_rejects_both_title_substitution_fallbacks():
         f"Students may apply {title} as a memorized rule without checking "
         "the conditions, context, or representation given in the problem."
     )
-    assert concept_validator.is_terminal_generic_analysis_filler(
-        misconception)
-    assert concept_validator.is_terminal_generic_analysis_filler(
-        error_analysis)
+    assert not hasattr(concept_validator, "is_terminal_generic_analysis_filler")
     report = concept_validator.validate_concept_rows(
         [{
             "topic": "Inquiry",
@@ -1901,12 +1908,9 @@ def test_terminal_validation_rejects_both_title_substitution_fallbacks():
         }],
         strict_analysis_section=True,
     )
-    assert {
-        error["code"] for error in report["errors"]
-    }.issuperset({
-        "generic_misconception",
-        "generic_error_analysis",
-    })
+    assert not {
+        "generic_misconception", "generic_error_analysis",
+    } & {error["code"] for error in report["errors"]}
 
 
 def test_authored_one_sided_analysis_gets_no_deterministic_filler():
@@ -5773,3 +5777,38 @@ def test_activity_host_override_accepts_two_independent_title_signals():
 
     assert g._high_confidence_assignment_override(
         activity, tuple(concepts), concepts) == "CONCEPT-0002"
+
+
+@pytest.mark.parametrize("analysis", [
+    "Learners take the denominator to mean the number of pieces selected.",
+    "Students carry a claim from one experiment across every material.",
+    "",  # An empty section remains a visible schema defect.
+])
+def test_unlabelled_analysis_is_preserved_without_wordlist_classification(analysis):
+    details = "Description: Source-grounded teaching. // Misconception/ Error Analysis: " + analysis
+    normalized = cr.normalize_analysis_sections(details)
+    sections = cr.split_sections(normalized)
+    combined = [text for label, text in sections if cr.is_combined_analysis_label(label)]
+    assert combined == [analysis]
+    assert cr.analysis_components(normalized) == ("", "")
+    assert cr.normalize_analysis_sections(normalized) == normalized
+
+
+def test_cross_kind_duplicate_and_correction_tail_are_not_reclassified_or_dropped():
+    statement = "Students take the numerator to mean the denominator; actually, these have different roles."
+    details = (
+        "Description: Fractions describe equal parts. // Misconceptions: " + statement
+        + " // Error Analysis: " + statement
+    )
+    normalized = cr.normalize_analysis_sections(details)
+    assert cr.analysis_components(normalized) == (statement, statement)
+    assert normalized.count(statement) == 2
+    assert cr.normalize_analysis_sections(normalized) == normalized
+
+
+@pytest.mark.parametrize("statement", ["Compare.", "Applying the concept.", "Explain none of the above."])
+def test_terminal_mastery_check_only_requires_one_nonempty_canonical_statement(statement):
+    details = "Description: Source-grounded teaching.\nAchieving Mastery: " + statement
+    assert g._has_valid_terminal_mastery(details)
+    assert not g._has_valid_terminal_mastery("Description: Teaching.\nAchieving Mastery: ")
+    assert not g._has_valid_terminal_mastery("Description: Teaching.")

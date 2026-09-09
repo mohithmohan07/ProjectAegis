@@ -285,3 +285,19 @@ def test_a_host_entry_for_a_missing_row_is_a_hard_error(
     }
     with pytest.raises(assemble_mod.AssemblyError, match="does not exist"):
         assemble_mod.assemble(golden_envelope, settled, broken)
+
+
+def test_final_rows_freeze_complete_named_evidence_for_the_refiner(assembled, golden_envelope):
+    canonical = {
+        str(block["block_id"]): block for block in golden_envelope["canonical"]["blocks"]
+    }
+    inventory = {
+        str(item["qid"]): item for item in golden_envelope["inventory"]["items"]
+    }
+    for row in assembled[0]["rows"]:
+        evidence = row["_aegis_source_evidence"]
+        assert evidence["source_blocks"] == [canonical[bid] for bid in row.get("_source_block_ids") or []]
+        assert evidence["reference_blocks"] == [canonical[bid] for bid in row.get("_reference_block_ids") or []]
+        for item in evidence["question_task_inventory"]:
+            assert item == inventory[item["qid"]]
+        assert [item["item_id"] for item in evidence["learner_analysis_inventory"]] == list(row.get("_aegis_analysis_allotments") or [])

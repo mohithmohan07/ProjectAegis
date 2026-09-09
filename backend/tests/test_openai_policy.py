@@ -16,11 +16,12 @@ from app.services import assessment_routing
 from app.services import generation, workbooks
 
 
-# Register Q26 (2026-09-04): the default profile is TIERED. Semantic
-# authoring/adjudication request ``high``; the independent advisory critic
-# (``advisory_critic``) and mechanical restatement work request ``medium``;
-# metadata requests ``low``. ``uniform-xhigh`` (the former Q22 policy) stays
-# selectable through AEGIS_OPENAI_REASONING_PROFILE for A/B measurement.
+# Register Q31 (2026-09-07): the default profile is UNIFORM-XHIGH again
+# (Q22) — every purpose requests ``xhigh``. The TIERED cost profile of Q26
+# (semantic authoring/adjudication ``high``; the independent advisory critic
+# and mechanical restatement work ``medium``; metadata ``low``) stays
+# selectable through AEGIS_OPENAI_REASONING_PROFILE for A/B measurement;
+# this table is its registry.
 EXPECTED_REASONING_POLICY = {
     "assessment_generation": "high",
     "source_extraction": "high",
@@ -68,36 +69,41 @@ class _CapturingClient:
 
 
 def test_default_model_and_complete_reasoning_policy(monkeypatch):
+    """Register Q31: every purpose requests xhigh by default (Q22 restored)."""
     monkeypatch.delenv(openai_policy.OPENAI_MODEL_ENV, raising=False)
     monkeypatch.delenv(openai_policy.REASONING_PROFILE_ENV, raising=False)
 
     assert openai_policy.configured_openai_model() == "gpt-5.6-luna"
-    assert openai_policy.configured_reasoning_profile() == "tiered"
-    assert openai_policy.REASONING_EFFORT_BY_PURPOSE == EXPECTED_REASONING_POLICY
-    assert openai_policy.reasoning_policy() == EXPECTED_REASONING_POLICY
-    for purpose, effort in EXPECTED_REASONING_POLICY.items():
-        assert openai_policy.reasoning_effort_for(purpose) == effort
-    # Every critic adapter is the same second pass and prices below the
-    # author it audits (register Q26).
-    assert openai_policy.reasoning_effort_for("advisory_critic") == "medium"
-    assert openai_policy.REASONING_ORDER["medium"] < openai_policy.REASONING_ORDER[
-        openai_policy.reasoning_effort_for("concept_mapping")
-    ]
-
-
-def test_uniform_xhigh_profile_stays_selectable(monkeypatch):
-    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "uniform-xhigh")
-
     assert openai_policy.configured_reasoning_profile() == "uniform-xhigh"
     assert openai_policy.UNIFORM_REASONING_EFFORT == "xhigh"
+    # The registry still names every purpose (with the cost tiers as values).
+    assert openai_policy.REASONING_EFFORT_BY_PURPOSE == EXPECTED_REASONING_POLICY
     assert set(openai_policy.reasoning_policy()) == set(
         EXPECTED_REASONING_POLICY
     )
     assert set(openai_policy.reasoning_policy().values()) == {"xhigh"}
+    for purpose in EXPECTED_REASONING_POLICY:
+        assert openai_policy.reasoning_effort_for(purpose) == "xhigh"
     assert openai_policy.chat_request_policy("metadata", model="gpt-5.6-luna") == {
         "model": "gpt-5.6-luna",
         "reasoning_effort": "xhigh",
     }
+
+
+def test_tiered_cost_profile_stays_selectable(monkeypatch):
+    """Register Q26's cost profile, one variable away for A/B measurement."""
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "tiered")
+
+    assert openai_policy.configured_reasoning_profile() == "tiered"
+    assert openai_policy.reasoning_policy() == EXPECTED_REASONING_POLICY
+    for purpose, effort in EXPECTED_REASONING_POLICY.items():
+        assert openai_policy.reasoning_effort_for(purpose) == effort
+    # Under the cost profile every critic adapter is the same second pass
+    # and prices below the author it audits (register Q26).
+    assert openai_policy.reasoning_effort_for("advisory_critic") == "medium"
+    assert openai_policy.REASONING_ORDER["medium"] < openai_policy.REASONING_ORDER[
+        openai_policy.reasoning_effort_for("concept_mapping")
+    ]
 
 
 def test_unknown_reasoning_profile_is_refused_not_defaulted(monkeypatch):
@@ -140,6 +146,9 @@ def test_every_live_critic_adapter_declares_the_advisory_critic_purpose():
 
 def test_model_override_keeps_purpose_policy(monkeypatch):
     monkeypatch.setenv(openai_policy.OPENAI_MODEL_ENV, "custom-model")
+    # The cost profile keeps the purposes distinguishable; the default
+    # (uniform-xhigh, Q31) would make every assertion below read "xhigh".
+    monkeypatch.setenv(openai_policy.REASONING_PROFILE_ENV, "tiered")
 
     assert openai_policy.chat_request_policy("metadata") == {
         "model": "custom-model",
@@ -187,7 +196,8 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
     assert result == {"ok": True}
     call = _CapturingClient.completions.calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "medium"
+    # The default profile (uniform-xhigh, Q31) rides the transport unchanged.
+    assert call["reasoning_effort"] == "xhigh"
     assert call["response_format"] == {"type": "json_object"}
     assert "json" in str(call["messages"])
     assert call["max_completion_tokens"] == 321
@@ -575,7 +585,8 @@ def test_workbook_call_uses_same_policy_and_preserves_json_mode():
     assert result == '{"ok": true}'
     call = completions.calls[-1]
     assert call["model"] == "gpt-5.6-luna"
-    assert call["reasoning_effort"] == "medium"
+    # The default profile (uniform-xhigh, Q31) rides the transport unchanged.
+    assert call["reasoning_effort"] == "xhigh"
     assert call["response_format"] == {"type": "json_object"}
     assert "json" in str(call["messages"]).casefold()
     assert call["max_completion_tokens"] == 654

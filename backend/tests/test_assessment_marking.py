@@ -369,7 +369,9 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     assert payload["stage"] == "assessment.marking"
     assert payload["candidate"] == candidate
     assert payload["assessment_format_policy"] == (
-        marking.assessment_profile.assessment_format_policy(None, META)
+        marking.assessment_profile.assessment_format_policy(
+            marking.assessment_profile.resolve_for_metadata(None, META), META,
+        )
     )
     assert payload["adopted_answer_contract"] == {
         "answer_restriction": "Open",
@@ -412,7 +414,7 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     assert verdict["question_duration"] == 6.0
     assert verdict["duration_basis_count"] is None
     assert verdict["math_keyboard"] == "Yes"
-    assert verdict["flags"] == []
+    assert all("assessment_visual_evidence_unavailable" in flag for flag in verdict["flags"])
     assert verdict["blueprint_authority"] == {
         "source": "explicit_blueprint_cell",
         "cell_id": cell["cell_id"],
@@ -429,7 +431,7 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
         ),
     }
     authority = verdict["authority"]
-    assert authority["policy_version"] == "assessment-marking-8"
+    assert authority["policy_version"] == "assessment-marking-9-column-spec"
     assert "created_at" not in authority and "provider" not in authority
     stored = store.get(authority["decision_key"])
     assert stored is not None
@@ -467,7 +469,7 @@ def test_marking_replays_without_author_critic_or_fixer(monkeypatch) -> None:
 def test_stale_v7_marking_record_redecides_under_current_policy(monkeypatch) -> None:
     """Contract v2.0 §27.5 (0.5/1 rubric quantum) re-keyed the policy to v8."""
     monkeypatch.setattr(marking.config, "phase3_decision_workers", lambda: 1)
-    assert marking.MARKING_POLICY_VERSION == "assessment-marking-8"
+    assert marking.MARKING_POLICY_VERSION == "assessment-marking-9-column-spec"
     pair = (_candidate(), _cell())
     store = kernel.DecisionStore()
     calls = 0
@@ -485,7 +487,7 @@ def test_stale_v7_marking_record_redecides_under_current_policy(monkeypatch) -> 
         provider=author, store=store,
     )[0]
     monkeypatch.setattr(
-        marking, "MARKING_POLICY_VERSION", "assessment-marking-8"
+        marking, "MARKING_POLICY_VERSION", "assessment-marking-9-column-spec"
     )
     current = marking.decide_markings(
         [pair], meta=META, envelope_sha256=ENVELOPE_SHA256,
@@ -494,7 +496,7 @@ def test_stale_v7_marking_record_redecides_under_current_policy(monkeypatch) -> 
 
     assert calls == 2
     assert stale["authority"]["policy_version"] == "assessment-marking-7"
-    assert current["authority"]["policy_version"] == "assessment-marking-8"
+    assert current["authority"]["policy_version"] == "assessment-marking-9-column-spec"
     assert stale["authority"]["decision_key"] != (
         current["authority"]["decision_key"]
     )
@@ -837,28 +839,28 @@ def test_objective_correct_marker_is_semantically_immutable(monkeypatch) -> None
             "sum exactly",
             id="answer-wrong-sum",
         ),
-        # Contract v2.0 §27.5 (RUB-002): a criterion is exactly 0.5 or 1 —
-        # a larger award is refused even when the arithmetic still sums.
+        # Owner column policy: awards must be positive multiples of 0.5,
+        # even when nonconforming fractions would still sum correctly.
         pytest.param(
             "single",
             lambda row: (
-                row["answers"][0].__setitem__("answer_weightage", 1.5),
-                row["answers"][1].__setitem__("answer_weightage", 0.5),
+                row["answers"][0].__setitem__("answer_weightage", 1.25),
+                row["answers"][1].__setitem__("answer_weightage", 0.75),
             ),
-            "is not 0.5 or 1",
+            "positive multiple of 0.5",
             id="answer-quantum",
         ),
         pytest.param(
             "multipart",
             lambda row: (
                 row["sub_questions"][0]["keywords"][0].__setitem__(
-                    "weightage", 1.5
+                    "weightage", 1.25
                 ),
                 row["sub_questions"][0]["keywords"][1].__setitem__(
-                    "weightage", 0.5
+                    "weightage", 0.75
                 ),
             ),
-            "is not 0.5 or 1",
+            "positive multiple of 0.5",
             id="keyword-quantum",
         ),
         pytest.param(
@@ -1046,7 +1048,7 @@ def test_fixer_is_revalidated_by_the_same_semantic_and_arithmetic_checker(
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.marking",
         "unit_id": "CAND-DESC",
-        "policy_version": "assessment-marking-8",
+        "policy_version": "assessment-marking-9-column-spec",
     }
 
 
@@ -1413,7 +1415,7 @@ def test_msbshse_matrix_duration_rejects_a_positive_but_wrong_value(
         ("objective", "Fill in the blanks", 1, 1),
         # Contract v2.0 §21: True or False is a Subjective row with one
         # placeholder-bound answer, so it is likewise a one-subpoint cell.
-        ("subjective", "True or False", 1, 1),
+        ("subjective", "True/False", 1, 1),
         # The Subjective fixture contains two declared response slots.
         ("subjective", "Fill in the blanks", 2, 2),
     ],
@@ -1457,7 +1459,7 @@ def test_msbshse_per_subpoint_duration_uses_contract_bound_basis(
         ("objective", "Match the Following"),
         ("objective", "Fill in the blanks"),
         # Contract v2.0 §21: True or False lives on the Subjective sheet.
-        ("subjective", "True or False"),
+        ("subjective", "True/False"),
     ],
 )
 def test_msbshse_compound_subpoints_fail_before_provider(

@@ -420,6 +420,7 @@ def run(
                 env,
                 copy.deepcopy(stage_rows),
                 provider=injected.get("polish"),
+                critic=injected.get("critic"),
                 store=store,
                 fixer=injected.get("fixer"),
             )
@@ -557,6 +558,10 @@ def run(
             "decision_flags": {},
             "validation": [],
             "refused": str(error),
+            # A refused map is still THIS run's map (register Q29): the
+            # refusal must stage against this chapter, never be read as
+            # another run's authority.
+            premap_mod.RUN_IDENTITY_FIELD: premap_mod.run_identity(env),
         }
         progress.log(
             "Pre-Learning map REFUSED and not shipped: " + str(error)

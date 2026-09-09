@@ -69,6 +69,8 @@ def install(generation: ModuleType | None = None) -> None:
                                 reading.get("dropped_furniture") or []
                             ),
                             "provenance": reading.get("provenance") or {},
+                            "source_comparisons": reading.get("source_comparisons") or [],
+                            "review_flags": reading.get("review_flags") or [],
                         }
                     if reading.get("mode") == "live":
                         mmd_text = (
@@ -150,6 +152,10 @@ def _reading_for_run(
     except Exception:  # noqa: BLE001 — an unreadable envelope is no prior
         prior = None
     sections = _assessment_sections()
+    if prior:
+        existing = chapter_reading.cached_reading(raw, sections, allow_legacy=True)
+        if existing is not None:
+            return existing
     if prior and chapter_reading.cached_reading(raw, sections) is None:
         progress.log(
             "This run's checkpoints were compiled before chapter reading "

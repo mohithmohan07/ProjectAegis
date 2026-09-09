@@ -1601,6 +1601,529 @@ contract, and §2 forbids blending:**
 verdict into code (Rule 1): every change is a cell's type, marker or
 resolution, and no content decision changed hands.
 
+### Q29 · Decided — the Pre lane is bound to the run it was authored for
+
+Owner input, 6–7 Sep 2026: "the pre learning built wasn't so great either"
+— audit the Pre lane against the previous PRs for what the handoffs
+dropped. The audit ran over the same eleven-chapter corpus as Q28 and over
+the code at HEAD; the three findings below were confirmed in both places
+(the corpus reproduces them, and the code trace names the seam). Each is a
+mechanic: an identity comparison, a delimiter, a count against one. No
+content decision changed hands (Rule 1).
+
+**Implemented:**
+
+* **The Pre authority records the run it belongs to, and staging refuses
+  another run's.** Corpus: the School Bell Rings Again run shipped Self
+  Help Is the Only Way's Pre Master (`aegis_master_REL-8b37df…_v1.xlsx`,
+  every row carrying `06MSEN_SelfHelpIsth_…_PrL` identities) beside its
+  own, correct, Pre Concept file — and all eight School Bell Pre concepts
+  shipped with zero questions. Code: the Pre bundle carried no chapter,
+  the sidecar restore read a process-scoped ContextVar's directory rather
+  than the job's, staging preferred whatever arrived first, and Output
+  02's manifest entry never compared the frozen Master's lineage with the
+  staged payload's. Now `premap.build` stamps `run_identity` (the
+  envelope's frozen `chapter_id`/`chapter_code`, `source_contract_hash`,
+  `envelope_sha256`) on every map, including a refused one; the release
+  bundle lifts it; `stage_pre_release_from_run` compares every authority
+  in its chain against the chapter being staged
+  (`generation.pre_release_identity_defect`), refuses a mismatch, records
+  it under the payload's own `pre_authority_defects` key with the issue
+  `pre_learning_authority_not_this_run`, and falls through to the next
+  authority — a refusal that leaves no rows blocks the database write
+  (Diagnostic); one that a later authority of this run repaired is a
+  warning. `restored_pre_release` takes the job's directory explicitly
+  (the four-output deposit handoff passes the audited job's; the Phase 3
+  session is only the fallback for a caller with no job) and refuses a
+  map whose recorded source contract is not the envelope's beside it.
+  `master_entry` keeps the entry present and disabled with
+  `MASTER_STALE_FOR_RUN` when the live Master's frozen
+  `staged_release_uid` is not the staged payload's, and the publication
+  gate's silent `continue` on that lineage mismatch is a note on the
+  receipt (`identity_review_flags`). Every comparison is dormant, and
+  says so, for an artefact recorded before the field existed — the same
+  posture the Master lane's seal gate took for pre-seal rows.
+* **`keywords` on Pre rows is a `" | "` list.** Corpus: 100 % of Pre rows
+  in five chapters read `['connected verse', 'reading fluency', …]` while
+  the same run's Post rows read the clean form. Code:
+  `premap.py` `str()`-ed a JSON-array answer into the cell, PREMAP_SYSTEM
+  named `keywords` without a format, and the writer's `_list_cell` kept
+  the repr as one token. Now `premap.keywords_cell` joins a list on the
+  exact delimiter (§16), PREMAP_SYSTEM says the shape in the Post
+  prompt's words, `bi.list_token_defects` names a bracketed, quoted
+  literal beside the DEL-001 pipe check (so the Master read-back sees it
+  through the call it already makes), and the Concept File read-back
+  checks the same `MULTI_VALUE_FIELDS` with the same function, recording
+  a `bulk_import_readback_list_cell_defect` decision.
+* **A Pre concept with no routed question is a blocking QC finding
+  (§8.6).** Corpus: every School Bell Pre concept, and the hand-built Pre
+  Masters the owner had to write. Code: the plan prompt licensed a zero
+  plan ("plan zero only when that is true"), and nothing compared any
+  concept's routed count to one — the row rendered as a questionless tail
+  and the Pre lane's QC accounting skipped items entirely. Now
+  `release_qc.PRE_CONCEPT_UNASSESSED` blocks the database write (every
+  download ships) for each Pre row whose `_aegis_pre_generated_questions`
+  is empty, transcribing WHY from the lane's own records — the plan's zero
+  total, which the prompt now names as the model's recorded request to
+  DROP the concept (a prerequisite with no Mastery worth verifying should
+  not have become a Pre concept), with its rationale; or the recorded
+  authoring block. Nothing drops the concept: the run records the
+  request, the reviewer removes the concept or re-runs. The prior pin
+  "a lane that authored no question is a flag-free Ready release" is
+  retired by this entry; the R4 half it protected — a readable
+  "authored none" is not an unreadable snapshot — stands and is still
+  pinned.
+
+**Also recorded here (PR #291, 7 Sep 2026, jesc112.pdf):** the four
+Figure-citation gate codes (`phase2_unresolved_figure_reference`,
+`phase2_ambiguous_figure_reference` and their legacy spellings) joined
+`_PHASE2_ADVISORY_GATE_CODES`. `figure_citations_ship_for_review()` had
+emitted them as warnings since the rewritten pipeline, but the
+advisory/fatal split never listed them, so a verified 13-page extraction
+was refused over two unmatched "Fig." citations. §7.1.5 asks for every
+unresolved reference to be resolved before RELEASE; the review flag
+carries it there. Error severity still fails closed.
+
+**Stands:** everything Q26–Q28 list. The Pre lane's authoring — how many
+prerequisites, which concepts, how many questions each — remains the
+model's; this entry only makes the run unable to ship another run's
+answer, a list as a repr, or a concept it never assessed, without saying
+so.
+
+### Q30 · Decided — the owner's Pre coverage rule: five Basic and five Intermediate questions per Pre concept (amends §8 for the Pre lane)
+
+Owner ruling, 7 Sep 2026: *"I would like 5 basic and 5 intermediate level
+questions per concept of Pre Learning."*
+
+**What it changes, stated rather than blended (Rule 0).** Contract v2.0 §8
+says "No fixed count such as five questions … is permitted" and Q26
+restated it as "no quotas"; Q20 (21 Aug) had set "about 5 per concept,
+split left to the model" and the 21 Aug diagnostic posture; the 20 Aug
+steer before it was ~10 as 5 Basic + 5 Intermediate. The owner, as the
+contract's author, now fixes the Pre lane's coverage at **exactly five
+Basic and five Intermediate generated questions for every Pre concept, and
+no Advanced ones**. §8's "no fixed count" is amended for the Pre lane by
+this ruling; the contract text itself awaits the owner's v2.1 issue and is
+not rewritten here. §8.6 (at least one routed question; Q29's blocking
+finding) stands beneath it. Q29's one exception stands too: a plan of
+zero is the model's recorded request to DROP the concept, never a shipped
+concept with fewer questions.
+
+**How it is held (`phase3/pre_coverage.py`, the one place the numbers
+live):**
+
+* **A frozen run variable.** The rule (`version`
+  `pre-coverage-owner-2026-09-07`, `per_tier` `{Basic: 5, Intermediate:
+  5}`) is stamped on the Phase 3 envelope's metadata where a production
+  envelope is built (`concept_topology_contract._run_rewritten_phase3`),
+  so it is inside the seal and inside every decision key. A reused sealed
+  envelope keeps the rule, or the absence, it was sealed with — decide-
+  once. `prequestions.build` reads it back and logs which posture is in
+  force. An envelope that records no rule (sealed before this ruling; the
+  RNE golden fixtures) runs under Q26's posture in full, which is why the
+  golden replay chain is unchanged and why re-recording it under Q30
+  needs a live run.
+* **The plan.** Under the rule the plan checker adds one comparison
+  against the ONE external number the owner fixed: every plan states
+  total 10 and the split 5 Basic / 5 Intermediate exactly, or zero with
+  no split. The plan's judgment is its RATIONALE — which capabilities of
+  the Mastery each tier's questions verify. The critic's ANCHORING
+  dimension is redirected to the rationale's coverage, never the number.
+* **Authoring.** Each question is written AT its tier and carries a
+  `tier` field; the authoring checker counts each tier against the
+  plan's split (the model's own plan against its own questions, tier by
+  tier). Basic verifies that the learner holds the fundamental as the
+  concept states it; Intermediate that the learner can apply it in a
+  situation the needing Post concepts depend on — stated to the model as
+  evidence, never branched on in code.
+* **The Master.** `assessment_release_run` transports the authored tier
+  into the level stage for a generated question that carries one — the
+  level row records `mechanical_basis: authored_tier` and no model
+  verdict is asked for, because a second verdict could only break the
+  split the owner fixed. Every other candidate (the source lane, and
+  generated questions authored before the rule) keeps the independent
+  verdict exactly as before. Clustering into BG/IG families within a tier
+  stays the model's.
+* **Release QC.** `release_qc.PRE_CONCEPT_COVERAGE_OFF_RULE` blocks the
+  database write (every download ships) for a staged Pre concept whose
+  questions are tiered otherwise than the rule the payload records;
+  dormant where no rule rode the payload or the questions carry no tier.
+
+**Rule 1, plainly.** A fixed count the owner set is a product rule, not a
+judgment about the source: the code compares recorded numbers and
+transports a recorded model decision. Which capabilities the ten
+questions verify, and every question's text, remain the model's. The
+Q4/Q26 pins over `prequestions.py` (no numeric literal, no norm the model
+is anchored on) stand: the module holds no count; it reads the owner's.
+
+**Stands:** everything Q26–Q29 list except §8's "no fixed count" for the
+Pre lane, amended above.
+
+### Q31 · Decided — writing quality before spend: the Q26 cost cuts are reversed by default
+
+Owner report, 7 Sep 2026: *"since the restructure the outputs have been
+completely off … the outputs are coming out but the way they are written
+is completely off"*, narrowed by the owner to *"since the time V2.0
+contract was introduced in this PR line"* (PR 288, 4 Sep). Owner ruling
+on the causal analysis that followed: *"Can we inculcate the changes? And
+improve the prompting and intelligence as well."*
+
+**What the analysis found.** Every corrected workbook in the owner's
+correction corpus and every pre-4-Sep output on record was written under
+Q22's uniform `xhigh`, a concept Refiner over every released row, the
+Master Refiner and the touched-group QA on, a critic on every Master
+decision and three bounded corrections for a confidence shortfall. PR 288
+changed all six in one day, together with the contract's wording rules,
+and no output produced since has been measured against one produced
+before on the same source. The register recorded each cut as "one
+environment variable away for measurement"; the measurement was never
+made, and the owner's reading of the outputs is the measurement now.
+
+**What this entry decides (amends Q26's cost policy, keeps Q22 as the
+default it restores).** The writing-quality settings are the code defaults
+again, stated in `fly.toml` so a deploy cannot drift from them silently:
+
+* `AEGIS_OPENAI_REASONING_PROFILE` defaults to `uniform-xhigh` (Q22): every
+  purpose — chapter and topic descriptions, Polish, the Refiner, the
+  critics, transcription and outline — requests `xhigh`. The `tiered`
+  profile stays selectable as the cost profile; its table remains the
+  registry's stated values so the A/B the owner never ran can still be run.
+* `AEGIS_CONCEPT_REFINER` defaults to `all` (§8.3 as written before Q26:
+  every released row is refined; `flagged` and `off` stay selectable).
+* `AEGIS_MASTER_REFINER` and `AEGIS_MASTER_GROUP_QA` default on; `0`
+  switches either off.
+* `AEGIS_MASTER_CRITICS` defaults to every stage. The joint per-item review
+  after marking (contract §27 step 6, `assessment_item_review`) stays on
+  beside them — it is a contract stage, not a replacement for the critics.
+* A pure `[confidence]` shortfall goes back through the bounded
+  corrections (three attempts) like any other defect. Q26's argument — a
+  re-ask on the same evidence could only buy an inflated number — assumed
+  the feedback is contentless; it is not: the correction names the weak
+  grounding and the model may cite better evidence or rewrite the claim
+  it could not ground. The prompts still forbid inflating a score, and a
+  shortfall that survives the attempts ships flagged, as before Q26.
+
+The Q26 cost profile is one variable away in every case and is written
+beside the defaults in `fly.toml`; nothing here moves a verdict into code
+or changes a decide-once key (Rule 1; reasoning effort remains transport
+policy).
+
+**Recorded, still open for the owner.** Two v2.0 wording rules the
+analysis names as the other half of "the way they are written" are
+contract text and stand until the owner rules: Q27's verbatim Post
+questions (the source's wording ships unedited, so a source's awkward
+sentence is the learner's sentence) and §22.5's label-free Objective
+explanations. Neither is changed here. The prompt and intelligence
+improvements the owner asked for in the same breath are the next slice,
+authored against the contract and this register, never against Rule 1.
+
+**Stands:** everything Q26–Q30 list except Q26's cost-policy defaults,
+reversed above; Q26's "Recorded, not yet done" list stands unchanged.
+
+### Q32 · Decided — the 8 September owner column rules and prompt refinement
+
+**Historical implementation record:** Q33 below supersedes this entry's
+English/Mathematics-only formatting scope, `creative` spelling and fixed
+English keyboard rule for new runs. The original workbook evidence and
+v1 behavior remain recorded here; frozen v1 releases retain that behavior.
+
+Owner instruction, 8 Sep 2026: work on Project Aegis using the uploaded
+Excel specifications for how output columns are written, refine prompting
+for every API output, structure it properly and make suggestions. Evidence:
+`English_Aegis_column_spec_fill_in.xlsx` and
+`Math_Aegis_column_spec_fill_in.xlsx`. Exact cell references, file hashes,
+implementation scope, prompt-family audit and unresolved examples are in
+[the column-spec review](column-spec-review-2026-09-08.md).
+
+**What changes, stated rather than blended (Rule 0).** Completed owner
+rules in column F amend the following fields for new policy-bound runs:
+
+* English keywords use comma-space and 3–6 short terms actually taught, in
+  textual order. Relationship rosters remain space-pipe-space. The model
+  chooses terms; code projects the already-authored list.
+* English Objective explanations start with the correct lowercase option
+  label and exact answer, then the supported rationale. This resolves
+  Q31's open question about label-free explanations **for English only**.
+* English textual rubric criteria use only `content`, `language`,
+  `creative`, `evidence` in exact `[tag]: criterion` syntax. The former
+  seven-tag registry remains a legacy policy. Tags remain forbidden in
+  non-English rubrics, typed Equation/Image criteria and learner answers.
+* English and Mathematics Descriptive criterion weights permit positive
+  multiples of 0.5 rather than only 0.5 or 1. Exact parent/child sums,
+  real numeric storage, blank unused slots and the separate four-mark
+  criterion-count safeguard remain.
+* Generated question source is exact `UpSchool DB`; source-drawn question
+  source remains the run publication. This amends Q27's one-source rule
+  **only for authored questions**. Concept source and chapter publication
+  do not change.
+* Objective and valid Subjective rows are `Specific`. Descriptive
+  restriction remains a model decision from the real task. English
+  `math_keyboard` is exact `No`; Mathematics remains demand-dependent.
+
+Subject adapters are chosen from run metadata, never the subject of an
+example in either workbook. The shared policy is
+`owner-column-spec-2026-09-08`, carried by newly resolved profiles. A
+persisted resolved profile without it keeps the legacy contract; a replay
+does not silently acquire this amendment.
+
+**Writing scope.** Prompts distinguish teaching description from mastery,
+learner explanation from evaluator criteria, and source evidence from
+instructions. Chapter/topic descriptions use original connected prose;
+English specifies 3–5 chapter sentences and 2–4 topic sentences. Optional
+learner analysis is omitted when irrelevant rather than fabricated. Group
+descriptions name the exact assessed capability in one evaluator-facing
+sentence. Changed author and critic prompts retain their exact response
+schemas and protected fields. No prose-quality judgment moves into code.
+
+**Explicitly held open.** English topic-title rules omit the topic suffix
+used by their concept examples. Math topic title/display rules and concept
+ID grammar disagree with their examples; its placeholder example includes
+an entire question; its 0/1 Objective weights conflict with exact totals
+above one mark; its `post_topics` instruction says pre topics. Current
+canonical identities, display names, bare placeholder letters, marks sums
+and Post roster behavior stand pending the focused rulings in the review.
+Examples do not authorize copying unrelated chapter facts or stale assets.
+
+The update cells distinguish fresh content (`No`) from intentional changes
+to existing content (`Yes`). Fresh generation still emits `No`; this
+amendment does not invent an update workflow or infer existing entity IDs.
+Raw template duplicate-header counts do not change Q27's registered
+72/440/149 output schema.
+
+**Q32 export correction:** Contract §24 and both supplied sheets' Answer
+blocks F18/F23/F25 require equivalent, non-additive parent and child rubric
+views. Existing code incorrectly removed the parent view. Current column
+policy restores it by mechanically projecting the ordered child criteria
+into the main rubric columns and validating exact equivalence. Internal
+scoring remains child-owned; no semantic judgment or second award is added.
+Legacy frozen profiles retain their recorded export behavior.
+
+**Stands:** Q27's verbatim Post source questions, Q29's run binding, Q30's
+five Basic and five Intermediate Pre questions per concept, Q31's restored
+quality defaults, all other Q26–Q31 rulings, model author/independent critic
+ownership and the release/artefact distinction. This records an
+implementation amendment, not a claim of measured live writing quality or
+authorization to merge or deploy.
+
+### Q33 · Decided — universal column rules and owner review before step removal
+
+Owner clarification, 8 Sep 2026: the two supplied subjects are examples of
+how Aegis outputs must be written, not a restriction to those subjects.
+Only English rubric tags such as `[content]` and `[creativity]` belong in
+rubrics; other subjects must not carry them. The owner also requires
+end-to-end attention to source-topic absorption, concept decomposition,
+teaching detail, KaTeX, hosted images and usable evaluation rubrics, and
+supplied varied source PDFs for that review. The owner explicitly requires
+being consulted **before any unnecessary run step is removed**.
+
+**Universal format, with one explicit subject exception.** New profiles
+carry `owner-column-spec-2026-09-08-v2`. Every subject uses the same output
+column rules: comma-space keyword cells, correct lowercase option label
+and exact answer at the start of Objective explanations, positive
+multiples of 0.5 for Descriptive criterion weights, exact totals and
+non-additive multipart parent/child rubric views. Relationship lists keep
+their pipe delimiter. Teaching descriptions use original connected prose;
+the 3–5 chapter sentence, 2–4 topic sentence and 3–6 relevant keyword
+guidance applies across subjects. These are model writing instructions,
+not semantic count thresholds.
+
+The English-only registry is `content`, `language`, `creativity`,
+`evidence`, in exact `[tag]: criterion` syntax, restricted to textual
+English Descriptive criteria. The owner's latest `creativity` spelling
+supersedes v1's `creative`. No functional rubric tag belongs in other
+subjects, learner-facing fields, or typed Equation/Image criteria. The
+actual subject, grade, source and response demand still determine the
+pedagogy through API authoring and independent review; shared formatting
+does not mean identical content across subjects.
+
+Keyboard mode is response-dependent in every subject, authored by the API
+and checked by its critic. Objective's keyboard cell remains blank;
+Subjective/Descriptive use exact `Yes` or `No`. Q32's blanket English `No`
+is removed from new policy because the clarified subject exception is
+rubric tags, not response mechanics. This changes a column policy and
+does not remove a pipeline stage. Existing explicit category/marks/duration
+profiles continue to apply; a subject-specific example does not select or
+invent one.
+
+Each criterion must name observable evidence relevant to the actual task,
+allow valid alternatives under its adopted answer contract, and avoid
+double-credit or unasked requirements. Independent demands must not be
+bundled into an omnibus criterion. A coherent criterion may exceed one
+mark under the half-step policy; the separate existing minimum of two
+criteria for a four-mark single-part Descriptive answer stands.
+
+**Replay and evidence.** Persisted v1 snapshots keep their recorded
+delimiters, explanation prefixes, tag registry and keyboard policy.
+Persisted profiles with no column-policy snapshot keep the legacy contract.
+The author, critic, release checks and workbook projection read the same
+carried policy. Original uploaded workbook cells are retained as evidence;
+Q33 corrects their initial interpretation rather than rewriting that
+evidence. The six identity/placeholder/weight representation conflicts in
+the review remain open where this clarification does not resolve them.
+
+**Removal requires a concrete proposal and the owner's prior approval.**
+Review the whole run and identify a proposed removal's purpose, replacement
+coverage, expected effect and evidence first. Do not disable, bypass or
+delete a stage on the basis of this request alone. Existing author/critic,
+refiner and evidence-preservation stages remain in place until the owner
+approves a specific proposal. Semantic judgments remain API-driven.
+
+**Validation limit.** Cross-subject dry regressions cover author payloads,
+mechanical validation, XLSX read-back, tag containment and frozen policy
+replay. They do not establish live chapter quality, successful Fly image
+hosting or a complete live end-to-end run. Source-format diversity and
+image/KaTeX correctness must be assessed with the supplied chapter evidence
+and explicit live results before claiming those outcomes. No merge,
+deployment or production database write is authorized by this entry.
+
+### Q34 · Decided — API-owned learner analysis and mastery quality
+
+Owner approval, 8 Sep 2026: **“Yes, please.”**, answering the concrete
+proposal to replace the remaining concept learner-analysis word-list and
+80% word-overlap checks with model author/critic review while preserving
+formatting, identity and scoring checks. The proposal also identified the
+mastery-text substance thresholds. This is the specific prior approval
+required by Q33, not authorization for other stage removals.
+
+**Approved removal, in both learning lanes and every subject.** Retire the
+generic-misconception/error vocabularies, required belief/action framing,
+80% analysis token overlap, and the four-word/twelve-character mastery
+substance test. Delete the corresponding predicates and semantic finding
+codes rather than leaving them disabled. The deeper trace found mirrored
+behavior in `concept_refiner.normalize_analysis_sections`: it filtered,
+reclassified and deduplicated authored insights by their wording. Remove
+that behavior too. Preserve unclassified content for review, preserve
+explicitly selected kinds, and retain every authored mastery statement
+instead of choosing the last one as “more substantive.”
+
+**Replacement coverage.** Strengthen the existing Settle, Analyse,
+Premap/Preanalyse, Polish and final Refiner author/critic instructions.
+Review misconception versus faulty application by meaning, duplication by
+the claim and consequence, usefulness against supplied evidence, and
+mastery as an observable supported capability. A concise statement can be
+complete. An empty inventory can be justified. Neither preferred verbs nor
+shared vocabulary determines the verdict. Source-backed authors/critics
+see their existing chapter or prerequisite evidence; the final Refiner
+reviews the assembled teaching row and must not pretend it saw source
+material absent from its request. No extra routine concept-quality pass
+is added; conditional Polish remains conditional and Q31's all-row Refiner
+remains in place.
+
+**Content and review preservation.** Empty-inventory dissent and reviewer
+unavailability must survive at inventory scope and on the affected map's
+rows, even when there is no item ID to carry a flag. Existing historical
+semantic flags remain visible. An explicit model-driven instruction round
+now receives one independent advisory critic with the original and
+proposed records, instruction, and lane-appropriate source evidence.
+Its dissent/unavailability is recorded without rejecting an applicable
+author proposal. Exact manual edits remain user-owned and API-free.
+
+**Mechanical checks remain.** Keep required fields, exact section shape,
+nonempty explicitly present analysis components, mastery marker presence,
+location and count, identity/allotment accounting, protected fields,
+KaTeX/image format, rubric tags and score arithmetic. Missing or duplicate
+mastery markers can still nominate an API repair; the validator cannot
+decide that a nonempty statement is too short to mean enough. Stored
+decisions remain immutable; changed author/critic instructions use distinct
+decision identities rather than masquerading as previously reviewed work.
+
+**Bounded scope and evidence.** Other inherited semantic heuristics,
+including Description length/placeholder/copied-source checks, Type/Case
+checks and Settle's identical mastery-string check across concepts, are
+outside this approved removal. Do not claim all deterministic semantic
+heuristics have been purged. Their removal needs a separate concrete
+proposal under Q33. The associated review records dry regression results;
+there is no measured live quality result, production provider run, Fly
+upload, merge or deployment in this amendment. Q33's universal column
+policy v2 and English-only rubric-tag exception stand unchanged.
+
+
+### Q35 — DECIDED — Complete evidence, efficient execution and exact output vocabulary
+
+**Owner ruling (8 September 2026).** The owner approved all recommendations in
+`Aegis_End_to_End_Review_and_Optimization_Proposal.md`, then clarified that the
+reported deterministic category/group regression concerns the **field values**
+(such as `Fill in the blanks`), not how a question is judged to belong to a
+category. This amendment follows merged PR #293 and its verified baseline
+`feed425adc9c8a096c7940ecec5aefba7e0d6fad`.
+
+**Approved implementation.** Supply complete specifically referenced source,
+task, prerequisite and visual evidence to existing authors and critics; preserve
+cross-page and table/figure relationships and complete crops; separate printed
+caption provenance from authored public alt text; independently review direct-MMD
+normalization without repeating the verified-PDF review. Preserve malformed
+learner-facing content and its before/after repair evidence. Replace the audited
+remaining Description/copied-prose/Type/Case meaning heuristics with the existing
+API semantic review and repair owners. Exact syntax, identity, inventory,
+arithmetic, image and KaTeX checks remain mechanical.
+
+Forward adopted answer-space contracts and accepted equivalents to rubric review;
+make exported scoring sufficient for equivalent and partial-credit responses;
+protect complete source tasks including Objective options and figures. Reconcile
+stale Open/Specific instructions with Q26; existing accepted source/language plans
+govern concept skeletons. Detect aggregate multipart capacity conflicts early,
+preserve all scoring evidence and never silently truncate or split a source task.
+
+Implement repeated-prefix caching, bounded independent parallelism, strict
+transport schemas where the complete response contract supports them, interrupted
+author/critic resume, and attributable attempt/wait/cost records. Incremental
+Master validation must preserve per-unit rollback, complete topology checks and a
+final full workbook readback; it must demonstrate parity before replacing a full
+per-unit check. Savings are measured, never inferred from a passing mock test.
+
+**Exact output vocabulary.** Restore the historically declared presentation
+labels through one versioned, deterministic serializer/allowed-value contract.
+Only explicit spelling/casing/plural aliases may map to a canonical label; no
+question text, command words, marks or meaning heuristics assign a category or
+tier. Category/difficulty judgments retain their existing API owners and carried
+blueprint decisions. `Basic`, `Intermediate`, `Advanced` are exact output labels.
+Distinct category/mark profiles retain their separate identity. Persist the
+vocabulary with new profiles and preserve the labels of already-frozen runs.
+The historical evidence and alias table are recorded separately in
+`docs/category-group-history-2026-09-08.md`.
+
+**Ratified representation interpretations.** Topics use unique
+`ChapterBaseID_TNN`, concepts use `TopicID_CNN`, display names remain plain and
+rosters reuse exact decorated titles. Subjective placeholders store `a`, stems
+store `$$a$$`, and learner text displays `____`. Correct Objective option weight
+equals the accepted item marks; distractors have zero weight. `post_topics`
+contains Post topics. The governing Pre prerequisite boundary remains earlier
+grade/year; generic assessment calibration must be explicit and must not borrow
+an unrelated institution's profile. Chapter duration keeps its separate rule.
+
+**Preserved scope.** Luna, uniform xhigh, all configured critics, all-row Concept
+refinement, Master refinement, group QA, and five Basic plus five Intermediate
+questions per retained Pre concept remain in effect. No reduction of these stages
+or coverage, interactive Batch substitution, production restart/deployment or
+unmeasured quality claim is authorized by this amendment. Implementation and dry
+acceptance can proceed autonomously; live provider/Fly acceptance depends on the
+required configured access and a separately recorded run scope. The original
+master-contract document remains a verbatim historical authority; this register
+records amendments rather than silently rewriting it.
+
+### Q36 — DECIDED — Durable question numbering and current workflow tests
+
+**Owner ruling (9 September 2026).** After the audit showed six obsolete
+workflow assertions and one genuine highest-number reuse bug among the seven
+expected failures, the owner approved implementing the proposed fixes and
+rerunning CI with zero expected failures.
+
+Persist atomic per-family highwater counters independently of questions,
+concepts and releases. Continue existing label families without renumbering.
+Record supplied/imported labels and staged Master labels; recover the highest
+retained live or historical release number on startup. The same accepted Master
+run replays a durable, content-bound reservation, preserving labels and cached
+Refiner decisions. Changed accepted work obtains a fresh reservation. Do not
+hold a database write lock across provider calls or commit unrelated caller edits.
+Previously deleted labels absent every retained record cannot be reconstructed.
+
+Migrate the six old tests to the current staged-generation, explicit-publication
+and downloadable-diagnostic contracts, preserving their formatting, topology,
+source-merge, checkpoint-recovery and conversion-failure assertions. Remove their
+expected-failure exemptions and the numbering exemption only once the actual
+behaviors pass. This authorizes no semantic classifier changes, stage removal,
+model/effort reduction, production merge or deployment.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

@@ -481,6 +481,15 @@ def _native_tasks(
     figure_payload = fallback._figure_payload_from_canonical(
         {"figures": figures, "images": images}
     )
+    # The parser's historical caption cleaner drops printed punctuation.
+    # Source captions are now immutable evidence in both compilers; keep the
+    # same exact metadata contract rather than masking it in the machine diff.
+    for source_block in fallback._page_block_index(page_acsd).values():
+        if source_block.get("kind") != "figure":
+            continue
+        payload = figure_payload.get(str(source_block.get("asset_url") or ""))
+        if payload is not None and payload[0] in figures_by_id:
+            fallback._preserve_source_figure_metadata(figures_by_id[payload[0]], source_block)
     figure_by_ref: dict[str, list[str]] = {}
     for figure in figures:
         for reference_id in figure.get("reference_ids") or []:

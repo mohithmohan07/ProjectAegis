@@ -406,215 +406,232 @@ def _resilient_openai_multimodal_json(
                 "brief, do not restate the input, and spend tokens on completing "
                 "every required opaque ID exactly once."
             )
-        try:
-            generation._acquire_openai_slot(gate, purpose=purpose)
+        with openai_usage.request_attempt(
+            requested_model=str(request_policy["model"]), purpose=purpose,
+            provider=model_provider.active_provider(),
+            reasoning_effort=str(request_policy.get("reasoning_effort") or ""),
+            service_tier=str(request_policy.get("service_tier") or ""),
+        ):
             try:
-                response = client.chat.completions.create(
-                    **request_policy,
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": str(system or "") + recovery_instruction,
+                generation._acquire_openai_slot(gate, purpose=purpose)
+                openai_usage.record_service_started()
+                try:
+                    response = client.chat.completions.create(
+                        **request_policy,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": str(system or "") + recovery_instruction,
+                            },
+                            {"role": "user", "content": content},
+                        ],
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": response_schema,
                         },
-                        {"role": "user", "content": content},
-                    ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": response_schema,
-                    },
-                    max_completion_tokens=current_budget,
-                )
-            finally:
-                generation._release_openai_slot(gate)
-            try:
-                openai_usage.record_response(
-                    response, requested_model=request_policy["model"]
-                )
-            except Exception:
-                pass
+                        max_completion_tokens=current_budget,
+                    )
+                except BaseException as exc:
+                    openai_usage.record_attempt_outcome("provider_error", error=exc)
+                    raise
+                finally:
+                    openai_usage.record_service_ended()
+                    generation._release_openai_slot(gate)
+                try:
+                    openai_usage.record_response(
+                        response, requested_model=request_policy["model"]
+                    )
+                except Exception:
+                    pass
 
-            choice = response.choices[0]
-            finish_reason = str(getattr(choice, "finish_reason", "") or "")
-            message = choice.message
-            refusal = str(getattr(message, "refusal", "") or "").strip()
-            raw = getattr(message, "content", "") or ""
-            if not isinstance(raw, str):
-                raw = str(raw)
+                choice = response.choices[0]
+                finish_reason = str(getattr(choice, "finish_reason", "") or "")
+                message = choice.message
+                refusal = str(getattr(message, "refusal", "") or "").strip()
+                raw = getattr(message, "content", "") or ""
+                if not isinstance(raw, str):
+                    raw = str(raw)
 
-            parsed: object | None = None
-            parse_error: Exception | None = None
-            try:
-                parsed = json.loads(raw or "{}")
-            except Exception as exc:  # JSONDecodeError plus compatible clients
-                parse_error = exc
+                openai_usage.record_attempt_outcome("invalid_json")
+                parsed: object | None = None
+                parse_error: Exception | None = None
+                try:
+                    parsed = json.loads(raw or "{}")
+                except Exception as exc:  # JSONDecodeError plus compatible clients
+                    parse_error = exc
 
-            if refusal:
-                raise ValueError(
-                    f"{_provider_label()} {label} refused schema {schema}: {refusal[:500]}"
-                )
+                if refusal:
+                    openai_usage.record_attempt_outcome("refused_response")
+                    raise ValueError(
+                        f"{_provider_label()} {label} refused schema {schema}: {refusal[:500]}"
+                    )
 
-            # Some providers mark the response as length-limited after emitting a
-            # complete closing brace. Accept it only after proving every required
-            # field/row is present; semantic/identity validators still run at the
-            # caller boundary.
-            if isinstance(parsed, dict) and _matches_schema_shape(
-                parsed, strict_schema
-            ):
-                if finish_reason == "length":
+                # Some providers mark the response as length-limited after emitting a
+                # complete closing brace. Accept it only after proving every required
+                # field/row is present; semantic/identity validators still run at the
+                # caller boundary.
+                if isinstance(parsed, dict) and _matches_schema_shape(
+                    parsed, strict_schema
+                ):
+                    if finish_reason == "length":
+                        progress.log(
+                            "Accepted a complete strict-schema response despite a "
+                            f"provider length marker ({label}, schema {schema}).",
+                            level="warning",
+                        )
+                    _log_effort_negotiation_once(
+                        label=label,
+                        model=selected_model,
+                        requested=str(base_policy.get("reasoning_effort") or ""),
+                        used=(
+                            ""
+                            if omit_reasoning_effort
+                            else str(request_policy.get("reasoning_effort") or "")
+                        ),
+                    )
+                    openai_usage.record_attempt_outcome("success")
+                    return parsed
+
+                incomplete_object = isinstance(parsed, dict)
+                if finish_reason == "length" or incomplete_object:
+                    openai_usage.record_attempt_outcome("truncated_response" if finish_reason == "length" else "invalid_schema")
+                    if truncations >= max_turnovers:
+                        condition = (
+                            "an incomplete strict object"
+                            if incomplete_object
+                            else "a completion-limit response"
+                        )
+                        raise _TerminalStructuredOutputError(
+                            f"{_provider_label()} {label} schema {schema} remained {condition} "
+                            f"after {truncations + 1} bounded response(s) at "
+                            f"the {current_budget}-token allowance"
+                        )
+                    previous_budget = current_budget
+                    current_budget = min(
+                        completion_cap,
+                        max(previous_budget * 2, previous_budget + 4000),
+                    )
+                    truncations += 1
+                    issue = (
+                        "returned an incomplete strict object"
+                        if incomplete_object
+                        else "reached the completion limit"
+                    )
+                    allowance = (
+                        f"with {current_budget} tokens"
+                        if current_budget > previous_budget
+                        else f"at the {current_budget}-token provider maximum"
+                    )
                     progress.log(
-                        "Accepted a complete strict-schema response despite a "
-                        f"provider length marker ({label}, schema {schema}).",
+                        f"{_provider_label()} {label} schema {schema} {issue} at "
+                        f"{previous_budget} tokens; retrying {allowance} and compact "
+                        "structured reasoning "
+                        f"({truncations}/{max_turnovers}).",
                         level="warning",
                     )
-                _log_effort_negotiation_once(
-                    label=label,
-                    model=selected_model,
-                    requested=str(base_policy.get("reasoning_effort") or ""),
-                    used=(
-                        ""
-                        if omit_reasoning_effort
-                        else str(request_policy.get("reasoning_effort") or "")
-                    ),
-                )
-                return parsed
+                    continue
 
-            incomplete_object = isinstance(parsed, dict)
-            if finish_reason == "length" or incomplete_object:
-                if truncations >= max_turnovers:
-                    condition = (
-                        "an incomplete strict object"
-                        if incomplete_object
-                        else "a completion-limit response"
+                if parsed is not None:
+                    raise ValueError(
+                        f"{_provider_label()} {label} schema {schema} returned "
+                        f"{type(parsed).__name__}, expected an object"
                     )
-                    raise _TerminalStructuredOutputError(
-                        f"{_provider_label()} {label} schema {schema} remained {condition} "
-                        f"after {truncations + 1} bounded response(s) at "
-                        f"the {current_budget}-token allowance"
+                if finish_reason and finish_reason != "stop":
+                    raise ValueError(
+                        f"{_provider_label()} {label} schema {schema} ended with "
+                        f"finish_reason={finish_reason!r}"
                     )
-                previous_budget = current_budget
-                current_budget = min(
-                    completion_cap,
-                    max(previous_budget * 2, previous_budget + 4000),
+                raise ValueError(
+                    f"{_provider_label()} {label} schema {schema} returned invalid JSON: "
+                    f"{parse_error!r}"
                 )
-                truncations += 1
-                issue = (
-                    "returned an incomplete strict object"
-                    if incomplete_object
-                    else "reached the completion limit"
-                )
-                allowance = (
-                    f"with {current_budget} tokens"
-                    if current_budget > previous_budget
-                    else f"at the {current_budget}-token provider maximum"
-                )
+            except _TerminalStructuredOutputError:
+                raise
+            except generation.OpenAIQueueTimeoutError as exc:
+                openai_usage.record_attempt_outcome("queue_timeout", error=exc)
+                raise
+            except transient_errors as exc:
+                code = generation._openai_error_code(exc)
+                if code == "insufficient_quota":
+                    raise RuntimeError(
+                        f"{_provider_label()} quota exhausted during {label}"
+                    ) from exc
+                if single_attempt:
+                    raise RuntimeError(
+                        f"{_provider_label()} {label} single attempt failed: {exc!r}"
+                    ) from exc
+                transient += 1
+                last_error = exc
+                if transient > config.OPENAI_TRANSIENT_RETRIES:
+                    raise RuntimeError(
+                        f"{_provider_label()} unavailable during {label} after "
+                        f"{transient - 1} transient retries: {exc!r}"
+                    ) from exc
+                delay = generation._transient_backoff(exc, transient)
                 progress.log(
-                    f"{_provider_label()} {label} schema {schema} {issue} at "
-                    f"{previous_budget} tokens; retrying {allowance} and compact "
-                    "structured reasoning "
-                    f"({truncations}/{max_turnovers}).",
+                    f"{_provider_label()} {label} busy ({type(exc).__name__}); retrying in "
+                    f"{delay:.0f}s.",
                     level="warning",
                 )
-                continue
-
-            if parsed is not None:
-                raise ValueError(
-                    f"{_provider_label()} {label} schema {schema} returned "
-                    f"{type(parsed).__name__}, expected an object"
+                openai_usage.wait_for_retry(delay)
+            except Exception as exc:
+                openai_usage.record_attempt_outcome("", error=exc)
+                if single_attempt:
+                    raise RuntimeError(
+                        f"{_provider_label()} {label} schema {schema} single attempt failed: "
+                        f"{exc!r}"
+                    ) from exc
+                current_effort = str(
+                    request_policy.get("reasoning_effort") or ""
                 )
-            if finish_reason and finish_reason != "stop":
-                raise ValueError(
-                    f"{_provider_label()} {label} schema {schema} ended with "
-                    f"finish_reason={finish_reason!r}"
-                )
-            raise ValueError(
-                f"{_provider_label()} {label} schema {schema} returned invalid JSON: "
-                f"{parse_error!r}"
-            )
-        except _TerminalStructuredOutputError:
-            raise
-        except generation.OpenAIQueueTimeoutError:
-            raise
-        except transient_errors as exc:
-            code = generation._openai_error_code(exc)
-            if code == "insufficient_quota":
-                raise RuntimeError(
-                    f"{_provider_label()} quota exhausted during {label}"
-                ) from exc
-            if single_attempt:
-                raise RuntimeError(
-                    f"{_provider_label()} {label} single attempt failed: {exc!r}"
-                ) from exc
-            transient += 1
-            last_error = exc
-            if transient > config.OPENAI_TRANSIENT_RETRIES:
-                raise RuntimeError(
-                    f"{_provider_label()} unavailable during {label} after "
-                    f"{transient - 1} transient retries: {exc!r}"
-                ) from exc
-            delay = generation._transient_backoff(exc, transient)
-            progress.log(
-                f"{_provider_label()} {label} busy ({type(exc).__name__}); retrying in "
-                f"{delay:.0f}s.",
-                level="warning",
-            )
-            time.sleep(delay)
-        except Exception as exc:
-            if single_attempt:
-                raise RuntimeError(
-                    f"{_provider_label()} {label} schema {schema} single attempt failed: "
-                    f"{exc!r}"
-                ) from exc
-            current_effort = str(
-                request_policy.get("reasoning_effort") or ""
-            )
-            lower_effort = _CAPABILITY_REASONING_DOWNGRADE.get(current_effort)
-            if (
-                current_effort in _CAPABILITY_REASONING_DOWNGRADE
-                and _unsupported_reasoning_effort(exc)
-                and lower_effort != current_effort
-            ):
-                # Publish the discovered ceiling process-wide before retrying:
-                # every other call path then starts here instead of paying for
-                # the same rejection again.
-                note_unsupported_reasoning_effort(
-                    selected_model, current_effort
-                )
-                if lower_effort:
-                    reasoning_cap = lower_effort
-                else:
-                    omit_reasoning_effort = True
-                next_label = repr(lower_effort) if lower_effort else "omitted"
+                lower_effort = _CAPABILITY_REASONING_DOWNGRADE.get(current_effort)
+                if (
+                    current_effort in _CAPABILITY_REASONING_DOWNGRADE
+                    and _unsupported_reasoning_effort(exc)
+                    and lower_effort != current_effort
+                ):
+                    # Publish the discovered ceiling process-wide before retrying:
+                    # every other call path then starts here instead of paying for
+                    # the same rejection again.
+                    note_unsupported_reasoning_effort(
+                        selected_model, current_effort
+                    )
+                    if lower_effort:
+                        reasoning_cap = lower_effort
+                    else:
+                        omit_reasoning_effort = True
+                    next_label = repr(lower_effort) if lower_effort else "omitted"
+                    progress.log(
+                        f"{_provider_label()} {label} does not support reasoning effort "
+                        f"{current_effort!r} for model {selected_model}; retrying "
+                        f"immediately with reasoning_effort {next_label} without "
+                        "consuming a "
+                        "protocol retry.",
+                        level="warning",
+                    )
+                    continue
+                if _definitive_client_error(exc):
+                    # Authentication, permissions, model availability, and other
+                    # invalid-request failures cannot be fixed by replaying an
+                    # identical payload.  Surface them immediately so the caller's
+                    # explicit model fallback or infrastructure handling can act.
+                    raise RuntimeError(
+                        f"{_provider_label()} {label} request was definitively rejected: {exc}"
+                    ) from exc
+                hard += 1
+                last_error = exc
+                if hard >= 3:
+                    raise RuntimeError(
+                        f"{_provider_label()} {label} schema {schema} failed after "
+                        f"{hard} bounded protocol attempt(s): {last_error!r}"
+                    ) from exc
                 progress.log(
-                    f"{_provider_label()} {label} does not support reasoning effort "
-                    f"{current_effort!r} for model {selected_model}; retrying "
-                    f"immediately with reasoning_effort {next_label} without "
-                    "consuming a "
-                    "protocol retry.",
+                    f"{_provider_label()} {label} schema {schema} returned an unusable structured "
+                    f"response ({exc}); retrying bounded protocol attempt "
+                    f"{hard + 1}/3.",
                     level="warning",
                 )
-                continue
-            if _definitive_client_error(exc):
-                # Authentication, permissions, model availability, and other
-                # invalid-request failures cannot be fixed by replaying an
-                # identical payload.  Surface them immediately so the caller's
-                # explicit model fallback or infrastructure handling can act.
-                raise RuntimeError(
-                    f"{_provider_label()} {label} request was definitively rejected: {exc}"
-                ) from exc
-            hard += 1
-            last_error = exc
-            if hard >= 3:
-                raise RuntimeError(
-                    f"{_provider_label()} {label} schema {schema} failed after "
-                    f"{hard} bounded protocol attempt(s): {last_error!r}"
-                ) from exc
-            progress.log(
-                f"{_provider_label()} {label} schema {schema} returned an unusable structured "
-                f"response ({exc}); retrying bounded protocol attempt "
-                f"{hard + 1}/3.",
-                level="warning",
-            )
-            time.sleep(2)
+                openai_usage.wait_for_retry(2)
 
 
 def _artifact_dir() -> Path | None:
