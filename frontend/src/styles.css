@@ -1111,17 +1111,33 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .console-head {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   gap: 8px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--console-border);
 }
+.console-head-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
 .console-title {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.console-copy-btn { flex: 0 0 auto; }
+.console-head-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
 }
 .console button.ghost {
   background: var(--console-panel);

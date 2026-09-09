@@ -52,6 +52,14 @@ SYLLABUS_FILES = {
     "ncf": "UnitChapter_List__NCF.xlsx",
 }
 
+# Owner correction, 9 September 2026 (95cbddf5 screenshot): the original
+# Grade 01 Maths workbook interchanged these unit/chapter cells. Retain that
+# original source and apply the explicit correction to the imported catalogue.
+_NCF_GRADE01_MATH_CORRECTIONS = {
+    ("Measurement", "Time and Measurement"): ("Time and Measurement", "Measurement"),
+    ("Numbers Beyond 20", "Playing with Numbers"): ("Playing with Numbers", "Numbers Beyond 20"),
+}
+
 # Column header aliases (lowercase).
 _COL_ALIASES: dict[str, tuple[str, ...]] = {
     "board": ("board", "syllabus", "examination board", "exam board"),
@@ -72,6 +80,16 @@ class SyllabusRow:
     subject: str
     unit: str
     chapter: str
+
+
+def _correct_supplied_row(row: SyllabusRow) -> SyllabusRow:
+    if (row.board, row.grade, row.subject) == ("NCF", "01", "Mathematics"):
+        corrected = _NCF_GRADE01_MATH_CORRECTIONS.get((
+            normalize_unit(row.unit), normalize_chapter(row.chapter),
+        ))
+        if corrected:
+            return SyllabusRow(row.board, row.grade, row.subject, *corrected)
+    return row
 
 
 def _cell_str(value) -> str:
@@ -367,7 +385,7 @@ def parse_workbook(
         else:
             rows.extend(sheet_rows)
     wb.close()
-    return rows
+    return [_correct_supplied_row(row) for row in rows]
 
 
 def _chapter_key(row: SyllabusRow) -> tuple[str, str, str, str, str]:
@@ -376,6 +394,7 @@ def _chapter_key(row: SyllabusRow) -> tuple[str, str, str, str, str]:
 
 def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
     """Insert chapter shells; skip duplicates already in the DB."""
+    rows = [_correct_supplied_row(row) for row in rows]
     created = 0
     skipped = 0
     seen: set[tuple[str, str, str, str, str]] = set()
@@ -384,6 +403,28 @@ def upsert_chapters(db: Session, rows: list[SyllabusRow]) -> dict[str, int]:
         c.chapter_code
         for c in db.query(models.Chapter.chapter_code).all()
     }
+
+    supplied = {_chapter_key(row) for row in rows}
+    for chapter in db.query(models.Chapter).filter_by(
+        board="NCF", grade="01", subject="Mathematics",
+    ).all():
+        previous = SyllabusRow(chapter.board, chapter.grade, chapter.subject,
+                               chapter.unit, chapter.chapter_title)
+        corrected = _correct_supplied_row(previous)
+        if corrected == previous or _chapter_key(corrected) not in supplied:
+            continue
+        new_code = directory.make_chapter_code(
+            corrected.board, corrected.grade, corrected.subject, corrected.chapter,
+        )
+        if new_code != chapter.chapter_code and new_code in existing_codes:
+            continue  # Existing content is retained by the normal refresh path.
+        existing_codes.discard(chapter.chapter_code)
+        chapter.unit = corrected.unit
+        chapter.chapter_title = corrected.chapter
+        chapter.chapter_display_name = corrected.chapter
+        chapter.chapter_code = new_code
+        existing_codes.add(new_code)
+        # Keep the chapter ID and every attached topic/concept/question.
 
     for row in rows:
         dedupe = _chapter_key(row)

@@ -2523,4 +2523,11 @@ Local verification: all 167 frontend tests pass and the production build
 succeeds. All 110 targeted backend accounting, currency, checkpoint and run
 journal tests pass, including mixed-provider resumes at different frozen
 exchange rates and conservative attribution of incomplete historical ledgers.
-Full PR CI remains the merge gate.
+The owner's final follow-up requests Copy beside the console title and corrects
+the two Grade 01 NCF Maths mappings: Time and Measurement → Measurement;
+Playing with Numbers → Numbers Beyond 20. Preserve the original workbook as
+source evidence, apply the correction on import and update matching existing
+chapter rows while retaining their IDs and attached content. Update the
+catalogue expectations accordingly. The owner expressly requests no further
+testing and immediate PR update/merge; the checks above preceded these final
+Copy/catalogue changes.

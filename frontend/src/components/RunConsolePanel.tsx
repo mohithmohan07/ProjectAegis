@@ -158,35 +158,43 @@ export default function RunConsolePanel() {
   return (
     <aside className={`console${expanded ? " console-expanded" : ""}`}>
       <div className="console-head">
-        <span className={`status-dot ${statusDot}`} />
-        <strong className="console-title">{state.title || "Activity log"}</strong>
-        <div className="spacer" />
-        <button className="ghost console-btn" onClick={copyLog} disabled={state.lines.length === 0}>
-          {copied ? "Copied" : "Copy"}
-        </button>
-        <button
-          className="ghost console-btn"
-          title="Download the current console snapshot: retained log, run state and latest usage. Available while running; excludes full server diagnostics."
-          disabled={state.lines.length === 0 && !state.usage && !state.active}
-          onClick={() => {
-            try {
-              downloadConsoleSnapshot(state);
-              setSnapshotError(false);
-            } catch {
-              setSnapshotError(true);
-            }
-          }}
-        >
-          Download snapshot
-        </button>
-        <button className="ghost console-btn" onClick={clear} disabled={state.active}>Clear</button>
-        <button
-          className="ghost console-btn console-expand-btn"
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {expanded ? "Shrink" : "Expand"}
-        </button>
-        <button className="ghost console-btn" onClick={() => setOpen(false)}>Hide</button>
+        <div className="console-head-main">
+          <span className={`status-dot ${statusDot}`} />
+          <strong className="console-title">{state.title || "Activity log"}</strong>
+          <button
+            className="ghost console-btn console-copy-btn"
+            aria-label={copied ? "Console log copied" : "Copy console log"}
+            onClick={copyLog}
+            disabled={state.lines.length === 0}
+          >
+            {copied ? "Copied" : "Copy"}
+          </button>
+        </div>
+        <div className="console-head-actions">
+          <button
+            className="ghost console-btn"
+            title="Download the current console snapshot: retained log, run state and latest usage. Available while running; excludes full server diagnostics."
+            disabled={state.lines.length === 0 && !state.usage && !state.active}
+            onClick={() => {
+              try {
+                downloadConsoleSnapshot(state);
+                setSnapshotError(false);
+              } catch {
+                setSnapshotError(true);
+              }
+            }}
+          >
+            Download snapshot
+          </button>
+          <button className="ghost console-btn" onClick={clear} disabled={state.active}>Clear</button>
+          <button
+            className="ghost console-btn console-expand-btn"
+            onClick={() => setExpanded((v) => !v)}
+          >
+            {expanded ? "Shrink" : "Expand"}
+          </button>
+          <button className="ghost console-btn" onClick={() => setOpen(false)}>Hide</button>
+        </div>
       </div>
 
       {snapshotError && <div role="alert">The console snapshot could not be downloaded. Please try again.</div>}

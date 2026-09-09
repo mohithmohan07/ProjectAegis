@@ -1,6 +1,14 @@
 # Aegis — working rules
 
 **Latest owner amendment: Q43 (9 September 2026).**
+The final follow-up requires Copy to remain visible beside the console title,
+and corrects the supplied Grade 01 NCF Maths pairs: unit Time and Measurement
+contains chapter Measurement; unit Playing with Numbers contains chapter
+Numbers Beyond 20. Apply these explicit corrections to catalogue imports and
+existing rows without losing their attached content. The owner explicitly
+requests no further testing and immediate PR update/merge for this follow-up;
+that supersedes the local testing gate below without bypassing repository
+access controls.
 The owner requests a collapsible usage box in the log column so the logs have
 room, plus separate GPT, Gemini and total estimated charges in rupees. Keep
 the compact cost breakdown visible when the detailed metrics are folded.
