@@ -1,8 +1,8 @@
 """Import unit/chapter syllabus structure from Excel workbooks.
 
 Loads chapter shells (no concepts or questions) so users can deposit concept
-mapping into pre-defined units and chapters. English Language is replicated
-across all boards because it is universal.
+mapping into pre-defined units and chapters. The shared upper-grade English
+Language syllabus is replicated across its four configured boards.
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from .. import bulk_import as bi
 from . import directory
 from .text_normalize import (
     normalize_board,
@@ -38,8 +37,10 @@ _MAHARASHTRA_SUBJECTS = {
     "evs": "Environmental Studies",
 }
 
-# Boards that receive the shared English Language syllabus.
-ALL_SYLLABUS_BOARDS = list(bi.BOARDS)
+# Boards whose supplied catalogue includes the shared Grades 6–10 English
+# Language syllabus. NCF's supplied workbook contains only Grades 1–3; adding
+# its board must not invent the unrelated shared upper-grade chapters.
+ALL_SYLLABUS_BOARDS = ["CBSE", "ICSE", "Maharashtra", "Karnataka"]
 
 # Known syllabus files (place under ``data/syllabus/``).
 SYLLABUS_FILES = {
@@ -48,6 +49,7 @@ SYLLABUS_FILES = {
     "maharashtra": "UnitChapter_List__Maharashtra_Board.xlsx",
     "cbse": "UnitChapter_List__CBSE.xlsx",
     "icse": "UnitChapter_List__ICSE.xlsx",
+    "ncf": "UnitChapter_List__NCF.xlsx",
 }
 
 # Column header aliases (lowercase).
@@ -466,6 +468,7 @@ def _infer_file_options(filename: str) -> dict:
         "msbshse": "Maharashtra",
         "kstate": "Karnataka",
         "karnataka": "Karnataka",
+        "ncf": "NCF",
     }.items():
         if key in lower:
             return {"default_board": board}

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useOptionalAuth } from "../Auth";
 import { useRunConsole } from "../RunConsole";
+import { displayLabel } from "../lib/displayLabels";
 import type { UploadJob } from "../types";
 import MmdViewer from "./MmdViewer";
 import SourceBookInput from "./SourceBookInput";
@@ -1582,13 +1583,18 @@ function formatCheckpointTarget(identity: Record<string, string>): string {
     "board",
     "grade",
     "subject",
-    "unit",
-    "chapter_title",
-    "chapter_code",
   ];
   const values = orderedFields
     .map((field) => identity[field]?.trim())
     .filter((value): value is string => Boolean(value));
+  const unit = displayLabel("", identity.unit, "");
+  if (unit) values.push(unit);
+  const chapter = displayLabel(
+    identity.chapter_display_name,
+    identity.chapter_title,
+    "",
+  );
+  if (chapter) values.push(chapter);
   return values.length ? values.join(" / ") : "saved destination";
 }
 

@@ -91,12 +91,14 @@ def parse_code_prefix(text: str) -> tuple[str, str, str] | None:
 
 
 _BOARD_FROM_TAG = {
+    "NCF": "NCF",
     "CBSE": "CBSE",
     "ICSE": "ICSE",
     "KSTATE": "Karnataka",
     "MSBSHSE": "Maharashtra",
 }
 _BOARD_TO_TAG = {
+    "NCF": "NCF",
     "CBSE": "CBSE",
     "ICSE": "ICSE",
     "Karnataka": "KSTATE",
@@ -104,6 +106,15 @@ _BOARD_TO_TAG = {
     "Maharashtra": "MSBSHSE",
     "MSBSHSE": "MSBSHSE",
 }
+# Known board tokens delimit the subject and optional publication. Both can
+# contain underscores (Environmental_Studies / Seed_to_Plant), so splitting
+# every underscore into a fixed four-field tuple misreads a real workbook.
+_KNOWN_BOARD_HUMAN_TAG = re.compile(
+    r"\((\d{2})_([^()]+?)_("
+    + "|".join(re.escape(board) for board in _BOARD_FROM_TAG)
+    + r")(?:_([^()]+))?\)",
+    re.IGNORECASE,
+)
 _BOOK_TAG_HINTS = [
     ("rs aggarwal", "RS"),
     ("rd sharma", "RD"),
@@ -144,12 +155,20 @@ _ICSE_HISTORY_CIVICS = {"history", "civics", "history and civics", "history & ci
 
 def parse_chapter_human_tag(text: str) -> dict | None:
     """Parse ``Chapter Name (09_Mathematics_CBSE_RS)`` style tags."""
-    m = _CHAPTER_HUMAN_TAG.search(text or "")
+    m = _KNOWN_BOARD_HUMAN_TAG.search(text or "")
+    known_board = m is not None
+    if m is None:
+        # Preserve historical/custom board tags with the legacy grammar.
+        m = _CHAPTER_HUMAN_TAG.search(text or "")
     if not m:
         return None
     grade, subject_slug, board_tag, book_tag = m.groups()
     board = _BOARD_FROM_TAG.get(board_tag.upper(), board_tag)
-    subject = infer_subject(subject_slug) or subject_slug.replace("_", " ")
+    subject = (
+        text_normalize.normalize_subject(subject_slug.replace("_", " "))
+        if known_board else
+        infer_subject(subject_slug) or subject_slug.replace("_", " ")
+    )
     return {
         "grade": grade,
         "board": board,

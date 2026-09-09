@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { useAsync } from "../hooks";
+import { displayLabel } from "../lib/displayLabels";
 import DirectoryPicker from "../components/DirectoryPicker";
 import type { Outcome, PreviewResult, Question, Scope, TagResult } from "../types";
 
@@ -102,7 +103,7 @@ function TagAssessment({ questions }: { questions: Question[] }) {
               <span>
                 <span className="badge green">tagged</span>{" "}
                 <span className="mono">{result.question_label}</span> is now also under{" "}
-                <strong>{result.concept_title}</strong>. On export it will be written
+                <strong>{displayLabel("", result.concept_title, "the selected concept")}</strong>. On export it will be written
                 as a repeated row (same label) — a tag, not a duplicate.
               </span>
             ) : (

@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "../api/client";
 import { RichDetails } from "../lib/richText";
+import { displayLabel } from "../lib/displayLabels";
 import type {
   ReleaseReviewConcept,
   ReleaseReviewEdit,
@@ -113,7 +114,13 @@ function ConceptEditForm({
           ) : (
             <input
               data-testid={`edit-field-${field}`}
-              value={draft[field]}
+              value={
+                field === "topic"
+                  || field === "parent_concept"
+                  || field === "concept_title"
+                  ? displayLabel("", draft[field], "")
+                  : draft[field]
+              }
               disabled={busy}
               onChange={(event) =>
                 setDraft({ ...draft, [field]: event.target.value })
@@ -351,7 +358,9 @@ export default function ReleaseReview() {
 
           {view.topics.map((topicGroup) => (
             <section key={topicGroup.topic} data-testid="review-topic">
-              <div className="section-title">{topicGroup.topic}</div>
+              <div className="section-title">
+                {displayLabel("", topicGroup.topic, "Untitled topic")}
+              </div>
               <div className="stack">
                 {topicGroup.concepts.map((concept: ReleaseReviewConcept) => (
                   <div
@@ -380,7 +389,9 @@ export default function ReleaseReview() {
                     ) : (
                       <>
                         <div className="row">
-                          <strong>{concept.concept_title}</strong>
+                          <strong>
+                            {displayLabel("", concept.concept_title, "Untitled concept")}
+                          </strong>
                           {concept.release_status && (
                             <span className="badge">
                               {concept.release_status}

@@ -1,6 +1,18 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q41 (9 September 2026).**
+**Latest owner amendment: Q42 (9 September 2026).**
+The owner explicitly requests fixing and merging the missing NCF chapter
+catalogue and frontend code visibility. Bundle the supplied 18-chapter Grades
+1–3 workbook, expose Board `NCF` and publication `Seed to Plant`, and preserve
+the existing catalogue. Display readable chapter/unit/checkpoint labels while
+retaining machine identities for matching, APIs and workbook contracts.
+The publication selected before a run remains Concept Source and extracted
+Post-learning Question Source; generated Pre-learning Question Source is
+`UpSchool DB`. This change does not alter pipeline/model policies or existing
+run provenance. Implement, verify and merge; the existing main-branch workflow
+handles deployment without a separate manual Fly action.
+
+**Previous owner amendment: Q41 (9 September 2026).**
 [Q41](docs/aegis-restructure.md#q41--decided--complete-question-membership-response-mechanism-classification-and-concept-review-before-masters)
 requires every source-set task, including in-text and activity/info-hub prompts,
 to enter the semantic question inventory with its necessary source context and

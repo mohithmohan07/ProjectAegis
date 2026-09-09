@@ -2455,3 +2455,42 @@ after the complete implementation and validation. This supersedes the previous
 push-approval block and merge hold; root completes the normal repository gates
 and merges the reviewed changes. No separate manual Fly deployment or restart
 is requested.
+
+### Q42 — DECIDED — NCF chapter catalogue, publication and readable labels
+
+**Owner ruling (9 September 2026).** Fix and merge the omitted chapter-deposit
+catalogue from `Unit-Chapter List_ NCF(1).xlsx`: Board `NCF`, Grades 1–3,
+publication `Seed to Plant`. The original workbook contains 18 chapters and
+is bundled without modification as `UnitChapter_List__NCF.xlsx`. Its subjects,
+units and chapter wording remain source-owned; only the embedded identity
+suffixes are removed from readable catalogue names. Preserve all existing
+catalogue rows and do not extend NCF with unrelated upper-grade syllabus rows.
+Startup must import the new entries into an already populated installation
+and remain idempotent on subsequent starts.
+
+**Source rules.** Expose `Seed to Plant` in the publication selector. The
+publication selected for the run remains Concept Source and extracted
+Post-learning Question Source. Generated Pre-learning Question Source remains
+exact `UpSchool DB` under the existing current column policy. Do not substitute
+the chapter's identity tag, filename or accumulated database provenance for
+the selected publication; do not rewrite historical run provenance.
+
+**Frontend.** Show readable chapter, unit, topic, concept and checkpoint target
+labels. Prefer display names and omit recognized identity suffixes and explicit
+chapter-code fields. Preserve machine IDs in API/checkpoint data and workbook
+contracts so hiding a code does not change the selected chapter or its resume
+identity. Clarify the Source field's hint to explain the Pre/Post distinction.
+Human chapter tags must round-trip multiword subjects and publications, including
+`Environmental_Studies` and `Seed_to_Plant`, using the Board token as their
+boundary while retaining the historical custom-board parsing path.
+
+**Validation and delivery.** Verify all 18 attachment rows, NCF identity
+round-trips, source vocabularies, bootstrap idempotence, unchanged existing
+catalogue rows and frontend code absence/selection behavior. The owner
+explicitly authorizes merge after checks; existing automatic Fly deployment
+follows that merge. This changes no model or content-authoring policy.
+
+Local verification: 231 backend catalogue/import/source/identity checks and
+all 164 frontend tests pass; the frontend production build succeeds. All
+2,774 rows from the five existing bundled workbooks compare unchanged, and
+the NCF addition contributes exactly 18 rows. Full PR CI is the merge gate.

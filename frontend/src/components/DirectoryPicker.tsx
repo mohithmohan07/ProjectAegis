@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { api } from "../api/client";
+import { displayLabel } from "../lib/displayLabels";
 import type { BoardNode, ChapterDetail, ChapterRef, Scope } from "../types";
 
 /**
@@ -107,7 +108,11 @@ export default function DirectoryPicker({
     setScopeType("chapter");
     setPicked([]);
     setInitialSelectionMessage(
-      `Saved checkpoint target selected: ${matchedChapter.chapter_title}.`,
+      `Saved checkpoint target selected: ${displayLabel(
+        matchedChapter.chapter_display_name,
+        matchedChapter.chapter_title,
+        "saved chapter",
+      )}.`,
     );
   }, [initialChapterIdentity, loading, reloadSignal, tree]);
 
@@ -126,12 +131,24 @@ export default function DirectoryPicker({
       return;
     }
     if (scopeType === "chapter") {
-      onScope({ type: "chapter", ids: [chapter.id], label: chapter.chapter_title });
+      onScope({
+        type: "chapter",
+        ids: [chapter.id],
+        label: displayLabel(
+          chapter.chapter_display_name,
+          chapter.chapter_title,
+          "Untitled chapter",
+        ),
+      });
     } else if (picked.length) {
       onScope({
         type: scopeType,
         ids: picked,
-        label: `${picked.length} ${scopeType}(s) in ${chapter.chapter_title}`,
+        label: `${picked.length} ${scopeType}(s) in ${displayLabel(
+          chapter.chapter_display_name,
+          chapter.chapter_title,
+          "Untitled chapter",
+        )}`,
       });
     } else {
       onScope(null);
@@ -231,7 +248,11 @@ export default function DirectoryPicker({
           <select id={`${idBase}-unit`} value={unit} disabled={!subjectNode}
             onChange={(e) => { setUnit(e.target.value); reset("unit"); }}>
             <option value="">Unit…</option>
-            {subjectNode?.units.map((u) => <option key={u.unit}>{u.unit}</option>)}
+            {subjectNode?.units.map((u) => (
+              <option key={u.unit} value={u.unit}>
+                {displayLabel("", u.unit, "Untitled unit")}
+              </option>
+            ))}
           </select>
         </div>
         <div className="field">
@@ -248,7 +269,10 @@ export default function DirectoryPicker({
             }}>
             <option value="">Chapter…</option>
             {unitNode?.chapters.map((c) => (
-              <option key={c.id} value={c.id}>{c.chapter_title} ({c.concept_count} concepts)</option>
+              <option key={c.id} value={c.id}>
+                {displayLabel(c.chapter_display_name, c.chapter_title, "Untitled chapter")}
+                {` (${c.concept_count} concepts)`}
+              </option>
             ))}
           </select>
         </div>
@@ -272,7 +296,7 @@ export default function DirectoryPicker({
               {detail?.topics.map((t) => (
                 <label key={t.id} className="pick-item">
                   <input type="checkbox" checked={picked.includes(t.id)} onChange={() => toggle(t.id)} />
-                  <span>{t.topic_title}</span>
+                  <span>{displayLabel(t.topic_display_name, t.topic_title, "Untitled topic")}</span>
                   <span className="muted">{t.concepts.length} concepts · {t.pre_post_learning}</span>
                 </label>
               ))}
@@ -284,8 +308,10 @@ export default function DirectoryPicker({
                 t.concepts.map((c) => (
                   <label key={c.id} className="pick-item">
                     <input type="checkbox" checked={picked.includes(c.id)} onChange={() => toggle(c.id)} />
-                    <span>{c.concept_title}</span>
-                    <span className="muted">{t.topic_title}</span>
+                    <span>{displayLabel(c.concept_display_name, c.concept_title, "Untitled concept")}</span>
+                    <span className="muted">
+                      {displayLabel(t.topic_display_name, t.topic_title, "Untitled topic")}
+                    </span>
                   </label>
                 )),
               )}

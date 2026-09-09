@@ -13,6 +13,40 @@ def test_make_chapter_code_roundtrips_board_and_subject():
     assert directory.parse_code_prefix(code) == ("10", "CBSE", "Mathematics")
 
 
+def test_ncf_identity_roundtrips_without_an_unknown_board():
+    code = directory.make_chapter_code("NCF", "01", "English", "Thank You Taffy")
+    assert directory.parse_code_prefix(code) == ("01", "NCF", "English")
+    assert directory.chapter_tag("NCF", "01", "English", book="Seed to Plant") == (
+        "01_English_NCF_Seed_to_Plant"
+    )
+    for subject in ("English", "Mathematics", "Environmental Studies"):
+        for publication in ("", "Seed to Plant"):
+            tagged = directory.chapter_titled_cell(
+                "Sample Chapter", "NCF", "01", subject, book=publication,
+            )
+            parsed = directory.parse_chapter_human_tag(tagged)
+            assert parsed == {
+                "grade": "01", "board": "NCF", "subject": subject,
+                "book": "SEED_TO_PLANT" if publication else "",
+            }
+            restored = directory.derive_chapter_meta("Sample Chapter", tagged)
+            assert (restored["board"], restored["grade"], restored["subject"]) == (
+                "NCF", "01", subject,
+            )
+            assert directory.parse_code_prefix(restored["chapter_code"]) == (
+                "01", "NCF", subject,
+            )
+
+
+def test_ncf_publication_and_lower_grades_are_selectable(client):
+    response = client.get("/directory/vocab")
+    assert response.status_code == 200
+    vocab = response.json()
+    assert "NCF" in vocab["boards"]
+    assert {"01", "02", "03"}.issubset(vocab["grades"])
+    assert "Seed to Plant" in vocab["book_sources"]
+
+
 def test_chapter_tag_includes_book_and_board_tokens():
     assert directory.chapter_tag("CBSE", "09", "Mathematics", book="RS Aggarwal") \
         == "09_Mathematics_CBSE_RS"
