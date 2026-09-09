@@ -48,6 +48,13 @@ PRE_CLAIM_SYSTEM = (
     "begins (a 'let us recall' / 'what you already know' exercise, a "
     "revision drill of prior-grade skills). Those are pre-learning's "
     "territory and are claimed OUT of the Post assessment.\n"
+    "Read source_evidence as part of each full task: its original text, "
+    "shared context, options, complete tables, figures and recorded child "
+    "tasks can change what the learner is being asked to do. A shortened "
+    "text field alone is not the complete assessment demand.\n"
+    "The recorded parent_qid and subpart fields identify child ownership "
+    "before multipart folding; read a parent's related child evidence "
+    "through those exact links, never infer relationships from position.\n"
     "Earlier-class means an earlier grade/year. Revision of an earlier "
     "chapter in the same grade alone is not sufficient for a Pre claim. "
     "Do not invent curriculum history from a chapter title or position.\n"
@@ -71,6 +78,8 @@ PRE_CLAIM_CRITIC_SYSTEM = (
     "mislabelled as recap (the chapter-opener trap), and is any obvious "
     "earlier-class revision drill missed? Position in the chapter is "
     "never evidence either way. Dissent must name the source_qid(s). "
+    "Check the complete source_evidence, including table cells, figures "
+    "and compound child tasks; do not audit only the shortened text field. "
     "Respond with a single JSON object: "
     '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}')
 )
@@ -167,6 +176,8 @@ def decide_pre_learning_claims(
             critic = lane_policy.critic_for("pre_claim", _live_claim_critic)
     store = store or kernel.DecisionStore()
 
+    from .assessment_source_inventory import source_task_evidence
+
     payload = {
         "stage": "assessment.pre_learning_claim",
         "rules": PRE_CLAIM_SYSTEM,
@@ -177,6 +188,7 @@ def decide_pre_learning_claims(
                 "source_label": str(atom.get("source_paper_number") or ""),
                 "source_kind": str(atom.get("source_kind") or ""),
                 "text": str(atom.get("normalized_public_text") or ""),
+                "source_evidence": source_task_evidence(atom),
             }
             for atom in rows
             if str(atom.get("source_qid") or "")

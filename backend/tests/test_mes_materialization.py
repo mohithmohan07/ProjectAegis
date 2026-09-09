@@ -10,6 +10,18 @@ from app.services.phase3 import kernel
 
 ENVELOPE_SHA256 = "e" * 64
 META = {"subject": "Mathematics", "grade": "06"}
+_ASSET_URL = "https://x/a.png"
+
+
+@pytest.fixture(autouse=True)
+def _available_source_pixels(monkeypatch, tmp_path):
+    # These tests exercise accepted materialization, not missing-asset
+    # behavior. Declared external URLs are now correctly reported as missing
+    # evidence; supply real pinned pixels instead of that old placeholder.
+    from tests.test_assessment_visual_evidence import _pinned
+
+    url, _ = _pinned(monkeypatch, tmp_path)
+    monkeypatch.setitem(globals(), "_ASSET_URL", url)
 
 
 def _cell(**changes) -> dict:
@@ -41,7 +53,7 @@ def _atom(**changes) -> dict:
         "options": ["Cone", "Cube"],
         "route_evidence": {"owner": "recorded source host"},
         "assets": [{
-            "url": "https://x/a.png",
+            "url": _ASSET_URL,
             "alt": "a solid tapering to an apex",
             "order": 1,
             "sha256": "s1",

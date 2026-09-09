@@ -1,6 +1,20 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q37 (9 September 2026).**
+**Latest owner amendment: Q38 (9 September 2026).**
+[Q38](docs/aegis-restructure.md#q38--decided--question-owned-tables-visible-images-and-readable-excel)
+requires question-owned tables to appear with their question as a complete
+KaTeX array under the existing rules, or one complete faithful image where
+needed. Preserve structured source and multipart-child evidence through the
+author payload, and preserve accepted images through Concept refinement and
+cleanup. Do not flatten tables into coordinate prose or silently strip images.
+Make Excel cells readable with wrapping, field widths and native display line
+breaks paired with the required `<br>` import markers outside math. Preserve
+complete KaTeX spans and declared Equation cells byte-for-byte. A paired prose
+break imports as one logical break; all schema fields remain.
+Keep PR #297 a draft: no merge, deployment, restart or provider change while
+the owner's files are running.
+
+**Previous owner amendment: Q37 (9 September 2026).**
 [Q37](docs/aegis-restructure.md#q37--decided--run-scheduling-live-accounting-and-complete-pre-learning-capture)
 approves fixing the observed Master serialization, independent source batching,
 live cost visibility and Pre-learning evidence/splitting defects before any

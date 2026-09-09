@@ -20,7 +20,7 @@ DATA = Path(__file__).parents[1] / "data" / "Testing"
         ("Class 10 Chapter 5 Electricity.mmd", 60),
     ],
 )
-def test_phase2_source_critical_ledgers_are_ready_and_source_ordered(
+def test_phase2_source_critical_ledgers_preserve_order_and_surface_table_repairs(
     filename: str,
     expected_tasks: int,
 ):
@@ -34,11 +34,25 @@ def test_phase2_source_critical_ledgers_are_ready_and_source_ordered(
 
     canonical = compiled.canonical
     tasks = canonical["tasks"]
-    assert canonical["phase2_inventory_ready"] is True, (
-        filename,
-        compiled.report.get("phase2_issues"),
-    )
-    assert compiled.report["phase2_issues"] == []
+    # These historical parser prompts lost the table environment boundaries
+    # upstream. The current formatter retains their cells/layout evidence and
+    # exposes repair defects rather than declaring flattened prose ready.
+    expected_repairs = {
+        "RNE.mmd": {},
+        "jemh105 (1).mmd": {"QINV-0015": ["katex_row_spacing", "raw_latex"]},
+        "Class 10 Chapter 5 Electricity.mmd": {
+            "QINV-0009": ["raw_latex"], "QINV-0049": ["katex_row_spacing"],
+        },
+    }[filename]
+    assert canonical["phase2_inventory_ready"] is (not expected_repairs)
+    issues = compiled.report["phase2_issues"]
+    assert all(issue["code"] == "phase2_task_rich_text_invalid" for issue in issues)
+    assert {issue["qid"]: issue["rich_text_issues"] for issue in issues} == expected_repairs
+    for task in tasks:
+        if task["qid"] in expected_repairs:
+            assert " & " in task["display_prompt"]
+            assert r"\\" in task["display_prompt"]
+            assert "Table row" not in task["display_prompt"]
     assert len(tasks) == expected_tasks, (
         filename,
         len(tasks),

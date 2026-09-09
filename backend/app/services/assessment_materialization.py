@@ -151,6 +151,17 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "record the missing stimulus in rationale for review and recorded "
     "repair. Never invent a passage or transcript, silently omit essential "
     "source material, or adapt the task to hide the gap.\n"
+    "compound_subparts retains the original child atoms under their exact "
+    "source QIDs after they are folded into one multipart question. Read "
+    "their full source text, shared context, tables and figures as owned "
+    "evidence for those child tasks. A question-owned table or figure must "
+    "appear in the learner question beneath its owning instruction (or in "
+    "that child's sub-question text); a common stimulus appears in the "
+    "parent question before the subquestions. Use a complete KaTeX table "
+    "or the supplied complete table image. Keeping the stimulus only in "
+    "assets, source_context, an answer or an audit is not a complete "
+    "learner question. Do not create duplicate standalone child questions "
+    "or move a child-only stimulus to unrelated tasks.\n"
     "For Objective cells, return no more than six canonical options with "
     "exactly one correct marker: each answers[] entry is an object whose "
     "answer_content carries the option text (never empty, never a "
@@ -943,6 +954,8 @@ def _assemble(
                 "alternative_set_id": source.get("alternative_set_id"),
             }
         ),
+        **({"compound_subparts": copy.deepcopy(source["compound_subparts"])}
+           if "compound_subparts" in source else {}),
         "route_evidence": copy.deepcopy(source.get("route_evidence") or {}),
         "assessment_gist": copy.deepcopy(source.get("assessment_gist")),
         "assessment_eligibility": (
@@ -972,7 +985,7 @@ def _source_wording_authority(atom: Mapping | None) -> dict[str, Any] | None:
             for key in (
                 "shared_context", "source_context", "source_answer", "options",
                 "assets", "image_urls", "image_manifest", "content_objects",
-                "tables", "block_ids", "page", "source_document_hash",
+                "tables", "compound_subparts", "block_ids", "page", "source_document_hash",
             )
             if key in atom
         },

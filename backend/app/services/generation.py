@@ -1620,9 +1620,11 @@ Rules:
   page references. When the source text cites one, substitute the full actual
   content it points to (the real numbers, expression, conditions, or task) —
   e.g. write "such as expressing 1.272727... as 14/11", never "as in Example 8".
-- Do NOT embed image URLs in Description. Describe visual content
-  in words here; image URLs belong only in Types Example lines (with their
-  figure reference).
+- Preserve source-owned figures in Description and learner-analysis when they
+  support the explanation. Use their supplied canonical [img] tags with the
+  exact source URL and grounded alt text; explain the visual alongside it.
+  Do not remove or relocate a figure merely because it appears in Description.
+  Do not invent figures, image URLs, labels, or decorative images.
 - Wrap every mathematical expression exactly as [Katex] valid LaTeX [/Katex].
   Never emit raw math delimiters or raw TeX outside those tags.
 """)
@@ -2390,11 +2392,13 @@ Rules:
   and task, e.g. "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
   A figure/table reference WITH its canonical [img] tag embedded right after it
-  is valid content — keep it (in Types Example lines). Never leave a
+  is valid content — keep it in its owning section. Never leave a
   Description truncated mid-sentence while fixing artifacts.
-- Image URLs belong in canonical [img] tags on Types Example lines next to the figure
-  reference. Do not put image URLs in the Description section; describe the
-  visual in words there instead.
+- Preserve source-owned figures in Description, learner-analysis, Types and
+  Activity/Info Hub using their supplied canonical [img] tags and exact URLs.
+  Keep each figure with the explanation or source task it supports; describe
+  the visual alongside it. Do not delete or relocate figures because of the
+  section label, and do not invent figures, image URLs, or labels.
 - For merged_description issues (one cell carrying two or more concepts'
   "Description:" blocks): keep ONLY the content belonging to THIS row's
   concept — rewrite the cell so it describes exactly one concept. NEVER

@@ -1035,14 +1035,18 @@ def _electricity_page_bundle() -> dict:
     }
 
 
-def test_electricity_blocks_converter_markup_until_verified_pdf_repair():
+def test_electricity_retains_complete_visual_tables_until_verified_full_table_repair():
     _source, canonical, graph, _report, semantic = _compile_fixture(
         "Class 10 Chapter 5 Electricity.mmd",
         subject="Physics",
         chapter_title="Electricity",
     )
 
-    assert graph["status"] == "review_required"
+    # The historical Mathpix source includes visual cells and spanning
+    # resistivity rows. Keeping those tables whole now exposes the real
+    # rich-text repair requirement instead of passing flattened pipe prose.
+    assert graph["status"] == "failed"
+    assert "unsupported_table" in kr.rich_text_issues(semantic)
     assert len(graph["topics"]) == 8
     assert len(graph["subtopics"]) == 3
     assert len(graph["tasks"]) == 60
@@ -1085,20 +1089,29 @@ def test_electricity_blocks_converter_markup_until_verified_pdf_repair():
     repaired_source = phase3.render_semantic_source(repaired, canonical)
 
     assert selected["key"] == "PAGE-0004:0001"
-    assert repaired["status"] == "ready"
-    assert "<smiles>" not in repaired_source
-    assert "[[VISUAL:" not in repaired_source
+    assert repaired["status"] == "failed"
+    assert repaired.get("source_fusion_repairs") == []
+    assert "<smiles>" in repaired_source
     assert "Wires crossing without joining" in repaired_source
-    assert "[img src=\"https://aegis.example/source-assets/7/crossing-wires.jpg?sig=verified\"" in repaired_source
-    assert not kr.rich_text_issues(repaired_source)
-    assert not phase3.validate_graph(
-        repaired, canonical=canonical, semantic_source=repaired_source
-    )
+    assert "An electric cell" in repaired_source
+    assert "Voltmeter" in repaired_source
+    assert r"\begin{tabular}" in repaired_source
+    assert "unsupported_table" in kr.rich_text_issues(repaired_source)
+    assert any(issue["code"] == "semantic_source_rich_text" for issue in phase3.validate_graph(
+        repaired, canonical=canonical, semantic_source=repaired_source,
+    ))
 
+    # A whole-table candidate reaches the independent critic; its dissent
+    # remains advisory while the separate actual rich-text defect stays open.
+    complete_pages = _electricity_page_bundle()
+    complete_pages["pages"][0]["blocks"][0].update({
+        "asset_scope": "full_table",
+        "asset_url": "https://aegis.example/source-assets/7/complete-symbol-table.jpg",
+    })
     rejected = phase3.reconcile_source_anomalies(
         graph,
         canonical=canonical,
-        page_bundle=_electricity_page_bundle(),
+        page_bundle=complete_pages,
         provider=provider,
         critic=lambda payload: {
             "verdict": "verified",
@@ -1107,10 +1120,9 @@ def test_electricity_blocks_converter_markup_until_verified_pdf_repair():
             "issues": ["the visual ownership is still uncertain"],
         },
     )
-    # Under the rewrite a rejected adjudication never blocks the chapter:
-    # the block keeps its verbatim extracted text and ships flagged, and
-    # the critic's textual dissent joins the recorded issue message.
-    assert rejected["status"] == "ready"
+    # The critic's dissent does not create a new gate. The original tables
+    # and existing structural defects remain visible for source repair.
+    assert rejected["status"] == "failed"
     assert rejected.get("source_fusion_repairs") == []
     unresolved_issue = next(
         issue for issue in rejected["issues"]
@@ -1134,16 +1146,32 @@ def test_stale_markup_review_checkpoint_re_reconciles_on_resume(
     adjudicated against the verified page bundle exactly as a fresh compile
     would be, instead of re-raising the stale human-decision pause.
     """
-    source, canonical, graph, _report, _semantic = _compile_fixture(
-        "Class 10 Chapter 5 Electricity.mmd",
-        subject="Physics",
-        chapter_title="Electricity",
+    # Isolate checkpoint reconciliation from the corpus's other visual and
+    # spanning tables: one complete source table has one verified full crop.
+    source = "\n".join([
+        "# Electricity", "## 1 Circuit components",
+        r"\begin{tabular}{|l|l|}Components & Symbols \\",
+        r"Wires crossing without joining & <smiles>CC(C)(C)C</smiles> \\",
+        r"\end{tabular}",
+    ])
+    canonical = phase2.compile_phase2_source(
+        source, source_filename="electricity-symbols.mmd", consumer_module="build_concepts",
+    ).canonical
+    graph, _report = phase3.compile_semantic_graph(
+        canonical, source_text=source,
+        metadata={"subject": "Physics", "chapter_title": "Electricity", "board": "CBSE"},
     )
-    assert graph["status"] == "review_required"
+    assert graph["status"] == "failed"
     graph["classification_mode"] = "api_classified_and_verified"
 
     monkeypatch.setattr(phase3, "semantic_api_enabled", lambda: True)
     pages = _electricity_page_bundle()
+    pages["pages"][0]["blocks"][0].update({
+        "table_rows": [["Components", "Symbols"], ["Wires crossing without joining", "[[VISUAL:2]]"]],
+        "asset_scope": "full_table",
+        "asset_url": "https://aegis.example/source-assets/7/complete-symbol-table.jpg",
+        "asset_bbox": [0, 0, 1000, 1000],
+    })
     monkeypatch.setattr(
         phase3, "load_page_evidence", lambda *_args, **_kwargs: pages)
 
@@ -1192,6 +1220,10 @@ def test_stale_markup_review_checkpoint_re_reconciles_on_resume(
         resume_review_graph=copy.deepcopy(graph),
     )
     assert resumed["status"] == "ready"
+    resolved_source = phase3.render_semantic_source(resumed, canonical)
+    assert "complete-symbol-table.jpg" in resolved_source
+    assert "<smiles>" not in resolved_source
+    assert not kr.rich_text_issues(resolved_source)
 
 
 @pytest.mark.parametrize(

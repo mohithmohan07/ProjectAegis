@@ -609,12 +609,13 @@ def test_append_migrates_historical_cells_before_strict_reimport(
         column=objective_layout.column("question", "question_text") + 1,
     ).value
     assert "Answer A) stays prose." in migrated_question
-    assert "<br>a) Alpha<br>b) Beta" in migrated_question
-    assert "\n" not in migrated_question
-    assert "Table row 1, column 1: Name" in migrated_question_text
+    assert "<br>\na) Alpha<br>\nb) Beta" in migrated_question
+    assert "\n" in migrated_question
+    assert r"\begin{array}{|l|r|}" in migrated_question_text
+    assert r"\text{Name}" in migrated_question_text
     assert "|---|" not in migrated_question_text
-    assert "<br>a) Alpha<br>b) Beta" in migrated_question_text
-    assert "\n" not in migrated_question_text
+    assert "<br>\na) Alpha<br>\nb) Beta" in migrated_question_text
+    assert "\n" in migrated_question_text
 
     descriptive = migrated[descriptive_layout.sheet_name]
     answer_display = descriptive.cell(
@@ -723,12 +724,13 @@ def test_fresh_export_lowercases_legacy_objective_labels_on_the_copy(
         ).value
         workbook.close()
         assert "Answer A) stays prose." in question_value
-        assert "<br>a) Alpha<br>b) Beta" in question_value
-        assert "\n" not in question_value
-        assert "Table row 1, column 1: Name" in text_value
+        assert "<br>\na) Alpha<br>\nb) Beta" in question_value
+        assert "\n" in question_value
+        assert r"\begin{array}{|l|r|}" in text_value
+        assert r"\text{Name}" in text_value
         assert "|---|" not in text_value
-        assert "<br>a) Alpha<br>b) Beta" in text_value
-        assert "\n" not in text_value
+        assert "<br>\na) Alpha<br>\nb) Beta" in text_value
+        assert "\n" in text_value
 
         response = client.post(
             "/data/import",

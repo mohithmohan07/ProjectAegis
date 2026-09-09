@@ -2693,7 +2693,7 @@ def test_prompts_require_opening_granularity_and_canonical_media_policy():
     assert "Belgium vs Sri Lanka" not in canonicalize
     assert "lesson-plan them apart" in canonicalize
     refine = g.prompts.get_text("concepts.description_refine.system")
-    assert "Do NOT embed image URLs in Description" in refine
+    assert "Preserve source-owned figures in Description" in refine
     assert "truncated mid-sentence" in refine
     assert "Preserve any existing Activity/Info Hub" in refine
     inventory = g.prompts.get_text("concepts.question_task_inventory.system")
@@ -2719,10 +2719,10 @@ def test_prompts_require_opening_granularity_and_canonical_media_policy():
     assert "Ohm's Law" not in math_types
     descriptive_types = g.prompts.get_text("concepts.types_guidance.descriptive")
     assert "Belgium" not in descriptive_types
-    assert "Do not put image URLs in the Description" in repair
+    assert "Preserve source-owned figures in Description" in repair
 
 
-def test_cleanup_strips_mathpix_from_description_keeps_types_and_hub():
+def test_cleanup_preserves_source_images_in_description_types_and_hub():
     image_url = "https://cdn.mathpix.com/cropped/sorrieu.jpg"
     rec = {
         "topic": "The French Revolution and the Idea of the Nation",
@@ -2744,7 +2744,7 @@ def test_cleanup_strips_mathpix_from_description_keeps_types_and_hub():
     }
     out = concept_cleanup.clean_concept_record(dict(rec), neutralize_artifacts=True)
     sections = dict(cr.split_sections(out["concept_details"]))
-    assert image_url not in sections["Description"]
+    assert image_url in sections["Description"]
     assert image_url in sections["Activity/Info Hub"]
     assert image_url in sections["Types"]
     report = concept_validator.validate_concept_rows(
@@ -2752,7 +2752,7 @@ def test_cleanup_strips_mathpix_from_description_keeps_types_and_hub():
     assert not any(e["code"] == "description_image_url" for e in report["errors"])
 
 
-def test_validator_warns_on_mathpix_in_description():
+def test_validator_does_not_reject_a_source_image_because_of_its_section():
     rows = [{
         "topic": "T", "parent_concept": "P", "concept_title": "C",
         "concept_details": (
@@ -2763,7 +2763,7 @@ def test_validator_warns_on_mathpix_in_description():
         "keywords": "",
     }]
     report = concept_validator.validate_concept_rows(rows, allow_types=True)
-    assert any(e["code"] == "description_image_url" for e in report["errors"])
+    assert not any(e["code"] == "description_image_url" for e in report["errors"])
 
 
 def test_history_descriptive_examples_are_not_short_case_errors():

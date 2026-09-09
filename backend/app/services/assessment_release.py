@@ -1458,13 +1458,16 @@ def _cell_shape_findings(
     reads what the text says.
     """
     from ..bulk_import import assessment_workbook as workbook
+    from ..bulk_import.presentation import is_equation_field, to_display_rich_text
 
     findings: list[dict] = []
     for field, value in record.items():
-        # Measured on the ``<br>``-projected text the cell will hold (§17),
-        # exactly as the renderer's cell writer measures it.
+        # Include the visible Excel LF paired with each ``<br>`` token,
+        # exactly as the renderer's final cell writer measures it.
         projected = (
-            bi.to_workbook_rich_text(value) if isinstance(value, str)
+            to_display_rich_text(
+                value, raw_equation=is_equation_field(field, record),
+            ) if isinstance(value, str)
             else value
         )
         for defect in workbook.cell_text_defects(projected):

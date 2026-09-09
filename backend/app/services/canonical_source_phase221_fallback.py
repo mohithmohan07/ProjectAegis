@@ -600,10 +600,13 @@ figure in its actual zero-based row and column; textual cells remain verbatim.
 source_caption is immutable printed wording, while public_alt may describe
 the visible figure neutrally. Never erase visible source information to hide
 an answer; flag answer-revealing source apparatus for downstream assessment.
-Compare supplied FIGURE-CROP evidence with its full original page: every
+Compare supplied FIGURE-CROP and TABLE-CROP evidence with its full original page: every
 required label, arrow, unit, axis, legend and dependent panel must remain
 inside the crop. A narrow crop that loses these is incomplete even if the
 central drawing is visible. If crop evidence is unavailable, name that limit.
+For a TABLE-CROP, verify the entire grid, every header, row, column, printed
+cell value, deliberately blank cell and drawing. A cell-only crop is not a
+complete table. The table bbox must cover that complete source table.
 A task whose text is only its bare cue ("Do it.") is a defect. An
 activity's numbered steps must stay one task block. Do not rewrite or repair
 the candidate. Return needs_correction or ambiguous when any material defect
@@ -672,10 +675,70 @@ def _page_prompt(pages: list[PdfPage], *, candidate: dict[str, Any] | None = Non
         payload["instruction"] = "Verify this candidate without rewriting it."
         payload["candidate"] = candidate
         payload["crop_evidence_identity"] = (
-            "Extra evidence IDs end in FIGURE-CROP-<reading_order>. These are "
+            "Extra evidence IDs end in FIGURE-CROP-<reading_order> or "
+            "TABLE-CROP-<reading_order>. These are "
             "the candidate bbox crops of that original page, for completeness comparison."
         )
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _visual_asset_scope(block: dict[str, Any]) -> str | None:
+    """Render recorded visual ownership, never infer it from cell contents."""
+    if block.get("kind") == "figure":
+        return "figure"
+    if block.get("kind") == "table" and block.get("table_cell_visual_refs"):
+        return "full_table"
+    return None
+
+
+_FULL_TABLE_REVIEW_VERSION = "full-table-crop-review-1"
+
+
+def _full_table_review_identity(block: dict[str, Any], page_id: str, block_index: dict) -> dict:
+    return {
+        "version": _FULL_TABLE_REVIEW_VERSION,
+        "page_id": page_id,
+        "reading_order": block.get("reading_order"),
+        "evidence_sha256": _sha256_text(canonical_source._json_text({
+            "bbox": block.get("bbox"), "table_rows": block.get("table_rows"),
+            "table_cell_visual_refs": block.get("table_cell_visual_refs"),
+            "cell_figure_bboxes": [figure.get("bbox") for _r, _c, _ref, figure in _table_cell_figures(block, block_index)],
+        })),
+    }
+
+
+def _validate_full_table_crop(
+    block: dict[str, Any], page_id: str,
+    block_index: dict[tuple[str, int], dict[str, Any]],
+) -> None:
+    """A full-table crop may not silently clip or omit another source page."""
+    import math
+
+    bbox = block.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        raise ValueError("full table crop has no complete source bbox")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(value) or not 0 <= value <= 1000 for value in bbox):
+        raise ValueError("full table crop bbox is outside its source page")
+    if bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
+        raise ValueError("full table crop bbox has no positive area")
+    if len(_table_cell_figures(block, block_index)) != len(block.get("table_cell_visual_refs") or []):
+        raise ValueError("full table crop has unresolved cell coordinates or figure identities")
+    for cell in block.get("table_cell_visual_refs") or []:
+        ref = cell.get("figure_ref") if isinstance(cell, dict) else None
+        if not isinstance(ref, dict) or not page_id or ref.get("page_id") != page_id:
+            raise ValueError("full table crop cannot represent an unresolved or cross-page cell figure")
+        figure = block_index.get((page_id, ref.get("reading_order")))
+        if not figure or figure.get("kind") != "figure":
+            raise ValueError("full table crop has an unresolved cell figure")
+        figure_bbox = figure.get("bbox")
+        if (not isinstance(figure_bbox, (list, tuple)) or len(figure_bbox) != 4
+                or any(isinstance(value, bool) or not isinstance(value, (int, float))
+                       or not math.isfinite(value) for value in figure_bbox)):
+            raise ValueError("full table crop has no complete cell-figure bbox")
+        if not (bbox[0] <= figure_bbox[0] < figure_bbox[2] <= bbox[2]
+                and bbox[1] <= figure_bbox[1] < figure_bbox[3] <= bbox[3]):
+            raise ValueError("full table crop does not contain its declared cell figure")
 
 
 def _figure_crop_review_pages(
@@ -690,16 +753,20 @@ def _figure_crop_review_pages(
     from PIL import Image
 
     source_pages = {page.page_id: page for page in pages}
+    block_index = _page_block_index(candidate)
     crops: list[phase22.EvidencePage] = []
     for row in candidate.get("pages") or []:
         source = source_pages.get(str(row.get("page_id") or ""))
         if source is None:
             continue
         for block in row.get("blocks") or []:
-            if block.get("kind") != "figure":
+            scope = _visual_asset_scope(block)
+            if scope is None:
                 continue
             order = int(block.get("reading_order") or 0)
             try:
+                if scope == "full_table":
+                    _validate_full_table_crop(block, source.page_id, block_index)
                 data = base64.b64decode(source.image_data_url.split(",", 1)[1])
                 with Image.open(io.BytesIO(data)) as original:
                     x0, y0, x1, y1 = block["bbox"]
@@ -709,8 +776,9 @@ def _figure_crop_review_pages(
                     output = io.BytesIO()
                     cropped.save(output, format="JPEG", quality=88)
                 crops.append(phase22.EvidencePage(
-                    evidence_id=f"{source.page_id}-FIGURE-CROP-{order:04d}",
-                    page_number=source.page_number, text="Candidate figure crop; compare with full page.",
+                    evidence_id=f"{source.page_id}-{'TABLE' if scope == 'full_table' else 'FIGURE'}-CROP-{order:04d}",
+                    page_number=source.page_number,
+                    text="Candidate complete table crop; compare every header, cell and drawing with the full page." if scope == "full_table" else "Candidate figure crop; compare with full page.",
                     image_data_url="data:image/jpeg;base64," + base64.b64encode(output.getvalue()).decode("ascii"),
                     score=1.0,
                 ))
@@ -1177,7 +1245,7 @@ OUTLINE_REVIEW_VERSION = "chapter-outline-review-1"
 # when the renderer changes what the same page ACSD looks like as MMD (so
 # already-converted sources are recognized as stale) without invalidating
 # the paid page-transcription caches.
-RENDER_VERSION = "task-cues-verbatim-1"
+RENDER_VERSION = "task-cues-verbatim-full-table-assets-2"
 # Task cues render as a sub-level heading under an active outline: deep
 # enough not to be read as a chapter topic, still a heading so the
 # deterministic task parser can find the block.
@@ -2652,6 +2720,14 @@ def extract_batch_via_openai(pages: list[PdfPage]) -> dict[str, Any]:
         )
         reason = _verification_rejection_reason(pages, verification)
         if not reason:
+            reviewed_ids = {page.evidence_id for page in crop_evidence}
+            reviewed_index = _page_block_index(normalized)
+            for reviewed_page in normalized.get("pages") or []:
+                page_id = str(reviewed_page.get("page_id") or "")
+                for reviewed_block in reviewed_page.get("blocks") or []:
+                    crop_id = f"{page_id}-TABLE-CROP-{int(reviewed_block.get('reading_order') or 0):04d}"
+                    if _visual_asset_scope(reviewed_block) == "full_table" and crop_id in reviewed_ids:
+                        reviewed_block["full_table_crop_review"] = _full_table_review_identity(reviewed_block, page_id, reviewed_index)
             verified_confidence = float(verification.get("confidence") or 0.0)
             if verified_confidence < _min_page_confidence():
                 # 6E: sub-floor confidence flags, never rejects (the
@@ -3022,6 +3098,7 @@ def materialize_visual_assets(
     asset_dir = artifact_dir / ASSET_DIRNAME
     asset_dir.mkdir(parents=True, exist_ok=True)
     document = fitz.open(path)
+    block_index = _page_block_index(page_acsd)
     count = 0
     try:
         for page_row in page_acsd.get("pages") or []:
@@ -3030,9 +3107,12 @@ def materialize_visual_assets(
                 raise ValueError("page ACSD references a page outside the PDF")
             page = document[page_number - 1]
             for block in page_row.get("blocks") or []:
-                if block.get("kind") != "figure":
+                scope = _visual_asset_scope(block)
+                if scope is None:
                     continue
                 try:
+                    if scope == "full_table":
+                        _validate_full_table_crop(block, str(page_row.get("page_id") or ""), block_index)
                     clip = _clip_bbox(page, list(block.get("bbox") or []))
                     pixmap = page.get_pixmap(
                         matrix=fitz.Matrix(2.0, 2.0), clip=clip, alpha=False
@@ -3050,8 +3130,11 @@ def materialize_visual_assets(
                     # bundle so the release surface shows exactly what was
                     # not materialized and why (R4). Every other figure on
                     # every page still materializes below.
+                    if scope == "full_table":
+                        for field in ("asset_url", "asset_filename", "asset_scope", "asset_bbox", "asset_page_number"):
+                            block.pop(field, None)
                     flag = (
-                        "figure asset could not be materialized (page "
+                        f"{'full table' if scope == 'full_table' else 'figure'} asset could not be materialized (page "
                         f"{page_number}, reading order "
                         f"{int(block.get('reading_order') or 0)}): {exc}"
                     )
@@ -3065,6 +3148,16 @@ def materialize_visual_assets(
                     _atomic_write_bytes(destination, data)
                 block["asset_filename"] = filename
                 block["asset_url"] = asset_url(job_id, filename)
+                if scope == "full_table":
+                    block["asset_scope"] = scope
+                    block["asset_bbox"] = copy.deepcopy(block["bbox"])
+                    block["asset_page_number"] = page_number
+                    expected_review = _full_table_review_identity(block, str(page_row.get("page_id") or ""), block_index)
+                    if block.get("full_table_crop_review") != expected_review:
+                        flag = f"full table crop review not recorded for page {page_number}, reading order {int(block.get('reading_order') or 0)}; prior source verification did not inspect this complete-table crop"
+                        if flag not in page_row.setdefault("review_flags", []):
+                            page_row["review_flags"].append(flag)
+                            progress.log(flag, level="warning")
                 try:
                     source_asset_store.pin_asset(
                         data,
@@ -3232,6 +3325,24 @@ def _render_table(rows: list[list[str]]) -> str:
         lines.append("\\hline")
     lines.append("\\end{tabular}")
     return "\n".join(lines)
+
+
+def _full_table_tag(block: dict[str, Any]) -> str:
+    if block.get("asset_scope") != "full_table" or not block.get("asset_url"):
+        return ""
+    return kr.image(str(block["asset_url"]), str(
+        block.get("public_alt") or block.get("source_caption")
+        or block.get("caption") or "Complete source table"
+    ))
+
+
+def _render_table_block(block: dict[str, Any]) -> str:
+    tag = _full_table_tag(block)
+    if tag:
+        # Keep the transport block typed as a table. Its original rows and
+        # cell/figure links remain in page ACSD and canonical source evidence.
+        return "\\begin{table}\n" + tag + "\n\\end{table}"
+    return _render_table(list(block.get("table_rows") or []))
 
 
 def _markdown_heading(level: int, text: str) -> str:
@@ -3537,7 +3648,7 @@ def _render_page_acsd_parts(
                 emit(text, {**ref, "role": "body"})
             elif kind == "table":
                 emit(
-                    _render_table(list(block.get("table_rows") or [])),
+                    _render_table_block(block),
                     {**ref, "role": "body"},
                 )
             elif kind == "math":
@@ -3648,7 +3759,7 @@ def _page_block_match_key(block: dict[str, Any]) -> str:
         # Match the same mechanical table rendering on both sides. A picture
         # cell has no text; comparing its pipe placeholder against the parser's
         # flattened grid previously lost the entire table's canonical identity.
-        return _normal(structure.flatten_table_markup(_render_table(block.get("table_rows") or [])))
+        return _normal(structure.flatten_table_markup(_render_table_block(block)))
     return _normal(_page_context_text(block))
 
 
@@ -3805,6 +3916,9 @@ def _page_context_text(
 ) -> str:
     kind = str(block.get("kind") or "")
     if kind == "table":
+        full_table = _full_table_tag(block)
+        if full_table:
+            return full_table
         cells = [[str(cell or "").strip() for cell in row] for row in block.get("table_rows") or [] if isinstance(row, list)]
         for row, column, _ref, figure in _table_cell_figures(block, block_index or {}):
             url = str(figure.get("asset_url") or "")
@@ -4073,6 +4187,27 @@ def apply_page_acsd_relationships(
     canonical_tables_by_ref: dict[tuple[str, int], dict[str, Any]] = {}
     used_table_blocks: set[str] = set()
     _rendered, rendered_spans = render_page_acsd_to_mmd_with_spans(page_acsd)
+    figures_by_block = {
+        str(figure.get("block_id") or ""): figure
+        for figure in canonical.get("figures") or [] if isinstance(figure, dict)
+    }
+    visual_occurrences: dict[tuple[str, int], dict[str, str]] = {}
+    for span in rendered_spans:
+        if span.get("page_kind") != "figure" or span.get("role") != "body":
+            continue
+        source_ref = {"page_id": str(span["page_id"]), "reading_order": int(span["reading_order"])}
+        occurrence = next((candidate for candidate in canonical_blocks
+            if candidate.get("kind") == "figure" and candidate.get("source_start") == span["start"]), None)
+        if occurrence is None:
+            continue
+        figure = figures_by_block.get(str(occurrence.get("block_id") or ""))
+        if not figure or not figure.get("figure_id"):
+            continue
+        occurrence["source_page_block_ref"] = copy.deepcopy(source_ref)
+        figure["source_page_block_ref"] = copy.deepcopy(source_ref)
+        visual_occurrences[(source_ref["page_id"], source_ref["reading_order"])] = {
+            "figure_id": str(figure["figure_id"]), "block_id": str(occurrence["block_id"]),
+        }
     table_starts = {
         (str(span["page_id"]), int(span["reading_order"])): int(span["start"])
         for span in rendered_spans if span.get("page_kind") == "table" and span.get("role") == "body"
@@ -4098,6 +4233,10 @@ def apply_page_acsd_relationships(
         used_table_blocks.add(str(canonical_table.get("block_id") or ""))
         canonical_tables_by_ref[(owner_page, order)] = canonical_table
         canonical_table["source_page_block_ref"] = {"page_id": owner_page, "reading_order": order}
+        canonical_table["table_rows"] = copy.deepcopy(table.get("table_rows") or [])
+        for key in ("asset_scope", "asset_url", "asset_filename", "asset_bbox", "asset_page_number", "full_table_crop_review"):
+            if key in table:
+                canonical_table[key] = copy.deepcopy(table[key])
         if not table.get("table_cell_visual_refs"):
             continue
         canonical_table["table_cell_visual_refs"] = copy.deepcopy(table["table_cell_visual_refs"])
@@ -4105,6 +4244,7 @@ def apply_page_acsd_relationships(
         canonical_table["table_cell_visuals"] = [
             {"row_index": row, "column_index": column,
              "figure_ref": {"page_id": ref[0], "reading_order": ref[1]},
+             **visual_occurrences.get(ref, {}),
              "asset_url": figure.get("asset_url"), "asset_filename": figure.get("asset_filename"),
              "source_caption": figure.get("source_caption", figure.get("caption")),
              "public_alt": figure.get("public_alt", "")}
@@ -4417,6 +4557,34 @@ def apply_page_acsd_relationships(
                     preferred_caption=str(figure_block.get("public_alt") or preferred_caption),
                 )
 
+            # A cell drawing remains recorded source evidence, while the
+            # learner sees its complete owning table once. This replacement
+            # uses explicit table-cell references, never proximity or captions.
+            for context_ref in context_refs:
+                table = page_block_index.get(context_ref, {})
+                full_table_url = str(table.get("asset_url") or "")
+                if table.get("asset_scope") != "full_table" or not full_table_url:
+                    continue
+                covered_urls = {
+                    str(figure.get("asset_url") or "")
+                    for _row, _column, _ref, figure in _table_cell_figures(table, page_block_index)
+                    if figure.get("asset_url")
+                }
+                display_urls[:] = [url for url in display_urls if url not in covered_urls]
+                display_figure_ids[:] = [
+                    figure_id for figure_id in display_figure_ids
+                    if not set(figures_by_id.get(figure_id, {}).get("image_urls") or []) <= covered_urls
+                ]
+                for url in covered_urls:
+                    display_captions.pop(url, None)
+                payload = figure_payload.get(full_table_url)
+                if payload is not None:
+                    add_figure(payload[0], task_id, display_urls, display_figure_ids, display_captions,
+                               preferred_caption="Complete source table")
+                elif full_table_url not in display_urls:
+                    display_urls.append(full_table_url)
+                    display_captions[full_table_url] = "Complete source table"
+
             task["figure_refs"] = list(display_figure_ids)
             task["raw_figure_refs"] = list(raw_figure_ids)
             task["display_figure_refs"] = list(display_figure_ids)
@@ -4473,6 +4641,9 @@ def apply_page_acsd_relationships(
                         "kind": context_block.get("kind"),
                         "display_text": display_text,
                         "table_cell_visual_refs": copy.deepcopy(context_block.get("table_cell_visual_refs") or []),
+                        **{key: copy.deepcopy(context_block[key]) for key in (
+                            "table_rows", "asset_scope", "asset_url", "asset_filename", "asset_bbox", "asset_page_number", "full_table_crop_review",
+                        ) if key in context_block},
                     }
                     if canonical_context is not None:
                         context_object["block_id"] = canonical_context.get("block_id")
@@ -4692,7 +4863,7 @@ def _reconstruction_manifest(
         for page in pages
         for block in page.get("blocks") or []
         if isinstance(block, dict)
-        and block.get("kind") == "figure"
+        and _visual_asset_scope(block) is not None
         and block.get("asset_url")
     )
     reasons = list(

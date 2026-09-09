@@ -554,15 +554,36 @@ def _current_keyword_cell(value: str) -> str:
     return ", ".join(str(value).split(LIST_DELIMITER))
 
 
-def _projected_cell(value: object) -> str:
+def _projected_cell(value: object, *, raw_equation: bool = False) -> str:
     """The comparable form of one EXPECTED cell after the renderer's
-    deterministic projections: internal ``\\n`` → ``<br>`` (§17); numbers
-    and everything else exactly as ``_normalized_cell`` reads them back."""
+    prose projection. Native TeX LF is source whitespace, including inside
+    raw Equation cells; converting it to HTML corrupts the math body.
 
-    if isinstance(value, str):
-        value = value.replace("\r\n", "\n").replace("\r", "\n")
-        value = value.replace("\n", LINE_BREAK)
+    This expectation stays independent of the production serializer; numbers
+    and everything else retain ``_normalized_cell``'s comparison form.
+    """
+
+    if isinstance(value, str) and not raw_equation:
+        segments = re.split(r"(\[Katex\].*?\[/Katex\])", value, flags=re.DOTALL)
+        value = "".join(
+            segment if index % 2 else segment.replace("\r\n", "\n").replace(
+                "\r", "\n").replace("\n", LINE_BREAK)
+            for index, segment in enumerate(segments)
+        )
     return _normalized_cell(value)
+
+
+def _expected_equation_field(field: str, record: dict) -> bool:
+    """Declared raw math slots in the independently reconstructed fixture row."""
+    answer = re.fullmatch(r"(?:answer_content|answer)_(\d+)", field)
+    keyword = re.fullmatch(r"sq(\d+)_keyword_(\d+)", field)
+    if answer:
+        return record.get(f"answer_type_{answer.group(1)}") == "Equation"
+    if keyword:
+        return record.get(
+            f"sq{keyword.group(1)}_answer_type_{keyword.group(2)}"
+        ) == "Equation"
+    return False
 
 
 def _normalize_chapter(chapter: dict[str, str], subject: str) -> dict[str, str]:
@@ -1162,8 +1183,14 @@ def _expected_question_record(
             record[field] = katex_rules.replace_unsupported_tables(
                 str(record[field])
             )
-    # Contract §17: every string cell projects its line breaks to ``<br>``.
-    return {field: _projected_cell(value) for field, value in record.items()}
+    # Contract §17: prose line breaks project to ``<br>``; Q38 preserves
+    # source TeX whitespace inside wrapped math and declared Equation cells.
+    return {
+        field: _projected_cell(
+            value, raw_equation=_expected_equation_field(field, record),
+        )
+        for field, value in record.items()
+    }
 
 
 def _digest(values: object) -> str:
@@ -1993,8 +2020,9 @@ def _full_rendered_master_evidence(
 
 
 # Re-pinned 2026-09-04 for Master Governing Contract v2.0 (register Q26):
-# every multi-value cell is a " | " list (§16), every line break renders as
-# ``<br>`` (§17), textual answer types carry the lane literal ``Words`` on
+# every multi-value cell is a " | " list (§16), prose line breaks render as
+# ``<br>`` (§17; Q38 preserves TeX whitespace), textual answer types carry
+# the lane literal ``Words`` on
 # Objective/Subjective (§22–§23), ``question_source`` is the publication
 # (§18), ``chapter_duration`` is numeric (§32) and every one of the five
 # ``is_update_*`` cells is exact ``No`` on questionless tails too (§14.1).
@@ -2016,9 +2044,15 @@ def _full_rendered_master_evidence(
 # ``is_numeric_display_field`` names — and every sheet keeps its exact row,
 # column and cell counts.
 # Q33 deliberately changes keyword separators and multipart parent projections
-# for new runs. These historical digests stay unchanged and now run with an
-# explicitly carried legacy profile. The exhaustive current-policy comparison
+# for new runs. These digests use an explicitly carried legacy profile and
+# remain unchanged except for Q38's nine math cells documented below.
+# The exhaustive current-policy comparison
 # below permits only those two projections over this same pinned cell matrix.
+# Q38 preserves native TeX newlines instead of injecting HTML into math.
+# Exactly nine Math Post Descriptive cells change (eight wrapped rich cells
+# and one declared Equation cell); the dedicated proof below restores the
+# original full-workbook digest by reversing only that transport difference.
+# Raw fixture digests, every other cell and all workbook geometry stay pinned.
 FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
     "english_post_master.xlsx": {
         "digest": "cf647d9be29322455484f429c7e6b9938c7c65ede96698220dedefc0f65f0bbb",
@@ -2055,7 +2089,7 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
     "math_post_master.xlsx": {
-        "digest": "92e8cc77c757aa979a2b8d38d1f5a68cc8829c599b5de7d7ed7bff04223eeaba",
+        "digest": "3de7a40fffc28b6f485eed45d59f77e8d884a280524b9272dd550027fb2e48b3",
         "sheets": {
             "Objective": (
                 47, 72, 3384,
@@ -2063,7 +2097,7 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
             ),
             "Descriptive": (
                 24, 440, 10560,
-                "b321669946fb6b64a5963296e78870c1657e6c8610162c24c435153309d5b6ec",
+                "2ea0c84bd491e547023c21ce348d5814c3c5edfd18e2a8f87d12c4fcc2041992",
             ),
             "Subjective": (
                 4, 149, 596,
@@ -2089,6 +2123,62 @@ FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
         },
     },
 }
+
+
+def test_math_post_native_tex_breaks_are_the_only_changed_pinned_cells():
+    """Nine named math cells explain the new digest; the old digest survives.
+
+    No fixture is rewritten and no cell is excluded from either digest. The
+    original full-workbook hash is restored only by replacing source TeX
+    newlines with the old erroneous HTML token in these nine exact cells.
+    """
+    snapshot, _ = _master_snapshot(
+        "math_post_master.xlsx", "math_post_concept.xlsx", "Mathematics", 30,
+    )
+    data, _ = workbook.render_master_file(
+        snapshot, _profile("Mathematics", legacy_columns=True),
+    )
+    parsed = workbook.parse_workbook(data)
+    expected = {
+        ("Descriptive", 10, "concept_details"): 16,
+        ("Descriptive", 10, "display_answer"): 7,
+        ("Descriptive", 10, "answer_explanation"): 7,
+        ("Descriptive", 24, "display_answer"): 14,
+        ("Descriptive", 25, "concept_details"): 10,
+        ("Descriptive", 25, "question"): 11,
+        ("Descriptive", 25, "display_answer"): 18,
+        ("Descriptive", 25, "answer_content_5"): 9,
+        ("Descriptive", 25, "answer_explanation"): 18,
+    }
+    changed = {}
+    historical = []
+    for sheet in CANONICAL_SHEET_ORDER:
+        fields = parsed["sheets"][sheet]["fields"]
+        matrix = []
+        for row_number, row in enumerate(parsed["sheets"][sheet]["rows"], 3):
+            cells = []
+            for field in fields:
+                value = _normalized_cell(row.get(field, ""))
+                if "\n" in value:
+                    key = (sheet, row_number, field)
+                    changed[key] = value.count("\n")
+                    if not _expected_equation_field(field, row):
+                        # Every changed newline belongs inside source math,
+                        # never to a removed/added prose paragraph.
+                        outside_math = re.sub(
+                            r"\[Katex\].*?\[/Katex\]", "", value,
+                            flags=re.DOTALL,
+                        )
+                        assert "\n" not in outside_math, key
+                    assert key in expected
+                    value = value.replace("\n", LINE_BREAK)
+                cells.append(value)
+            matrix.append(cells)
+        historical.append([sheet, fields, matrix])
+    assert changed == expected
+    assert _digest(historical) == (
+        "92e8cc77c757aa979a2b8d38d1f5a68cc8829c599b5de7d7ed7bff04223eeaba"
+    )
 
 
 @pytest.mark.parametrize(

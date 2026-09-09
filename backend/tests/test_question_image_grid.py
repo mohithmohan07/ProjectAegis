@@ -9,7 +9,10 @@ text untouched and rides the candidate as a named review flag.
 from __future__ import annotations
 
 import copy
+import hashlib
 import io
+
+import pytest
 
 from app.services import katex_rules as kr
 from app.services import question_image_grid as grid
@@ -101,6 +104,91 @@ def test_a_failed_download_changes_nothing_and_is_named(monkeypatch):
     assert new_text == text, "never half-stitched"
     assert "error" in record and "boom" in record["error"]
     assert "combined_image_url" not in record
+
+
+def _pinned_jpeg(monkeypatch, tmp_path, color="red"):
+    from PIL import Image
+    from app.services import canonical_source_phase221_fallback as fallback
+
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", _BASE)
+    monkeypatch.setattr(source_asset_store.config, "DATA_DIR", tmp_path)
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 48), color).save(buffer, format="JPEG")
+    data = buffer.getvalue()
+    filename = hashlib.sha256(data).hexdigest() + ".jpg"
+    url = fallback.asset_url(7, filename)
+    source_asset_store.pin_asset(data, job_id=7, asset_url=url)
+    return url, data, source_asset_store.stored_asset_path(filename)
+
+
+def test_stitch_reads_verified_local_pixels_without_public_http(monkeypatch, tmp_path):
+    first_url, first_bytes, _ = _pinned_jpeg(monkeypatch, tmp_path)
+    second_url, _, _ = _pinned_jpeg(monkeypatch, tmp_path, color="blue")
+
+    def refuse(*args, **kwargs):
+        pytest.fail("Pinned source bytes must not be downloaded through Fly")
+
+    monkeypatch.setattr(grid.urllib.request, "urlopen", refuse)
+    assert grid._download(first_url) == first_bytes
+    text = "Compare. " + kr.image(first_url, "First") + " " + kr.image(second_url, "Second")
+    result, record = grid.consolidate_images(text, job_id=7)
+    assert len(grid.image_tags(result)) == 1
+    assert "error" not in record
+    assert record["combined_image_url"].startswith(_BASE + "/source-assets/7/")
+
+
+def test_wrong_local_or_remote_bytes_never_impersonate_source_hash(monkeypatch, tmp_path):
+    url, _data, path = _pinned_jpeg(monkeypatch, tmp_path)
+    path.write_bytes(b"corrupt local copy")
+    calls = []
+
+    def wrong_remote(request, **kwargs):
+        calls.append(request.full_url)
+        return io.BytesIO(_png_bytes("blue"))
+
+    monkeypatch.setattr(grid.urllib.request, "urlopen", wrong_remote)
+    with pytest.raises(ValueError, match="does not match its content hash"):
+        grid._download(url)
+    assert calls == [url]
+
+
+def test_missing_local_copy_can_recover_matching_public_bytes(monkeypatch, tmp_path):
+    url, data, path = _pinned_jpeg(monkeypatch, tmp_path)
+    path.unlink()
+    monkeypatch.setattr(grid.urllib.request, "urlopen", lambda *args, **kwargs: io.BytesIO(data))
+    assert grid._download(url) == data
+
+
+def test_external_lookalike_url_cannot_resolve_local_pixels(monkeypatch, tmp_path):
+    url, _data, _path = _pinned_jpeg(monkeypatch, tmp_path)
+    external_url = url.replace(_BASE, "https://external.example.org")
+    external_data = _png_bytes("blue")
+    calls = []
+
+    def remote(request, **kwargs):
+        calls.append(request.full_url)
+        return io.BytesIO(external_data)
+
+    monkeypatch.setattr(grid.urllib.request, "urlopen", remote)
+    assert grid._download(external_url) == external_data
+    assert calls == [external_url]
+
+
+def test_same_images_with_different_labels_do_not_reuse_cached_pixels(monkeypatch):
+    monkeypatch.setenv("AEGIS_PUBLIC_BASE_URL", _BASE)
+    cache = {}
+    first_text = _two_tag_text()
+    second_text = first_text.replace('alt="Drum"', 'alt="Cylinder"')
+    _, first = grid.consolidate_images(first_text, job_id=7, downloader=_fake_downloader, cache=cache)
+    _, second = grid.consolidate_images(second_text, job_id=7, downloader=_fake_downloader, cache=cache)
+    assert first["combined_image_url"] != second["combined_image_url"]
+    assert len(cache) == 2
+
+    def refuse(_url):
+        pytest.fail("The identical labelled bank should reuse the completed stitch")
+
+    _, repeated = grid.consolidate_images(second_text, job_id=7, downloader=refuse, cache=cache)
+    assert repeated["combined_image_url"] == second["combined_image_url"]
 
 
 # --------------------------------------------------------------------------- #

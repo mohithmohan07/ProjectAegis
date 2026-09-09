@@ -593,8 +593,10 @@ def test_master_renderer_projects_screenshot_shaped_markdown_table_cells():
     row = mp.parse_workbook(master)["sheets"]["Objective"]["rows"][0]
 
     for field in ("question", "question_text"):
-        assert "Table row 1, column 1: Name of peak" in row[field]
-        assert "Table row 6, column 2: 8586" in row[field]
+        assert r"\begin{array}{|l|r|}" in row[field]
+        assert r"\text{Name of peak}" in row[field]
+        assert r"\text{Kanchanjunga} & \text{8586}" in row[field]
+        assert "Table row" not in row[field]
         assert "|:---|---:|" not in row[field]
     assert "a) Circle" in row["question_text"]
 
@@ -924,14 +926,14 @@ def test_the_truncated_cell_states_a_true_count_and_stays_under_the_cap():
     # ``<br>`` projection, and the cap is measured on that projected text.
     plain = mp._cell_value("z" * 40000, context="t")
     stated = int(re.search(r"first (\d+) of (\d+)", plain).group(1))
-    assert stated == plain.index("<br>[Aegis:"), "the count is the true count"
+    assert stated == plain.index("<br>\n[Aegis:"), "the count is the true count"
     assert len(plain) <= mp.CELL_LIMIT
 
     guarded = mp._cell_value("=" + "x" * 40000, context="t")
     assert guarded.startswith("=")
     assert len(guarded) <= mp.CELL_LIMIT
     stated = int(re.search(r"first (\d+) of (\d+)", guarded).group(1))
-    assert stated == guarded.index("<br>[Aegis:")
+    assert stated == guarded.index("<br>\n[Aegis:")
 
     # A value under the cap whose line breaks project past it is measured
     # AFTER the projection: the cell never exceeds Excel's limit.

@@ -2171,6 +2171,70 @@ retained Pre concept remain. A provider comparison or effort experiment is a
 later decision. Mock concurrency tests establish scheduling behavior, not a
 measured live completion time or pedagogical quality improvement.
 
+### Q38 — DECIDED — Question-owned tables, visible images and readable Excel
+
+**Owner ruling (9 September 2026).** The owner reports missing tables/images
+and clustered Excel cells, then clarifies: "Tabular columns are supposed to
+come under the question, if it is part of the question" and requests an image
+or a table using the existing KaTeX rules. This authorizes correction of the
+lossy transport and formatting rules identified in review. The deployment hold
+remains: update the draft PR only, without changing the running app.
+
+**Tables and question ownership.** Keep a question's complete table in its
+learner-facing context, including shared context for dependent multipart
+children. A complete syntactically understood text/math table becomes one
+canonical KaTeX array preserving headings, ordered rows, cells, blanks and
+mathematics. Blank-cell phantom spacing uses an existing rendered size
+reference from the same source column; no answer is invented. Tables requiring
+visuals use one complete faithful image through
+the existing source/API crop decision. Do not replace tables with coordinate
+prose, detach them into sidecars, or drop nested child tables/figures before
+authoring. Malformed, spanning or image-bearing markup that cannot be
+transported faithfully remains intact with a named defect for the existing
+repair process. No local semantic reconstruction is authorized.
+
+The existing source crop step now also renders a complete table when the API
+has declared its visual cells and page bounds. Validate exact cell-figure
+identities and containment before creating the image. Preserve original rows,
+cell references and bounds as evidence; replace contained cell-only images
+with the complete table in the owning question's display. The existing source
+critic receives the whole table crop and original page. New approvals record
+an evidence-bound crop review receipt; reused historical transcription without
+that receipt carries an explicit unreviewed-crop flag.
+
+**Images.** Preserve accepted image references in Description and learner
+analysis during refinement and cleanup. Remove stale instructions declaring
+those images categorically forbidden. The model still decides relevance; URL,
+source-identity and rendering checks still apply. Declared image fields must
+remain visible in delivery reports even when their URLs cannot be verified.
+Image grids may read verified pinned bytes locally; their cache includes all
+inputs that affect the pixels, including labels. Public delivery requirements
+remain independent of local availability.
+
+**Excel display.** Preserve the `<br>` import marker and `<br><br>` paragraph
+meaning required by §17. In the final XLSX cell presentation, pair each marker
+with a native Excel line feed so a wrapped cell displays the separation too.
+Apply that projection only outside complete KaTeX spans, preserving TeX
+newlines and comments exactly. Declared Equation cells remain raw LaTeX through
+export, import, readback and cell-capacity checks.
+Import and canonical comparisons treat each pair as one logical break;
+repeated export must not multiply breaks. This supplements the HTML transport
+instead of relying on native line feeds for import behavior. Apply sensible
+widths to the exact registered fields and top-aligned wrapping; preserve row-2
+headers, sheet names, data-row topology, numeric types and formula protection.
+Measure the final display string against Excel's cell limit, preserving the
+existing complete overflow evidence and release flags.
+
+**Limits.** Excel does not itself render Aegis image/KaTeX markup as pictures
+or mathematical tables. These fields remain importable rich text for the
+application renderer. Previously flattened prose cannot safely be reconstructed
+without its original source; previously generated workbooks are not silently
+rewritten by this code change. Actual missing assets in a current run require
+that run's export or evidence, separate from mocked transport verification.
+Fresh source builds use the new table renderer; existing compiled source and
+sealed decisions retain their recorded content. Do not invalidate accepted
+historical runs by globally bumping downstream compiler versions.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

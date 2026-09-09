@@ -500,26 +500,10 @@ def scrub_validator_artifacts(text: str) -> str:
 _SECTION_SEP = " // "
 
 
-_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(https?://[^)]+\)", re.IGNORECASE)
-_BRACKET_IMAGE_RE = re.compile(
-    r'\[img\s+src="https?://[^"]+"(?:\s+alt="[^"]*")?[^\]]*\]',
-    re.IGNORECASE,
-)
 _TEXTBOOK_SECTION_REF_RE = re.compile(
     r"(?:\bsections?\s+|§\s*)\d+(?:\.\d+)+\b",
     re.IGNORECASE,
 )
-
-
-def _strip_images_from_prose(text: str) -> str:
-    """Remove shipped images from Description/learner-analysis prose.
-
-    Image URLs are valid in Types Examples and Activity/Info Hub entries (with
-    their figure reference); they are not acceptable in Description text.
-    """
-    if not text:
-        return text
-    return _tidy(_BRACKET_IMAGE_RE.sub("", _MARKDOWN_IMAGE_RE.sub("", text)))
 
 
 def _clean_details(details: str, *, neutralize: bool = True) -> str:
@@ -555,10 +539,9 @@ def _clean_details(details: str, *, neutralize: bool = True) -> str:
             or cr.is_learner_analysis_label(label)
         ):
             cleaned = _TEXTBOOK_SECTION_REF_RE.sub("the chapter", cleaned)
-        # Mathpix URLs are Types/Hub-only; strip them from Description and
-        # learner-analysis sections even during reference-preserving cleanup.
-        if not is_types and not is_hub:
-            cleaned = _strip_images_from_prose(cleaned)
+        # Source-owned figures stay attached in every section. Whether a
+        # visual supports this concept belongs to the API author/critic;
+        # formatting must not silently delete its evidence.
         out.append(neutralize_source_artifacts(cleaned) if neutralize else cleaned)
     return _SECTION_SEP.join(out)
 

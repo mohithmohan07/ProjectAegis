@@ -299,19 +299,49 @@ def merge_sources(existing: str, new: str) -> str:
 # --------------------------------------------------------------------------- #
 
 LINE_BREAK = "<br>"
-_BR_RE = _re_tags.compile(r"<br\s*/?>", _re_tags.IGNORECASE)
+_BR_DISPLAY_RE = _re_tags.compile(r"<br\s*/?>\n?", _re_tags.IGNORECASE)
+_KATEX_SPAN_RE = _re_tags.compile(r"\[Katex\].*?\[/Katex\]", _re_tags.DOTALL)
+
+
+def _outside_katex(text: str, transform) -> str:
+    """Apply an encoding transform only outside complete canonical math spans.
+
+    Native TeX newlines are source whitespace and terminate percent comments;
+    HTML breaks must never be injected into or removed from a math body.
+    """
+    parts = []
+    start = 0
+    for match in _KATEX_SPAN_RE.finditer(text):
+        parts.extend((transform(text[start:match.start()]), match.group()))
+        start = match.end()
+    parts.append(transform(text[start:]))
+    return "".join(parts)
 
 
 def to_workbook_rich_text(text) -> str:
-    """Project internal newlines to ``<br>`` for one workbook cell."""
+    """Project prose newlines to ``<br>`` while preserving canonical TeX."""
     value = str(text if text is not None else "")
-    value = value.replace("\r\n", "\n").replace("\r", "\n")
-    return value.replace("\n", LINE_BREAK)
+    return _outside_katex(
+        value, lambda segment: segment.replace("\r\n", "\n").replace(
+            "\r", "\n").replace("\n", LINE_BREAK),
+    )
 
 
-def from_workbook_rich_text(text) -> str:
-    """Invert :func:`to_workbook_rich_text` on import (``<br/>`` included)."""
-    return _BR_RE.sub("\n", str(text if text is not None else ""))
+def from_workbook_rich_text(text, *, raw_equation: bool = False) -> str:
+    """Read both canonical breaks and the workbook's visible ``<br>``/LF pair.
+
+    One physical newline immediately after a break token is its Excel
+    presentation, not a second paragraph break. Additional newlines remain
+    authored breaks. HTML variants and CRLF files keep the same semantics.
+    """
+    value = str(text if text is not None else "")
+    if raw_equation:
+        return value
+    return _outside_katex(
+        value, lambda segment: _BR_DISPLAY_RE.sub(
+            "\n", segment.replace("\r\n", "\n").replace("\r", "\n"),
+        ),
+    )
 
 
 _DURATION_MINUTES_RE = _re_tags.compile(r"^\s*(\d+(?:\.\d+)?)\s*(?:min(?:ute)?s?)?\s*$", _re_tags.IGNORECASE)

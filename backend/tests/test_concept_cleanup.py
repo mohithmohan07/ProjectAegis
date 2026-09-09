@@ -83,7 +83,7 @@ def test_clean_record_preserves_structural_examples_and_is_idempotent():
     ) == 1
 
 
-def test_clean_record_sanitizes_error_analysis_as_learner_prose():
+def test_clean_record_sanitizes_error_analysis_without_losing_its_figure():
     rec = clean_concept_record({
         "concept_title": "evaluating exponents",
         "concept_details": (
@@ -94,8 +94,9 @@ def test_clean_record_sanitizes_error_analysis_as_learner_prose():
     })
 
     assert "section 2.3" not in rec["concept_details"]
-    assert "https://example.test/error.png" not in rec["concept_details"]
+    assert '[img src="https://example.test/error.png" alt="work"]' in rec["concept_details"]
     assert "Error Analysis:" in rec["concept_details"]
+    assert clean_concept_record(dict(rec)) == rec
 
 
 # --------------------------- & collapse (Input 02a) --------------------------- #

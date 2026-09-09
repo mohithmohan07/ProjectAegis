@@ -1978,6 +1978,10 @@ def _clean_table(value: str, *, flatten: bool = False) -> str:
     parse or patch individual cells pass ``flatten=True`` for pipe rows.
     """
     text = str(value or "")
+    if not flatten:
+        # A public display cannot discard spanning instructions or table
+        # boundaries. Unsupported structures remain whole for API repair.
+        return structure.normalize_task_table_markup(text)
     # Preserve the learner-visible cell content of common publisher layout
     # macros while discarding only their row/column spanning instructions.
     text = re.sub(
@@ -1993,11 +1997,7 @@ def _clean_table(value: str, *, flatten: bool = False) -> str:
         flags=re.I,
     )
     text = re.sub(r"\\cline\{[^{}]*\}", "\n", text, flags=re.I)
-    text = (
-        structure.flatten_table_markup(text)
-        if flatten
-        else structure.normalize_task_table_markup(text)
-    )
+    text = structure.flatten_table_markup(text)
     text = _TABLE_BEGIN_RE.sub("\n", text)
     return text
 
@@ -2143,8 +2143,14 @@ def _clean_public_text(
     code_protected: list[tuple[str, str]] = []
     if preserve_markdown_code:
         text, code_protected = _protect_markdown_code(text)
+    # Render the complete table before masking its math/images. Encoding a
+    # masked token as a KaTeX text atom would prevent its exact restoration.
+    text = _clean_table(text)
+    # Protect remaining unsupported table spans while still normalizing
+    # unrelated prose and cross-block formulas around them.
+    text, table_protected = kr._protect_table_markup(text)
     text, protected = _protect_rich_tokens(text)
-    text = _clean_list(_clean_table(text))
+    text = _clean_list(text)
     text = _LAYOUT_COMMAND_RE.sub(" ", text)
     text = _ENV_RE.sub("\n", text)
     text = re.sub(r"\\(?:section|subsection|subsubsection|chapter)\*?\{([^{}]*)\}", r"\1", text)
@@ -2163,11 +2169,17 @@ def _clean_public_text(
         repaired = kr.repair_unwrapped_math(text)
         if not kr.rich_text_issues(repaired):
             text = repaired
-    # Any residual layout/control command is not learner-visible source text.
+    # Layout cleanup applies only outside rich tokens: array rules and
+    # supported math spacing are part of the authored table, not furniture.
+    text, final_protected = _protect_rich_tokens(text)
     text = re.sub(r"\\(?:hline|vspace|hspace|noindent|smallskip|medskip|bigskip)\b", " ", text)
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
     text = "\n".join(line for line in lines if line).strip()
-    return _restore_markdown_code(text, code_protected)
+    return _restore_markdown_code(
+        kr._restore_table_markup(
+            _restore_rich_tokens(text, final_protected), table_protected,
+        ), code_protected,
+    )
 
 
 def _graph_block_text(
@@ -2455,6 +2467,10 @@ def _candidate_anomaly_packet(
             "text": str(block.get("text") or ""),
             "latex": str(block.get("latex") or ""),
             "table_rows": copy.deepcopy(block.get("table_rows") or []),
+            "table_cell_visual_refs": copy.deepcopy(block.get("table_cell_visual_refs") or []),
+            "asset_scope": str(block.get("asset_scope") or ""),
+            "asset_url": str(block.get("asset_url") or ""),
+            "asset_bbox": copy.deepcopy(block.get("asset_bbox") or []),
             "linked_visual_orders": [
                 int(value) for value in block.get("linked_visual_orders") or []
             ],
@@ -2469,14 +2485,17 @@ def _candidate_anomaly_packet(
             "kind": canonical_kind,
             "source_start": int(canonical_block.get("source_start") or 0),
             "source_end": int(canonical_block.get("source_end") or 0),
-            "raw_text": source_text[:10000],
+            "raw_text": source_text,
         },
         "candidate_blocks": candidate_blocks,
         "candidate_page_numbers": sorted(candidate_page_numbers),
         "instruction": (
             "Select the one already-verified original-PDF page block that "
             "contains the visible source evidence needed to replace the "
-            "converter-only semantic markup. Do not write replacement text."
+            "converter-only semantic markup. For a table, select a full_table "
+            "asset only when its complete crop preserves every source header, "
+            "row, column, blank and required visual; a single symbol or partial "
+            "table cannot replace the whole source table. Do not write replacement text."
         ),
     }
 
@@ -2723,7 +2742,19 @@ def _patch_suspicious_table(
             patched_any = True
     if not patched_any:
         raise ValueError("canonical table no longer contains the reported anomaly")
-    return "\n".join(" | ".join(row) for row in canonical_rows)
+    rendered = kr._table_array(canonical_rows, "c" * len(canonical_rows[0]))
+    if rendered is None:
+        raise ValueError("verified visual or spanning table requires a complete table crop")
+    return rendered
+
+
+def _full_table_asset(block: dict[str, Any]) -> str:
+    if block.get("kind") != "table" or block.get("asset_scope") != "full_table":
+        return ""
+    url = str(block.get("asset_url") or "").strip()
+    if not url:
+        return ""
+    return kr.image(url, str(block.get("caption") or "Complete source table"))
 
 
 def _render_verified_page_block(
@@ -2731,10 +2762,15 @@ def _render_verified_page_block(
 ) -> str:
     kind = str(block.get("kind") or "")
     if kind == "table":
-        return "\n".join(
-            " | ".join(_render_page_cell(cell, page) for cell in row)
-            for row in block.get("table_rows") or []
-        )
+        full_image = _full_table_asset(block)
+        if full_image:
+            return full_image
+        rows = [[_render_page_cell(cell, page) for cell in row]
+                for row in block.get("table_rows") or []]
+        rendered = kr._table_array(rows, "c" * len(rows[0])) if rows else None
+        if rendered is None:
+            raise ValueError("verified visual or spanning table requires a complete table crop")
+        return rendered
     if kind == "math":
         latex = str(block.get("latex") or "").strip()
         return kr.katex(latex) if latex else ""
@@ -2762,7 +2798,7 @@ def _resolve_verified_page_candidate(
         if selected_block.get("kind") != "table":
             raise ValueError(
                 "table anomaly must be resolved by a verified table block")
-        resolved = _patch_suspicious_table(
+        resolved = _full_table_asset(selected_block) or _patch_suspicious_table(
             canonical_text,
             selected_block=selected_block,
             selected_page=selected_page,

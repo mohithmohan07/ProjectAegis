@@ -181,14 +181,8 @@ _TABULAR_RE = re.compile(
     r"(?P<body>.*?)\\end\s*\{\s*tabular\s*\}",
     re.IGNORECASE | re.DOTALL,
 )
-_UNTERMINATED_TABULAR_RE = re.compile(
-    r"\\begin\s*\{\s*tabular\s*\}\s*"
-    r"(?:\[[^\]]*\]\s*)?\{(?P<columns>[^}]*)\}"
-    r"(?P<body>.*)\Z",
-    re.IGNORECASE | re.DOTALL,
-)
 _UNSUPPORTED_TABLE_BEGIN_RE = re.compile(
-    r"\\begin\s*\{\s*tabular\s*\}", re.IGNORECASE,
+    r"\\begin\s*\{\s*tabular\*?\s*\}|<table\b", re.IGNORECASE,
 )
 _ARRAY_BEGIN_RE = re.compile(
     r"\\begin\s*\{\s*array\s*\}", re.IGNORECASE,
@@ -240,13 +234,6 @@ _LITERAL_NEWLINE_BEFORE_LIST_ITEM_RE = re.compile(
 )
 _LEGACY_ROMAN_ATOM_RE = re.compile(
     r"\\mathrm\s*\{",
-)
-_TABLE_ROW_RE = re.compile(r"(?<!\\)\\\\(?:\[[^\]]*\])?")
-_TABLE_COLUMN_RE = re.compile(r"(?<!\\)&")
-_TABLE_RULE_RE = re.compile(
-    r"\\(?:hline|toprule|midrule|bottomrule)\b"
-    r"|\\cline\{[^}]*\}",
-    re.IGNORECASE,
 )
 _FOOTNOTE_RE = re.compile(
     r"\\footnotetext\{(?P<body>[^{}]*(?:\{[^{}]*\}[^{}]*)*)\}",
@@ -681,65 +668,46 @@ _TEX_OPERATOR_COMMANDS = frozenset({
 _MATH_OPERATOR_CHARS = frozenset("+-*/=<>(),[]\u00d7\u00f7")
 
 
-def _plain_table_cell(value: str) -> str:
-    """Expose one table cell without interpreting its subject matter."""
-
-    cell = _TABLE_RULE_RE.sub("", str(value or "")).strip()
-    cell = re.sub(r"\\displaystyle\b", "", cell).strip()
-    # ``\text{...}`` and the related style groups carry literal cell labels.
-    # Peel only balanced, innermost groups; every character inside survives.
-    group = re.compile(
-        r"\\(?:text|textrm|textsf|texttt|mathrm|mathbf|mathit)\{([^{}]*)\}"
-    )
-    while True:
-        unwrapped = group.sub(lambda match: match.group(1), cell)
-        if unwrapped == cell:
-            break
-        cell = unwrapped
-    for pattern in _RAW_MATH_PATTERNS:
-        cell = pattern.sub(lambda match: str(match.group("body") or ""), cell)
-    cell = cell.replace("~", " ")
-    cell = re.sub(r"\s+", " ", cell).strip()
-    return cell or "(blank)"
-
-
-def _labeled_table(body: str) -> str:
-    """Project table structure to explicit row/column-labelled plain text."""
-
-    raw_rows = _TABLE_ROW_RE.split(str(body or ""))
-    # Some source converters emit a tabular declaration followed by newline
-    # rows and literal pipes instead of TeX ``\\``/``&`` separators.  The
-    # declaration still proves the structure; retain those rows mechanically.
-    if len(raw_rows) == 1 and "\n" in raw_rows[0]:
-        raw_rows = raw_rows[0].splitlines()
-    if raw_rows and not _TABLE_RULE_RE.sub("", raw_rows[-1]).strip():
-        raw_rows.pop()
-    rows: list[str] = []
-    row_number = 0
-    for raw_row in raw_rows:
-        cleaned_row = _TABLE_RULE_RE.sub("", raw_row).strip()
-        # A rule-only fragment is layout, not an authored data row.
-        if not cleaned_row and "&" not in raw_row:
+def _split_table_tokens(
+    value: str, separator: str, *, tex_groups: bool = True,
+) -> list[str] | None:
+    """Split syntax-level table delimiters, respecting TeX groups/escapes."""
+    cells: list[str] = []
+    start = 0
+    index = 0
+    depth = 0
+    while index < len(value):
+        if depth == 0 and value.startswith(separator, index):
+            cells.append(value[start:index])
+            index += len(separator)
+            start = index
             continue
-        row_number += 1
-        cells = _TABLE_COLUMN_RE.split(cleaned_row)
-        if len(cells) == 1 and re.search(r"(?<!\\)\|", cleaned_row):
-            cells = re.split(r"(?<!\\)\|", cleaned_row)
-        rows.append("; ".join(
-            f"Table row {row_number}, column {column_number}: "
-            f"{_plain_table_cell(cell)}"
-            for column_number, cell in enumerate(cells, start=1)
-        ))
-    return "\n".join(rows) or "Table row 1, column 1: (blank)"
+        character = value[index]
+        if character == "\\":
+            index += 2
+            continue
+        if tex_groups and character == "{":
+            depth += 1
+        elif tex_groups and character == "}":
+            depth -= 1
+            if depth < 0:
+                return None
+        index += 1
+    if depth:
+        return None
+    cells.append(value[start:])
+    return cells
 
 
 def _markdown_table_cells(line: str) -> list[str]:
-    """Split one pipe row while retaining escaped literal pipes."""
-
-    cells = re.split(r"(?<!\\)\|", str(line or ""))
-    if cells and not cells[0].strip():
+    """Split one pipe row while retaining escaped literal pipes and blanks."""
+    value = str(line or "").strip()
+    cells = _split_table_tokens(value, "|", tex_groups=False)
+    if cells is None:
+        return []
+    if value.startswith("|"):
         cells.pop(0)
-    if cells and not cells[-1].strip():
+    if cells and not cells[-1] and value.endswith("|"):
         cells.pop()
     return [cell.replace(r"\|", "|") for cell in cells]
 
@@ -761,11 +729,108 @@ def _markdown_table_start(lines: list[str], index: int) -> bool:
     )
 
 
+def _table_cell_equation(value: str) -> str | None:
+    """Render explicitly marked math and plain table text without inference.
+
+    Unknown layout, nested tables and visual cells stay in their source table
+    for the existing API repair/crop decision.  The serializer cannot choose
+    a substitute stimulus or flatten a visual's relationship to its cell.
+    """
+    cell = re.sub(r"[ \t]*[\r\n]+[ \t]*", " ", str(value or "")).strip()
+    if (
+        re.search(
+            r"(?i)\[img\b|!\[|<[^>]+>|\\(?:includegraphics|begin|end|multicolumn|multirow)\b",
+            cell,
+        )
+        or _MARKDOWN_LINK_RE.search(cell)
+        # Contract placeholders are answer controls, never ordinary math.
+        # Moving one inside a KaTeX array would change the learner's task.
+        or re.search(r"\$\$[a-t]\$\$", cell)
+    ):
+        return None
+    cell = _normalize_legacy_roman_atoms(cell)
+    cell = canonicalize_rich_text(cell)
+    pieces: list[str] = []
+    cursor = 0
+    for match in _KATEX_TAG_RE.finditer(cell):
+        plain = _table_plain_text(cell[cursor:match.start()])
+        if plain is None:
+            return None
+        pieces.append(plain)
+        pieces.append(match.group("body").strip())
+        cursor = match.end()
+    plain = _table_plain_text(cell[cursor:])
+    if plain is None:
+        return None
+    pieces.append(plain)
+    return "".join(pieces)
+
+
+def _table_plain_text(value: str) -> str | None:
+    """Encode plain cell spans; preserve explicit balanced TeX text atoms."""
+    pieces: list[str] = []
+    start = 0
+    index = 0
+    while index < len(value):
+        if value[index] != "\\":
+            index += 1
+            continue
+        # These escapes denote literal text in the source TeX dialect.
+        if index + 1 < len(value) and value[index + 1] in "&%$#_{}|":
+            index += 2
+            continue
+        atom = re.match(r"\\text\{", value[index:])
+        if atom is None:
+            return None
+        opening = index + atom.end() - 1
+        end = _balanced_group_end(value, opening, "{", "}")
+        if end is None:
+            return None
+        segment = re.sub(r"\\([&%$#_{}|])", r"\1", value[start:index])
+        pieces.append(_tex_text(segment))
+        pieces.append(value[index:end])
+        index = end
+        start = end
+    segment = re.sub(r"\\([&%$#_{}|])", r"\1", value[start:])
+    pieces.append(_tex_text(segment))
+    return "".join(pieces)
+
+
+def _table_array(rows: list[list[str]], columns: str) -> str | None:
+    alignments = [character for character in columns if character in "lcr"]
+    width = len(alignments)
+    columns = "|" + "|".join(alignments) + "|"
+    if not rows or not width or any(len(row) != width for row in rows):
+        return None
+    rendered_cells = [[_table_cell_equation(cell) for cell in row] for row in rows]
+    if any(cell is None for row in rendered_cells for cell in row):
+        return None
+    for column in range(width):
+        if all(row[column] for row in rendered_cells):
+            continue
+        # Use only a glyph run already present in this column as an invisible
+        # size reference. No answer or hypothetical entry is invented. The
+        # exact forbidden house-style literal \phantom{n} is never emitted.
+        reference = next((
+            row[column] for row in rendered_cells
+            if row[column] and row[column] != "n"
+        ), None)
+        if reference is None:
+            return None  # No recorded size: preserve the source for API repair.
+        for row in rendered_cells:
+            if not row[column]:
+                row[column] = r"\phantom{" + reference + "}"
+    rendered_rows = [" & ".join(row) for row in rendered_cells]
+    return katex(
+        r"\begin{array}{" + columns + r"} \hline "
+        + r" \\ \hline ".join(rendered_rows)
+        + r" \\ \hline \end{array}"
+    )
+
+
 def _replace_markdown_tables(value: str) -> str:
     lines = str(value or "").splitlines()
-    if not any(
-        _markdown_table_start(lines, index) for index in range(len(lines))
-    ):
+    if not any(_markdown_table_start(lines, i) for i in range(len(lines))):
         return str(value or "")
     output: list[str] = []
     index = 0
@@ -774,21 +839,20 @@ def _replace_markdown_tables(value: str) -> str:
             output.append(lines[index])
             index += 1
             continue
-        table_rows = [lines[index]]
-        index += 2  # separator syntax is layout, never a data cell
-        while index < len(lines) and len(
-            _markdown_table_cells(lines[index])
-        ) >= 2:
-            table_rows.append(lines[index])
+        start = index
+        rows = [_markdown_table_cells(lines[index])]
+        alignments = _markdown_table_cells(lines[index + 1])
+        columns = "|" + "|".join(
+            "c" if cell.strip().startswith(":") and cell.strip().endswith(":")
+            else "r" if cell.strip().endswith(":") else "l"
+            for cell in alignments
+        ) + "|"
+        index += 2
+        while index < len(lines) and "|" in lines[index] and lines[index].strip():
+            rows.append(_markdown_table_cells(lines[index]))
             index += 1
-        for row_number, row in enumerate(table_rows, start=1):
-            output.append("; ".join(
-                f"Table row {row_number}, column {column_number}: "
-                f"{_plain_table_cell(cell)}"
-                for column_number, cell in enumerate(
-                    _markdown_table_cells(row), start=1
-                )
-            ))
+        rendered = _table_array(rows, columns)
+        output.append(rendered if rendered is not None else "\n".join(lines[start:index]))
     return "\n".join(output)
 
 
@@ -819,47 +883,137 @@ def _has_noncanonical_array(value: str) -> bool:
     )
 
 
-def replace_unsupported_tables(text: str) -> str:
-    """Replace unsupported tabular/Markdown markup without dropping a cell.
+def _protect_table_markup(value: str) -> tuple[str, list[tuple[str, str]]]:
+    """Mask remaining table spans, leaving surrounding prose/math available.
 
-    A source-associated image is a semantic choice and therefore belongs to
-    the model pass.  This fallback handles only the mechanical case in which
-    an unsupported table dialect reaches a serializer: it retains ordered
-    cells and labels their coordinates, with no inferred headings or
-    reconstructed meaning.  Canonical KaTeX ``array`` environments are a
-    supported CMS representation and pass through byte-for-byte.
+    This is a syntax span operation only. It preserves incomplete tables to
+    end-of-input when no matching closer exists, rather than guessing a cell
+    or table boundary from content.
     """
+    text = str(value or "")
+    spans: list[tuple[int, int]] = []
+    for pattern in (
+        re.compile(r"\\(?P<action>begin|end)\s*\{\s*tabular\*?\s*\}", re.I),
+        re.compile(r"<(?P<close>/)?table\b[^>]*>", re.I),
+    ):
+        stack: list[int] = []
+        for match in pattern.finditer(text):
+            closing = (match.groupdict().get("action") or "").lower() == "end" or bool(match.groupdict().get("close"))
+            if closing:
+                if stack:
+                    start = stack.pop()
+                    if not stack:
+                        spans.append((start, match.end()))
+            else:
+                stack.append(match.start())
+        if stack:
+            spans.append((stack[0], len(text)))
+    lines = text.splitlines(keepends=True)
+    offsets = [0]
+    for line in lines:
+        offsets.append(offsets[-1] + len(line))
+    index = 0
+    while index < len(lines):
+        if not _markdown_table_start(lines, index):
+            index += 1
+            continue
+        start = index
+        index += 2
+        while index < len(lines) and "|" in lines[index] and lines[index].strip():
+            index += 1
+        spans.append((offsets[start], offsets[index]))
+    # A table inside an existing math wrapper keeps that complete wrapper;
+    # otherwise raw-math normalization would rewrite only its surroundings.
+    for pattern in (_KATEX_TAG_RE, *_RAW_BLOCK_MATH_PATTERNS):
+        for match in pattern.finditer(text):
+            if any(match.start() <= start and end <= match.end() for start, end in spans):
+                spans.append(match.span())
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+        else:
+            merged.append((start, end))
+    prefix = "\ue110AEGISTABLE"
+    while prefix in text:
+        prefix += "\ue110"
+    protected: list[tuple[str, str]] = []
+    pieces: list[str] = []
+    cursor = 0
+    for index, (start, end) in enumerate(merged):
+        token = f"{prefix}{index}\ue111"
+        pieces.extend((text[cursor:start], token))
+        protected.append((token, text[start:end]))
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces), protected
 
+
+def _restore_table_markup(value: str, protected: list[tuple[str, str]]) -> str:
+    for token, original in protected:
+        value = value.replace(token, original)
+    return value
+
+
+def replace_unsupported_tables(text: str) -> str:
+    """Project complete text/math tables to arrays, retaining repair defects.
+
+    Every row, column, blank cell and explicit mathematical expression must
+    survive. Ambiguous syntax, spans, visual tables and malformed structures
+    remain present for the existing API repair path. A serializer never
+    invents a crop, drops a cell, or replaces a table with coordinate prose.
+    Existing canonical arrays pass through unchanged.
+    """
     value = str(text or "")
+    protected: list[str] = []
+
+    def stash(original: str) -> str:
+        protected.append(original)
+        return f"\ue000AEGIS_TABLE_{len(protected) - 1}\ue001"
 
     def table(match: re.Match) -> str:
-        return _labeled_table(str(match.group("body") or ""))
-
-    def replace_dialects(body: str) -> str:
-        replaced = _TABULAR_RE.sub(table, body)
-        # Closed environments were consumed above.  A remaining declaration
-        # is a malformed source-converter tail; label everything after it so
-        # no cell or following text disappears and no unsupported dialect
-        # reaches the CMS.
-        replaced = _UNTERMINATED_TABULAR_RE.sub(table, replaced)
-        return replaced
+        columns = re.sub(r"\s+", "", match.group("columns") or "")
+        if re.fullmatch(r"[lcr|]+", columns) is None:
+            return match.group(0)
+        body = str(match.group("body") or "")
+        raw_rows = _split_table_tokens(body, r"\\")
+        if raw_rows is None:
+            return match.group(0)
+        rows: list[list[str]] = []
+        for index, raw_row in enumerate(raw_rows):
+            row = re.sub(r"^(?:\s*\\hline\b)*\s*", "", raw_row)
+            if index == len(raw_rows) - 1 and not row.strip():
+                continue  # closing row delimiter and rules are layout only
+            # Optional TeX spacing belongs to the preceding row break.
+            # Until carried structurally, retain it for API repair; never
+            # turn a dimension into authored content in the next first cell.
+            if index and re.match(r"\s*\[(?!Katex\])", row, re.IGNORECASE):
+                return match.group(0)
+            cells = _split_table_tokens(row, "&")
+            if cells is None:
+                return match.group(0)
+            rows.append(cells)
+        return _table_array(rows, columns) or match.group(0)
 
     def wrapped(match: re.Match) -> str:
         body = str(match.group("body") or "")
-        replaced = replace_dialects(body)
-        return replaced if replaced != body else match.group(0)
+        # Only a complete table owns the whole wrapper. Mixed math/layout
+        # stays untouched so we cannot move text across an equation boundary.
+        if not _UNSUPPORTED_TABLE_BEGIN_RE.search(body):
+            return match.group(0)
+        tabular = _TABULAR_RE.fullmatch(body.strip())
+        if tabular is None:
+            return stash(match.group(0))
+        rendered = table(tabular)
+        return stash(rendered if rendered != tabular.group(0) else match.group(0))
 
-    # A tabular environment inside a KaTeX wrapper must lose the wrapper as
-    # well: the CMS does not render that dialect through KaTeX.
     value = _KATEX_TAG_RE.sub(wrapped, value)
-    # The same is true for raw display-math wrappers.  Removing only tabular
-    # would otherwise let canonicalization re-wrap coordinate labels as
-    # ``[Katex] Table row ... [/Katex]``.
     for pattern in _RAW_BLOCK_MATH_PATTERNS:
         value = pattern.sub(wrapped, value)
-    value = replace_dialects(value)
-    value = _replace_markdown_tables(value)
-    return value
+    value = _TABULAR_RE.sub(table, value)
+    for index, original in enumerate(protected):
+        value = value.replace(f"\ue000AEGIS_TABLE_{index}\ue001", original)
+    return _replace_markdown_tables(value)
 
 
 def _looks_like_currency_pair(match: re.Match) -> bool:
@@ -1058,7 +1212,7 @@ def legacy_export_rich_text(text: str) -> str:
 
     This helper belongs only at public workbook serialization seams.  It
     performs deterministic, meaning-preserving repairs on the exported copy:
-    unsupported table dialects are labelled by coordinates, plain balanced
+    complete text/math tables become canonical arrays, plain balanced
     ``\\mathrm`` atoms become ``\\text`` atoms, and a complete raw canonical
     array gains its required ``[Katex]`` wrapper.  A literal ``\\n``
     immediately before a list label becomes the real line break it
@@ -1104,8 +1258,27 @@ def _mask_tex_text_groups(value: str) -> str:
     return "".join(masked)
 
 
+def _mask_tex_comments(value: str) -> str:
+    """Hide TeX comments from syntax probes without changing source bytes."""
+    masked = list(value)
+    index = 0
+    while index < len(value):
+        if value[index] == "\\":
+            index += 2  # An escaped percent is content; a paired slash is not.
+            continue
+        if value[index] == "%":
+            end = index
+            while end < len(value) and value[end] not in "\r\n":
+                end += 1
+            masked[index:end] = " " * (end - index)
+            index = end
+            continue
+        index += 1
+    return "".join(masked)
+
+
 def _equation_has_loose_prose(value: str) -> bool:
-    lexical = _mask_tex_text_groups(value)
+    lexical = _mask_tex_text_groups(_mask_tex_comments(value))
     # A dimension row-spacing argument (``\\[0.12 cm]``, supported per owner
     # decision D1 2026-08-29) is structural LaTeX; without masking, its unit
     # ("cm") reads as a two-letter word of prose.
@@ -1593,6 +1766,7 @@ def canonicalize_rich_text(text: str) -> str:
     not touch typed keyword columns, whose Equation contract is raw LaTeX.
     """
     value = replace_unsupported_tables(str(text or ""))
+    value, table_protected = _protect_table_markup(value)
     protected: list[str] = []
 
     def stash(rendered: str) -> str:
@@ -1639,7 +1813,7 @@ def canonicalize_rich_text(text: str) -> str:
     for index, rendered in enumerate(protected):
         value = value.replace(
             f"@@AEGIS_RICH_TEXT_{index:04d}@@", rendered)
-    return value
+    return _restore_table_markup(value, table_protected)
 
 
 def rich_text_issues(

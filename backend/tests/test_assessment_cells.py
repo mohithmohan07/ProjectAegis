@@ -149,7 +149,12 @@ def test_cell_decision_carries_complete_content_without_print_position(
     assert cell["count"] == 1
     assert cell["appears_in"] == ["Pre/Post-Worksheet/Test"]
     assert cell["accepted_source_qids"] == ["QINV-0001"]
-    assert cell["flags"] == []
+    # The fixture URL is deliberately not a materialized pinned source asset.
+    # Its missing visual evidence remains explicit alongside the cell verdict.
+    assert cell["flags"] == [
+        "assessment_visual_evidence_unavailable: https://example.test/leaf.png "
+        "(not_an_authorized_pinned_source_asset)"
+    ]
     authority = cell["authority"]
     assert authority["policy_version"] == "assessment-cell-3-column-spec"
     assert authority["review_flags"] == []
@@ -231,7 +236,11 @@ def test_critic_dissent_flags_without_retrying_the_author(monkeypatch) -> None:
     assert cell["marks"] == 3.0
     assert any("dissent" in flag for flag in cell["flags"])
     assert any("Marks may deserve" in flag for flag in cell["flags"])
-    assert cell["authority"]["review_flags"] == cell["flags"]
+    assert cell["flags"] == [
+        *cell["authority"]["review_flags"],
+        "assessment_visual_evidence_unavailable: https://example.test/leaf.png "
+        "(not_an_authorized_pinned_source_asset)",
+    ]
 
 
 def test_mechanical_defect_gets_bounded_correction_before_critic(
