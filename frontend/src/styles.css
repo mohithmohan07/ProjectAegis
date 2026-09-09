@@ -1003,6 +1003,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 }
 .console-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 12px 14px;

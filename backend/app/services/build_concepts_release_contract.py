@@ -739,6 +739,10 @@ def _build_master_siblings(
                 lanes,
                 _build_lane,
                 max_workers=len(lanes),
+                # These workers orchestrate independent releases. Each lane
+                # still needs its bounded per-decision pool; treating the
+                # lane wrapper as that pool serialized every Master stage.
+                orchestration=True,
                 labels=[
                     "Master · Output 02 (Pre)"
                     if lane == release.LANE_PRE

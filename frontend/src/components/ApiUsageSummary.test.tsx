@@ -41,7 +41,7 @@ test("explains when token pricing is unavailable", () => {
   );
 
   expect(screen.getByText("Unavailable")).toBeDefined();
-  expect(screen.getByText(/pricing is not configured for every model used/i)).toBeDefined();
+  expect(screen.getByText(/pricing is not configured for every model or service tier used/i)).toBeDefined();
 });
 
 test("can distinguish an uploaded source from a generated artifact", () => {
@@ -145,7 +145,7 @@ test("shows attempts without usage receipts and never presents their unknown cos
   const stageRow = screen.getByText("Rubric review").closest("tr")!;
   const cells = within(stageRow).getAllByRole("cell");
   expect(cells[1].textContent).toBe("2");
-  expect(cells[3].textContent).toBe("Unavailable");
+  expect(cells[3].textContent).toBe("Unavailable · Usage incomplete");
 });
 
 test("shows elapsed and local processing time for a zero-API checkpoint replay", () => {
@@ -168,4 +168,97 @@ test("shows elapsed and local processing time for a zero-API checkpoint replay",
   expect(screen.getByText("Requests", { selector: "dt" }).parentElement?.textContent)
     .toBe("Requests0");
   expect(screen.queryByText(/token usage is missing/i)).toBeNull();
+});
+
+test("retains recorded cost while parallel requests are pending without calling their usage missing", () => {
+  render(<ApiUsageSummary compact usage={{
+    ...USAGE,
+    provider_request_count: 5,
+    pending_request_count: 2,
+    unresolved_usage_request_count: 0,
+    usage_complete: true,
+  }} />);
+  expect(screen.getByText("Recorded estimate", { selector: "dt" }).parentElement?.textContent)
+    .toContain("$0.007654");
+  expect(screen.getByText(/2 provider requests are still running/)).toBeDefined();
+  expect(screen.queryByText(/token usage is missing/i)).toBeNull();
+  expect(screen.queryByText("Unavailable")).toBeNull();
+});
+
+test("retains known dollars after missing usage without presenting them as the full bill", () => {
+  render(<ApiUsageSummary compact usage={{
+    ...USAGE,
+    provider_request_count: 5,
+    pending_request_count: 1,
+    unresolved_usage_request_count: 1,
+    usage_complete: false,
+    estimated_cost_usd: null,
+    known_usage_estimated_cost_usd: 0.032,
+  }} />);
+  expect(screen.getByText("Recorded estimate", { selector: "dt" }).parentElement?.textContent)
+    .toContain("$0.0320");
+  expect(screen.getByText(/1 provider request is still running/)).toBeDefined();
+  expect(screen.getByText(/full total is unknown/)).toBeDefined();
+  expect(screen.queryByText("Estimated cost", { selector: "dt" })).toBeNull();
+  expect(screen.queryByText(/pricing is not configured/i)).toBeNull();
+});
+
+test.each([0, 1])("new request-state counters expose missing usage and pricing together (unresolved=%i)", (unresolved) => {
+  render(<ApiUsageSummary compact usage={{
+    ...USAGE,
+    provider_request_count: 4,
+    pending_request_count: 0,
+    unresolved_usage_request_count: unresolved,
+    usage_complete: false,
+    pricing_complete: false,
+    estimated_cost_usd: null,
+    known_usage_estimated_cost_usd: 0.032,
+  }} />);
+  expect(screen.getByText("$0.0320")).toBeDefined();
+  expect(screen.getByText(/exclude unresolved charges/)).toBeDefined();
+  expect(screen.getByText(/exclude unpriced usage/)).toBeDefined();
+  expect(screen.queryByText(/provider requests? (is|are) still running/)).toBeNull();
+});
+
+test("legacy missing usage does not falsely diagnose absent model rates", () => {
+  render(<ApiUsageSummary compact usage={{
+    ...USAGE,
+    provider_request_count: 4,
+    usage_complete: false,
+    pricing_complete: false,
+    estimated_cost_usd: null,
+    known_usage_estimated_cost_usd: 0.032,
+  }} />);
+  expect(screen.getByText("$0.0320")).toBeDefined();
+  expect(screen.getByText(/exclude unresolved charges/)).toBeDefined();
+  expect(screen.queryByText(/pricing is not configured/i)).toBeNull();
+});
+
+test("compact usage retains the priced subtotal and explains an unknown rate", () => {
+  render(<ApiUsageSummary compact usage={{
+    ...USAGE,
+    estimated_cost_usd: null,
+    known_usage_estimated_cost_usd: 0.015,
+    pricing_complete: false,
+  }} />);
+  expect(screen.getByText("$0.0150")).toBeDefined();
+  expect(screen.getByText(/exclude unpriced usage/)).toBeDefined();
+  expect(screen.queryByText(/token usage is missing/i)).toBeNull();
+});
+
+test("stage rows preserve their known cost and request state", () => {
+  render(<ApiUsageSummary usage={{
+    ...USAGE,
+    stages: [{
+      stage: "Master marking", lane: "Pre", request_count: 3,
+      provider_request_count: 5, pending_request_count: 1,
+      unresolved_usage_request_count: 1, usage_complete: false,
+      input_tokens: 100, output_tokens: 20, reasoning_tokens: 10, total_tokens: 120,
+      estimated_cost_usd: null, known_usage_estimated_cost_usd: 0.032,
+      pricing_complete: true, first_ts: 1, last_ts: 2,
+    }],
+  }} />);
+  const costCell = within(screen.getByText("Master marking").closest("tr")!)
+    .getAllByRole("cell")[3];
+  expect(costCell.textContent).toBe("$0.0320 recorded · 1 pending · Usage incomplete");
 });

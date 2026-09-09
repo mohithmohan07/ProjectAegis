@@ -202,6 +202,7 @@ export default function DocumentUpload({
   const currentJobRef = useRef<UploadJob | null>(job);
   currentJobRef.current = job;
   const controlsDisabled = busy || disabled;
+  const diagnosticsBusy = controlsDisabled || Boolean(job?.generation_running);
   const inputRef = useRef<HTMLInputElement>(null);
   const checkpointInputRef = useRef<HTMLInputElement>(null);
   const savedJobRequestGenerationRef = useRef(0);
@@ -858,16 +859,28 @@ export default function DocumentUpload({
             >
               Download checkpoint
             </a>
-            <a
-              className="button-link ghost"
-              href={api.runDiagnosticsUrl(job.id)}
-              download
-              title={"Everything this run saved — every checkpoint stage, "
-                + "the full generation log, and per-stage artifacts — in "
-                + "one shareable zip, whether or not the run finished."}
-            >
-              Download run diagnostics
-            </a>
+            {diagnosticsBusy ? (
+              <span>
+                <button className="ghost" disabled>
+                  Download run diagnostics
+                </button>
+                <span className="hint">
+                  {" Full diagnostics are available when this run stops. "}
+                  Use Download snapshot in the Console for its current log and usage.
+                </span>
+              </span>
+            ) : (
+              <a
+                className="button-link ghost"
+                href={api.runDiagnosticsUrl(job.id)}
+                download
+                title={"Saved checkpoints, the generation log and source "
+                  + "artifacts in one ZIP. Available after completion, "
+                  + "failure or a pause."}
+              >
+                Download run diagnostics
+              </a>
+            )}
             {DRIVE_BACKUP_FOLDER_URL && (
               <a
                 className="button-link ghost"
@@ -899,7 +912,7 @@ export default function DocumentUpload({
           actionsDisabled={controlsDisabled}
           manifest={job.source_artifacts}
           jobId={job.id}
-          jobRunning={Boolean(job.generation_running)}
+          jobRunning={Boolean(job.generation_running) || disabled}
           showRunOutputs={module === "concepts"}
           generationBlocked={nonResumable}
           onPublished={(freshJob) => {
@@ -1473,6 +1486,18 @@ function SourceArtifactsCard({
         </div>
         <div className="row">
           {evidence.map((artifact) => (
+            (artifact.kind === "release_diagnostics"
+              || artifact.kind === "pre_release_diagnostics")
+              && (jobRunning || actionsDisabled || anyMasterRebuilding) ? (
+              <button
+                className="ghost"
+                disabled
+                key={artifact.kind}
+                title="Full diagnostics are available when this run stops. Use Download snapshot in the Console for its current log and usage."
+              >
+                {artifact.label}
+              </button>
+            ) : (
             <a
               className="button-link ghost"
               href={artifact.download_url}
@@ -1484,6 +1509,7 @@ function SourceArtifactsCard({
             >
               {artifact.label}
             </a>
+            )
           ))}
         </div>
         </details>

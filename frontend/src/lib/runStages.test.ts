@@ -93,6 +93,25 @@ describe("stageCost", () => {
     const cost = stageCost([row("A", "", 0.5), row("A", "X", null)], "A");
     expect(cost!.cost).toBeNull();
     expect(cost!.costComplete).toBe(false);
+    expect(cost!.knownCost).toBeCloseTo(0.5);
+    expect(cost!.pricingMissing).toBe(true);
+  });
+
+  it("keeps the subtotal across lanes with pending and unresolved requests", () => {
+    const cost = stageCost([
+      { ...row("A", "Pre", 0.5), provider_request_count: 4,
+        pending_request_count: 2, usage_complete: true },
+      { ...row("A", "Post", null), provider_request_count: 3,
+        pending_request_count: 0, unresolved_usage_request_count: 1,
+        known_usage_estimated_cost_usd: 0.25, pricing_complete: true,
+        usage_complete: false },
+    ], "A")!;
+    expect(cost.cost).toBeNull();
+    expect(cost.knownCost).toBeCloseTo(0.75);
+    expect(cost.pendingCount).toBe(2);
+    expect(cost.usageGap).toBe(true);
+    expect(cost.pricingMissing).toBe(false);
+    expect(cost.requestCount).toBe(7);
   });
 
   it("returns null for a stage with no usage", () => {

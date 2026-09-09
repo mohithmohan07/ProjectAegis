@@ -2124,6 +2124,53 @@ expected-failure exemptions and the numbering exemption only once the actual
 behaviors pass. This authorizes no semantic classifier changes, stage removal,
 model/effort reduction, production merge or deployment.
 
+### Q37 — DECIDED — Run scheduling, live accounting and complete Pre-learning capture
+
+**Owner ruling (9 September 2026).** After reviewing the active Statistics and
+Madam Rides the Bus logs, the owner said "Let's fix other things before thinking
+about gemini" and explicitly added "make sure not to deploy yet. files are
+runnning still." This authorizes implementation, dry verification and a new PR;
+it does not authorize a main merge, deployment, restart or live provider switch.
+
+**Execution.** The automatic two-lane Master wrapper must preserve bounded
+parallel question work inside each lane. Orchestration nesting is distinct from
+decision-pool nesting: retain the protection against unbounded nested Settle
+pools, ordered application, independent lane failure handling, downward
+cancellation and saved successful paid work. Independent source hierarchy
+batches can run concurrently within each author or critic pass; criticism still
+waits for the complete author pass. Source text, prompts, cache identities and
+result order are preserved by this scheduling change.
+
+**Accounting and diagnostics.** Show recorded, priced usage even while calls are
+pending or a completed request has missing usage. Distinguish pending requests,
+unresolved usage and missing pricing; never turn unknown charges into zero or
+present a partial subtotal as the complete bill. Keep historical costs frozen
+and portable usage schemas backward compatible. Provide a downloadable current
+console snapshot containing the retained log and usage during an active run.
+This is not the full source/decision archive: that ZIP retains its consistency
+lock and is offered after the active operation stops.
+
+**Pre-learning.** Give existing prerequisite authors and critics complete
+relevant task/context evidence and actual figures. Resolve all allowed evidence
+identities and forward earlier omission findings. Allow a model to split a
+compound capture into separately identified fundamentals while preserving its
+parent provenance and exact accounting of the atomic parts. Let the final
+authority recover an omitted prerequisite from supplied source evidence and
+record how source demands are covered, or why no prerequisite is needed, within
+the existing author/critic call. Group independently teachable and diagnosable
+capabilities rather than merging them merely because one lesson teaches them
+together. Earlier-grade eligibility, explicit dispositions and the prohibition
+on padding remain. No target concept count or deterministic meaning judgment is
+introduced. Newly sealed Phase 3 envelopes freeze this policy; reused envelopes
+keep their existing policy and accepted decisions.
+
+**Preserved quality.** Luna, uniform xhigh, all configured author/critic/refiner
+stages, English-only functional rubric tags, complete source task protection,
+KaTeX/image validation and five Basic plus five Intermediate questions per
+retained Pre concept remain. A provider comparison or effort experiment is a
+later decision. Mock concurrency tests establish scheduling behavior, not a
+measured live completion time or pedagogical quality improvement.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

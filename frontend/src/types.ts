@@ -97,6 +97,10 @@ export interface StageUsageRow {
   usage_complete?: boolean;
   attempt_coverage_complete?: boolean;
   missing_usage_response_count?: number;
+  /** Requests still running; their eventual tokens/cost are not yet recorded. */
+  pending_request_count?: number;
+  /** Finished provider requests whose usage could not be recovered. */
+  unresolved_usage_request_count?: number;
   input_tokens: number;
   cached_input_tokens?: number;
   cache_write_tokens?: number;
@@ -104,6 +108,8 @@ export interface StageUsageRow {
   reasoning_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number | null;
+  /** Recorded priced usage only, retained even when the full total is unknown. */
+  known_usage_estimated_cost_usd?: number;
   pricing_complete: boolean;
   first_ts: number;
   last_ts: number;
@@ -133,6 +139,8 @@ export interface OpenAIUsage {
   usage_complete?: boolean;
   attempt_coverage_complete?: boolean;
   missing_usage_response_count?: number;
+  pending_request_count?: number;
+  unresolved_usage_request_count?: number;
   untracked_response_count?: number;
   mechanical_wall_seconds?: number;
   mechanical_thread_cpu_seconds?: number;
@@ -146,6 +154,8 @@ export interface OpenAIUsage {
   reasoning_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number | null;
+  /** Recorded priced usage only; excludes pending and unresolved charges. */
+  known_usage_estimated_cost_usd?: number;
   currency?: "USD" | string;
   pricing_source?: string;
   pricing_as_of?: string;

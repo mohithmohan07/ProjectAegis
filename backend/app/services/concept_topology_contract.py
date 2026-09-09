@@ -419,6 +419,7 @@ def _run_rewritten_phase3(
             env = None
     if env is None:
         from .phase3 import pre_coverage as p3_coverage
+        from . import prelearning_capture_policy
 
         env = p3_envelope.build(
             graph=graph,
@@ -430,7 +431,13 @@ def _run_rewritten_phase3(
             # variable, recorded on the envelope so it is inside the seal
             # and every decision key. A reused sealed envelope keeps the
             # rule (or the absence) it was sealed with — decide-once.
-            metadata=p3_coverage.stamp(kwargs.get("meta") or {}),
+            metadata={
+                **p3_coverage.stamp(kwargs.get("meta") or {}),
+                # New Phase 3 boundaries adopt the complete-evidence/atomic
+                # capture contract. Reused envelopes above remain verbatim,
+                # including the absence of this key on historical runs.
+                prelearning_capture_policy.KEY: prelearning_capture_policy.VERSION,
+            },
         )
         if envelope_path is not None:
             try:

@@ -265,11 +265,12 @@ def phase3_decision_workers() -> int:
 
 
 def source_chunk_workers() -> int:
-    """Per-run parallel workers for Phase 2 source chunks and packets.
+    """Per-run parallel workers for source chunks, packets and hierarchy batches.
 
     Governs the chunk fan-outs that read the source (question
     identification, the Question/Task Inventory, skeleton extraction) and
-    the Phase 2.2 evidence-packet adjudication. Chunks are decided in
+    the Phase 2.2 evidence-packet adjudication, plus independent batches
+    within each source hierarchy author or critic pass. Chunks are decided in
     parallel and APPLIED in input order, so output — including cross-chunk
     dedup and QID numbering — is byte-identical to a sequential run.
 

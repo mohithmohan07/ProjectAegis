@@ -115,6 +115,36 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+test("active jobs direct diagnostics to the live console and unlock the ZIP after stopping", () => {
+  const job = convertedJob();
+  job.generation_running = true;
+  job.source_artifacts!.files.push({
+    kind: "release_diagnostics",
+    label: "Full saved diagnostic evidence",
+    filename: "diagnostics.zip",
+    media_type: "application/zip",
+    size_bytes: 0,
+    download_url: "/diagnostics/81",
+  });
+  const view = render(
+    <RunConsoleProvider>
+      <DocumentUpload module="concepts" conceptKind="post" externalJob={job} onJob={vi.fn()} />
+    </RunConsoleProvider>,
+  );
+  expect(screen.queryByRole("link", { name: "Download run diagnostics" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Download run diagnostics" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByRole("button", { name: "Full saved diagnostic evidence" }).hasAttribute("disabled")).toBe(true);
+  expect(screen.getByText(/Use Download snapshot in the Console/)).toBeDefined();
+
+  view.rerender(
+    <RunConsoleProvider>
+      <DocumentUpload module="concepts" conceptKind="post" externalJob={{ ...job, generation_running: false }} onJob={vi.fn()} />
+    </RunConsoleProvider>,
+  );
+  expect(screen.getByRole("link", { name: "Download run diagnostics" }).getAttribute("href")).toBe("/diagnostics/81");
+  expect(screen.getByRole("link", { name: "Full saved diagnostic evidence" }).getAttribute("href")).toBe("/diagnostics/81");
+});
+
 test("shows the Phase 2 source-critical cutover without overstating semantic use", () => {
   render(
     <RunConsoleProvider>

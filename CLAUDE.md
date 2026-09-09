@@ -1,6 +1,17 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q36 (9 September 2026).**
+**Latest owner amendment: Q37 (9 September 2026).**
+[Q37](docs/aegis-restructure.md#q37--decided--run-scheduling-live-accounting-and-complete-pre-learning-capture)
+approves fixing the observed Master serialization, independent source batching,
+live cost visibility and Pre-learning evidence/splitting defects before any
+Gemini or reasoning-effort experiment. Preserve Luna/uniform-xhigh, every review
+stage, the 5+5 Pre question rule and API-owned semantic judgments. New sealed
+Phase 3 envelopes carry the improved Pre policy; reused envelopes retain their
+recorded policy and decisions. The owner explicitly forbids deployment while
+the current files run: prepare and verify a PR only; do not merge to main,
+deploy, restart the app or change its provider settings.
+
+**Previous owner amendment: Q36 (9 September 2026).**
 [Q36](docs/aegis-restructure.md#q36--decided--durable-question-numbering-and-current-workflow-tests)
 approves fixing question-number reuse with durable atomic reservations and
 migrating the six stale expected-failure tests to staged generation and explicit

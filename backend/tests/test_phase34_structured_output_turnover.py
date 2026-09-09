@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -768,7 +770,7 @@ def test_hierarchy_batches_are_cached_and_allow_cross_batch_parent_ids(
         second = phase34._classify_hierarchy_batched(payload)
 
     assert len(calls) == 3
-    assert [len(batch) for batch in calls] == [10, 10, 3]
+    assert sorted(len(batch) for batch in calls) == [3, 10, 10]
     assert first == second
     assert [row["section_id"] for row in first["sections"]] == [
         f"SEC-{index:04d}" for index in range(1, 24)
@@ -796,6 +798,8 @@ def test_resume_reuses_successful_hierarchy_batches_after_late_failure(
         return _classification_response(kwargs)
 
     monkeypatch.setenv("AEGIS_PHASE3_HIERARCHY_BATCH_SECTIONS", "10")
+    # Keep coverage for the explicitly supported sequential configuration.
+    monkeypatch.setenv("AEGIS_SOURCE_CHUNK_WORKERS", "1")
     monkeypatch.setattr(
         phase22, "_openai_multimodal_json", fail_on_second_batch
     )
@@ -869,3 +873,221 @@ def test_hierarchy_critic_is_batched_and_cached(tmp_path, monkeypatch):
         "repairs": [],
         "issues": [],
     }
+
+
+def _batch_response(kind: str, kwargs: dict) -> dict:
+    if kind == "classifier":
+        return _classification_response(kwargs)
+    request = json.loads(kwargs["prompt"])
+    return {
+        "verdict": "repair_required",
+        "confidence": 0.999,
+        "repairs": [],
+        "issues": [request["target_section_ids"][0]],
+    }
+
+
+def _first_result_id(kind: str, result: dict) -> str:
+    if kind == "classifier":
+        return result["sections"][0]["section_id"]
+    return result["issues"][0]
+
+
+@pytest.mark.parametrize("kind", ["classifier", "critic"])
+def test_hierarchy_batches_overlap_with_bounded_ordered_application(
+    tmp_path, monkeypatch, kind,
+):
+    """A blocked first batch must allow its sibling, but not unbounded work."""
+    payload = _hierarchy_payload(12)
+    all_ids = [row["section_id"] for row in payload["sections"]]
+    payload["proposed_hierarchy"] = _classification_response({
+        "prompt": json.dumps({"target_section_ids": all_ids}),
+    })["sections"]
+    run = (
+        phase34._classify_hierarchy_batched
+        if kind == "classifier" else phase34._critic_hierarchy_batched
+    )
+    first_started = threading.Event()
+    second_cached = threading.Event()
+    third_started = threading.Event()
+    release_first = threading.Event()
+    calls = []
+    logs = []
+    session = {"artifact_dir": tmp_path}
+    original_write = phase34._write_cache_entry
+
+    def cache_result(key, result):
+        original_write(key, result)
+        if _first_result_id(kind, result) == "SEC-0005":
+            second_cached.set()
+
+    def fake_call(**kwargs):
+        assert phase3.active_session() is session
+        request = json.loads(kwargs["prompt"])
+        calls.append(request)
+        first_id = request["target_section_ids"][0]
+        if first_id == "SEC-0001":
+            first_started.set()
+            assert release_first.wait(5), "test did not release the first batch"
+        elif first_id == "SEC-0005":
+            assert first_started.wait(5), "sibling batch never started"
+        else:
+            third_started.set()
+        return _batch_response(kind, kwargs)
+
+    def invoke():
+        with phase3.activate_session(session):
+            return run(payload)
+
+    monkeypatch.setenv("AEGIS_PHASE3_HIERARCHY_BATCH_SECTIONS", "4")
+    monkeypatch.setenv("AEGIS_SOURCE_CHUNK_WORKERS", "2")
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", fake_call)
+    monkeypatch.setattr(phase34, "_write_cache_entry", cache_result)
+    monkeypatch.setattr(phase34.progress, "log", lambda message, **_: logs.append(message))
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(invoke)
+        try:
+            assert second_cached.wait(5), "hierarchy batch calls were serialized"
+            assert not third_started.is_set()
+            assert not any(message.startswith("Verified Phase 3 hierarchy") for message in logs)
+        finally:
+            release_first.set()
+        result = future.result(timeout=5)
+
+    assert len(calls) == 3
+    for request in calls:
+        assert [row["section_id"] for row in request["section_directory"]] == all_ids
+        if kind == "critic":
+            assert [row["section_id"] for row in request["proposed_hierarchy"]] == all_ids
+    verified = [message for message in logs if message.startswith("Verified Phase 3 hierarchy")]
+    assert len(verified) == 3
+    assert all(f"batch {index}/3" in message for index, message in enumerate(verified, start=1))
+    if kind == "classifier":
+        assert [row["section_id"] for row in result["sections"]] == all_ids
+    else:
+        assert result["issues"] == ["SEC-0001", "SEC-0005", "SEC-0009"]
+
+    # Each paid batch, including the out-of-order sibling, has a durable receipt.
+    with phase3.activate_session(session):
+        assert len(phase34._read_cache()["entries"]) == 3
+        monkeypatch.setattr(
+            phase22, "_openai_multimodal_json",
+            lambda **_: pytest.fail("verified parallel batch was replayed"),
+        )
+        assert run(payload) == result
+
+
+@pytest.mark.parametrize("kind", ["classifier", "critic"])
+def test_failed_hierarchy_batch_preserves_completed_sibling_for_resume(
+    tmp_path, monkeypatch, kind,
+):
+    payload = _hierarchy_payload(12)
+    run = (
+        phase34._classify_hierarchy_batched
+        if kind == "classifier" else phase34._critic_hierarchy_batched
+    )
+    second_cached = threading.Event()
+    calls = []
+    original_write = phase34._write_cache_entry
+
+    def cache_result(key, result):
+        original_write(key, result)
+        if _first_result_id(kind, result) == "SEC-0005":
+            second_cached.set()
+
+    def fail_first(**kwargs):
+        request = json.loads(kwargs["prompt"])
+        first_id = request["target_section_ids"][0]
+        calls.append(first_id)
+        if first_id == "SEC-0001":
+            assert second_cached.wait(5), "successful sibling never saved its receipt"
+            raise RuntimeError("simulated provider interruption")
+        return _batch_response(kind, kwargs)
+
+    monkeypatch.setenv("AEGIS_PHASE3_HIERARCHY_BATCH_SECTIONS", "4")
+    monkeypatch.setenv("AEGIS_SOURCE_CHUNK_WORKERS", "2")
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", fail_first)
+    monkeypatch.setattr(phase34, "_write_cache_entry", cache_result)
+    with phase3.activate_session({"artifact_dir": tmp_path}):
+        with pytest.raises(RuntimeError, match="simulated provider interruption"):
+            run(payload)
+        assert set(calls) == {"SEC-0001", "SEC-0005"}
+        assert len(phase34._read_cache()["entries"]) == 1
+        resumed_calls = []
+
+        def resume(**kwargs):
+            request = json.loads(kwargs["prompt"])
+            resumed_calls.append(request["target_section_ids"][0])
+            return _batch_response(kind, kwargs)
+
+        monkeypatch.setattr(phase22, "_openai_multimodal_json", resume)
+        result = run(payload)
+        assert set(resumed_calls) == {"SEC-0001", "SEC-0009"}
+        assert len(phase34._read_cache()["entries"]) == 3
+    if kind == "classifier":
+        assert len(result["sections"]) == 12
+    else:
+        assert result["issues"] == ["SEC-0001", "SEC-0005", "SEC-0009"]
+
+
+def test_graph_compilation_finishes_every_author_batch_before_criticism(
+    tmp_path, monkeypatch,
+):
+    from app.services import canonical_source_phase2 as phase2
+
+    source = "\n\n".join(
+        f"# Teaching topic {index}\n\nSource body for topic {index}."
+        for index in range(1, 13)
+    )
+    canonical = phase2.compile_phase2_source(
+        source,
+        source_filename="hierarchy-passes.mmd",
+        consumer_module="build_concepts",
+    ).canonical
+    expected_ids = {row["section_id"] for row in canonical["sections"]}
+    saved_author_ids = set()
+    critic_ids = set()
+    receipt_lock = threading.Lock()
+    original_write = phase34._write_cache_entry
+
+    def cache_result(key, result):
+        original_write(key, result)
+        if "sections" in result:
+            with receipt_lock:
+                saved_author_ids.update(row["section_id"] for row in result["sections"])
+
+    def provider(**kwargs):
+        request = json.loads(kwargs["prompt"])
+        target_ids = request["target_section_ids"]
+        if kwargs["purpose"] == "concept_mapping":
+            assert not critic_ids
+            return {"sections": [
+                {
+                    "section_id": section_id,
+                    "parent_section_id": "",
+                    "role": "main_topic",
+                    "confidence": 0.999,
+                    "evidence": ["independent teaching topic"],
+                }
+                for section_id in target_ids
+            ]}
+        assert saved_author_ids == expected_ids
+        assert {row["section_id"] for row in request["proposed_hierarchy"]} == expected_ids
+        with receipt_lock:
+            critic_ids.update(target_ids)
+        return {"verdict": "verified", "confidence": 0.999, "repairs": [], "issues": []}
+
+    monkeypatch.setenv("AEGIS_PHASE3_HIERARCHY_BATCH_SECTIONS", "4")
+    monkeypatch.setenv("AEGIS_SOURCE_CHUNK_WORKERS", "2")
+    monkeypatch.setattr(phase22, "_openai_multimodal_json", provider)
+    monkeypatch.setattr(phase34, "_write_cache_entry", cache_result)
+    with phase3.activate_session({"artifact_dir": tmp_path, "canonical": canonical}):
+        graph, _ = phase3.compile_semantic_graph(
+            canonical,
+            source_text=source,
+            metadata={"subject": "History", "chapter_title": "Hierarchy passes"},
+            hierarchy_provider=phase34._classify_hierarchy_batched,
+            critic_provider=phase34._critic_hierarchy_batched,
+        )
+    assert graph["classification_mode"] == "api_classified_and_verified"
+    assert critic_ids == expected_ids

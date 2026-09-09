@@ -23,6 +23,8 @@ This contract makes structured output resumable rather than brittle:
   payload bounding does not substitute a deterministic role guess for review;
 * successful batches survive a later failure, so Resume starts at the first
   uncached batch rather than replaying the chapter;
+* independent batches within each pass run on the bounded source-worker pool;
+  criticism still starts after the complete authored hierarchy is available;
 * progress and terminal errors name the actual purpose/schema instead of calling
   every downstream structured request "source adjudication".
 
@@ -35,6 +37,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -53,10 +56,14 @@ from .. import config
 from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase3 as phase3
 from . import progress
+from .phase3 import kernel
 
 _CONTRACT_VERSION = 3
 _TURNOVER_VERSION = "phase3.4-structured-output-turnover-2"
 _HIERARCHY_CACHE_FILENAME = "source.phase34-hierarchy-batch-cache.json"
+# Batches share one receipt file. Serialize only its read/modify/atomic-write,
+# never provider work, so out-of-order successes survive a sibling failure.
+_HIERARCHY_CACHE_LOCK = threading.Lock()
 _ALLOWED_HIERARCHY_ROLES = (
     "chapter_heading",
     "main_topic",
@@ -660,18 +667,19 @@ def _write_cache_entry(key: str, value: dict[str, Any]) -> None:
     if directory is None:
         return
     path = directory / _HIERARCHY_CACHE_FILENAME
-    cache = _read_cache()
-    if cache.get("version") != _TURNOVER_VERSION:
-        cache = {"version": _TURNOVER_VERSION, "entries": {}}
-    cache.setdefault("entries", {})[key] = {
-        "created_at": time.time(),
-        "model": str(config.OPENAI_MODEL),
-        "result": copy.deepcopy(value),
-    }
-    phase3._atomic_write(
-        path,
-        json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-    )
+    with _HIERARCHY_CACHE_LOCK:
+        cache = _read_cache()
+        if cache.get("version") != _TURNOVER_VERSION:
+            cache = {"version": _TURNOVER_VERSION, "entries": {}}
+        cache.setdefault("entries", {})[key] = {
+            "created_at": time.time(),
+            "model": str(config.OPENAI_MODEL),
+            "result": copy.deepcopy(value),
+        }
+        phase3._atomic_write(
+            path,
+            json.dumps(cache, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        )
 
 
 def _cache_key(
@@ -1245,8 +1253,11 @@ def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         "Preserve physical order, use only opaque IDs, and return every target "
         "exactly once with concise evidence."
     )
-    for batch_index, start in enumerate(range(0, len(all_ids), size), start=1):
-        target_ids = all_ids[start:start + size]
+    batches = [
+        all_ids[start:start + size] for start in range(0, len(all_ids), size)
+    ]
+
+    def classify_batch(target_ids: list[str]):
         batch_payload = _classification_payload_for_batch(payload, target_ids)
         key = _cache_key(
             kind="classifier",
@@ -1272,14 +1283,30 @@ def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         )
         if cached is None:
             _write_cache_entry(key, {"sections": rows})
+        return rows, cache_state
+
+    def apply_batch(index: int, target_ids: list[str], result) -> None:
+        rows, cache_state = result
         for row in rows:
             combined[str(row["section_id"])] = row
         progress.log(
             f"Verified Phase 3 hierarchy classification batch "
-            f"{batch_index}/{batch_count} ({len(target_ids)} section(s); "
+            f"{index + 1}/{batch_count} ({len(target_ids)} section(s); "
             f"cache {cache_state}).",
             level="success",
         )
+
+    kernel.parallel_map_in_order(
+        batches,
+        classify_batch,
+        max_workers=config.source_chunk_workers(),
+        labels=[
+            f"Hierarchy author {index + 1}/{batch_count}"
+            for index in range(batch_count)
+        ],
+        announce="Phase 3 hierarchy classification",
+        on_result=apply_batch,
+    )
     return {"sections": [combined[section_id] for section_id in all_ids]}
 
 
@@ -1316,8 +1343,13 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         "parents, wrong parent links, and order drift. Use only supplied IDs. "
         "Return concise repairs only for targeted IDs and never rewrite source."
     )
-    for batch_index, start in enumerate(range(0, len(all_ids), size), start=1):
-        target_ids = all_ids[start:start + size]
+    # The caller starts this pass only after the complete authored hierarchy
+    # is available. Every independent critic batch sees that same proposal.
+    batches = [
+        all_ids[start:start + size] for start in range(0, len(all_ids), size)
+    ]
+
+    def audit_batch(target_ids: list[str]):
         batch_payload = _critic_payload_for_batch(payload, target_ids)
         key = _cache_key(
             kind="critic",
@@ -1343,6 +1375,11 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         )
         if cached is None:
             _write_cache_entry(key, normalized)
+        return normalized, cache_state
+
+    def apply_batch(index: int, target_ids: list[str], result) -> None:
+        nonlocal confidence, needs_repair
+        normalized, cache_state = result
         confidence = min(confidence, float(normalized["confidence"]))
         if (
             normalized["verdict"] == "repair_required"
@@ -1353,10 +1390,22 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         all_repairs.extend(copy.deepcopy(normalized["repairs"]))
         all_issues.extend(normalized["issues"])
         progress.log(
-            f"Verified Phase 3 hierarchy critic batch {batch_index}/{batch_count} "
+            f"Verified Phase 3 hierarchy critic batch {index + 1}/{batch_count} "
             f"({len(target_ids)} section(s); cache {cache_state}).",
             level="success",
         )
+
+    kernel.parallel_map_in_order(
+        batches,
+        audit_batch,
+        max_workers=config.source_chunk_workers(),
+        labels=[
+            f"Hierarchy critic {index + 1}/{batch_count}"
+            for index in range(batch_count)
+        ],
+        announce="Phase 3 hierarchy criticism",
+        on_result=apply_batch,
+    )
     return {
         "verdict": "repair_required" if needs_repair else "verified",
         "confidence": confidence,

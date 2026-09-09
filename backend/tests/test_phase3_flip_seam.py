@@ -84,14 +84,14 @@ def test_prepare_final_routes_through_the_rewrite(
 
     assert rows == [{"concept_title": "Stub Row"}]
     # The seam sealed the exact envelope the golden fixture records, plus
-    # the ONE frozen run variable a production envelope carries since
-    # register Q30: the owner's Pre coverage rule, stamped into the
-    # metadata and therefore inside the seal. The golden fixture predates
-    # the ruling and records no rule.
+    # the owner's Pre coverage and atomic capture policies, frozen inside
+    # the new seal. The golden fixture predates both policies.
     from app.services.phase3 import pre_coverage
+    from app.services import prelearning_capture_policy
 
     expected = copy.deepcopy(fixture_env)
     expected["metadata"] = pre_coverage.stamp(expected["metadata"])
+    expected["metadata"][prelearning_capture_policy.KEY] = prelearning_capture_policy.VERSION
     expected["envelope_sha256"] = envelope_mod.seal_sha256(expected)
     assert captured["env"]["metadata"][pre_coverage.RULE_FIELD] == (
         pre_coverage.owner_rule()
@@ -101,6 +101,39 @@ def test_prepare_final_routes_through_the_rewrite(
     # The decision store lives in the job's durable artifact directory.
     assert str(captured["store_dir"]).endswith("phase3-decisions")
     assert str(captured["store_dir"]).startswith(str(tmp_path))
+
+
+def test_historical_sealed_envelope_keeps_legacy_capture_policy(monkeypatch, tmp_path, fixture_env):
+    """New code must not rebill Pre judgments sealed before the new policy."""
+    from app.services import prelearning_capture_policy
+
+    original = copy.deepcopy(fixture_env)
+    assert prelearning_capture_policy.KEY not in original["metadata"]
+    (tmp_path / "source.phase3-envelope.json").write_text(json.dumps({
+        "boundary_skeleton_sha256": phase3._sha256_json(original["skeleton_rows"]),
+        "envelope": original,
+    }), encoding="utf-8")
+    captured = []
+
+    def fake_run(env, **kwargs):
+        captured.append(copy.deepcopy(env))
+        return {"records": [], "summary": {
+            "row_count": 0, "flagged_row_count": 0,
+            "routed_qids": 0, "unrouted_items": 0,
+        }}
+
+    monkeypatch.setattr(runner, "run", fake_run)
+    monkeypatch.setattr(envelope_mod, "build", lambda **kwargs: pytest.fail("historical envelope was rebuilt"))
+    with phase3.activate_session({"artifact_dir": tmp_path, "canonical": original["canonical"]}), phase3.activate(_graph_from(original)):
+        generation._prepare_final_concept_content(
+            copy.deepcopy(original["skeleton_rows"]), subject="History",
+            mmd_text="canonical semantic source", meta=original["metadata"],
+            source_sections=[], source_topic_excerpts=[], method_anchors=[],
+            question_task_inventory=copy.deepcopy(original["inventory"]),
+            mined_types=copy.deepcopy(original["mined_types"]),
+        )
+    assert captured == [original]
+    assert not prelearning_capture_policy.active(captured[0])
 
 
 def test_the_sealed_envelope_is_reused_across_resumes(

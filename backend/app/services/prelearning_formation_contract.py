@@ -369,6 +369,14 @@ def adjudicate_prerequisites(
     from .phase3 import kernel
 
     env = envelope_mod.validate(env)
+    from . import prelearning_capture_policy
+
+    if prelearning_capture_policy.active(env):
+        from . import prelearning_authority_v2
+
+        return prelearning_authority_v2.adjudicate(
+            env, merged, provider=provider, critic=critic, store=store, fixer=fixer,
+        )
     lookup = _capture_lookup(merged)
     if not lookup:
         result = copy.deepcopy(dict(merged))

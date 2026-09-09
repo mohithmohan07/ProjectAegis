@@ -1536,7 +1536,7 @@ def _validate_stage_row(value: Any, path: str) -> None:
 def _validate_usage(value: Any, path: str) -> None:
     _validate_usage_row(value, path, model_row=False)
     if "usage_schema_version" in value:
-        _integer(value["usage_schema_version"], f"{path}.usage_schema_version", usage_schema.SCHEMA_VERSION, minimum=usage_schema.SCHEMA_VERSION)
+        _integer(value["usage_schema_version"], f"{path}.usage_schema_version", usage_schema.SCHEMA_VERSION, minimum=usage_schema.MIN_SCHEMA_VERSION)
     usage_schema.validate_extensions(value, path)
     for index, row in enumerate(value.get("cost_by_stage_lane_model") or []):
         _validate_usage_row(

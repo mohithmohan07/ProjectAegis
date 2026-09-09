@@ -165,6 +165,7 @@ class StageUsage:
     total_tokens: int = 0
     estimated_cost_usd: Decimal = Decimal("0")
     pricing_complete: bool = True
+    missing_usage_responses: int = 0
     first_ts: float = 0.0
     last_ts: float = 0.0
 
@@ -305,7 +306,7 @@ class UsageAccumulator:
             row.total_tokens += total
             if request_cost is None:
                 row.pricing_complete = False
-            elif row.pricing_complete:
+            else:
                 row.estimated_cost_usd += request_cost
             now = time.time()
             if not row.first_ts:
@@ -371,14 +372,12 @@ class UsageAccumulator:
             pricing_complete = True
             cost = 0.0
         attempt_rows = self.attempts
-        unknown_attempts = sum(
-            bool(row.get("service_started_at")) and not row.get("usage_reported")
-            for row in attempt_rows
+        pending_count, unresolved_count = _request_usage_counts(
+            attempt_rows, missing_usage_responses=self.missing_usage_responses,
         )
-        usage_complete = not (self.missing_usage_responses or unknown_attempts)
+        usage_complete = not unresolved_count
         known_cost = round(sum(row["known_usage_estimated_cost_usd"] for row in model_rows), 12)
         if not usage_complete:
-            pricing_complete = False
             cost = None
         stage_names = list(dict.fromkeys([
             *self.stage_windows, *([self.open_stage] if self.open_stage_started else []),
@@ -414,6 +413,8 @@ class UsageAccumulator:
             "known_usage_estimated_cost_usd": known_cost,
             "attempt_count": len(attempt_rows),
             "provider_request_count": sum(bool(row.get("service_started_at")) for row in attempt_rows),
+            "pending_request_count": pending_count,
+            "unresolved_usage_request_count": unresolved_count,
             "missing_usage_response_count": self.missing_usage_responses,
             "untracked_response_count": self.untracked_response_count,
             "attempt_coverage_complete": self.untracked_response_count == 0 and sum(bool(row.get("usage_reported")) for row in attempt_rows) == request_count,
@@ -529,17 +530,66 @@ def _interval_seconds(intervals: list[tuple[float, float]]) -> float:
     return round(total, 3)
 
 
-def _stage_attempt_fields(row: StageUsage, attempts: list[dict[str, Any]]) -> dict[str, Any]:
-    usage_complete = not any(
-        item.get("service_started_at") and not item.get("usage_reported") for item in attempts
+def _request_usage_counts(
+    attempts: list[dict[str, Any]], *, missing_usage_responses: int = 0,
+) -> tuple[int, int]:
+    """Separate work awaiting a response from charges we cannot resolve.
+
+    A service-end timestamp alone does not mark usage missing: adapters record
+    that timestamp immediately before recording the returned response. Queued
+    attempts that never reached the transport have no unknown provider cost.
+    """
+    pending = unresolved = tracked_missing_responses = 0
+    for item in attempts:
+        missing_response = item.get("usage_status") in {"missing", "incomplete"}
+        tracked_missing_responses += bool(missing_response)
+        if item.get("usage_reported"):
+            continue
+        if missing_response:
+            unresolved += 1
+        elif item.get("service_started_at"):
+            if item.get("ended_at") is not None or item.get("outcome") not in {
+                "queued", "in_flight",
+            }:
+                unresolved += 1
+            else:
+                pending += 1
+    # Compatible endpoints can report missing usage outside request_attempt.
+    unresolved += max(0, missing_usage_responses - tracked_missing_responses)
+    return pending, unresolved
+
+
+def _summary_usage_counts(summary: dict[str, Any]) -> tuple[int, int]:
+    if "pending_request_count" in summary:
+        return (
+            _int(summary.get("pending_request_count")),
+            _int(summary.get("unresolved_usage_request_count")),
+        )
+    # Legacy snapshots did not distinguish running calls. Preserve their
+    # declared uncertainty; do not reinterpret historical unknown costs as 0.
+    return 0, max(
+        _int(summary.get("missing_usage_response_count")),
+        _int(summary.get("provider_request_count")) - _int(summary.get("request_count")),
+        0,
     )
+
+
+def _stage_attempt_fields(row: StageUsage, attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    pending_count, unresolved_count = _request_usage_counts(
+        attempts, missing_usage_responses=row.missing_usage_responses,
+    )
+    usage_complete = not unresolved_count
     return {
         "attempt_count": len(attempts),
         "provider_request_count": sum(bool(item.get("service_started_at")) for item in attempts),
+        "pending_request_count": pending_count,
+        "unresolved_usage_request_count": unresolved_count,
+        "missing_usage_response_count": row.missing_usage_responses,
+        "known_usage_estimated_cost_usd": round(float(row.estimated_cost_usd), 12),
         "usage_complete": usage_complete,
         "attempt_coverage_complete": sum(bool(item.get("usage_reported")) for item in attempts) >= row.request_count,
-        "pricing_complete": row.pricing_complete and usage_complete,
-        "estimated_cost_usd": round(float(row.estimated_cost_usd), 6) if row.pricing_complete and usage_complete else None,
+        "pricing_complete": row.pricing_complete,
+        "estimated_cost_usd": round(float(row.estimated_cost_usd), 12) if row.pricing_complete and usage_complete else None,
     }
 
 
@@ -591,6 +641,8 @@ def request_attempt(*, requested_model: str, purpose: str = "", provider: str = 
             if row["service_started_at"] is None:
                 row["queue_seconds"] = row["elapsed_seconds"]
         _active_attempt.reset(token)
+        if not row["usage_reported"]:
+            _emit_usage_update()
 
 
 def record_service_started() -> None:
@@ -600,6 +652,7 @@ def record_service_started() -> None:
             row["service_started_at"] = time.time()
             row["queue_seconds"] = round(max(0.0, row["service_started_at"] - row["queued_at"]), 6)
             row["outcome"] = "in_flight"
+        _emit_usage_update()
 
 
 def record_service_ended() -> None:
@@ -623,6 +676,8 @@ def record_attempt_outcome(outcome: str, *, error: BaseException | None = None,
                 row["error_type"] = type(error).__name__
                 row["http_status"] = getattr(error, "status_code", None)
                 row["request_id"] = getattr(error, "request_id", None) or row["request_id"]
+        if outcome and not row["usage_reported"]:
+            _emit_usage_update()
 
 
 def wait_for_retry(seconds: float) -> None:
@@ -688,12 +743,32 @@ def bind_persisted_summary(
         return merge_summaries(persisted)
     key = str(persistence_key)
     if key not in accumulator.persistence_baselines:
-        accumulator.persistence_baselines[key] = copy.deepcopy(persisted)
+        accumulator.persistence_baselines[key] = _closed_baseline(persisted)
     accumulator.visible_persistence_key = key
     return merge_summaries(
         accumulator.persistence_baselines[key],
         accumulator.summary(),
     )
+
+
+def _closed_baseline(summary: dict[str, Any]) -> dict[str, Any]:
+    """A previous segment's interrupted calls are unresolved, never live.
+
+    Keep the original attempt records and frozen prices intact. Only the
+    derived counters change: this accumulator cannot receive those responses.
+    """
+    baseline = copy.deepcopy(summary)
+    for row in [baseline, *(baseline.get("stages") or [])]:
+        pending, unresolved = _summary_usage_counts(row)
+        if not pending:
+            continue
+        row["pending_request_count"] = 0
+        row["unresolved_usage_request_count"] = unresolved + pending
+        row["usage_complete"] = False
+        row["estimated_cost_usd"] = None
+        if row is baseline:
+            row["cost_matrix_complete"] = False
+    return baseline
 
 
 def cumulative_summary(
@@ -755,6 +830,17 @@ def console_summary() -> dict[str, Any]:
     return visible_summary(include_attempts=False)
 
 
+def _emit_usage_update() -> None:
+    # Live events are compact and cumulative. Missing receipts and transport
+    # state must reach the console even when no successful response follows.
+    try:
+        from . import progress
+
+        progress.usage(console_summary())
+    except Exception:  # pragma: no cover - accounting must never break generation
+        pass
+
+
 def record_response(response: Any, *, requested_model: str = "") -> dict[str, Any]:
     """Record one billable Chat Completions response, if tracking is active.
 
@@ -775,6 +861,12 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         usage_status = "incomplete"
         usage = None
     attempt = _active_attempt.get()
+    try:
+        from . import progress
+
+        stage, lane = progress.current_stage(), progress.current_lane()
+    except Exception:  # pragma: no cover - attribution must never break billing
+        stage, lane = "", ""
     with _MUTATION_LOCK:
         if attempt is None:
             accumulator.untracked_response_count += 1
@@ -791,7 +883,13 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
             })
         if usage is None:
             accumulator.missing_usage_responses += 1
-            return accumulator.summary()
+            stage_row = accumulator.stages.setdefault(
+                (stage, lane), StageUsage(stage=stage, lane=lane),
+            )
+            stage_row.missing_usage_responses += 1
+    if usage is None:
+        _emit_usage_update()
+        return accumulator.summary(include_attempts=False)
 
     input_tokens = _int(_get(usage, "prompt_tokens", _get(usage, "input_tokens")))
     output_tokens = _int(
@@ -819,12 +917,6 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         )
         if reported_tier in {"", "default", "standard", "auto"} else None
     )
-    try:
-        from . import progress
-
-        stage, lane = progress.current_stage(), progress.current_lane()
-    except Exception:  # pragma: no cover - attribution must never break billing
-        stage, lane = "", ""
     accumulator.add(
         model=model,
         input_tokens=input_tokens,
@@ -855,12 +947,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     # cheap no-op, while the web UI receives updated aggregate usage live —
     # the cumulative summary (baseline + this run, stages and elapsed
     # included), identical in shape to what the job record persists.
-    try:
-        from . import progress
-
-        progress.usage(console_summary())
-    except Exception:  # pragma: no cover - accounting must never break generation
-        pass
+    _emit_usage_update()
     return summary
 
 
@@ -874,6 +961,7 @@ def _merge_stage_rows(
         "request_count", "input_tokens", "cached_input_tokens",
         "cache_write_tokens", "output_tokens", "reasoning_tokens",
         "total_tokens", "attempt_count", "provider_request_count",
+        "missing_usage_response_count",
     )
     for summary in summaries:
         if not isinstance(summary, dict):
@@ -887,6 +975,9 @@ def _merge_stage_rows(
                 "lane": key[1],
                 **{name: 0 for name in counters},
                 "estimated_cost_usd": 0.0,
+                "known_usage_estimated_cost_usd": 0.0,
+                "pending_request_count": 0,
+                "unresolved_usage_request_count": 0,
                 "pricing_complete": True,
                 "usage_complete": True,
                 "attempt_coverage_complete": True,
@@ -898,18 +989,34 @@ def _merge_stage_rows(
             })
             for name in counters:
                 target[name] += _int(row.get(name))
+            pending, unresolved = _summary_usage_counts(row)
+            target["pending_request_count"] += pending
+            target["unresolved_usage_request_count"] += unresolved
+            known_cost = _known_cost(row)
+            if row.get("known_usage_estimated_cost_usd") is None and row.get("estimated_cost_usd") is None:
+                # v2 stage aggregates dropped their subtotal on pricing gaps;
+                # the persisted model matrix still contains the known prices.
+                known_cost = sum(
+                    _known_cost(item)
+                    for item in summary.get("cost_by_stage_lane_model") or []
+                    if (str(item.get("stage") or ""), str(item.get("lane") or "")) == key
+                )
+            target["known_usage_estimated_cost_usd"] = round(
+                target["known_usage_estimated_cost_usd"] + known_cost, 12,
+            )
             target["usage_complete"] = target["usage_complete"] and row.get("usage_complete") is not False
             target["attempt_coverage_complete"] = target["attempt_coverage_complete"] and bool(
                 row.get("attempt_coverage_complete", not row.get("request_count"))
             )
             cost = row.get("estimated_cost_usd")
-            if cost is None or row.get("pricing_complete") is False:
+            if row.get("pricing_complete") is False or (cost is None and row.get("usage_complete") is not False):
                 target["pricing_complete"] = False
+            if cost is None or row.get("pricing_complete") is False:
                 target["estimated_cost_usd"] = None
-            elif target["pricing_complete"]:
+            elif target["estimated_cost_usd"] is not None:
                 try:
                     target["estimated_cost_usd"] = round(
-                        target["estimated_cost_usd"] + float(cost), 6
+                        target["estimated_cost_usd"] + float(cost), 12
                     )
                 except (TypeError, ValueError):
                     target["pricing_complete"] = False
@@ -934,6 +1041,14 @@ def _merge_stage_rows(
     return list(merged.values())
 
 
+def _known_cost(summary: dict[str, Any]) -> float:
+    # A complete historical total is authoritative, even when an older row
+    # does not carry the newer subtotal field. Never reprice its tokens.
+    if summary.get("estimated_cost_usd") is not None and summary.get("pricing_complete") is not False:
+        return _float(summary["estimated_cost_usd"])
+    return _float(summary.get("known_usage_estimated_cost_usd"))
+
+
 def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
     """Merge persisted/run summaries without repricing historical usage."""
     accumulator = UsageAccumulator()
@@ -949,9 +1064,9 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         if _int(summary.get("request_count")) > 0:
             saw_usage = True
             value = summary.get("estimated_cost_usd")
-            if value is None or summary.get("pricing_complete") is False:
+            if summary.get("pricing_complete") is False or (value is None and summary.get("usage_complete") is not False):
                 pricing_complete = False
-            else:
+            elif value is not None:
                 try:
                     saved_cost += Decimal(str(value))
                 except (ValueError, TypeError):
@@ -1046,10 +1161,13 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         else sum(_int(row.get("provider_request_count")) for row in valid_summaries)
     )
     merged["missing_usage_response_count"] = sum(_int(row.get("missing_usage_response_count")) for row in valid_summaries)
+    state_counts = [_summary_usage_counts(row) for row in valid_summaries]
+    merged["pending_request_count"] = sum(pending for pending, _ in state_counts)
+    merged["unresolved_usage_request_count"] = sum(unresolved for _, unresolved in state_counts)
     merged["untracked_response_count"] = sum(_int(row.get("untracked_response_count")) for row in valid_summaries)
     merged["usage_complete"] = all(row.get("usage_complete") is not False for row in valid_summaries)
     merged["known_usage_estimated_cost_usd"] = round(sum(
-        _float(row.get("known_usage_estimated_cost_usd", row.get("estimated_cost_usd")))
+        _known_cost(row)
         for row in valid_summaries
     ), 12)
     merged["attempt_coverage_complete"] = all(
@@ -1061,7 +1179,6 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         for row in valid_summaries
     )
     if not merged["usage_complete"]:
-        merged["pricing_complete"] = False
         merged["estimated_cost_usd"] = None
     merged["cost_by_stage_lane_model"] = [
         {"stage": stage, "lane": lane, **_model_summary(item)}

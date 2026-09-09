@@ -12,7 +12,8 @@ import ApiUsageSummary, {
   formatEstimatedCost,
   formatTokenCount,
 } from "./ApiUsageSummary";
-import { hasUsageGap } from "../lib/apiUsage";
+import { usageCost, usageCostNotes } from "../lib/apiUsage";
+import { downloadConsoleSnapshot } from "../lib/runSnapshot";
 
 /* On a phone the console is a bottom sheet: the log needs the room, so
    the usage block starts FOLDED there (one line, tap to open) and the
@@ -74,6 +75,7 @@ export default function RunConsolePanel() {
   const [expanded, setExpanded] = useState(false);
   const [follow, setFollow] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [snapshotError, setSnapshotError] = useState(false);
   const [, forceTick] = useState(0);
 
   // On phones the open console is a fixed bottom sheet; this class lets
@@ -136,6 +138,7 @@ export default function RunConsolePanel() {
     : state.status === "done"
       ? "final for this run"
       : "recorded so far";
+  const currentCost = state.usage ? usageCost(state.usage) : null;
 
   const onScroll = () => {
     const el = bodyRef.current;
@@ -166,6 +169,21 @@ export default function RunConsolePanel() {
         <button className="ghost console-btn" onClick={copyLog} disabled={state.lines.length === 0}>
           {copied ? "Copied" : "Copy"}
         </button>
+        <button
+          className="ghost console-btn"
+          title="Download the current console snapshot: retained log, run state and latest usage. Available while running; excludes full server diagnostics."
+          disabled={state.lines.length === 0 && !state.usage && !state.active}
+          onClick={() => {
+            try {
+              downloadConsoleSnapshot(state);
+              setSnapshotError(false);
+            } catch {
+              setSnapshotError(true);
+            }
+          }}
+        >
+          Download snapshot
+        </button>
         <button className="ghost console-btn" onClick={clear} disabled={state.active}>Clear</button>
         <button
           className="ghost console-btn console-expand-btn"
@@ -175,6 +193,8 @@ export default function RunConsolePanel() {
         </button>
         <button className="ghost console-btn" onClick={() => setOpen(false)}>Hide</button>
       </div>
+
+      {snapshotError && <div role="alert">The console snapshot could not be downloaded. Please try again.</div>}
 
       {(state.startedAt !== null || state.lines.length > 0) && (
         <div className="console-meta">
@@ -203,11 +223,13 @@ export default function RunConsolePanel() {
             Model usage ({usageState})
             {" · "}
             {formatTokenCount(state.usage.total_tokens)} tokens
-            {hasUsageGap(state.usage) ? (
-              <> · Usage incomplete · Cost unavailable</>
-            ) : state.usage.estimated_cost_usd != null && (
-              <> · {formatEstimatedCost(state.usage.estimated_cost_usd)}</>
-            )}
+            {currentCost?.value != null && <>
+              {" · "}{formatEstimatedCost(currentCost.value)}{currentCost.recordedOnly ? " recorded" : ""}
+            </>}
+            {currentCost?.pendingCount ? <> · {currentCost.pendingCount} pending</> : null}
+            {currentCost?.usageGap && <> · Usage incomplete</>}
+            {currentCost?.pricingMissing && <> · Pricing incomplete</>}
+            {currentCost?.value == null && <> · Cost unavailable</>}
           </summary>
           <ApiUsageSummary
             usage={state.usage}
@@ -336,11 +358,15 @@ function StageCard({
               {formatTokenCount(cost.totalTokens)} tok
             </span>
           )}
-          {cost && cost.cost != null && (
-            <span className="stage-chip" title="Estimated cost of this stage">
-              {formatEstimatedCost(cost.cost)}
+          {cost && (
+            <span className="stage-chip" title="Estimated cost of reported, priced usage in this stage">
+              {formatEstimatedCost(cost.cost ?? cost.knownCost)}
+              {(!cost.costComplete || cost.pendingCount > 0) && cost.knownCost !== null ? " recorded" : ""}
             </span>
           )}
+          {cost && cost.pendingCount > 0 && <span className="stage-chip">{cost.pendingCount} pending</span>}
+          {cost?.usageGap && <span className="stage-chip" title="Recorded estimates exclude unresolved charges; the full total is unknown">Usage incomplete</span>}
+          {cost?.pricingMissing && <span className="stage-chip" title="Recorded estimates exclude unpriced usage; the full total is unknown">Pricing incomplete</span>}
           {cost && cost.cachedInputTokens > 0 && (
             <span className="stage-chip" title="Input tokens served from cache">
               ↺ {formatTokenCount(cost.cachedInputTokens)} cached
@@ -371,12 +397,15 @@ function StageCard({
               {(() => {
                 const row = cost?.lanes.find((r) => r.lane === lane);
                 if (!row) return null;
+                const laneCost = usageCost(row);
                 return (
-                  <span className="stage-lane-cost">
+                  <span className="stage-lane-cost" title={usageCostNotes(row).join(" ")}>
                     {" · "}{formatTokenCount(row.total_tokens)} tok
-                    {row.estimated_cost_usd != null && (
-                      <> · {formatEstimatedCost(row.estimated_cost_usd)}</>
-                    )}
+                    {" · "}{formatEstimatedCost(laneCost.value)}
+                    {laneCost.recordedOnly && laneCost.value !== null ? " recorded" : ""}
+                    {laneCost.pendingCount > 0 && <> · {laneCost.pendingCount} pending</>}
+                    {laneCost.usageGap && <> · Usage incomplete</>}
+                    {laneCost.pricingMissing && <> · Pricing incomplete</>}
                     {(row.cached_input_tokens ?? 0) > 0 && (
                       <> · {formatTokenCount(row.cached_input_tokens ?? 0)} cached</>
                     )}

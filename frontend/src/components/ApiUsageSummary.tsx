@@ -1,5 +1,5 @@
 import type { OpenAIUsage } from "../types";
-import { finiteUsageNumber, hasUsageGap, providerRequestCount } from "../lib/apiUsage";
+import { finiteUsageNumber, providerRequestCount, usageCost, usageCostNotes } from "../lib/apiUsage";
 
 interface ApiUsageSummaryProps {
   usage?: OpenAIUsage | null;
@@ -66,9 +66,9 @@ export default function ApiUsageSummary({
     && elapsedSeconds <= 0 && processingSeconds <= 0
     && finiteUsageNumber(usage.mechanical_span_count) <= 0) return null;
 
-  const usageGap = hasUsageGap(usage);
-  const displayedCost = usageGap ? null : usage.estimated_cost_usd;
-  const costAvailable = typeof displayedCost === "number" && Number.isFinite(displayedCost);
+  const cost = usageCost(usage);
+  const notes = usageCostNotes(usage);
+  const costAvailable = cost.value !== null;
   const model = usage.model || "Unknown model";
   const heading = compact
     ? cumulative ? "Cumulative model usage" : "Model usage"
@@ -80,7 +80,7 @@ export default function ApiUsageSummary({
     <section
       className={`api-usage${compact ? " api-usage-compact" : ""}`}
       data-testid="api-usage-summary"
-      aria-label="OpenAI API usage and estimated cost"
+      aria-label="API usage and estimated cost"
     >
       <div className="api-usage-head">
         <div>
@@ -99,7 +99,8 @@ export default function ApiUsageSummary({
           value={formatTokenCount(requestCount)}
           hint={usage.attempt_coverage_complete === false
             ? "Complete request history unavailable"
-            : usageGap ? "Includes requests with missing usage" : undefined}
+            : cost.usageGap ? "Includes requests with missing usage"
+            : cost.pendingCount > 0 ? "Includes requests still running" : undefined}
         />
         {attemptCount > requestCount && (
           <UsageMetric label="Attempts" value={formatTokenCount(attemptCount)}
@@ -125,8 +126,9 @@ export default function ApiUsageSummary({
         />
         <UsageMetric label="Total tokens" value={formatTokenCount(usage.total_tokens)} />
         <UsageMetric
-          label="Estimated cost"
-          value={formatEstimatedCost(displayedCost)}
+          label={cost.recordedOnly && costAvailable ? "Recorded estimate" : "Estimated cost"}
+          value={formatEstimatedCost(cost.value)}
+          hint={cost.recordedOnly && costAvailable ? "Reported, priced usage only" : undefined}
           emphasized={costAvailable}
         />
         {elapsedSeconds > 0 && (
@@ -156,33 +158,33 @@ export default function ApiUsageSummary({
               </tr>
             </thead>
             <tbody>
-              {(usage.stages ?? []).map((row, index) => (
-                <tr key={`${row.stage}\u0000${row.lane}\u0000${index}`}>
-                  <td>
-                    {row.stage || "(unattributed)"}
-                    {row.lane ? <small> {row.lane}</small> : null}
-                  </td>
-                  <td>{formatTokenCount(providerRequestCount(row))}</td>
-                  <td>{formatTokenCount(row.total_tokens)}</td>
-                  <td>
-                    {row.pricing_complete && !hasUsageGap(row)
-                      ? formatEstimatedCost(row.estimated_cost_usd)
-                      : "Unavailable"}
-                  </td>
-                  <td>{formatElapsedSeconds(row.elapsed_seconds)}</td>
-                </tr>
-              ))}
+              {(usage.stages ?? []).map((row, index) => {
+                const rowCost = usageCost(row);
+                return (
+                  <tr key={`${row.stage}\u0000${row.lane}\u0000${index}`}>
+                    <td>
+                      {row.stage || "(unattributed)"}
+                      {row.lane ? <small> {row.lane}</small> : null}
+                    </td>
+                    <td>{formatTokenCount(providerRequestCount(row))}</td>
+                    <td>{formatTokenCount(row.total_tokens)}</td>
+                    <td title={usageCostNotes(row).join(" ")}>
+                      {formatEstimatedCost(rowCost.value)}
+                      {rowCost.recordedOnly && rowCost.value !== null && <small> recorded</small>}
+                      {rowCost.pendingCount > 0 && <small> · {rowCost.pendingCount} pending</small>}
+                      {rowCost.usageGap && <small> · Usage incomplete</small>}
+                      {rowCost.pricingMissing && <small> · Pricing incomplete</small>}
+                    </td>
+                    <td>{formatElapsedSeconds(row.elapsed_seconds)}</td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {usageGap && (
-        <div className="api-usage-note">
-          Token usage is missing for one or more provider requests. Token totals
-          are incomplete, and the total cost is unavailable.
-        </div>
-      )}
+      {notes.map((note) => <div className="api-usage-note" key={note}>{note}</div>)}
       {!compact && (
         <div className="api-usage-note">
           {cumulative
@@ -194,18 +196,18 @@ export default function ApiUsageSummary({
                 Totals are cumulative for this file across parsing, the
                 original attempt, and every retry; retrying does not reset
                 them.{" "}
-                {usageGap
+                {cost.usageGap
                   ? "Reported usage is retained; missing usage is not counted as free."
                   : costAvailable
                   ? "The estimate uses the active model's published rates, including cache-write charges and long-context multipliers where they apply; cached input and cache writes are already included in input tokens."
-                  : "A cost estimate is unavailable because pricing is not configured for every model used."}
+                  : "Reported token counts are retained."}
               </>
             )
-            : usageGap
+            : cost.usageGap
               ? "Reported usage is retained; missing usage is not counted as free."
               : costAvailable
               ? "Estimate uses the active model's published rates, including cache-write charges and long-context multipliers where they apply. Cached input and cache writes are already included in input tokens; custom or regional pricing is excluded."
-              : "Token counts are available, but a cost estimate is unavailable because pricing is not configured for every model used."}
+              : "Reported token counts are retained."}
         </div>
       )}
     </section>
