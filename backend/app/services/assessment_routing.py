@@ -12,17 +12,20 @@ answer as topical evidence and never carries distractors.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 from typing import Any, Mapping
 
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_release as rel
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 # -2: released candidate concepts and rules are now the explicit GPT-5.6
 # cache prefix; the routed candidate is the complete varying suffix.
-ROUTE_POLICY_VERSION = "assessment-route-2"
+ROUTE_POLICY_VERSION = "assessment-route-2-column-spec"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -34,7 +37,7 @@ _PROMPT_CACHE_STABLE_KEYS = (
 )
 
 ROUTER_SYSTEM = (
-    "You are the Aegis assessment router. Choose the ONE released concept "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment router. Choose the ONE released concept "
     "whose teaching content this question assesses: its canonical home. "
     "Judge from the complete question, expected answer or rubric, source "
     "and routing evidence, assets, and every candidate concept's released "
@@ -46,11 +49,11 @@ ROUTER_SYSTEM = (
     "question assesses.\n"
     "Return ONLY strict JSON:\n"
     '{"candidate_id":"","concept_key":"","evidence":"decisive released '
-    'teaching content","rationale":"evidence-bound reason"}'
+    'teaching content","rationale":"evidence-bound reason"}')
 )
 
 ROUTE_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one Aegis home-concept "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one Aegis home-concept "
     "route. Audit the proposed route against the complete question, answer "
     "or rubric, source and routing evidence, assets, and every released "
     "candidate concept description. Flag a concept that does not teach what "
@@ -60,7 +63,7 @@ ROUTE_CRITIC_SYSTEM = (
     "the proposed route stands and your concerns ship for review. State your "
     "honest confidence.\n"
     "Return ONLY strict JSON:\n"
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}')
 )
 
 
@@ -380,6 +383,7 @@ def _live_route(payload: dict[str, Any]) -> dict[str, Any]:
         ROUTER_SYSTEM,
         suffix,
         purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "route-author-v2",
@@ -405,6 +409,7 @@ def _live_route_critic(payload: dict[str, Any]) -> dict[str, Any]:
         ROUTE_CRITIC_SYSTEM,
         suffix,
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "route-critic-v2",
@@ -520,6 +525,7 @@ def route_candidate(
         "candidate": _candidate_payload(candidate),
         "candidate_concepts": _concept_payload(concepts),
     }
+    visual_evidence.bind(payload, candidate, payload["candidate_concepts"])
     decision = kernel.decide(
         kind="assessment.route",
         unit_id=candidate_id,
@@ -533,7 +539,7 @@ def route_candidate(
         fixer=fixer,
     )
     response = copy.deepcopy(dict(decision["response"]))
-    flags = _review_flags(decision)
+    flags = _review_flags(decision) + visual_evidence.review_flags(payload)
     return _placement(
         candidate,
         concept_key=str(response.get("concept_key") or ""),

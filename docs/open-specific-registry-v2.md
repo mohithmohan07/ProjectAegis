@@ -33,15 +33,24 @@ of truth. The workbook's "All Subjects (Combined)" sheet is a generated
 exact mirror of the four subject registries and is present in the `.xlsx`; it
 is not duplicated here.
 
-**The decided carve-out (Q11) still governs.** The Math/Physics
-method-equivalence families (word problems, variable assignment,
-multi-formula, numerical technique, own-words definitions) keep their v1
-**Open** stance so a learner solving by a valid alternate method is always
-safe in grading — revisit only when Clarius' Specific grading provably
-honours recorded equivalents. The no-local-fallback invariant holds: an
-unclassifiable item ships with the author's best verdict and a review flag;
-`answer_restriction` never receives an invented third value and the row is
-never withheld.
+**Current governing rule: Q26, reaffirmed by Q35.** Q26 supersedes Q11's
+standing Math/Physics method-equivalence carve-out. A bounded semantic target
+is **Specific**, with valid equivalent wording, notation, units, algebraic
+forms and working explicitly represented in its answer/marking contract.
+Alternative ways to reach that bounded target do not by themselves make it
+Open. A task is **Open** when its actual scoring contract intentionally credits
+materially different content, evidence, methods or justified conclusions.
+The API author and independent critic judge the complete task and scoring
+contract; no subject, command-word or historical-family lookup assigns it.
+
+The workbook transcription and supplementary examples below are preserved
+historical evidence. Where an old example, heading or disagreement instruction
+conflicts with Q26 or the current advisory-review/export contract, the current
+governing contract takes precedence. In particular, there is no third exported
+`answer_restriction` value: unresolved semantics retain the author's recorded
+best verdict and named review findings, with downloads still available. The
+registry hash changes with this explicit precedence amendment; previously
+recorded decisions retain their original policy identity.
 
 ---
 

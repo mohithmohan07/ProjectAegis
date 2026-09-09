@@ -11,9 +11,9 @@ the arithmetic.
 
 It is an AUDITOR (register Q10): its dissent becomes review flags on the
 candidate and rides the release for the reviewer; it never rewrites,
-retries or gates anything.  It replaces the four separate per-decision
-critics that used to audit the same item piecemeal (register Q26), so the
-item is audited once, whole, rather than four times in fragments.
+retries or gates anything. Q31 restores per-decision critics by default;
+this review additionally checks their combined final item. No critic is
+removed by this module.
 
 Mechanics only in code: the response shape is checked, the verdict is an
 enum, and a review that cannot run leaves a named flag rather than a
@@ -26,9 +26,12 @@ from typing import Any, Mapping
 
 from .. import config
 from . import assessment_profile
+from . import column_spec
+from .response_schemas import item_review_schema
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
-ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-2"
+ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-4-adopted-evidence"
 AUDIT_FIELD = "_aegis_assessment_item_review"
 WARNING = "assessment_item_review"
 UNAVAILABLE_WARNING = "assessment_item_review_unavailable"
@@ -41,7 +44,7 @@ _PROMPT_CACHE_STABLE_KEYS = (
     "rubric_tag_policy",
 )
 
-ITEM_REVIEW_SYSTEM = (
+ITEM_REVIEW_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + (
     "You are the independent joint reviewer of ONE finished Aegis "
     "assessment item (Master Governing Contract v2.0 §27 step 6). You see "
     "the source atom (when the item is source-owned), the recorded blueprint "
@@ -65,16 +68,27 @@ ITEM_REVIEW_SYSTEM = (
     "model answer is complete and learner-facing, identical in "
     "display_answer and answer_explanation for Descriptive items, and free "
     "of rubric narration, criterion tags, marks or evaluator instructions; "
-    "an Objective explanation opens with the exact correct answer text and "
-    "no option letter or number; (6) every criterion is one observable, "
-    "question-specific credit-bearing demand worth 0.5 or 1, nothing asked "
+    "an Objective explanation uses the exact correct-answer text and the "
+    "option-label prefix required by column_spec_policy (the universal "
+    "format includes the lowercase label); (6) every criterion is one observable, "
+    "question-specific credit-bearing demand with its permitted weight "
+    "increment from column_spec_policy, nothing asked "
     "is unscored, nothing unasked is credited, nothing is double-counted, "
     "every criterion appears in the model answer and every required "
     "model-answer component is scored; (7) rubric-tag containment follows "
     "the supplied rubric_tag_policy exactly; (8) the arithmetic — option, "
     "slot, parent and child sums reconcile to the item marks; (9) the "
     "duration follows the supplied assessment_format_policy for the "
-    "category and difficulty. Judge only this item on its own evidence; "
+    "category and difficulty. Apply the rubric to a fully correct response, "
+    "a valid equivalent or alternative method, a partly correct response, "
+    "and a plausible but incorrect or irrelevant response. Verify that an "
+    "evaluator using only the exported item and criteria can distinguish "
+    "them without hidden author notes or exact phrase matching. If a "
+    "method, reason, unit or diagram feature is required, its credit must "
+    "be explicit; do not invent such requirements when the task does not "
+    "ask for them. Do not invent a new partial-credit scale or new output "
+    "fields: name ambiguous or missing scoring evidence in issues with "
+    "the affected criterion. Judge only this item on its own evidence; "
     "never infer from length, position, neighbours or quotas. There is no "
     "quota for issues: return every genuine, evidence-bound concern and an "
     "empty list when there is none. You do not rewrite, retry, or gate "
@@ -128,6 +142,8 @@ def _live_review(payload: dict[str, Any]) -> dict[str, Any]:
         ITEM_REVIEW_SYSTEM,
         suffix,
         purpose="advisory_critic",
+        response_schema=item_review_schema(),
+        image_urls=visual_evidence.image_inputs(payload),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "item-review-v2",
@@ -146,21 +162,41 @@ def _payload(
     format_policy: Mapping[str, Any],
 ) -> dict[str, Any]:
     item = copy.deepcopy(dict(candidate))
-    # The item's own audit records are not evidence for the review.
+    # Prior self-evaluation is not evidence. The adopted answer contract IS
+    # a settled decision input, independent of the author's confidence/claims.
     for key in list(item):
-        if key.startswith("_aegis_"):
+        if key.startswith("_aegis_") or key in {"authority", "flags", "assessment_eligibility"}:
             item.pop(key, None)
-    return {
+    raw_contract = candidate.get("_aegis_assessment_answer_restriction")
+    contract = raw_contract if isinstance(raw_contract, Mapping) else {}
+    missing_contract_fields = [
+        field for field, expected_type in (
+            ("answer_restriction", str), ("answer_space_contract", str),
+            ("required_elements", list), ("accepted_variations", list),
+        ) if not isinstance(contract.get(field), expected_type)
+    ]
+    return visual_evidence.bind({
         "stage": "assessment.item_review",
+        "response_schema_contract": item_review_schema().identity(),
         "rules": ITEM_REVIEW_SYSTEM,
         "metadata": copy.deepcopy(dict(meta)),
         "assessment_format_policy": copy.deepcopy(dict(format_policy)),
         "rubric_tag_policy": assessment_profile.rubric_tag_policy(meta),
+        "column_spec_policy": column_spec.from_metadata(meta),
         "candidate_id": str(candidate.get("candidate_id") or ""),
         "source_atom": copy.deepcopy(dict(atom)) if atom is not None else None,
         "blueprint_cell": copy.deepcopy(dict(cell)),
         "item": item,
-    }
+        "adopted_answer_contract": {
+            key: copy.deepcopy(contract[key])
+            for key in (
+                "answer_restriction", "answer_space_contract",
+                "required_elements", "accepted_variations",
+            ) if key in contract
+        },
+        "answer_contract_availability": "recorded" if not missing_contract_fields else "missing",
+        "answer_contract_missing_fields": missing_contract_fields,
+    }, atom, item)
 
 
 def review_items(
@@ -187,6 +223,7 @@ def review_items(
         raise ItemReviewError("item review requires an envelope hash")
     metadata = dict(meta) if isinstance(meta, Mapping) else {}
     run_profile = assessment_profile.resolve_for_metadata(profile, metadata)
+    metadata = column_spec.bind_metadata(metadata, run_profile)
     format_policy = assessment_profile.assessment_format_policy(
         run_profile, metadata,
     )
@@ -270,6 +307,9 @@ def review_items(
         ]
         verdict = str(response.get("verdict") or "")
         flags = [f"item review: {issue}" for issue in issues]
+        flags.extend(visual_evidence.review_flags(payload))
+        if payload["answer_contract_availability"] == "missing":
+            flags.append("assessment_answer_contract_unavailable: joint review lacks the adopted answer-space contract")
         if verdict == "dissent" and not flags:
             flags.append("item review: dissent recorded without detail")
         return {
@@ -281,6 +321,7 @@ def review_items(
             "authority": {
                 "decision_key": str(decision.get("key") or ""),
                 "policy_version": str(decision.get("policy_version") or ""),
+                "visual_evidence": copy.deepcopy(payload["visual_evidence"]),
             },
         }
 

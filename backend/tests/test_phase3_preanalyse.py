@@ -15,8 +15,8 @@ for the Post lane holds here unchanged:
 * the evidence is the Pre lane's own: the merged prerequisite capture and
   the Pre map's Descriptions, with NO current-chapter source block and NO
   question/task inventory QID anywhere in it;
-* and the POST analyse pass is untouched — same POLICY_VERSION, same
-  payload, same stored decision keys.
+* and the two lanes retain separate base policies, payloads and item IDs;
+  prompt-aware saved-decision replay is tested in test_phase3_prompt_replay.
 """
 from __future__ import annotations
 
@@ -244,7 +244,7 @@ def test_misconception_and_error_analysis_stay_two_distinct_meanings(
     system = prompts.PREANALYSE_INVENTORY_SYSTEM
     assert "never restate one as the other" in system
     assert "incorrect learner belief" in system
-    assert "concrete process error" in system
+    assert "concrete faulty action or reasoning step" in system
 
 
 def test_the_rendered_section_is_the_existing_house_format_section(
@@ -347,6 +347,28 @@ def test_an_empty_inventory_over_a_thin_pre_map_is_legal_and_clean(
         assert "Misconception" not in row["concept_details"]
         assert "_aegis_analysis_allotments" not in row
         assert "\nAchieving Mastery: " in row["concept_details"]
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_empty_pre_inventory_review_survives_without_creating_an_item(golden_envelope, unavailable):
+    calls = []
+
+    def critic(request):
+        if request["stage"] == "prelearn.analyse.inventory":
+            calls.append(request["stage"])
+            if unavailable:
+                raise RuntimeError("analysis review unavailable")
+            return {"verdict": "rejected", "confidence": 0.9, "issues": ["A prerequisite insight used by QINV-0004 may have been missed."]}
+        return _verified_critic(request)
+
+    result = _build(golden_envelope, inventory=[], critic=critic)
+    assert result["analysis"]["inventory"] == []
+    assert result["analysis"]["inventory_review_flags"]
+    assert calls == ["prelearn.analyse.inventory"]
+    for row in result["rows"]:
+        assert row["review_flags"]
+        assert "QINV-0004" not in row["concept_details"]
+        assert "_aegis_analysis_allotments" not in row
 
 
 def test_no_count_quota_rides_the_prompt_the_payload_or_the_code(
@@ -654,13 +676,13 @@ def test_an_item_naming_an_unknown_pre_concept_is_a_defect(golden_envelope):
 
 
 # ---------------------------------------------------------------------------
-# the POST analyse pass is untouched
+# the POST analyse base policy and evidence remain separate
 
 
-def test_the_post_analyse_pass_is_untouched(golden_envelope):
+def test_the_post_analyse_base_policy_and_evidence_are_separate(golden_envelope):
     """A prerequisite misconception must never compete with a Post row for
-    the same item, and the Post pass's stored decisions must not re-key.
-    Its POLICY_VERSION, its item mint, and its payload are pinned here."""
+    the same item. Base policy, item mint and evidence remain lane-specific;
+    actual decision policies also carry each pass's author/critic hash."""
     from app.services.phase3 import analyse as post
 
     assert post.POLICY_VERSION == "analysis-1"
@@ -677,9 +699,8 @@ def test_the_post_analyse_pass_is_untouched(golden_envelope):
     assert evidence["source_blocks"]
     assert evidence["question_task_inventory"]
 
-    # And the decision key of a Post inventory build is unchanged by
-    # anything in this slice: recomputed here from the same payload shape
-    # the pass builds.
+    # The original base policy is retained. Actual pass replay additionally
+    # binds the relevant prompt texts (test_phase3_prompt_replay.py).
     from app.services.phase3 import prompts
 
     payload = {

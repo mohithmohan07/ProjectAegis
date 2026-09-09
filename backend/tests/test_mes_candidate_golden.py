@@ -63,12 +63,16 @@ def _provider(recorded: dict, calls: list[str]) -> kernel.Provider:
     cell_rows = {
         row["source_qid"]: row for row in recorded["cell_responses"]
     }
+    # Reuse recorded semantic answers under the current prompt policy.
+    # Cell/candidate IDs bind the decision key and must rekey when prompts
+    # change; source qids are the stable fixture join. The JSON stays intact.
     materialized_rows = {
-        row["candidate_id"]: row
-        for row in recorded["materialization_responses"]
+        atom["source_qid"]: row
+        for atom, row in zip(recorded["atoms"], recorded["materialization_responses"])
     }
     route_rows = {
-        row["candidate_id"]: row for row in recorded["route_responses"]
+        atom["source_qid"]: row
+        for atom, row in zip(recorded["atoms"], recorded["route_responses"])
     }
 
     def provide(request: dict) -> dict:
@@ -77,9 +81,11 @@ def _provider(recorded: dict, calls: list[str]) -> kernel.Provider:
         if stage == "assessment.cell":
             row = cell_rows[request["source_atom"]["source_qid"]]
         elif stage == "assessment.materialize":
-            row = materialized_rows[request["candidate_id"]]
+            row = copy.deepcopy(materialized_rows[request["source_atom"]["source_qid"]])
+            row["candidate_id"] = request["candidate_id"]
         elif stage == "assessment.route":
-            row = route_rows[request["candidate"]["candidate_id"]]
+            row = copy.deepcopy(route_rows[request["candidate"]["source_qid"]])
+            row["candidate_id"] = request["candidate"]["candidate_id"]
         else:  # pragma: no cover - an unknown pass is the regression
             raise AssertionError(f"unexpected assessment stage {stage!r}")
         return copy.deepcopy(row)
@@ -173,11 +179,13 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
         fixer=_forbidden("the Fixer"),
     )
 
-    expected_ids = recorded["expected_cell_ids"]
-    assert {
+    current_ids = {
         cell["accepted_source_qids"][0]: cell["cell_id"]
         for cell in first["cells"]
-    } == expected_ids
+    }
+    assert set(current_ids) == set(recorded["expected_cell_ids"])
+    assert all(current_ids[qid] != old_id for qid, old_id in recorded["expected_cell_ids"].items())
+    assert len(set(current_ids.values())) == len(current_ids)
     for cell, response in zip(first["cells"], recorded["cell_responses"]):
         assert cell["accepted_source_qids"] == [response["source_qid"]]
         assert {
@@ -189,14 +197,14 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
             for key, value in response.items()
             if key != "source_qid"
         }
-        assert cell["authority"]["policy_version"] == "assessment-cell-3"
+        assert cell["authority"]["policy_version"] == "assessment-cell-3-column-spec"
 
     candidates = first["materialized"]["candidates"]
     for candidate, response in zip(
         candidates, recorded["materialization_responses"]
     ):
         for key in (
-            "candidate_id", "question", "display_answer", "answers",
+            "question", "display_answer", "answers",
             "sub_questions", "answer_explanation", "requires_visual",
         ):
             if key in {"answers", "sub_questions"}:
@@ -220,17 +228,18 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
         audit = candidate["_aegis_assessment_materialization"]
         assert audit["rationale"] == response["rationale"]
         assert audit["authority"]["policy_version"] == (
-            "assessment-materialize-14"
+            "assessment-materialize-15-column-spec"
         )
 
     for placement, response in zip(
         first["routed"]["placements"], recorded["route_responses"]
     ):
         assert {
-            key: placement[key] for key in response
-        } == response
+            key: placement[key] for key in response if key != "candidate_id"
+        } == {key: value for key, value in response.items() if key != "candidate_id"}
+        assert placement["candidate_id"] in {candidate["candidate_id"] for candidate in candidates}
         assert placement["authority"]["policy_version"] == (
-            "assessment-route-2"
+            "assessment-route-2-column-spec"
         )
     assert candidates[0]["shared_context"] == "Write a note on:"
     assert candidates[0]["source_context"]["parent_qid"] == "QINV-0016"

@@ -33,6 +33,7 @@ from aegis_pipeline.openai_policy import (
 
 from .. import bulk_import as bi
 from .. import config, models
+from . import column_spec
 from . import concept_cleanup
 from . import concept_validator as cv
 from . import containers
@@ -45,6 +46,7 @@ from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from . import source_topic_decision
 from . import type_granularity_decision
+from .response_schemas import ResponseSchema, provider_response_format
 from .semantic_recovery import (
     HumanDecisionRequired,
     ProviderResponseContractError,
@@ -326,7 +328,7 @@ def generate_questions_for_concept(
             "question_label": question_label(concept, idx),
             "question_category": category,
             "cognitive_skills": cognitive_skill,
-            "question_source": _concept_publication(concept),
+            "question_source": column_spec.for_metadata({"subject": concept.topic.chapter.subject})["generated_question_source"],
             "level_of_difficulty": difficulty,
             "marks": marks,
             "question_duration": question_duration,
@@ -444,7 +446,7 @@ def _live_questions_for_concept(
                 "question_label": question_label(concept, start_index + n),
                 "question_category": category,
                 "cognitive_skills": cognitive_skill,
-                "question_source": _concept_publication(concept),
+                "question_source": column_spec.for_metadata({"subject": concept.topic.chapter.subject})["generated_question_source"],
                 "level_of_difficulty": difficulty,
                 # The blueprint-cell kernel owns these three semantic values.
                 # Model output cannot silently replace or default them.
@@ -1316,6 +1318,12 @@ Return ONLY strict JSON:
 
 COVERAGE IS MANDATORY (most important rule):
 - Build a compact teacher-facing concept map from the first line to the last.
+- An accepted source-topic roster or sealed language topology plan supplied
+  with this request is authoritative for topic names, order and ownership.
+  Preserve that plan, including its unnumbered or chapter-named topics. Do
+  not replace its structure with a generic subject template or a numbering
+  rule. When no accepted plan is supplied, infer structure from the source
+  evidence and make the ownership explicit in source_evidence.
 - Infer the document's teaching structure from its headings, reading order,
   prose, representations, and task blocks. Subject metadata is context only;
   never assume a fixed structure merely because the subject has a familiar
@@ -1323,12 +1331,11 @@ COVERAGE IS MANDATORY (most important rule):
   text may be organized as episodes or investigations.
 - Let the chapter's own teaching structure decide how many concepts there
   are — there is no quota. A concept is something a teacher would plan and
-  teach as one coherent lesson segment: SUBSTANTIAL, self-standing, and
-  worth a full description. Judge each candidate row: if its description
-  would be thin — one or two sentences restating a heading, a single fact,
-  a single formula variant, or a sliver of a bigger explanation — it is NOT
-  a concept; fold it into the concept it belongs to and let that concept's
-  description carry the full depth.
+  teach as one coherent lesson segment. Judge independence from its mastery
+  objective and source teaching, never its sentence or word count. A short
+  but complete source-backed objective may stand alone; an isolated detail
+  serving another objective belongs in that objective's explanation. Keep
+  the detail when consolidating, and do not pad a concise objective.
 - A concept is a durable teaching/mastery objective, not every term, example,
   subheading, exercise prompt, case, or factual detail.
 - When several definitions, examples, sub-types, steps, or procedures serve
@@ -1339,9 +1346,11 @@ COVERAGE IS MANDATORY (most important rule):
   cases, people, events, laws, methods, or processes that a teacher would
   genuinely lesson-plan apart — never split one explanation into fragments.
 - Chapter-opening / pre-section narrative (HEADING PATH: [Chapter opening])
-  MUST yield at least one teachable concept under the first main topic from
-  that opening content. Never skip opening material just because it precedes
-  section 1.
+  must be read and accounted for. Follow its ownership in the accepted plan.
+  Without a plan, decide whether it teaches an independent objective, gives
+  necessary context for another objective, or is non-teaching apparatus.
+  Preserve substantive opening teaching and context without forcing an
+  invented opening concept or automatically assigning it to the first topic.
 - Do not create separate concept rows for cases/examples/questions. These are
   captured later as Types/Cases with full source questions.
 - Explicit proofs, derivations, algorithms, and reusable methods/procedures are
@@ -1371,18 +1380,19 @@ COVERAGE IS MANDATORY (most important rule):
   be a case/example is also a defect.
 
 TOPIC SEGREGATION IS MANDATORY (second most important rule):
-- topic MUST be the textbook MAIN SECTION heading the content sits under (use
-  the HEADING PATH / SECTION HEADINGS given with the text); strip section numbers.
-- When the textbook nests subsections under a main numbered section, the MAIN
-  section is the topic; each subsection becomes a parent_concept cluster (or
-  concepts) under that topic — NEVER a topic of its own.
-- An unnumbered chapter title or book title is NEVER a topic. Exception: when a
-  numbered MAIN section intentionally has the same title as the chapter, that
-  numbered section is a valid topic. Filing every concept under one unnumbered
-  umbrella topic is still a defect.
-- When the text spans several main section headings it MUST produce several
-  topics, in the same reading order. Cover EVERY main section of the chapter —
-  missing tail sections is a defect.
+- Use the accepted source-topic roster or sealed language topology plan
+  exactly when supplied. HEADING PATH / SECTION HEADINGS are source evidence,
+  not permission to override those accepted topic boundaries.
+- Otherwise decide main teaching sections and subordinate clusters from the
+  source's meaning and reading order. A subsection can be a topic when the
+  source teaches it independently; numbering alone does not settle its role.
+- A numbered MAIN section with the same title as the chapter is a valid topic.
+  An unnumbered or chapter-named topic is equally valid when supported by the
+  accepted plan or the source's teaching structure. Do not collapse genuinely
+  separate topics into an umbrella or split a coherent single-topic source
+  merely to create several headings.
+- Cover the complete accepted source scope, including tail sections, while
+  preserving topic ownership and reading order.
 
 Rules:
 - Do not invent textbook topics; preserve the section order from the source.
@@ -1391,21 +1401,20 @@ Rules:
 - Concept is one compact teachable mastery unit.
 - Concept names must be specific and non-repetitive.
 - No Types, no culmination rows, no groups, no assessment labels.
-- No vague or structural names: Introduction, Overview, Basics, Basic Concepts,
-  Misc, Miscellaneous, Examples, Practice, Definition of, Types of. Prefer a
-  content-specific title for opening material instead of the word "Introduction".
+- Preserve accepted names exactly. When authoring a new concept name, name
+  its specific teaching objective rather than a generic structural label.
 - Do not use exercise/question-type headings as concepts.
 - Avoid repeated sibling openers.
 - concept_description starts with "Description:" and TEACHES the concept in
-  a full teaching paragraph (roughly 5-9 substantive sentences): name the
+  complete source-grounded prose with no sentence or word quota: name the
   key people, places, rules, formulas, relationships, and the reasoning
   that connects them, drawn from the source. This text becomes the basis
   for books, worksheets, notes, slides, and interactive content, so it
   must carry enough substance that a writer could author those materials
   from the description alone. A description that merely restates the title
-  or lists a bare fact is a defect — if you cannot write a substantive
-  description, the row is not a real concept and belongs inside a
-  neighbouring one.
+  without teaching its meaning is a defect. Include the explanation,
+  relationships, conditions and reasoning needed for this objective at the
+  source's grade; do not invent detail merely to lengthen the description.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
 - source_evidence is for validation/debug only and must not be written to workbook.
 """)
@@ -2540,9 +2549,13 @@ Rules:
   given in the metadata block; when none is given return 0. The duration is a
   registry/upload value, never an estimate — do not invent one.
 - topics: one entry per provided topic, using the EXACT same topic strings.
-- topic_description: 2-3 sentences specific to that topic — what it teaches,
+- topic_description: 2-4 original sentences specific to that topic — what it teaches,
   the key ideas/skills among its concepts, and how it connects to the
   neighbouring topics. NEVER just list the concept names.
+- Distinguish narrative development from a mathematical or scientific
+  progression. Explain the relationship between the actual concepts, using
+  the supplied source and settled topology; never borrow a sample chapter's
+  plot, formula, terminology, duration, or number of topics.
 - No source artifacts (Example 3, Exercise 1.2, Fig 4, page numbers) and never
   the words "MMD"/"MMDs".
 """)
@@ -2989,6 +3002,7 @@ def _openai_json(
     prompt_cache_key: str = "",
     model: str | None = None,
     image_urls: list[str] | None = None,
+    response_schema: ResponseSchema | None = None,
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
@@ -3013,6 +3027,10 @@ def _openai_json(
     is placed immediately before ``user``; callers are responsible for
     splitting without loss.  Unsupported providers/models use the original
     two-string message shape with the pieces concatenated.
+
+    ``response_schema`` opts a fixed response envelope into provider-supported
+    strict JSON Schema and matching local validation. It never replaces the
+    caller's semantic or identity checks. Other calls keep ordinary JSON mode.
     """
     import json
     import time
@@ -3033,7 +3051,7 @@ def _openai_json(
     )
     # Disable SDK-level retries: this layer already supplies the retry policy
     # and can surface each wait to the active progress stream.
-    from . import model_provider
+    from . import model_provider, openai_usage
 
     client = OpenAI(
         timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS,
@@ -3050,6 +3068,11 @@ def _openai_json(
         prompt_cache_key=prompt_cache_key,
         model=str(request_policy["model"]),
         provider=model_provider.active_provider(),
+    )
+    response_format = provider_response_format(
+        response_schema,
+        provider=model_provider.active_provider(),
+        model=str(request_policy["model"]),
     )
     if image_urls:
         user_message = messages[-1]
@@ -3085,118 +3108,136 @@ def _openai_json(
         0 if single_attempt else config.OPENAI_TRANSIENT_RETRIES
     )
     while True:
-        try:
-            _acquire_openai_slot(gate, purpose=purpose)
+        with openai_usage.request_attempt(
+            requested_model=str(request_policy["model"]), purpose=purpose,
+            provider=model_provider.active_provider(),
+            reasoning_effort=str(request_policy.get("reasoning_effort") or ""),
+            service_tier=str(request_policy.get("service_tier") or ""),
+        ):
             try:
-                resp = client.chat.completions.create(
-                    **request_policy,
-                    **prompt_cache_args,
-                    messages=messages,
-                    response_format={"type": "json_object"},
-                    max_completion_tokens=limit,
-                )
-            finally:
-                _release_openai_slot(gate)
-            # Record before finish-reason/JSON validation: responses retried for
-            # truncation or malformed JSON are still billable.
-            try:
-                from . import openai_usage
-
-                openai_usage.record_response(
-                    resp, requested_model=request_policy["model"]
-                )
-            except Exception:  # accounting must never trigger another API call
-                pass
-            choice = resp.choices[0]
-            if getattr(choice, "finish_reason", None) == "length":
-                raise RuntimeError(
-                    f"{_provider_label()} response truncated at max_completion_tokens={limit}. "
-                    "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
-                )
-            return json.loads(choice.message.content or "{}")
-        except OpenAIQueueTimeoutError:
-            raise
-        except transient_errors as e:
-            error_code = _openai_error_code(e)
-            if error_code == "insufficient_quota":
-                progress.log(
-                    f"{_provider_label()} quota is exhausted (insufficient_quota); not "
-                    "retrying a definitive billing/quota denial.",
-                    level="error",
-                )
-                raise RuntimeError(
-                    f"{_provider_label()} quota exhausted (insufficient_quota); the request "
-                    "was not retried because quota errors are non-transient."
-                ) from e
-            transient += 1
-            last_err = e
-            if transient > transient_retry_limit:
-                if single_attempt:
-                    raise RuntimeError(
-                        f"{_provider_label()} unavailable after 1 physical request "
-                        f"({type(e).__name__}): {e!r}"
-                    ) from e
-                raise RuntimeError(
-                    f"{_provider_label()} unavailable after {transient - 1} transient retries "
-                    f"(rate limit/timeout): {e!r}"
-                ) from e
-            delay = _transient_backoff(e, transient)
-            progress.log(
-                f"{_provider_label()} busy ({type(e).__name__}) — waiting {delay:.0f}s before "
-                f"retry {transient}/{transient_retry_limit}.",
-                level="warning",
-            )
-            time.sleep(delay)
-        except Exception as e:  # noqa: BLE001 — retry then surface
-            # A rejected reasoning_effort is a deterministic capability
-            # mismatch, not a flaky response: replaying the identical request
-            # can only produce the identical 400. Record the discovered ceiling
-            # for every call path in this process, then retry immediately at the
-            # lower effort without consuming a hard attempt.
-            current_effort = str(request_policy.get("reasoning_effort") or "")
-            if current_effort and is_unsupported_reasoning_effort_error(e):
-                lowered = note_unsupported_reasoning_effort(
-                    request_policy["model"], current_effort
-                )
-                # ``single_attempt`` promises exactly one physical request, so
-                # it records the ceiling for later callers but does not retry.
-                if (
-                    not single_attempt
-                    and lowered is not None
-                    and lowered != current_effort
-                ):
-                    if lowered:
-                        request_policy["reasoning_effort"] = lowered
-                    else:
-                        request_policy.pop("reasoning_effort", None)
-                    progress.log(
-                        f"{_provider_label()} does not support reasoning effort "
-                        f"{current_effort!r} for model "
-                        f"{request_policy['model']}; retrying with "
-                        f"{lowered or 'omitted'!r} without consuming a retry.",
-                        level="warning",
+                _acquire_openai_slot(gate, purpose=purpose)
+                openai_usage.record_service_started()
+                try:
+                    resp = client.chat.completions.create(
+                        **request_policy,
+                        **prompt_cache_args,
+                        messages=messages,
+                        response_format=response_format,
+                        max_completion_tokens=limit,
                     )
-                    continue
-            # A provider-side 400 is a deterministic request rejection.  The
-            # identical replay cannot repair it and previously caused three
-            # pointless physical requests before the checkpoint surfaced the
-            # same failure.  Malformed model output still follows the bounded
-            # parse-retry path below; only the provider's BadRequest response
-            # fails immediately.
-            if isinstance(e, BadRequestError):
-                raise RuntimeError(
-                    f"{_provider_label()} rejected the generation request "
-                    f"for purpose {purpose!r} with model "
-                    f"{request_policy['model']!r} (HTTP 400, messages SHA-256 "
-                    f"{request_messages_sha256}); the identical request was "
-                    "not retried: "
-                    f"{e}"
-                ) from e
-            last_err = e
-            attempt += 1
-            if attempt >= hard_attempt_limit:
-                break
-            time.sleep(2)
+                except BaseException as exc:
+                    openai_usage.record_attempt_outcome("provider_error", error=exc)
+                    raise
+                finally:
+                    openai_usage.record_service_ended()
+                    _release_openai_slot(gate)
+                # Record before finish-reason/JSON validation: responses retried for
+                # truncation or malformed JSON are still billable.
+                try:
+                    openai_usage.record_response(
+                        resp, requested_model=request_policy["model"]
+                    )
+                except Exception:  # accounting must never trigger another API call
+                    pass
+                choice = resp.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    openai_usage.record_attempt_outcome("truncated_response")
+                    raise RuntimeError(
+                        f"{_provider_label()} response truncated at max_completion_tokens={limit}. "
+                        "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
+                    )
+                openai_usage.record_attempt_outcome("invalid_json")
+                response = json.loads(choice.message.content or "{}")
+                if response_schema is not None:
+                    openai_usage.record_attempt_outcome("invalid_schema")
+                    response_schema.validate_response(response)
+                openai_usage.record_attempt_outcome("success")
+                return response
+            except OpenAIQueueTimeoutError as exc:
+                openai_usage.record_attempt_outcome("queue_timeout", error=exc)
+                raise
+            except transient_errors as e:
+                error_code = _openai_error_code(e)
+                if error_code == "insufficient_quota":
+                    progress.log(
+                        f"{_provider_label()} quota is exhausted (insufficient_quota); not "
+                        "retrying a definitive billing/quota denial.",
+                        level="error",
+                    )
+                    raise RuntimeError(
+                        f"{_provider_label()} quota exhausted (insufficient_quota); the request "
+                        "was not retried because quota errors are non-transient."
+                    ) from e
+                transient += 1
+                last_err = e
+                if transient > transient_retry_limit:
+                    if single_attempt:
+                        raise RuntimeError(
+                            f"{_provider_label()} unavailable after 1 physical request "
+                            f"({type(e).__name__}): {e!r}"
+                        ) from e
+                    raise RuntimeError(
+                        f"{_provider_label()} unavailable after {transient - 1} transient retries "
+                        f"(rate limit/timeout): {e!r}"
+                    ) from e
+                delay = _transient_backoff(e, transient)
+                progress.log(
+                    f"{_provider_label()} busy ({type(e).__name__}) — waiting {delay:.0f}s before "
+                    f"retry {transient}/{transient_retry_limit}.",
+                    level="warning",
+                )
+                openai_usage.wait_for_retry(delay)
+            except Exception as e:  # noqa: BLE001 — retry then surface
+                openai_usage.record_attempt_outcome("", error=e)
+                # A rejected reasoning_effort is a deterministic capability
+                # mismatch, not a flaky response: replaying the identical request
+                # can only produce the identical 400. Record the discovered ceiling
+                # for every call path in this process, then retry immediately at the
+                # lower effort without consuming a hard attempt.
+                current_effort = str(request_policy.get("reasoning_effort") or "")
+                if current_effort and is_unsupported_reasoning_effort_error(e):
+                    lowered = note_unsupported_reasoning_effort(
+                        request_policy["model"], current_effort
+                    )
+                    # ``single_attempt`` promises exactly one physical request, so
+                    # it records the ceiling for later callers but does not retry.
+                    if (
+                        not single_attempt
+                        and lowered is not None
+                        and lowered != current_effort
+                    ):
+                        if lowered:
+                            request_policy["reasoning_effort"] = lowered
+                        else:
+                            request_policy.pop("reasoning_effort", None)
+                        progress.log(
+                            f"{_provider_label()} does not support reasoning effort "
+                            f"{current_effort!r} for model "
+                            f"{request_policy['model']}; retrying with "
+                            f"{lowered or 'omitted'!r} without consuming a retry.",
+                            level="warning",
+                        )
+                        continue
+                # A provider-side 400 is a deterministic request rejection.  The
+                # identical replay cannot repair it and previously caused three
+                # pointless physical requests before the checkpoint surfaced the
+                # same failure.  Malformed model output still follows the bounded
+                # parse-retry path below; only the provider's BadRequest response
+                # fails immediately.
+                if isinstance(e, BadRequestError):
+                    raise RuntimeError(
+                        f"{_provider_label()} rejected the generation request "
+                        f"for purpose {purpose!r} with model "
+                        f"{request_policy['model']!r} (HTTP 400, messages SHA-256 "
+                        f"{request_messages_sha256}); the identical request was "
+                        "not retried: "
+                        f"{e}"
+                    ) from e
+                last_err = e
+                attempt += 1
+                if attempt >= hard_attempt_limit:
+                    break
+                openai_usage.wait_for_retry(2)
     if single_attempt:
         raise RuntimeError(
             f"{_provider_label()} extraction failed after 1 physical request: "
@@ -11988,11 +12029,7 @@ def _canonical_mined_type_title(
     origin_case_count = int(mtype.get("_origin_case_count") or 0)
     if origin_case_count and len(mtype.get("case_prompts") or []) < origin_case_count:
         definition = ""
-    normalized_title = cv._normalized_type_definition(title)
-    if (
-        not title
-        or cv._GENERIC_TYPE_DEFINITION_RE.fullmatch(normalized_title)
-    ):
+    if not title:
         cases = [
             {"case_prompt": raw_case}
             if isinstance(raw_case, str) else raw_case
@@ -12115,7 +12152,10 @@ def _has_mastery_line(details: str) -> bool:
 
 
 def _has_valid_terminal_mastery(details: str) -> bool:
-    """Whether Description has one substantive canonical mastery ending."""
+    """Whether Description has one nonempty canonical mastery ending.
+
+    Semantic adequacy belongs to the API author and independent critic.
+    """
     description = _concept_description_only(details)
     matches = list(cr._MASTERY_LABEL_RE.finditer(description))
     if len(matches) != 1:
@@ -12127,7 +12167,6 @@ def _has_valid_terminal_mastery(details: str) -> bool:
         and "\n" not in statement
         and "\r" not in statement
         and description.endswith(f"\nAchieving Mastery: {statement}")
-        and cv._is_substantive_mastery_statement(statement)
     )
 
 
@@ -13341,9 +13380,6 @@ _FATAL_CODES = {
     "empty_error_analysis", "duplicate_misconception",
     "duplicate_error_analysis", "missing_misconception_or_error_analysis",
     "issue_section_order", "noncanonical_issue_label",
-    "generic_misconception", "misconception_framing",
-    "generic_error_analysis", "error_analysis_framing",
-    "issue_section_overlap",
     "analysis_section_format", "missing_learner_analysis",
     # Q1 marker accounting: a learner-analysis section on a row the
     # chapter inventory never allotted an item to.
@@ -13357,7 +13393,7 @@ _FATAL_CODES = {
     "verbatim_source_description",
     "missing_type_definition", "generic_type_definition",
     "duplicate_type_definition", "missing_mastery_statement",
-    "mastery_statement_format", "mastery_statement_not_substantive",
+    "mastery_statement_format",
     "duplicate_mastery_statement", "mastery_marker_outside_description",
 }
 
@@ -13374,6 +13410,8 @@ _FATAL_CODES = {
 # 0.8``) while a duplicate QID published without complaint — the exact
 # inversion of Rule 1 and T9. Identity, arithmetic, exactly-once and schema
 # blocking lives at the publication act (T9's closed set), not here.
+# Q34 later removed the analysis wording/overlap and mastery-substance
+# classifiers themselves; this paragraph records the earlier inversion.
 # A LITERAL, pinned by its own test, so "just add one more code to the
 # fatal set" is no longer a one-line change anyone can make quietly.
 _BLOCKING_CODES = frozenset({
@@ -17286,6 +17324,8 @@ def _dedupe_titles_chapter_wide(records: list[dict]) -> list[dict]:
 def _skeleton_chunk_verdict_via_api(
     chunk_text: str,
     records: list[dict],
+    *,
+    source_plan: Mapping[str, Any] | None = None,
 ) -> dict:
     """Independent model audit of one chunk's extracted skeleton.
 
@@ -17310,22 +17350,28 @@ def _skeleton_chunk_verdict_via_api(
         "micro-concepts (terms, cases, examples, sub-types, or question "
         "headings standing alone as rows)? Judge only from what the text "
         "teaches — never from row counts, text length, or how many "
-        "concepts you would have expected. Return STRICT JSON only: "
+        "concepts you would have expected. When an accepted source plan is "
+        "supplied, its topic names, boundaries and order are authoritative; "
+        "do not demand numbered topics or override an unnumbered topic. "
+        "Read the full extracted descriptions before naming missing "
+        "coverage: opening teaching may already be integrated into its "
+        "owning concept and does not require a separate opening row. "
+        "Return STRICT JSON only: "
         '{"coverage": "complete" | "under_extracted", '
         '"missing_objectives": ["<objective the skeleton missed>", ...], '
         '"grain": "sound" | "micro_split", "reason": "<one sentence>"}'
     )
     user = (
-        "SOURCE TEXT:\n"
-        + str(chunk_text or "")
-        + "\n\nEXTRACTED SKELETON (concept titles, in order):\n"
-        + _json.dumps(
-            [
-                str(row.get("concept_title") or "").strip()
-                for row in records
-            ],
-            ensure_ascii=False,
+        (
+            "ACCEPTED SOURCE PLAN (preserve its authority):\n"
+            + _json.dumps(source_plan, ensure_ascii=False)
+            + "\n\n"
+            if source_plan is not None else ""
         )
+        + "SOURCE TEXT:\n"
+        + str(chunk_text or "")
+        + "\n\nEXTRACTED SKELETON (complete rows, in order):\n"
+        + _json.dumps(records, ensure_ascii=False)
     )
     data = _openai_json(system, user, purpose="concept_validation")
     if not isinstance(data, dict):
@@ -18123,6 +18169,23 @@ def _canonicalize_method_anchor_tags(
     return out
 
 
+def _skeleton_source_plan(meta: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Reuse the same transported plan reader as Post formation."""
+    from .postlearning_formation_contract import language_plan
+
+    return language_plan({"metadata": meta})
+
+
+def _skeleton_contract_sha256(meta: Mapping[str, Any]) -> str:
+    """Chunk reuse includes the actual author instructions and source plan."""
+    return hashlib.sha256(json.dumps({
+        "policy": "skeleton-source-authority-v1",
+        "system": prompts.get_text("concepts.skeleton.system"),
+        "metadata_block": _metadata_block(dict(meta)),
+        "source_plan": _skeleton_source_plan(meta),
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def _extract_skeleton_via_api(
     chunks: list[dict], *, meta: dict,
     progress_start: float = 0.03, progress_end: float = 0.24,
@@ -18130,6 +18193,14 @@ def _extract_skeleton_via_api(
     checkpoint_callback=None,
 ) -> list[dict]:
     system = prompts.get_text("concepts.skeleton.system")
+    source_plan = _skeleton_source_plan(meta)
+    skeleton_contract_sha256 = _skeleton_contract_sha256(meta)
+    source_plan_block = (
+        "\nACCEPTED SOURCE PLAN (preserve exact topic names, order and "
+        "ownership; extract only this chunk's supported teaching):\n"
+        + json.dumps(source_plan, ensure_ascii=False) + "\n"
+        if source_plan is not None else ""
+    )
     all_records: list[dict] = []
     progress.log(
         f"Section-aware skeleton extraction across {len(chunks)} chunk(s).")
@@ -18146,6 +18217,7 @@ def _extract_skeleton_via_api(
             )
             or saved.get("chunk_sha256") != _chunk_checkpoint_sha256(
                 chunks[expected_index - 1])
+            or saved.get("skeleton_contract_sha256") != skeleton_contract_sha256
             or not isinstance(saved.get("records"), list)
         ):
             break
@@ -18153,6 +18225,7 @@ def _extract_skeleton_via_api(
             "chunk_index": expected_index,
             "chunk_count": len(chunks),
             "chunk_sha256": saved["chunk_sha256"],
+            "skeleton_contract_sha256": skeleton_contract_sha256,
             "records": copy.deepcopy(saved["records"]),
         }
         completed_chunks.append(durable_chunk)
@@ -18179,8 +18252,9 @@ def _extract_skeleton_via_api(
         method_anchors = _method_coverage_anchors(
             chunk.get("sections") or [])
         heading_block = (
-            "\nSECTION HEADINGS IN THIS CHUNK (use ONLY these as topics; never "
-            "invent your own topic names):\n- "
+            "\nSECTION HEADINGS IN THIS CHUNK (source evidence; preserve "
+            "the accepted plan when supplied, otherwise infer teaching "
+            "ownership from the source):\n- "
             + "\n- ".join(chunk_headings) + "\n"
         ) if chunk_headings else ""
         method_block = ""
@@ -18195,6 +18269,7 @@ def _extract_skeleton_via_api(
             )
         user = (
             _metadata_block(meta)
+            + source_plan_block
             + heading_block
             + method_block
             + f"\nChunk {i} of {len(chunks)}:\n"
@@ -18213,7 +18288,7 @@ def _extract_skeleton_via_api(
         verdict: dict = {}
         try:
             verdict = _skeleton_chunk_verdict_via_api(
-                chunk["text"], chunk_records)
+                chunk["text"], chunk_records, source_plan=source_plan)
         except Exception as exc:  # noqa: BLE001 - audit is advisory
             progress.log(
                 f"  chunk {i}/{len(chunks)} skeleton audit unavailable "
@@ -18371,6 +18446,7 @@ def _extract_skeleton_via_api(
             "chunk_index": i,
             "chunk_count": len(chunks),
             "chunk_sha256": _chunk_checkpoint_sha256(chunk),
+            "skeleton_contract_sha256": skeleton_contract_sha256,
             "records": copy.deepcopy(chunk_records),
         })
         _emit_concept_checkpoint(
@@ -19493,6 +19569,11 @@ _TYPE_TAXONOMY_CHECKPOINT_STAGE = "type_taxonomy_ready"
 _CONCEPT_CHECKPOINT_STAGE = "pre_type_assignment"
 PHASE3_PRE_RELEASE_FIELD = "phase3_pre_release"
 PHASE3_PRE_RELEASE_SCHEMA = 1
+# The run identity the Pre map records about itself (premap.run_identity,
+# register Q29), lifted onto the release bundle so release staging can
+# refuse an authority that belongs to another chapter. The literal equals
+# ``phase3.premap.RUN_IDENTITY_FIELD``; a regression pins it.
+PRE_RUN_IDENTITY_FIELD = "run_identity"
 
 # Stage versions describe the serialized artifact contract, not the git
 # revision that produced it.  A later deployment may therefore reuse an older
@@ -19642,14 +19723,26 @@ def phase3_pre_release_bundle(
     *,
     snapshot_writes: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """The exact Phase 3 Pre output carried through checkpoint and release."""
+    """The exact Phase 3 Pre output carried through checkpoint and release.
 
-    return {
+    The map's own recorded run identity (``premap.run_identity``) is
+    lifted onto the bundle, so every carrier of the authority — the
+    checkpoint entry, the in-memory transport, the sidecar restore — says
+    which chapter's run it is. A map minted before the identity existed
+    carries none, and the bundle then carries none: the staging gate is
+    dormant for it rather than guessing.
+    """
+
+    bundle = {
         "schema_version": PHASE3_PRE_RELEASE_SCHEMA,
         "pre_map": copy.deepcopy(dict(pre_map)),
         "pre_questions": copy.deepcopy(dict(pre_questions)),
         "snapshot_writes": copy.deepcopy(dict(snapshot_writes or {})),
     }
+    identity = pre_map.get(PRE_RUN_IDENTITY_FIELD)
+    if isinstance(identity, Mapping):
+        bundle[PRE_RUN_IDENTITY_FIELD] = copy.deepcopy(dict(identity))
+    return bundle
 
 
 def valid_phase3_pre_release_bundle(value: object) -> bool:
@@ -19661,6 +19754,70 @@ def valid_phase3_pre_release_bundle(value: object) -> bool:
         and isinstance(value.get("pre_map"), Mapping)
         and isinstance(value.get("pre_questions"), Mapping)
         and isinstance(value.get("snapshot_writes", {}), Mapping)
+    )
+
+
+def pre_release_run_identity(value: object) -> dict[str, Any] | None:
+    """The run identity a bundle or a bare Pre map records, or ``None``.
+
+    A bundle carries it at the top level; a map (a sidecar read straight
+    off disk) carries it on itself. ``None`` means "recorded nothing",
+    which is a legacy artefact, never a verdict.
+    """
+
+    if not isinstance(value, Mapping):
+        return None
+    identity = value.get(PRE_RUN_IDENTITY_FIELD)
+    if not isinstance(identity, Mapping):
+        nested = value.get("pre_map")
+        identity = (
+            nested.get(PRE_RUN_IDENTITY_FIELD)
+            if isinstance(nested, Mapping) else None
+        )
+    return dict(identity) if isinstance(identity, Mapping) else None
+
+
+def pre_release_identity_defect(
+    value: object, *, chapter_id: int | None,
+) -> str:
+    """Why this Pre authority is NOT the named chapter's, or ``""``.
+
+    Register Q29 (owner corpus, 2026-09-06: the School Bell run shipped
+    Self Help's Pre Master beside its own Pre Concept file). Nothing bound
+    the staged Pre authority to the run: the bundle carried no chapter,
+    the sidecar restore read a process-scoped directory, and staging
+    preferred whatever arrived first. This is the binding — a comparison
+    of the chapter the map's envelope froze against the chapter the
+    release is being staged into.
+
+    Mechanics only. A bundle that recorded no identity (minted before
+    the field existed) yields ``""``: the gate is dormant for it, exactly
+    as the Master lane's seal gate is dormant for rows frozen before a
+    seal was recorded, and the caller says so rather than refusing paid
+    work on a guess. An identity that names ANOTHER chapter is the
+    defect, stated with both identities so the reviewer can see which
+    run's authority arrived.
+    """
+
+    identity = pre_release_run_identity(value)
+    if identity is None or chapter_id in (None, 0):
+        return ""
+    recorded = identity.get("chapter_id")
+    if recorded in (None, ""):
+        return ""
+    try:
+        matches = int(recorded) == int(chapter_id)
+    except (TypeError, ValueError):
+        matches = False
+    if matches:
+        return ""
+    code = str(identity.get("chapter_code") or "").strip()
+    return (
+        "the Phase 03 Pre-Learning authority records chapter "
+        f"{recorded!r}" + (f" ({code})" if code else "")
+        + f" as the run it was authored for, not this run's chapter "
+        f"{int(chapter_id)}; another chapter's Pre map is never staged "
+        "as this chapter's Output 01"
     )
 
 
@@ -22178,7 +22335,12 @@ def concepts_from_mmd(
             # the original decision keys and replays the decide-once store.
             from . import concept_topology_contract as _topology
 
-            restored_pre, pre_defects = _topology.restored_pre_release()
+            # The directory is THIS job's (the session the seam activated
+            # for it), handed over explicitly — register Q29 retired the
+            # read of a process-scoped ContextVar inside the restore.
+            restored_pre, pre_defects = _topology.restored_pre_release(
+                artifact_dir=active_artifact_dir or None,
+            )
             if isinstance(restored_pre, Mapping):
                 phase3_pre_release_authority = phase3_pre_release_bundle(
                     restored_pre.get("pre_map") or {},

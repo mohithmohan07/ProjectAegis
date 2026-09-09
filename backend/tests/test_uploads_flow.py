@@ -87,15 +87,67 @@ def test_convert_text_upload_preserves_utf8_source(client):
     assert "â€" not in converted["mmd_text"]
 
 
-def test_generate_requires_conversion(client, first_chapter):
+def test_generate_requires_conversion(client, db, first_chapter, monkeypatch):
+    from app.services import build_concepts_release as release
+    from app.services import build_concepts_terminal_release_contract as terminal
+    from app.services import generation
+
+    # This test client's fixture does not run lifespan/bootstrap; install
+    # the production publication guard explicitly instead of depending on
+    # another test having installed it earlier in the session.
+    terminal.install()
+    before = {
+        table: db.query(table).count()
+        for table in (models.Topic, models.Concept, models.Question)
+    }
+    provider_calls = []
+
+    def forbidden_provider(*_args, **_kwargs):
+        provider_calls.append(True)
+        pytest.fail("an unconverted upload must not enter a provider")
+
+    monkeypatch.setattr(generation, "_openai_json", forbidden_provider)
+    monkeypatch.setattr(uploads.mmd, "to_mmd", forbidden_provider)
     files = {"file": ("doc.txt", io.BytesIO(b"# Doc\n\nbody"), "text/plain")}
-    job = client.post("/build-concepts/post-learning/uploads", files=files).json()
-    # Generating before conversion should surface an error in the stream.
-    from tests.conftest import stream_error_message
-    msg = stream_error_message(client.post(
+    job = client.post(
+        "/build-concepts/post-learning/uploads"
+        "?source_book=NCERT&chapter_duration_minutes=40", files=files,
+    ).json()
+    # The unattended contract retains diagnostics on every failed run. The
+    # conversion prerequisite still blocks both authoring and publication.
+    result = stream_result(client.post(
         f"/build-concepts/post-learning/uploads/{job['id']}/generate",
         json={"target_chapter_id": first_chapter["id"]}))
-    assert msg and "convert" in msg.lower()
+    db.expire_all()
+    stored = db.get(models.UploadJob, job["id"])
+    payload = release.release_payload(stored)
+    assert payload is not None
+    assert payload["records"] == []
+    assert "run_incomplete" in result
+    assert "convert the uploaded document to MMD before generating" in (
+        result["run_incomplete"]["error"]
+    )
+    assert any(
+        "convert the uploaded document to MMD before generating"
+        in str(issue.get("message", ""))
+        for issue in payload["issues"]
+    )
+    assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+    assert result["database_uploaded"] is False
+    assert client.get(
+        f"/build-concepts/uploads/{job['id']}/diagnostics.zip"
+    ).status_code == 200
+    refused = client.post(
+        f"/build-concepts/uploads/{job['id']}/upload-release?lane=post"
+    )
+    assert refused.status_code == 400
+    assert "terminal_generation_incomplete" in refused.json()["detail"]
+    assert provider_calls == []
+    assert stored.mmd_text == ""
+    assert stored.result_ids == []
+    assert stored.openai_usage["attempt_count"] == 0
+    assert stored.openai_usage["total_tokens"] == 0
+    assert {table: db.query(table).count() for table in before} == before
 
 
 def test_convert_stream_emits_progress_events(client):

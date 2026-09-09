@@ -26,7 +26,7 @@ from typing import Any, Callable
 from .. import config
 from . import progress, prompts
 
-READING_VERSION = 1
+READING_VERSION = 2
 
 # Census kinds, exactly as the process document names them.
 BLOCK_KINDS = (
@@ -111,6 +111,30 @@ NORMALIZE_SYSTEM = prompts.register(
     ),
 )
 
+VERIFY_SYSTEM = prompts.register(
+    "chapter_reading.verify.system",
+    label="Chapter reading — independent source comparison",
+    category="Chapter reading (Pass 1)",
+    description="Compare original MMD with the proposed normalization; retain advisory evidence.",
+    default=(
+        "You are the independent source-fidelity reviewer for direct MMD ingestion. "
+        "Compare original_mmd against proposed_normalized_mmd; the original is the "
+        "authority. Do not repeat the author's self-assessment or rewrite either text. "
+        "Check every teaching statement, negation, condition, quantity, equation and "
+        "unit, question and numbering, figure/caption, and their relationships. "
+        "Heading markup may change; teaching wording and order may not. Only layout "
+        "Honor assessment_sections: their banners remain present and un-promoted. "
+        "furniture may be removed, and every removed line must be recorded verbatim "
+        "in dropped_furniture. Judge whether those lines really are furniture; a "
+        "repeated learning statement is not furniture merely because it repeats. "
+        "Never infer missing words or judge quality using length, keywords or overlap. "
+        "Return ONE JSON object with verdict (verified, needs_correction, or ambiguous) "
+        "and findings (an array of objects with code, original_excerpt, proposed_excerpt, "
+        "and explanation). Use empty findings when verified. Report missing evidence "
+        "honestly. Your findings are advisory; preserve both versions for review."
+    ),
+)
+
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
@@ -147,9 +171,10 @@ def _chunks(text: str, *, max_chars: int = _MAX_CHUNK_CHARS) -> list[str]:
 
 def _cache_key(
     mmd_text: str, assessment_sections: tuple[str, ...] = (),
+    *, version: int = READING_VERSION,
 ) -> str:
-    payload = "\0".join((
-        f"chapter-reading-v{READING_VERSION}",
+    parts = [
+        f"chapter-reading-v{version}",
         config.OPENAI_MODEL,
         _sha256_text(prompts.get_text("chapter_reading.normalize.system")),
         _sha256_text(mmd_text),
@@ -157,7 +182,10 @@ def _cache_key(
         # without its outline produces different MMD, and the older reading
         # would otherwise be replayed for every later run.
         _sha256_text("\n".join(assessment_sections)),
-    ))
+    ]
+    if version >= 2:
+        parts.append(_sha256_text(prompts.get_text("chapter_reading.verify.system")))
+    payload = "\0".join(parts)
     return _sha256_text(payload)[:32]
 
 
@@ -233,8 +261,8 @@ def _read_chunk(
     outline: list[str],
     previous_tail: str,
     assessment_sections: tuple[str, ...] = (),
-) -> tuple[str, list[dict[str, Any]], list[str], bool]:
-    """Return (normalized_text, census_rows, dropped_furniture, fell_back)."""
+) -> tuple[str, list[dict[str, Any]], list[str], bool, dict[str, Any]]:
+    """Return text/census/furniture/fallback and the immutable comparison record."""
     payload = {
         "source_filename": source_filename,
         "chunk_index": chunk_index + 1,
@@ -260,15 +288,26 @@ def _read_chunk(
             "text and flagging it for review.",
             level="warning",
         )
-        return chunk, _fallback_census(chunk_index, "provider failure"), [], True
+        return chunk, _fallback_census(chunk_index, "provider failure"), [], True, {
+            "chunk_index": chunk_index, "original_mmd": chunk,
+            "proposed_normalized_mmd": None, "verdict": "unavailable",
+            "findings": [{"code": "normalization_provider_failure", "explanation": type(exc).__name__}],
+        }
 
     normalized = str((decision or {}).get("normalized_mmd") or "")
+    record = {
+        "chunk_index": chunk_index,
+        "original_mmd": chunk,
+        "proposed_normalized_mmd": normalized,
+        "dropped_furniture": copy.deepcopy((decision or {}).get("dropped_furniture") or []),
+    }
     if not normalized.strip():
         return (
             chunk,
             _fallback_census(chunk_index, "empty normalized text"),
             [],
             True,
+            {**record, "verdict": "unusable", "findings": [{"code": "empty_normalized_text"}]},
         )
     for tag in _image_tags(chunk):
         if tag not in normalized:
@@ -278,13 +317,31 @@ def _read_chunk(
                 _fallback_census(chunk_index, f"image tag dropped: {tag[:120]}"),
                 [],
                 True,
+                {**record, "verdict": "unusable", "findings": [{"code": "image_tag_dropped", "original_excerpt": tag}]},
             )
     dropped = [
-        str(line)[:300]
+        str(line)
         for line in (decision.get("dropped_furniture") or [])
         if str(line or "").strip()
     ]
-    return normalized, _chunk_census(decision, chunk_index=chunk_index), dropped, False
+    try:
+        review = api_call(
+            prompts.get_text("chapter_reading.verify.system"),
+            json.dumps({**record, "assessment_sections": list(assessment_sections)}, ensure_ascii=False),
+            purpose="source_extraction",
+        )
+        if not isinstance(review, dict) or review.get("verdict") not in {
+            "verified", "needs_correction", "ambiguous",
+        } or not isinstance(review.get("findings"), list):
+            review = {"verdict": "unavailable", "findings": [{"code": "invalid_independent_review"}]}
+    except Exception as exc:  # Reviewer unavailability never discards paid source work.
+        if _quota_stop(exc):
+            raise
+        review = {"verdict": "unavailable", "findings": [{
+            "code": "independent_review_unavailable", "explanation": type(exc).__name__,
+        }]}
+    record.update({"verdict": review["verdict"], "findings": copy.deepcopy(review["findings"])})
+    return normalized, _chunk_census(decision, chunk_index=chunk_index), dropped, False, record
 
 
 def _fallback_census(chunk_index: int, reason: str) -> list[dict[str, Any]]:
@@ -299,6 +356,7 @@ def _fallback_census(chunk_index: int, reason: str) -> list[dict[str, Any]]:
 
 def cached_reading(
     raw_source: str, assessment_sections: tuple[str, ...] = (),
+    *, allow_legacy: bool = False,
 ) -> dict[str, Any] | None:
     """The stored reading for this exact raw text — never a model call.
 
@@ -313,6 +371,10 @@ def cached_reading(
     hit = _load_cached(_cache_key(raw, assessment_sections))
     if hit is None and assessment_sections:
         hit = _load_cached(_cache_key(raw))
+    if hit is None and allow_legacy:
+        hit = _load_cached(_cache_key(raw, assessment_sections, version=1))
+        if hit is None and assessment_sections:
+            hit = _load_cached(_cache_key(raw, version=1))
     return hit
 
 
@@ -329,7 +391,7 @@ def normalized_for(
     raw = str(raw_source or "")
     if not raw:
         return raw
-    cached = cached_reading(raw, assessment_sections)
+    cached = cached_reading(raw, assessment_sections, allow_legacy=True)
     if cached is None:
         return raw
     return str(cached.get("normalized_mmd") or "") or raw
@@ -390,8 +452,9 @@ def read_chapter(
     dropped: list[str] = []
     outline: list[str] = []
     fallbacks = 0
+    comparisons: list[dict[str, Any]] = []
     for index, chunk in enumerate(chunks):
-        text, rows, chunk_dropped, fell_back = _read_chunk(
+        text, rows, chunk_dropped, fell_back, comparison = _read_chunk(
             chunk,
             api_call=api_call,
             chunk_index=index,
@@ -405,6 +468,7 @@ def read_chapter(
             ),
         )
         normalized_parts.append(text)
+        comparisons.append(comparison)
         census.extend(rows)
         dropped.extend(chunk_dropped)
         fallbacks += 1 if fell_back else 0
@@ -426,6 +490,12 @@ def read_chapter(
         "normalized_mmd": normalized,
         "census": census,
         "dropped_furniture": dropped,
+        "source_comparisons": comparisons,
+        "review_flags": [
+            {"chunk_index": item["chunk_index"], "verdict": item["verdict"],
+             "findings": copy.deepcopy(item["findings"])}
+            for item in comparisons if item["verdict"] != "verified" or item["findings"]
+        ],
         "provenance": {
             "version": READING_VERSION,
             "model": config.OPENAI_MODEL,

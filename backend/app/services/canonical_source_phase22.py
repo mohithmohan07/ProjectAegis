@@ -667,75 +667,92 @@ def _openai_multimodal_json(
     hard = 0
     last_error: Exception | None = None
     while True:
-        try:
-            generation._acquire_openai_slot(gate, purpose=purpose)
+        with openai_usage.request_attempt(
+            requested_model=str(request_policy["model"]), purpose=purpose,
+            provider=model_provider.active_provider(),
+            reasoning_effort=str(request_policy.get("reasoning_effort") or ""),
+            service_tier=str(request_policy.get("service_tier") or ""),
+        ):
             try:
-                _notify_openai_transport_started()
-                response = client.chat.completions.create(
-                    **request_policy,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": content},
-                    ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": response_schema,
-                    },
-                    max_completion_tokens=max_tokens,
+                generation._acquire_openai_slot(gate, purpose=purpose)
+                openai_usage.record_service_started()
+                try:
+                    _notify_openai_transport_started()
+                    response = client.chat.completions.create(
+                        **request_policy,
+                        messages=[
+                            {"role": "system", "content": system},
+                            {"role": "user", "content": content},
+                        ],
+                        response_format={
+                            "type": "json_schema",
+                            "json_schema": response_schema,
+                        },
+                        max_completion_tokens=max_tokens,
+                    )
+                except BaseException as exc:
+                    openai_usage.record_attempt_outcome("provider_error", error=exc)
+                    raise
+                finally:
+                    openai_usage.record_service_ended()
+                    generation._release_openai_slot(gate)
+                try:
+                    openai_usage.record_response(
+                        response, requested_model=request_policy["model"]
+                    )
+                except Exception:
+                    pass
+                choice = response.choices[0]
+                if getattr(choice, "finish_reason", None) == "length":
+                    openai_usage.record_attempt_outcome("truncated_response")
+                    raise RuntimeError("source adjudication response was truncated")
+                openai_usage.record_attempt_outcome("invalid_json")
+                value = json.loads(choice.message.content or "{}")
+                if not isinstance(value, dict):
+                    openai_usage.record_attempt_outcome("invalid_schema")
+                    raise ValueError("source adjudication response must be an object")
+                openai_usage.record_attempt_outcome("success")
+                return value
+            except generation.OpenAIQueueTimeoutError as exc:
+                openai_usage.record_attempt_outcome("queue_timeout", error=exc)
+                raise
+            except transient_errors as exc:
+                code = generation._openai_error_code(exc)
+                if code == "insufficient_quota":
+                    raise RuntimeError(f"{_provider_label()} quota exhausted during source adjudication") from exc
+                if single_attempt:
+                    raise RuntimeError(
+                        f"{_provider_label()} source adjudication single attempt failed: "
+                        f"{exc!r}"
+                    ) from exc
+                transient += 1
+                last_error = exc
+                if transient > config.OPENAI_TRANSIENT_RETRIES:
+                    raise RuntimeError(
+                        f"{_provider_label()} unavailable during source adjudication after "
+                        f"{transient - 1} transient retries: {exc!r}"
+                    ) from exc
+                delay = generation._transient_backoff(exc, transient)
+                progress.log(
+                    f"{_provider_label()} source adjudication busy "
+                    f"({type(exc).__name__}); retrying in {delay:.0f}s.",
+                    level="warning",
                 )
-            finally:
-                generation._release_openai_slot(gate)
-            try:
-                openai_usage.record_response(
-                    response, requested_model=request_policy["model"]
-                )
-            except Exception:
-                pass
-            choice = response.choices[0]
-            if getattr(choice, "finish_reason", None) == "length":
-                raise RuntimeError("source adjudication response was truncated")
-            value = json.loads(choice.message.content or "{}")
-            if not isinstance(value, dict):
-                raise ValueError("source adjudication response must be an object")
-            return value
-        except generation.OpenAIQueueTimeoutError:
-            raise
-        except transient_errors as exc:
-            code = generation._openai_error_code(exc)
-            if code == "insufficient_quota":
-                raise RuntimeError(f"{_provider_label()} quota exhausted during source adjudication") from exc
-            if single_attempt:
-                raise RuntimeError(
-                    f"{_provider_label()} source adjudication single attempt failed: "
-                    f"{exc!r}"
-                ) from exc
-            transient += 1
-            last_error = exc
-            if transient > config.OPENAI_TRANSIENT_RETRIES:
-                raise RuntimeError(
-                    f"{_provider_label()} unavailable during source adjudication after "
-                    f"{transient - 1} transient retries: {exc!r}"
-                ) from exc
-            delay = generation._transient_backoff(exc, transient)
-            progress.log(
-                f"{_provider_label()} source adjudication busy "
-                f"({type(exc).__name__}); retrying in {delay:.0f}s.",
-                level="warning",
-            )
-            time.sleep(delay)
-        except Exception as exc:
-            if single_attempt:
-                raise RuntimeError(
-                    f"{_provider_label()} source adjudication single attempt failed: "
-                    f"{exc!r}"
-                ) from exc
-            hard += 1
-            last_error = exc
-            if hard >= 3:
-                raise RuntimeError(
-                    f"{_provider_label()} source adjudication failed: {last_error!r}"
-                ) from exc
-            time.sleep(2)
+                openai_usage.wait_for_retry(delay)
+            except Exception as exc:
+                openai_usage.record_attempt_outcome("", error=exc)
+                if single_attempt:
+                    raise RuntimeError(
+                        f"{_provider_label()} source adjudication single attempt failed: "
+                        f"{exc!r}"
+                    ) from exc
+                hard += 1
+                last_error = exc
+                if hard >= 3:
+                    raise RuntimeError(
+                        f"{_provider_label()} source adjudication failed: {last_error!r}"
+                    ) from exc
+                openai_usage.wait_for_retry(2)
 
 def _page_by_number(pages: list[EvidencePage], page_number: int) -> EvidencePage | None:
     return next((page for page in pages if page.page_number == page_number), None)

@@ -137,10 +137,15 @@ def test_description_refine_prompt_requires_mastery_line():
 # Topic segregation (one-topic-for-all collapse)
 # --------------------------------------------------------------------------- #
 
-def test_skeleton_prompt_forbids_umbrella_topics():
+def test_skeleton_prompt_respects_source_topic_authority():
     text = prompts.get_text("concepts.skeleton.system")
     assert "TOPIC SEGREGATION IS MANDATORY" in text
-    assert "NEVER a topic" in text
+    assert "accepted source-topic roster or sealed language topology plan" in text
+    assert "Do not collapse genuinely" in text
+    assert "unnumbered or chapter-named topic is equally valid" in text
+    assert "no sentence or word quota" in text
+    assert "invented opening concept" in text
+    assert "MUST yield at least one" not in text
 
 
 def test_topic_segregation_verdict_carries_the_evidence(monkeypatch):

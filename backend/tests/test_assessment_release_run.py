@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 from collections import Counter
 from pathlib import Path
 
@@ -160,9 +161,10 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
                      "correct_answer": "No", "answer_weightage": "0"},
                 ],
                 "sub_questions": [],
-                # Contract v2.0 §22.5: the explanation opens with the exact
-                # correct-option text, never a letter or number.
-                "answer_explanation": "Cube. A cube is three-dimensional.",
+                # Follow the run's carried prefix contract.
+                "answer_explanation": (
+                    "a) " if payload.get("column_spec_policy", {}).get("objective_explanation_prefix") == "option_label_and_answer" else ""
+                ) + "Cube. A cube is three-dimensional.",
                 "requires_visual": False,
                 "rationale": "preserves the source question and answer",
             }
@@ -309,9 +311,9 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
         refined = copy.deepcopy(payload[unit_kind])
         if unit_kind == "candidate":
             if refined["sheet_kind"] == "objective":
-                refined["answers"][0]["answer_content"] = "A cube"
                 refined["answer_explanation"] = (
-                    "A cube occupies space in three dimensions."
+                    ("a) " if payload.get("column_spec_policy", {}).get("objective_explanation_prefix") == "option_label_and_answer" else "")
+                    + "Cube. A cube occupies space in all three dimensions."
                 )
             else:
                 # §24 parity: both model-answer fields move together.
@@ -386,8 +388,17 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
 
 
 def test_full_pipeline_publishes_a_ready_release(db):
+    from app.services import identity
+
     chapter = _chapter_with_concepts(db)
     job = _make_job(db, chapter)
+    # This fixture shares a chapter with other release tests. Staged releases
+    # now retain issued numbers even before database publication, so assert
+    # exact continuation instead of assuming every family still starts at 1.
+    next_indices = {
+        row.family_base: identity.next_label_index(db, row.family_base)
+        for row in db.query(models.QuestionLabelSequence).all()
+    }
     calls = {}
     qa_payloads = []
     authorities, first_concept_name = _authorities(
@@ -416,13 +427,16 @@ def test_full_pipeline_publishes_a_ready_release(db):
     q = objective_rows[0]
     assert q["question_appears_in"] == "Pre/Post-Worksheet/Test"
     assert q["answer_restriction"] == "Specific"
-    assert q["answer_content_1"] == "A cube"
+    assert q["answer_content_1"] == "Cube"
+    assert "all three dimensions" in q["answer_explanation"]
     assert q["question_duration"] == 2
     assert str(q["correct_answer_1"]) == "Yes"
     # Labels mint from the concept machine identity in source order.
-    assert q["question_label"].endswith("Q01")
-    assert descriptive_rows[0]["question_label"].endswith(
-        ("Q01", "Q02"))
+    for row in (q, descriptive_rows[0]):
+        base, _separator, _number = row["question_label"].rpartition(" Q")
+        expected = next_indices.get(base, 1)
+        assert row["question_label"] == f"{base} Q{expected:02d}"
+        next_indices[base] = expected + 1
     assert descriptive_rows[0]["answer_restriction"] == "Open"
     assert descriptive_rows[0]["question_duration"] == 5
     assert descriptive_rows[0]["math_keyboard"] == "No"
@@ -502,46 +516,46 @@ def test_full_pipeline_publishes_a_ready_release(db):
         authority = candidate[
             "_aegis_assessment_level_verdict"]["authority"]
         assert authority["decision_key"]
-        assert authority["policy_version"] == "assessment-level-1"
+        assert authority["policy_version"] == "assessment-level-1-column-spec"
         assert "created_at" not in authority
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
-        ] == "assessment-cell-3"
+        ] == "assessment-cell-3-column-spec"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-14"
+        ] == "assessment-materialize-15-column-spec"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
         assert restriction_authority["policy_version"].startswith(
-            "assessment-answer-restriction-3;"
+            "assessment-answer-restriction-5-q26-evidence;"
         )
         assert candidate["_aegis_assessment_answer_restriction"][
             "registry"
         ]["registry_id"] == "registry-v2.0"
         assert candidate["_aegis_assessment_marking"]["authority"][
             "policy_version"
-        ] == "assessment-marking-8"
+        ] == "assessment-marking-9-column-spec"
         assert candidate["_aegis_assessment_marking"][
             "blueprint_authority"
         ]["decomposition_authority"] == "api_per_item_verdict"
         assert candidate["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-candidate-4"
+        ] == "assessment-master-refiner-candidate-5-complete-task"
         assert candidate["_aegis_assessment_route"]["authority"][
             "policy_version"
-        ] == "assessment-route-2"
+        ] == "assessment-route-2-column-spec"
     for group in occupied:
         assert group["_aegis_assessment_variant_cluster"]["authority"][
-            "policy_version"] == "assessment-variant-cluster-1"
+            "policy_version"] == "assessment-variant-cluster-1-column-spec"
         assert group["_aegis_assessment_group_description"]["authority"][
-            "policy_version"] == "assessment-group-description-1"
+            "policy_version"] == "assessment-group-description-1-column-spec"
         assert group["_aegis_assessment_group_quality"]["authority"][
-            "policy_version"] == "assessment-group-quality-1"
+            "policy_version"] == "assessment-group-quality-1-column-spec"
         assert group["_aegis_assessment_master_refinement"][
             "policy_version"
-        ] == "assessment-master-refiner-group-1"
+        ] == "assessment-master-refiner-group-1-column-spec"
         assert group["semantic_description"].endswith(
             "precise grade-level wording."
         )
@@ -1034,6 +1048,55 @@ def test_grouping_decisions_replay_without_provider_calls(db, tmp_path):
     } == first_text
 
 
+@pytest.mark.parametrize("split_tiers", [False, True])
+def test_group_stages_run_independently_with_complete_qa_context(
+    db, monkeypatch, split_tiers,
+):
+    chapter = _chapter_with_concepts(db)
+    job = _make_job(db, chapter)
+    calls = {}
+    authorities, _ = _authorities(db, chapter, calls=calls)
+    monkeypatch.setattr(run.config, "phase3_decision_workers", lambda: 2)
+    if split_tiers:
+        original_level, critic = authorities["level"]
+
+        def level(payload):
+            result = original_level(payload)
+            if payload["candidate"]["sheet_kind"] == "objective":
+                result["tier"] = "Basic"
+            return result
+
+        authorities["level"] = (level, critic)
+
+    for stage in (["cluster"] if split_tiers else []) + ["describe", "qa"]:
+        original, critic = authorities[stage]
+        barrier = threading.Barrier(2, timeout=5)
+
+        def concurrent(payload, original=original, barrier=barrier):
+            barrier.wait()
+            return original(payload)
+
+        authorities[stage] = (concurrent, critic)
+
+    release = run.run_release_for_job(
+        db, job.id, owner_sub=OWNER, authorities=authorities,
+        **_decision_context(),
+    )
+    groups = release.payload["groups"]
+    assert len(groups) == 2
+    assert [g["group_type"] for g in groups] == (
+        ["Basic", "Advanced"] if split_tiers else ["Advanced", "Advanced"]
+    )
+    assert len(calls["describe"]) == len(calls["qa"]) == 2
+    for payload in calls["qa"]:
+        siblings = payload["sibling_groups"]
+        assert len(siblings) == (0 if split_tiers else 1)
+        if siblings:
+            assert siblings[0]["group"]["semantic_description"]
+            assert siblings[0]["members"]
+            assert siblings[0]["group"]["group_key"] != payload["group"]["group_key"]
+
+
 def test_route_critic_dissent_publishes_with_review_warning(db):
     chapter = _chapter_with_concepts(db)
     job = _make_job(db, chapter)
@@ -1091,7 +1154,7 @@ def test_master_refiner_delegate_failure_stages_unrefined_rows_with_warning(
         svc.RELEASED_WITH_WARNINGS
     )
     assert release.payload["refinements"]["policy_version"] == (
-        "assessment-master-refiner-4"
+        "assessment-master-refiner-4-column-spec"
     )
     assert release.payload["refinements"]["changes"] == []
     for record in [
@@ -1162,7 +1225,8 @@ def test_refiner_dissent_keeps_diff_when_required_empty_group_has_no_audit(
     diff = release.payload["refinements"]
     assert diff["changes"]
     assert any(
-        change["after"] == "A cube" for change in diff["changes"]
+        "Cube. A cube occupies space in all three dimensions."
+        in str(change["after"]) for change in diff["changes"]
     )
     empty = next(
         group for group in release.payload["groups"]
@@ -1281,4 +1345,4 @@ def test_explicit_subjective_cell_binds_under_its_profile_contract():
     assert bound[0]["accepted_source_qids"] == ["QINV-0001"]
     assert bound[0]["appears_in"] == ["Pre/Post-Worksheet/Test"]
     assert bound[0]["source_policy"] == "reuse"
-    assert bound[0]["authority"]["policy_version"] == "assessment-cell-3"
+    assert bound[0]["authority"]["policy_version"] == "assessment-cell-3-column-spec"

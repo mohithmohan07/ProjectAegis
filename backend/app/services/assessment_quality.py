@@ -13,17 +13,20 @@ across a concept's groups and blueprint-coverage arithmetic.
 """
 from __future__ import annotations
 
+from . import column_spec
+
 import copy
 import json
 from typing import Any, Mapping
 
 from . import assessment_lane_policy as lane_policy
+from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
-QUALITY_POLICY_VERSION = "assessment-group-quality-1"
+QUALITY_POLICY_VERSION = "assessment-group-quality-1-column-spec"
 
 QA_SYSTEM = (
-    "You are the Aegis touched-group QA reviewer. Review ONE assessment "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis touched-group QA reviewer. Review ONE assessment "
     "group holistically against its member questions and its home "
     "concept: question correctness; answer/rubric consistency; whether "
     "the home concept actually entails every member; internal cohesion "
@@ -37,11 +40,11 @@ QA_SYSTEM = (
     '{"group_key":"","flags":[{"code":"","member_candidate_id":"",'
     '"detail":""}]}\n'
     "group_key must echo the reviewed group exactly. A flag may leave "
-    "member_candidate_id empty when it concerns the group as a whole."
+    "member_candidate_id empty when it concerns the group as a whole.")
 )
 
 QA_CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one touched-group quality "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one touched-group quality "
     "review. Audit the proposed flags against the complete group, concept, "
     "member, and sibling evidence. You must not revise the group or the "
     "questions. Your dissent is advisory: the proposed review stands and "
@@ -50,7 +53,7 @@ QA_CRITIC_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"verdict":"verified","confidence":0.0,"issues":[]} or '
     '{"verdict":"dissent","confidence":0.0,"issues":["evidence-bound '
-    'concern"]}'
+    'concern"]}')
 )
 
 
@@ -158,6 +161,7 @@ def _live_review(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         QA_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="concept_validation",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -167,6 +171,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         QA_CRITIC_SYSTEM, json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
+        image_urls=visual_evidence.image_inputs(payload),
     )
 
 
@@ -235,6 +240,7 @@ def review_group(
         "members": _member_evidence(members),
         "sibling_groups": _sibling_evidence(siblings),
     }
+    visual_evidence.bind(payload, members, concept, payload["sibling_groups"])
     decision = kernel.decide(
         kind="assessment.group_quality",
         unit_id=group_key,
@@ -253,6 +259,7 @@ def review_group(
         if isinstance(flag, Mapping)
     ]
     review_flags = [str(flag) for flag in decision.get("review_flags") or []]
+    review_flags.extend(visual_evidence.review_flags(payload))
     return {
         "flags": flags,
         "quality_review": "flagged" if flags or review_flags else "verified",

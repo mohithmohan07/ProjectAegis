@@ -1280,13 +1280,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
   margin: 6px 0;
 }
 .katex-inline {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  background: var(--accent-tint);
-  border: 1px solid var(--accent-ring);
-  color: var(--accent-fg);
-  border-radius: 6px;
-  padding: 1px 5px;
+  display: inline-block;
+  vertical-align: middle;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 3px 1px;
+  white-space: normal;
 }
 
 .concept-edit-form {

@@ -478,6 +478,19 @@ def _readiness(release: models.AssessmentRelease, manifest: Mapping) -> str:
     identity, reason and flags. What is gone is the DECIDER, not the record.
     """
     read_back = manifest.get("read_back") or {}
+    from . import katex_render_validation, source_asset_publication
+
+    # Frozen mechanical delivery/render evidence. Never retry network or Node
+    # work when a download, recovery, or readiness read examines this manifest.
+    for checker in (source_asset_publication, katex_render_validation):
+        report = manifest.get(checker.REPORT_FIELD)
+        if manifest.get("output_validation_version") == 1 and not isinstance(report, Mapping):
+            return BLOCKED
+        if isinstance(report, Mapping):
+            if checker.report_defects(report):
+                return BLOCKED
+            if report.get("workbook_sha256s") != manifest.get("workbook_sha256s"):
+                return BLOCKED
     if (
         read_back.get("concepts_errors")
         or read_back.get("master_errors")
@@ -513,6 +526,11 @@ def _apply_publication_metadata(
         "readiness": manifest["readiness"],
         "issues": manifest["issues"],
         "read_back": manifest["read_back"],
+        **{
+            field: manifest[field]
+            for field in ("source_asset_publication", "katex_render_validation", "output_validation_version")
+            if field in manifest
+        },
     }
     publication = {
         "directory": str(target),
@@ -618,6 +636,32 @@ def publish_release(
         manifest = dict(output["manifest"])
         manifest["release_uid"] = release.release_uid
         manifest["version"] = release.version
+        from . import katex_render_validation, source_asset_publication
+
+        rendered_workbooks = {
+            "concepts_xlsx": output["concepts_xlsx"],
+            "master_xlsx": output["master_xlsx"],
+        }
+        # Inspect the exact cells about to be published, once per publication.
+        # Failed/unavailable probes become a blocked-readiness report; both
+        # workbooks and the complete manifest still reach the atomic export.
+        manifest[source_asset_publication.REPORT_FIELD] = (
+            source_asset_publication.inspect_workbooks(rendered_workbooks)
+        )
+        manifest[katex_render_validation.REPORT_FIELD] = (
+            katex_render_validation.validate_workbooks(rendered_workbooks)
+        )
+        manifest["output_validation_version"] = 1
+        final_findings = [
+            finding
+            for checker in (source_asset_publication, katex_render_validation)
+            for finding in checker.release_findings(manifest[checker.REPORT_FIELD])
+        ]
+        manifest["issues"]["output_validation"] = final_findings
+        manifest["read_back"]["master_errors"].extend(
+            f"output validation: {finding.get('code')}: {finding.get('message')}"
+            for finding in final_findings
+        )
         manifest["readiness"] = _readiness(release, manifest)
         manifest_bytes = json.dumps(
             manifest, ensure_ascii=False, indent=1,
@@ -957,7 +1001,7 @@ def upload_master_to_database(
     if release.state not in {"ready_for_upload", "validated_with_flags"}:
         raise UploadRefused(
             f"release in state {release.state!r} cannot be uploaded")
-    if readiness == BLOCKED:
+    if readiness == BLOCKED or _readiness(release, manifest) == BLOCKED:
         raise UploadRefused(
             "release is blocked for database upload; resolve the named "
             "issues and publish a new version")

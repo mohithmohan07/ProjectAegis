@@ -54,6 +54,7 @@ def _atom(**changes) -> dict:
 
 
 def _objective_response(request: dict, **changes) -> dict:
+    labelled = request.get("column_spec_policy", {}).get("objective_explanation_prefix") == "option_label_and_answer"
     response = {
         "candidate_id": request["candidate_id"],
         "question": "The illustration shows a solid. Name it.",
@@ -75,8 +76,9 @@ def _objective_response(request: dict, **changes) -> dict:
             },
         ],
         "sub_questions": [],
-        # Contract v2.0 §22.5: opens with the exact correct-option text.
-        "answer_explanation": "Cone. The curved face tapers to an apex.",
+        # New runs include the label; frozen earlier requests keep their
+        # original prefix contract. Explicit test overrides still win below.
+        "answer_explanation": ("a) " if labelled else "") + "Cone. The curved face tapers to an apex.",
         "requires_visual": True,
         "rationale": "The item preserves the supplied visual identification.",
     }
@@ -121,7 +123,7 @@ def _subjective_response(request: dict, **changes) -> dict:
         "answers": [{
             "answer_type": "Phrases",
             "answer_content": "an",
-            "answer_display": "an",
+            "answer_display": "Yes",
             "placeholder": "a",
         }],
         "sub_questions": [],
@@ -185,10 +187,206 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-14"
+        "assessment-materialize-15-column-spec"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
+
+
+@pytest.mark.parametrize(("subject", "raw", "derived"), [
+    # Actual corpus wording: Self Help is the Only Way, PDF page 1.
+    ("English", "1. Read aloud.", "Write a summary of the lark story."),
+    # Actual corpus wording: Measurement, PDF page 1. The source grammar stays.
+    ("Science", "What the vegetable vendor is measuring?",
+     "What is the vegetable vendor measuring?"),
+])
+def test_source_master_authority_is_raw_text_even_when_example_conflicts(
+    subject, raw, derived,
+):
+    atom = _atom(
+        raw_text=raw, normalized_public_text=derived, options=[],
+        source_kind="intext_question", parent_qid=None, subpart=None,
+        alternative_set_id=None,
+    )
+    original_atom = copy.deepcopy(atom)
+    author_seen = {}
+    critic_seen = {}
+
+    def provider(request):
+        author_seen.update(copy.deepcopy(request))
+        authority = request["source_wording_authority"]
+        assert authority["authoritative_field"] == "source_atom.raw_text"
+        assert authority["raw_text"] == raw
+        assert authority["derived_context_only"]["text"] == derived
+        prefix = "[content]: " if subject == "English" else ""
+        return _descriptive_response(
+            request, question=authority["raw_text"],
+            answers=[{"answer_type": "Phrases", "answer_content": prefix + "Source task criterion."}],
+        )
+
+    def critic(request):
+        critic_seen.update(copy.deepcopy(request))
+        assert request["source_wording_authority"]["raw_text"] == raw
+        assert request["source_atom"]["normalized_public_text"] == derived
+        assert request["proposed_decision"]["question"] == raw
+        return _verified(request)
+
+    candidate = am.materialize_candidate(
+        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        meta={"subject": subject, "grade": "06"}, context={"chapter": "source corpus"},
+        envelope_sha256=ENVELOPE_SHA256, provider=provider, critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    authority = author_seen["source_wording_authority"]
+    assert authority["supporting_source"]["assets"] == atom["assets"]
+    assert authority["supporting_source"]["shared_context"] == atom["shared_context"]
+    assert authority["supporting_source"]["options"] == []
+    assert authority["subparts"] == {
+        "parent_qid": None, "subpart": None, "alternative_set_id": None,
+    }
+    assert critic_seen["source_wording_authority"] == authority
+    assert candidate["question"] == candidate["source_evidence"] == raw
+    assert candidate["source_context"]["normalized_public_text"] == derived
+    assert atom == original_atom
+    assert "must NEVER override raw_text" in am.MATERIALIZE_SYSTEM
+    assert "printed grammar error" in am.MATERIALIZE_CRITIC_SYSTEM
+
+
+def test_source_wording_critic_can_flag_corrected_printed_error_without_rewriting():
+    raw = "What the vegetable vendor is measuring?"
+    derived = "What is the vegetable vendor measuring?"
+    atom = _atom(raw_text=raw, normalized_public_text=derived, options=[])
+
+    def provider(request):
+        return _descriptive_response(request, question=derived)
+
+    def critic(request):
+        assert request["source_wording_authority"]["raw_text"] == raw
+        assert request["proposed_decision"]["question"] == derived
+        return {"verdict": "dissent", "confidence": 1.0, "issues": [
+            "The proposed question corrects the printed source grammar; Q27 requires raw wording.",
+        ]}
+
+    candidate = am.materialize_candidate(
+        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        meta={"subject": "Science", "grade": "06"},
+        envelope_sha256=ENVELOPE_SHA256, provider=provider, critic=critic,
+        store=kernel.DecisionStore(),
+    )
+
+    assert candidate["assessment_eligibility"] == "flagged"
+    assert candidate["question"] == derived  # semantic dissent remains advisory
+    assert candidate["source_evidence"] == raw
+    assert any("printed source grammar" in flag for flag in candidate["flags"])
+
+
+def test_source_authority_does_not_promote_derived_text_when_raw_missing():
+    atom = _atom(raw_text="", normalized_public_text="A fluent derived Example.")
+    authority = am._source_wording_authority(atom)
+
+    assert authority["authoritative_field"] == "source_atom.raw_text"
+    assert authority["raw_text"] == ""
+    assert authority["derived_context_only"]["text"] == "A fluent derived Example."
+    assert am._source_wording_authority(None) is None
+
+
+def test_complete_required_excerpt_reaches_author_and_independent_critic():
+    excerpt = "First stanza: The bell rings.\nSecond stanza: The children enter."
+    atom = _atom(
+        raw_text="Explain how the second stanza follows the first.",
+        normalized_public_text="Explain the sequence in the poem.",
+        shared_context=excerpt, options=[],
+    )
+    seen = []
+
+    def provider(request):
+        source = request["source_wording_authority"]
+        assert source["supporting_source"]["shared_context"] == excerpt
+        question = source["supporting_source"]["shared_context"] + "\n" + source["raw_text"]
+        return _descriptive_response(request, question=question)
+
+    def critic(request):
+        seen.append(copy.deepcopy(request))
+        assert request["source_wording_authority"]["supporting_source"]["shared_context"] == excerpt
+        assert request["proposed_decision"]["question"].startswith(excerpt)
+        return _verified(request)
+
+    candidate = am.materialize_candidate(
+        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        meta=META, envelope_sha256=ENVELOPE_SHA256, provider=provider,
+        critic=critic, store=kernel.DecisionStore(),
+    )
+
+    assert len(seen) == 1
+    assert candidate["question"].startswith(excerpt)
+    assert candidate["shared_context"] == excerpt
+    assert "minimum complete source-verbatim excerpt" in am.MATERIALIZE_CRITIC_SYSTEM
+    assert "never assume the learner has the chapter" in am.MATERIALIZE_SYSTEM
+    assert "the learner has the chapter." not in am.MATERIALIZE_SYSTEM
+
+
+def test_missing_listening_transcript_is_flagged_without_a_substitute_stimulus():
+    raw = "Listen to the dialogue and explain why the speaker changes her mind."
+    atom = _atom(
+        raw_text=raw, normalized_public_text="Explain the speaker's change of mind.",
+        shared_context="", source_context={"audio": None, "transcript": None},
+        options=[], assets=[],
+    )
+
+    def provider(request):
+        source = request["source_wording_authority"]
+        assert source["supporting_source"]["source_context"] == {"audio": None, "transcript": None}
+        return _descriptive_response(
+            request, question=source["raw_text"],
+            rationale="Required source audio and transcript are missing; no substitute stimulus was invented.",
+        )
+
+    def critic(request):
+        assert request["proposed_decision"]["question"] == raw
+        return {"verdict": "dissent", "confidence": 1.0, "issues": [
+            "Required source audio and transcript are missing; the task is not independently answerable.",
+        ]}
+
+    candidate = am.materialize_candidate(
+        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        meta=META, envelope_sha256=ENVELOPE_SHA256, provider=provider,
+        critic=critic, store=kernel.DecisionStore(),
+    )
+
+    assert candidate["question"] == raw
+    assert candidate["assessment_eligibility"] == "flagged"
+    assert any("transcript are missing" in flag for flag in candidate["flags"])
+    assert "Never invent a passage or transcript" in am.MATERIALIZE_SYSTEM
+    assert "change from listening to reading" in am.MATERIALIZE_CRITIC_SYSTEM
+
+
+def test_pre_authority_materialization_cache_is_not_replayed(monkeypatch):
+    store = kernel.DecisionStore()
+    calls = []
+
+    def provider(request):
+        calls.append(copy.deepcopy(request))
+        return _objective_response(request)
+
+    original_payload = am._decision_payload
+
+    def before_authority(*args, **kwargs):
+        payload = original_payload(*args, **kwargs)
+        payload.pop("source_wording_authority")
+        return payload
+
+    # The same policy and candidate cannot replay across the authority addition:
+    # the kernel hashes the complete payload, not only its policy-version label.
+    with monkeypatch.context() as patch:
+        patch.setattr(am, "_decision_payload", before_authority)
+        old = _materialize(provider=provider, store=store)
+    current = _materialize(provider=provider, store=store)
+
+    assert len(calls) == 2
+    assert "source_wording_authority" not in calls[0]
+    assert calls[1]["source_wording_authority"]["raw_text"] == _atom()["raw_text"]
+    assert old["authority"]["decision_key"] != current["authority"]["decision_key"]
 
 
 def test_materialization_cannot_author_restriction_or_marking():
@@ -369,7 +567,7 @@ def test_subjective_blank_materializes_with_ordered_placeholder_contract():
     assert candidate["answers"] == [{
         "answer_type": "Phrases",
         "answer_content": "an",
-        "answer_display": "an",
+        "answer_display": "Yes",
         "placeholder": "a",
         "answer_weightage": "",
     }]
@@ -646,11 +844,15 @@ def test_english_post_materialization_honors_thirty_answer_master_capacity():
 
     assert seen["workbook_capacities"] == {
         "descriptive_answer_slots": 30,
+        "multipart_parent_criterion_slots": 30,
+        "subquestion_slots": 15,
+        "criterion_slots_per_subquestion": 6,
+        "overflow_policy": "preserve_all_children_and_flag_parent_projection_capacity",
     }
     assert len(candidate["answers"]) == 30
     assert candidate["assessment_eligibility"] == "accepted"
     assert candidate["authority"]["policy_version"] == (
-        "assessment-materialize-14"
+        "assessment-materialize-15-column-spec"
     )
 
 

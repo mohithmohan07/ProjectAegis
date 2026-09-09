@@ -65,6 +65,9 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_columns()
     _backfill_and_normalize()
+    from .services.question_label_sequences import backfill
+    with engine.begin() as connection:
+        backfill(connection)
 
 
 def _ensure_columns() -> None:

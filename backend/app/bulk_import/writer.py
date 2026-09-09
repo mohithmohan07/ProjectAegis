@@ -25,8 +25,8 @@ from sqlalchemy.orm import Session
 from . import (
     ANSWER_TYPES, CHAPTER_FIELDS, TOPIC_FIELDS, FIELDS_BY_KIND, SHEET_BY_KIND,
     SECTION_BANDS, GROUP_FIELDS_BY_KIND,
-    appears_in_wire, duration_minutes_cell, join_multi, merge_sources,
-    normalize_answer_type, wire_answer_type,
+    appears_in_wire, duration_minutes_cell, join_multi, list_token_defects,
+    merge_sources, normalize_answer_type, wire_answer_type,
     normalize_question_text, split_multi, strip_title_tag, strip_topic_title,
     to_workbook_rich_text,
 )
@@ -34,8 +34,10 @@ from . import layouts
 from . import assessment_workbook as workbook_contract
 from . import workbook_sync
 from .. import models
+from ..services import openai_usage
 from ..services import (
     assessment_release as release_contract,
+    column_spec,
     directory,
     identity,
     katex_rules,
@@ -558,6 +560,11 @@ class ConceptExportScope:
 # prose, Rule 1's forbidden bullets, with [measured] no test anywhere
 # pinning any of them firing.
 READBACK_TOPOLOGY_MISMATCH = "bulk_import_readback_topology_mismatch"
+# Contract v2.0 §16 at the Concept File read-back (register Q29): a
+# multi-value cell that is a bracketed list literal or carries a literal
+# pipe inside one token. The Master read-back already names both through
+# ``bi.list_token_defects``; this is the same check on the same cells.
+READBACK_LIST_CELL_DEFECT = "bulk_import_readback_list_cell_defect"
 
 
 def _validate_concepts_workbook_bytes(
@@ -586,7 +593,7 @@ def _validate_concepts_workbook_bytes(
     idx_concept_title = fields.index("concept_title")
     labels_index = fields.index("topic_concept_labels")
     description_index = fields.index("topic_description")
-    expected: dict[tuple[str, str, str, str], dict[str, str]] = {}
+    expected: dict[tuple[str, str, str, str], dict[str, object]] = {}
     for concept in concepts:
         for topic in _concept_placements(concept):
             key = (
@@ -608,6 +615,7 @@ def _validate_concepts_workbook_bytes(
                 "topic_title": str(front[idx_topic_title] or ""),
                 "concept_labels": str(front[labels_index] or ""),
                 "topic_description": str(front[description_index] or ""),
+                "column_policy": column_spec.for_metadata({"subject": topic.chapter.subject}),
             }
 
     workbook = openpyxl.load_workbook(
@@ -627,6 +635,16 @@ def _validate_concepts_workbook_bytes(
             for name in workbook_contract.UPDATE_FIELDS
             if name in fields
         }
+        # Contract v2.0 §16 (register Q29): the multi-value cells the
+        # Master read-back checks, checked here on the Concept File with
+        # the same function, so a serialized array or a literal pipe in a
+        # token is named on either output rather than shipping silently.
+        list_indices = {
+            name: fields.index(name)
+            for name in workbook_contract.MULTI_VALUE_FIELDS
+            if name in fields and name != "keywords"
+        }
+        list_issues: list[str] = []
 
         for row_number, row in enumerate(
             ws.iter_rows(min_row=3, values_only=True), start=3,
@@ -648,6 +666,11 @@ def _validate_concepts_workbook_bytes(
                             f"{workbook_contract.UPDATE_FIELD_VALUE!r} "
                             "(every authored data row carries exact 'No')"
                         )
+                for name, index in list_indices.items():
+                    for defect in list_token_defects(_cell_str(row, index)):
+                        list_issues.append(
+                            f"row {row_number}: {name} {defect}"
+                        )
             key = (
                 normalize_question_text(chapter_title),
                 normalize_question_text(concept_title),
@@ -658,6 +681,11 @@ def _validate_concepts_workbook_bytes(
                 continue
             seen[key] = seen.get(key, 0) + 1
             contract = expected[key]
+            if "keywords" in fields:
+                for defect in column_spec.keyword_defects(
+                    _cell_str(row, fields.index("keywords")), contract["column_policy"],
+                ):
+                    list_issues.append(f"row {row_number}: keywords {defect}")
             if _cell_str(row, idx_topic_title) != contract["topic_title"]:
                 issues.append(
                     f"{concept_title}: noncanonical topic number/title")
@@ -679,28 +707,41 @@ def _validate_concepts_workbook_bytes(
             issues.append(
                 "fresh concept export contains duplicate selected placements")
 
-        if not issues:
-            return []
-        findings = list(dict.fromkeys(issues))
-        decision = _fixer_decision(
-            READBACK_TOPOLOGY_MISMATCH,
-            detail=(
-                "the serialized concept workbook disagrees with its "
-                "accepted DB topology; the artifact ships with this "
-                "recorded decision instead of being withheld — every "
-                "finding is named here for the reviewer (T10-4, Q13)"
-            ),
-            context={
-                "findings": findings,
-                "exact_rows": bool(exact_rows),
-            },
-        )
-        logging.getLogger(__name__).warning(
-            "bulk-import %s: %s", READBACK_TOPOLOGY_MISMATCH,
-            json.dumps(
-                decision, sort_keys=True, ensure_ascii=False, default=str),
-        )
-        return [decision]
+        decisions: list[dict] = []
+        if issues:
+            decisions.append(_fixer_decision(
+                READBACK_TOPOLOGY_MISMATCH,
+                detail=(
+                    "the serialized concept workbook disagrees with its "
+                    "accepted DB topology; the artifact ships with this "
+                    "recorded decision instead of being withheld — every "
+                    "finding is named here for the reviewer (T10-4, Q13)"
+                ),
+                context={
+                    "findings": list(dict.fromkeys(issues)),
+                    "exact_rows": bool(exact_rows),
+                },
+            ))
+        if list_issues:
+            decisions.append(_fixer_decision(
+                READBACK_LIST_CELL_DEFECT,
+                detail=(
+                    "a multi-value cell of the serialized concept workbook "
+                    "is not a ' | ' list (contract v2.0 §16); the artifact "
+                    "ships with this recorded decision instead of being "
+                    "withheld — every cell is named here for the reviewer"
+                ),
+                context={"findings": list(dict.fromkeys(list_issues))},
+            ))
+        for decision in decisions:
+            logging.getLogger(__name__).warning(
+                "bulk-import %s: %s", decision["code"],
+                json.dumps(
+                    decision, sort_keys=True, ensure_ascii=False,
+                    default=str,
+                ),
+            )
+        return decisions
     finally:
         workbook.close()
 
@@ -817,7 +858,9 @@ def _concept_field_value(
     if field == "concept_details":
         return concept.concept_details
     if field == "keywords":
-        return _list_cell(concept.keywords)
+        return column_spec.keyword_cell(
+            concept.keywords, column_spec.for_metadata({"subject": topic.chapter.subject}),
+        )
     if field == "digicards":
         return _list_cell(concept.digicards)
     if field == "related_concepts":
@@ -1144,9 +1187,10 @@ def _question_band_values(
             values[field] = katex_rules.lowercase_objective_option_labels(
                 str(values.get(field) or ""), option_capacity,
             )
-    # A Descriptive item's subquestions own the complete scoring contract.
-    # Some historical ORM rows also retain the old shared main rubric; omit
-    # that residue from the workbook projection without mutating the JSON.
+    # Child criteria are the one internal scoring source. A fresh DB export
+    # projects their ordered union into the parent rubric as a second,
+    # equivalent, non-additive view. Historical ORM parent residue stays
+    # untouched; only this workbook projection changes.
     has_scoring_subquestions = (
         sheet_layout.kind == "descriptive"
         and len(sub_questions) <= len(sheet_layout.sub_question_numbers)
@@ -1160,10 +1204,30 @@ def _question_band_values(
         and _complete_subquestion_scoring(
             sub_questions, q.marks,
             main_question=str(values.get("question") or ""),
-            main_question_text=str(values.get("question_text") or ""),
         )
     )
-    answers = [] if has_scoring_subquestions else answers
+    if has_scoring_subquestions:
+        if column_spec.for_metadata({}).get("multipart_parent_projection") == (
+            "ordered_child_union"
+        ):
+            try:
+                answers = workbook_contract.multipart_parent_answers(
+                    sub_questions,
+                )
+            except ValueError as exc:
+                raise WorkbookCapacityError(
+                    f"question {q.question_label!r} cannot project its "
+                    f"multipart parent rubric: {exc}"
+                ) from exc
+            if len(answers) > len(sheet_layout.answer_block_numbers):
+                raise WorkbookCapacityError(
+                    f"question {q.question_label!r} needs {len(answers)} "
+                    "parent rubric slots for its complete ordered child "
+                    f"union, but {sheet_layout.sheet_name!r} can represent "
+                    f"only {len(sheet_layout.answer_block_numbers)}"
+                )
+        else:
+            answers = []
     for n in sheet_layout.answer_block_numbers:
         answer = answers[n - 1] if n - 1 < len(answers) else {}
         exported_answer = dict(answer or {})
@@ -1347,10 +1411,10 @@ def _complete_subquestion_scoring(
             if weight is None:
                 return False
             weights.append(weight)
-        if sum(weights, Decimal(0)) != marks:
+        if release_contract.exact_weight_sum(weights) != marks:
             return False
         part_marks.append(marks)
-    return sum(part_marks, Decimal(0)) == expected_total
+    return release_contract.exact_weight_sum(part_marks) == expected_total
 
 
 def _complete_row_subquestion_scoring(
@@ -2132,7 +2196,8 @@ def append_concepts(db: Session, path: Path, concept_ids: list[int],
             index.concept_titles.add(key[0])
             result["written"] += 1
     serialized = io.BytesIO()
-    wb.save(serialized)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(serialized)
     # T10-4 (S11): a read-back disagreement is one recorded decision and
     # the workbook still lands — the raise that used to sit here gated the
     # mid-run deposit after the model budget was spent, and nothing ever
@@ -2265,7 +2330,8 @@ def write_workbook(db: Session, dest: Path | None = None,
                     )
                 next_row["objective"] += 1
     buf = io.BytesIO()
-    wb.save(buf)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(buf)
     data = buf.getvalue()
     if dest:
         dest.write_bytes(data)
@@ -2320,7 +2386,8 @@ def write_concepts_workbook(
             apply_numeric_formats(ws, next_row, sheet_layout)
             next_row += 1
     buf = io.BytesIO()
-    wb.save(buf)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(buf)
     data = buf.getvalue()
     # T10-4 (S11): findings are recorded (the helper logs the full
     # decision — this path returns bytes and has no decisions list), and
@@ -2410,7 +2477,8 @@ def write_subject_workbook(
                 next_row["objective"] += 1
 
     buf = io.BytesIO()
-    wb.save(buf)
+    with openai_usage.mechanical_span("workbook.serialize"):
+        wb.save(buf)
     return buf.getvalue()
 
 

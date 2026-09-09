@@ -33,7 +33,7 @@ from . import canonical_source_phase34_structured_output_contract as phase34
 from . import generation
 from . import progress
 
-_CONTRACT_VERSION = 6
+_CONTRACT_VERSION = 7
 
 
 def _active() -> bool:
@@ -114,6 +114,7 @@ def install() -> None:
         prompt_cache_key: str = "",
         model: str | None = None,
         image_urls: list[str] | None = None,
+        response_schema=None,
     ) -> dict:
         _log_policy_once()
         effective = (
@@ -147,6 +148,10 @@ def install() -> None:
             # images.  A stale wrapper signature previously rejected this
             # keyword before the provider call and crashed the live run.
             kwargs["image_urls"] = image_urls
+        if response_schema is not None:
+            # Strict response envelopes are independent of token ceilings.
+            # Forward opt-in only, preserving legacy injected signatures.
+            kwargs["response_schema"] = response_schema
         return generation._PHASE35_ORIGINAL_OPENAI_JSON(
             system,
             user,

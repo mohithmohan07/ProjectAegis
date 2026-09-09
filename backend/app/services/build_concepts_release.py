@@ -127,6 +127,13 @@ RELEASE_ROW_ROUTES_FIELD = "_aegis_release_type_case_routes"
 RELEASE_ROW_REFINED_FIELD = "_aegis_release_refined"
 RELEASE_ROW_LANE_FIELD = "_aegis_release_lane"
 PRE_ROW_GENERATED_QUESTIONS_FIELD = "_aegis_pre_generated_questions"
+# Register Q29: the Pre authorities this staging REFUSED because they
+# recorded another chapter's run identity (``generation.
+# pre_release_identity_defect``). Its own key with its own honest reader
+# in ``structural_defects`` — the Round 9 lesson: a finding routed onto
+# ``snapshot_defects`` would be reported as "an input snapshot could not
+# be read", which is not what happened.
+PRE_AUTHORITY_DEFECTS_FIELD = "pre_authority_defects"
 # Owner decision D4 (2026-08-29, concept-mapping audit): a Pre row ships
 # ``related_concepts`` EMPTY — both audit correctors cleared the
 # cross-phase Post links, superseding OD3/T3.3's populated column. The
@@ -169,6 +176,11 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     # release for the reviewer's audit (every LA-id accounted, allotted
     # to exactly one concept) and is stripped before DB upload.
     "_aegis_analysis_allotments",
+    # Q35: complete immutable evidence and lossless structural repair history
+    # accompany the staged row, but are not learner-facing database columns.
+    "_aegis_source_evidence",
+    "_aegis_structure_original",
+    "_aegis_polish_repairs",
     # The Phase 03 Pre-Learning map's row-private records (doc §4,
     # phase3/premap.py): the captured prerequisites a pre-concept teaches,
     # and its explicit needed-for links to the Post concepts that require
@@ -1016,6 +1028,20 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
                 "an input snapshot could not be read, so this release is "
                 f"incomplete rather than empty: {_normal(defect)}"
             )
+    # Register Q29: a refused cross-run authority blocks only when the
+    # refusal left the release WITHOUT its rows — then "empty" would be a
+    # lie and the write is refused. When a later authority in the chain
+    # was this run's and staged the rows, the refusal is a recorded
+    # warning (``_pre_release_issues``): the rows are sound, the transport
+    # that offered another chapter's map is what the reviewer must see.
+    if not payload.get("records"):
+        for defect in payload.get(PRE_AUTHORITY_DEFECTS_FIELD) or []:
+            if _normal(defect):
+                defects.append(
+                    "a Phase 03 Pre-Learning authority was refused because "
+                    "it belongs to another run, so this release is "
+                    f"incomplete rather than empty: {_normal(defect)}"
+                )
     # A ``records`` value that is not an array carries no row at all, and
     # the emptiness split must not let it read as an empty release. It is
     # CORRUPTION — [measured] with only ``nothing_to_publish`` answering,
@@ -1160,6 +1186,14 @@ def structural_defects(payload: Mapping[str, Any] | None) -> list[str]:
             f"payload does not record: {text}"
         )
     defects.extend(_pre_lane_verdict_defects(payload))
+    from . import katex_render_validation, source_asset_publication
+
+    for checker in (source_asset_publication, katex_render_validation):
+        report = payload.get(checker.REPORT_FIELD)
+        if payload.get("output_validation_version") == 1 and not isinstance(report, Mapping):
+            defects.append(f"{checker.REPORT_FIELD}_missing: this release requires its frozen output validation report")
+        elif isinstance(report, Mapping):
+            defects.extend(checker.readiness_defects(payload))
     return defects
 
 
@@ -3022,6 +3056,13 @@ def stage_release(
         "source_book": str(job.source_book or ""),
     })
     issues.extend(qc_issues)
+    from . import katex_render_validation, source_asset_publication
+
+    exported_content = {"records": record_rows, "chapter_meta": chapter_meta}
+    asset_publication = source_asset_publication.inspect_assets(exported_content)
+    math_render = katex_render_validation.inspect_render(exported_content)
+    issues.extend(source_asset_publication.release_findings(asset_publication))
+    issues.extend(katex_render_validation.release_findings(math_render))
     # Q13/R4: public Examples whose wording has no exact owner in the
     # source inventory are adjudicated by one recorded decision and ride
     # this same ledger. Decided HERE, beside the QC audit, so every exit
@@ -3122,6 +3163,9 @@ def stage_release(
             final_grounding_certificate or {}
         ),
         "chapter_meta": _json_safe(chapter_meta),
+        source_asset_publication.REPORT_FIELD: _json_safe(asset_publication),
+        katex_render_validation.REPORT_FIELD: _json_safe(math_render),
+        "output_validation_version": 1,
         # The Architect's assembled instruction set for this run
         # (docs/aegis-restructure.md §8.1): version, hash, authored slots,
         # and the critic's advisory flags, for the reviewer's audit. The
@@ -3273,6 +3317,17 @@ def _refine_pre_records(
             "pre_post": "Pre",
             # Contract v2.0 §18: the publication only, never a filename.
             "source_book": job.source_book or "",
+            # These are the map's already-redacted captured fundamentals,
+            # not current-chapter exercises or the finished Post map.
+            "prerequisite_evidence": [
+                {
+                    "pre_concept_id": row.get("_pre_concept_id", ""),
+                    "prerequisites": copy.deepcopy(
+                        row.get("_aegis_pre_prerequisites") or []
+                    ),
+                }
+                for row in records
+            ],
             # Deliberately absent: the chapter's question/task inventory,
             # its mined Types, AND its source text — all three of which
             # the Post hook passes. The Pre lane extracts no question
@@ -3346,15 +3401,38 @@ def stage_pre_release_from_run(
 
     from . import progress
 
+    # Register Q29: the chapter this staging is FOR. Every authority the
+    # chain offers is compared against it (``generation.
+    # pre_release_identity_defect``) before it is accepted — an authority
+    # that records another chapter's run is refused, recorded under its
+    # own key, and the chain falls through to the next one. An authority
+    # that recorded no identity (minted before the field existed) is
+    # accepted as before; the gate is dormant for it, not lenient.
+    expected_chapter = int(
+        target_chapter_id
+        or (job.deposit_scope_ids or [0])[0]
+        or 0
+    )
+    identity_defects: list[str] = []
+
     authority: Mapping[str, Any] | None = None
     authority_defects: list[str] = []
     if phase3_pre_release is not None:
-        if generation.valid_phase3_pre_release_bundle(phase3_pre_release):
-            authority = phase3_pre_release
-        else:
+        if not generation.valid_phase3_pre_release_bundle(phase3_pre_release):
             authority_defects.append(
                 "the in-memory Phase 03 Pre release authority is malformed"
             )
+        else:
+            mismatch = generation.pre_release_identity_defect(
+                phase3_pre_release, chapter_id=expected_chapter,
+            )
+            if mismatch:
+                identity_defects.append(
+                    "the in-memory Phase 03 Pre release authority was "
+                    "refused: " + mismatch
+                )
+            else:
+                authority = phase3_pre_release
     if authority is None:
         # The caller's captured deposit-time envelope first: it is the
         # direct transport of the envelope as it stood when the rows were
@@ -3369,9 +3447,20 @@ def stage_pre_release_from_run(
                 candidate = checkpoint.get(
                     generation.PHASE3_PRE_RELEASE_FIELD
                 )
-                if generation.valid_phase3_pre_release_bundle(candidate):
-                    authority = candidate
-                    break
+                if not generation.valid_phase3_pre_release_bundle(candidate):
+                    continue
+                mismatch = generation.pre_release_identity_defect(
+                    candidate, chapter_id=expected_chapter,
+                )
+                if mismatch:
+                    identity_defects.append(
+                        "a checkpoint's Phase 03 Pre release authority "
+                        f"(stage {str(checkpoint.get('stage') or '')!r}) "
+                        "was refused: " + mismatch
+                    )
+                    continue
+                authority = candidate
+                break
             if authority is not None:
                 break
 
@@ -3393,7 +3482,24 @@ def stage_pre_release_from_run(
             )
     else:
         pre_map, map_defect = _run_snapshot(job, PRE_MAP_SNAPSHOT)
-        if pre_map is None and not map_defect and not authority_defects:
+        sidecar_foreign = False
+        if pre_map is not None:
+            mismatch = generation.pre_release_identity_defect(
+                pre_map, chapter_id=expected_chapter,
+            )
+            if mismatch:
+                identity_defects.append(
+                    f"the recorded {PRE_MAP_SNAPSHOT} was refused: "
+                    + mismatch
+                )
+                pre_map = None
+                sidecar_foreign = True
+        if (
+            pre_map is None
+            and not map_defect
+            and not authority_defects
+            and not identity_defects
+        ):
             terminal = any(
                 str(checkpoint.get("stage") or "") in {
                     "post_type_assignment", "final_content_ready",
@@ -3443,9 +3549,15 @@ def stage_pre_release_from_run(
                 f"but neither {generation.PHASE3_PRE_RELEASE_FIELD} nor "
                 f"{PRE_MAP_SNAPSHOT} is available"
             )
-        pre_questions, questions_defect = _run_snapshot(
-            job, PRE_QUESTIONS_SNAPSHOT
-        )
+        if sidecar_foreign:
+            # Another run's map recovers nothing for this one, and the
+            # questions beside it are that run's too: not read, so none
+            # of its plans, blocks or refusals is transcribed as ours.
+            pre_questions, questions_defect = None, ""
+        else:
+            pre_questions, questions_defect = _run_snapshot(
+                job, PRE_QUESTIONS_SNAPSHOT
+            )
         if (
             pre_map is not None
             and pre_questions is None
@@ -3490,6 +3602,7 @@ def stage_pre_release_from_run(
             refinements=refinements,
             snapshot_defects=snapshot_defects,
             snapshot_write_warnings=snapshot_write_warnings,
+            authority_defects=identity_defects,
         )
     except Exception as exc:  # noqa: BLE001 - the Pre lane never blocks Post
         db.rollback()
@@ -3524,6 +3637,7 @@ def _pre_release_issues(
     snapshot_defects: Sequence[str] = (),
     snapshot_write_warnings: Sequence[str] = (),
     row_defects: Sequence[Mapping[str, Any]] = (),
+    authority_defects: Sequence[str] = (),
 ) -> list[dict[str, Any]]:
     """Everything the Pre lane recorded, as release issues.
 
@@ -3550,6 +3664,25 @@ def _pre_release_issues(
                 "what it held is missing from this release rather than "
                 "absent from the chapter: " + _normal(defect)
             ),
+            phase="phase03",
+        ))
+    for defect in authority_defects:
+        # Register Q29: a Pre authority that records ANOTHER chapter's run
+        # was refused at staging. When the refusal left no rows it is an
+        # error and (via ``structural_defects`` reading its own key) blocks
+        # the database write while every download stays open; when a
+        # later authority of this run staged the rows it is a warning —
+        # the rows are sound, the cross-run transport is what the reviewer
+        # must see. Either way the message says which authority arrived
+        # and for which chapter.
+        issues.append(_issue(
+            code="pre_learning_authority_not_this_run",
+            message=(
+                "A Phase 03 Pre-Learning authority was refused because it "
+                "belongs to another run, so what it held is not this "
+                "chapter's and is not staged: " + _normal(defect)
+            ),
+            severity="warning" if records else "error",
             phase="phase03",
         ))
     for warning in snapshot_write_warnings:
@@ -3915,6 +4048,7 @@ def stage_pre_release(
     refinements: Mapping[str, Any] | None = None,
     snapshot_defects: Sequence[str] = (),
     snapshot_write_warnings: Sequence[str] = (),
+    authority_defects: Sequence[str] = (),
 ) -> dict[str, Any] | None:
     """Stage Outputs 01/02 into the sibling slot on THIS job.
 
@@ -4026,6 +4160,17 @@ def stage_pre_release(
         "directory_metadata": directory_metadata,
         "chapter_meta": chapter_meta,
         "source_book": str(job.source_book or ""),
+        # Contract v2.0 §8.6 (register Q29): the lane's own records of
+        # WHY a concept has no question — the coverage plan (a zero total
+        # is the model's recorded drop request) and the authoring block —
+        # so the audit transcribes the reason instead of guessing one.
+        "pre_question_plans": dict(questions_source.get("plans") or {}),
+        "pre_question_blocks": dict(questions_source.get("blocked") or {}),
+        # Register Q30: the coverage rule the questions were authored
+        # under (absent when none was recorded) and the questions
+        # themselves, so the audit can hold each concept to the rule.
+        "pre_coverage_rule": questions_source.get("coverage_rule"),
+        "generated_questions": generated,
     })
     # Round 9: QC blocking findings ride their OWN key. Folding them into
     # ``snapshot_defects`` [measured] minted one spurious
@@ -4034,12 +4179,23 @@ def stage_pre_release(
     qc_blocking_defects = [
         _normal(defect) for defect in qc_blocking if _normal(defect)
     ]
+    staged_authority_defects = [
+        _normal(defect) for defect in authority_defects if _normal(defect)
+    ]
     issues = _pre_release_issues(
         source, questions_source, raw_rows, snapshot_defects,
         snapshot_write_warnings=snapshot_write_warnings,
         row_defects=row_defects,
+        authority_defects=staged_authority_defects,
     )
     issues.extend(qc_issues)
+    from . import katex_render_validation, source_asset_publication
+
+    exported_content = {"records": raw_rows, "chapter_meta": chapter_meta}
+    asset_publication = source_asset_publication.inspect_assets(exported_content)
+    math_render = katex_render_validation.inspect_render(exported_content)
+    issues.extend(source_asset_publication.release_findings(asset_publication))
+    issues.extend(katex_render_validation.release_findings(math_render))
     annotated = _annotate_records(raw_rows, issues, {})
     summary = _release_summary(annotated, issues)
     source_document_hash = "sha256:" + hashlib.sha256(
@@ -4072,6 +4228,9 @@ def stage_pre_release(
         # S9 — the row-level defect record, the same key and the same shape
         # the Post lane carries.
         STAGED_ROW_DEFECTS_FIELD: _json_safe(row_defects),
+        # Register Q29 — the refused cross-run authorities, on their own
+        # key with their own reader (``structural_defects``).
+        PRE_AUTHORITY_DEFECTS_FIELD: _json_safe(staged_authority_defects),
         # S9 / D8.3 — premap's recorded empty-capture verdict, carried
         # verbatim. ``structural_defects`` reads it; nothing re-decides it.
         PRE_LANE_VERDICT_FIELD: _json_safe(
@@ -4096,6 +4255,9 @@ def stage_pre_release(
         # hold it without putting it in a Pre artefact.
         "question_task_inventory": {},
         "chapter_meta": _json_safe(chapter_meta),
+        source_asset_publication.REPORT_FIELD: _json_safe(asset_publication),
+        katex_render_validation.REPORT_FIELD: _json_safe(math_render),
+        "output_validation_version": 1,
         "snapshot_defects": _json_safe(
             [_normal(defect) for defect in snapshot_defects if _normal(defect)]
         ),

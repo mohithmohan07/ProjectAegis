@@ -191,7 +191,9 @@ def test_missing_provider_usage_is_not_invented():
         summary = openai_usage.current_summary()
     assert summary["request_count"] == 0
     assert summary["total_tokens"] == 0
-    assert summary["estimated_cost_usd"] == 0.0
+    assert summary["estimated_cost_usd"] is None
+    assert summary["usage_complete"] is False
+    assert summary["missing_usage_response_count"] == 1
 
 
 def test_context_isolation_between_concurrent_jobs():

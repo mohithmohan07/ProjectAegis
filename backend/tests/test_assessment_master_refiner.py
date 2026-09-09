@@ -25,6 +25,7 @@ from app.services import assessment_master_refiner as refiner
 from app.services import assessment_profile
 from app.services import assessment_release as rel
 from app.services import assessment_release_service as release_service
+from app.services import column_spec
 from app.services import katex_rules
 from app.services.phase3 import kernel
 
@@ -42,6 +43,16 @@ BASIC_GROUP = f"({MACHINE_ID}) BG01"
 INTERMEDIATE_GROUP = f"({MACHINE_ID}) IG01"
 ADVANCED_GROUP = f"({MACHINE_ID}) AG01"
 
+# This recorded corpus asserts the legacy contract (including label-free
+# explanations and legacy Subjective display fields). Carry that contract
+# explicitly when replaying it; current-policy behavior is covered by the
+# owner-column and full release-run tests.
+_LEGACY_PROFILE = assessment_profile.resolve_for_metadata(
+    assessment_profile.DEFAULT_PROFILE,
+    {"board": "MSBSHSE", "grade": "6", "subject": "Mathematics"},
+)
+_LEGACY_PROFILE.pop(column_spec.POLICY_KEY)
+
 _METADATA = {
     "board": "MSBSHSE",
     "grade": "6",
@@ -49,7 +60,7 @@ _METADATA = {
     "unit": "Geometry",
     "chapter_title": "Three-Dimensional Shapes",
     "chapter_code": "06MSMA01",
-    "profile": assessment_profile.DEFAULT_PROFILE,
+    "profile": _LEGACY_PROFILE,
 }
 
 _OBJECTIVE_RATIONALE = (
@@ -381,6 +392,7 @@ def _payload_with_subjective() -> dict:
         "difficulty": "Less",
         "marks": 1.0,
         "question_duration": 1.0,
+        "duration_basis_count": 1,
         "question_source": PUBLICATION,
         "math_keyboard": "No",
         "question_appears_in": "Pre/Post-Worksheet/Test",
@@ -504,6 +516,71 @@ def test_fixture_exercises_the_real_release_and_workbook_contracts():
         f"{MACHINE_ID} Q01",
         f"{MACHINE_ID} Q02",
     ]
+
+
+@pytest.mark.parametrize("mutation", [
+    lambda row: row["answers"][0].update(answer_content="A cube"),
+    lambda row: row["answers"].reverse(),
+    lambda row: row["answers"][0].update(answer_type="Image"),
+])
+def test_complete_objective_task_is_immutable_in_refiner(mutation):
+    original = _payload()["candidates"][0]
+    changed = copy.deepcopy(original)
+    mutation(changed)
+    checker = refiner._response_checker(unit_kind="candidate", unit_id=OBJECTIVE_ID, original=original)
+    assert any("whitelist" in defect for defect in checker({
+        "record_kind": "candidate", "row_ref": OBJECTIVE_ID,
+        "record": changed, "rationale": "Proposed option edit.",
+    }))
+
+
+def test_incremental_projection_matches_full_readback_and_keeps_group_member_evidence():
+    payload = _payload_with_subjective()
+    profile = assessment_profile.resolve_for_metadata(_METADATA["profile"], _METADATA)
+    baseline = refiner._validation_state(payload, profile)
+    payload["candidates"][0]["answer_explanation"] += " This is a spatial shape."
+    partial = refiner._validation_state(payload, profile, unit_kind="candidate", unit_id=OBJECTIVE_ID)
+    complete = refiner._validation_state(payload, profile)
+    assert partial["errors"] == complete["errors"] == []
+    assert list(partial["candidate_rows"]) == [OBJECTIVE_ID]
+    merged = refiner._merge_projection_state(baseline, partial)
+    assert merged == complete
+
+
+def test_refiner_keeps_full_baseline_final_readback_and_uses_incremental_changed_units(monkeypatch):
+    calls = []
+    actual = refiner._validation_state
+    def tracked(payload, profile, **kwargs):
+        calls.append((kwargs.get("unit_kind", "full"), kwargs.get("unit_id", "")))
+        return actual(payload, profile, **kwargs)
+    monkeypatch.setattr(refiner, "_validation_state", tracked)
+    def author(request):
+        def polish(record, _request):
+            if record.get("candidate_id") == OBJECTIVE_ID:
+                record["answer_explanation"] += " This is a spatial shape."
+        return _proposal(request, polish)
+    records, diff, flags = _refine(_payload(), author)
+    assert not flags
+    assert diff["changes"]
+    assert calls == [("full", ""), ("candidate", OBJECTIVE_ID), ("full", "")]
+
+
+def test_projection_merge_failure_rolls_back_before_publishing_any_changed_content(monkeypatch):
+    original = _payload()
+    def broken_merge(before, partial):
+        raise KeyError("injected projection merge failure")
+    monkeypatch.setattr(refiner, "_merge_projection_state", broken_merge)
+    def author(request):
+        def polish(record, _request):
+            if record.get("candidate_id") == OBJECTIVE_ID:
+                record["answer_explanation"] += " This is a spatial shape."
+        return _proposal(request, polish)
+    records, diff, flags = _refine(original, author)
+    candidate = _unit(records[0], OBJECTIVE_ID)
+    assert candidate["answer_explanation"] == original["candidates"][0]["answer_explanation"]
+    assert candidate[refiner.AUDIT_FIELD]["status"] == "rolled_back"
+    assert diff["changes"] == []
+    assert any("projection merge failure" in flag for flag in flags)
 
 
 def test_image_answer_readback_compares_with_the_rendered_url_projection():
@@ -667,9 +744,8 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
 
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
-                record["answers"][0]["answer_content"] = "A cube"
                 record["answer_explanation"] = _objective_explanation(
-                    "A cube",
+                    "Cube",
                     _OBJECTIVE_RATIONALE.replace(
                         "identifies the cube", "clearly identifies the cube"
                     ),
@@ -712,7 +788,6 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert refined["refinements"] == diff
     assert [change["unit_id"] for change in diff["changes"]] == [
         OBJECTIVE_ID,
-        OBJECTIVE_ID,
         DESCRIPTIVE_ID,
         DESCRIPTIVE_ID,
         DESCRIPTIVE_ID,
@@ -739,8 +814,8 @@ def test_candidate_and_group_prose_refinements_land_and_read_back_exactly():
     assert objective["question_text"].startswith(
         original["candidates"][0]["question_text"]
     )
-    assert "a) A cube" in objective["question_text"]
-    assert objective["answer_content_1"] == "A cube"
+    assert "a) Cube" in objective["question_text"]
+    assert objective["answer_content_1"] == "Cube"
     assert objective["answer_explanation"] == refined["candidates"][0][
         "answer_explanation"
     ]
@@ -944,9 +1019,8 @@ def test_critic_dissent_is_advisory_and_the_valid_refinement_still_ships():
     def provider(request):
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
-                record["answers"][0]["answer_content"] = "A solid cube"
                 record["answer_explanation"] = _objective_explanation(
-                    "A solid cube"
+                    "Cube", _OBJECTIVE_RATIONALE + " The option is a solid."
                 )
 
         return _proposal(request, polish)
@@ -963,7 +1037,8 @@ def test_critic_dissent_is_advisory_and_the_valid_refinement_still_ships():
     )
     refined = records[0]
     objective = _unit(refined, OBJECTIVE_ID)
-    assert objective["answers"][0]["answer_content"] == "A solid cube"
+    assert objective["answers"][0]["answer_content"] == "Cube"
+    assert objective["answer_explanation"].endswith("The option is a solid.")
     assert any(
         change["unit_id"] == OBJECTIVE_ID for change in diff["changes"]
     )
@@ -1029,8 +1104,7 @@ def test_fixer_uses_the_same_contract_and_its_valid_decision_ships_flagged():
         fixer_calls.append(original_request["row_ref"])
 
         def polish(record, _request):
-            record["answers"][0]["answer_content"] = "The cube"
-            record["answer_explanation"] = _objective_explanation("The cube")
+            record["answer_explanation"] = _objective_explanation("Cube", _OBJECTIVE_RATIONALE + " The key is a solid.")
 
         return _proposal(original_request, polish, rationale="Fixer repair.")
 
@@ -1040,7 +1114,8 @@ def test_fixer_uses_the_same_contract_and_its_valid_decision_ships_flagged():
     objective = _unit(records[0], OBJECTIVE_ID)
     assert provider_calls[OBJECTIVE_ID] == kernel.MAX_ATTEMPTS
     assert fixer_calls == [OBJECTIVE_ID]
-    assert objective["answers"][0]["answer_content"] == "The cube"
+    assert objective["answers"][0]["answer_content"] == "Cube"
+    assert objective["answer_explanation"].endswith("The key is a solid.")
     assert objective[refiner.AUDIT_FIELD]["fixer"] is True
     assert refiner.WARNING in objective["flags"]
     assert any(
@@ -1062,9 +1137,8 @@ def test_renderer_exception_rolls_back_but_retains_fixer_decision_authority():
 
         def too_large(record, _request):
             oversized = "x" * 40_000
-            record["answers"][0]["answer_content"] = oversized
             # Keep §22.5 parity so the oversized cell is the only defect.
-            record["answer_explanation"] = _objective_explanation(oversized)
+            record["answer_explanation"] = _objective_explanation("Cube", _OBJECTIVE_RATIONALE + " " + oversized)
 
         return _proposal(original_request, too_large, rationale="Fixer prose.")
 
@@ -1107,8 +1181,7 @@ def test_decide_once_replay_makes_zero_author_critic_or_fixer_calls():
 
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
-                record["answers"][0]["answer_content"] = "A cube"
-                record["answer_explanation"] = _objective_explanation("A cube")
+                record["answer_explanation"] = _objective_explanation("Cube", _OBJECTIVE_RATIONALE + " It occupies space.")
 
         return _proposal(request, polish)
 
@@ -1241,11 +1314,10 @@ def test_real_xlsx_readback_rollback_is_isolated_and_order_is_preserved(
 
         def polish(record, _request):
             if record.get("candidate_id") == OBJECTIVE_ID:
-                record["answers"][0]["answer_content"] = normalised_by_xlsx
                 # Keep §22.5 parity so the CR normalisation is the only
                 # reason the unit rolls back.
                 record["answer_explanation"] = _objective_explanation(
-                    normalised_by_xlsx
+                    "Cube", _OBJECTIVE_RATIONALE + " " + normalised_by_xlsx
                 )
             elif record.get("candidate_id") == DESCRIPTIVE_ID:
                 record["sub_questions"][0]["keywords"][0]["keyword"] = (

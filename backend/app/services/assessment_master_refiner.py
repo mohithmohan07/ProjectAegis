@@ -26,6 +26,10 @@ from .. import config
 from ..bulk_import import assessment_workbook
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import openai_usage
+from . import column_spec
+from .response_schemas import advisory_critic_schema
+from . import assessment_visual_evidence as visual_evidence
 from . import katex_rules
 from . import assessment_release as rel
 from . import assessment_release_service as release_service
@@ -33,9 +37,9 @@ from . import semantic_confidence_policy as confidence_policy
 from .phase3 import kernel
 
 
-MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-4"
-CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-4"
-GROUP_POLICY_VERSION = "assessment-master-refiner-group-1"
+MASTER_REFINER_POLICY_VERSION = "assessment-master-refiner-4-column-spec"
+CANDIDATE_POLICY_VERSION = "assessment-master-refiner-candidate-5-complete-task"
+GROUP_POLICY_VERSION = "assessment-master-refiner-group-1-column-spec"
 CANDIDATE_KIND = "assessment.master_refiner.candidate"
 GROUP_KIND = "assessment.master_refiner.group"
 AUDIT_FIELD = "_aegis_assessment_master_refinement"
@@ -96,19 +100,23 @@ _PROTECTED_TOKEN_RE = re.compile(
 )
 
 CANDIDATE_SYSTEM = (
-    "You are the Aegis assessment Master Refiner. Polish ONE already-final "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment Master Refiner. Polish ONE already-final "
     "assessment row only around its settled identity. The clustered question "
     "wording is immutable: never alter question or question_text. You may "
-    "polish only answer_explanation, every answers[].answer_content, "
+    "polish only answer_explanation, non-Objective answers[].answer_content, "
     "Descriptive display_answer, and sub_questions[].keywords[].keyword. "
+    "Every Objective option's content, medium and order is immutable, including "
+    "source figures and labels; the complete learner task is protected. "
     "Preserve meaning, accepted answer space, option order, correct markers, "
     "marks, all weightages, subquestion text/decomposition, duration, keyboard "
     "mode, QIDs, URLs, image/KaTeX tokens, assets, provenance, routing, tier, "
     "labels, audits, flags, and every other field byte-for-byte and type-for-"
-    "type. [Katex] wraps only genuine mathematical notation: a plain "
-    "numeral, digit-grouped number, or currency amount standing in prose "
-    "stays plain text — unwrap one only where doing so changes no other "
-    "byte of meaning. Preserve each typed answer_content/keyword medium exactly: "
+    "type. Preserve the protected KaTeX tokens exactly; a formatting issue "
+    "inside a protected token is a review finding, not permission to unwrap "
+    "or rewrite it. Keep ordinary numerals and currency amounts as prose; "
+    "new KaTeX is only for genuine mathematical notation in an editable "
+    "rich-text field, never a textual rubric. Preserve each typed "
+    "answer_content/keyword medium exactly: "
     "Equation is one full raw-LaTeX cell without [Katex] and with any words "
     "inside \\text{...}; Phrases is wholly plain text without TeX. Never "
     "introduce tabular, Markdown-table, or noncanonical array markup; a "
@@ -128,13 +136,24 @@ CANDIDATE_SYSTEM = (
     "subquestion keyword rubrics. Only a single-part 4-mark Descriptive "
     "candidate requires at least two main rubric blocks. Subjective question "
     "placeholders such as $$a$$ are immutable CMS tokens, not raw math. If no "
+    "other improvement is needed, keep fluent, precise prose unchanged. "
+    "Use column_spec_policy for the explanation prefix and rubric-tag registry. "
+    "Keep Descriptive display_answer and answer_explanation identical, and "
+    "make each rubric criterion independently observable without changing "
+    "its demand or weight. The recorded answer-space contract carries adopted "
+    "required elements and accepted variations. Express applicable equivalent "
+    "answers/methods and partial-credit boundaries in the exported rubric prose "
+    "within its existing demand, cardinality and weight; hidden audit notes "
+    "cannot be the evaluator's only source of acceptance rules. Do not invent "
+    "requirements or add credit. If this cannot be represented within the "
+    "settled structure, preserve the item and explain the gap in rationale. If no "
     "polish is warranted, echo the record unchanged. Return only "
     "strict JSON with record_kind='candidate', the exact row_ref, the complete "
-    "record, and a non-empty rationale."
+    "record, and a non-empty rationale.")
 )
 
 GROUP_SYSTEM = (
-    "You are the Aegis assessment Master Refiner. Polish ONE already-final "
+    column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment Master Refiner. Polish ONE already-final "
     "occupied assessment group's semantic_description only. Preserve its "
     "group/concept identity, tier, family, sequence, visible names, member "
     "candidate IDs and their order, status, audits, flags, assets, tokens and "
@@ -142,17 +161,17 @@ GROUP_SYSTEM = (
     "level, clustering, membership, or any question. If no polish is warranted, "
     "echo the record unchanged. Return only strict JSON with "
     "record_kind='group', the exact row_ref, the complete record, and a "
-    "non-empty rationale."
+    "non-empty rationale.")
 )
 
 CRITIC_SYSTEM = (
-    "You are the independent advisory critic for one assessment Master "
+    column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + ("You are the independent advisory critic for one assessment Master "
     "Refiner proposal. Audit prose quality, meaning preservation, grade fit, "
     "and the immutable identity boundary against the rendered Master evidence. "
     "Never rewrite, gate, retry, adjudicate, or choose alternate content. A "
     "mechanically valid author decision always stands; dissent is recorded for "
     "review. Return only strict JSON: "
-    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}.'
+    '{"verdict":"verified|dissent","confidence":0.0,"issues":[]}.')
 )
 
 
@@ -243,7 +262,9 @@ def _candidate_editable_items(
     ]
     if str(candidate.get("sheet_kind") or "") == "descriptive":
         items.append(("display_answer", candidate.get("display_answer")))
-    for answer_index, answer in enumerate(candidate.get("answers") or []):
+    for answer_index, answer in enumerate(
+        [] if candidate.get("sheet_kind") == "objective" else candidate.get("answers") or []
+    ):
         if isinstance(answer, Mapping):
             items.append((
                 f"answers[{answer_index}].answer_content",
@@ -289,7 +310,7 @@ def _locked_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     if str(locked.get("sheet_kind") or "") == "descriptive":
         locked["display_answer"] = {"editable": "display_answer"}
     answers = locked.get("answers")
-    if isinstance(answers, list):
+    if isinstance(answers, list) and locked.get("sheet_kind") != "objective":
         for position, answer in enumerate(answers):
             if isinstance(answer, dict):
                 answer["answer_content"] = {
@@ -321,7 +342,10 @@ def _locked_group(group: Mapping[str, Any]) -> dict[str, Any]:
 
 def _response_checker(
     *, unit_kind: str, unit_id: str, original: Mapping[str, Any],
+    profile: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
+    column_policy = column_spec.from_profile(profile)
+    tags_required = assessment_profile.rubric_tags_required(profile) if profile is not None else None
     expected_locked = (
         _locked_candidate(original)
         if unit_kind == "candidate"
@@ -408,6 +432,8 @@ def _response_checker(
                     )
                 if sheet_kind == "descriptive" and rel.malformed_rubric_tag(
                     answer.get("answer_content"), answer.get("answer_type"),
+                    tags_required=tags_required,
+                    allowed_tags=column_policy.get("rubric_tags") or None,
                 ):
                     defects.append(
                         f"descriptive rubric {answer_index} does not start "
@@ -435,6 +461,8 @@ def _response_checker(
                         )
                     if rel.malformed_rubric_tag(
                         keyword.get("keyword"), keyword.get("answer_type"),
+                        tags_required=tags_required,
+                        allowed_tags=column_policy.get("rubric_tags") or None,
                     ):
                         defects.append(
                             f"subquestion {sub_index} keyword "
@@ -549,18 +577,35 @@ def _live_author(request: dict[str, Any]) -> dict[str, Any]:
         if request.get("unit_kind") == "candidate"
         else GROUP_SYSTEM
     )
+    prefix, suffix = generation._json_prompt_cache_parts(
+        request, stable_keys=("stage", "unit_kind", "rules", "critic_rules", "metadata", "column_spec_policy"),
+    )
     return generation._openai_json(
-        system, json.dumps(request, ensure_ascii=False), purpose="concept_mapping"
+        system, suffix, purpose="concept_mapping",
+        image_urls=visual_evidence.image_inputs(request),
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "master-refiner-author-v5", prefix, shard_seed=str(request.get("row_ref") or ""),
+        ),
     )
 
 
 def _live_critic(request: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
+    prefix, suffix = generation._json_prompt_cache_parts(
+        request, stable_keys=("stage", "unit_kind", "rules", "critic_rules", "metadata", "column_spec_policy"),
+    )
     return generation._openai_json(
         CRITIC_SYSTEM,
-        json.dumps(request, ensure_ascii=False),
+        suffix,
         purpose="advisory_critic",
+        response_schema=advisory_critic_schema(),
+        image_urls=visual_evidence.image_inputs(request),
+        prompt_cache_prefix=prefix,
+        prompt_cache_key=generation._prompt_cache_key(
+            "master-refiner-critic-v5", prefix, shard_seed=str(request.get("row_ref") or ""),
+        ),
     )
 
 
@@ -712,10 +757,18 @@ def _wire_text(value: Any) -> str:
     return "" if value is None else str(value)
 
 
+@openai_usage.measure_mechanical("assessment.master_validation")
 def _validation_state(
     payload: Mapping[str, Any], profile: Mapping[str, Any],
+    *, unit_kind: str = "", unit_id: str = "",
 ) -> dict[str, Any]:
-    """Run release mechanics and exact production workbook read-back."""
+    """Run all release mechanics; read back the affected workbook projection.
+
+    Baseline/final calls render both complete outputs. A changed prose unit
+    cannot change hierarchy, identity, memberships or scoring (the whitelist
+    checker proves this first), so intermediate calls render only its affected
+    Master rows through the same production renderer and readback validator.
+    """
 
     frozen = rel.freeze_payload(payload, profile)
     errors = [f"payload: {error}" for error in frozen.get("errors") or []]
@@ -724,7 +777,34 @@ def _validation_state(
         f"payload: {finding['code']}: {finding['message']}"
         for finding in rel.unresolved_question_homes(snapshot, profile)
     )
-    output = assessment_workbook.build_dual_output(snapshot, profile)
+    if unit_kind:
+        selected = [
+            candidate for candidate in snapshot.get("candidates") or []
+            if (
+                str(candidate.get("candidate_id") or "") == unit_id
+                if unit_kind == "candidate"
+                else str(candidate.get("group_key") or "") == unit_id
+            )
+        ]
+        selected_groups = {str(candidate.get("group_key") or "") for candidate in selected}
+        snapshot = {
+            **snapshot,
+            "candidates": selected,
+            "groups": [group for group in snapshot.get("groups") or [] if str(group.get("group_key") or "") in selected_groups],
+        }
+        master_bytes, issues = assessment_workbook.render_master_file(snapshot, profile)
+        output = {
+            "master_xlsx": master_bytes,
+            "manifest": {
+                "issues": issues,
+                "read_back": {"master_errors": assessment_workbook.validate_master_file(
+                    assessment_workbook.parse_workbook(master_bytes), snapshot, profile,
+                    group_provenance=issues.get("group_provenance") or [],
+                )},
+            },
+        }
+    else:
+        output = assessment_workbook.build_dual_output(snapshot, profile)
     manifest = output["manifest"]
     errors.extend(
         f"concept-readback: {error}"
@@ -763,7 +843,7 @@ def _validation_state(
             if group_key:
                 group_rows.setdefault(group_key, []).append(copied)
 
-    for candidate in payload.get("candidates") or []:
+    for candidate in snapshot.get("candidates") or []:
         candidate_id = str(candidate.get("candidate_id") or "")
         rows = candidate_rows.get(candidate_id, [])
         if len(rows) != 1:
@@ -910,6 +990,39 @@ def _validation_state(
     }
 
 
+def _merge_projection_state(before: Mapping[str, Any], partial: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep full rendered evidence while replacing exactly the validated rows."""
+    def merge_row(old: Mapping[str, Any], new: Mapping[str, Any]) -> dict[str, Any]:
+        # A sliced workbook has sliced label aggregates/rollups. Those are
+        # immutable baseline evidence, not changes made by the Refiner. Copy
+        # only editable wire fields back into the complete rendered row.
+        result = dict(old)
+        for field, value in new.items():
+            if field in {"answer_explanation", "display_answer", "group_description"} or re.fullmatch(
+                r"(?:answer_content|answer)_[0-9]+|sq[0-9]+_keyword_[0-9]+", field,
+            ):
+                result[field] = value
+        return result
+
+    state = {
+        "errors": list(partial["errors"]),
+        "candidate_rows": dict(before["candidate_rows"]),
+        "group_rows": dict(before["group_rows"]),
+    }
+    for candidate_id, rows in partial["candidate_rows"].items():
+        state["candidate_rows"][candidate_id] = [
+            merge_row(old, new) for old, new in zip(before["candidate_rows"][candidate_id], rows)
+        ]
+    for group_key, rows in partial["group_rows"].items():
+        by_label = {str(row.get("question_label") or ""): row for row in rows}
+        state["group_rows"][group_key] = [
+            merge_row(row, by_label[str(row.get("question_label") or "")])
+            if str(row.get("question_label") or "") in by_label else row
+            for row in before["group_rows"].get(group_key, [])
+        ]
+    return state
+
+
 def _new_errors(before: Sequence[str], after: Sequence[str]) -> list[str]:
     remaining = Counter(after) - Counter(before)
     return list(remaining.elements())
@@ -944,12 +1057,21 @@ def _unit_payload(
         "row_ref": unit_id,
         "rules": rules + _instruction_suffix(instruction_set),
         "critic_rules": CRITIC_SYSTEM,
+        "critic_response_schema": advisory_critic_schema().identity(),
         "metadata": _content_evidence(metadata),
+        "column_spec_policy": column_spec.from_metadata(metadata),
         "rendered_master_rows": _content_evidence(list(rendered_rows)),
         "context": _content_evidence(context),
     }
     payload[unit_kind] = _model_record(record)
-    return payload
+    if unit_kind == "candidate":
+        contract = record.get("_aegis_assessment_answer_restriction") or {}
+        payload["adopted_answer_contract"] = {
+            key: copy.deepcopy(contract[key])
+            for key in ("answer_restriction", "answer_space_contract", "required_elements", "accepted_variations")
+            if isinstance(contract, Mapping) and key in contract
+        }
+    return visual_evidence.bind(payload, record, rendered_rows, context)
 
 
 def _empty_diff(summary: str, review_flags: Sequence[str] = ()) -> dict[str, Any]:
@@ -1059,6 +1181,7 @@ def refine_master(
             metadata.get("assessment_profile") or metadata.get("profile"),
             metadata,
         )
+        metadata = column_spec.bind_metadata(metadata, profile)
         baseline = _validation_state(original, profile)
         if baseline["errors"]:
             return _global_fallback(
@@ -1176,15 +1299,21 @@ def refine_master(
                 else:
                     before_changes = _group_changes(record, proposal, rationale)
                 if before_changes:
-                    trial = copy.deepcopy(current)
-                    trial_record = trial[collection][index]
+                    # The proposal edits one record; keep unchanged collections
+                    # shared read-only instead of copying the complete release.
+                    trial = dict(current)
+                    trial[collection] = list(current[collection])
+                    trial_record = copy.deepcopy(record)
+                    trial[collection][index] = trial_record
                     if unit_kind == "candidate":
                         _apply_candidate_prose(trial_record, proposal)
                     else:
                         trial_record["semantic_description"] = copy.deepcopy(
                             proposal["semantic_description"]
                         )
-                    trial_state = _validation_state(trial, profile)
+                    trial_state = _validation_state(
+                        trial, profile, unit_kind=unit_kind, unit_id=unit_id,
+                    )
                     regressions = _new_errors(
                         current_state["errors"], trial_state["errors"]
                     )
@@ -1206,8 +1335,9 @@ def refine_master(
                         )
                         release_flags.append(f"{unit_kind}[{unit_id}]: {reason}")
                         return
+                    merged_state = _merge_projection_state(current_state, trial_state)
                     current = trial
-                    current_state = trial_state
+                    current_state = merged_state
                     record = current[collection][index]
                 # An accepted no-op proposal applies nothing and re-proves
                 # nothing: typed-equality across the whole whitelist means
@@ -1337,6 +1467,7 @@ def refine_master(
                             unit_kind=entry["unit_kind"],
                             unit_id=entry["unit_id"],
                             original=entry["decision_record"],
+                            profile=profile,
                         ),
                         critic=critic,
                         store=decision_store,

@@ -39,17 +39,50 @@ test("a later section starting with markup instead of a label stays intact", () 
   });
 });
 
-/* ---- renderInline (via rendered output — no innerHTML anywhere) --------- */
+/* ---- renderInline (actual target KaTeX output) -------------------------- */
 
-test("katex becomes a code node carrying the raw LaTeX", () => {
+test("katex typesets a fraction and retains accessible source mathematics", () => {
   const { container } = render(
     <div>{renderInline("Sum: [Katex]S_n = \\frac{n}{2}(a + l)[/Katex] done")}</div>,
   );
-  const code = container.querySelector("code.katex-inline");
-  expect(code).not.toBeNull();
-  expect(code!.textContent).toBe("S_n = \\frac{n}{2}(a + l)");
+  expect(container.querySelector(".katex .mfrac")).not.toBeNull();
+  expect(container.querySelector("math annotation")!.textContent).toBe("S_n = \\frac{n}{2}(a + l)");
   expect(container.textContent).toContain("Sum: ");
   expect(container.textContent).toContain(" done");
+});
+
+test("renders complete arrays and science units through the same engine", () => {
+  const { container } = render(<div>{renderInline(
+    String.raw`[Katex]\begin{array}{c|c}\text{Current (A)}&\text{Voltage (V)}\\1&2\\2&4\end{array}[/Katex]<br>[Katex]R=\frac{V}{I}=2\,\Omega[/Katex]`,
+  )}</div>);
+  expect(container.querySelectorAll(".katex")).toHaveLength(2);
+  expect(container.querySelector(".mtable")).not.toBeNull();
+  expect(container.querySelector(".katex-error")).toBeNull();
+  expect(container.querySelectorAll("br")).toHaveLength(1);
+});
+
+test("invalid math stays visible and does not prevent later content rendering", () => {
+  const { container } = render(<div>{renderInline(
+    String.raw`Before [Katex]\frac{[/Katex]<br>After`,
+  )}</div>);
+  expect(container.querySelector(".katex-error")!.textContent).toBe(String.raw`\frac{`);
+  expect(container.textContent).toContain("After");
+});
+
+test("math commands cannot inject links or HTML and macros do not leak", () => {
+  const { container } = render(<div>{renderInline(
+    String.raw`[Katex]\href{javascript:alert(1)}{x}[/Katex][Katex]\gdef\secret{42}\secret[/Katex][Katex]\secret[/Katex]`,
+  )}</div>);
+  expect(container.querySelector("a")).toBeNull();
+  expect(container.querySelector("script")).toBeNull();
+  expect(container.querySelectorAll(".katex-inline")[2].textContent).toContain(String.raw`\secret`);
+});
+
+test("canonical workbook breaks render without parsing arbitrary HTML", () => {
+  const { container } = render(<RichDetails details={'One<br><br>Two <img src=x onerror=alert(1)>'} />);
+  expect(container.querySelectorAll("br")).toHaveLength(2);
+  expect(container.querySelector("img")).toBeNull();
+  expect(container.textContent).toContain("<img src=x onerror=alert(1)>");
 });
 
 test("an https image renders as <img> with alt and lazy loading", () => {
@@ -111,6 +144,6 @@ test("RichDetails renders titled blocks with inline markup transformed", () => {
   expect(sections[0].querySelector(".rich-section-label")).toBeNull();
   expect(sections[0].textContent).toBe("The gap d.");
   expect(sections[1].querySelector(".rich-section-label")!.textContent).toBe("Formula");
-  expect(sections[1].querySelector("code.katex-inline")!.textContent).toBe("d = a_2 - a_1");
+  expect(sections[1].querySelector("math annotation")!.textContent).toBe("d = a_2 - a_1");
   expect(sections[2].querySelector("img")!.getAttribute("src")).toBe("https://cdn.example/f.png");
 });

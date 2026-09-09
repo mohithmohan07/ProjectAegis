@@ -77,7 +77,7 @@ Only these candidate prose leaves are editable:
 
 - `display_answer` for a Descriptive candidate;
 - `answer_explanation`;
-- `answers[*].answer_content` for Objective, Descriptive, and Subjective candidates; and
+- `answers[*].answer_content` for Descriptive and Subjective candidates; and
 - `sub_questions[*].keywords[*].keyword` (wording only).
 
 Only this group prose leaf is editable:
@@ -87,6 +87,18 @@ Only this group prose leaf is editable:
 Keyword wording is treated as rubric prose. Its row identity, order,
 `answer_type`, and `weightage` remain immutable. No sub-question stem, mark,
 cardinality, ordering, or other decomposition field is editable.
+
+Q35 protects the complete settled Objective task, including every option's
+content, medium, image tokens and ordering. Source-owned and generated options
+are both part of the learner-visible question used for grouping. A required
+option change is an upstream decision revision, never a Master prose polish.
+
+Intermediate proposal validation runs the complete release mechanics, then
+renders and reads back only the affected Master rows with the production
+renderer/validator. Baseline and final validation still render and read back
+both complete workbooks. Each defective proposal rolls back its own unit.
+Only validated editable cells are merged into the complete rendered evidence;
+immutable label aggregates and all sibling/member rows remain intact.
 
 Q21 narrows the editable answer leaf by its already-declared medium. An
 `Equation` proposal remains one full raw-LaTeX cell without `[Katex]` and any

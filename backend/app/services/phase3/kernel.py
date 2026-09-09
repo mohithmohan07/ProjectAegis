@@ -13,9 +13,12 @@ Doctrine (docs/phase3-rewrite-spec.md §4, "Decide once"):
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 import hashlib
 import json
+import marshal
+import functools
 import os
 import tempfile
 import threading
@@ -32,6 +35,14 @@ MAX_ATTEMPTS = 3
 Provider = Callable[[dict[str, Any]], Mapping[str, Any]]
 Checker = Callable[[Mapping[str, Any]], list[str]]
 Critic = Callable[[dict[str, Any]], Mapping[str, Any]]
+
+# A child decision pool uses its parent's worker instead of creating another
+# pool whose threads all wait on the same provider gate (Settle used to grow
+# 16 topic workers into 256 batch workers). Context propagation also makes the
+# cancellation signal available to nested sequential batches.
+_pool_cancel: contextvars.ContextVar[threading.Event | None] = (
+    contextvars.ContextVar("aegis_decision_pool_cancel", default=None)
+)
 
 
 class ContractError(RuntimeError):
@@ -117,6 +128,7 @@ class DecisionStore:
         # lock only guards the map/file bookkeeping, never serializes model
         # calls.
         self._lock = threading.Lock()
+        self._pending_store: DecisionStore | None = None
         if self._directory is not None:
             self._directory.mkdir(parents=True, exist_ok=True)
 
@@ -174,6 +186,16 @@ class DecisionStore:
             return sorted(self._memory)
         return sorted(p.stem for p in self._directory.glob("*.json"))
 
+    def pending_authors(self) -> "DecisionStore":
+        """Separate immutable receipts; never returned by decision ``peek``."""
+        with self._lock:
+            if self._pending_store is None:
+                self._pending_store = DecisionStore(
+                    self._directory / "pending_author"
+                    if self._directory is not None else None
+                )
+            return self._pending_store
+
 
 def parallel_map_in_order(
     items,
@@ -213,18 +235,24 @@ def parallel_map_in_order(
         raise ValueError("labels must match items one-to-one")
 
     def run_one(index: int, item):
+        cancellation = _pool_cancel.get()
+        if cancellation is not None and cancellation.is_set():
+            from concurrent.futures import CancelledError
+
+            raise CancelledError("a sibling decision failed")
         if label_list is None:
             return worker(item)
         with progress.label_scope(label_list[index]):
             return worker(item)
 
-    workers = min(int(max_workers), len(items))
+    nested = _pool_cancel.get() is not None
+    workers = 1 if nested else min(int(max_workers), len(items))
     if announce and len(items) > 0:
         progress.log(
             f"{announce}: {len(items)} unit(s) across "
             f"{max(1, workers)} parallel worker(s)"
         )
-    if max_workers <= 1 or len(items) <= 1:
+    if max_workers <= 1 or len(items) <= 1 or nested:
         results = []
         for index, item in enumerate(items):
             result = run_one(index, item)
@@ -232,28 +260,48 @@ def parallel_map_in_order(
                 on_result(index, item, result)
             results.append(result)
         return results
-    import contextvars
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [
-            pool.submit(contextvars.copy_context().run, run_one, index, item)
-            for index, item in enumerate(items)
-        ]
-        results = []
-        try:
-            for index, future in enumerate(futures):
-                result = future.result()
+    cancellation = threading.Event()
+    token = _pool_cancel.set(cancellation)
+    pool = ThreadPoolExecutor(max_workers=workers)
+    pending = {}
+    ready = {}
+    results = []
+    next_submit = 0
+    try:
+        while len(results) < len(items):
+            # Bound submitted-but-unapplied work as well as live threads.
+            while next_submit < min(len(items), len(results) + workers):
+                future = pool.submit(
+                    contextvars.copy_context().run,
+                    run_one, next_submit, items[next_submit],
+                )
+                pending[future] = next_submit
+                next_submit += 1
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            # Observe every completed failure before applying a prefix or
+            # scheduling more work, even when the first input is still slow.
+            for future in completed:
+                index = pending.pop(future)
+                ready[index] = future.result()
+            while len(results) in ready:
+                index = len(results)
+                result = ready.pop(index)
                 if on_result is not None:
                     on_result(index, items[index], result)
                 results.append(result)
-        except BaseException:
-            # Fail fast: a failed decision stops the run, so queued sibling
-            # batches must not keep spending provider calls.
-            for other in futures:
-                other.cancel()
-            raise
         return results
+    except BaseException:
+        cancellation.set()
+        for future in pending:
+            future.cancel()
+        raise
+    finally:
+        # Started provider work cannot be unsent: let it save paid decisions.
+        # Nested workers stop before starting their next independent unit.
+        pool.shutdown(wait=True, cancel_futures=True)
+        _pool_cancel.reset(token)
 
 
 def pin_flags(
@@ -326,13 +374,59 @@ def advisory_flags(review: Mapping[str, Any] | None) -> list[str]:
     return flags
 
 
-def _is_confidence_score_shortfall(defect: str) -> bool:
-    """A checker's honest sub-floor SCORE defect (``… is below …``).
+@functools.lru_cache(maxsize=128)
+def _module_contract_hash(path: str, mtime_ns: int, size: int) -> bytes:
+    # Metadata keys make edits invalidate the cache without re-reading the
+    # same imported prompt/module bytes for every independent decision.
+    return hashlib.sha256(Path(path).read_bytes()).digest()
 
-    The ``[confidence]`` prefix marks the whole ship-flagged class; only the
-    numeric-score member of it skips the bounded corrections (Q26).
+
+def _callable_contract_hash(callback: Callable | None) -> str:
+    """Conservative implementation binding for pending receipts only.
+
+    Effective prompts/schemas and source identities remain in the decision
+    payload/policy. Bytecode and directly referenced prompt/module constants
+    additionally invalidate interrupted work after a deployment change.
+    Reviewed decisions retain their established decide-once key semantics.
     """
-    return defect.startswith("[confidence] ") and " is below " in defect
+    if callback is None:
+        return "none"
+    target = getattr(callback, "func", callback)
+    code = getattr(target, "__code__", None)
+    digest = hashlib.sha256()
+    if code is not None:
+        digest.update(marshal.dumps(code))
+        namespace = getattr(target, "__globals__", {})
+        for name in sorted(code.co_names):
+            value = namespace.get(name)
+            if isinstance(value, (str, int, float, bool, dict, list, tuple)):
+                try:
+                    digest.update(_canonical_json(value).encode("utf-8"))
+                except (TypeError, ValueError):
+                    pass
+            module_file = getattr(value, "__file__", None)
+            if module_file and str(module_file).endswith(".py"):
+                with contextlib.suppress(OSError):
+                    info = Path(module_file).stat()
+                    digest.update(_module_contract_hash(
+                        str(module_file), info.st_mtime_ns, info.st_size,
+                    ))
+    else:
+        digest.update(
+            f"{type(target).__module__}.{type(target).__qualname__}".encode()
+        )
+    return digest.hexdigest()
+
+
+def _pending_author_key(key: str, provider, checker, critic, fixer) -> str:
+    return hashlib.sha256(_canonical_json({
+        "decision_key": key,
+        "receipt_version": 1,
+        "provider": _callable_contract_hash(provider),
+        "checker": _callable_contract_hash(checker),
+        "critic": _callable_contract_hash(critic),
+        "fixer": _callable_contract_hash(fixer),
+    }).encode("utf-8")).hexdigest()
 
 
 def decide(
@@ -380,122 +474,153 @@ def decide(
     if cached is not None:
         return cached
 
-    defects: list[str] = []
-    response: Mapping[str, Any] | None = None
-    for attempt in range(1, max(1, attempts) + 1):
-        request = copy.deepcopy(dict(payload))
-        request["attempt"] = attempt
-        request["max_attempts"] = attempts
-        if defects:
-            request["response_contract_feedback"] = list(defects)
-        response = provider(request)
-        defects = [
-            str(row) for row in checker(response or {}) if str(row).strip()
-        ]
-        if not defects:
-            break
-        if all(_is_confidence_score_shortfall(d) for d in defects):
-            # An honest sub-floor confidence SCORE is a judgment signal,
-            # not a structural defect. The prompts tell the model never to
-            # inflate a score to pass a threshold, so asking again for
-            # the same evidence could only buy an inflated number at the
-            # price of a full re-spend (register Q26): the decision ships
-            # after this one attempt with the shortfall recorded for review.
-            # Other ``[confidence]``-class defects (a grounding outside its
-            # topic, for one) keep their bounded corrections: the feedback
-            # names a fix the model can make, so the re-ask is not a
-            # re-spend for a number.
-            break
-    else:  # pragma: no cover - loop always breaks or raises below
-        pass
-    confidence_only = defects and all(
-        defect.startswith("[confidence] ") for defect in defects
-    )
-    fixer_flags: list[str] = []
-    fixer_engaged = False
-    if confidence_only:
-        # An honest sub-floor confidence after every bounded re-ask is a
-        # judgment signal, not a structural defect: the decision ships
-        # with the shortfall recorded for review (a run must produce
-        # output; one weak grounding must not kill a chapter).
-        pass
-    elif defects and fixer is not None:
-        # The Fixer seam (Q13): one recorded, flagged best-judgment
-        # decision at the block, validated by the same checker, and the
-        # run completes. Nothing is guessed silently — every original
-        # defect becomes a review flag naming what was blocked and what
-        # was decided.
-        blocked = list(defects)
-        fixer_payload = {
-            "fixer": True,
-            "blocked_check": list(defects),
-            "contract": {
-                "kind": str(kind),
-                "unit_id": str(unit_id),
-                "policy_version": str(policy_version),
-            },
-            "original_payload": copy.deepcopy(dict(payload)),
-            "last_response": copy.deepcopy(dict(response or {})),
-        }
-        fixer_defects = list(defects)
+    pending_key = _pending_author_key(key, provider, checker, critic, fixer)
+    pending_store = store.pending_authors()
+    pending = pending_store.get(pending_key)
+    if pending is not None:
+        response = copy.deepcopy(pending["response"])
+        digest = hashlib.sha256(_canonical_json(response).encode("utf-8")).hexdigest()
+        if pending.get("decision_key") != key or pending.get("response_sha256") != digest:
+            raise ContractError("pending author receipt integrity mismatch")
+        # Check again with the active mechanical contract. A pending receipt
+        # cannot turn a newly invalid shape into a reviewed decision.
+        defects = [str(item) for item in checker(response) if str(item).strip()]
+        if any(not item.startswith("[confidence] ") for item in defects):
+            raise ContractError("pending author receipt fails active contract", defects)
+        flags = list(pending.get("review_flags") or [])
+        fixer_engaged = bool(pending.get("fixer"))
+    else:
+        defects: list[str] = []
+        response: Mapping[str, Any] | None = None
         for attempt in range(1, max(1, attempts) + 1):
-            request = copy.deepcopy(fixer_payload)
+            request = copy.deepcopy(dict(payload))
             request["attempt"] = attempt
             request["max_attempts"] = attempts
-            request["response_contract_feedback"] = list(fixer_defects)
-            candidate = fixer(request)
-            fixer_defects = [
-                str(row)
-                for row in checker(candidate or {})
-                if str(row).strip()
+            if defects:
+                request["response_contract_feedback"] = list(defects)
+            response = provider(request)
+            defects = [
+                str(row) for row in checker(response or {}) if str(row).strip()
             ]
-            if not any(
-                not defect.startswith("[confidence] ")
-                for defect in fixer_defects
-            ):
-                response = candidate
-                defects = list(fixer_defects)
-                confidence_only = bool(defects)
-                fixer_engaged = True
-                rationale = " ".join(
-                    str((candidate or {}).get("rationale") or "").split()
-                )[:240] or "corrected by the Fixer's best judgment"
-                fixer_flags = [
-                    f"fixer: blocked={defect}; decided={rationale}"
-                    for defect in blocked
-                ]
+            if not defects:
                 break
-        if not fixer_engaged:
+            # A sub-floor confidence goes back through the bounded corrections
+            # like any other defect (register Q31 restores the pre-Q26
+            # behaviour): the feedback names the weak grounding, and the model
+            # may find better evidence or a tighter topology on the re-ask —
+            # the prompts still forbid inflating a score to pass a threshold,
+            # so a re-ask that only moves the number ships flagged below.
+        else:  # pragma: no cover - loop always breaks or raises below
+            pass
+        confidence_only = defects and all(
+            defect.startswith("[confidence] ") for defect in defects
+        )
+        fixer_flags: list[str] = []
+        fixer_engaged = False
+        if confidence_only:
+            # An honest sub-floor confidence after every bounded re-ask is a
+            # judgment signal, not a structural defect: the decision ships
+            # with the shortfall recorded for review (a run must produce
+            # output; one weak grounding must not kill a chapter).
+            pass
+        elif defects and fixer is not None:
+            # The Fixer seam (Q13): one recorded, flagged best-judgment
+            # decision at the block, validated by the same checker, and the
+            # run completes. Nothing is guessed silently — every original
+            # defect becomes a review flag naming what was blocked and what
+            # was decided.
+            blocked = list(defects)
+            fixer_payload = {
+                "fixer": True,
+                "blocked_check": list(defects),
+                "contract": {
+                    "kind": str(kind),
+                    "unit_id": str(unit_id),
+                    "policy_version": str(policy_version),
+                },
+                "original_payload": copy.deepcopy(dict(payload)),
+                "last_response": copy.deepcopy(dict(response or {})),
+            }
+            fixer_defects = list(defects)
+            for attempt in range(1, max(1, attempts) + 1):
+                request = copy.deepcopy(fixer_payload)
+                request["attempt"] = attempt
+                request["max_attempts"] = attempts
+                request["response_contract_feedback"] = list(fixer_defects)
+                candidate = fixer(request)
+                fixer_defects = [
+                    str(row)
+                    for row in checker(candidate or {})
+                    if str(row).strip()
+                ]
+                if not any(
+                    not defect.startswith("[confidence] ")
+                    for defect in fixer_defects
+                ):
+                    response = candidate
+                    defects = list(fixer_defects)
+                    confidence_only = bool(defects)
+                    fixer_engaged = True
+                    rationale = " ".join(
+                        str((candidate or {}).get("rationale") or "").split()
+                    )[:240] or "corrected by the Fixer's best judgment"
+                    fixer_flags = [
+                        f"fixer: blocked={defect}; decided={rationale}"
+                        for defect in blocked
+                    ]
+                    break
+            if not fixer_engaged:
+                raise ContractError(
+                    f"{kind} decision for {unit_id} failed its mechanical "
+                    f"response contract after {attempts} bounded correction "
+                    "attempt(s), and the Fixer could not produce a "
+                    "contract-satisfying decision either: "
+                    + "; ".join((fixer_defects or blocked)[:8]),
+                    defects=fixer_defects or blocked,
+                )
+        elif defects:
             raise ContractError(
-                f"{kind} decision for {unit_id} failed its mechanical "
-                f"response contract after {attempts} bounded correction "
-                "attempt(s), and the Fixer could not produce a "
-                "contract-satisfying decision either: "
-                + "; ".join((fixer_defects or blocked)[:8]),
-                defects=fixer_defects or blocked,
+                f"{kind} decision for {unit_id} failed its mechanical response "
+                f"contract after {attempts} bounded correction attempt(s): "
+                + "; ".join(defects[:8]),
+                defects=defects,
             )
-    elif defects:
-        raise ContractError(
-            f"{kind} decision for {unit_id} failed its mechanical response "
-            f"contract after {attempts} bounded correction attempt(s): "
-            + "; ".join(defects[:8]),
-            defects=defects,
-        )
 
-    flags: list[str] = list(fixer_flags)
-    if confidence_only:
-        flags.extend(
-            defect[len("[confidence] "):] + "; shipped for review "
-            "(an honest confidence is recorded, never re-asked)"
-            for defect in defects
-        )
+        flags: list[str] = list(fixer_flags)
+        if confidence_only:
+            flags.extend(
+                defect[len("[confidence] "):] + "; shipped for review after "
+                f"{attempts} bounded attempt(s)"
+                for defect in defects
+            )
+        pending = pending_store.put(pending_key, {
+            "state": "pending_review",
+            "decision_key": key,
+            "response": copy.deepcopy(dict(response or {})),
+            "response_sha256": hashlib.sha256(
+                _canonical_json(response or {}).encode("utf-8")
+            ).hexdigest(),
+            "review_flags": list(flags),
+            "fixer": fixer_engaged,
+            "provider": str(provider_label),
+            "created_at": time.time(),
+        })
+        # If concurrent callers raced on the same identity, first-write-wins
+        # applies to the authored response as well as the eventual decision.
+        # Never attach a receipt for one draft to a review of another draft.
+        response = copy.deepcopy(pending["response"])
+        flags = list(pending.get("review_flags") or [])
+        fixer_engaged = bool(pending.get("fixer"))
+    review_state = "not_requested"
     if critic is not None:
         review_payload = copy.deepcopy(dict(payload))
         review_payload["proposed_decision"] = copy.deepcopy(dict(response or {}))
         try:
             review = critic(review_payload)
+            review_state = "reviewed" if isinstance(review, Mapping) else "unaudited"
         except Exception as exc:  # the auditor can never take the run down
             review = None
+            review_state = "unaudited"
             flags.append(
                 f"critic failed to run ({type(exc).__name__}); decision "
                 "stands unaudited"
@@ -504,13 +629,16 @@ def decide(
 
     decision = {
         "key": key,
+        "state": review_state,
+        "pending_author_key": pending_key,
         "kind": str(kind),
         "unit_id": str(unit_id),
         "envelope_sha256": str(envelope_sha256),
         "policy_version": str(policy_version),
         "response": copy.deepcopy(dict(response or {})),
         "review_flags": flags,
-        "provider": str(provider_label),
+        "provider": str(pending.get("provider", provider_label)),
+        "author_created_at": pending["created_at"],
         "created_at": time.time(),
     }
     if fixer_engaged:

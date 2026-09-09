@@ -6,6 +6,8 @@ import pytest
 from app import models
 from app.services import (
     build_concepts,
+    build_concepts_release_contract as release_contract,
+    build_concepts_terminal_release_contract as terminal_release,
     canonical_source_phase2 as phase2,
     canonical_source_phase3 as phase3,
     grounding_certificate,
@@ -38,12 +40,31 @@ def test_a_filename_is_never_borrowed_as_the_publication():
 
 
 def test_post_learning_creates_concepts(client, db, first_chapter, monkeypatch):
-    _use_specific_dry_learner_analysis(monkeypatch)
+    release_contract.install()
+    authored = [{
+        "topic": "Recorded Trigonometry Basics",
+        "parent_concept": "Trigonometric ratios",
+        "concept_title": title,
+        "concept_details": f"Description: {description}",
+        "keywords": "ratio",
+    } for title, description in [
+        ("Recorded sine ratio", "Sine is opposite over hypotenuse."),
+        ("Recorded cosine ratio", "Cosine is adjacent over hypotenuse."),
+    ]]
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd",
+        lambda *_args, **_kwargs: copy.deepcopy(authored),
+    )
     files = {"file": ("notes.txt", io.BytesIO(
         b"## Trigonometry Basics\nSine ratio: opposite over hypotenuse\n"
         b"Cosine ratio: adjacent over hypotenuse"
     ), "text/plain")}
-    job = client.post("/build-concepts/post-learning/uploads", files=files).json()
+    job = client.post(
+        "/build-concepts/post-learning/uploads",
+        params={"source_book": "Recorded Trigonometry Book",
+                "chapter_duration_minutes": 40},
+        files=files,
+    ).json()
     assert job["learning_kind"] == "post"
     assert job["status"] == "uploaded"  # upload stages only
 
@@ -51,42 +72,93 @@ def test_post_learning_creates_concepts(client, db, first_chapter, monkeypatch):
     result = stream_result(client.post(
         f"/build-concepts/post-learning/uploads/{job['id']}/generate",
         json={"target_chapter_id": first_chapter["id"]}))
-    assert result["concepts_created"] >= 2
-    assert result["rows_appended"] >= 2
+    assert result["released"] is True
+    assert result["row_count"] == len(authored)
+    assert result["database_uploaded"] is False
+    db.expire_all()
+    titles = [row["concept_title"] for row in authored]
+    assert db.query(models.Concept).filter(
+        models.Concept.concept_title.in_(titles),
+    ).count() == 0
+    payload = client.get(result["release_payload_url"]).json()
+    assert [row["concept_title"] for row in payload["records"]] == titles
+    assert client.get(result["release_bulk_import_url"]).status_code == 200
+
+    published = client.post(result["database_upload_url"])
+    assert published.status_code == 200, published.text
+    receipt = published.json()
+    assert receipt["database_uploaded"] is True
+    assert len(receipt["created_concept_ids"]) == len(authored)
     db.expire_all()
     concepts = (
         db.query(models.Concept)
-        .filter(models.Concept.id.in_(result["concept_ids"]))
+        .filter(models.Concept.id.in_(receipt["created_concept_ids"]))
         .all()
     )
-    assert concepts
-    assert {concept.sources for concept in concepts} == {"notes"}
+    assert {concept.concept_title for concept in concepts} == set(titles)
+    assert {concept.sources for concept in concepts} == {
+        "Recorded Trigonometry Book",
+    }
 
 
 def test_post_learning_groups_concepts_under_one_topic(
     client, db, first_chapter, monkeypatch,
 ):
     """Concepts sharing a topic name must share ONE Topic row (no duplicates)."""
-    _use_specific_dry_learner_analysis(monkeypatch)
+    release_contract.install()
+    authored = [{
+        "topic": "Grouping Topic 9912",
+        "parent_concept": parent,
+        "concept_title": title,
+        "concept_details": "Description: A recorded source-grounded idea.",
+        "keywords": "grouping",
+    } for parent, title in [
+        ("Grouping", "Grouping concept alpha 9912"),
+        ("Grouping", "Grouping concept beta 9912"),
+        ("Grouping", "Grouping concept gamma 9912"),
+        ("Culmination", "Culmination - Grouping Topic 9912"),
+    ]]
+    # The fixture author chooses this topology and its culmination; the
+    # regression tests its preservation, never an inferred concept quota.
+    monkeypatch.setattr(
+        build_concepts.generation, "concepts_from_mmd",
+        lambda *_args, **_kwargs: copy.deepcopy(authored),
+    )
     files = {"file": ("grouping.txt", io.BytesIO(
         b"## Grouping Topic 9912\nGrouping concept alpha 9912\n"
         b"Grouping concept beta 9912\nGrouping concept gamma 9912"
     ), "text/plain")}
-    job = client.post("/build-concepts/post-learning/uploads", files=files).json()
+    job = client.post(
+        "/build-concepts/post-learning/uploads",
+        params={"source_book": "Grouping Book", "chapter_duration_minutes": 40},
+        files=files,
+    ).json()
     convert_concept_upload(client, job["id"])
     result = stream_result(client.post(
         f"/build-concepts/post-learning/uploads/{job['id']}/generate",
         json={"target_chapter_id": first_chapter["id"]}))
-    assert result["concepts_created"] == 4
-
-    import app.models as models
+    assert result["row_count"] == len(authored)
+    assert result["database_uploaded"] is False
+    assert db.query(models.Topic).filter_by(
+        chapter_id=first_chapter["id"], topic_title="Grouping Topic 9912",
+    ).count() == 0
+    payload = client.get(result["release_payload_url"]).json()
+    assert [row["concept_title"] for row in payload["records"]] == [
+        row["concept_title"] for row in authored
+    ]
+    published = client.post(result["database_upload_url"])
+    assert published.status_code == 200, published.text
+    assert len(published.json()["created_concept_ids"]) == len(authored)
+    db.expire_all()
     topics = (
         db.query(models.Topic)
         .filter_by(chapter_id=first_chapter["id"], topic_title="Grouping Topic 9912")
         .all()
     )
     assert len(topics) == 1
-    assert len(topics[0].concepts) == 4
+    assert {c.concept_title for c in topics[0].concepts} == {
+        row["concept_title"] for row in authored
+    }
     assert sum(c.concept_title.startswith("Culmination -") for c in topics[0].concepts) == 1
 
 
@@ -435,12 +507,16 @@ def test_post_learning_discard_control_durably_clears_only_final_checkpoint(
 def test_post_learning_api_discards_invalid_final_and_completes_retry_without_api(
     client, db, first_chapter, monkeypatch,
 ):
+    release_contract.install()
+    terminal_release.install()
     source = "# T\nA short source section."
     job = models.UploadJob(
         module="build_concepts",
         upload_type="document",
         learning_kind="post",
         filename="api-discard-final.mmd",
+        source_book="Checkpoint Recovery Book",
+        chapter_duration_minutes=40,
         mmd_text=source,
         status="converted",
     )
@@ -448,6 +524,41 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     db.commit()
     db.refresh(job)
     chapter = db.get(models.Chapter, first_chapter["id"])
+
+    monkeypatch.setattr(
+        build_concepts.generation.config, "use_live_generation", lambda: True,
+    )
+    # Replay the real persisted Architect assembly during both live-mode
+    # resumes; its identity must agree with the seeded checkpoint envelope.
+    instruction_set = build_concepts.instruction_architect.ensure_instruction_set(
+        metadata={
+            "board": chapter.board,
+            "grade": chapter.grade,
+            "subject": chapter.subject,
+            "unit": chapter.unit,
+            "chapter_title": chapter.chapter_title,
+            "chapter_id": chapter.id,
+            "chapter_code": chapter.chapter_code,
+            "learning_kind": "Post",
+            "source_book": job.source_book,
+        },
+        source_text=source,
+        artifact_dir=build_concepts.uploads.source_artifact_directory(job.id),
+        api_call=lambda *_args, **_kwargs: {
+            "subject_topology_guidance": "Follow the source topic T.",
+            "grade_band_vocabulary": "Use the source terminology.",
+            "language_mode": {
+                "mode": "expository", "rationale": "A source explanation.",
+            },
+            "board_publication_conventions": "",
+            "publication_label": job.source_book,
+            "chapter_cautions": [],
+        },
+        critic=lambda _payload: {
+            "verdict": "verified", "confidence": 1.0, "issues": [],
+        },
+    )
+    instruction_hash = instruction_set["instruction_set_sha256"]
 
     details = (
         "Description: A complete concept description."
@@ -481,29 +592,20 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         "question_task_inventory": {"items": [], "stats": {}},
         "mined_types": {"types": []},
         "method_row_snapshot": [],
+        build_concepts.generation.PHASE3_PRE_RELEASE_FIELD: (
+            build_concepts.generation.phase3_pre_release_bundle(
+                {"rows": [], "topics": []},
+                {"plans": {}, "questions": {}, "blocked": {}},
+            )
+        ),
     }
-    prior = build_concepts.generation._make_concept_checkpoint(
-        "post_type_assignment",
-        records=records("Prior-stage concept"),
-        **common,
-    )
-    stale_final = build_concepts.generation._make_concept_checkpoint(
-        "final_content_ready",
-        records=records("Rejected final concept"),
-        **common,
-    )
     checkpoint_args = {
         "fingerprint": build_concepts._generation_checkpoint_fingerprint(
-            job, chapter),
+            job, chapter, instruction_set_sha256=instruction_hash),
         "target_identity": build_concepts._generation_target_identity(chapter),
         "target_chapter_id": chapter.id,
+        "instruction_set_sha256": instruction_hash,
     }
-    history = build_concepts._merge_generation_checkpoint_history(
-        {}, prior, **checkpoint_args)
-    job.generation_checkpoint = build_concepts._merge_generation_checkpoint_history(
-        history, stale_final, **checkpoint_args)
-    db.commit()
-
     # Phase 3 never resumes a concept checkpoint on a deterministic source guess.
     # Seed the independently verified source graph so this regression can remain
     # focused on durable concept-checkpoint recovery without another model call.
@@ -521,6 +623,8 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         "chapter_id": chapter.id,
         "chapter_code": chapter.chapter_code,
         "learning_kind": "Post",
+        "instruction_set_sha256": instruction_hash,
+        "language_topology_plan": "",
     }
 
     def classify_source(payload):
@@ -559,19 +663,37 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     monkeypatch.setattr(
         phase3, "prepare_generation_graph", use_verified_source_graph
     )
+    provider_calls = []
+
+    def forbidden_provider(*args, **kwargs):
+        provider_calls.append((args, kwargs))
+        raise AssertionError(
+            f"checkpoint recovery must not call OpenAI: {args[:1]!r}, {kwargs!r}"
+        )
+
     monkeypatch.setattr(
-        build_concepts.generation.config,
-        "use_live_generation",
-        lambda: True,
+        build_concepts.generation, "_openai_json", forbidden_provider,
+    )
+    # Downstream release metadata/refinement and Master authoring have their
+    # own regression suites. Recorded outputs keep this HTTP recovery test
+    # focused on reusing the already certified concept work.
+    monkeypatch.setattr(
+        build_concepts.generation, "chapter_meta_via_api",
+        lambda **_kwargs: {
+            "chapter_description": "Recorded chapter metadata.",
+            "chapter_duration_minutes": 40,
+            "topic_descriptions": {"t": "Recorded topic metadata."},
+        },
     )
     monkeypatch.setattr(
-        build_concepts.generation,
-        "_openai_json",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("checkpoint recovery must not call OpenAI")
-        ),
+        release_contract.release_refiner, "refine_release",
+        lambda rows, **_kwargs: (copy.deepcopy(rows), {"changes": []}, []),
     )
-    def prepare_grounded(current, **_kwargs):
+    monkeypatch.setattr(
+        release_contract, "_build_master_siblings",
+        lambda *_args, **_kwargs: {},
+    )
+    def prepare_grounded(current):
         grounded = copy.deepcopy(current)
         source_blocks = [
             block for block in graph.get("blocks") or []
@@ -664,10 +786,30 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         )
         return grounded
 
+    prior = build_concepts.generation._make_concept_checkpoint(
+        "post_type_assignment",
+        records=prepare_grounded(records("Prior-stage concept")),
+        **common,
+    )
+    stale_final = build_concepts.generation._make_concept_checkpoint(
+        "final_content_ready",
+        records=records("Rejected final concept"),
+        grounding_certificate_required=True,
+        **common,
+    )
+    history = build_concepts._merge_generation_checkpoint_history(
+        {}, prior, **checkpoint_args)
+    job.generation_checkpoint = build_concepts._merge_generation_checkpoint_history(
+        history, stale_final, **checkpoint_args)
+    db.commit()
+
+    def forbidden_reauthor(*_args, **_kwargs):
+        raise AssertionError("certified Phase 3 must not be authored again")
+
     monkeypatch.setattr(
         build_concepts.generation,
         "_prepare_final_concept_content",
-        prepare_grounded,
+        forbidden_reauthor,
     )
     # This regression isolates fallback from an uncertified terminal
     # checkpoint.  The preceding stage now receives a latest-boundary
@@ -699,8 +841,10 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
 
     # A final checkpoint without the new payload/evidence certificate is
     # incompatible and is never loaded as a candidate. Resume begins at the
-    # preceding certified stage and re-runs final grounding.
-    assert len(validations) == 1
+    # preceding certified stage, preserving its source/Pre authority.
+    first_result = [event["data"] for event in events
+                    if event.get("type") == "result"][-1]
+    assert len(validations) == 1, first_result.get("run_incomplete")
     assert validations[0][0] == "Prior-stage concept"
     assert validations[0][1].startswith("Culmination -")
     assert any(
@@ -708,12 +852,19 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         and "Persisted compatible checkpoint fallback" in event.get("message", "")
         for event in events
     )
-    assert any(
-        event.get("type") == "error"
-        and "stop after certified prior checkpoint was restored"
-        in event.get("message", "")
-        for event in events
+    assert first_result["run_incomplete"]["error"] == (
+        "RuntimeError: stop after certified prior checkpoint was restored"
     )
+    assert first_result["run_incomplete"]["resume_allowed"] is True
+    assert first_result["database_uploaded"] is False
+    first_payload = client.get(first_result["release_payload_url"]).json()
+    assert [row["concept_title"] for row in first_payload["records"]] == [
+        "Prior-stage concept", "Culmination - T",
+    ]
+    assert client.get(first_result["diagnostics_url"]).status_code == 200
+    refused = client.post(first_result["database_upload_url"])
+    assert refused.status_code == 400
+    assert "terminal" in refused.json()["detail"]
 
     db.expire_all()
     saved = db.get(models.UploadJob, job.id)
@@ -723,6 +874,8 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         for entry in saved.generation_checkpoint["checkpoints"]
     ] == ["post_type_assignment"]
     assert saved.openai_usage.get("request_count", 0) == 0
+    assert saved.status == "converted"
+    assert provider_calls == []
 
     status = client.get(f"/build-concepts/uploads/{job.id}").json()
     assert status["checkpoint_stage"] == "post_type_assignment"
@@ -746,22 +899,8 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         )
         return {"ok": True, "errors": [], "summary": {}}
 
-    deposited = []
-
-    def deposit(_db, *, records, **_kwargs):
-        deposited.append([row["concept_title"] for row in records])
-        return [], [], {
-            "written": 0,
-            "sources_updated": 0,
-            "grounding_certificate": copy.deepcopy(
-                _kwargs["final_grounding_certificate"]
-            ),
-        }
-
     monkeypatch.setattr(
         build_concepts.generation, "_validate_final_or_raise", accept)
-    monkeypatch.setattr(
-        build_concepts, "_deposit_and_publish_concepts", deposit)
 
     result = stream_result(client.post(
         f"/build-concepts/post-learning/uploads/{job.id}/generate",
@@ -770,18 +909,47 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
 
     assert result["job_id"] == job.id
     assert accepted[0][0] == "Prior-stage concept"
-    assert deposited[0][0] == "Prior-stage concept"
+    assert result["released"] is True
+    assert "run_incomplete" not in result
+    assert result["database_uploaded"] is False
+    assert result["row_count"] == 2
+    final_payload = client.get(result["release_payload_url"]).json()
+    assert [row["concept_title"] for row in final_payload["records"]] == [
+        "Prior-stage concept", "Culmination - T",
+    ]
+    assert terminal_release.payload_terminal_generation_complete(final_payload)
+    assert client.get(result["release_bulk_import_url"]).status_code == 200
     db.expire_all()
     completed = db.get(models.UploadJob, job.id)
-    assert completed.status == "generated"
-    assert completed.generation_checkpoint == {}
+    assert completed.status == "released"
+    # Staging retains the terminal receipt for diagnostics; publication is
+    # still a separate act and the upload cannot restart a completed run.
+    assert completed.generation_checkpoint["stage"] == "final_content_ready"
+    assert completed.generation_checkpoint["instruction_set_sha256"] == (
+        instruction_hash
+    )
+    assert all(
+        row["concept_title"] != "Rejected final concept"
+        for entry in completed.generation_checkpoint["checkpoints"]
+        for row in entry.get("records", [])
+    )
     assert completed.openai_usage.get("request_count", 0) == 0
+    assert provider_calls == []
+    assert db.query(models.Concept).filter(
+        models.Concept.concept_title.in_([
+            "Prior-stage concept", "Rejected final concept", "Culmination - T",
+        ]),
+    ).count() == 0
 
     completed_status = client.get(
         f"/build-concepts/uploads/{job.id}").json()
     assert completed_status["checkpoint_available"] is False
-    assert completed_status["checkpoint_stage"] == ""
-    assert completed_status["checkpoint_progress"] == 0.0
+    assert completed_status["checkpoint_stage"] == "final_content_ready"
+    assert completed_status["checkpoint_progress"] == 0.98
+    assert client.post(
+        f"/build-concepts/post-learning/uploads/{job.id}/generate",
+        json={"target_chapter_id": chapter.id},
+    ).status_code == 409
 
 
 def test_post_learning_preserves_invalid_checkpoint_and_requires_start_over(

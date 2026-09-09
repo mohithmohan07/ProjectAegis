@@ -135,10 +135,9 @@ test("renders topics, concept cards, flags and the rendered details", async () =
   // The one review flag renders as a badge.
   expect(cards[0].textContent).toContain("placed by best reading");
 
-  // Details are rendered, not shown raw: katex -> code node, https img -> <img>.
-  const code = cards[0].querySelector("code.katex-inline");
-  expect(code).not.toBeNull();
-  expect(code!.textContent).toBe("d = a_{n+1} - a_n");
+  // Actual KaTeX HTML+MathML and source images reach the review page.
+  expect(cards[0].querySelector(".katex")).not.toBeNull();
+  expect(cards[0].querySelector("math annotation")!.textContent).toBe("d = a_{n+1} - a_n");
   const img = screen.getByAltText("AP number line");
   expect(img.getAttribute("src")).toBe("https://cdn.example/ap.png");
   const anchor = cards[2].querySelector("a");

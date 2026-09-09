@@ -1,3 +1,4 @@
+import copy
 import pathlib
 
 import pytest
@@ -30,7 +31,114 @@ def _analysis_sections(details):
     ]
 
 
-def test_duplicate_application_mistake_normalizes_to_error_analysis_and_validates():
+@pytest.mark.parametrize("text", [
+    "Omitting the negative sign during substitution.",
+    "Students may believe this.",
+    "Students may misunderstand fractions.",
+    "Students may record all observations accurately.",
+    "Students may struggle with this concept.",
+    "Students should correctly retain the units.",
+    "Students may quote evidence without linking it to the claim.",
+    "Students may believe denominators are added. The correct rule is to find a common denominator.",
+    "Students may assume signed values is a rule that always applies without checking its conditions, context, or representation.",
+    "n/a",
+    "धारणा और प्रक्रिया में अंतर है।",
+])
+@pytest.mark.parametrize("label", ["Misconceptions", "Error Analysis"])
+def test_analysis_wording_is_evidence_for_api_review_not_a_local_verdict(text, label):
+    row = _rec(
+        "Authored Analysis",
+        "Description: Signed values retain their signs throughout substitution. // "
+        f"Misconception/ Error Analysis: {label}: {text}",
+    )
+    original = copy.deepcopy(row)
+    report = cv.validate_concept_rows(
+        [row], strict_analysis_section=True, analysis_allotted_keys={0},
+    )
+    # Structural acceptance is not a claim that every passage is good
+    # analysis. The author and critic must make that semantic assessment.
+    assert report["errors"] == []
+    assert row == original
+
+
+@pytest.mark.parametrize("mastery", [
+    "Go.",
+    "Plot points.",
+    "Doing it well.",
+    "Applying the concept correctly.",
+    "n/a",
+    "समझाना।",
+    "Explain the reasoning. " * 70,
+])
+def test_mastery_wording_and_length_cannot_trigger_a_semantic_verdict(mastery):
+    row = _rec(
+        "Authored Mastery",
+        "Description: Signed values retain their signs throughout substitution.\n"
+        f"Achieving Mastery: {mastery}",
+    )
+    original = copy.deepcopy(row)
+    report = cv.validate_concept_rows(
+        [row], strict_mastery_statement=True, analysis_allotted_keys=set(),
+    )
+    assert report["errors"] == []
+    assert row == original
+
+
+def test_identical_analysis_is_not_an_overlap_verdict_or_a_rewrite():
+    text = "Students may add the denominators when adding fractions."
+    row = _rec(
+        "Fraction Addition",
+        "Description: Fractions require a common denominator before addition. // "
+        f"Misconception/ Error Analysis: Misconceptions: {text}; Error Analysis: {text}",
+    )
+    row["flags"] = [{"code": "issue_section_overlap", "message": "Historical reviewer finding"}]
+    original = copy.deepcopy(row)
+    report = cv.validate_concept_rows(
+        [row], strict_analysis_section=True, analysis_allotted_keys={0},
+    )
+    assert report["errors"] == []
+    assert row == original  # historical findings remain readable as recorded
+
+
+def test_unlabelled_analysis_survives_formatting_and_still_has_a_shape_finding():
+    text = "An unresolved source-specific learning difficulty."
+    row = _rec(
+        "Unresolved Analysis",
+        "Description: Signed values retain their signs throughout substitution. // "
+        f"Misconception/ Error Analysis: {text}",
+    )
+    formatted = cv.ensure_valid_learner_analysis([row])[0]
+    assert text in formatted["concept_details"]
+    report = cv.validate_concept_rows(
+        [formatted], strict_analysis_section=True, analysis_allotted_keys={0},
+    )
+    assert "analysis_section_format" in _codes(report)
+
+
+@pytest.mark.parametrize("analysis,valid", [
+    ("Misconceptions: ; Error Analysis: Omitting a sign.", False),
+    ("Misconceptions: A false belief.; Error Analysis: ", False),
+    ("Misconceptions: \t ; Error Analysis: Omitting a sign.", False),
+    ("Misconceptions: A false belief.; Error Analysis: \t ", False),
+    ("Misconceptions: ; Error Analysis: ", False),
+    ("Misconceptions: A false belief.", True),
+    ("Error Analysis: Omitting a sign.", True),
+    ("Misconceptions: A false belief.; Error Analysis: Omitting a sign.", True),
+])
+def test_each_explicit_analysis_component_requires_text_after_formatting(analysis, valid):
+    row = _rec(
+        "Authored Analysis",
+        "Description: Signed values retain their signs throughout substitution. // "
+        f"Misconception/ Error Analysis: {analysis}",
+    )
+    formatted = cv.ensure_valid_learner_analysis([row])[0]
+    report = cv.validate_concept_rows(
+        [formatted], strict_analysis_section=True, analysis_allotted_keys={0},
+    )
+    assert ("analysis_section_format" not in _codes(report)) is valid
+
+
+def test_identical_analysis_under_two_authored_labels_is_not_reclassified():
     mistake = (
         "Students may make the mistake of dropping the negative sign during "
         "substitution."
@@ -40,7 +148,9 @@ def test_duplicate_application_mistake_normalizes_to_error_analysis_and_validate
         f"Misconceptions: {mistake} // Error Analysis: {mistake}"
     )
 
-    assert _analysis_sections(normalized) == [("Error Analysis", mistake)]
+    assert _analysis_sections(normalized) == [
+        ("Misconceptions", mistake), ("Error Analysis", mistake),
+    ]
 
     report = cv.validate_concept_rows([
         _rec("Signed Substitution", normalized),
@@ -51,34 +161,11 @@ def test_duplicate_application_mistake_normalizes_to_error_analysis_and_validate
     assert "issue_section_overlap" not in _codes(report)
 
 
-def test_common_error_with_negation_is_valid_error_analysis():
-    error_analysis = (
-        "A common error is not converting metres to centimetres before "
-        "substitution."
-    )
-
-    assert cv.is_valid_error_analysis(error_analysis)
-    report = cv.validate_concept_rows([_rec(
-        "Unit Conversion Before Substitution",
-        "Description: Values use compatible units before substitution. // "
-        f"Error Analysis: {error_analysis}",
-    )])
-    assert "error_analysis_framing" not in _codes(report)
 
 
-def test_actorless_application_mistake_is_invalid_error_analysis():
-    actorless = "Omitting the negative sign during substitution."
-
-    assert not cv.is_valid_error_analysis(actorless)
-    report = cv.validate_concept_rows([_rec(
-        "Actorless Error Analysis",
-        "Description: Negative signs are retained during substitution. // "
-        f"Error Analysis: {actorless}",
-    )])
-    assert "error_analysis_framing" in _codes(report)
 
 
-def test_validator_rejects_only_high_confidence_truncated_description_clause():
+def test_description_clause_completeness_is_an_api_judgment():
     broken = cv.validate_concept_rows([_rec(
         "Scientific Inquiry",
         "Description: Students observe carefully, record evidence, and use it "
@@ -96,7 +183,7 @@ def test_validator_rejects_only_high_confidence_truncated_description_clause():
         ),
     ])
 
-    assert "description_truncated_clause" in _codes(broken)
+    assert "description_truncated_clause" not in _codes(broken)
     assert "description_truncated_clause" not in _codes(complete)
 
 
@@ -139,14 +226,12 @@ def test_ensure_valid_learner_analysis_preserves_authored_content_and_exempts_cu
 
     out = cv.ensure_valid_learner_analysis(records)
 
-    # Legacy cross-filed statements are re-labelled by normalization without
-    # losing a word: the mistake filed under Misconceptions joins the authored
-    # Error Analysis text verbatim.
-    assert _analysis_sections(out[0]["concept_details"]) == [(
-        "Error Analysis",
-        "Students may believe that every negative input produces a negative "
-        "result. Students may omit the negative sign during substitution.",
-    )]
+    # Authored placement survives; only the API may reclassify these
+    # statements. Both potentially misplaced passages stay reviewable.
+    assert _analysis_sections(out[0]["concept_details"]) == [
+        ("Misconceptions", "Students may omit the negative sign during substitution."),
+        ("Error Analysis", "Students may believe that every negative input produces a negative result."),
+    ]
 
     # A single authored section stays alone: no deterministic filler is
     # inserted for the missing sibling.
@@ -215,71 +300,14 @@ def test_final_analysis_normalization_preserves_specific_science_errors(
         misconception,
         error_analysis,
     )
-    assert cv.is_valid_error_analysis(error_analysis)
 
 
-def test_error_analysis_rejects_generic_difficulty_without_a_mistaken_action():
-    for text in (
-        "Students may struggle with this concept.",
-        "Students may encounter difficulties.",
-        "Students may use the formula.",
-        "Students may apply the concept.",
-        "Students may calculate the value.",
-        "Students may answer incorrectly.",
-        "Students may respond incorrectly.",
-        "Students may perform the task incorrectly.",
-        "Students may choose the wrong answer.",
-        "Students may repeatedly respond incorrectly.",
-        "Students may simply choose the wrong answer.",
-        "Students may only understand this concept.",
-    ):
-        assert not cv.is_valid_error_analysis(text)
 
 
-def test_error_analysis_accepts_subject_specific_actions_with_mistake_cues():
-    for text in (
-        "Students may paraphrase the passage instead of analysing the "
-        "author's inference.",
-        "Students may quote evidence without linking it to the claim.",
-        "Students may return inside the loop rather than after the loop.",
-        "Students may treat political authority as hereditary rather than "
-        "civic.",
-        "Students may change two variables at once and attribute the outcome "
-        "to only one factor.",
-        "Students may record only the final observation and omit the trial "
-        "conditions.",
-        "Students may draw a conclusion after a single trial.",
-        "Students may compare unlike observations as though they came from "
-        "controlled trials.",
-    ):
-        assert cv.is_valid_error_analysis(text)
 
 
-def test_error_analysis_accepts_prompted_actions_only_with_named_consequences():
-    for text in (
-        "Students may count the endpoint twice, increasing the interval "
-        "total by one.",
-        "Students may add the numerator and denominator before simplifying, "
-        "producing an incorrect fraction.",
-        "Students may divide by the scale factor before converting units, "
-        "producing the wrong magnitude.",
-        "Students may group nonadjacent clauses before checking their link, "
-        "resulting in an invalid interpretation.",
-    ):
-        assert cv.is_valid_error_analysis(text)
-
-    for text in (
-        "Students may count the endpoints.",
-        "Students may add the numerator and denominator.",
-        "Students may divide by the scale factor.",
-        "Students may group the clauses.",
-    ):
-        assert not cv.is_valid_error_analysis(text)
 
 
-def test_error_analysis_rejects_correct_procedural_action_without_a_defect():
-    assert not cv.is_valid_error_analysis(
-        "Students may record all observations accurately.")
 
 
 def test_no_word_count_predicate_judges_whether_an_example_is_a_real_task():
@@ -333,16 +361,12 @@ def test_a_three_word_source_question_renders_without_a_length_error():
     assert not any("short" in code for code in codes), sorted(codes)
 
 
-def test_belief_adverbs_classify_as_misconceptions_but_authored_placement_wins():
+def test_belief_adverbs_do_not_override_authored_placement():
     beliefs = (
         "Students may incorrectly assume that multiplication always makes a "
         "number larger.",
         "Students mistakenly believe that the denominator is also added.",
     )
-    for text in beliefs:
-        assert cv.is_valid_misconception(text)
-        assert not cv.is_valid_error_analysis(text)
-
     record = _rec(
         "Adverb-Framed Belief",
         "Description: Multiplication scales quantities by a factor. // "
@@ -357,19 +381,10 @@ def test_belief_adverbs_classify_as_misconceptions_but_authored_placement_wins()
     assert sections == [("Error Analysis", beliefs[0])]
 
 
-def test_misconceptions_reject_generic_objects_and_mixed_action_statements():
-    for text in (
-        "Students may believe this.",
-        "Students may think something.",
-        "Students may misunderstand fractions.",
-        "Students may confuse the terms.",
-    ):
-        assert not cv.is_valid_misconception(text)
-
+def test_mixed_analysis_statement_keeps_its_authored_label():
     belief = "Students may believe that multiplication always increases a value."
     mistake = "Students may omit the negative sign during substitution."
     mixed = f"{belief} {mistake}"
-    assert not cv.is_valid_misconception(mixed)
 
     record = _rec(
         "Mixed Legacy Analysis",
@@ -389,7 +404,6 @@ def test_analysis_splitter_does_not_split_learner_words_inside_a_belief():
         "Students may believe teachers and students have identical roles.",
     )
     for belief in beliefs:
-        assert cv.is_valid_misconception(belief)
         record = _rec(
             "Belief With Learner Object",
             f"Description: Roles and learning rates vary. // Misconceptions: {belief}",
@@ -401,29 +415,13 @@ def test_analysis_splitter_does_not_split_learner_words_inside_a_belief():
         # Error Analysis sibling is inserted.
         assert sections == [("Misconceptions", belief)]
 
-    assert not cv.is_valid_misconception("Students may believe.")
 
 
-def test_misconceptions_reject_correction_prose_after_the_false_belief():
+def test_correction_tailed_analysis_is_preserved_for_api_review():
     corrected = (
         "Students may believe denominators are added. The correct rule is to "
         "find a common denominator."
     )
-    for text in (
-        corrected,
-        "Students may believe multiplication always increases a value. In "
-        "fact, factors below one decrease it.",
-        "Students may think zero has no value; instead, zero is a number.",
-    ):
-        assert not cv.is_valid_misconception(text)
-
-    assert cv.is_valid_misconception(
-        "Students may believe the denominator must also be added."
-    )
-    assert cv.is_valid_misconception(
-        "Students may confuse the numerator with the denominator."
-    )
-
     record = _rec(
         "Correction-Tailed Legacy Belief",
         "Description: Fractions use a common denominator before addition. // "
@@ -432,11 +430,9 @@ def test_misconceptions_reject_correction_prose_after_the_false_belief():
     sections = _analysis_sections(
         cv.ensure_valid_learner_analysis([record])[0]["concept_details"]
     )
-    # The correction tail is authored content and is kept verbatim (the text
-    # fails the misconception predicate, so normalization files the whole
-    # statement under Error Analysis) — it is never trimmed down to the
-    # bare belief.
-    assert sections == [("Error Analysis", corrected)]
+    # The correction tail is authored evidence for the API reviewer;
+    # formatting cannot relabel it or trim it down to a bare belief.
+    assert sections == [("Misconceptions", corrected)]
 
 
 def test_overlapping_authored_error_analysis_items_are_all_preserved():
@@ -457,8 +453,7 @@ def test_overlapping_authored_error_analysis_items_are_all_preserved():
     )
 
     # The overlap filter no longer drops authored statements: every error
-    # item the model wrote survives verbatim; overlap quality is the terminal
-    # gate's judgment, not a deterministic filter's.
+    # item the model wrote survives verbatim; the API reviewer judges overlap.
     assert sections == [
         ("Misconceptions", misconception),
         ("Error Analysis", f"{overlapping_error} {distinct_error}"),
@@ -524,7 +519,7 @@ def test_validator_flags_duplicate_and_noncanonical_issue_sections():
     } <= _codes(report)
 
 
-def test_validator_enforces_issue_section_order_and_distinct_content():
+def test_validator_enforces_issue_section_order_without_an_overlap_verdict():
     wrong_order = cv.validate_concept_rows([_rec(
         "Adding Fractions",
         "Description: Fractions need a common denominator before addition. // "
@@ -541,49 +536,11 @@ def test_validator_enforces_issue_section_order_and_distinct_content():
     )])
 
     assert "issue_section_order" in _codes(wrong_order)
-    assert "issue_section_overlap" in _codes(wrong_order)
+    assert "issue_section_overlap" not in _codes(wrong_order)
     assert "issue_section_order" not in _codes(overlapping)
-    assert "issue_section_overlap" in _codes(overlapping)
+    assert "issue_section_overlap" not in _codes(overlapping)
 
 
-def test_validator_distinguishes_beliefs_from_application_mistakes():
-    report = cv.validate_concept_rows([
-        _rec(
-            "Procedural Text in Misconceptions",
-            "Description: The sign must be retained during substitution. // "
-            "Misconceptions: Students may omit the negative sign while "
-            "substituting a value.",
-        ),
-        _rec(
-            "Belief Text in Error Analysis",
-            "Description: Scaling can increase or decrease a value. // "
-            "Error Analysis: Students may believe that multiplication always "
-            "makes a number larger.",
-        ),
-        _rec(
-            "Generic Error Analysis",
-            "Description: The method has an ordered sequence of operations. // "
-            "Error Analysis: Students may make calculation errors.",
-        ),
-        _rec(
-            "Correction in Error Analysis",
-            "Description: Units are retained throughout the calculation. // "
-            "Error Analysis: Students should correctly retain the units.",
-        ),
-    ])
-
-    assert "misconception_framing" in {
-        error["code"] for error in report["errors"] if error["row_index"] == 0
-    }
-    assert "error_analysis_framing" in {
-        error["code"] for error in report["errors"] if error["row_index"] == 1
-    }
-    assert "generic_error_analysis" in {
-        error["code"] for error in report["errors"] if error["row_index"] == 2
-    }
-    assert "error_analysis_framing" in {
-        error["code"] for error in report["errors"] if error["row_index"] == 3
-    }
 
 
 def test_validator_detects_repeated_sibling_openers():
@@ -652,7 +609,7 @@ def test_description_section_references_are_errors_but_decimals_are_allowed():
     } == {(0, "error"), (1, "error")}
 
 
-def test_validator_rejects_copied_source_prose_only_in_descriptions():
+def test_source_copying_and_quotation_are_api_judgments():
     source = (
         "A nation state is built when people share a sense of collective "
         "identity and decide to live together under common political institutions."
@@ -665,7 +622,7 @@ def test_validator_rejects_copied_source_prose_only_in_descriptions():
             "national identity.",
         ),
     ], source_text=source)
-    assert "verbatim_source_description" in _codes(copied)
+    assert "verbatim_source_description" not in _codes(copied)
 
     question_only = cv.validate_concept_rows([
         _rec(
@@ -702,7 +659,8 @@ def test_strict_type_hierarchy_requires_defined_cases_and_numbered_examples():
     )
     report = cv.validate_concept_rows(
         [invalid], strict_type_hierarchy=True)
-    assert {"case_question_not_definition", "example_numbering"} <= _codes(report)
+    assert "example_numbering" in _codes(report)
+    assert "case_question_not_definition" not in _codes(report)
 
     valid = _rec(
         "Equation Practice",
@@ -746,10 +704,10 @@ def test_strict_type_hierarchy_requires_a_case_for_every_type_and_real_definitio
     )
     generic_report = cv.validate_concept_rows(
         [generic_case], strict_type_hierarchy=True)
-    assert "generic_case_definition" in _codes(generic_report)
+    assert "generic_case_definition" not in _codes(generic_report)
 
 
-def test_strict_type_hierarchy_rejects_empty_task_container_case_titles():
+def test_generic_case_meaning_is_not_inferred_from_title_vocabulary():
     generic_titles = [
         "Use the given information",
         "Answer the question",
@@ -777,7 +735,7 @@ def test_strict_type_hierarchy_rejects_empty_task_container_case_titles():
         error["row_index"] for error in report["errors"]
         if error["code"] == "generic_case_definition"
     }
-    assert generic_rows == set(range(len(generic_titles)))
+    assert generic_rows == set()
 
 
 def test_strict_type_hierarchy_allows_a_meaningful_imperative_case_title():
@@ -798,7 +756,7 @@ def test_strict_type_hierarchy_allows_a_meaningful_imperative_case_title():
     )
 
 
-def test_strict_type_hierarchy_rejects_obvious_case_example_family_mismatch():
+def test_case_example_family_alignment_is_an_api_judgment():
     rows = [
         _rec(
             "Resistor Combinations",
@@ -833,10 +791,10 @@ def test_strict_type_hierarchy_rejects_obvious_case_example_family_mismatch():
         if error["code"] == "case_example_semantic_mismatch"
     }
 
-    assert mismatch_rows == {0, 1}
+    assert mismatch_rows == set()
 
 
-def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles():
+def test_only_empty_type_titles_are_mechanical_defects():
     case = (
         "Case 01: Given a linear equation, isolate its unknown using inverse "
         "operations. Example 01: Solve 3x + 2 = 14."
@@ -867,11 +825,11 @@ def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles()
         error["code"] for error in report["errors"]
         if error["row_index"] == 0
     }
-    assert "generic_type_definition" in {
+    assert "generic_type_definition" not in {
         error["code"] for error in report["errors"]
         if error["row_index"] == 1
     }
-    assert "duplicate_type_definition" in {
+    assert "duplicate_type_definition" not in {
         error["code"] for error in report["errors"]
         if error["row_index"] == 2
     }
@@ -886,7 +844,7 @@ def test_strict_type_hierarchy_rejects_empty_generic_and_duplicate_type_titles()
     assert "generic_type_definition" not in _codes(legacy_report)
 
 
-def test_strict_type_titles_are_unique_across_normal_concepts_in_each_topic():
+def test_reusable_type_meaning_is_not_inferred_from_title_overlap():
     def row(title, topic):
         return _rec(
             title,
@@ -911,10 +869,10 @@ def test_strict_type_titles_are_unique_across_normal_concepts_in_each_topic():
         error["row_index"] for error in report["errors"]
         if error["code"] == "duplicate_type_definition"
     ]
-    assert duplicate_rows == [1]
+    assert duplicate_rows == []
 
 
-def test_strict_type_hierarchy_rejects_all_named_generic_type_variants():
+def test_generic_type_meaning_is_not_inferred_from_title_vocabulary():
     generic_titles = [
         "Assessment pattern",
         "Source inventory task",
@@ -943,7 +901,7 @@ def test_strict_type_hierarchy_rejects_all_named_generic_type_variants():
         error["row_index"] for error in report["errors"]
         if error["code"] == "generic_type_definition"
     }
-    assert generic_rows == set(range(len(generic_titles)))
+    assert generic_rows == set()
 
 
 def test_strict_mastery_requires_one_canonical_terminal_description_line():
@@ -992,9 +950,9 @@ def test_strict_mastery_reports_missing_malformed_duplicate_and_stray_markers():
                 "Applying the method independently.",
             ),
             _rec(
-                "Thin Mastery",
+                "Empty Mastery",
                 "Description: A complete explanation.\n"
-                "Achieving Mastery: Doing it well.",
+                "Achieving Mastery:   ",
             ),
             _rec(
                 "Duplicate Mastery",
@@ -1023,7 +981,7 @@ def test_strict_mastery_reports_missing_malformed_duplicate_and_stray_markers():
 
     assert "missing_mastery_statement" in row_codes[0]
     assert "mastery_statement_format" in row_codes[1]
-    assert "mastery_statement_not_substantive" in row_codes[2]
+    assert "mastery_statement_format" in row_codes[2]
     assert "duplicate_mastery_statement" in row_codes[3]
     assert {
         "duplicate_mastery_statement",
@@ -1187,10 +1145,8 @@ def test_q1_gate_split_scopes_existence_to_allotted_rows():
     assert "analysis_section_format" in _codes(report)
 
 
-def test_q1_quality_codes_keep_their_meaning_on_allotted_sections():
-    """The gate split never dilutes quality: a generic analysis on an
-    ALLOTTED row still fails, and a malformed section on an UNALLOTTED
-    row still gets its shape code beside the marker-accounting code."""
+def test_q1_allotment_checks_shape_while_api_judges_generic_analysis():
+    """Genericity is reviewed by the API; structural and allotment checks stand."""
     generic = _rec(
         "Signed Substitution",
         "Description: Signed values retain their signs during substitution "
@@ -1201,7 +1157,8 @@ def test_q1_quality_codes_keep_their_meaning_on_allotted_sections():
         [generic], strict_analysis_section=True,
         analysis_allotted_keys={0},
     )
-    assert "generic_misconception" in _codes(report)
+    assert "generic_misconception" not in _codes(report)
+    assert "placeholder" not in _codes(report)
 
     malformed_unallotted = _rec(
         "Signed Substitution",

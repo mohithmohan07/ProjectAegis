@@ -23,6 +23,7 @@ from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
+from .evidence import decide_with_visual_evidence, image_inputs
 from ... import config
 from .. import containers
 from .. import progress
@@ -146,12 +147,14 @@ def project_type_owner_hub_placements(
 
 
 def _description_of(details: object) -> str:
-    match = re.search(
-        r"Description:\s*(.*?)(?=\n[A-Z][A-Za-z ]{2,24}:|//|$)",
-        str(details or ""),
-        re.DOTALL,
+    # Only the canonical section delimiter ends a Description. Internal
+    # headings (Worked Example, Conditions, etc.) are teaching, not boundaries.
+    from .. import concept_refiner
+
+    return "\n".join(
+        content for label, content in concept_refiner.split_sections(str(details or ""))
+        if label.strip().casefold() == "description"
     )
-    return _normal(match.group(1)) if match else ""
 
 
 def hub_pool(env: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -292,7 +295,7 @@ def _live_place(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.PLACE_SYSTEM, prompts.render(payload),
         purpose="concept_mapping",
-        image_urls=_payload_image_urls(payload),
+        image_urls=image_inputs(payload) if "visual_evidence" in payload else _payload_image_urls(payload),
     )
 
 
@@ -303,7 +306,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.PLACE_CRITIC_SYSTEM, prompts.render(payload),
         purpose="advisory_critic",
-        image_urls=_payload_image_urls(payload),
+        image_urls=image_inputs(payload) if "visual_evidence" in payload else _payload_image_urls(payload),
     )
 
 
@@ -323,7 +326,7 @@ def _live_fixer(payload: dict[str, Any]) -> dict[str, Any]:
         # (matches phase3/fixer.live_fixer), never as a critic pass.
         purpose="semantic_resolution",
         model=fixer_mod.fixer_model(),
-        image_urls=_payload_image_urls(vision_payload),
+        image_urls=image_inputs(vision_payload) if "visual_evidence" in vision_payload else _payload_image_urls(vision_payload),
     )
 
 
@@ -452,7 +455,7 @@ def place(
             "settled_concepts": concepts_payload,
             "pool": batch,
         }
-        decision = kernel.decide(
+        decision = decide_with_visual_evidence(
             kind="place.container02",
             unit_id=f"pool#{start}",
             envelope_sha256=envelope_sha,

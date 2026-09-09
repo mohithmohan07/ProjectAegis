@@ -34,6 +34,8 @@ import pytest
 from app import bulk_import as bi
 from app.bulk_import import assessment_workbook as workbook
 from app.services import assessment_profile
+from app.services import assessment_output_vocabulary
+from app.services import column_spec
 from app.services import identity
 from app.services import katex_rules
 
@@ -542,6 +544,16 @@ def _contract_list(value: str) -> str:
     )
 
 
+def _current_keyword_cell(value: str) -> str:
+    """Q33 changes only the separator of already-normalized keyword tokens.
+
+    The historical audit's malformed quoted-list cells remain evidence;
+    this expectation neither decodes their repr nor repairs their content.
+    """
+
+    return ", ".join(str(value).split(LIST_DELIMITER))
+
+
 def _projected_cell(value: object) -> str:
     """The comparable form of one EXPECTED cell after the renderer's
     deterministic projections: internal ``\\n`` → ``<br>`` (§17); numbers
@@ -1022,6 +1034,20 @@ def _expected_question_record(
         "answer_explanation": candidate["answer_explanation"],
     }
     answers = candidate["answers"]
+    if sheet == "Descriptive" and candidate["sub_questions"]:
+        # Q33 / contract §24: the workbook's parent is the ordered,
+        # non-additive copy of the scored children, not the fixture's
+        # separately worded historical parent rubric. Keep that fixture
+        # content pinned separately under its carried legacy policy.
+        answers = [
+            {
+                "answer_type": keyword["answer_type"],
+                "answer_content": keyword["keyword"],
+                "answer_weightage": keyword["weightage"],
+            }
+            for child in candidate["sub_questions"]
+            for keyword in child["keywords"]
+        ]
     # Contract v2.0 §22–§24: a textual medium carries the lane literal —
     # ``Words`` on Objective option and Subjective answer cells, ``Phrases``
     # on Descriptive rubric/keyword cells; Equation/Image read the same.
@@ -1476,11 +1502,26 @@ MASTER_CONTRACTS = (
 )
 
 
-def _profile(subject: str) -> dict:
-    return assessment_profile.resolve_for_metadata(
+def _profile(subject: str, *, legacy_columns: bool = False) -> dict:
+    profile = assessment_profile.resolve_for_metadata(
         None,
         {"board": "MSBSHSE", "grade": "06", "subject": subject},
     )
+    # These pinned 27-Aug workbooks carry the historical category taxonomy.
+    # The current-column comparison below isolates Q33's column projections;
+    # it does not migrate the fixture's category decisions to a new Q35 run.
+    # Remove BOTH newly bound snapshots, so legacy hashes and field literals
+    # remain exact. Fresh-run vocabulary is tested separately end to end.
+    profile.pop(assessment_output_vocabulary.POLICY_KEY)
+    profile.pop(assessment_output_vocabulary.FORMAT_SNAPSHOT_KEY)
+    if legacy_columns:
+        # A persisted pre-Q32 profile has resolved selector metadata but
+        # no column-policy key. Re-entry must not upgrade this old run.
+        profile.pop(column_spec.POLICY_KEY)
+        assert assessment_profile.resolve_for_metadata(profile, {}) == profile
+    else:
+        assert profile[column_spec.POLICY_KEY]["version"] == column_spec.VERSION
+    return profile
 
 
 def _lane_snapshot(phase: str) -> dict:
@@ -1619,6 +1660,7 @@ def test_normalized_concept_rows_render_field_for_field(
         )
         expected.update(_field_values(topic, TOPIC_FIELDS))
         expected.update(_field_values(concept, CONCEPT_FIELDS))
+        expected["keywords"] = _current_keyword_cell(concept["keywords"])
         expected["topic_title"] = _rendered_topic_title(snapshot, topic)
         expected["concept_title"] = _rendered_concept_title(concept)
         # Contract §32: the chapter duration is a numeric minutes cell.
@@ -1741,7 +1783,7 @@ def test_normalized_master_questions_and_hierarchy_render_field_for_field(
             "concept_title": _rendered_concept_title(concept),
             "concept_display_name": concept["concept_display_name"],
             "concept_details": concept["concept_details"],
-            "keywords": concept["keywords"],
+            "keywords": _current_keyword_cell(concept["keywords"]),
             "digicards": concept["digicards"],
             "related_concepts": concept["related_concepts"],
             "concept_source": concept["concept_source"],
@@ -1916,12 +1958,14 @@ def _full_rendered_master_evidence(
     subject: str,
     phase: str,
     answer_slots: int,
+    *,
+    legacy_columns: bool = False,
 ) -> dict[str, object]:
     concept_filename = master_filename.replace("_master", "_concept")
     snapshot, _candidates = _master_snapshot(
         master_filename, concept_filename, subject, answer_slots
     )
-    profile = _profile(subject)
+    profile = _profile(subject, legacy_columns=legacy_columns)
     data, _issues = workbook.render_master_file(snapshot, profile)
     parsed = workbook.parse_workbook(data)
     schema = workbook.output_schema("master", profile, _lane_snapshot(phase))
@@ -1954,7 +1998,7 @@ def _full_rendered_master_evidence(
 # Objective/Subjective (§22–§23), ``question_source`` is the publication
 # (§18), ``chapter_duration`` is numeric (§32) and every one of the five
 # ``is_update_*`` cells is exact ``No`` on questionless tails too (§14.1).
-# The digests pin the renderer's CURRENT bytes; correctness is asserted
+# The digests pin the renderer's frozen legacy-policy cells; correctness is asserted
 # field for field by the tests above.  Re-pinned later the same day once
 # the renderer stopped comma-splitting a pipe-free roster (Topic 06's
 # single-concept roster "Classifying Numbers in the Natural, Whole, and
@@ -1971,6 +2015,10 @@ def _full_rendered_master_evidence(
 # sub_question_marks_N and sqN_weightage_M — every one a field
 # ``is_numeric_display_field`` names — and every sheet keeps its exact row,
 # column and cell counts.
+# Q33 deliberately changes keyword separators and multipart parent projections
+# for new runs. These historical digests stay unchanged and now run with an
+# explicitly carried legacy profile. The exhaustive current-policy comparison
+# below permits only those two projections over this same pinned cell matrix.
 FULL_RENDERED_MASTER_EVIDENCE: dict[str, dict[str, object]] = {
     "english_post_master.xlsx": {
         "digest": "cf647d9be29322455484f429c7e6b9938c7c65ede96698220dedefc0f65f0bbb",
@@ -2055,8 +2103,87 @@ def test_every_normalized_rendered_master_cell_is_pinned(
     _contract_id: str,
 ) -> None:
     assert _full_rendered_master_evidence(
-        master_filename, subject, phase, answer_slots
+        master_filename, subject, phase, answer_slots, legacy_columns=True
     ) == FULL_RENDERED_MASTER_EVIDENCE[master_filename]
+
+
+@pytest.mark.parametrize(
+    "master_filename,subject,_phase,answer_slots,_contract_id", MASTER_CONTRACTS,
+)
+def test_current_policy_changes_only_keywords_and_multipart_parent_cells(
+    master_filename: str, subject: str, _phase: str,
+    answer_slots: int, _contract_id: str,
+) -> None:
+    """Every new-policy cell is derived from the still-pinned legacy matrix.
+
+    No raw fixture, digest, other question content, row order or workbook
+    geometry is rebaselined to accommodate the two approved projections.
+    """
+    snapshot, candidates = _master_snapshot(
+        master_filename, master_filename.replace("_master", "_concept"),
+        subject, answer_slots,
+    )
+    legacy_bytes, _ = workbook.render_master_file(
+        snapshot, _profile(subject, legacy_columns=True),
+    )
+    current_bytes, _ = workbook.render_master_file(snapshot, _profile(subject))
+    legacy = workbook.parse_workbook(legacy_bytes)
+    current = workbook.parse_workbook(current_bytes)
+    for sheet in CANONICAL_SHEET_ORDER:
+        legacy_sheet = legacy["sheets"][sheet]
+        current_sheet = current["sheets"][sheet]
+        assert current_sheet["fields"] == legacy_sheet["fields"]
+        fields = current_sheet["fields"]
+        for row_number, (old_row, new_row) in enumerate(zip(
+            legacy_sheet["rows"], current_sheet["rows"], strict=True,
+        ), start=3):
+            expected = dict(old_row)
+            expected["keywords"] = _current_keyword_cell(old_row.get("keywords", ""))
+            label = str(old_row.get("question_label") or "")
+            if label and sheet == "Descriptive":
+                candidate = candidates[label][2]
+                if candidate["sub_questions"]:
+                    parent = _expected_question_record(
+                        candidate, sheet, answer_slots=answer_slots,
+                    )
+                    for number in range(1, answer_slots + 1):
+                        for prefix in (
+                            "answer_type", "answer_content", "answer_weightage",
+                        ):
+                            field = f"{prefix}_{number}"
+                            expected[field] = parent.get(field, "")
+            assert {
+                field: _normalized_cell(new_row.get(field, ""))
+                for field in fields
+            } == {
+                field: _normalized_cell(_as_written(field, expected.get(field, "")))
+                for field in fields
+            }, (master_filename, sheet, row_number)
+
+
+@pytest.mark.parametrize("filename,subject", [
+    ("english_pre_concept.xlsx", "English"),
+    ("math_pre_concept.xlsx", "Mathematics"),
+])
+def test_raw_keyword_list_literals_remain_visible_validation_defects(
+    filename: str, subject: str,
+) -> None:
+    snapshot, raw_rows = _concept_snapshot(filename, subject)
+    profile = _profile(subject)
+    rows = workbook.parse_workbook(
+        workbook.render_concept_file(snapshot, profile),
+    )["sheets"]["Objective"]["rows"]
+    found = False
+    for raw_row, row in zip(raw_rows, rows, strict=True):
+        if not raw_row["keywords"].startswith("['"):
+            continue
+        found = True
+        assert row["keywords"] == raw_row["keywords"]
+        defects = column_spec.keyword_defects(
+            row["keywords"], column_spec.from_profile(profile),
+        )
+        assert any("bracketed list literal" in defect for defect in defects)
+    assert found, "the malformed historical fixture evidence must stay present"
 
 
 def test_master_raw_question_source_is_the_retired_origin_default() -> None:

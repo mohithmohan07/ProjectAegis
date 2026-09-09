@@ -1,5 +1,66 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q36 (9 September 2026).**
+[Q36](docs/aegis-restructure.md#q36--decided--durable-question-numbering-and-current-workflow-tests)
+approves fixing question-number reuse with durable atomic reservations and
+migrating the six stale expected-failure tests to staged generation and explicit
+publication. Preserve useful regression assertions and identical-run replay;
+target zero expected failures. This is identifier bookkeeping, separate from
+Q35's exact category/group field values and API-owned semantic judgments.
+
+**Previous owner amendment: Q35 (8 September 2026).**
+[Q35](docs/aegis-restructure.md#q35--decided--complete-evidence-efficient-execution-and-exact-output-vocabulary)
+approves the end-to-end audit recommendations: complete source/visual evidence,
+lossless formatting and API-owned semantic repair, consistent grading contracts,
+and execution/cache/schema/resume/accounting improvements. The additional
+Description/copied-prose/Type/Case meaning-heuristic removals identified in that
+audit are now authorized. Keep exact schema, identity, arithmetic and rendering
+gates, all existing review stages, Luna/xhigh and the 5+5 Pre coverage.
+The owner's clarification about deterministic category/group columns concerns
+their **exact output labels**, such as `Fill in the blanks` and
+`Basic`/`Intermediate`/`Advanced`. It does not authorize changing how a question's
+category or difficulty is judged. Carry a versioned canonical output vocabulary
+for new runs; preserve the vocabulary and policies frozen into existing runs.
+Other stage removals, model/effort reductions and production deployment are not
+implied by this implementation amendment. Live benchmark claims require the
+configured provider/Fly access and recorded matching runs.
+
+**Previous amendment: Q34 (8 September 2026).**
+[Q34](docs/aegis-restructure.md#q34--decided--api-owned-learner-analysis-and-mastery-quality)
+records the owner's approval to remove learner-analysis wording/overlap
+heuristics and mastery-substance length thresholds, including mirrored
+normalizer behavior. Existing API authors and independent advisory critics
+own those judgments for every subject and both learning lanes. Preserve
+authored content, kind and review evidence through mechanical formatting;
+retain exact schema, identity, rich-text and scoring checks. This specific
+removal is authorized; other proposed removals still need owner approval.
+
+Read Rule 0 with
+[Q33](docs/aegis-restructure.md#q33--decided--universal-column-rules-and-owner-review-before-step-removal)
+and the [column-spec review](docs/column-spec-review-2026-09-08.md).
+The two example subjects define the shared output format for **all
+subjects**. For new policy-bound runs, keyword cells use comma-space,
+Objective explanations include the correct lowercase option label and
+exact answer, and criterion weights permit positive multiples of 0.5.
+Only functional rubric tags are English-specific: the registry is
+`content/language/creativity/evidence`, permitted solely in textual English
+Descriptive criteria. Every other subject writes untagged criteria. Keyboard
+need is an API decision from the requested response in every subject;
+Objective retains its blank keyboard cell. Generated question source is
+`UpSchool DB`, and valid Objective/Subjective answers are `Specific`. Multipart
+workbooks show the parent rubric as the ordered, non-additive copy of child
+criteria required by contract §24. Fresh
+generation keeps update flags `No`; an existing-entity update is a separate
+explicit workflow. The current policy is `owner-column-spec-2026-09-08-v2`;
+persisted v1 and legacy profiles keep their carried policy. Q32's initial
+subject limits, `creative` spelling and English keyboard default are
+superseded for new runs. **Run every proposed pipeline-step removal by the
+owner before removing it.** Audit and propose concrete changes first; this
+instruction does not authorize deleting a stage. The
+review named contradictory identity/placeholder/weight examples; Q35 now
+ratifies their documented interpretations. These amendments take precedence over the older field
+defaults listed below; Rule 1 and the verbatim master-contract file stand.
+
 ## Rule 0: The Master Governing Contract v2.0 is the output specification
 
 `docs/aegis-master-governing-contract-v2.md` (document ID

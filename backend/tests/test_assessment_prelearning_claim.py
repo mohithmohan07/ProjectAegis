@@ -35,8 +35,8 @@ ENVELOPE = "e" * 64
 def _contract_materialize_author(payload):
     """A contract-v2.0 proposal for one source question of the fixture.
 
-    Objective: the explanation OPENS with the exact correct-option text and
-    names no option letter (§22.5). Descriptive: ``display_answer`` and
+    Objective: the explanation follows the carried column policy, including
+    its correct option label for Q33 runs. Descriptive: ``display_answer`` and
     ``answer_explanation`` are one model answer (§24), the criteria carry
     no bracket tag outside an English run (§28) and are worth exactly
     1 mark each (§27.5), summing to the cell's 3 marks.
@@ -57,7 +57,10 @@ def _contract_materialize_author(payload):
             ],
             "sub_questions": [],
             "answer_explanation": (
-                "Cube is the solid: it occupies space in three dimensions, "
+                ("a) " if payload.get("column_spec_policy", {}).get(
+                    "objective_explanation_prefix"
+                ) == "option_label_and_answer" else "")
+                + "Cube is the solid: it occupies space in three dimensions, "
                 "while a circle is a flat figure."
             ),
             "requires_visual": False,

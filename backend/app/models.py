@@ -15,7 +15,7 @@ Round-tripping back to the canonical sheets is handled by ``bulk_import.writer``
 import hashlib
 from datetime import datetime
 
-from sqlalchemy import String, Integer, Text, ForeignKey, DateTime, JSON, Float, UniqueConstraint
+from sqlalchemy import String, Integer, BigInteger, Text, ForeignKey, DateTime, JSON, Float, UniqueConstraint, event, inspect
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -146,6 +146,25 @@ class Group(Base):
     # Reverse side of QuestionTag: questions that are *tagged* into this group
     # (in addition to the questions whose primary home is this group).
     tagged_in = relationship("QuestionTag", back_populates="group", cascade="all, delete-orphan")
+
+
+class QuestionLabelSequence(Base):
+    """Issued numbers survive deletion of questions, releases and concepts."""
+
+    __tablename__ = "question_label_sequences"
+
+    family_base: Mapped[str] = mapped_column(String(255), primary_key=True)
+    last_issued: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+
+
+class QuestionLabelReservation(Base):
+    """Content-bound Master reservations replay without reissuing identities."""
+
+    __tablename__ = "question_label_reservations"
+
+    reservation_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    counts: Mapped[dict] = mapped_column(JSON, nullable=False)
+    starts: Mapped[dict] = mapped_column(JSON, nullable=False)
 
 
 class Question(Base):
@@ -684,3 +703,46 @@ class ConceptReleaseVersion(Base):
             name="uq_concept_release_version_uid",
         ),
     )
+
+
+@event.listens_for(Question, "before_insert")
+@event.listens_for(Question, "before_delete")
+def _remember_question_label(_mapper, connection, question):
+    from .services.question_label_sequences import record_issued_labels
+
+    record_issued_labels(connection, [question.question_label])
+
+
+@event.listens_for(Question, "before_update")
+def _remember_changed_question_label(_mapper, connection, question):
+    from .services.question_label_sequences import record_issued_labels
+
+    history = inspect(question).attrs.question_label.history
+    if history.has_changes():
+        record_issued_labels(connection, [*history.deleted, question.question_label])
+
+
+@event.listens_for(AssessmentRelease, "before_insert")
+@event.listens_for(AssessmentRelease, "before_delete")
+def _remember_release_labels(_mapper, connection, release):
+    from itertools import chain
+    from .services.question_label_sequences import record_issued_labels, release_labels
+
+    record_issued_labels(connection, chain(
+        release_labels(release.payload), release_labels(release.concept_snapshot),
+    ))
+
+
+@event.listens_for(AssessmentRelease, "before_update")
+def _remember_changed_release_labels(_mapper, connection, release):
+    from itertools import chain
+    from .services.question_label_sequences import record_issued_labels, release_labels
+
+    state = inspect(release)
+    payloads = []
+    for field in ("payload", "concept_snapshot"):
+        history = state.attrs[field].history
+        if history.has_changes():
+            payloads.extend(history.deleted)
+            payloads.append(getattr(release, field))
+    record_issued_labels(connection, chain.from_iterable(map(release_labels, payloads)))

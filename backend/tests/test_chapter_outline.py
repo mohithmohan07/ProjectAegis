@@ -345,6 +345,8 @@ def test_derive_outline_caches_its_decision(monkeypatch, tmp_path):
 
     def _respond(**_kwargs):
         calls["n"] += 1
+        if _kwargs["response_schema"]["name"] == "aegis_chapter_outline_review":
+            return {"verdict": "verified", "issues": []}
         return _candidate()
 
     monkeypatch.setattr(phase22, "_openai_multimodal_json", _respond)
@@ -358,7 +360,7 @@ def test_derive_outline_caches_its_decision(monkeypatch, tmp_path):
     assert [t["title"] for t in first["topics"]] == ["Dimensions", "Exercise 1"]
     # A decided outline is content-addressed by source hash: the second
     # conversion of the same book must not re-ask the model.
-    assert calls["n"] == 1
+    assert calls["n"] == 2
     assert second == first
 
 
@@ -1141,6 +1143,8 @@ def test_omitted_tasks_go_back_to_the_model_and_their_splits_are_recovered(
 
     def _respond(*, prompt, **_kwargs):
         calls.append(prompt)
+        if _kwargs["response_schema"]["name"] == "aegis_chapter_outline_review":
+            return {"verdict": "verified", "issues": []}
         if len(calls) == 1:
             # First reading forgets the multi-part task entirely.
             return _two_task_candidate(whole_tasks=[
@@ -1162,7 +1166,7 @@ def test_omitted_tasks_go_back_to_the_model_and_their_splits_are_recovered(
 
     outline = fallback.derive_chapter_outline(_two_task_pages())
 
-    assert len(calls) == 2
+    assert len(calls) == 3
     # The follow-up prompt is scoped to the forgotten block only.
     assert "How many faces does a cube have?" in calls[1]
     assert "Name one solid with a curved surface." not in calls[1]
@@ -1180,6 +1184,8 @@ def test_a_complete_first_reading_never_triggers_a_follow_up(
 
     def _respond(**_kwargs):
         calls["n"] += 1
+        if _kwargs["response_schema"]["name"] == "aegis_chapter_outline_review":
+            return {"verdict": "verified", "issues": []}
         return _two_task_candidate(whole_tasks=[
             {"page_id": "PDF-PAGE-0001", "reading_order": 2},
             {"page_id": "PDF-PAGE-0001", "reading_order": 3},
@@ -1190,7 +1196,7 @@ def test_a_complete_first_reading_never_triggers_a_follow_up(
 
     outline = fallback.derive_chapter_outline(_two_task_pages())
 
-    assert calls["n"] == 1
+    assert calls["n"] == 2
     assert outline["unruled_task_refs"] == []
 
 
@@ -1214,11 +1220,13 @@ def test_a_failed_follow_up_leaves_the_first_reading_standing(
 
     outline = fallback.derive_chapter_outline(_two_task_pages())
 
-    assert calls["n"] == 2
+    assert calls["n"] == 3
     assert outline is not None
     assert outline["chapter_title"] == "Shapes"
     # Still reported, so the release can say the chapter was not read whole.
     assert outline["unruled_task_refs"] == [["PDF-PAGE-0001", 3]]
+
+    assert outline["review_provenance"]["status"] == "unavailable"
 
 
 def test_the_prompt_requires_a_ruling_on_every_task_block():

@@ -10,35 +10,44 @@ question, and the Pre lane's generated questions rode the same pipeline.
 
 Contract v2.0 §27 step 6 asks for ONE independent critic that jointly
 verifies the question, answer space, model answer, criteria, accepted
-equivalents and arithmetic.  This module is where that consolidation is
-decided, in one place:
+equivalents and arithmetic.  Q26 made that joint review the only Master
+critic by default and switched the per-decision critics, the Master
+Refiner and the touched-group QA off.
 
-* the per-item author decisions keep their mechanical checkers and The
-  Fixer, and their separate critics are OFF by default; the joint item
-  review (``assessment_item_review``) audits the finished item once,
-  after marking, with the whole item in view;
-* the route keeps its critic (one unambiguous owning Concept is a
-  semantic release gate, §43) and so do the chapter-level dedup and
-  pre-learning claim verdicts (few calls, each removes a question);
-* the Master Refiner and the touched-group QA are opt-in.
+Register Q31 (owner ruling, 7 Sep 2026) reverses those defaults: the owner
+measured the outputs written under the Q26 cuts against the earlier ones
+and ruled that the writing quality comes first.  So, by default:
 
-Nothing here changes who decides: every semantic verdict remains a model
-verdict (CLAUDE.md Rule 1).  Only the number of second passes changes, and
-the former behaviour is one environment variable away for A/B measurement.
+* every per-item author decision keeps its own independent advisory
+  critic beside the joint item review — the critic's named dissent is what
+  the Refiners read when they repair a row;
+* the Master Refiner and the touched-group QA run on every Master;
+* the joint item review stays on.
+
+Each pass is still one environment variable away for the cost profile
+(``AEGIS_MASTER_CRITICS=none``, ``AEGIS_MASTER_REFINER=0``,
+``AEGIS_MASTER_GROUP_QA=0``), so the two policies can be measured against
+each other on the same source.  Nothing here changes who decides: every
+semantic verdict remains a model verdict (CLAUDE.md Rule 1).  Only the
+number of second passes changes.
 """
 from __future__ import annotations
 
 import os
 from typing import Any, Callable
 
-# Stages whose separate advisory critic stays on under the default policy.
-DEFAULT_CRITIC_STAGES: frozenset[str] = frozenset({
-    "route", "dedup", "pre_claim",
-})
 # Every stage that has a per-decision critic adapter at all.
 ALL_CRITIC_STAGES: frozenset[str] = frozenset({
     "cells", "materialize", "answer_restriction", "marking", "route",
     "level", "cluster", "describe", "qa", "refiner", "dedup", "pre_claim",
+})
+# Stages whose separate advisory critic runs under the default policy:
+# all of them (register Q31). The Q26 cost set — route, dedup and the
+# pre-learning claim only — is one variable away (``AEGIS_MASTER_CRITICS=
+# route,dedup,pre_claim``).
+DEFAULT_CRITIC_STAGES: frozenset[str] = ALL_CRITIC_STAGES
+COST_CRITIC_STAGES: frozenset[str] = frozenset({
+    "route", "dedup", "pre_claim",
 })
 
 CRITICS_ENV = "AEGIS_MASTER_CRITICS"
@@ -54,10 +63,10 @@ def _truthy(value: str) -> bool:
 def critic_stages() -> frozenset[str]:
     """The stages whose separate critic runs.
 
-    ``AEGIS_MASTER_CRITICS`` = ``all`` restores a critic on every decision
-    (the pre-Q26 behaviour); ``none`` runs no per-decision critic; a
-    comma-separated list names the stages explicitly.  Unset means the
-    default set above.
+    ``AEGIS_MASTER_CRITICS`` = ``all`` (the default since register Q31)
+    runs a critic on every decision; ``none`` runs no per-decision critic;
+    a comma-separated list names the stages explicitly (the Q26 cost set
+    is ``route,dedup,pre_claim``).  Unset means the default set above.
     """
     raw = os.environ.get(CRITICS_ENV, "").strip().lower()
     if not raw:
@@ -99,13 +108,15 @@ def item_review_enabled() -> bool:
 
 
 def group_qa_enabled() -> bool:
-    """Whether the touched-group QA pass runs (default off, opt-in)."""
-    return _truthy(os.environ.get(GROUP_QA_ENV, ""))
+    """Whether the touched-group QA pass runs (default on since Q31)."""
+    raw = os.environ.get(GROUP_QA_ENV, "").strip()
+    return True if not raw else _truthy(raw)
 
 
 def master_refiner_enabled() -> bool:
-    """Whether the Master Refiner prose pass runs (default off, opt-in)."""
-    return _truthy(os.environ.get(REFINER_ENV, ""))
+    """Whether the Master Refiner prose pass runs (default on since Q31)."""
+    raw = os.environ.get(REFINER_ENV, "").strip()
+    return True if not raw else _truthy(raw)
 
 
 def describe() -> dict[str, Any]:

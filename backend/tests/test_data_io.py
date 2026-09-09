@@ -275,7 +275,7 @@ def test_import_workbook_roundtrip(client, db, request):
             "keywords": [{
                 "answer_type": "Phrases",
                 "weightage": "2",
-                "keyword": "[content]: states and explains the result",
+                "keyword": "states and explains the result",
             }],
         }],
         display_answer="A complete explanation of the result.",
@@ -380,7 +380,27 @@ def test_import_workbook_roundtrip(client, db, request):
         if not has_subquestion:
             continue
         multipart_rows += 1
+        # §24/Q32: the parent is the ordered, non-additive view of child
+        # criteria. Both representations must carry the same two-mark rubric;
+        # export must neither blank it nor introduce a second scoring demand.
+        expected_rubric = {
+            "answer_type_1": "Phrases",
+            "answer_content_1": "states and explains the result",
+            "answer_weightage_1": "2",
+            "sq1_answer_type_1": "Phrases",
+            "sq1_keyword_1": "states and explains the result",
+            "sq1_weightage_1": "2",
+            "marks": 2,
+            "sub_question_marks_1": "2",
+        }
+        for field, expected in expected_rubric.items():
+            assert descriptive_sheet.cell(
+                row=row_number,
+                column=descriptive_layout.column("question", field) + 1,
+            ).value == expected
         for number in descriptive_layout.answer_block_numbers:
+            if number == 1:
+                continue
             for field in (
                 f"answer_type_{number}",
                 f"answer_content_{number}",
