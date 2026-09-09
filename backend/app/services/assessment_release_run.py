@@ -1407,13 +1407,44 @@ def _label_base(concept: Mapping[str, Any]) -> str:
 
 
 def _next_label_index(db: Session, base: str) -> int:
-    """Continue numbering after every label already committed for this base.
-
-    The body moved to ``identity.next_label_index`` (T5-3) so the Build
-    Assessments lane runs the identical max-scan instead of its own count.
-    This name is kept as the local seam.
-    """
+    """Compatibility peek; minting requires a durable range reservation."""
     return identity.next_label_index(db, base)
+
+
+def _require_master_allocation_session(db: Session) -> None:
+    """Avoid waiting on our own SQLite transaction or committing caller edits."""
+    bind = db.get_bind()
+    engine = bind.engine
+    if engine.dialect.name == "sqlite":
+        # A second writer cannot proceed behind our own uncommitted writer.
+        # Name a caller transaction defect rather than waiting for ourselves
+        # or implicitly committing unrelated caller edits.
+        if db.connection().connection.driver_connection.in_transaction:
+            raise ReleaseRunError(
+                "Master label reservation requires no active SQLite database "
+                "transaction; commit or roll back the preceding operation before the run"
+            )
+
+
+def _reserve_master_labels(
+    db: Session, counts: dict[str, int], *, reservation_key: str,
+) -> dict[str, int]:
+    """Commit issued numbers before external Refiner work, without committing db.
+
+    The runner reads the accepted source in its caller's session. This short
+    independent transaction releases its write lock before any provider call
+    or snapshot write. A later failed Master can leave a gap, never reuse.
+    """
+    if not any(counts.values()):
+        return {}
+    _require_master_allocation_session(db)
+    engine = db.get_bind().engine
+    with Session(bind=engine) as allocator:
+        starts = identity.reserve_label_indices(
+            allocator, counts, reservation_key=reservation_key,
+        )
+        allocator.commit()
+    return starts
 
 
 # --------------------------------------------------------------------------- #
@@ -1456,6 +1487,9 @@ def run_pre_release_for_job(
     job = uploads.get_job(
         db, job_id, owner_sub=owner_sub, module="build_concepts")
     db.refresh(job)
+    # Check the short independent reservation can run before any provider
+    # spend, and check again at allocation if a callback changed the session.
+    _require_master_allocation_session(db)
     generation_recovery.require_mutation_allowed(
         job, operation="build the pre Master file"
     )
@@ -1534,6 +1568,7 @@ def run_release_for_job(
     generation_recovery.require_mutation_allowed(
         job, operation="build a Master file"
     )
+    _require_master_allocation_session(db)
     authorities = dict(authorities or {})
     generate_lane = generated_questions is not None
     profile = assessment_profile.resolve(profile)
@@ -1558,7 +1593,8 @@ def run_release_for_job(
             )
         )
     try:
-        bridge = release_snapshot.build(db, job, staged_release)
+        with db.no_autoflush:
+            bridge = release_snapshot.build(db, job, staged_release)
     except release_snapshot.SnapshotError as exc:
         raise ReleaseRunError(str(exc)) from exc
     inventory = bridge["question_task_inventory"]
@@ -2952,15 +2988,37 @@ def run_release_for_job(
     )
 
     # Stage 8.5 — labels from accepted source order, append-only.
-    label_cursor: dict[str, int] = {}
+    label_counts: dict[str, int] = {}
+    for candidate in candidates:
+        concept_key = str(candidate.get("concept_key") or "")
+        if concept_key:
+            base = _label_base(concept_records_by_key[concept_key])
+            label_counts[base] = label_counts.get(base, 0) + 1
+    # Replaying the exact same accepted work retains its labels and cached
+    # Refiner decisions. Different jobs, lanes or accepted content reserve new
+    # ranges. The receipt and counter advance commit atomically, so interruption
+    # between numbering and release creation cannot cause reuse or extra spend.
+    reservation_key = rel.sha256_json({
+        "policy": "master-label-reservation-v1",
+        "owner_sub": owner_sub,
+        "job_id": job.id,
+        "lane": staged_lane,
+        "envelope_sha256": envelope_sha,
+        "source_concept_release_sha256": source_release_sha,
+        "profile": profile,
+        "candidates": candidates,
+        "groups": groups,
+        "placements": placements,
+    })
+    label_cursor = _reserve_master_labels(
+        db, label_counts, reservation_key=reservation_key,
+    )
     for candidate in candidates:
         concept_key = str(candidate.get("concept_key") or "")
         if not concept_key:
             continue
         concept = concept_records_by_key[concept_key]
         base = _label_base(concept)
-        if base not in label_cursor:
-            label_cursor[base] = _next_label_index(db, base)
         candidate["question_label"] = f"{base} Q{label_cursor[base]:02d}"
         label_cursor[base] += 1
 

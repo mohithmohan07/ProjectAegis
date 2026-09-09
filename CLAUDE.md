@@ -1,6 +1,14 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q35 (8 September 2026).**
+**Latest owner amendment: Q36 (9 September 2026).**
+[Q36](docs/aegis-restructure.md#q36--decided--durable-question-numbering-and-current-workflow-tests)
+approves fixing question-number reuse with durable atomic reservations and
+migrating the six stale expected-failure tests to staged generation and explicit
+publication. Preserve useful regression assertions and identical-run replay;
+target zero expected failures. This is identifier bookkeeping, separate from
+Q35's exact category/group field values and API-owned semantic judgments.
+
+**Previous owner amendment: Q35 (8 September 2026).**
 [Q35](docs/aegis-restructure.md#q35--decided--complete-evidence-efficient-execution-and-exact-output-vocabulary)
 approves the end-to-end audit recommendations: complete source/visual evidence,
 lossless formatting and API-owned semantic repair, consistent grading contracts,

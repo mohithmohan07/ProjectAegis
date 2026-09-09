@@ -7,7 +7,7 @@ import pytest
 from app import bulk_import as bi
 from app import models
 from app.bulk_import import writer
-from tests.conftest import convert_concept_upload, stream_result
+from tests.conftest import convert_concept_upload
 
 
 def _mark_allotted(records):
@@ -785,37 +785,144 @@ def test_roundtrip_recovers_clean_titles(db):
     assert "_" in str(rows[0][12])  # a tag is present
 
 
-def test_deposit_fills_required_fields(client, db, monkeypatch):
-    # A fresh chapter with blank (NA-equivalent) required fields.
+@pytest.mark.parametrize("registered_minutes", [120, None])
+def test_deposit_fills_required_fields(client, db, monkeypatch, registered_minutes):
+    """Authored metadata stages first; only registered durations publish.
+
+    The former test expected generation to invent required fields and write
+    them immediately. This pins the retained descriptions/list formatting
+    across the actual review and explicit publication boundaries instead.
+    """
+    from openpyxl import load_workbook
+    from app.services import build_concepts_release as release
+    from app.services import build_concepts_terminal_release_contract as terminal
+    from app.services import chapter_durations, generation
+
+    terminal.install()
+    suffix = "Registered" if registered_minutes else "Missing"
     chapter = models.Chapter(
-        chapter_code="09CBSS_ReqTest", board="CBSE", grade="09",
+        chapter_code=f"09CBSS_ReqTest{suffix}", board="CBSE", grade="09",
         subject="Social Science", unit="Social Science Unit",
-        chapter_title="Req Test Chapter", chapter_display_name="Req Test Chapter",
+        chapter_title=f"Req Test Chapter {suffix}",
+        chapter_display_name=f"Req Test Chapter {suffix}",
         chapter_duration="", chapter_description="", pre_topics="", post_topics="",
     )
     db.add(chapter)
     db.commit()
     chapter_id = chapter.id
+    topics = ["Meaning of Social Science", "Importance of Social Science"]
+    descriptions = {
+        bi.normalize_question_text(topics[0]): "Social science examines people and societies.",
+        bi.normalize_question_text(topics[1]): "Social science explains choices in public life.",
+    }
+    chapter_description = "An authored account of social science and its importance."
+    records = [
+        {
+            "topic": topic,
+            "concept_title": title,
+            "concept_details": f"Description: {detail}",
+            "keywords": "society",
+            "_semantic_topic_id": f"TOPIC-{index:04d}",
+        }
+        for index, (topic, title, detail) in enumerate([
+            (topics[0], "Study of Society", "Social science studies people in society."),
+            (topics[1], "Understanding Public Choices", "Evidence informs choices in public life."),
+        ], start=1)
+    ]
+    metadata_calls = []
+
+    def recorded_metadata(*, meta, topics):
+        metadata_calls.append((meta, topics))
+        return {
+            "chapter_description": chapter_description,
+            "topic_descriptions": descriptions,
+        }
+
+    monkeypatch.setattr(generation, "chapter_meta_via_api", recorded_metadata)
+    monkeypatch.setattr(
+        chapter_durations, "lookup_duration_minutes",
+        lambda **_kwargs: registered_minutes,
+    )
+    monkeypatch.setattr(
+        generation, "_openai_json",
+        lambda *_args, **_kwargs: pytest.fail("publication must not call a provider"),
+    )
 
     files = {"file": ("req.txt", io.BytesIO(
         b"## Meaning of Social Science\nWhat is social science studies.\n"
         b"Scope of social science explained.\n"
         b"## Importance of Social Science\nWhy social science matters today."
     ), "text/plain")}
-    job = client.post("/build-concepts/post-learning/uploads", files=files).json()
+    job = client.post(
+        "/build-concepts/post-learning/uploads?source_book=NCERT", files=files,
+    ).json()
     convert_concept_upload(client, job["id"])
-    stream_result(client.post(
-        f"/build-concepts/post-learning/uploads/{job['id']}/generate",
-        json={"target_chapter_id": chapter_id}))
-
+    db.expire_all()
+    upload = db.get(models.UploadJob, job["id"])
+    release.stage_release(
+        db, upload, target_chapter_id=chapter_id, records=records,
+        inventory={"items": [], "stats": {}}, mined_types={"types": []},
+    )
+    assert len(metadata_calls) == 1
+    assert [row["topic"] for row in metadata_calls[0][1]] == topics
     db.expire_all()
     chapter = db.get(models.Chapter, chapter_id)
-    # Required fields are filled (no "NA").
-    assert chapter.chapter_duration.endswith("minutes")
-    assert chapter.chapter_description and chapter.chapter_description.lower() != "na"
-    # pre/post topic lists are comma-separated (never semicolons).
-    assert ";" not in (chapter.post_topics or "")
-    # Newly created post topics carry a synthesized summary.
-    new = [t for t in chapter.topics if t.topic_title in
-           ("Meaning of Social Science", "Importance of Social Science")]
-    assert new and all(t.topic_description for t in new)
+    assert chapter.chapter_duration == ""
+    assert chapter.chapter_description == ""
+    assert chapter.post_topics == ""
+    assert chapter.topics == []
+
+    exported = client.get(
+        f"/build-concepts/uploads/{job['id']}/release-bulk-import.xlsx"
+    )
+    assert exported.status_code == 200
+    with io.BytesIO(exported.content) as data:
+        workbook = load_workbook(data, read_only=True)
+        sheet = workbook[bi.SHEET_OBJECTIVE]
+        header = next(sheet.iter_rows(min_row=2, max_row=2, values_only=True))
+        rows = [dict(zip(header, row)) for row in sheet.iter_rows(
+            min_row=3, values_only=True,
+        ) if any(value is not None for value in row)]
+        workbook.close()
+    assert len(rows) == 2
+    assert {row["chapter_description"] for row in rows} == {chapter_description}
+    assert [row["topic_description"] for row in rows] == list(descriptions.values())
+    assert {row["chapter_duration"] for row in rows} == {registered_minutes}
+    assert all(row["post_topics"] == " | ".join(
+        entry["topic_title"] for entry in rows
+    ) for row in rows)
+    assert all(row["pre_topics"] is None for row in rows)
+
+    response = client.post(
+        f"/build-concepts/uploads/{job['id']}/upload-release?lane=post"
+    )
+    if registered_minutes is None:
+        assert response.status_code == 400
+        assert "chapter_duration_unregistered" in response.json()["detail"]
+        db.expire_all()
+        chapter = db.get(models.Chapter, chapter_id)
+        assert chapter.chapter_duration == ""
+        assert chapter.chapter_description == ""
+        assert chapter.topics == []
+        payload = release.release_payload(db.get(models.UploadJob, job["id"]))
+        assert release.release_state(payload) == release.DIAGNOSTIC_RELEASE
+        assert any(issue["code"] == "chapter_duration_unregistered"
+                   for issue in payload["issues"])
+        assert client.get(
+            f"/build-concepts/uploads/{job['id']}/diagnostics.zip"
+        ).status_code == 200
+        assert len(metadata_calls) == 1
+        return
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["database_uploaded"] is True
+    assert len(response.json()["created_concept_ids"]) == 2
+    db.expire_all()
+    chapter = db.get(models.Chapter, chapter_id)
+    assert chapter.chapter_duration == "120 minutes"
+    assert chapter.chapter_description == chapter_description
+    assert chapter.post_topics == " | ".join(row["topic_title"] for row in rows)
+    assert {topic.topic_title: topic.topic_description for topic in chapter.topics} == {
+        topic: descriptions[bi.normalize_question_text(topic)] for topic in topics
+    }
+    assert len(metadata_calls) == 1, "explicit publication must reuse staged metadata"

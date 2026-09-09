@@ -388,8 +388,17 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
 
 
 def test_full_pipeline_publishes_a_ready_release(db):
+    from app.services import identity
+
     chapter = _chapter_with_concepts(db)
     job = _make_job(db, chapter)
+    # This fixture shares a chapter with other release tests. Staged releases
+    # now retain issued numbers even before database publication, so assert
+    # exact continuation instead of assuming every family still starts at 1.
+    next_indices = {
+        row.family_base: identity.next_label_index(db, row.family_base)
+        for row in db.query(models.QuestionLabelSequence).all()
+    }
     calls = {}
     qa_payloads = []
     authorities, first_concept_name = _authorities(
@@ -423,9 +432,11 @@ def test_full_pipeline_publishes_a_ready_release(db):
     assert q["question_duration"] == 2
     assert str(q["correct_answer_1"]) == "Yes"
     # Labels mint from the concept machine identity in source order.
-    assert q["question_label"].endswith("Q01")
-    assert descriptive_rows[0]["question_label"].endswith(
-        ("Q01", "Q02"))
+    for row in (q, descriptive_rows[0]):
+        base, _separator, _number = row["question_label"].rpartition(" Q")
+        expected = next_indices.get(base, 1)
+        assert row["question_label"] == f"{base} Q{expected:02d}"
+        next_indices[base] = expected + 1
     assert descriptive_rows[0]["answer_restriction"] == "Open"
     assert descriptive_rows[0]["question_duration"] == 5
     assert descriptive_rows[0]["math_keyboard"] == "No"

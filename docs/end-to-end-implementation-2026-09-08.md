@@ -33,6 +33,39 @@ uniform xhigh, configured review stages and 5 Basic + 5 Intermediate Pre
 coverage remain unchanged. See [label history](category-group-history-2026-09-08.md)
 for the exact presentation map and historical evidence.
 
+## Q36 follow-up: expected failures and durable identifiers
+
+The previous CI result was 3,955 passed and seven expected failures. Six tests
+still assumed automatic publication, invented metadata or error-only failures;
+one exposed actual reuse of the highest deleted question number. Q36 approves
+fixing that defect and migrating the useful assertions to current behavior.
+
+Two additive tables now retain each label family's issued highwater and the
+content-bound reservations used by Master retries. Both generation paths reserve
+complete ranges atomically. Imported questions and staged release snapshots
+advance history without changing their supplied labels; startup backfills live
+questions and every retained release version. Blank and legacy families remain
+separate. History outlives deleted questions, concepts and releases. Numbers
+absent every retained record before the migration cannot be recovered.
+
+An identical accepted Master replay keeps its labels, frozen payload and cached
+Refiner work. New accepted content reserves new numbers. Master reservations
+commit in a short independent transaction before external Refiner calls; they
+survive interruption without holding a write lock across those calls. Ordinary
+assessment batches reserve within their publication transaction and do not
+commit unrelated caller edits. Database integer exhaustion is detected before
+arithmetic can round or reuse a number; oversized historical labels remain
+verbatim and bootable, with further allocation in that family refused.
+
+The six migrated tests now cover staged downloads and explicit publication,
+source merging across two jobs, registered or missing duration, conversion
+failure diagnostics, and certified checkpoint recovery without provider calls.
+All seven expected-failure exemptions have been removed. The new allocator suite
+uses independent SQLite sessions and a recreated engine to check concurrency,
+rollback, restart, deletion, imports, staged history and interrupted Master
+reservation replay. Existing release tests retain their exact-payload and
+zero-provider-call replay assertions.
+
 ## Operational verification still required
 
 Offline tests establish transport, evidence preservation, arithmetic, identity,

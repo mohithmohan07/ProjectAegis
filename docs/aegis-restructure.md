@@ -2101,6 +2101,29 @@ required configured access and a separately recorded run scope. The original
 master-contract document remains a verbatim historical authority; this register
 records amendments rather than silently rewriting it.
 
+### Q36 — DECIDED — Durable question numbering and current workflow tests
+
+**Owner ruling (9 September 2026).** After the audit showed six obsolete
+workflow assertions and one genuine highest-number reuse bug among the seven
+expected failures, the owner approved implementing the proposed fixes and
+rerunning CI with zero expected failures.
+
+Persist atomic per-family highwater counters independently of questions,
+concepts and releases. Continue existing label families without renumbering.
+Record supplied/imported labels and staged Master labels; recover the highest
+retained live or historical release number on startup. The same accepted Master
+run replays a durable, content-bound reservation, preserving labels and cached
+Refiner decisions. Changed accepted work obtains a fresh reservation. Do not
+hold a database write lock across provider calls or commit unrelated caller edits.
+Previously deleted labels absent every retained record cannot be reconstructed.
+
+Migrate the six old tests to the current staged-generation, explicit-publication
+and downloadable-diagnostic contracts, preserving their formatting, topology,
+source-merge, checkpoint-recovery and conversion-failure assertions. Remove their
+expected-failure exemptions and the numbering exemption only once the actual
+behaviors pass. This authorizes no semantic classifier changes, stage removal,
+model/effort reduction, production merge or deployment.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the

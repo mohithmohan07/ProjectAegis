@@ -2,17 +2,11 @@
 import io
 
 import openpyxl
+import pytest
 
 from app import bulk_import as bi
-from app import config, models
+from app import models
 from app.bulk_import import layouts, reader, writer
-
-
-def _use_specific_dry_learner_analysis(monkeypatch):
-    # The deterministic learner-analysis fallbacks are deleted (filler is
-    # never synthesized); dry rows simply carry whatever analysis their
-    # fixtures author. Kept as a no-op seam so callers stay explicit.
-    del monkeypatch
 
 
 def test_merge_sources_dedupes_case_insensitively():
@@ -84,38 +78,126 @@ def test_legacy_workbook_without_concept_source_still_imports(db, tmp_path):
 
 
 def test_concept_resused_across_books_merges_sources(
-    client, db, first_chapter, monkeypatch,
+    client, db, monkeypatch,
 ):
-    """Same concept from a second book: not duplicated, sources accumulate."""
-    _use_specific_dry_learner_analysis(monkeypatch)
+    """Two reviewed releases reuse identities only on explicit publication.
+
+    Persisted provenance accumulates while each run's export continues to
+    name its own publication, including after the second book is published.
+    """
+    from app.services import build_concepts_release as release
+    from app.services import build_concepts_terminal_release_contract as terminal
+    from app.services import generation
+    from tests.conftest import convert_concept_upload
+
+    terminal.install()
+    chapter = models.Chapter(
+        chapter_code="10CBPH_OpticsSourceMerge", board="CBSE", grade="10",
+        subject="Physics", unit="Optics", chapter_title="Optics Source Merge",
+        chapter_display_name="Optics Source Merge", chapter_duration="40 minutes",
+    )
+    db.add(chapter)
+    db.commit()
+    chapter_id = chapter.id
+    records = [{
+        "topic": "Optics Basics",
+        "concept_title": "Refraction of Light through Glass Slabs",
+        "concept_details": "Description: Light changes direction at a glass boundary.",
+        "keywords": "refraction",
+        "_semantic_topic_id": "TOPIC-OPTICS",
+    }, {
+        "topic": "Optics Basics",
+        "concept_title": "Total Internal Reflection in Prisms",
+        "concept_details": "Description: Light reflects inside glass above the critical angle.",
+        "keywords": "reflection",
+        "_semantic_topic_id": "TOPIC-OPTICS",
+    }]
+    monkeypatch.setattr(generation, "chapter_meta_via_api", lambda **_kwargs: {
+        "chapter_description": "An authored account of light crossing glass boundaries.",
+        "topic_descriptions": {
+            bi.normalize_question_text("Optics Basics"): "Refraction and internal reflection.",
+        },
+    })
+    monkeypatch.setattr(
+        generation, "_openai_json",
+        lambda *_args, **_kwargs: pytest.fail("publication must not call a provider"),
+    )
     body = (b"## Optics Basics\n"
             b"Refraction of light through glass slabs\n"
             b"Total internal reflection in prisms")
 
-    from tests.conftest import convert_concept_upload, stream_result
-
-    def upload_and_generate(book):
+    def upload_and_stage(book):
         files = {"file": (f"{book.replace(' ', '_')}.txt", io.BytesIO(body), "text/plain")}
         job = client.post(
             f"/build-concepts/post-learning/uploads?source_book={book}", files=files,
         ).json()
         assert job["source_book"] == book
         convert_concept_upload(client, job["id"])
-        return stream_result(client.post(
-            f"/build-concepts/post-learning/uploads/{job['id']}/generate",
-            json={"target_chapter_id": first_chapter["id"]}))
+        db.expire_all()
+        release.stage_release(
+            db, db.get(models.UploadJob, job["id"]),
+            target_chapter_id=chapter_id, records=records,
+            inventory={"items": [], "stats": {}}, mined_types={"types": []},
+        )
+        return job["id"]
 
-    first = upload_and_generate("NCERT")
-    assert first["concepts_created"] == 3
-    assert first["concepts_merged"] == 0
+    def exported_rows(job_id):
+        response = client.get(
+            f"/build-concepts/uploads/{job_id}/release-bulk-import.xlsx"
+        )
+        assert response.status_code == 200
+        workbook = openpyxl.load_workbook(io.BytesIO(response.content), read_only=True)
+        try:
+            sheet = workbook[bi.SHEET_OBJECTIVE]
+            header = next(sheet.iter_rows(min_row=2, max_row=2, values_only=True))
+            return [dict(zip(header, row)) for row in sheet.iter_rows(
+                min_row=3, values_only=True,
+            ) if any(value is not None for value in row)]
+        finally:
+            workbook.close()
 
-    second = upload_and_generate("RD Sharma")
-    assert second["concepts_created"] == 0
-    assert second["concepts_merged"] == 3
+    def concepts():
+        db.expire_all()
+        return (db.query(models.Concept).join(models.Topic)
+                .filter(models.Topic.chapter_id == chapter_id)
+                .order_by(models.Concept.id).all())
 
-    c = (db.query(models.Concept)
-         .filter(models.Concept.concept_title.like("Refraction of light%")).one())
-    assert c.sources == "NCERT | RD Sharma"
+    def publish(job_id):
+        response = client.post(
+            f"/build-concepts/uploads/{job_id}/upload-release?lane=post"
+        )
+        assert response.status_code == 200, response.json()
+        assert response.json()["database_uploaded"] is True
+        return response.json()
+
+    first_job = upload_and_stage("NCERT")
+    assert concepts() == []
+    first_export = exported_rows(first_job)
+    assert len(first_export) == len(records)
+    assert {row["concept_source"] for row in first_export} == {"NCERT"}
+    first = publish(first_job)
+    assert len(first["created_concept_ids"]) == len(records)
+    assert first["updated_concept_ids"] == []
+    identities = [(concept.id, concept.machine_id) for concept in concepts()]
+    assert all(machine_id for _, machine_id in identities)
+    assert {concept.sources for concept in concepts()} == {"NCERT"}
+
+    second_job = upload_and_stage("RD Sharma")
+    assert second_job != first_job
+    assert [(concept.id, concept.machine_id) for concept in concepts()] == identities
+    assert {concept.sources for concept in concepts()} == {"NCERT"}
+    second_export = exported_rows(second_job)
+    assert len(second_export) == len(records)
+    assert {row["concept_source"] for row in second_export} == {"RD Sharma"}
+    second = publish(second_job)
+    assert second["created_concept_ids"] == []
+    assert second["updated_concept_ids"] == first["created_concept_ids"]
+    assert [(concept.id, concept.machine_id) for concept in concepts()] == identities
+    assert {concept.sources for concept in concepts()} == {"NCERT | RD Sharma"}
+    for job_id, book in ((first_job, "NCERT"), (second_job, "RD Sharma")):
+        rows = exported_rows(job_id)
+        assert len(rows) == len(records)
+        assert {row["concept_source"] for row in rows} == {book}
 
 
 def test_duplicate_questions_across_books_merge_sources(client, db, first_chapter):
