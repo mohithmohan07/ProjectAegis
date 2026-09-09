@@ -59,6 +59,31 @@ test("live console, stages and lanes show recorded INR with incomplete usage and
   expect(lane.textContent).toContain("Usage incomplete");
 });
 
+test("usage details start folded, toggle accessibly, and keep the choice across usage updates", () => {
+  const { rerender } = render(<RunConsolePanel />);
+  const show = screen.getByRole("button", { name: /show usage details/i });
+  expect(show.getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByText("Input tokens", { selector: "dt" })).toBeNull();
+
+  fireEvent.click(show);
+  expect(screen.getByRole("button", { name: /hide usage details/i })
+    .getAttribute("aria-expanded")).toBe("true");
+  expect(screen.getByText("Input tokens", { selector: "dt" })).toBeDefined();
+
+  mocks.state = {
+    ...mocks.state,
+    usage: { ...mocks.state.usage!, total_tokens: 101 },
+  };
+  rerender(<RunConsolePanel />);
+  expect(screen.getByRole("button", { name: /hide usage details/i })
+    .getAttribute("aria-expanded")).toBe("true");
+
+  fireEvent.click(screen.getByRole("button", { name: /hide usage details/i }));
+  expect(screen.getByRole("button", { name: /show usage details/i })
+    .getAttribute("aria-expanded")).toBe("false");
+  expect(screen.queryByText("Input tokens", { selector: "dt" })).toBeNull();
+});
+
 test("historical USD remains visible while INR is explicitly unavailable", () => {
   const usage = mocks.state.usage!;
   for (const record of [usage, ...(usage.stages ?? [])]) {

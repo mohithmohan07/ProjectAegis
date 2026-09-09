@@ -144,6 +144,36 @@ export interface StageUsageRow extends InrUsage {
   elapsed_seconds?: number;
 }
 
+/** Cumulative usage and recorded charges for one provider family.  The
+ * backend keeps this alongside the top-level ledger so the UI can show a
+ * provider split without re-pricing historical receipts in the browser. */
+export interface ProviderUsageSummary extends InrUsage {
+  /** Stable provider key (openai, gemini, or unknown). */
+  provider?: "openai" | "gemini" | "unknown";
+  model?: string;
+  request_count?: number;
+  provider_request_count?: number;
+  attempt_count?: number;
+  usage_complete?: boolean;
+  attempt_coverage_complete?: boolean;
+  missing_usage_response_count?: number;
+  pending_request_count?: number;
+  unresolved_usage_request_count?: number;
+  untracked_response_count?: number;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  cache_write_tokens?: number;
+  uncached_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_tokens?: number;
+  total_tokens?: number;
+  estimated_cost_usd?: number | null;
+  known_usage_estimated_cost_usd?: number;
+  pricing_complete?: boolean;
+  /** Provider rows may expose stage/request detail in future versions. */
+  stages?: StageUsageRow[];
+}
+
 export interface OpenAIUsage extends InrUsage {
   model: string;
   stages?: StageUsageRow[];
@@ -162,6 +192,8 @@ export interface OpenAIUsage extends InrUsage {
   request_count: number;
   request_attempts?: ProviderRequestUsage[];
   latest_request?: ProviderRequestUsage | null;
+  /** Durable provider-family totals (OpenAI/GPT, Gemini, and unknown). */
+  providers?: ProviderUsageSummary[];
   /** request_count remains the legacy count of usage-bearing responses. */
   provider_request_count?: number;
   attempt_count?: number;

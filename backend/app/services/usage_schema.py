@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 SCHEMA_VERSION = 3
 MIN_SCHEMA_VERSION = 2
@@ -117,6 +117,37 @@ class CostMatrixRow(CurrencyFields):
     pricing_source: Annotated[str, Field(max_length=2048)]
 
 
+class ProviderSummary(CurrencyFields):
+    """Cumulative usage for one normalized provider family.
+
+    Provider identity is deliberately a small closed vocabulary in the wire
+    summary.  The raw attempt ledger retains the original provider string so
+    custom/historical routes remain auditable while their aggregate is placed
+    in ``unknown`` instead of being guessed as OpenAI or Gemini.
+    """
+
+    provider: Literal["openai", "gemini", "unknown"]
+    request_count: Count
+    input_tokens: Count
+    cached_input_tokens: Count
+    cache_write_tokens: Count = 0
+    uncached_input_tokens: Count
+    output_tokens: Count
+    reasoning_tokens: Count
+    total_tokens: Count
+    estimated_cost_usd: Cost | None
+    known_usage_estimated_cost_usd: Cost
+    pricing_complete: bool
+    pricing_source: Annotated[str, Field(max_length=2048)]
+    attempt_count: Count
+    provider_request_count: Count
+    pending_request_count: Count
+    unresolved_usage_request_count: Count
+    missing_usage_response_count: Count
+    usage_complete: bool
+    attempt_coverage_complete: bool
+
+
 class MechanicalSpan(Closed):
     span_id: Identifier
     parent_span_id: Identifier | None
@@ -163,6 +194,9 @@ class UsageExtensionsV3(UsageExtensionsV2):
     usage_schema_version: Annotated[int, Field(ge=3, le=3)]
     pending_request_count: Count
     unresolved_usage_request_count: Count
+    # Compact live summaries retain the provider split even when request
+    # attempt details are intentionally omitted from the stream.
+    providers: list[ProviderSummary] = Field(default_factory=list, max_length=3)
     # Run-level timing is separate from provider request time.  Processing
     # pauses while the reviewer edits the Concept files, then resumes for the
     # Master build; all three values remain in the same durable receipt.
@@ -196,11 +230,25 @@ def validate_currency_fields(value: dict, path: str) -> None:
 
 
 def validate_extensions(value: dict, path: str) -> None:
-    extensions = {key: value[key] for key in TOP_EXTENSION_FIELDS if key in value}
-    if not extensions:
-        return
     try:
+        if "providers" in value:
+            # Provider rows are a v3 addition, but an export can retain them
+            # while carrying a v2 version marker. Validate their shape in
+            # either case so malformed/negative rows cannot bypass checks.
+            if not isinstance(value["providers"], list) or len(value["providers"]) > 3:
+                raise ValueError("providers must be a list with at most three rows")
+            TypeAdapter(list[ProviderSummary]).validate_python(
+                value["providers"], strict=True,
+            )
         schema = UsageExtensionsV3 if value.get("usage_schema_version") == 3 else UsageExtensionsV2
+        # Provider rows were validated above. Preserve the existing strict
+        # version-specific validation for every other telemetry field.
+        extensions = {
+            key: value[key] for key in TOP_EXTENSION_FIELDS if key in value
+            and not (key == "providers" and schema is UsageExtensionsV2)
+        }
+        if not extensions:
+            return
         schema.model_validate(extensions, strict=True)
     except ValueError as exc:
         raise ValueError(f"{path} runtime telemetry schema is invalid: {exc}") from exc

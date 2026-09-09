@@ -210,6 +210,7 @@ test("live Gemini request charges and cumulative rupees survive terminal usage",
     inr_conversion_complete: true, latest_request: receipt,
   };
   act(() => pending[0].onEvent({ type: "usage", data: live }));
+  fireEvent.click(screen.getByRole("button", { name: /Show usage details/ }));
   expect(screen.getByText("Latest request", { selector: "dt" }).parentElement?.textContent)
     .toContain("₹0.8750");
 
@@ -217,8 +218,10 @@ test("live Gemini request charges and cumulative rupees survive terminal usage",
     estimated_cost_inr: 2.735, request_attempts: [receipt] };
   await act(async () => pending[0].resolve({ openai_usage: final }));
   expect(screen.getByTestId("status").textContent).toBe("done");
-  expect(screen.getByText("Estimated cost", { selector: "dt" }).parentElement?.textContent)
+  expect(screen.getByTestId("provider-cost-strip").textContent)
     .toContain("₹2.74");
+  expect(screen.getByRole("button", { name: /Hide usage details/ }).getAttribute("aria-expanded"))
+    .toBe("true");
   expect(screen.getByText("Latest request", { selector: "dt" }).parentElement?.textContent)
     .toContain("₹0.8750");
 });

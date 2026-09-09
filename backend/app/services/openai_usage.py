@@ -73,6 +73,8 @@ _PRICING: tuple[tuple[str, Pricing], ...] = (
     ),
 )
 
+_PROVIDER_KEYS = ("openai", "gemini", "unknown")
+
 
 def _decimal_override(name: str) -> Decimal | None:
     try:
@@ -199,6 +201,13 @@ class StageUsage:
 @dataclass
 class UsageAccumulator:
     models: dict[str, ModelUsage] = field(default_factory=dict)
+    # Provider totals are maintained independently of model totals because a
+    # model name alone cannot identify a custom route.  For example, an
+    # explicitly labelled third-party endpoint using a GPT-shaped model stays
+    # in ``unknown`` while its already-recorded model receipt is preserved.
+    providers: dict[str, ModelUsage] = field(default_factory=dict)
+    provider_missing_usage_responses: dict[str, int] = field(default_factory=dict, repr=False)
+    provider_untracked_responses: dict[str, int] = field(default_factory=dict, repr=False)
     stages: dict[tuple[str, str], StageUsage] = field(default_factory=dict)
     stage_models: dict[tuple[str, str, str], ModelUsage] = field(default_factory=dict)
     attempts: list[dict[str, Any]] = field(default_factory=list)
@@ -264,6 +273,7 @@ class UsageAccumulator:
         self,
         *,
         model: str,
+        provider: str = "",
         request_count: int = 1,
         input_tokens: int = 0,
         cached_input_tokens: int = 0,
@@ -314,6 +324,17 @@ class UsageAccumulator:
             reasoning_tokens=reasoning_tokens,
             total_tokens=total,
             estimated_cost_usd=request_cost,
+            )
+            provider_key = _provider_key(provider, model)
+            provider_item = self.providers.setdefault(
+                provider_key, ModelUsage(model=provider_key)
+            )
+            provider_item.add(
+                request_count=request_count, input_tokens=input_tokens,
+                cached_input_tokens=cached_input_tokens,
+                cache_write_tokens=cache_write_tokens,
+                output_tokens=output_tokens, reasoning_tokens=reasoning_tokens,
+                total_tokens=total, estimated_cost_usd=request_cost,
             )
             matrix_row = self.stage_models.setdefault(
                 (str(stage), str(lane), model), ModelUsage(model=model)
@@ -492,8 +513,57 @@ class UsageAccumulator:
             ],
             "stages": self.stage_rows(),
         }
+        result["providers"] = self.provider_rows()
         _add_receipt_currency(result, self.currency_receipts)
         return result
+
+    def provider_rows(self) -> list[dict[str, Any]]:
+        """Return normalized provider aggregates, including live coverage.
+
+        Attempt details are optional in the console stream, so all fields
+        needed by the compact provider split are materialized before callers
+        remove ``request_attempts``.
+        """
+        attempts_by_provider: dict[str, list[dict[str, Any]]] = {}
+        for attempt in self.attempts:
+            key = _attempt_provider_key(attempt)
+            attempts_by_provider.setdefault(key, []).append(attempt)
+        keys = set(self.providers)
+        keys.update(attempts_by_provider)
+        keys.update(self.provider_missing_usage_responses)
+        keys.update(self.provider_untracked_responses)
+        rows: list[dict[str, Any]] = []
+        for provider in _PROVIDER_KEYS:
+            if provider not in keys:
+                continue
+            item = self.providers.get(provider, ModelUsage(model=provider))
+            row = _provider_usage_summary(item, provider)
+            attempts = attempts_by_provider.get(provider, [])
+            pending, unresolved = _request_usage_counts(attempts)
+            missing = self.provider_missing_usage_responses.get(provider, 0)
+            unresolved += max(0, missing - sum(
+                1 for attempt in attempts
+                if attempt.get("usage_status") in {"missing", "incomplete"}
+            ))
+            row.update({
+                "attempt_count": len(attempts),
+                "provider_request_count": sum(
+                    bool(attempt.get("service_started_at")) for attempt in attempts
+                ),
+                "pending_request_count": pending,
+                "unresolved_usage_request_count": unresolved,
+                "missing_usage_response_count": missing,
+                "usage_complete": unresolved == 0,
+                "attempt_coverage_complete": (
+                    self.provider_untracked_responses.get(provider, 0) == 0
+                    and sum(bool(attempt.get("usage_reported")) for attempt in attempts)
+                    == item.request_count
+                ),
+            })
+            if unresolved:
+                row["estimated_cost_usd"] = None
+            rows.append(row)
+        return rows
 
 
 # Workers under the bounded decision pool share ONE accumulator object per
@@ -602,6 +672,33 @@ def _request_usage_counts(
     # Compatible endpoints can report missing usage outside request_attempt.
     unresolved += max(0, missing_usage_responses - tracked_missing_responses)
     return pending, unresolved
+
+
+def _provider_key(provider: Any, model: Any = "") -> str:
+    """Normalize explicit route identity, with a model fallback for legacy.
+
+    An explicit non-empty provider always wins.  Values outside the two
+    configured provider families intentionally collapse to ``unknown``;
+    otherwise a custom endpoint could be silently presented as GPT/OpenAI.
+    Empty provider fields are the historical shape, so those use model
+    prefixes to classify existing receipts honestly.
+    """
+    explicit = str(provider or "").strip().lower()
+    if explicit:
+        return explicit if explicit in {"openai", "gemini"} else "unknown"
+    lowered = str(model or "").strip().lower().removeprefix("models/")
+    if lowered.startswith("gemini-"):
+        return "gemini"
+    if lowered.startswith("gpt-"):
+        return "openai"
+    return "unknown"
+
+
+def _attempt_provider_key(attempt: dict[str, Any]) -> str:
+    return _provider_key(
+        attempt.get("provider"),
+        attempt.get("actual_model") or attempt.get("requested_model"),
+    )
 
 
 def _summary_usage_counts(summary: dict[str, Any]) -> tuple[int, int]:
@@ -803,7 +900,14 @@ def _closed_baseline(summary: dict[str, Any]) -> dict[str, Any]:
     derived counters change: this accumulator cannot receive those responses.
     """
     baseline = copy.deepcopy(summary)
-    for row in [baseline, *(baseline.get("stages") or [])]:
+    # Resolve old explicit provider identities before compact streaming drops
+    # the attempt ledger. Full and compact resumes must show the same split.
+    sources = _provider_rows_from_summary(baseline)
+    baseline["providers"] = _merge_provider_rows((baseline,))
+    for row in baseline["providers"]:
+        _currency_totals(row, [source for source in sources
+                              if source.get("provider") == row["provider"]], receipts=False)
+    for row in [baseline, *(baseline.get("stages") or []), *(baseline.get("providers") or [])]:
         pending, unresolved = _summary_usage_counts(row)
         if not pending:
             continue
@@ -963,8 +1067,15 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     if attempt is not None and attempt.get("usage_status") is not None:
         return accumulator.summary(include_attempts=False)
     model = str(_get(response, "model") or requested_model or "unknown")
-    gemini = (model.lower().removeprefix("models/").startswith("gemini-")
-              or (attempt is not None and attempt.get("provider") == "gemini"))
+    explicit_provider = (attempt or {}).get("provider") if attempt is not None else ""
+    provider_key = _provider_key(explicit_provider, model)
+    # Keep response-shape parsing compatible with the pre-breakdown ledger:
+    # a Gemini-shaped model (or explicit Gemini route) uses Google's native
+    # total reconciliation even when a custom route is aggregated as unknown.
+    gemini = (
+        model.lower().removeprefix("models/").startswith("gemini-")
+        or str(explicit_provider or "").strip().lower() == "gemini"
+    )
     prompt_details = _get(usage, "prompt_tokens_details") or _get(usage, "input_tokens_details")
     completion_details = _get(usage, "completion_tokens_details") or _get(usage, "output_tokens_details")
     reported_input = _reported_count(_first_present(usage, "prompt_tokens", "input_tokens"))
@@ -1008,6 +1119,9 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     with _MUTATION_LOCK:
         if attempt is None:
             accumulator.untracked_response_count += 1
+            accumulator.provider_untracked_responses[provider_key] = (
+                accumulator.provider_untracked_responses.get(provider_key, 0) + 1
+            )
         else:
             attempt.update({
                 "actual_model": _get(response, "model") or None,
@@ -1029,6 +1143,9 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
             if attempt is not None:
                 attempt["usage_reported"] = False
             accumulator.missing_usage_responses += 1
+            accumulator.provider_missing_usage_responses[provider_key] = (
+                accumulator.provider_missing_usage_responses.get(provider_key, 0) + 1
+            )
             stage_row = accumulator.stages.setdefault(
                 (stage, lane), StageUsage(stage=stage, lane=lane),
             )
@@ -1043,7 +1160,8 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     cache_write_tokens = min(max(input_tokens - cached_tokens, 0), cache_write_tokens)
     response_cost = (
         _request_cost(
-            model=model, input_tokens=input_tokens, cached_input_tokens=cached_tokens,
+            model=model,
+            input_tokens=input_tokens, cached_input_tokens=cached_tokens,
             cache_write_tokens=cache_write_tokens, output_tokens=output_tokens,
             priced_at=priced_at,
         )
@@ -1051,6 +1169,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     )
     accumulator.add(
         model=model,
+        provider=provider_key,
         input_tokens=input_tokens,
         cached_input_tokens=cached_tokens,
         cache_write_tokens=cache_write_tokens,
@@ -1074,7 +1193,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 accumulator.fx_quote = {}
         quote = accumulator.fx_quote
         currency_receipt = {
-            "stage": stage, "lane": lane, "model": model,
+            "stage": stage, "lane": lane, "model": model, "provider": provider_key,
             "estimated_cost_usd": float(response_cost) if response_cost is not None else None,
             "estimated_cost_inr": usage_currency.to_inr(response_cost, quote or None),
             **_fx_fields(quote),
@@ -1098,7 +1217,7 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 "pricing_policy": pricing.policy if pricing else None,
                 "pricing_source": pricing.source if pricing else None,
                 **{key: value for key, value in currency_receipt.items()
-                   if key not in {"stage", "lane", "model", "estimated_cost_usd"}},
+                   if key not in {"stage", "lane", "model", "provider", "estimated_cost_usd"}},
             })
     summary = accumulator.summary(include_attempts=False)
 
@@ -1266,7 +1385,8 @@ def _currency_totals(target: dict[str, Any], rows: list[dict[str, Any]], *, rece
 
 def _add_receipt_currency(summary: dict[str, Any], receipts: list[dict[str, Any]]) -> None:
     _currency_totals(summary, receipts, receipts=True)
-    for field, keys in (("models", ("model",)), ("stages", ("stage", "lane")),
+    for field, keys in (("models", ("model",)), ("providers", ("provider",)),
+                        ("stages", ("stage", "lane")),
                         ("cost_by_stage_lane_model", ("stage", "lane", "model"))):
         grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
         for receipt in receipts:
@@ -1277,15 +1397,179 @@ def _add_receipt_currency(summary: dict[str, Any], receipts: list[dict[str, Any]
 
 def _merge_currency(summary: dict[str, Any], segments: list[dict[str, Any]]) -> None:
     _currency_totals(summary, segments, receipts=False)
-    for field, keys in (("models", ("model",)), ("stages", ("stage", "lane")),
+    for field, keys in (("models", ("model",)), ("providers", ("provider",)),
+                        ("stages", ("stage", "lane")),
                         ("cost_by_stage_lane_model", ("stage", "lane", "model"))):
         grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
         for segment in segments:
-            rows = segment.get(field) or ([segment] if field == "models" and segment.get("request_count") else [])
+            if field == "providers":
+                # Legacy summaries have no provider array.  Reuse the same
+                # model-prefix classification as the aggregate merger so
+                # their recorded INR receipts stay attached to the provider
+                # row rather than disappearing on a resumed display.
+                rows = _provider_rows_from_summary(segment)
+            else:
+                rows = segment.get(field) or ([segment] if field == "models" and segment.get("request_count") else [])
             for row in rows:
                 grouped.setdefault(tuple(str(row.get(key) or "") for key in keys), []).append(row)
         for row in summary.get(field) or []:
             _currency_totals(row, grouped.get(tuple(str(row.get(key) or "") for key in keys), []), receipts=False)
+
+
+_PROVIDER_COUNTERS = (
+    "request_count", "input_tokens", "cached_input_tokens",
+    "cache_write_tokens", "output_tokens", "reasoning_tokens", "total_tokens",
+    "attempt_count", "provider_request_count", "missing_usage_response_count",
+)
+
+
+def _provider_rows_from_summary(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Attribute frozen legacy totals only when the evidence reconciles.
+
+    New summaries already contain exact provider rows. Older model aggregates
+    can be split when their money agrees with the recorded total; otherwise
+    retain the whole segment as unattributed instead of inventing a split.
+    Attempt metadata informs identity, never a fresh calculation of charges.
+    """
+    rows = summary.get("providers")
+    if isinstance(rows, list) and rows:
+        return [row for row in rows if isinstance(row, dict)]
+    attempts = [row for row in summary.get("request_attempts") or [] if isinstance(row, dict)]
+    model_rows = [row for row in summary.get("models") or [] if isinstance(row, dict)]
+    pending, unresolved = _summary_usage_counts(summary)
+    if not model_rows and not (
+        summary.get("request_count") or attempts or pending or unresolved
+        or summary.get("usage_complete") is False or _known_cost(summary)
+        or _float(summary.get("known_usage_estimated_cost_inr"))
+        or _float(summary.get("estimated_cost_inr"))
+    ):
+        return []
+    if not model_rows:
+        model_rows = [summary]
+
+    identities: dict[str, set[str]] = {}
+    for attempt in attempts:
+        for name in (attempt.get("actual_model"), attempt.get("requested_model")):
+            if name:
+                identities.setdefault(str(name), set()).add(_attempt_provider_key(attempt))
+    inferred: list[dict[str, Any]] = []
+    for row in model_rows:
+        model = str(row.get("model") or summary.get("model") or "unknown")
+        candidates = identities.get(model, {_provider_key("", model)})
+        provider = next(iter(candidates)) if len(candidates) == 1 else "unknown"
+        inferred.append({**row, "provider": provider})
+    families = {row["provider"] for row in inferred}
+    families.update(_attempt_provider_key(attempt) for attempt in attempts)
+    if len(families) == 1:
+        # One unambiguous provider owns the full frozen total, including
+        # currency fields or uncertainty absent from older model rows.
+        return [{**summary, "provider": next(iter(families))}]
+
+    def recorded_inr(row: dict[str, Any]) -> float | None:
+        for name in ("estimated_cost_inr", "known_usage_estimated_cost_inr"):
+            value = row.get(name)
+            if isinstance(value, (int, float)):
+                return float(value)
+        return None
+
+    total_inr = recorded_inr(summary)
+    row_inr = [recorded_inr(row) for row in inferred]
+    currency_agrees = (
+        all(value is None for value in row_inr) if total_inr is None
+        else all(value is not None for value in row_inr)
+        and abs(sum(value for value in row_inr if value is not None) - total_inr) < 1e-8
+    )
+    can_split = (
+        not pending and not unresolved and summary.get("usage_complete") is not False
+        and not summary.get("missing_usage_response_count")
+        and families == {row["provider"] for row in inferred}
+        and sum(_int(row.get("request_count")) for row in inferred) == _int(summary.get("request_count"))
+        and abs(sum(_known_cost(row) for row in inferred) - _known_cost(summary)) < 1e-9
+        and currency_agrees
+    )
+    return inferred if can_split else [{**summary, "provider": "unknown"}]
+
+
+def _merge_provider_rows(
+    summaries: tuple[dict[str, Any] | None, ...],
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for summary in summaries:
+        if not isinstance(summary, dict):
+            continue
+        for row in _provider_rows_from_summary(summary):
+            provider = _provider_key(row.get("provider"), "")
+            target = merged.setdefault(provider, {
+                "provider": provider,
+                **{name: 0 for name in _PROVIDER_COUNTERS},
+                "uncached_input_tokens": 0,
+                "estimated_cost_usd": 0.0,
+                "known_usage_estimated_cost_usd": 0.0,
+                "pricing_complete": True,
+                "pricing_source": DEFAULT_PRICING_SOURCE,
+                "pending_request_count": 0,
+                "unresolved_usage_request_count": 0,
+                "usage_complete": True,
+                "attempt_coverage_complete": True,
+            })
+            for name in _PROVIDER_COUNTERS:
+                target[name] += _int(row.get(name))
+            uncached = row.get("uncached_input_tokens")
+            if uncached is None:
+                uncached = _int(row.get("input_tokens")) - _int(
+                    row.get("cached_input_tokens")
+                )
+            target["uncached_input_tokens"] += _int(uncached)
+            pending, unresolved = _summary_usage_counts(row)
+            target["pending_request_count"] += pending
+            target["unresolved_usage_request_count"] += unresolved
+            target["usage_complete"] = target["usage_complete"] and row.get(
+                "usage_complete", unresolved == 0
+            ) is not False
+            target["attempt_coverage_complete"] = (
+                target["attempt_coverage_complete"]
+                and bool(row.get("attempt_coverage_complete", not row.get("request_count")))
+            )
+            known_cost = _known_cost(row)
+            target["known_usage_estimated_cost_usd"] = round(
+                target["known_usage_estimated_cost_usd"] + known_cost, 12,
+            )
+            cost = row.get("estimated_cost_usd")
+            if row.get("pricing_complete") is False or (
+                cost is None and row.get("usage_complete") is not False
+                and row.get("request_count")
+            ):
+                target["pricing_complete"] = False
+            if cost is None or row.get("pricing_complete") is False:
+                target["estimated_cost_usd"] = None
+            elif target["estimated_cost_usd"] is not None:
+                try:
+                    target["estimated_cost_usd"] = round(
+                        target["estimated_cost_usd"] + float(cost), 12
+                    )
+                except (TypeError, ValueError):
+                    target["pricing_complete"] = False
+                    target["estimated_cost_usd"] = None
+            source = str(row.get("pricing_source") or "")
+            if source and target.get("pricing_source") == DEFAULT_PRICING_SOURCE:
+                target["pricing_source"] = source
+            elif source and target.get("pricing_source") != source:
+                target["pricing_source"] = DEFAULT_PRICING_SOURCE
+    result: list[dict[str, Any]] = []
+    for provider in _PROVIDER_KEYS:
+        row = merged.get(provider)
+        if row is None:
+            continue
+        row["estimated_cost_usd"] = (
+            None if (
+                not row["usage_complete"]
+                or not row["pricing_complete"]
+                or row["estimated_cost_usd"] is None
+            )
+            else round(float(row["estimated_cost_usd"]), 12)
+        )
+        result.append(row)
+    return result
 
 
 def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
@@ -1437,6 +1721,7 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         {"stage": stage, "lane": lane, **_model_summary(item)}
         for (stage, lane, _model), item in matrix.items()
     ]
+    merged["providers"] = _merge_provider_rows(tuple(summaries))
     merged["stage_timings"] = [
         {"stage": stage, "elapsed_seconds": round(seconds, 3)}
         for stage, seconds in timings.items()
@@ -1518,6 +1803,15 @@ def _model_summary(item: ModelUsage) -> dict[str, Any]:
                            if item.model.lower().removeprefix("models/").startswith("gemini-")
                            else DEFAULT_PRICING_SOURCE),
     }
+
+
+def _provider_usage_summary(item: ModelUsage, provider: str) -> dict[str, Any]:
+    row = _model_summary(item)
+    row.pop("model", None)
+    row["provider"] = provider
+    if provider == "gemini":
+        row["pricing_source"] = GEMINI_PRICING_SOURCE
+    return row
 
 
 def _pricing_source(rows: list[dict[str, Any]]) -> str:

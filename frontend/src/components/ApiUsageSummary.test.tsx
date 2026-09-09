@@ -21,6 +21,7 @@ const USAGE: OpenAIUsage = {
 
 test("shows token counts, model, generated file and estimated cost", () => {
   render(<ApiUsageSummary usage={USAGE} filename="chapter-workbook.pdf" />);
+  const summary = screen.getByTestId("api-usage-summary");
 
   expect(screen.getByText("API usage & estimated cost")).toBeDefined();
   expect(screen.getByText("Generated file: chapter-workbook.pdf")).toBeDefined();
@@ -32,8 +33,48 @@ test("shows token counts, model, generated file and estimated cost", () => {
   expect(screen.getByText("12")).toBeDefined();
   expect(screen.getByText("120 reasoning included")).toBeDefined();
   expect(screen.getByText("1,690")).toBeDefined();
-  expect(screen.getByText("₹0.6500")).toBeDefined();
+  expect(within(summary).getAllByText("₹0.6500")).toHaveLength(2);
   expect(screen.getByText("$0.007654 USD")).toBeDefined();
+});
+
+test("shows a provider cost strip with GPT, Gemini, total and unattributed states", () => {
+  render(<ApiUsageSummary usage={{
+    ...USAGE,
+    providers: [
+      {
+        provider: "openai", request_count: 2, estimated_cost_usd: 0.01,
+        estimated_cost_inr: 0.93, inr_conversion_complete: true,
+      },
+      {
+        provider: "gemini", request_count: 1, pending_request_count: 1,
+        estimated_cost_usd: 0.01, estimated_cost_inr: 0.93,
+        inr_conversion_complete: true,
+      },
+      {
+        provider: "unknown", request_count: 1, estimated_cost_usd: null,
+        estimated_cost_inr: null, usage_complete: false,
+      },
+    ],
+  }} />);
+
+  const strip = screen.getByTestId("provider-cost-strip");
+  expect(within(strip).getByText("GPT")).toBeDefined();
+  expect(within(strip).getByText("Gemini")).toBeDefined();
+  expect(within(strip).getByText("Total")).toBeDefined();
+  expect(within(strip).getByText("Unattributed")).toBeDefined();
+  expect(strip.textContent).toContain("₹0.9300");
+  expect(strip.textContent).toContain("1 pending");
+  expect(strip.textContent).toContain("Usage incomplete");
+});
+
+test("labels a legacy summary without provider rows as unavailable instead of zero", () => {
+  render(<ApiUsageSummary usage={USAGE} />);
+  const strip = screen.getByTestId("provider-cost-strip");
+  expect(strip.textContent).toContain("GPT");
+  expect(strip.textContent).toContain("Gemini");
+  expect(strip.textContent).toContain("Breakdown unavailable");
+  expect(strip.textContent).toContain("Total");
+  expect(strip.textContent).toContain("₹0.6500");
 });
 
 test("explains when token pricing is unavailable", () => {
@@ -237,7 +278,8 @@ test.each([0, 1])("new request-state counters expose missing usage and pricing t
     known_usage_estimated_cost_usd: 0.032,
     known_usage_estimated_cost_inr: 2.88,
   }} />);
-  expect(screen.getByText("₹2.88")).toBeDefined();
+  expect(screen.getByText("Recorded estimate", { selector: "dt" }).parentElement?.textContent)
+    .toContain("₹2.88");
   expect(screen.getByText(/exclude unresolved charges/)).toBeDefined();
   expect(screen.getByText(/exclude unpriced usage/)).toBeDefined();
   expect(screen.queryByText(/provider requests? (is|are) still running/)).toBeNull();
@@ -268,7 +310,8 @@ test("compact usage retains the priced subtotal and explains an unknown rate", (
     known_usage_estimated_cost_inr: 1.35,
     pricing_complete: false,
   }} />);
-  expect(screen.getByText("₹1.35")).toBeDefined();
+  expect(screen.getByText("Recorded estimate", { selector: "dt" }).parentElement?.textContent)
+    .toContain("₹1.35");
   expect(screen.getByText(/exclude unpriced usage/)).toBeDefined();
   expect(screen.queryByText(/token usage is missing/i)).toBeNull();
 });

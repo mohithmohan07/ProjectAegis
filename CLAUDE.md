@@ -1,6 +1,18 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q42 (9 September 2026).**
+**Latest owner amendment: Q43 (9 September 2026).**
+The owner requests a collapsible usage box in the log column so the logs have
+room, plus separate GPT, Gemini and total estimated charges in rupees. Keep
+the compact cost breakdown visible when the detailed metrics are folded.
+Use recorded provider charges and request-specific exchange rates; preserve
+pending, missing-usage and unavailable-conversion states. Provider subtotals
+remain cumulative through Concept review, reupload, retries and Master resume,
+including compact live events. Historical unattributed charges stay explicit.
+This changes presentation and accounting attribution, not model routing or
+content policies. The existing authorized verification and merge workflow
+continues; no separate manual Fly action is requested.
+
+**Previous owner amendment: Q42 (9 September 2026).**
 The owner explicitly requests fixing and merging the missing NCF chapter
 catalogue and frontend code visibility. Bundle the supplied 18-chapter Grades
 1–3 workbook, expose Board `NCF` and publication `Seed to Plant`, and preserve

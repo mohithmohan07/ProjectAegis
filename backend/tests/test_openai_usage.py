@@ -531,3 +531,230 @@ def test_workbook_library_recovers_usage_from_sidecar(tmp_path, monkeypatch):
 
 def test_requested_model_is_the_default():
     assert config.OPENAI_MODEL == "gpt-5.6-luna"
+
+
+def _provider_receipt(provider: str, model: str):
+    """Record one deterministic receipt through the real attempt ledger."""
+    with openai_usage.request_attempt(
+        requested_model=model, provider=provider,
+    ):
+        openai_usage.record_service_started()
+        openai_usage.record_response(_response(model=model))
+
+
+def test_mixed_provider_breakdown_is_compact_and_cumulative_across_resume(
+    monkeypatch,
+):
+    monkeypatch.setenv("AEGIS_USD_TO_INR_RATE", "90")
+    monkeypatch.setenv("AEGIS_USD_TO_INR_AS_OF", "2026-09-08")
+    with openai_usage.track():
+        _provider_receipt("openai", "gpt-5.6-luna")
+        _provider_receipt("gemini", "gemini-3.8-flash")
+        historical = openai_usage.current_summary()
+
+    monkeypatch.setenv("AEGIS_USD_TO_INR_RATE", "100")
+    monkeypatch.setenv("AEGIS_USD_TO_INR_AS_OF", "2026-09-09")
+    with openai_usage.track():
+        openai_usage.bind_persisted_summary("mixed-resume", historical)
+        _provider_receipt("openai", "gpt-5.6-luna")
+        _provider_receipt("gemini", "gemini-3.8-flash")
+        compact = openai_usage.console_summary()
+        full = openai_usage.visible_summary()
+
+    assert compact["request_attempts"] == []
+    assert compact["estimated_cost_usd"] == pytest.approx(0.0003196)
+    assert compact["estimated_cost_inr"] == pytest.approx(0.030362)
+    assert compact["usd_to_inr_rate"] is None
+    assert {row["provider"] for row in compact["providers"]} == {
+        "openai", "gemini",
+    }
+    by_provider = {row["provider"]: row for row in compact["providers"]}
+    assert by_provider["openai"]["request_count"] == 2
+    assert by_provider["gemini"]["request_count"] == 2
+    assert by_provider["openai"]["estimated_cost_inr"] == pytest.approx(0.006992)
+    assert by_provider["gemini"]["estimated_cost_inr"] == pytest.approx(0.02337)
+    assert sum(row["estimated_cost_usd"] for row in compact["providers"]) == pytest.approx(
+        compact["estimated_cost_usd"]
+    )
+    assert full["providers"] == compact["providers"]
+
+
+def test_provider_breakdown_preserves_pending_and_missing_cost_states(monkeypatch):
+    monkeypatch.setenv("AEGIS_USD_TO_INR_RATE", "90")
+    with openai_usage.track():
+        _provider_receipt("openai", "gpt-5.6-luna")
+        historical = openai_usage.current_summary()
+
+    monkeypatch.setenv("AEGIS_USD_TO_INR_RATE", "100")
+    with openai_usage.track():
+        openai_usage.bind_persisted_summary("missing-resume", historical)
+        with openai_usage.request_attempt(
+            requested_model="gemini-3.8-flash", provider="gemini",
+        ):
+            openai_usage.record_service_started()
+            pending = openai_usage.console_summary()
+            pending_gemini = next(
+                row for row in pending["providers"] if row["provider"] == "gemini"
+            )
+            assert pending_gemini["pending_request_count"] == 1
+            assert pending_gemini["unresolved_usage_request_count"] == 0
+            assert pending["usage_complete"] is True
+            openai_usage.record_response(
+                SimpleNamespace(model="gemini-3.8-flash", usage=None)
+            )
+        missing = openai_usage.console_summary()
+
+    gemini = next(row for row in missing["providers"] if row["provider"] == "gemini")
+    assert missing["estimated_cost_usd"] is None
+    assert missing["known_usage_estimated_cost_usd"] == pytest.approx(
+        historical["estimated_cost_usd"]
+    )
+    assert gemini["missing_usage_response_count"] == 1
+    assert gemini["unresolved_usage_request_count"] == 1
+    assert gemini["estimated_cost_usd"] is None
+    assert gemini["estimated_cost_inr"] is None
+    openai = next(row for row in missing["providers"] if row["provider"] == "openai")
+    assert openai["estimated_cost_inr"] == historical["estimated_cost_inr"]
+
+
+def test_explicit_custom_provider_stays_unknown_with_recorded_model_receipt():
+    with openai_usage.track():
+        _provider_receipt("custom-gateway", "gpt-5.6-luna")
+        summary = openai_usage.current_summary()
+
+    assert summary["request_attempts"][0]["provider"] == "custom-gateway"
+    assert [row["provider"] for row in summary["providers"]] == ["unknown"]
+    assert summary["providers"][0]["estimated_cost_usd"] == pytest.approx(
+        summary["estimated_cost_usd"]
+    )
+    assert summary["providers"][0]["estimated_cost_inr"] == pytest.approx(
+        summary["estimated_cost_inr"]
+    )
+
+
+def test_legacy_aggregate_pending_state_gets_unknown_provider_row():
+    merged = openai_usage.merge_summaries({
+        "model": "unknown",
+        "request_count": 0,
+        "estimated_cost_usd": 0.0,
+        "known_usage_estimated_cost_usd": 0.0,
+        "pending_request_count": 1,
+        "unresolved_usage_request_count": 0,
+        "usage_complete": True,
+        "pricing_complete": True,
+    })
+
+    unknown = next(row for row in merged["providers"] if row["provider"] == "unknown")
+    assert unknown["pending_request_count"] == 1
+    assert unknown["unresolved_usage_request_count"] == 0
+    assert unknown["known_usage_estimated_cost_usd"] == 0
+
+
+def test_legacy_attempt_provider_overrides_gpt_model_prefix():
+    legacy = {
+        "model": "gpt-5.6-luna",
+        "request_count": 1,
+        "input_tokens": 100,
+        "cached_input_tokens": 0,
+        "output_tokens": 20,
+        "reasoning_tokens": 0,
+        "total_tokens": 120,
+        "estimated_cost_usd": 0.25,
+        "pricing_complete": True,
+        "usage_complete": True,
+        "request_attempts": [{
+            "attempt_id": "legacy-proxy-attempt",
+            "provider": "custom-gateway",
+            "requested_model": "gpt-5.6-luna",
+            "actual_model": "gpt-5.6-luna",
+            "usage_reported": True,
+            "usage_status": "reported",
+            "input_tokens": 100,
+            "cached_input_tokens": 0,
+            "output_tokens": 20,
+            "reasoning_tokens": 0,
+            "total_tokens": 120,
+            "estimated_cost_usd": 0.25,
+            "service_started_at": 1.0,
+        }],
+        "attempt_details_included": True,
+    }
+
+    merged = openai_usage.merge_summaries(legacy)
+    assert [row["provider"] for row in merged["providers"]] == ["unknown"]
+    assert merged["providers"][0]["request_count"] == 1
+
+
+def test_provider_rows_are_validated_even_on_v2_marker():
+    from app.services import checkpoints
+
+    with openai_usage.track():
+        _provider_receipt("openai", "gpt-5.6-luna")
+        snapshot = openai_usage.current_summary()
+    snapshot["usage_schema_version"] = 2
+    snapshot["providers"][0]["request_count"] = -1
+
+    with pytest.raises(ValueError, match="runtime telemetry schema"):
+        checkpoints._validate_usage(snapshot, "usage")
+
+
+def test_legacy_provider_identity_survives_compact_resume_without_rewriting_history():
+    import copy
+    from app.services import checkpoints
+
+    with openai_usage.track():
+        _provider_receipt("custom-gateway", "gpt-5.6-luna")
+        legacy = openai_usage.current_summary()
+    legacy.pop("providers")
+    original = copy.deepcopy(legacy)
+    with openai_usage.track():
+        openai_usage.bind_persisted_summary("legacy-proxy-resume", legacy)
+        _provider_receipt("openai", "gpt-5.6-luna")
+        compact = openai_usage.console_summary()
+        full = openai_usage.visible_summary()
+
+    assert legacy == original
+    assert compact["request_attempts"] == []
+    assert compact["providers"] == full["providers"]
+    providers = {row["provider"]: row for row in compact["providers"]}
+    assert set(providers) == {"unknown", "openai"}
+    assert providers["unknown"]["estimated_cost_inr"] == legacy["estimated_cost_inr"]
+    assert sum(row["estimated_cost_inr"] for row in providers.values()) == pytest.approx(
+        compact["estimated_cost_inr"]
+    )
+    checkpoints._validate_usage(compact, "usage")
+
+
+@pytest.mark.parametrize("model_currency_available", [True, False])
+def test_legacy_provider_split_preserves_top_currency_when_model_detail_is_missing(
+    model_currency_available,
+):
+    import copy
+
+    with openai_usage.track():
+        _provider_receipt("openai", "gpt-5.6-luna")
+        _provider_receipt("gemini", "gemini-3.8-flash")
+        legacy = openai_usage.current_summary()
+    legacy.pop("providers")
+    legacy["request_attempts"] = []
+    legacy["attempt_details_included"] = False
+    legacy["estimated_cost_usd"] = 1.0
+    legacy["known_usage_estimated_cost_usd"] = 1.0
+    legacy["estimated_cost_inr"] = 90.0
+    legacy["known_usage_estimated_cost_inr"] = 90.0
+    for model, dollars, rupees in zip(legacy["models"], [0.25, 0.75], [22.5, 67.5]):
+        model["estimated_cost_usd"] = model["known_usage_estimated_cost_usd"] = dollars
+        model["estimated_cost_inr"] = model["known_usage_estimated_cost_inr"] = rupees
+        if not model_currency_available:
+            model.pop("estimated_cost_inr")
+            model.pop("known_usage_estimated_cost_inr")
+    original = copy.deepcopy(legacy)
+    merged = openai_usage.merge_summaries(legacy)
+    assert legacy == original
+    providers = merged["providers"]
+    assert {row["provider"] for row in providers} == (
+        {"openai", "gemini"} if model_currency_available else {"unknown"}
+    )
+    assert sum(row["estimated_cost_usd"] for row in providers) == 1.0
+    assert sum(row["estimated_cost_inr"] for row in providers) == 90.0
+    assert merged["estimated_cost_inr"] == 90.0
