@@ -68,8 +68,27 @@ def _origin(value: str) -> tuple[str, str, int | None]:
 
 
 def image_urls(value: Any) -> list[str]:
-    """Collect image wires, not arbitrary links or model-selected network targets."""
+    """Collect image wires and declared image fields, never arbitrary links.
+
+    An external image reference still needs a named unavailable/unverified
+    result. Restricting bare URLs to our own route made an ``assets[].url``
+    reference disappear from both delivery reports and visual evidence.
+    Collection does not authorize a fetch: ``inspect_assets`` still permits
+    probes only at the configured origin and exact content-addressed route.
+    """
     found: set[str] = set()
+
+    def declared_image(item: Any) -> None:
+        if isinstance(item, str):
+            url = item.strip()
+            if url.startswith(("https://", "http://")):
+                found.add(url)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                declared_image(child)
+        elif isinstance(item, Mapping):
+            for field in ("url", "src", "source_url", "asset_url", "image_url"):
+                declared_image(item.get(field))
 
     def walk(item: Any) -> None:
         if isinstance(item, Mapping):
@@ -82,6 +101,11 @@ def image_urls(value: Any) -> list[str]:
                         found.add(url)
             for key, child in item.items():
                 if not str(key).startswith("_"):
+                    if key in {
+                        "image_url", "asset_url", "image_urls", "images",
+                        "assets", "image_manifest",
+                    }:
+                        declared_image(child)
                     walk(child)
         elif isinstance(item, (list, tuple)):
             for child in item:

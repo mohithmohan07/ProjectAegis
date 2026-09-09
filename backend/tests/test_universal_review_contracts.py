@@ -403,25 +403,14 @@ def test_the_corrected_house_table_style_passes_both_media():
     )
 
 
-def test_positioned_unterminated_tabular_tail_preserves_pipe_cells():
+def test_positioned_unterminated_tabular_tail_stays_visible_for_api_repair():
     source = "\n".join([
         r"\begin{tabular}[t]{|l|l|} Attribute | Significance",
         "Broken chains | Being freed",
         "Olive branch | Willingness to make peace",
     ])
-
-    rendered = kr.canonicalize_rich_text(source)
-
-    assert rendered.splitlines() == [
-        "Table row 1, column 1: Attribute; "
-        "Table row 1, column 2: Significance",
-        "Table row 2, column 1: Broken chains; "
-        "Table row 2, column 2: Being freed",
-        "Table row 3, column 1: Olive branch; "
-        "Table row 3, column 2: Willingness to make peace",
-    ]
+    assert kr.canonicalize_rich_text(source) == source
     assert "unsupported_table" in kr.rich_text_issues(source)
-    assert kr.rich_text_issues(rendered) == []
 
 
 def test_screenshot_shaped_markdown_table_preserves_header_and_every_cell():
@@ -434,21 +423,20 @@ def test_screenshot_shaped_markdown_table_preserves_header_and_every_cell():
         "| Makalu | 8485 |",
         "| Kanchanjunga | 8586 |",
     ])
-
     rendered = kr.canonicalize_rich_text(source)
-
-    assert rendered.splitlines() == [
-        "Table row 1, column 1: Name of peak; "
-        "Table row 1, column 2: Altitude (in metres)",
-        "Table row 2, column 1: K-2; Table row 2, column 2: 8611",
-        "Table row 3, column 1: Lao Tse; Table row 3, column 2: 8516",
-        "Table row 4, column 1: Mount Everest (Sagarmatha); "
-        "Table row 4, column 2: 8849",
-        "Table row 5, column 1: Makalu; Table row 5, column 2: 8485",
-        "Table row 6, column 1: Kanchanjunga; "
-        "Table row 6, column 2: 8586",
+    expected_rows = [
+        r"\text{Name of peak} & \text{Altitude (in metres)}",
+        r"\text{K-2} & \text{8611}",
+        r"\text{Lao Tse} & \text{8516}",
+        r"\text{Mount Everest (Sagarmatha)} & \text{8849}",
+        r"\text{Makalu} & \text{8485}",
+        r"\text{Kanchanjunga} & \text{8586}",
     ]
-    assert "---" not in rendered
+    assert rendered == kr.katex(
+        r"\begin{array}{|l|r|} \hline "
+        + r" \\ \hline ".join(expected_rows)
+        + r" \\ \hline \end{array}"
+    )
     assert "unsupported_table" in kr.rich_text_issues(source)
     assert kr.rich_text_issues(rendered) == []
 

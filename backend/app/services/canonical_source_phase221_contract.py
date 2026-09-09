@@ -9,11 +9,11 @@ from typing import Any
 from . import canonical_source_phase2 as phase2
 from . import canonical_source_phase221_fallback as fallback
 
-_CONTRACT_VERSION = 2
+_CONTRACT_VERSION = 3
 
 
 def install() -> None:
-    from . import generation_recovery, mmd, openai_usage, progress, uploads
+    from . import generation_recovery, mmd, model_routing_run, openai_usage, progress, uploads
     from .. import config
 
     if getattr(uploads, "_CANONICAL_SOURCE_PHASE221_VERSION", 0) >= _CONTRACT_VERSION:
@@ -159,7 +159,8 @@ def install() -> None:
         )
         path = uploads.upload_file_path(staged)
         if path.suffix.lower() != ".pdf" or not fallback._enabled():
-            return original_convert(*args, **kwargs)
+            with model_routing_run.bind_job(staged):
+                return original_convert(*args, **kwargs)
 
         # The GPT reader is the only PDF converter. There is no second
         # converter to try first, nothing to compare it against, and so no
@@ -175,7 +176,8 @@ def install() -> None:
             generation_recovery.require_mutation_allowed(
                 current, operation="convert this upload"
             )
-            return _run_reader(db, current, reason=["pdf_source"])
+            with model_routing_run.bind_job(current):
+                return _run_reader(db, current, reason=["pdf_source"])
 
     @wraps(original_load_or_refresh)
     def load_or_refresh_for_job(job: Any):

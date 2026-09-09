@@ -54,6 +54,7 @@ from . import assessment_release_service as release_service
 from . import assessment_routing as routing
 from . import assessment_source_inventory as source_inventory
 from . import assessment_profile
+from . import assessment_response_policy as response_policy
 from . import build_concepts_release
 from . import identity
 from . import generation_recovery
@@ -514,6 +515,7 @@ def _snapshot_cells(
             "question_category": str(
                 cell.get("question_category") or ""
             ),
+            "selection_mode": str(cell.get("selection_mode") or ""),
             "cognitive_skill": str(cell.get("cognitive_skill") or ""),
             "difficulty": str(cell.get("difficulty") or ""),
             "marks": cell.get("marks"),
@@ -546,6 +548,7 @@ def _snapshot_materializations(
             "blueprint_cell_id": str(
                 candidate.get("blueprint_cell_id") or ""
             ),
+            "selection_mode": str(candidate.get("selection_mode") or ""),
             "flags": list(candidate.get("flags") or []),
             "audit": dict(
                 candidate.get(_MATERIALIZATION_AUDIT_FIELD) or {}
@@ -773,6 +776,19 @@ def _bind_explicit_cells(
             defects.append(f"{cell_id}: unknown cognitive_skill")
         if cell.get("difficulty") not in bi.DIFFICULTY_LEVELS:
             defects.append(f"{cell_id}: unknown difficulty")
+        selection_mode = cell.get("selection_mode", "")
+        if not isinstance(selection_mode, str):
+            defects.append(f"{cell_id}: selection_mode must be a string")
+        elif cell.get("sheet_kind") == "objective":
+            if selection_mode.strip() and selection_mode.strip() not in response_policy.SELECTION_MODES:
+                defects.append(
+                    f"{cell_id}: Objective selection_mode must be one of "
+                    f"{response_policy.SELECTION_MODES}"
+                )
+        elif selection_mode.strip():
+            defects.append(
+                f"{cell_id}: selection_mode must be blank for non-Objective"
+            )
         total_marks = marking._decimal(cell.get("marks"))
         if total_marks is not None and total_marks > 0:
             try:
@@ -1064,6 +1080,19 @@ def _bind_generated_cells(
             defects.append(f"{cell_id}: unknown cognitive_skill")
         if cell.get("difficulty") not in bi.DIFFICULTY_LEVELS:
             defects.append(f"{cell_id}: unknown difficulty")
+        selection_mode = cell.get("selection_mode", "")
+        if not isinstance(selection_mode, str):
+            defects.append(f"{cell_id}: selection_mode must be a string")
+        elif cell.get("sheet_kind") == "objective":
+            if selection_mode.strip() and selection_mode.strip() not in response_policy.SELECTION_MODES:
+                defects.append(
+                    f"{cell_id}: Objective selection_mode must be one of "
+                    f"{response_policy.SELECTION_MODES}"
+                )
+        elif selection_mode.strip():
+            defects.append(
+                f"{cell_id}: selection_mode must be blank for non-Objective"
+            )
         total_marks = marking._decimal(cell.get("marks"))
         if total_marks is not None and total_marks > 0:
             try:
@@ -1592,6 +1621,12 @@ def run_release_for_job(
                 "before building Output 04"
             )
         )
+    if staged_lane == build_concepts_release.LANE_POST and generate_lane:
+        raise ReleaseRunError(
+            "Post-Learning Master questions must come only from the uploaded "
+            "source inventory; generated_questions is permitted only for "
+            "the Pre-Learning lane"
+        )
     try:
         with db.no_autoflush:
             bridge = release_snapshot.build(db, job, staged_release)
@@ -1656,9 +1691,21 @@ def run_release_for_job(
             "Pre-Learning items (owner steer, 17 Aug 2026)"
         )
     if not generate_lane and not (inventory.get("items") or []):
-        # Post-lane only (the Pre lane generates), so OD4 names Output 03.
-        raise ReleaseRunError(
-            "the staged Output-03 release has no question/task inventory"
+        # An empty source bank is valid only when the Concept review handoff
+        # recorded the closed-world reviewed receipt. Historical payloads
+        # with no inventory remain refused, preserving the old unexplained
+        # empty behavior while allowing an intentional all-omitted review to
+        # produce a zero-question Master without any question API calls.
+        if not source_inventory.has_reviewed_source_bank(inventory):
+            # Post-lane only (the Pre lane generates), so OD4 names Output 03.
+            raise ReleaseRunError(
+                "the staged Output-03 release has no question/task inventory"
+            )
+        progress.log(
+            "Assessment release: the reviewed Post question bank is "
+            "intentionally empty; building an empty Master without source "
+            "question API calls.",
+            level="warning",
         )
     chapter_id = int(bridge["snapshot"].get("target_chapter_id") or 0)
     if not chapter_id:
@@ -2207,6 +2254,29 @@ def run_release_for_job(
             )
         if cell.get("concept_key"):
             candidate["blueprint_concept_key"] = str(cell["concept_key"])
+        # A reviewed Post Concept workbook can move a retained question to a
+        # different Concept.  The review adapter records the edited row index
+        # and title; resolve that target against this immutable release
+        # snapshot and use the existing routing constraint seam.  The title
+        # check guards against a stale row index after an omitted Concept,
+        # while the index remains the deterministic tie-breaker for duplicate
+        # display titles.
+        reviewed_target = (atom or {}).get("reviewed_target")
+        if isinstance(reviewed_target, Mapping):
+            # The reviewed target was already identity-bound to the staged
+            # record by the workbook handoff. Resolve only that exact index,
+            # then check the model-authored title/topic guard. Never fall back
+            # to a same-title or first-position route: a stale target must
+            # stay visibly unplaced and must not trigger semantic API routing.
+            target_key, target_error = release_snapshot.reviewed_target_concept_key(
+                reviewed_target, list(bridge.get("concepts") or [])
+            )
+            candidate["reviewed_target"] = copy.deepcopy(dict(reviewed_target))
+            if target_key:
+                candidate["blueprint_concept_key"] = target_key
+            else:
+                candidate.pop("blueprint_concept_key", None)
+                candidate["reviewed_target_error"] = target_error
         if _needs_review(cell):
             _append_warning(candidate, _CELL_WARNING)
         if materialization_needs_review:

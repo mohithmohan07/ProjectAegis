@@ -49,6 +49,48 @@ def test_local_pin_is_not_public_delivery():
     assert publication.report_defects(report)
 
 
+def test_declared_external_images_are_reported_but_never_fetched():
+    refs = [f"https://images.example.org/{index}.jpg" for index in range(6)]
+    payload = {
+        "asset_url": refs[0],
+        "image_url": refs[1],
+        "image_urls": [refs[2]],
+        "assets": [{"url": refs[3], "alt": "Source diagram"}],
+        "images": [{"url": refs[4], "caption": "Source panel"}],
+        "image_manifest": [{"src": refs[5]}],
+        "source_book_url": "https://books.example.org/chapter",
+        "citation": {"url": "https://books.example.org/reference"},
+        "_audit": {"assets": [{"url": "https://audit.example.org/old.jpg"}]},
+    }
+    assert publication.image_urls(payload) == refs
+
+    def refuse(request):
+        pytest.fail(f"External image was fetched: {request.url}")
+
+    with httpx.Client(transport=httpx.MockTransport(refuse)) as client:
+        report = publication.inspect_assets(payload, allow_probe=True, client=client)
+    assert report["state"] == "unverified"
+    assert report["source_url_count"] == len(refs)
+    assert report["probe_count"] == 0
+    assert {entry["reason"] for entry in report["assets"]} == {
+        "outside_configured_asset_origin_or_route"
+    }
+
+
+def test_declared_external_asset_remains_visible_to_visual_review():
+    from app.services import assessment_visual_evidence
+
+    url = "https://images.example.org/source-diagram.jpg"
+    payload = assessment_visual_evidence.bind({}, {"assets": [{"url": url}]})
+    assert assessment_visual_evidence.image_inputs(payload) == []
+    assert len(payload["visual_evidence"]["images"]) == 1
+    assert payload["visual_evidence"]["images"][0]["source_url"] == url
+    assert assessment_visual_evidence.review_flags(payload) == [
+        "assessment_visual_evidence_unavailable: " + url
+        + " (not_an_authorized_pinned_source_asset)"
+    ]
+
+
 def test_public_get_verifies_jpeg_bytes_and_dedupes_hash_without_forwarding_query():
     data = jpeg()
     seen = []

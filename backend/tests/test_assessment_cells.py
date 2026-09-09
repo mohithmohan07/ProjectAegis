@@ -68,6 +68,7 @@ def _valid_response(request: dict, **overrides) -> dict:
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "marks": 3,
+        "selection_mode": "",
         "rationale": "The learner must explain linked characteristics.",
     }
     response.update(overrides)
@@ -149,9 +150,14 @@ def test_cell_decision_carries_complete_content_without_print_position(
     assert cell["count"] == 1
     assert cell["appears_in"] == ["Pre/Post-Worksheet/Test"]
     assert cell["accepted_source_qids"] == ["QINV-0001"]
-    assert cell["flags"] == []
+    # The fixture URL is deliberately not a materialized pinned source asset.
+    # Its missing visual evidence remains explicit alongside the cell verdict.
+    assert cell["flags"] == [
+        "assessment_visual_evidence_unavailable: https://example.test/leaf.png "
+        "(not_an_authorized_pinned_source_asset)"
+    ]
     authority = cell["authority"]
-    assert authority["policy_version"] == "assessment-cell-3-column-spec"
+    assert authority["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
     assert authority["review_flags"] == []
     assert "created_at" not in authority
     assert "provider" not in authority
@@ -231,7 +237,11 @@ def test_critic_dissent_flags_without_retrying_the_author(monkeypatch) -> None:
     assert cell["marks"] == 3.0
     assert any("dissent" in flag for flag in cell["flags"])
     assert any("Marks may deserve" in flag for flag in cell["flags"])
-    assert cell["authority"]["review_flags"] == cell["flags"]
+    assert cell["flags"] == [
+        *cell["authority"]["review_flags"],
+        "assessment_visual_evidence_unavailable: https://example.test/leaf.png "
+        "(not_an_authorized_pinned_source_asset)",
+    ]
 
 
 def test_mechanical_defect_gets_bounded_correction_before_critic(
@@ -340,7 +350,7 @@ def test_mechanical_exhaustion_routes_to_recorded_fixer(monkeypatch) -> None:
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.cell",
         "unit_id": "QINV-0001",
-        "policy_version": "assessment-cell-3-column-spec",
+        "policy_version": "assessment-cell-4-response-mechanism-sop-2026-09-09",
     }
     assert cell["sheet_kind"] == "descriptive"
     assert cell["authority"]["fixer"] is True

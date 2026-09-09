@@ -72,12 +72,15 @@ Three choices recorded here rather than left as omissions:
 """
 from __future__ import annotations
 
+import copy
 import re
 from typing import Any, Callable, Mapping
 
 from . import envelope as envelope_mod
 from . import kernel
 from .. import progress
+from .. import prelearning_capture_policy as capture_policy
+from . import evidence as visual_evidence
 
 POLICY_VERSION = "prelearn-1"
 
@@ -158,7 +161,7 @@ def _evidence_list(value: object, *, dedupe: bool = True) -> list[str]:
 # per-stage evidence
 
 
-def stage_evidence(
+def _legacy_stage_evidence(
     env: Mapping[str, Any],
     stage: str,
     *,
@@ -316,6 +319,103 @@ def stage_evidence(
     }
 
 
+def stage_evidence(
+    env: Mapping[str, Any], stage: str, *,
+    settled: list[Mapping[str, Any]] | None = None,
+    analysis: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Keep legacy replay exact; new runs carry complete owned evidence."""
+    packet = _legacy_stage_evidence(env, stage, settled=settled, analysis=analysis)
+    if not capture_policy.active(env):
+        return packet
+    if stage == "settle":
+        blocks = {
+            str(row.get("block_id") or ""): row
+            for row in env["canonical"]["blocks"] if isinstance(row, Mapping)
+        }
+        for row in packet["source_blocks"]:
+            original = blocks.get(row["block_id"], {})
+            row["text"] = visual_evidence.block_text(original)
+            row["source_context"] = visual_evidence.block_context(original)
+        for row, original in zip(packet["settled_concepts"], settled or []):
+            row["concept_details"] = str(original.get("concept_details") or "")
+            row["source_block_ids"] = copy.deepcopy(original.get("_source_block_ids") or [])
+    elif stage == "host":
+        from . import host as host_mod
+
+        items = {
+            str(row.get("qid") or ""): row
+            for row in (env.get("inventory") or {}).get("items") or []
+            if isinstance(row, Mapping)
+        }
+        for row in packet["questions"]:
+            original = items.get(row["qid"], {})
+            row["text"] = str(original.get("polished_task") or original.get("normalized_task") or original.get("raw_task") or "")
+            # The source already owns these options, context, figures and
+            # relationships. Copy the record rather than guess an allowlist.
+            row["source_task"] = copy.deepcopy(dict(original))
+        packet["type_case_units"] = copy.deepcopy(host_mod.derive_units(env))
+    elif stage == "place":
+        from . import place as place_mod
+
+        packet["pooled_hub_items"] = copy.deepcopy(place_mod.hub_pool(env))
+        packet["pooled_figures"] = copy.deepcopy(place_mod.figure_pool(env))
+    else:
+        packet["analysis_inventory"] = [
+            copy.deepcopy(dict(row)) for row in (analysis or {}).get("inventory") or []
+            if isinstance(row, Mapping) and str(row.get("item_id") or "")
+        ]
+    return packet
+
+
+def indexed_evidence(stage: str, packet: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve every citable namespace to the exact stage evidence it names."""
+    index: dict[str, list[dict[str, Any]]] = {}
+    for section, field in _CITABLE_ID_KEYS.get(stage, ()):
+        for row in packet.get(section) or []:
+            if not isinstance(row, Mapping):
+                continue
+            value = row.get(field)
+            for ref in value if isinstance(value, (list, tuple)) else [value]:
+                if not ref:
+                    continue
+                record = {"stage": stage, "section": section, "content": copy.deepcopy(dict(row))}
+                entries = index.setdefault(str(ref), [])
+                if record not in entries:
+                    entries.append(record)
+    return index
+
+
+def resolve_evidence(index: Mapping[str, Any], cited: set[str]) -> dict[str, Any]:
+    """Follow explicit known-ID relationships, including task/block owners.
+
+    A Type citation carries its QIDs and a concept carries its source blocks.
+    Preserve that closure without selecting evidence by wording or proximity.
+    Cycles and shared references are emitted once, in the index's stable order.
+    """
+    wanted: set[str] = set()
+    pending = list(sorted(cited))
+
+    def references(value: Any):
+        if isinstance(value, str):
+            if value in index:
+                yield value
+        elif isinstance(value, Mapping):
+            for child in value.values():
+                yield from references(child)
+        elif isinstance(value, (list, tuple)):
+            for child in value:
+                yield from references(child)
+
+    while pending:
+        ref = pending.pop()
+        if ref in wanted or ref not in index:
+            continue
+        wanted.add(ref)
+        pending.extend(references(index[ref]))
+    return {ref: copy.deepcopy(entries) for ref, entries in index.items() if ref in wanted}
+
+
 def citable_ids(stage: str, evidence: Mapping[str, Any]) -> set[str]:
     """Every id a capture at ``stage`` may cite — from its own payload."""
     known: set[str] = set()
@@ -457,8 +557,9 @@ def _live_capture(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PRELEARN_CAPTURE_SYSTEM, prompts.render(payload),
+        prompts.PRELEARN_CAPTURE_SYSTEM + _policy_instruction(payload), prompts.render(payload),
         purpose="concept_mapping",
+        **_vision_kwargs(payload),
     )
 
 
@@ -467,8 +568,9 @@ def _live_merge(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PRELEARN_MERGE_SYSTEM, prompts.render(payload),
+        prompts.PRELEARN_MERGE_SYSTEM + _policy_instruction(payload), prompts.render(payload),
         purpose="concept_mapping",
+        **_vision_kwargs(payload),
     )
 
 
@@ -477,9 +579,18 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PRELEARN_CRITIC_SYSTEM, prompts.render(payload),
+        prompts.PRELEARN_CRITIC_SYSTEM + _policy_instruction(payload), prompts.render(payload),
         purpose="advisory_critic",
+        **_vision_kwargs(payload),
     )
+
+
+def _policy_instruction(payload: Mapping[str, Any]) -> str:
+    return (("\n" + capture_policy.CAPTURE_INSTRUCTION) if payload.get("capture_policy") == capture_policy.VERSION else "") + capture_policy.boundary_instruction(payload)
+
+
+def _vision_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {"image_urls": visual_evidence.image_inputs(payload)} if "visual_evidence" in payload else {}
 
 
 _CAPTURE_RULES = {
@@ -609,6 +720,11 @@ def capture_stage(
     if stage not in _CITABLE_ID_KEYS:
         raise ValueError(f"unknown prelearn capture stage {stage!r}")
     evidence = stage_evidence(env, stage, settled=settled, analysis=analysis)
+    enhanced = capture_policy.active(env)
+    evidence_receipt = {
+        "capture_policy": capture_policy.VERSION,
+        "evidence_packet": copy.deepcopy(evidence),
+    } if enhanced else {}
     known_ids = citable_ids(stage, evidence)
     if not known_ids:
         return {
@@ -616,6 +732,7 @@ def capture_stage(
             "items": [],
             "review_flags": {},
             "stage_flags": [],
+            **evidence_receipt,
         }
 
     if provider is None:
@@ -631,10 +748,15 @@ def capture_stage(
 
     payload = {
         "stage": f"prelearn.capture:{stage}",
+        **capture_policy.boundary_fields(env),
         "rules": _capture_rules(stage, rules_suffix),
         "evidence": evidence,
     }
-    decision = kernel.decide(
+    if enhanced:
+        payload["capture_policy"] = capture_policy.VERSION
+        payload["rules"] += " " + capture_policy.CAPTURE_INSTRUCTION
+    decide = visual_evidence.decide_with_visual_evidence if enhanced else kernel.decide
+    decision = decide(
         kind="prelearn.capture",
         unit_id=f"stage:{stage}",
         envelope_sha256=envelope_sha,
@@ -643,7 +765,7 @@ def capture_stage(
         checker=_capture_checker(known_ids),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION,
+        policy_version=POLICY_VERSION + (";" + capture_policy.VERSION if enhanced else ""),
         fixer=fixer,
     )
     items: list[dict[str, Any]] = []
@@ -671,6 +793,7 @@ def capture_stage(
         "items": items,
         "review_flags": review_flags,
         "stage_flags": flags,
+        **evidence_receipt,
     }
 
 
@@ -705,6 +828,8 @@ def merge(
 
     env = envelope_mod.validate(env)
     by_stage: dict[str, list[dict[str, Any]]] = {}
+    enhanced = capture_policy.active(env)
+    packets: dict[str, Any] = {}
     capture_rows: list[dict[str, Any]] = []
     for capture in captures or []:
         if not isinstance(capture, Mapping):
@@ -715,6 +840,8 @@ def merge(
             if isinstance(item, Mapping)
         ]
         by_stage[stage] = items
+        if enhanced and isinstance(capture.get("evidence_packet"), Mapping):
+            packets[stage] = copy.deepcopy(capture["evidence_packet"])
         for item in items:
             capture_rows.append({
                 "capture_ref": f"{stage}:{item['prerequisite_id']}",
@@ -749,6 +876,7 @@ def merge(
             "prerequisites": [],
             "review_flags": {},
             "stage_flags": decision_flags,
+            **({"capture_policy": capture_policy.VERSION, "evidence_packets": packets} if enhanced else {}),
         }
 
     if provider is None:
@@ -764,10 +892,22 @@ def merge(
 
     payload = {
         "stage": "prelearn.merge",
+        **capture_policy.boundary_fields(env),
         "rules": _merge_rules(rules_suffix),
         "captures": capture_rows,
     }
-    decision = kernel.decide(
+    if enhanced:
+        payload["capture_policy"] = capture_policy.VERSION
+        payload["prior_review_flags"] = copy.deepcopy(decision_flags)
+        all_evidence: dict[str, Any] = {}
+        for stage, packet in packets.items():
+            for ref, entries in indexed_evidence(stage, packet).items():
+                all_evidence.setdefault(ref, []).extend(entries)
+        payload["evidence_index"] = resolve_evidence(
+            all_evidence, {ref for row in capture_rows for ref in row["evidence"]},
+        )
+    decide = visual_evidence.decide_with_visual_evidence if enhanced else kernel.decide
+    decision = decide(
         kind="prelearn.merge",
         unit_id="chapter",
         envelope_sha256=envelope_sha,
@@ -778,7 +918,7 @@ def merge(
         ),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION,
+        policy_version=POLICY_VERSION + (";" + capture_policy.VERSION if enhanced else ""),
         fixer=fixer,
     )
     by_ref = {row["capture_ref"]: row for row in capture_rows}
@@ -832,4 +972,5 @@ def merge(
         "prerequisites": prerequisites,
         "review_flags": review_flags,
         "stage_flags": decision_flags,
+        **({"capture_policy": capture_policy.VERSION, "evidence_packets": packets} if enhanced else {}),
     }

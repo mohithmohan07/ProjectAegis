@@ -244,6 +244,22 @@ def run(
     store_dir: str | Path | None = None,
     providers: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Replay with the transport profile sealed into this envelope."""
+    from .. import model_provider
+
+    env = envelope_mod.validate(env)
+    with model_provider.bind_profile(
+        (env.get("metadata") or {}).get(model_provider.PROFILE_KEY)
+    ):
+        return _run_bound(env, store_dir=store_dir, providers=providers)
+
+
+def _run_bound(
+    env: Mapping[str, Any],
+    *,
+    store_dir: str | Path | None = None,
+    providers: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Settle → Host → Place → Analyse → Polish → Assemble.
 
     Place, Analyse, and Polish read the same frozen post-Host input and

@@ -22,6 +22,7 @@ from .build_concepts_release import (
     LANE_POST,
     LANE_PRE,
     PRE_LANE_VERDICT_FIELD,
+    CONCEPT_REVIEW_MASTER_READY,
     STAGED_RELEASE_UID_FIELD,
     ReleaseUnavailableError,
     _lift_resolved_related_concepts,
@@ -33,6 +34,7 @@ from .build_concepts_release import (
     row_projection_defect,
     staged_version,
     structural_defects,
+    concept_review_state,
 )
 
 
@@ -214,6 +216,12 @@ def upload_release_to_database(
     payload = release_payload(job, lane=resolved)
     if payload is None:
         raise ReleaseUnavailableError("this upload has no staged release")
+    review_state = concept_review_state(job)
+    if review_state and review_state.get("status") != CONCEPT_REVIEW_MASTER_READY:
+        raise ValueError(
+            "Concept review is still active; submit/accept the reviewed "
+            "Concept inputs and build the Master files before publication"
+        )
     summary = copy.deepcopy(payload.get("summary") or {})
 
     def _published_ids() -> list[int]:

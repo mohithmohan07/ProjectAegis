@@ -10,6 +10,7 @@ from typing import Any
 from . import canonical_source_phase2 as phase2
 from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase3 as phase3
+from . import model_provider
 
 _CONTRACT_VERSION = 2
 
@@ -157,7 +158,9 @@ def install(generation: ModuleType | None = None) -> None:
         if not isinstance(session, dict) or not isinstance(canonical, dict):
             return original_concepts_wrapper(mmd_text, *args, **kwargs)
         semantic = phase22.active_semantic_source(mmd_text)
+        profile = model_provider.bound_profile()
         metadata = {
+            **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
             "board": kwargs.get("board") or "",
             "grade": kwargs.get("grade") or "",
             "subject": kwargs.get("subject") or "",

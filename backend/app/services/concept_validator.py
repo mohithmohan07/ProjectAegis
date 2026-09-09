@@ -686,10 +686,6 @@ def validate_concept_rows(
         # section shape and allotment without reclassifying its prose.
         if details:
             desc = _description_prose(details)
-            if _IMAGE_URL_RE.search(desc):
-                _add(errors, i, "concept_details", "description_image_url",
-                     "Mathpix/image URLs belong in Types Examples, not Description",
-                     "warning")
             if _DESCRIPTION_SECTION_REF_RE.search(desc):
                 _add(
                     errors, i, "concept_details",

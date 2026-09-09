@@ -160,6 +160,8 @@ from ... import bulk_import as bi
 from ... import config
 from .. import katex_rules as kr
 from .. import progress
+from .. import prelearning_capture_policy as capture_policy
+from . import evidence as visual_evidence
 
 # The run the map belongs to, stamped on the map itself (register Q29).
 # ``generation.PRE_RUN_IDENTITY_FIELD`` names the same key on the release
@@ -564,7 +566,10 @@ def map_evidence(
     qids = list(qids or [])
 
     text_by_id = {
-        str(row.get("block_id") or ""): str(row.get("display_text") or "")
+        str(row.get("block_id") or ""): (
+            visual_evidence.block_text(row) if capture_policy.active(env)
+            else str(row.get("display_text") or "")
+        )
         for row in env["canonical"]["blocks"]
         if isinstance(row, Mapping)
     }
@@ -573,15 +578,21 @@ def map_evidence(
         for row in env["graph"]["blocks"]
         if isinstance(row, Mapping)
     }
+    contexts = {
+        str(row.get("block_id") or ""): _redact_evidence_ids(
+            visual_evidence.block_context(row), qids,
+        )
+        for row in env["canonical"]["blocks"] if isinstance(row, Mapping)
+    } if capture_policy.active(env) else {}
     rows: list[dict[str, Any]] = []
     cited_blocks: list[str] = []
     for item in prerequisites.get("prerequisites") or []:
         if not isinstance(item, Mapping):
             continue
-        blocks = [
-            ref for ref in _ref_list(item.get("evidence"))
-            if ref in kind_by_id
-        ]
+        cited_refs = _ref_list(item.get("evidence"))
+        if capture_policy.active(env):
+            cited_refs = list(dict.fromkeys([*cited_refs, *_ref_list(item.get("source_block_ids"))]))
+        blocks = [ref for ref in cited_refs if ref in kind_by_id]
         for ref in blocks:
             if ref not in cited_blocks:
                 cited_blocks.append(ref)
@@ -598,10 +609,22 @@ def map_evidence(
                 "block_id": ref,
                 "kind": kind_by_id.get(ref, ""),
                 "text": _redact_ids(text_by_id.get(ref, ""), qids),
+                **({"source_context": contexts.get(ref, {})} if capture_policy.active(env) else {}),
             }
             for ref in cited_blocks
         ],
     }
+
+
+def _redact_evidence_ids(value: Any, qids: list[str]) -> Any:
+    """Transport complete block relationships without source-task identities."""
+    if isinstance(value, str):
+        return _redact_ids(value, qids)
+    if isinstance(value, Mapping):
+        return {_redact_ids(str(key), qids): _redact_evidence_ids(child, qids) for key, child in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_evidence_ids(child, qids) for child in value]
+    return value
 
 
 def empty_capture_evidence(
@@ -983,8 +1006,9 @@ def _live_map(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREMAP_SYSTEM, prompts.render(payload),
+        prompts.PREMAP_SYSTEM + _map_policy_instruction(payload), prompts.render(payload),
         purpose="concept_mapping",
+        **({"image_urls": visual_evidence.image_inputs(payload)} if "visual_evidence" in payload else {}),
     )
 
 
@@ -993,7 +1017,7 @@ def _live_links(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREMAP_NEEDED_FOR_SYSTEM, prompts.render(payload),
+        prompts.PREMAP_NEEDED_FOR_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
         purpose="concept_mapping",
     )
 
@@ -1003,12 +1027,27 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREMAP_CRITIC_SYSTEM, prompts.render(payload),
+        prompts.PREMAP_CRITIC_SYSTEM + _map_policy_instruction(payload), prompts.render(payload),
         purpose="advisory_critic",
+        **({"image_urls": visual_evidence.image_inputs(payload)} if "visual_evidence" in payload else {}),
     )
 
 
-def _map_rules(rules_suffix: str) -> str:
+def _map_policy_instruction(payload: Mapping[str, Any]) -> str:
+    return (("\n" + capture_policy.MAP_INSTRUCTION) if payload.get("capture_policy") == capture_policy.VERSION else "") + capture_policy.boundary_instruction(payload)
+
+
+def _map_rules(rules_suffix: str, *, atomic: bool = False) -> str:
+    grouping = (
+        "MEAN: group only fundamentals forming one independently teachable "
+        "and diagnosable capability. Sharing a lesson or a downstream use "
+        "alone does not make distinct capabilities one concept. Group "
+        "related concepts into topics by their learning relationship. "
+    ) if atomic else (
+        "MEAN: prerequisites that one lesson would teach together belong "
+        "to one concept, and concepts a teacher would teach in one "
+        "sitting belong to one topic. "
+    )
     return (
         "Phase 03: build the chapter's PRE-LEARNING concept map from the "
         "run's captured prerequisite set. A pre-learning concept teaches "
@@ -1022,9 +1061,7 @@ def _map_rules(rules_suffix: str) -> str:
         "record that concern in the review evidence; do not silently "
         "drop it or invent a curriculum history. Group the captured prerequisites into "
         "concepts, and the concepts into topics, purely by what they "
-        "MEAN: prerequisites that one lesson would teach together belong "
-        "to one concept, and concepts a teacher would teach in one "
-        "sitting belong to one topic. Name EVERY prerequisite_id from "
+        + grouping + "Name EVERY prerequisite_id from "
         "the request exactly once across the whole map — a prerequisite "
         "that fits with no other is its own single-prerequisite concept, "
         "never dropped. How many topics and concepts the captured "
@@ -1265,10 +1302,14 @@ def build(
     evidence = map_evidence(env, {"prerequisites": captured}, qids)
     payload = {
         "stage": "premap.map",
-        "rules": _map_rules(rules_suffix),
+        **capture_policy.boundary_fields(env),
+        "rules": _map_rules(rules_suffix, atomic=capture_policy.active(env)),
         "chapter": chapter_calibration(env),
         "evidence": evidence,
     }
+    enhanced = capture_policy.active(env)
+    if enhanced:
+        payload["capture_policy"] = capture_policy.VERSION
     # The model is never SHOWN a source question's identity: the
     # capture's citations are filtered to block ids and its free text is
     # redacted (``_redact_ids`` records why redaction, not refusal, is
@@ -1279,7 +1320,8 @@ def build(
     prerequisite_ids = [
         str(row.get("prerequisite_id") or "") for row in captured
     ]
-    decision = kernel.decide(
+    decide = visual_evidence.decide_with_visual_evidence if enhanced else kernel.decide
+    decision = decide(
         kind="premap.map",
         unit_id="chapter",
         envelope_sha256=envelope_sha,
@@ -1288,7 +1330,7 @@ def build(
         checker=_map_checker(prerequisite_ids),
         critic=critic,
         store=store,
-        policy_version=_policy_version("PREMAP_SYSTEM"),
+        policy_version=_policy_version("PREMAP_SYSTEM") + (";" + capture_policy.VERSION if enhanced else ""),
         fixer=fixer,
     )
     map_flags = list(decision.get("review_flags") or [])
@@ -1439,6 +1481,7 @@ def build(
             batch = pre_payload[start:start + _LINK_BATCH_SIZE]
             request = {
                 "stage": "premap.needed_for",
+                **capture_policy.boundary_fields(env),
                 "rules": _links_rules(rules_suffix),
                 "chapter": chapter_calibration(env),
                 "pre_concepts": batch,

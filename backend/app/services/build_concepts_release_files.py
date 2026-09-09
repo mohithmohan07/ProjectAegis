@@ -17,6 +17,7 @@ from . import concept_run_report
 from . import containers
 from . import identity
 from . import coverage_ledger
+from . import model_routing_run
 from . import uploads
 from .build_concepts_release import (
     LANE_POST,
@@ -1648,6 +1649,9 @@ def build_diagnostics_zip(
         original = _original_source(job)
         if original is not None:
             archive.write(original, f"source/original/{original.name}")
+        routing_record = model_routing_run._record_path(job)
+        if routing_record.is_file():
+            archive.write(routing_record, "source/model-routing.json")
         directory = _artifact_directory(job)
         if directory is not None:
             for path in sorted(directory.rglob("*")):

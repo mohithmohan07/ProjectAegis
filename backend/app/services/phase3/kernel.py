@@ -37,11 +37,18 @@ Checker = Callable[[Mapping[str, Any]], list[str]]
 Critic = Callable[[dict[str, Any]], Mapping[str, Any]]
 
 # A child decision pool uses its parent's worker instead of creating another
-# pool whose threads all wait on the same provider gate (Settle used to grow
-# 16 topic workers into 256 batch workers). Context propagation also makes the
-# cancellation signal available to nested sequential batches.
+# decision pool (Settle used to grow 16 topic workers into 256 batch workers).
+# Fixed orchestration lanes do not consume this decision-pool allowance.
+# Cancellation has its own scope: children observe parent failures, while a
+# caught lane failure must not cancel independent sibling lanes.
 _pool_cancel: contextvars.ContextVar[threading.Event | None] = (
     contextvars.ContextVar("aegis_decision_pool_cancel", default=None)
+)
+_pool_cancel_parents: contextvars.ContextVar[tuple[threading.Event, ...]] = (
+    contextvars.ContextVar("aegis_decision_pool_cancel_parents", default=())
+)
+_decision_pool_active: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "aegis_decision_pool_active", default=False,
 )
 
 
@@ -205,6 +212,7 @@ def parallel_map_in_order(
     labels: Sequence[str] | None = None,
     announce: str = "",
     on_result=None,
+    orchestration: bool = False,
 ) -> list:
     """Run ``worker`` over ``items`` on a bounded pool; results in input order.
 
@@ -228,6 +236,14 @@ def parallel_map_in_order(
     ordered side effects that must see a clean prefix: durable resume
     checkpoints ("chunks 1..k complete") and monotone progress updates.
     A worker that raises fails fast before its ``on_result`` runs.
+
+    ``orchestration=True`` is reserved for a fixed set of independent lanes
+    whose workers schedule their own decision pools (the Pre/Post Master
+    builds). It preserves a separate bounded decision pool inside each lane.
+    Deeper decision pools still run sequentially, and marking a pool as
+    orchestration never bypasses an already-active decision-pool boundary.
+    Cancellation propagates downward through both kinds of pool; a caught
+    lane-local failure does not poison the other lanes.
     """
     items = list(items)
     label_list = [str(label) for label in labels] if labels is not None else None
@@ -236,7 +252,9 @@ def parallel_map_in_order(
 
     def run_one(index: int, item):
         cancellation = _pool_cancel.get()
-        if cancellation is not None and cancellation.is_set():
+        if (
+            cancellation is not None and cancellation.is_set()
+        ) or any(parent.is_set() for parent in _pool_cancel_parents.get()):
             from concurrent.futures import CancelledError
 
             raise CancelledError("a sibling decision failed")
@@ -245,7 +263,7 @@ def parallel_map_in_order(
         with progress.label_scope(label_list[index]):
             return worker(item)
 
-    nested = _pool_cancel.get() is not None
+    nested = _decision_pool_active.get()
     workers = 1 if nested else min(int(max_workers), len(items))
     if announce and len(items) > 0:
         progress.log(
@@ -262,8 +280,14 @@ def parallel_map_in_order(
         return results
     from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
+    parent_cancellation = _pool_cancel.get()
+    parents = _pool_cancel_parents.get()
+    if parent_cancellation is not None:
+        parents += (parent_cancellation,)
     cancellation = threading.Event()
     token = _pool_cancel.set(cancellation)
+    parents_token = _pool_cancel_parents.set(parents)
+    decision_token = _decision_pool_active.set(not orchestration)
     pool = ThreadPoolExecutor(max_workers=workers)
     pending = {}
     ready = {}
@@ -301,6 +325,8 @@ def parallel_map_in_order(
         # Started provider work cannot be unsent: let it save paid decisions.
         # Nested workers stop before starting their next independent unit.
         pool.shutdown(wait=True, cancel_futures=True)
+        _decision_pool_active.reset(decision_token)
+        _pool_cancel_parents.reset(parents_token)
         _pool_cancel.reset(token)
 
 

@@ -47,9 +47,14 @@ from ..services import assessment_profile
 from ..services import openai_usage
 from ..services import column_spec
 from ..services import assessment_release as rel
+from ..services import assessment_response_policy as response_policy
 from ..services import identity
 from ..services import katex_rules
 from . import layouts
+from .presentation import (
+    DATA_ALIGNMENT, apply_sheet_presentation, canonical_cell_value,
+    is_equation_field, to_display_rich_text,
+)
 
 CELL_LIMIT = 32_767
 
@@ -437,6 +442,7 @@ _TRUNCATION_MARK = (
 
 def _cell_value(
     value: Any, *, context: str, oversized: list[dict] | None = None,
+    raw_equation: bool = False,
 ) -> Any:
     """One cell's value, repaired rather than refused (spec-step8 S9).
 
@@ -474,12 +480,11 @@ def _cell_value(
         return value
     raw = str(value)
     # Contract v2.0 §17: the workbook projection of a line break is the
-    # canonical HTML ``<br>`` (``<br><br>`` for a paragraph). The internal
-    # model keeps real newlines; this seam — the one cell writer both
-    # renderers share — is the deterministic HTML projection, and the
-    # reader inverts it on import. It is applied FIRST so the Excel cap
-    # below is measured on the text the cell will actually hold.
-    text = bi.to_workbook_rich_text(raw)
+    # canonical HTML ``<br>`` paired with a visible Excel line feed. This
+    # final-cell projection is applied FIRST so capacity includes every
+    # character the cell actually holds. The importer consumes each pair as
+    # one break, preserving the logical model and paragraph structure.
+    text = to_display_rich_text(raw, raw_equation=raw_equation)
     defects = cell_text_defects(text)
     if defects and oversized is not None:
         for defect in defects:
@@ -509,9 +514,9 @@ def _cell_value(
         # said it held 32 585 characters while holding 32 589 — a false
         # sentence inside a repair whose justification is that the record
         # stays true.
-        kept = budget - len(bi.to_workbook_rich_text(
+        kept = budget - len(to_display_rich_text(
             _TRUNCATION_MARK.format(kept=budget, actual=actual)))
-        mark = bi.to_workbook_rich_text(
+        mark = to_display_rich_text(
             _TRUNCATION_MARK.format(kept=kept, actual=actual))
         kept = min(kept, budget - len(mark))
         text = text[:kept] + mark
@@ -560,7 +565,9 @@ def _row_values(
     for field in fields:
         value = "" if field in blank else materialized.get(field, "")
         row.append(_cell_value(
-            value, context=f"{sheet}:{field}", oversized=oversized))
+            value, context=f"{sheet}:{field}", oversized=oversized,
+            raw_equation=is_equation_field(field, materialized),
+        ))
     return row
 
 
@@ -642,6 +649,7 @@ def _append_record(
     row_number = ws.max_row
     active_fields = (schema or output_schema("concept"))["fields"][sheet]
     for column, value in enumerate(values, start=1):
+        ws.cell(row=row_number, column=column).alignment = DATA_ALIGNMENT
         if isinstance(value, str) and value[:1] in {"=", "+", "-", "@"}:
             ws.cell(row=row_number, column=column).data_type = "s"
         elif (
@@ -676,6 +684,7 @@ def _write_headers(
         cell.value = field
         cell.font = Font(bold=True, size=9)
     ws.freeze_panes = "A3"
+    apply_sheet_presentation(ws, active["fields"][sheet])
 
 
 def _new_workbook(
@@ -1164,9 +1173,9 @@ def _question_record(
                 )
     # Release freeze refuses unsupported table dialects for fresh decisions.
     # Keep the renderer itself total for accepted legacy/direct callers too:
-    # mechanically project every untyped rich-text table to ordered
-    # row/column labels.  This is the last serializer seam, not a semantic
-    # reconstruction; already-authored source images remain untouched.
+    # complete supported tables project mechanically to canonical KaTeX
+    # arrays. Unsupported visual/malformed tables retain their content and
+    # defect for repair; already-authored source images remain untouched.
     for field in (
         "question", "question_text", "display_answer", "answer_explanation",
     ):
@@ -1552,9 +1561,15 @@ def parse_workbook(data: bytes) -> dict:
         for row_number, row in enumerate(rows, start=3):
             if row is None or not any(row):
                 continue
-            records.append({
+            raw_record = {
                 field: ("" if i >= len(row) or row[i] is None else row[i])
                 for i, field in enumerate(header)
+            }
+            records.append({
+                field: canonical_cell_value(
+                    value, raw_equation=is_equation_field(field, raw_record),
+                )
+                for field, value in raw_record.items()
             })
             row_numbers.append(row_number)
         parsed["sheets"][name] = {
@@ -1628,7 +1643,7 @@ def _populated(value: Any) -> bool:
 
 def _objective_marking_errors(
     row: Mapping[str, Any], *, label: str, marks: Decimal | None,
-    lane_literal: bool = True,
+    lane_literal: bool = True, selection_mode: str = "",
 ) -> list[str]:
     """Objective read-back marking gate.
 
@@ -1637,6 +1652,12 @@ def _objective_marking_errors(
     with it on, the legacy importer reads normalized values with it off.
     """
     errors: list[str] = []
+    selection_mode = str(selection_mode or "").strip()
+    if selection_mode and selection_mode not in response_policy.SELECTION_MODES:
+        errors.append(
+            f"{label}: unsupported Objective selection_mode "
+            f"{selection_mode!r}"
+        )
     correct_count = 0
     weights: list[Decimal] = []
     populated_options = 0
@@ -1657,7 +1678,8 @@ def _objective_marking_errors(
         # The cell carries the ``<br>`` projection (§17); the medium and
         # label probes read the internal form, as the reader does.
         answer_content = bi.from_workbook_rich_text(
-            str(row.get(f"answer_content_{n}") or "")
+            str(row.get(f"answer_content_{n}") or ""),
+            raw_equation=answer_type == "Equation",
         )
         if answer_type not in ANSWER_TYPES:
             errors.append(
@@ -1700,7 +1722,11 @@ def _objective_marking_errors(
                 errors.append(
                     f"{label}: correct option {n} weight must be positive"
                 )
-            if marks is not None and weight != marks:
+            if (
+                selection_mode != "multiple"
+                and marks is not None
+                and weight != marks
+            ):
                 errors.append(
                     f"{label}: correct weightage {weight} != marks {marks}"
                 )
@@ -1727,7 +1753,18 @@ def _objective_marking_errors(
             f"{label}: question_text uses uppercase objective option "
             f"label(s) {', '.join(uppercase_labels)}; use lowercase labels"
         )
-    if correct_count != 1:
+    if selection_mode and populated_options < 2:
+        errors.append(
+            f"{label}: Objective selection_mode requires at least two "
+            f"options (got {populated_options})"
+        )
+    if selection_mode == "multiple":
+        if correct_count < 2:
+            errors.append(
+                f"{label}: multiple selection requires at least two correct "
+                f"options (got {correct_count})"
+            )
+    elif correct_count != 1:
         errors.append(f"{label}: {correct_count} correct options")
     if (
         marks is not None
@@ -1762,7 +1799,8 @@ def _subjective_marking_errors(
         wire_type = str(row.get(f"answer_type_{n}") or "")
         answer_type = bi.normalize_answer_type(wire_type)
         answer_content = bi.from_workbook_rich_text(
-            str(row.get(f"answer_{n}") or "")
+            str(row.get(f"answer_{n}") or ""),
+            raw_equation=answer_type == "Equation",
         )
         if answer_type not in ANSWER_TYPES:
             errors.append(
@@ -1882,7 +1920,8 @@ def _descriptive_marking_errors(
         wire_type = str(row.get(f"answer_type_{n}") or "")
         answer_type = bi.normalize_answer_type(wire_type)
         answer_content = bi.from_workbook_rich_text(
-            str(row.get(f"answer_content_{n}") or "")
+            str(row.get(f"answer_content_{n}") or ""),
+            raw_equation=answer_type == "Equation",
         )
         parent_answers.append({
             "answer_type": answer_type, "answer_content": answer_content,
@@ -2002,7 +2041,8 @@ def _descriptive_marking_errors(
             wire_keyword_type = str(row.get(f"sq{n}_answer_type_{m}") or "")
             keyword_type = bi.normalize_answer_type(wire_keyword_type)
             keyword_content = bi.from_workbook_rich_text(
-                str(row.get(f"sq{n}_keyword_{m}") or "")
+                str(row.get(f"sq{n}_keyword_{m}") or ""),
+                raw_equation=keyword_type == "Equation",
             )
             child_keywords.append({
                 "answer_type": keyword_type, "keyword": keyword_content,
@@ -2273,6 +2313,16 @@ def validate_master_file(
     expected_concept_labels: dict[str, list[str]] = {}
     expected_question_labels: dict[str, list[str]] = {
         name: [] for name in ("Objective", "Subjective", "Descriptive")
+    }
+    # The workbook layout has no selection_mode column. Carry the explicit
+    # model-authored mode through the immutable candidate snapshot and use it
+    # only to select the Objective marking contract at read-back.
+    selection_mode_by_label = {
+        str(candidate.get("question_label") or ""): str(
+            candidate.get("selection_mode") or ""
+        ).strip()
+        for candidate in snapshot.get("candidates") or []
+        if str(candidate.get("question_label") or "").strip()
     }
     # The same count the renderer used: how many question rows each concept
     # actually places. A concept with none gets ONE tail row stopping at the
@@ -2682,10 +2732,14 @@ def validate_master_file(
             if name == "Objective":
                 errors.extend(_objective_marking_errors(
                     row, label=label, marks=marks,
+                    selection_mode=selection_mode_by_label.get(label, ""),
                 ))
                 answers = [{
                     "answer_type": bi.normalize_answer_type(row.get(f"answer_type_{n}")),
-                    "answer_content": bi.from_workbook_rich_text(row.get(f"answer_content_{n}")),
+                    "answer_content": bi.from_workbook_rich_text(
+                        row.get(f"answer_content_{n}"),
+                        raw_equation=is_equation_field(f"answer_content_{n}", row),
+                    ),
                     "correct_answer": row.get(f"correct_answer_{n}"),
                 } for n in range(1, MAX_OBJECTIVE_OPTIONS + 1)
                     if row.get(f"answer_content_{n}") is not None]

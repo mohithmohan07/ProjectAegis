@@ -114,12 +114,16 @@ def syllabus_workbook_dirs() -> list[Path]:
 
 
 def has_openai() -> bool:
-    """A usable model-provider credential is present (OpenAI or Gemini).
+    """OpenAI is required for source/concept work in the stage profile.
 
-    Gemini rides the OpenAI-compatible endpoint through the same client, so
-    for every "can we generate live?" question the two credentials are
-    interchangeable. The name is kept for its long-standing call sites.
+    A historical bound run retains its original interchangeable credential
+    check. New full Concept runs additionally preflight Gemini before spend;
+    a Gemini-only credential never routes their other stages to Google.
     """
+    from .services import model_provider
+
+    if model_provider.bound_profile() is not None:
+        return bool(os.environ.get("OPENAI_API_KEY"))
     return bool(
         os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY")
     )
@@ -265,11 +269,12 @@ def phase3_decision_workers() -> int:
 
 
 def source_chunk_workers() -> int:
-    """Per-run parallel workers for Phase 2 source chunks and packets.
+    """Per-run parallel workers for source chunks, packets and hierarchy batches.
 
     Governs the chunk fan-outs that read the source (question
     identification, the Question/Task Inventory, skeleton extraction) and
-    the Phase 2.2 evidence-packet adjudication. Chunks are decided in
+    the Phase 2.2 evidence-packet adjudication, plus independent batches
+    within each source hierarchy author or critic pass. Chunks are decided in
     parallel and APPLIED in input order, so output — including cross-chunk
     dedup and QID numbering — is byte-identical to a sequential run.
 

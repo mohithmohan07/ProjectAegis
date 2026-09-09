@@ -11,8 +11,9 @@ A returning client asks ``run-events?after=N`` and silently catches up to
 the exact current state; the same ``seq`` rides the live stream so the
 client can dedupe an overlap instead of double-printing.
 
-Mechanics only: sequence numbers, file appends, cursor reads. The journal
-is per-run — starting a new stream for the job truncates it — and lives
+Mechanics only: sequence numbers, file appends, cursor reads. The default
+journal is per-stream for backwards compatibility; a resumed same-run stream
+passes ``continue_existing=True`` to append with the existing cursor. It lives
 beside the job's other artifacts, so a data reset removes it with them.
 """
 from __future__ import annotations
@@ -44,13 +45,28 @@ class RunJournal:
     disagree — worker pool threads all emit through the same instance.
     """
 
-    def __init__(self, job_id: int) -> None:
+    def __init__(self, job_id: int, *, continue_existing: bool = False) -> None:
         self._path = journal_path(job_id)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
         self._seq = 0
-        # A new stream is a new run: the journal restarts with it.
-        self._handle = open(self._path, "w", encoding="utf-8")
+        mode = "a" if continue_existing and self._path.exists() else "w"
+        if mode == "a":
+            # A torn tail is harmless to ``read_after``; only valid stamped
+            # events contribute to the next cursor.  Sequence continuity is
+            # what lets a later Master stream be the same run in the UI.
+            try:
+                with open(self._path, encoding="utf-8") as previous:
+                    for line in previous:
+                        try:
+                            value = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(value.get("seq"), int):
+                            self._seq = max(self._seq, value["seq"])
+            except OSError:
+                mode = "w"
+        self._handle = open(self._path, mode, encoding="utf-8")
 
     def publish(
         self, event: dict[str, Any], sink: Callable[[dict[str, Any]], None],

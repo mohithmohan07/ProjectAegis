@@ -152,6 +152,27 @@ PRE_ROW_RELATED_UNRESOLVED_FIELD = "_aegis_pre_related_concepts_unresolved"
 # concept row carries the edited VALUES, never the trail.
 MANUAL_EDIT_TRAIL_FIELD = "_aegis_manual_edit_rounds"
 
+# Q41: a new Build Concepts run stops after the two Concept projections have
+# been staged so a reviewer can inspect and correct the complete input before
+# the expensive Master authoring stages.  The state is kept beside the release
+# slots in ``question_inventory`` for the same reason as the existing release
+# payload: it is carried by portable checkpoints and does not require a schema
+# migration.  Older jobs have no marker and retain their historical lifecycle.
+CONCEPT_REVIEW_KEY = "_aegis_concept_review"
+CONCEPT_REVIEW_VERSION = "aegis-concept-review-1"
+CONCEPT_REVIEW_PENDING = "pending_review"
+CONCEPT_REVIEW_REVIEWED = "reviewed"
+CONCEPT_REVIEW_MASTER_BUILDING = "master_building"
+CONCEPT_REVIEW_MASTER_READY = "master_ready"
+CONCEPT_REVIEW_MASTER_FAILED = "master_failed"
+CONCEPT_REVIEW_STATUSES = (
+    CONCEPT_REVIEW_PENDING,
+    CONCEPT_REVIEW_REVIEWED,
+    CONCEPT_REVIEW_MASTER_BUILDING,
+    CONCEPT_REVIEW_MASTER_READY,
+    CONCEPT_REVIEW_MASTER_FAILED,
+)
+
 _RELEASE_AUDIT_FIELDS = frozenset({
     RELEASE_ROW_STATUS_FIELD,
     RELEASE_ROW_ERRORS_FIELD,
@@ -464,6 +485,253 @@ def release_payload(
     if value.get("version") != RELEASE_VERSION:
         return None
     return value
+
+
+def concept_review_state(job: models.UploadJob) -> dict[str, Any]:
+    """Return the durable Concept-review state, or an empty legacy state.
+
+    This intentionally reads a marker rather than deriving lifecycle from
+    ``job.status`` or the presence of a release.  Existing released jobs did
+    not have a review pause and must continue to use their legacy routes.
+    """
+
+    inventory = job.question_inventory
+    raw = inventory.get(CONCEPT_REVIEW_KEY) if isinstance(inventory, Mapping) else None
+    if not isinstance(raw, Mapping):
+        return {}
+    state = copy.deepcopy(dict(raw))
+    state.setdefault("version", CONCEPT_REVIEW_VERSION)
+    state.setdefault("status", CONCEPT_REVIEW_PENDING)
+    state.setdefault("available_lanes", list(state.get("required_lanes") or []))
+    state.setdefault("optional_lanes", [])
+    state.setdefault("required_lanes", [])
+    state.setdefault("reviewed_lanes", [])
+    state.setdefault("concept_versions", {})
+    state.setdefault("concept_release_uids", {})
+    state.setdefault("master_outputs", {})
+    state.setdefault("corrected_inputs", {})
+    return state
+
+
+def _source_question_ids(inventory: object) -> list[str]:
+    """Extract recorded source QIDs without interpreting question meaning."""
+
+    if not isinstance(inventory, Mapping):
+        return []
+    result: list[str] = []
+    for row in inventory.get("items") or []:
+        if not isinstance(row, Mapping):
+            continue
+        value = str(row.get("qid") or row.get("source_qid") or "").strip()
+        if value and value not in result:
+            result.append(value)
+    return result
+
+
+def initialize_concept_review(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    target_chapter_id: int,
+) -> dict[str, Any]:
+    """Persist a review gate after Concept files are safely staged.
+
+    The original source hash and source-question identity set are frozen once
+    here. Corrected review inputs may change authoritative wording, while the
+    original upload and its provenance remain available in the job artifact
+    directory and the immutable ``ConceptReleaseVersion`` history.
+    """
+
+    post = release_payload(job, lane=LANE_POST)
+    pre = release_payload(job, lane=LANE_PRE)
+    payloads = {lane: value for lane, value in ((LANE_POST, post), (LANE_PRE, pre)) if value is not None}
+    if not payloads:
+        raise ReleaseUnavailableError("this upload has no staged release")
+    current = concept_review_state(job)
+    if current and current.get("original_source_document_hash"):
+        return current
+    post_inventory = (post or {}).get("question_task_inventory") or {}
+    source_ids = _source_question_ids(post_inventory)
+    source_hash = str((post or {}).get("source_document_hash") or "")
+    # Post's Types/Cases inventory is the source-question authority for the
+    # Post Master and therefore must be explicitly reviewed.  The Pre file
+    # has a review control too, but its generated prerequisite questions are
+    # optional to re-upload; an omitted Pre upload means the staged Pre draft
+    # remains authoritative.  This lets the reviewer correct either lane
+    # without making a redundant Pre question upload a gate.
+    required_lanes = [LANE_POST] if post is not None else []
+    optional_lanes = [lane for lane in payloads if lane not in required_lanes]
+    state: dict[str, Any] = {
+        "version": CONCEPT_REVIEW_VERSION,
+        "status": CONCEPT_REVIEW_PENDING,
+        "target_chapter_id": int(target_chapter_id or (post or {}).get("target_chapter_id") or 0),
+        "available_lanes": list(payloads),
+        "required_lanes": required_lanes,
+        "optional_lanes": optional_lanes,
+        "reviewed_lanes": [],
+        "concept_versions": {
+            lane: int(staged_version(payload) or 0)
+            for lane, payload in payloads.items()
+        },
+        "concept_release_uids": {
+            lane: str(payload.get(STAGED_RELEASE_UID_FIELD) or "")
+            for lane, payload in payloads.items()
+        },
+        "original_source_document_hash": source_hash,
+        "original_source_question_ids": source_ids,
+        "source_question_count": len(source_ids),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "corrected_at": "",
+        "master_started_at": "",
+        "master_completed_at": "",
+        "master_outputs": {},
+        "corrected_inputs": {
+            lane: {
+                "lane": lane,
+                "status": "pending",
+                "accepted": False,
+            }
+            for lane in payloads
+        },
+    }
+    durable = copy.deepcopy(dict(job.question_inventory or {}))
+    durable[CONCEPT_REVIEW_KEY] = state
+    job.question_inventory = durable
+    job.status = "concept_review"
+    job.detail = (
+        "Concept files are ready for review. Correct and resubmit every "
+        "staged Concept input before building the Master files."
+    )
+    db.commit()
+    db.refresh(job)
+    return state
+
+
+def update_concept_review_state(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    status: str | None = None,
+    reviewed_lane: str | None = None,
+    master_outputs: Mapping[str, Any] | None = None,
+    corrected_at: str | None = None,
+    master_started_at: str | None = None,
+    master_completed_at: str | None = None,
+    corrected_filename: str | None = None,
+    corrected_changed: bool | None = None,
+) -> dict[str, Any]:
+    """Update only lifecycle bookkeeping for a new review-gated run."""
+
+    state = concept_review_state(job)
+    if not state:
+        return {}
+    if status:
+        if status not in CONCEPT_REVIEW_STATUSES:
+            raise ValueError(f"unknown Concept review status {status!r}")
+        state["status"] = status
+    if reviewed_lane:
+        lane = normalize_lane(reviewed_lane)
+        reviewed = list(state.get("reviewed_lanes") or [])
+        if lane not in reviewed:
+            reviewed.append(lane)
+        state["reviewed_lanes"] = [
+            lane for lane in state.get("required_lanes") or [] if lane in reviewed
+        ]
+        required = set(state.get("required_lanes") or [])
+        if required and required.issubset(set(state["reviewed_lanes"])):
+            state["status"] = CONCEPT_REVIEW_REVIEWED
+        inputs = copy.deepcopy(state.get("corrected_inputs") or {})
+        inputs[lane] = {
+            "lane": lane,
+            "filename": str(corrected_filename or "edited Concept workbook"),
+            "uploaded_at": str(corrected_at or datetime.now(timezone.utc).isoformat()),
+            "status": "accepted",
+            "accepted": True,
+        }
+        if corrected_changed is not None:
+            inputs[lane]["changed"] = bool(corrected_changed)
+        state["corrected_inputs"] = inputs
+    if master_outputs is not None:
+        state["master_outputs"] = copy.deepcopy(dict(master_outputs))
+    for key, value in (
+        ("corrected_at", corrected_at),
+        ("master_started_at", master_started_at),
+        ("master_completed_at", master_completed_at),
+    ):
+        if value is not None:
+            state[key] = str(value)
+    state["concept_versions"] = {
+        lane: int(staged_version(release_payload(job, lane=lane)) or version or 0)
+        for lane, version in (state.get("concept_versions") or {}).items()
+        if release_payload(job, lane=lane) is not None
+    }
+    state["concept_release_uids"] = {
+        lane: str((release_payload(job, lane=lane) or {}).get(STAGED_RELEASE_UID_FIELD) or uid)
+        for lane, uid in (state.get("concept_release_uids") or {}).items()
+        if release_payload(job, lane=lane) is not None
+    }
+    durable = copy.deepcopy(dict(job.question_inventory or {}))
+    durable[CONCEPT_REVIEW_KEY] = state
+    job.question_inventory = durable
+    db.commit()
+    db.refresh(job)
+    return state
+
+
+def accept_concept_review(
+    db: Session,
+    job: models.UploadJob,
+    *,
+    lanes: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Record acceptance of the unchanged staged Concept files.
+
+    The review pause is a deliberate hold, not a mandatory file transfer.
+    When the owner clicks Build Master without uploading a correction, this
+    records that decision under the same marker and leaves the immutable
+    source/release history untouched.  It also accepts an unchanged optional
+    Pre lane when only Post was edited.
+    """
+    state = concept_review_state(job)
+    if not state:
+        return {}
+    available = list(state.get("available_lanes") or state.get("required_lanes") or [])
+    requested = available if lanes is None else [normalize_lane(lane) for lane in lanes]
+    reviewed = list(state.get("reviewed_lanes") or [])
+    accepted = list(state.get("accepted_without_upload_lanes") or [])
+    for lane in requested:
+        if lane not in available:
+            continue
+        if lane not in reviewed:
+            reviewed.append(lane)
+        if lane not in accepted:
+            accepted.append(lane)
+    state["reviewed_lanes"] = [
+        lane for lane in available if lane in reviewed
+    ]
+    state["accepted_without_upload_lanes"] = accepted
+    state["accepted_at"] = datetime.now(timezone.utc).isoformat()
+    inputs = copy.deepcopy(state.get("corrected_inputs") or {})
+    for lane in requested:
+        if lane in available:
+            inputs[lane] = {
+                "lane": lane,
+                "filename": "generated Concept workbook",
+                "accepted_at": state["accepted_at"],
+                "status": "accepted",
+                "accepted": True,
+                "changed": False,
+            }
+    state["corrected_inputs"] = inputs
+    required = set(state.get("required_lanes") or [])
+    if required.issubset(set(state["reviewed_lanes"])):
+        state["status"] = CONCEPT_REVIEW_REVIEWED
+    durable = copy.deepcopy(dict(job.question_inventory or {}))
+    durable[CONCEPT_REVIEW_KEY] = state
+    job.question_inventory = durable
+    db.commit()
+    db.refresh(job)
+    return state
 
 
 def payload_lane(payload: Mapping[str, Any] | None) -> str:

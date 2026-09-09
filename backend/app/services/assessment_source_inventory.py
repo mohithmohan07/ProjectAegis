@@ -20,10 +20,51 @@ import re
 from typing import Any, Mapping
 
 from . import assessment_release as rel
+from . import source_task_polishing_policy as source_format
 
 
 class SourceInventoryError(ValueError):
     """The inventory cannot be carried into a release without loss."""
+
+
+REVIEWED_SOURCE_BANK_KEY = "reviewed_source_questions"
+"""Durable marker written only by the accepted Concept review handoff."""
+
+
+def has_reviewed_source_bank(inventory: Mapping | None) -> bool:
+    """Whether an inventory explicitly owns a reviewed Post question set.
+
+    An empty ``items`` list is ambiguous in historical payloads.  The review
+    handoff writes this closed-world receipt beside the list, making an empty
+    reviewed bank distinguishable from an unexplained/missing inventory.
+    The check is structural only; it never decides which questions belong.
+    """
+    if not isinstance(inventory, Mapping):
+        return False
+    receipt = inventory.get(REVIEWED_SOURCE_BANK_KEY)
+    if not isinstance(receipt, Mapping):
+        return False
+    version = str(receipt.get("version") or "").strip()
+    if version not in {"reviewed-source-questions-1", "reviewed-types-cases-1"}:
+        return False
+    return all(isinstance(receipt.get(field), list) for field in (
+        "original_ids", "reviewed_ids", "omitted",
+    ))
+
+
+def source_task_evidence(atom: Mapping) -> dict[str, Any]:
+    """Complete declared stimulus for existing set judgments, with no audits."""
+    return {
+        key: copy.deepcopy(atom[key])
+        for key in (
+            "parent_qid", "subpart", "alternative_set_id",
+            "raw_text", "shared_context", "options", "tables", "content_objects",
+            "source_context", "compound_subparts", "assets", "image_urls",
+            "image_manifest", "images", "requires_visual", "requires_context",
+            "source_task_polishing_policy", "frozen_task_text", "normalized_source_text",
+        )
+        if key in atom
+    }
 
 
 _POSITION_FIELDS = frozenset({
@@ -199,15 +240,15 @@ def _assets_of(item: Mapping) -> list[dict]:
         if not url:
             continue
         meta = {}
-        for candidate in item.get("image_assets") or []:
+        for candidate in [*(item.get("image_assets") or []), *(item.get("assets") or [])]:
             if isinstance(candidate, Mapping) and (
                 str(candidate.get("url") or "").strip() == url
             ):
-                meta = candidate
-                break
+                meta.update(copy.deepcopy(dict(candidate)))
         explicit_alt = str(meta.get("alt") or "")
         caption_alt = str(captions.get(url) or "")
         assets.append({
+            **copy.deepcopy(dict(meta)),
             "source_page": meta.get("source_page"),
             "bbox": meta.get("bbox"),
             "sha256": str(meta.get("sha256") or ""),
@@ -220,6 +261,11 @@ def _assets_of(item: Mapping) -> list[dict]:
             ),
             "order": order,
         })
+    known_urls = {str(asset.get("url") or "") for asset in assets}
+    for asset in item.get("assets") or []:
+        if isinstance(asset, Mapping) and str(asset.get("url") or "") not in known_urls:
+            assets.append(copy.deepcopy(dict(asset)))
+            known_urls.add(str(asset.get("url") or ""))
     return assets
 
 
@@ -283,6 +329,17 @@ def source_atom_from_item(
         or item.get("raw_task")
         or ""
     )
+    if source_format.applies(item):
+        frozen = item.get("frozen_task_text")
+        if not isinstance(frozen, str) or not frozen.strip():
+            raise SourceInventoryError(
+                f"source task {qid!r} has a polishing policy without frozen wording"
+            )
+        public_text = frozen
+    route_evidence = _route_evidence(qid, mined_types, type_case_rows)
+    reviewed_target = item.get("_aegis_reviewed_target")
+    if isinstance(reviewed_target, Mapping):
+        route_evidence["reviewed_target"] = copy.deepcopy(dict(reviewed_target))
     return {
         "source_qid": qid,
         "source_document_hash": source_document_hash,
@@ -298,13 +355,37 @@ def source_atom_from_item(
         "normalized_public_text": public_text,
         "shared_context": str(item.get("shared_context") or ""),
         "source_answer": str(item.get("raw_solution_or_answer") or ""),
-        "options": list(item.get("options") or []),
+        "options": copy.deepcopy(item.get("options") or []),
         "topic_hint": str(item.get("topic_hint") or ""),
         "polish_flag": str(item.get("polish_flag") or ""),
         "assets": _assets_of(item),
-        "route_evidence": _route_evidence(
-            qid, mined_types, type_case_rows
-        ),
+        "route_evidence": route_evidence,
+        **({
+            source_format.FIELD: source_format.VERSION,
+            "frozen_task_text": copy.deepcopy(item.get("frozen_task_text")),
+            "normalized_source_text": copy.deepcopy(item.get("normalized_task")),
+            "polish_audit": copy.deepcopy(item.get("polish_audit")),
+            "polish_review_required": bool(item.get("polish_review_required")),
+        } if source_format.applies(item) else {}),
+        # These are source-owned structures, not output fields or decisions.
+        # Keeping only the stem loses a table held in content_objects and
+        # images nested in cells before the materializer can place them.
+        **{
+            key: copy.deepcopy(item[key])
+            for key in (
+                "tables", "content_objects", "image_manifest", "image_urls",
+                "image_assets", "images", "source_context", "requires_visual",
+                "requires_context", "sub_questions",
+            )
+            if key in item
+        },
+        # A reviewed Concept workbook may deliberately move a retained
+        # question to a different Type/Case/Concept.  Keep that accepted
+        # target beside the original route evidence so the Master routing
+        # seam can apply it mechanically while provenance stays intact.
+        **({
+            "reviewed_target": copy.deepcopy(item["_aegis_reviewed_target"])
+        } if isinstance(item.get("_aegis_reviewed_target"), Mapping) else {}),
     }
 
 
@@ -419,9 +500,35 @@ def partition_compound_parents(
                 str(atom.get("source_qid") or "")
             )
             continue
-        kept.append(dict(atom))
+        kept.append(copy.deepcopy(dict(atom)))
     if not folded_by_parent:
         return kept, []
+    atoms_by_qid = {str(atom.get("source_qid") or ""): atom for atom in atoms}
+
+    compiled_by_qid: dict[str, dict] = {}
+
+    def with_subparts(atom: Mapping, ancestors: frozenset[str]) -> dict:
+        qid = str(atom.get("source_qid") or "")
+        if qid in ancestors:
+            raise SourceInventoryError("cyclic compound-parent identity: " + qid)
+        if qid in compiled_by_qid:
+            return compiled_by_qid[qid]
+        row = copy.deepcopy(dict(atom))
+        children = folded_by_parent.get(qid) or []
+        if children:
+            row["compound_subparts"] = [
+                with_subparts(atoms_by_qid[child], ancestors | {qid})
+                for child in children
+            ]
+        compiled_by_qid[qid] = row
+        return row
+
+    # A folded child is not another learner question, but its owned stimulus
+    # remains source evidence under that exact child QID. Do not rewrite the
+    # parent stem or guess which child table is common to every subquestion.
+    for parent in folded_by_parent:
+        with_subparts(atoms_by_qid[parent], frozenset())
+    kept = [with_subparts(atom, frozenset()) for atom in kept]
     labels = {
         str(atom.get("source_qid") or ""): str(
             atom.get("source_paper_number") or ""

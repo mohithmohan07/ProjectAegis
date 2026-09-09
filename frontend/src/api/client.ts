@@ -92,6 +92,15 @@ export type ModelProviderInfo = {
   gemini_model: string;
   openai_model: string;
   note: string;
+  routing_profile?: string;
+  ready?: boolean;
+  stages?: Array<{
+    stage: string;
+    label: string;
+    provider: string;
+    model: string;
+    reasoning_effort: string;
+  }>;
 };
 
 /* `seq` is the durable run journal's monotonic cursor: it rides both the
@@ -256,6 +265,8 @@ export const api = {
     `${BASE}/build-concepts/uploads/${jobId}/inventory.csv`,
   checkpointUrl: (jobId: number) =>
     `${BASE}/build-concepts/uploads/${jobId}/checkpoint`,
+  conceptFileUrl: (jobId: number, lane: "post" | "pre") =>
+    `${BASE}/build-concepts/uploads/${jobId}/release-bulk-import.xlsx?lane=${lane}`,
   runDiagnosticsUrl: (jobId: number) =>
     `${BASE}/build-concepts/uploads/${jobId}/diagnostics.zip`,
   createWorkbookUrl: (subject: string, board: string, grade: string, mode: "blank" | "content") =>
@@ -398,6 +409,26 @@ export const api = {
     );
   },
 
+  /**
+   * Store a reviewer's corrected Concept workbook for the named lane.
+   *
+   * This is deliberately a different operation from
+   * ``uploadEditedWorkbook``.  The latter is retained for historical
+   * released jobs and publishes immediately; this operation only records the
+   * corrected input used by the later, explicit Master-generation action.
+   */
+  uploadCorrectedConceptInput: (jobId: number, lane: "post" | "pre", file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<Record<string, unknown>>(
+      `/build-concepts/uploads/${jobId}/concept-review/submit?lane=${lane}`,
+      { method: "POST", body: fd },
+    );
+  },
+  /** Stream the explicit second half of a Concept-first run. */
+  generateMaster: (jobId: number) =>
+    `/build-concepts/uploads/${jobId}/concept-review/master`,
+
   // Release review (step 9): read the staged release, edit it in place or
   // via a plain-language instruction. Every write carries the
   // staged_release_uid it was read from, so a concurrent edit 409s instead
@@ -425,6 +456,7 @@ export const api = {
     sessionGenerate: (id: number) => `/build-assessments/sessions/${id}/generate`,
     conceptConvert: (id: number) => `/build-concepts/uploads/${id}/convert`,
     postLearningGenerate: (id: number) => `/build-concepts/post-learning/uploads/${id}/generate`,
+    masterGenerate: (id: number) => `/build-concepts/uploads/${id}/concept-review/master`,
     workbookGenerate: "/workbooks/generate",
   },
 

@@ -45,6 +45,7 @@ from . import prompts
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from . import source_topic_decision
+from .source_topic_policy import SOURCE_TOPIC_POLICY
 from . import type_granularity_decision
 from .response_schemas import ResponseSchema, provider_response_format
 from .semantic_recovery import (
@@ -1417,7 +1418,7 @@ Rules:
   source's grade; do not invent detail merely to lengthen the description.
 - Keep source_evidence short: the phrase/heading/problem source that justifies the concept.
 - source_evidence is for validation/debug only and must not be written to workbook.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.missing_topic_recovery.system", category=_CONCEPTS_CAT,
@@ -1432,9 +1433,10 @@ Rules:
 - Every recovered concept must be TAUGHT by the supplied excerpt itself. Do
   not write concepts for material the excerpt only previews, mentions, or
   asks about — detailed definitions belong to the sections that teach them.
-  When the missing topic is thin framing material (a chapter opening), ONE
-  modest framing concept grounded in its own text is the correct recovery,
-  not a set of definition concepts imported from later sections.
+  Judge opening material by what it teaches, not its location or length.
+  Integrate supported context into its owning objective and preserve an
+  independently taught opening objective under its specific meaningful name;
+  never fabricate a framing concept or import later definitions to fill it.
 - Infer concept grain from that topic's own excerpt and hierarchy, not from the
   subject label or from a conventional textbook template.
 - Preserve the supplied topic string exactly. Never create another topic.
@@ -1450,7 +1452,7 @@ Rules:
 - Do not repeat any supplied existing concept title.
 - Do not emit Types, Cases, Examples, or learner analysis; the dedicated
   refinement passes add those sections after recovery.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.method_anchor_recovery.system", category=_CONCEPTS_CAT,
@@ -1518,7 +1520,7 @@ Rules:
 - Do not rewrite good concepts unnecessarily.
 - Do not invent exercise/example/review/practice topics.
 - Never add filler concepts.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.task_fragment_consolidation.system", category=_CONCEPTS_CAT,
@@ -1620,9 +1622,11 @@ Rules:
   page references. When the source text cites one, substitute the full actual
   content it points to (the real numbers, expression, conditions, or task) —
   e.g. write "such as expressing 1.272727... as 14/11", never "as in Example 8".
-- Do NOT embed image URLs in Description. Describe visual content
-  in words here; image URLs belong only in Types Example lines (with their
-  figure reference).
+- Preserve source-owned figures in Description and learner-analysis when they
+  support the explanation. Use their supplied canonical [img] tags with the
+  exact source URL and grounded alt text; explain the visual alongside it.
+  Do not remove or relocate a figure merely because it appears in Description.
+  Do not invent figures, image URLs, labels, or decorative images.
 - Wrap every mathematical expression exactly as [Katex] valid LaTeX [/Katex].
   Never emit raw math delimiters or raw TeX outside those tags.
 """)
@@ -1950,7 +1954,7 @@ TYPE WORDING (each Type must be properly defined):
 - Use Diagram Interpretation only when the learner must read a supplied visual
   and the owned inventory item has requires_visual=true. Observing a real-world
   process is not Diagram Interpretation.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.chapter_wide_task_topics.system", category=_CONCEPTS_CAT,
@@ -1969,7 +1973,7 @@ Rules:
 - For a mixed task, choose the topic containing its final or dominant assessed
   objective. Never place all tasks on the last topic merely because the review
   block follows it.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.type_semantic_consolidation.system", category=_CONCEPTS_CAT,
@@ -2089,7 +2093,7 @@ Rules:
 - These Case verdicts are evidence, not permission to render one Type on
   several concepts. A later owner verdict consolidates every Case/QID of a
   reusable Type onto one supported concept.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.type_mining_delta.system", category=_CONCEPTS_CAT,
@@ -2120,7 +2124,7 @@ DELTA RULES:
 - Create a new Type only for a distinct method, representation, constraint, or
   expected response—not merely for a different content target or host.
 - Cover every provided missed qid, but emit no unchanged Type, Case, or Example.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.type_embedding.system", category=_CONCEPTS_CAT,
@@ -2390,11 +2394,13 @@ Rules:
   and task, e.g. "solve the problem in Exercise 1.5" becomes
   "rationalise the denominator of 1/(7 + 3*sqrt(2))".
   A figure/table reference WITH its canonical [img] tag embedded right after it
-  is valid content — keep it (in Types Example lines). Never leave a
+  is valid content — keep it in its owning section. Never leave a
   Description truncated mid-sentence while fixing artifacts.
-- Image URLs belong in canonical [img] tags on Types Example lines next to the figure
-  reference. Do not put image URLs in the Description section; describe the
-  visual in words there instead.
+- Preserve source-owned figures in Description, learner-analysis, Types and
+  Activity/Info Hub using their supplied canonical [img] tags and exact URLs.
+  Keep each figure with the explanation or source task it supports; describe
+  the visual alongside it. Do not delete or relocate figures because of the
+  section label, and do not invent figures, image URLs, or labels.
 - For merged_description issues (one cell carrying two or more concepts'
   "Description:" blocks): keep ONLY the content belonging to THIS row's
   concept — rewrite the cell so it describes exactly one concept. NEVER
@@ -2467,9 +2473,9 @@ prompts.register(
     "concepts.topic_structure.system", category=_CONCEPTS_CAT,
     label="Topic re-segregation system prompt",
     default="""\
-Re-segregate a chapter concept map into its real textbook topics. Your ONLY
-job is to assign each concept to the textbook MAIN SECTION that actually
-teaches it, using the source file's own headings.
+Re-segregate a chapter concept map into its accepted teaching topics. Your ONLY
+job is to assign each concept to the accepted semantic topic that actually
+teaches it, using the source evidence and the recorded topic display roster.
 Return ONLY strict JSON:
 {"rows":[{"topic":"","parent_concept":"","concept":"","concept_description":"","keywords":""}]}.
 
@@ -2478,17 +2484,18 @@ Rules:
   order. Each excerpt includes all source blocks inherited by that main topic,
   including worked examples, solutions, exercises, and structural subheadings.
   Reassign ONLY the topic of each row.
-- Topic names must be the given source headings VERBATIM (only the section
-  number stripped) — never invent, rename, merge, or paraphrase headings.
-- The given headings are the MAIN sections. When a concept comes from a
-  subsection, file it under its MAIN section heading — subsections are never
-  topics.
+- Topic names must be the supplied accepted semantic display names VERBATIM.
+  These may be meaningful names authored from generic printed containers;
+  original source headings remain provenance, not competing output names.
+  Do not rename, merge, or paraphrase the accepted display roster in this pass.
+- The supplied roster records the accepted teaching sections. When a concept comes from a
+  subsection, follow the accepted semantic roster: a subsection may be a
+  topic when the source teaches an independent division there.
 - Keep EVERY row: same concept names, descriptions, keywords, and
   parent_concept, in the same relative order. Never add, drop, merge, split,
   or rename concepts.
-- Use several topics — a chapter is never one topic. Cover the chapter's full
-  span: rows from tail sections belong to those tail headings, not to an
-  earlier catch-all.
+- A coherent single-topic chapter is valid. Cover the chapter's full span
+  according to the accepted roster and teaching ownership, with no topic quota.
 - Assign each concept to the section whose content teaches it; consecutive
   concepts usually stay in the same section until the source moves on.
 - Use each row's source_evidence against the grouped excerpts. Formulas,
@@ -2497,11 +2504,9 @@ Rules:
   uses that evidence—not automatically to the preceding topic or an
   unnumbered chapter-title section.
 - Do not create exercise, example, review, or practice topics.
-- Do not use an unnumbered chapter title or book title as a topic. Exception:
-  when a numbered MAIN section intentionally has the same title as the chapter,
-  that numbered section is a valid topic and must remain available for rows
-  taught there.
-""")
+- A source-supported unnumbered or chapter-named topic is valid when the
+  accepted semantic roster gives it that teaching role.
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.topic_segregation_verdict.system", category=_CONCEPTS_CAT,
@@ -2530,7 +2535,7 @@ Rules:
   where the source actually teaches that content — never by how many
   headings, rows, or topics there are.
 - reason: one sentence naming the decisive evidence.
-""")
+""" + "\n" + SOURCE_TOPIC_POLICY)
 
 prompts.register(
     "concepts.chapter_meta.system", category=_CONCEPTS_CAT,
@@ -2573,7 +2578,11 @@ def _metadata(
     instruction_set_sha256: str = "",
     instruction_slots: dict | None = None,
 ) -> dict:
+    from . import model_provider
+
+    profile = model_provider.bound_profile()
     return {
+        **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
         "subject": subject or "",
         "board": board or "",
         "grade": grade or "",
@@ -2707,7 +2716,7 @@ def _provider_label() -> str:
         from . import model_provider
 
         return (
-            "Gemini" if model_provider.active_provider() == "gemini"
+            "Gemini" if model_provider.current_call_provider() == "gemini"
             else "OpenAI"
         )
     except Exception:  # noqa: BLE001 — labels must never break a message
@@ -2791,7 +2800,7 @@ def _acquire_openai_slot(
             level="warning",
         )
         raise OpenAIQueueTimeoutError(
-            "Timed out waiting for an available OpenAI generation slot. "
+            f"Timed out waiting for an available {_provider_label()} generation slot. "
             "If this run has a saved checkpoint, resume it after another "
             "generation finishes."
         )
@@ -2857,7 +2866,7 @@ def _acquire_openai_slot(
             return
         waited = time.monotonic() - started
         progress.log(
-            f"Still waiting for OpenAI capacity ({waited:.0f}s).",
+            f"Still waiting for {_provider_label()} capacity ({waited:.0f}s).",
             level="warning",
         )
 
@@ -3003,14 +3012,22 @@ def _openai_json(
     model: str | None = None,
     image_urls: list[str] | None = None,
     response_schema: ResponseSchema | None = None,
+    stage: str = "",
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
-    ``model`` overrides the deployment's configured model for THIS call only.
-    The Fixer passes ``phase3.fixer.fixer_model()``, which is deliberately the
-    same active model as ``config.OPENAI_MODEL``; ``None`` keeps that model for
-    every ordinary caller. All requests ride the same policy, effort
-    negotiation, retry loop and usage accounting.
+    New runs use their frozen routing profile: ``purpose`` selects the
+    declared OpenAI stage role, and only ``stage="prequestions.author"`` with
+    purpose ``pre_learning`` selects Gemini. Provider, model, effort, token
+    limits and credentials are snapshotted for this call without changing
+    process configuration. Complete evidence that cannot safely fit a mini
+    call uses Luna capacity; no source text is trimmed.
+
+    An explicit ``model`` must match that stage's route, or request Luna for
+    OpenAI work (as the Fixer does). Conflicting overrides are rejected rather
+    than ignored. Historical runs bound without a routing profile retain their
+    legacy per-call model overrides. All requests retain the existing effort
+    negotiation, bounded retries, queueing and usage accounting.
 
     Concurrency-safe for multiple simultaneous users on one shared API key:
     calls queue on a process-wide gate (never stampede the API), and
@@ -3045,18 +3062,26 @@ def _openai_json(
 
     transient_errors = (
         RateLimitError, APIConnectionError, APITimeoutError, InternalServerError)
-    limit = config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens
-    request_policy = chat_request_policy(
-        purpose, model=model or config.OPENAI_MODEL
-    )
-    # Disable SDK-level retries: this layer already supplies the retry policy
-    # and can surface each wait to the active progress stream.
     from . import model_provider, openai_usage
 
+    route = model_provider.resolve_route(
+        purpose, stage=stage, model=model,
+        input_text=(str(system) + str(prompt_cache_prefix) + str(user)
+                    + (json.dumps(response_schema.json_schema(), ensure_ascii=False) if response_schema else "")),
+        image_count=len(image_urls or []), max_output_tokens=max_tokens,
+    )
+    request_policy = route.request_policy(purpose)
+    limit = (route.output_limit(max_tokens) if route.profile_version else
+             route.output_limit(config.OPENAI_MAX_OUTPUT_TOKENS if max_tokens is None else max_tokens))
+    provider_label = "Gemini" if route.provider == "gemini" else "OpenAI"
+    if route.capacity_fallback:
+        progress.log("Complete evidence requires Luna capacity; preserving the entire request.", level="info")
+    # Snapshot credentials/provider once per call. No global provider switch can
+    # mix a Gemini model with an OpenAI client during concurrent work.
     client = OpenAI(
         timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
-        **model_provider.client_kwargs(),
+        **(model_provider.client_kwargs(route) if route.profile_version else model_provider.client_kwargs()),
     )
     # Enforce the JSON-mode wire contract centrally so every caller,
     # including editable prompt overrides, is protected by the same boundary.
@@ -3067,11 +3092,11 @@ def _openai_json(
         prompt_cache_prefix=prompt_cache_prefix,
         prompt_cache_key=prompt_cache_key,
         model=str(request_policy["model"]),
-        provider=model_provider.active_provider(),
+        provider=route.provider,
     )
     response_format = provider_response_format(
         response_schema,
-        provider=model_provider.active_provider(),
+        provider=route.provider,
         model=str(request_policy["model"]),
     )
     if image_urls:
@@ -3108,9 +3133,9 @@ def _openai_json(
         0 if single_attempt else config.OPENAI_TRANSIENT_RETRIES
     )
     while True:
-        with openai_usage.request_attempt(
+        with model_provider.bind_call(route), openai_usage.request_attempt(
             requested_model=str(request_policy["model"]), purpose=purpose,
-            provider=model_provider.active_provider(),
+            provider=route.provider,
             reasoning_effort=str(request_policy.get("reasoning_effort") or ""),
             service_tier=str(request_policy.get("service_tier") or ""),
         ):
@@ -3140,11 +3165,17 @@ def _openai_json(
                 except Exception:  # accounting must never trigger another API call
                     pass
                 choice = resp.choices[0]
+                if route.profile_version and (
+                    getattr(choice.message, "refusal", None)
+                    or getattr(choice, "finish_reason", None) == "content_filter"
+                ):
+                    openai_usage.record_attempt_outcome("refused_response")
+                    raise RuntimeError(f"{provider_label} declined this generation request; no question content was returned.")
                 if getattr(choice, "finish_reason", None) == "length":
                     openai_usage.record_attempt_outcome("truncated_response")
                     raise RuntimeError(
-                        f"{_provider_label()} response truncated at max_completion_tokens={limit}. "
-                        "Set AEGIS_OPENAI_MAX_OUTPUT_TOKENS higher or reduce input size."
+                        f"{provider_label} response truncated at max_completion_tokens={limit}. "
+                        "Preserve the request evidence and use lossless batching if more output is needed."
                     )
                 openai_usage.record_attempt_outcome("invalid_json")
                 response = json.loads(choice.message.content or "{}")
@@ -3160,12 +3191,12 @@ def _openai_json(
                 error_code = _openai_error_code(e)
                 if error_code == "insufficient_quota":
                     progress.log(
-                        f"{_provider_label()} quota is exhausted (insufficient_quota); not "
+                        f"{provider_label} quota is exhausted (insufficient_quota); not "
                         "retrying a definitive billing/quota denial.",
                         level="error",
                     )
                     raise RuntimeError(
-                        f"{_provider_label()} quota exhausted (insufficient_quota); the request "
+                        f"{provider_label} quota exhausted (insufficient_quota); the request "
                         "was not retried because quota errors are non-transient."
                     ) from e
                 transient += 1
@@ -3173,16 +3204,16 @@ def _openai_json(
                 if transient > transient_retry_limit:
                     if single_attempt:
                         raise RuntimeError(
-                            f"{_provider_label()} unavailable after 1 physical request "
+                            f"{provider_label} unavailable after 1 physical request "
                             f"({type(e).__name__}): {e!r}"
                         ) from e
                     raise RuntimeError(
-                        f"{_provider_label()} unavailable after {transient - 1} transient retries "
+                        f"{provider_label} unavailable after {transient - 1} transient retries "
                         f"(rate limit/timeout): {e!r}"
                     ) from e
                 delay = _transient_backoff(e, transient)
                 progress.log(
-                    f"{_provider_label()} busy ({type(e).__name__}) — waiting {delay:.0f}s before "
+                    f"{provider_label} busy ({type(e).__name__}) — waiting {delay:.0f}s before "
                     f"retry {transient}/{transient_retry_limit}.",
                     level="warning",
                 )
@@ -3211,7 +3242,7 @@ def _openai_json(
                         else:
                             request_policy.pop("reasoning_effort", None)
                         progress.log(
-                            f"{_provider_label()} does not support reasoning effort "
+                            f"{provider_label} does not support reasoning effort "
                             f"{current_effort!r} for model "
                             f"{request_policy['model']}; retrying with "
                             f"{lowered or 'omitted'!r} without consuming a retry.",
@@ -3226,7 +3257,7 @@ def _openai_json(
                 # fails immediately.
                 if isinstance(e, BadRequestError):
                     raise RuntimeError(
-                        f"{_provider_label()} rejected the generation request "
+                        f"{provider_label} rejected the generation request "
                         f"for purpose {purpose!r} with model "
                         f"{request_policy['model']!r} (HTTP 400, messages SHA-256 "
                         f"{request_messages_sha256}); the identical request was "
@@ -3240,11 +3271,11 @@ def _openai_json(
                 openai_usage.wait_for_retry(2)
     if single_attempt:
         raise RuntimeError(
-            f"{_provider_label()} extraction failed after 1 physical request: "
+            f"{provider_label} extraction failed after 1 physical request: "
             f"{last_err!r}"
         )
     raise RuntimeError(
-        f"{_provider_label()} extraction failed after {hard_attempt_limit} retries: "
+        f"{provider_label} extraction failed after {hard_attempt_limit} retries: "
         f"{last_err!r}"
     )
 
@@ -8360,7 +8391,7 @@ def _source_figure_registry_entries(
     return []
 
 
-_RENDERED_IMAGE_TAG_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
+_RENDERED_IMAGE_TAG_RE = kr._IMAGE_TAG_RE
 _RENDERED_EXAMPLE_SEGMENT_RE = re.compile(
     r"(?P<marker>\bExamples?(?:\s+0*\d+)?\s*:\s*)"
     r"(?P<body>.*?)"
@@ -17373,6 +17404,7 @@ def _skeleton_chunk_verdict_via_api(
         + "\n\nEXTRACTED SKELETON (complete rows, in order):\n"
         + _json.dumps(records, ensure_ascii=False)
     )
+    system += "\n" + SOURCE_TOPIC_POLICY
     data = _openai_json(system, user, purpose="concept_validation")
     if not isinstance(data, dict):
         return {}

@@ -1,6 +1,6 @@
 import type { RunLine } from "../RunConsole";
 import type { StageUsageRow } from "../types";
-import { hasUsageGap, providerRequestCount } from "./apiUsage";
+import { providerRequestCount, usageCost, usageCostInr } from "./apiUsage";
 
 /** One rendered stage card: a step line plus everything until the next step. */
 export interface StageGroup {
@@ -23,6 +23,14 @@ export interface StageCost {
   cacheWriteTokens: number;
   cost: number | null;
   costComplete: boolean;
+  knownCost: number | null;
+  costInr: number | null;
+  costInrComplete: boolean;
+  knownCostInr: number | null;
+  conversionMissing: boolean;
+  pendingCount: number;
+  usageGap: boolean;
+  pricingMissing: boolean;
   lanes: StageUsageRow[];
 }
 
@@ -79,9 +87,8 @@ export function latestStageOccurrenceIndexes(
 }
 
 /**
- * Sum the per-(stage, lane) usage rows for one stage title. Cost is null
- * (with costComplete=false) as soon as any contributing row is unpriced,
- * so a partial number is never shown as a total.
+ * Sum a stage's lanes, retaining a separately labelled known subtotal when
+ * a pending request, missing receipt or unknown rate prevents a full total.
  */
 export function stageCost(
   rows: StageUsageRow[] | undefined,
@@ -91,6 +98,16 @@ export function stageCost(
   if (mine.length === 0) return null;
   let cost = 0;
   let costComplete = true;
+  let knownCost = 0;
+  let hasKnownCost = false;
+  let costInr = 0;
+  let costInrComplete = true;
+  let knownCostInr = 0;
+  let hasKnownCostInr = false;
+  let conversionMissing = false;
+  let pendingCount = 0;
+  let usageGap = false;
+  let pricingMissing = false;
   let requestCount = 0;
   let totalTokens = 0;
   let cachedInputTokens = 0;
@@ -100,10 +117,29 @@ export function stageCost(
     totalTokens += row.total_tokens;
     cachedInputTokens += row.cached_input_tokens ?? 0;
     cacheWriteTokens += row.cache_write_tokens ?? 0;
-    if (!row.pricing_complete || row.estimated_cost_usd == null || hasUsageGap(row)) {
+    const rowCost = usageCost(row);
+    const rowCostInr = usageCostInr(row);
+    pendingCount += rowCost.pendingCount;
+    usageGap ||= rowCost.usageGap;
+    pricingMissing ||= rowCost.pricingMissing;
+    conversionMissing ||= rowCostInr.conversionMissing;
+    if (rowCost.value !== null) {
+      knownCost += rowCost.value;
+      hasKnownCost = true;
+    }
+    if (!rowCost.complete) {
       costComplete = false;
     } else {
-      cost += row.estimated_cost_usd;
+      cost += rowCost.value!;
+    }
+    if (rowCostInr.value !== null) {
+      knownCostInr += rowCostInr.value;
+      hasKnownCostInr = true;
+    }
+    if (!rowCostInr.complete || rowCostInr.conversionMissing) {
+      costInrComplete = false;
+    } else {
+      costInr += rowCostInr.value!;
     }
   }
   return {
@@ -113,6 +149,14 @@ export function stageCost(
     cacheWriteTokens,
     cost: costComplete ? cost : null,
     costComplete,
+    knownCost: hasKnownCost ? knownCost : null,
+    costInr: costInrComplete ? costInr : null,
+    costInrComplete,
+    knownCostInr: hasKnownCostInr ? knownCostInr : null,
+    conversionMissing,
+    pendingCount,
+    usageGap,
+    pricingMissing,
     lanes: mine.filter((row) => row.lane !== ""),
   };
 }

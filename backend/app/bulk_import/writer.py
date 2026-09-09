@@ -19,7 +19,6 @@ from pathlib import Path
 
 import openpyxl
 from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
 from sqlalchemy.orm import Session
 
 from . import (
@@ -28,11 +27,14 @@ from . import (
     appears_in_wire, duration_minutes_cell, join_multi, list_token_defects,
     merge_sources, normalize_answer_type, wire_answer_type,
     normalize_question_text, split_multi, strip_title_tag, strip_topic_title,
-    to_workbook_rich_text,
 )
 from . import layouts
 from . import assessment_workbook as workbook_contract
 from . import workbook_sync
+from .presentation import (
+    DATA_ALIGNMENT, apply_sheet_presentation, is_equation_cell,
+    to_display_rich_text,
+)
 from .. import models
 from ..services import openai_usage
 from ..services import (
@@ -290,12 +292,14 @@ def _set_cell_value(cell, value) -> None:
     XLSX because it would change the stored content.
     """
     safe = _safe_cell(value)
-    if isinstance(safe, str):
-        # Contract v2.0 §17: the workbook projection of a line break is the
-        # canonical ``<br>``; the reader inverts it on import.
-        safe = to_workbook_rich_text(safe)
+    if isinstance(safe, str) and cell.row > 2:
+        # The final cell retains the CMS token and displays its paired Excel
+        # line feed. Model values and schema headers are not changed.
+        safe = to_display_rich_text(safe, raw_equation=is_equation_cell(cell))
     _validate_cell_length(cell, safe)
     cell.value = safe
+    if cell.row > 2:
+        cell.alignment = DATA_ALIGNMENT
     if isinstance(safe, str) and safe.startswith(_FORMULA_PREFIXES):
         cell.data_type = "s"
 
@@ -2257,7 +2261,7 @@ def _write_headers(ws, kind: str, layout_id: str | None = None) -> None:
         _set_cell_value(c, name)
         c.font = Font(bold=True, size=9)
     ws.freeze_panes = "A3"
-    ws.column_dimensions[get_column_letter(1)].width = 22
+    apply_sheet_presentation(ws, fields)
 
 
 def _new_workbook(layout_id: str | None = None) -> openpyxl.Workbook:

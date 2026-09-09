@@ -93,6 +93,100 @@ describe("stageCost", () => {
     const cost = stageCost([row("A", "", 0.5), row("A", "X", null)], "A");
     expect(cost!.cost).toBeNull();
     expect(cost!.costComplete).toBe(false);
+    expect(cost!.knownCost).toBeCloseTo(0.5);
+    expect(cost!.pricingMissing).toBe(true);
+  });
+
+  it("sums only server-provided INR values across the stage's lanes", () => {
+    const cost = stageCost([
+      { ...row("A", "Pre", 0.5), estimated_cost_inr: 41,
+        inr_conversion_complete: true },
+      { ...row("A", "Post", 0.25), estimated_cost_inr: 22,
+        inr_conversion_complete: true },
+      { ...row("B", "", 1), estimated_cost_inr: 90,
+        inr_conversion_complete: true },
+    ], "A")!;
+
+    expect(cost.costInr).toBe(63);
+    expect(cost.knownCostInr).toBe(63);
+    expect(cost.costInrComplete).toBe(true);
+    expect(cost.conversionMissing).toBe(false);
+    expect(cost.cost).toBeCloseTo(0.75);
+  });
+
+  it("does not present converted lanes as the full INR total when another lane has no conversion", () => {
+    const cost = stageCost([
+      { ...row("A", "Pre", 0.5), estimated_cost_inr: 41,
+        inr_conversion_complete: true },
+      row("A", "Post", 0.25),
+    ], "A")!;
+
+    expect(cost.costInr).toBeNull();
+    expect(cost.knownCostInr).toBe(41);
+    expect(cost.costInrComplete).toBe(false);
+    expect(cost.conversionMissing).toBe(true);
+    expect(cost.cost).toBeCloseTo(0.75);
+    expect(cost.pricingMissing).toBe(false);
+  });
+
+  it("leaves historical INR costs unavailable without inventing a conversion", () => {
+    const cost = stageCost([row("A", "", 0.5)], "A")!;
+
+    expect(cost.costInr).toBeNull();
+    expect(cost.knownCostInr).toBeNull();
+    expect(cost.costInrComplete).toBe(false);
+    expect(cost.conversionMissing).toBe(true);
+    expect(cost.cost).toBe(0.5);
+  });
+
+  it("preserves a recorded INR subtotal alongside pending and unresolved usage", () => {
+    const cost = stageCost([
+      { ...row("A", "Pre", 0.5), estimated_cost_inr: 41,
+        inr_conversion_complete: true, provider_request_count: 4,
+        pending_request_count: 2, usage_complete: true },
+      { ...row("A", "Post", null), estimated_cost_inr: null,
+        known_usage_estimated_cost_inr: 22, inr_conversion_complete: true,
+        provider_request_count: 3, pending_request_count: 0,
+        unresolved_usage_request_count: 1, usage_complete: false,
+        known_usage_estimated_cost_usd: 0.25, pricing_complete: true },
+    ], "A")!;
+
+    expect(cost.costInr).toBeNull();
+    expect(cost.knownCostInr).toBe(63);
+    expect(cost.costInrComplete).toBe(false);
+    expect(cost.conversionMissing).toBe(false);
+    expect(cost.pendingCount).toBe(2);
+    expect(cost.usageGap).toBe(true);
+    expect(cost.pricingMissing).toBe(false);
+  });
+
+  it("preserves an explicitly converted zero", () => {
+    const cost = stageCost([
+      { ...row("A", "", 0), estimated_cost_inr: 0,
+        inr_conversion_complete: true },
+    ], "A")!;
+
+    expect(cost.costInr).toBe(0);
+    expect(cost.knownCostInr).toBe(0);
+    expect(cost.costInrComplete).toBe(true);
+    expect(cost.conversionMissing).toBe(false);
+  });
+
+  it("keeps the subtotal across lanes with pending and unresolved requests", () => {
+    const cost = stageCost([
+      { ...row("A", "Pre", 0.5), provider_request_count: 4,
+        pending_request_count: 2, usage_complete: true },
+      { ...row("A", "Post", null), provider_request_count: 3,
+        pending_request_count: 0, unresolved_usage_request_count: 1,
+        known_usage_estimated_cost_usd: 0.25, pricing_complete: true,
+        usage_complete: false },
+    ], "A")!;
+    expect(cost.cost).toBeNull();
+    expect(cost.knownCost).toBeCloseTo(0.75);
+    expect(cost.pendingCount).toBe(2);
+    expect(cost.usageGap).toBe(true);
+    expect(cost.pricingMissing).toBe(false);
+    expect(cost.requestCount).toBe(7);
   });
 
   it("returns null for a stage with no usage", () => {

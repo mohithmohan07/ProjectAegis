@@ -70,6 +70,8 @@ which lane allotted it.
 """
 from __future__ import annotations
 
+from .. import prelearning_capture_policy as capture_policy
+
 import hashlib
 import re
 from typing import Any, Callable, Mapping
@@ -256,7 +258,7 @@ def _live_build(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREANALYSE_INVENTORY_SYSTEM, prompts.render(payload),
+        prompts.PREANALYSE_INVENTORY_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
         purpose="concept_mapping",
     )
 
@@ -266,7 +268,7 @@ def _live_allot(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREANALYSE_ALLOT_SYSTEM, prompts.render(payload),
+        prompts.PREANALYSE_ALLOT_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
         purpose="concept_mapping",
     )
 
@@ -276,7 +278,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREANALYSE_CRITIC_SYSTEM, prompts.render(payload),
+        prompts.PREANALYSE_CRITIC_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
         purpose="advisory_critic",
     )
 
@@ -378,6 +380,7 @@ def analyse(
     # ---- 2.4 Build: one decision over the Pre lane's own evidence -----
     build_payload = {
         "stage": "prelearn.analyse.inventory",
+        **capture_policy.boundary_fields(env),
         "rules": _inventory_rules(rules_suffix),
         "chapter": premap_mod.chapter_calibration(env),
         "evidence": build_evidence(prerequisites, rows, qids),
@@ -463,6 +466,7 @@ def analyse(
         batch = inventory[start:start + _ALLOT_BATCH_SIZE]
         payload = {
             "stage": "prelearn.analyse.allot",
+            **capture_policy.boundary_fields(env),
             "rules": _allot_rules(rules_suffix),
             "pre_concepts": concepts_payload,
             "items": [

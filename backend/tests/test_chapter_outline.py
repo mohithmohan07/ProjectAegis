@@ -228,6 +228,41 @@ def test_gpt_boundary_parts_become_leaf_cases():
     assert leaves[1]["qid"] == "QINV-0022.2"
 
 
+def test_gpt_boundary_parts_retain_verified_parent_visual_context():
+    """Independent asks about one source figure each keep that figure."""
+    canonical = {
+        "tasks": [{
+            "task_id": "TASK-0001",
+            "qid": "QINV-0040",
+            "identity_key": "identity-visual",
+            "source_kind": "checkpoint_question",
+            "raw_prompt": "Look at Fig. 8. Answer the following questions.",
+            "display_prompt": "Look at Fig. 8. Answer the following questions.",
+            "figure_refs": ["FIG-00001"],
+            "image_urls": ["https://example.test/fig-8.png"],
+            "gpt_boundary_parts": [
+                {"label": "(a)", "stem": "", "text": "(a) Who is shown?"},
+                {"label": "(b)", "stem": "", "text": "(b) What is he doing?"},
+            ],
+        }],
+        "figures": [{
+            "figure_id": "FIG-00001",
+            "reference_ids": ["8"],
+            "image_urls": ["https://example.test/fig-8.png"],
+        }],
+    }
+
+    structure.materialize_task_leaf_cases(canonical)
+
+    leaves = canonical["tasks"][0]["leaf_cases"]
+    assert len(leaves) == 2
+    assert all(leaf["figure_refs"] == ["FIG-00001"] for leaf in leaves)
+    assert all(
+        leaf["image_urls"] == ["https://example.test/fig-8.png"]
+        for leaf in leaves
+    )
+
+
 def test_gpt_split_survives_never_split_inventory(monkeypatch):
     from app.services import canonical_source_phase2 as phase2
 
@@ -427,6 +462,58 @@ def test_prompts_state_the_conversation_and_answer_box_rules():
         "speech-bubble exchange posing one activity is correctly ONE task"
         in verification
     )
+    assert "embedded in an ordinary paragraph" in extraction
+    assert "never promote every printed question mark into a task" in extraction
+    assert "embedded in prose, a poem/passage" in verification
+    assert "literary, quoted, or character dialogue" in verification
+
+
+def test_q41_outline_and_page_decisions_use_fresh_identity_without_staling_mmd(
+    monkeypatch,
+):
+    """Q41 re-asks changed judgments while accepted reader stamps replay."""
+    source_hash = "q41-outline-source"
+    page_batch = [
+        fallback.PdfPage(
+            page_id="PDF-PAGE-0001", page_number=1, text="source",
+            image_data_url="data:image/jpeg;base64,ZmFrZQ==",
+            width=1000.0, height=1400.0,
+        )
+    ]
+    reader_version = fallback.source_reader_version()
+    current_outline_key = fallback._outline_cache_key(source_hash)
+    current_page_key = fallback._batch_cache_key_from_sha(source_hash, page_batch)
+    legacy_page_key = fallback._batch_cache_key_for_contract(
+        source_hash,
+        page_batch,
+        fallback_version=fallback.FALLBACK_VERSION,
+        ingestion_contract=fallback.INGESTION_CONTRACT_VERSION,
+    )
+
+    monkeypatch.setattr(
+        fallback, "OUTLINE_DECISION_VERSION", "chapter-outline-decision-10"
+    )
+    monkeypatch.setattr(
+        fallback, "PAGE_EXTRACTION_DECISION_VERSION", "page-extraction-decision-2"
+    )
+    prior_outline_key = fallback._outline_cache_key_for_contract(
+        source_hash,
+        fallback_version=fallback.FALLBACK_VERSION,
+        ingestion_contract=fallback.INGESTION_CONTRACT_VERSION,
+        decision_version=fallback.OUTLINE_DECISION_VERSION,
+    )
+    prior_page_key = fallback._batch_cache_key_from_sha(source_hash, page_batch)
+
+    assert current_outline_key != prior_outline_key
+    assert current_page_key != prior_page_key
+    assert current_page_key != legacy_page_key
+    # Decision-only identities are intentionally excluded from the source
+    # reader stamp, so an accepted historical MMD still passes replay.
+    assert fallback.source_reader_version() == reader_version
+    assert fallback.stale_mmd_reader(
+        "<!-- source_origin: gpt-pdf-to-acsd -->\n"
+        f"<!-- source_reader: {reader_version} -->\n"
+    ) == ""
 
 
 def test_advisory_gate_issues_ship_under_review_flags():

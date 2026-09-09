@@ -12,6 +12,8 @@ mastery sentence wording — and ``keywords``) is mechanics-enforced after every
 decision by re-parsing the refined ``concept_details`` and requiring the
 section labels, every non-editable section (Types, Activity/Info Hub), the
 Type/Case/Example token structure, and every QID string to be byte-identical;
+image attachments also retain their exact tokens and order within each section
+or keyword field, including their source URLs and alt text;
 a violating refinement is DISCARDED with a review flag, never applied. Every
 refinement is recorded as a diff on the release, the terminal validator is
 re-run mechanically afterwards (a refinement that introduces a NEW error is
@@ -45,7 +47,7 @@ from typing import Any, Mapping, Sequence
 from . import column_spec
 from .phase3 import kernel
 
-REFINER_POLICY_VERSION = "refiner-3-complete-source-evidence"
+REFINER_POLICY_VERSION = "refiner-4-preserve-source-visuals"
 
 # One decision PER ROW (polish.py precedent): an isolated row converges on
 # the first attempt and replays individually from the decision store.
@@ -143,6 +145,12 @@ def _is_editable_label(label: str) -> bool:
     return key.startswith("description") or cr.is_learner_analysis_label(label)
 
 
+def _image_tokens(value: str) -> list[str]:
+    from . import katex_rules
+
+    return [match.group(0) for match in katex_rules._IMAGE_TAG_RE.finditer(value)]
+
+
 def _identity_violations(
     before_row: Mapping[str, Any],
     after_details: str,
@@ -154,7 +162,9 @@ def _identity_violations(
     sections and rewrite keywords; every other part of ``concept_details`` —
     section labels and order, the Types section, Activity/Info Hub, the
     Type/Case/Example token structure, every QID string — must survive
-    byte-identical.
+    byte-identical. Image tokens in editable prose must also stay attached to
+    the same section/field in the same order. This checks asset identity only;
+    it does not forbid correcting math formatting in editable prose.
     """
 
     from . import concept_refiner as cr
@@ -175,6 +185,11 @@ def _identity_violations(
             before_sections, after_sections
         ):
             if _is_editable_label(label):
+                if _image_tokens(before_content) != _image_tokens(after_content):
+                    violations.append(
+                        f"image attachments changed in section {label!r} "
+                        "(preserve exact tags, URLs, alt text and order)"
+                    )
                 continue
             if before_content != after_content:
                 violations.append(
@@ -192,6 +207,10 @@ def _identity_violations(
     )
     if before_qids != after_qids:
         violations.append("QID strings changed")
+    if _image_tokens(str(before_row.get("keywords") or "")) != _image_tokens(
+        str(after_keywords or "")
+    ):
+        violations.append("image attachments changed in keywords")
     return violations
 
 
@@ -444,6 +463,7 @@ def _live_call(payload: dict[str, Any], *, critic: bool) -> dict[str, Any]:
         suffix,
         image_urls=assessment_visual_evidence.image_inputs(payload),
         purpose="advisory_critic" if critic else "concept_validation",
+        stage="concepts.refine.critic" if critic else "concepts.refine",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "concept-refiner-critic" if critic else "concept-refiner",
@@ -523,7 +543,12 @@ _RULES = (
     "'Achieving Mastery:' sentence), the Misconception/ Error Analysis "
     "wording, and the keywords. Keep every section label and the section "
     "order byte-identical, keep all factual content and [Katex] wrapping, "
-    "and keep concept_details beginning with 'Description: '. Return the "
+    "and preserve every existing [img] attachment byte-identically, including "
+    "its full source URL and alt text, in the same section or field and in the "
+    "same order. Never delete, duplicate, replace or move an image while "
+    "polishing the surrounding prose. If a figure is unavailable, retain its "
+    "attachment and report the limitation in rationale. "
+    "Keep concept_details beginning with 'Description: '. Return the "
     "row unchanged when it already reads at expectation."
 )
 

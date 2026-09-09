@@ -1,12 +1,13 @@
-"""Per-generation OpenAI token accounting and cost estimates.
+"""Per-generation provider token accounting and cost estimates.
 
 The active accumulator is context-local so simultaneous streamed jobs cannot
-mix their usage. Only usage returned by OpenAI is recorded; provider errors
+mix their usage. Only usage returned by the provider is recorded; errors
 without a response are deliberately not guessed.
 """
 from __future__ import annotations
 
 import copy
+import logging
 import contextvars
 import functools
 import os
@@ -15,14 +16,17 @@ import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Iterator
 
 from .usage_schema import SCHEMA_VERSION
 
 
-PRICING_AS_OF = "2026-08-28"
+PRICING_AS_OF = "2026-09-09"
 DEFAULT_PRICING_SOURCE = "https://developers.openai.com/api/docs/pricing"
+GEMINI_PRICING_SOURCE = "https://ai.google.dev/gemini-api/docs/pricing"
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,7 @@ class Pricing:
     long_context_threshold: int | None = None
     long_input_multiplier: Decimal = Decimal("1")
     long_output_multiplier: Decimal = Decimal("1")
+    policy: str = "standard-text-token-rates"
 
 
 # Standard text-token prices, snapshotted on PRICING_AS_OF. Prefix matching
@@ -69,33 +74,54 @@ _PRICING: tuple[tuple[str, Pricing], ...] = (
 )
 
 
-def _decimal_env(name: str, default: str) -> Decimal:
+def _decimal_override(name: str) -> Decimal | None:
     try:
-        return Decimal(os.environ.get(name, "").strip() or default)
+        raw = os.environ.get(name, "").strip()
+        value = Decimal(raw) if raw else None
+        return value if value is not None and value.is_finite() and value >= 0 else None
     except (InvalidOperation, ValueError):
-        return Decimal(default)
+        return None
 
 
-def _gemini_pricing() -> Pricing:
-    """Gemini rates, configurable to match the actual billing plan.
+def _pricing_date(priced_at: float | None = None) -> date:
+    return datetime.fromtimestamp(
+        time.time() if priced_at is None else priced_at, timezone.utc,
+    ).date()
 
-    Gemini models ride the provider-selection seam, and their prices change
-    per model and tier, so the defaults here are flash-class ballpark rates.
-    Set the AEGIS_GEMINI_*_PRICE_PER_M variables to your billed rates so the
-    run estimate matches your invoice; either way the token counts are exact.
+
+def _gemini_pricing(model: str, *, priced_at: float | None = None) -> Pricing | None:
+    """Verified paid Standard rates; never apply one Flash guess to all Gemini.
+
+    Google's published introductory rates expire after 2026-12-31. Select
+    the schedule at each request's UTC service-start date, not module import
+    time. Persisted costs remain receipts and are never recomputed on replay.
+    Explicit cache storage (token-hours), grounding and other tool charges
+    are separate from generation tokens and cannot be inferred here.
     """
-    return Pricing(
-        _decimal_env("AEGIS_GEMINI_INPUT_PRICE_PER_M", "0.30"),
-        _decimal_env("AEGIS_GEMINI_CACHED_INPUT_PRICE_PER_M", "0.03"),
-        _decimal_env("AEGIS_GEMINI_OUTPUT_PRICE_PER_M", "2.50"),
-        "https://ai.google.dev/pricing — flash-class defaults; override "
-        "with AEGIS_GEMINI_INPUT_PRICE_PER_M / "
-        "AEGIS_GEMINI_CACHED_INPUT_PRICE_PER_M / "
-        "AEGIS_GEMINI_OUTPUT_PRICE_PER_M",
-    )
-
-
-_PRICING = (*_PRICING, ("gemini", _gemini_pricing()))
+    lowered = model.lower().removeprefix("models/")
+    # These are model identities and snapshot suffixes, not content judgments.
+    known_model = next((base for base in ("gemini-3.8-flash", "gemini-3.6-flash")
+                        if lowered == base or (
+                            lowered.startswith(base + "-")
+                            and lowered[len(base) + 1:len(base) + 2].isdigit()
+                        )), None)
+    overrides = tuple(_decimal_override(f"AEGIS_GEMINI_{kind}_PRICE_PER_M")
+                      for kind in ("INPUT", "CACHED_INPUT", "OUTPUT"))
+    if known_model is None:
+        if any(value is None for value in overrides):
+            return None
+        return Pricing(*overrides, source=GEMINI_PRICING_SOURCE,
+                       policy="gemini-configured-standard-overrides")
+    introductory = _pricing_date(priced_at) < date(2027, 1, 1)
+    defaults = ((Decimal("0.75"), Decimal("0.075"), Decimal("3.75"))
+                if introductory else (Decimal("1.50"), Decimal("0.15"), Decimal("7.50")))
+    rates = tuple(override if override is not None else default
+                  for override, default in zip(overrides, defaults))
+    policy = ("gemini-flash-standard-through-2026-12-31"
+              if introductory else "gemini-flash-standard-from-2027-01-01")
+    if any(value is not None for value in overrides):
+        policy += ":configured-overrides"
+    return Pricing(*rates, source=f"{GEMINI_PRICING_SOURCE}#{known_model}", policy=policy)
 
 _COST_UNSET = object()
 
@@ -165,6 +191,7 @@ class StageUsage:
     total_tokens: int = 0
     estimated_cost_usd: Decimal = Decimal("0")
     pricing_complete: bool = True
+    missing_usage_responses: int = 0
     first_ts: float = 0.0
     last_ts: float = 0.0
 
@@ -178,6 +205,12 @@ class UsageAccumulator:
     mechanical_spans: list[dict[str, Any]] = field(default_factory=list)
     missing_usage_responses: int = 0
     untracked_response_count: int = 0
+    # FX is frozen once when this run first receives usage. Receipts include
+    # untracked callers as well as transport attempts; currency totals never
+    # depend on whether the compact stream includes the full attempt ledger.
+    fx_quote: dict[str, Any] | None = field(default=None, repr=False)
+    currency_receipts: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    latest_request: dict[str, Any] | None = field(default=None, repr=False)
     # One immutable durable baseline per persisted artifact. Recomputing
     # ``baseline + current run`` at every checkpoint makes repeated saves
     # idempotent while still including newly billed responses.
@@ -305,7 +338,7 @@ class UsageAccumulator:
             row.total_tokens += total
             if request_cost is None:
                 row.pricing_complete = False
-            elif row.pricing_complete:
+            else:
                 row.estimated_cost_usd += request_cost
             now = time.time()
             if not row.first_ts:
@@ -371,14 +404,12 @@ class UsageAccumulator:
             pricing_complete = True
             cost = 0.0
         attempt_rows = self.attempts
-        unknown_attempts = sum(
-            bool(row.get("service_started_at")) and not row.get("usage_reported")
-            for row in attempt_rows
+        pending_count, unresolved_count = _request_usage_counts(
+            attempt_rows, missing_usage_responses=self.missing_usage_responses,
         )
-        usage_complete = not (self.missing_usage_responses or unknown_attempts)
+        usage_complete = not unresolved_count
         known_cost = round(sum(row["known_usage_estimated_cost_usd"] for row in model_rows), 12)
         if not usage_complete:
-            pricing_complete = False
             cost = None
         stage_names = list(dict.fromkeys([
             *self.stage_windows, *([self.open_stage] if self.open_stage_started else []),
@@ -391,7 +422,7 @@ class UsageAccumulator:
             for row in spans
             if span_lookup.get(row.get("parent_span_id"), {}).get("thread_id") != row["thread_id"]
         )
-        return {
+        result = {
             "usage_schema_version": SCHEMA_VERSION,
             "model": (
                 model_rows[0]["model"]
@@ -414,11 +445,14 @@ class UsageAccumulator:
             "known_usage_estimated_cost_usd": known_cost,
             "attempt_count": len(attempt_rows),
             "provider_request_count": sum(bool(row.get("service_started_at")) for row in attempt_rows),
+            "pending_request_count": pending_count,
+            "unresolved_usage_request_count": unresolved_count,
             "missing_usage_response_count": self.missing_usage_responses,
             "untracked_response_count": self.untracked_response_count,
             "attempt_coverage_complete": self.untracked_response_count == 0 and sum(bool(row.get("usage_reported")) for row in attempt_rows) == request_count,
             "cost_matrix_complete": usage_complete,
             "request_attempts": copy.deepcopy(attempt_rows) if include_attempts else [],
+            "latest_request": copy.deepcopy(self.latest_request),
             "attempt_details_included": include_attempts,
             "mechanical_spans": copy.deepcopy(spans) if include_attempts else [],
             "mechanical_span_count": len(spans),
@@ -440,6 +474,16 @@ class UsageAccumulator:
             # Replayed decisions and workbook construction also consume time.
             # Monetary/request counters remain unchanged for a free replay.
             "elapsed_seconds": round(time.monotonic() - self.started_monotonic, 3),
+            # A stream segment is active processing by definition.  Durable
+            # job state replaces these three fields with the complete
+            # Concept -> review -> Master timeline when it is persisted.
+            "active_elapsed_seconds": round(
+                time.monotonic() - self.started_monotonic, 3
+            ),
+            "review_wait_seconds": 0.0,
+            "wall_elapsed_seconds": round(
+                time.monotonic() - self.started_monotonic, 3
+            ),
             "stage_timings": [
                 {"stage": stage, "elapsed_seconds": self._stage_elapsed(
                     self.stages.get((stage, ""), StageUsage(stage=stage, lane=""))
@@ -448,6 +492,8 @@ class UsageAccumulator:
             ],
             "stages": self.stage_rows(),
         }
+        _add_receipt_currency(result, self.currency_receipts)
+        return result
 
 
 # Workers under the bounded decision pool share ONE accumulator object per
@@ -529,17 +575,66 @@ def _interval_seconds(intervals: list[tuple[float, float]]) -> float:
     return round(total, 3)
 
 
-def _stage_attempt_fields(row: StageUsage, attempts: list[dict[str, Any]]) -> dict[str, Any]:
-    usage_complete = not any(
-        item.get("service_started_at") and not item.get("usage_reported") for item in attempts
+def _request_usage_counts(
+    attempts: list[dict[str, Any]], *, missing_usage_responses: int = 0,
+) -> tuple[int, int]:
+    """Separate work awaiting a response from charges we cannot resolve.
+
+    A service-end timestamp alone does not mark usage missing: adapters record
+    that timestamp immediately before recording the returned response. Queued
+    attempts that never reached the transport have no unknown provider cost.
+    """
+    pending = unresolved = tracked_missing_responses = 0
+    for item in attempts:
+        missing_response = item.get("usage_status") in {"missing", "incomplete"}
+        tracked_missing_responses += bool(missing_response)
+        if item.get("usage_reported"):
+            continue
+        if missing_response:
+            unresolved += 1
+        elif item.get("service_started_at"):
+            if item.get("ended_at") is not None or item.get("outcome") not in {
+                "queued", "in_flight",
+            }:
+                unresolved += 1
+            else:
+                pending += 1
+    # Compatible endpoints can report missing usage outside request_attempt.
+    unresolved += max(0, missing_usage_responses - tracked_missing_responses)
+    return pending, unresolved
+
+
+def _summary_usage_counts(summary: dict[str, Any]) -> tuple[int, int]:
+    if "pending_request_count" in summary:
+        return (
+            _int(summary.get("pending_request_count")),
+            _int(summary.get("unresolved_usage_request_count")),
+        )
+    # Legacy snapshots did not distinguish running calls. Preserve their
+    # declared uncertainty; do not reinterpret historical unknown costs as 0.
+    return 0, max(
+        _int(summary.get("missing_usage_response_count")),
+        _int(summary.get("provider_request_count")) - _int(summary.get("request_count")),
+        0,
     )
+
+
+def _stage_attempt_fields(row: StageUsage, attempts: list[dict[str, Any]]) -> dict[str, Any]:
+    pending_count, unresolved_count = _request_usage_counts(
+        attempts, missing_usage_responses=row.missing_usage_responses,
+    )
+    usage_complete = not unresolved_count
     return {
         "attempt_count": len(attempts),
         "provider_request_count": sum(bool(item.get("service_started_at")) for item in attempts),
+        "pending_request_count": pending_count,
+        "unresolved_usage_request_count": unresolved_count,
+        "missing_usage_response_count": row.missing_usage_responses,
+        "known_usage_estimated_cost_usd": round(float(row.estimated_cost_usd), 12),
         "usage_complete": usage_complete,
         "attempt_coverage_complete": sum(bool(item.get("usage_reported")) for item in attempts) >= row.request_count,
-        "pricing_complete": row.pricing_complete and usage_complete,
-        "estimated_cost_usd": round(float(row.estimated_cost_usd), 6) if row.pricing_complete and usage_complete else None,
+        "pricing_complete": row.pricing_complete,
+        "estimated_cost_usd": round(float(row.estimated_cost_usd), 12) if row.pricing_complete and usage_complete else None,
     }
 
 
@@ -591,6 +686,8 @@ def request_attempt(*, requested_model: str, purpose: str = "", provider: str = 
             if row["service_started_at"] is None:
                 row["queue_seconds"] = row["elapsed_seconds"]
         _active_attempt.reset(token)
+        if not row["usage_reported"]:
+            _emit_usage_update()
 
 
 def record_service_started() -> None:
@@ -600,6 +697,7 @@ def record_service_started() -> None:
             row["service_started_at"] = time.time()
             row["queue_seconds"] = round(max(0.0, row["service_started_at"] - row["queued_at"]), 6)
             row["outcome"] = "in_flight"
+        _emit_usage_update()
 
 
 def record_service_ended() -> None:
@@ -623,6 +721,8 @@ def record_attempt_outcome(outcome: str, *, error: BaseException | None = None,
                 row["error_type"] = type(error).__name__
                 row["http_status"] = getattr(error, "status_code", None)
                 row["request_id"] = getattr(error, "request_id", None) or row["request_id"]
+        if outcome and not row["usage_reported"]:
+            _emit_usage_update()
 
 
 def wait_for_retry(seconds: float) -> None:
@@ -688,12 +788,32 @@ def bind_persisted_summary(
         return merge_summaries(persisted)
     key = str(persistence_key)
     if key not in accumulator.persistence_baselines:
-        accumulator.persistence_baselines[key] = copy.deepcopy(persisted)
+        accumulator.persistence_baselines[key] = _closed_baseline(persisted)
     accumulator.visible_persistence_key = key
     return merge_summaries(
         accumulator.persistence_baselines[key],
         accumulator.summary(),
     )
+
+
+def _closed_baseline(summary: dict[str, Any]) -> dict[str, Any]:
+    """A previous segment's interrupted calls are unresolved, never live.
+
+    Keep the original attempt records and frozen prices intact. Only the
+    derived counters change: this accumulator cannot receive those responses.
+    """
+    baseline = copy.deepcopy(summary)
+    for row in [baseline, *(baseline.get("stages") or [])]:
+        pending, unresolved = _summary_usage_counts(row)
+        if not pending:
+            continue
+        row["pending_request_count"] = 0
+        row["unresolved_usage_request_count"] = unresolved + pending
+        row["usage_complete"] = False
+        row["estimated_cost_usd"] = None
+        if row is baseline:
+            row["cost_matrix_complete"] = False
+    return baseline
 
 
 def cumulative_summary(
@@ -755,6 +875,78 @@ def console_summary() -> dict[str, Any]:
     return visible_summary(include_attempts=False)
 
 
+def apply_run_timing(
+    summary: dict[str, Any], state: dict[str, Any] | None,
+    *, now: float | None = None,
+) -> dict[str, Any]:
+    """Overlay durable active/review/wall timing onto a usage summary.
+
+    Token receipts and this timing state have different persistence owners.
+    Keeping the join explicit lets the review workflow pause the active clock
+    without creating a synthetic provider attempt, while every saved summary
+    still carries one coherent set of values for the console and API.
+    """
+    if not isinstance(summary, dict) or not isinstance(state, dict) or not state:
+        return summary
+    from . import run_state
+
+    timing = run_state.snapshot(state, now=now)
+    active = float(timing.get("active_elapsed_seconds") or 0.0)
+    waiting = float(timing.get("review_wait_seconds") or 0.0)
+    wall = float(timing.get("wall_elapsed_seconds") or 0.0)
+    summary["active_elapsed_seconds"] = round(max(0.0, active), 3)
+    summary["review_wait_seconds"] = round(max(0.0, waiting), 3)
+    summary["wall_elapsed_seconds"] = round(max(0.0, wall), 3)
+    # ``elapsed_seconds`` is the established UI/API field.  It now means the
+    # active processing clock; the explicit wall/review fields make the
+    # distinction visible instead of hiding human waiting in processing time.
+    summary["elapsed_seconds"] = summary["active_elapsed_seconds"]
+    return summary
+
+
+def _emit_usage_update() -> None:
+    # Live events are compact and cumulative. Missing receipts and transport
+    # state must reach the console even when no successful response follows.
+    try:
+        from . import progress
+
+        accumulator, attempt = _active.get(), _active_attempt.get()
+        if accumulator is not None and attempt is not None:
+            accumulator.latest_request = attempt
+        progress.usage(console_summary())
+    except Exception:  # pragma: no cover - accounting must never break generation
+        pass
+
+
+def _format_inr(value: Any) -> str:
+    if value is None:
+        return "unavailable"
+    amount = Decimal(str(value))
+    if 0 < amount < Decimal("0.000001"):
+        return "<₹0.000001"
+    digits = 4 if amount >= Decimal("0.01") else 6
+    return f"₹{amount:.{digits}f}"
+
+
+def _emit_charge_log(*, model: str, attempt: dict[str, Any] | None,
+                     amount_inr: float | None, cumulative: dict[str, Any]) -> None:
+    """One compact durable journal entry per receipt, independent of log level."""
+    total = cumulative.get("estimated_cost_inr")
+    cumulative_label = (_format_inr(total) if total is not None else
+                        f"known {_format_inr(cumulative.get('known_usage_estimated_cost_inr'))} (total unavailable)")
+    provider = str((attempt or {}).get("provider") or "unknown")
+    attempt_id = str((attempt or {}).get("attempt_id") or "untracked")
+    try:
+        from . import progress
+
+        progress.log(
+            f"API estimate | {provider}/{model} | request {_format_inr(amount_inr)} "
+            f"| cumulative {cumulative_label} | attempt {attempt_id}"
+        )
+    except Exception:  # pragma: no cover - a display failure cannot rebill the request
+        pass
+
+
 def record_response(response: Any, *, requested_model: str = "") -> dict[str, Any]:
     """Record one billable Chat Completions response, if tracking is active.
 
@@ -765,16 +957,54 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     usage = _get(response, "usage")
     if accumulator is None:
         return current_summary()
-    usage_status = "reported"
-    if usage is None:
-        usage_status = "missing"
-    elif (
-        _get(usage, "prompt_tokens", _get(usage, "input_tokens")) is None
-        or _get(usage, "completion_tokens", _get(usage, "output_tokens")) is None
-    ):
-        usage_status = "incomplete"
-        usage = None
     attempt = _active_attempt.get()
+    # One transport attempt owns one receipt. Replaying its accounting hook
+    # must not charge the same response again; a real retry has a new attempt.
+    if attempt is not None and attempt.get("usage_status") is not None:
+        return accumulator.summary(include_attempts=False)
+    model = str(_get(response, "model") or requested_model or "unknown")
+    gemini = (model.lower().removeprefix("models/").startswith("gemini-")
+              or (attempt is not None and attempt.get("provider") == "gemini"))
+    prompt_details = _get(usage, "prompt_tokens_details") or _get(usage, "input_tokens_details")
+    completion_details = _get(usage, "completion_tokens_details") or _get(usage, "output_tokens_details")
+    reported_input = _reported_count(_first_present(usage, "prompt_tokens", "input_tokens"))
+    reported_output = _reported_count(_first_present(usage, "completion_tokens", "output_tokens"))
+    reported_cached = _reported_count(_get(prompt_details, "cached_tokens"))
+    reported_reasoning = _reported_count(_get(completion_details, "reasoning_tokens"))
+    if reported_reasoning is None:
+        reported_reasoning = _reported_count(_get(usage, "reasoning_tokens"))
+    reported_total = _reported_count(_get(usage, "total_tokens"))
+    input_tokens, output_tokens = reported_input or 0, reported_output or 0
+    cached_tokens = reported_cached or 0
+    reasoning_tokens = reported_reasoning or 0
+    cache_write_tokens = _int(_get(prompt_details, "cache_write_tokens"))
+    total_tokens = reported_total
+    usage_status = ("missing" if usage is None else "incomplete"
+                    if reported_input is None or reported_output is None else "reported")
+    accounting_basis = "reported_completion_tokens"
+    if gemini and usage is not None:
+        # Google's native total includes prompt, candidates and thoughts;
+        # compatible endpoints can expose visible completion separately or
+        # include thoughts already. The reported total settles both shapes
+        # without adding thinking twice or guessing an unreported breakdown.
+        if (reported_input is not None and reported_output is not None
+                and reported_total is not None
+                and reported_total >= input_tokens + output_tokens
+                and reasoning_tokens <= reported_total - input_tokens
+                and cached_tokens <= input_tokens):
+            output_tokens = reported_total - input_tokens
+            accounting_basis = "gemini_reported_total_minus_prompt"
+        else:
+            usage_status = "incomplete"
+            accounting_basis = "gemini_incomplete_or_inconsistent_receipt"
+    priced_at = (attempt or {}).get("service_started_at") or time.time()
+    pricing = _pricing_for(model, priced_at=priced_at)
+    try:
+        from . import progress
+
+        stage, lane = progress.current_stage(), progress.current_lane()
+    except Exception:  # pragma: no cover - attribution must never break billing
+        stage, lane = "", ""
     with _MUTATION_LOCK:
         if attempt is None:
             accumulator.untracked_response_count += 1
@@ -788,27 +1018,26 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 "usage_reported": usage is not None,
                 "usage_status": usage_status,
                 "outcome": "response_received",
+                "reported_input_tokens": reported_input,
+                "reported_cached_input_tokens": reported_cached,
+                "reported_output_tokens": reported_output,
+                "reported_reasoning_tokens": reported_reasoning,
+                "reported_total_tokens": reported_total,
+                "usage_accounting_basis": accounting_basis,
             })
-        if usage is None:
+        if usage_status != "reported":
+            if attempt is not None:
+                attempt["usage_reported"] = False
             accumulator.missing_usage_responses += 1
-            return accumulator.summary()
+            stage_row = accumulator.stages.setdefault(
+                (stage, lane), StageUsage(stage=stage, lane=lane),
+            )
+            stage_row.missing_usage_responses += 1
+    if usage is None:
+        _emit_usage_update()
+        _emit_charge_log(model=model, attempt=attempt, amount_inr=None, cumulative=console_summary())
+        return accumulator.summary(include_attempts=False)
 
-    input_tokens = _int(_get(usage, "prompt_tokens", _get(usage, "input_tokens")))
-    output_tokens = _int(
-        _get(usage, "completion_tokens", _get(usage, "output_tokens"))
-    )
-    prompt_details = _get(
-        usage, "prompt_tokens_details", _get(usage, "input_tokens_details")
-    )
-    completion_details = _get(
-        usage, "completion_tokens_details", _get(usage, "output_tokens_details")
-    )
-    cached_tokens = _int(_get(prompt_details, "cached_tokens"))
-    cache_write_tokens = _int(_get(prompt_details, "cache_write_tokens"))
-    reasoning_tokens = _int(_get(completion_details, "reasoning_tokens"))
-    raw_total = _get(usage, "total_tokens")
-    total_tokens = None if raw_total is None else _int(raw_total)
-    model = str(_get(response, "model") or requested_model or "unknown")
     reported_tier = str(_get(response, "service_tier") or "").lower()
     cached_tokens = min(input_tokens, cached_tokens)
     cache_write_tokens = min(max(input_tokens - cached_tokens, 0), cache_write_tokens)
@@ -816,15 +1045,10 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         _request_cost(
             model=model, input_tokens=input_tokens, cached_input_tokens=cached_tokens,
             cache_write_tokens=cache_write_tokens, output_tokens=output_tokens,
+            priced_at=priced_at,
         )
-        if reported_tier in {"", "default", "standard", "auto"} else None
+        if usage_status == "reported" and reported_tier in {"", "default", "standard", "auto"} else None
     )
-    try:
-        from . import progress
-
-        stage, lane = progress.current_stage(), progress.current_lane()
-    except Exception:  # pragma: no cover - attribution must never break billing
-        stage, lane = "", ""
     accumulator.add(
         model=model,
         input_tokens=input_tokens,
@@ -837,6 +1061,25 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
         lane=lane,
         estimated_cost_usd=response_cost,
     )
+    from . import usage_currency
+
+    with _MUTATION_LOCK:
+        if accumulator.fx_quote is None:
+            try:
+                accumulator.fx_quote = usage_currency.snapshot()
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                # A malformed display-currency setting must not retry an
+                # already billed generation request or erase its USD receipt.
+                _LOGGER.warning("INR conversion unavailable: %s", type(exc).__name__)
+                accumulator.fx_quote = {}
+        quote = accumulator.fx_quote
+        currency_receipt = {
+            "stage": stage, "lane": lane, "model": model,
+            "estimated_cost_usd": float(response_cost) if response_cost is not None else None,
+            "estimated_cost_inr": usage_currency.to_inr(response_cost, quote or None),
+            **_fx_fields(quote),
+        }
+        accumulator.currency_receipts.append(currency_receipt)
     if attempt is not None:
         with _MUTATION_LOCK:
             attempt.update({
@@ -845,9 +1088,17 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
                 "cache_write_tokens": cache_write_tokens,
                 "output_tokens": output_tokens,
                 "reasoning_tokens": reasoning_tokens,
+                "total_tokens": total_tokens,
                 "estimated_cost_usd": float(response_cost) if response_cost is not None else None,
                 "pricing_as_of": PRICING_AS_OF,
-                "pricing_basis": "standard_text_token_rates" if response_cost is not None else "unpriced_model_or_service_tier",
+                "pricing_basis": ("incomplete_usage_receipt" if usage_status != "reported" else
+                                  "standard_text_token_rates" if response_cost is not None else
+                                  "unpriced_model_or_service_tier"),
+                "pricing_effective_date": _pricing_date(priced_at).isoformat(),
+                "pricing_policy": pricing.policy if pricing else None,
+                "pricing_source": pricing.source if pricing else None,
+                **{key: value for key, value in currency_receipt.items()
+                   if key not in {"stage", "lane", "model", "estimated_cost_usd"}},
             })
     summary = accumulator.summary(include_attempts=False)
 
@@ -855,12 +1106,20 @@ def record_response(response: Any, *, requested_model: str = "") -> dict[str, An
     # cheap no-op, while the web UI receives updated aggregate usage live —
     # the cumulative summary (baseline + this run, stages and elapsed
     # included), identical in shape to what the job record persists.
-    try:
-        from . import progress
-
-        progress.usage(console_summary())
-    except Exception:  # pragma: no cover - accounting must never break generation
-        pass
+    _emit_usage_update()
+    cumulative = console_summary()
+    _emit_charge_log(model=model, attempt=attempt,
+                     amount_inr=currency_receipt["estimated_cost_inr"], cumulative=cumulative)
+    _LOGGER.info(
+        "API usage provider=%s model=%s attempt=%s request_estimate_inr=%s "
+        "cumulative_estimate_inr=%s cumulative_known_estimate_inr=%s "
+        "usd_to_inr_rate=%s fx_as_of=%s usage_status=%s",
+        (attempt or {}).get("provider", ""), model,
+        (attempt or {}).get("attempt_id", "untracked"),
+        currency_receipt["estimated_cost_inr"], cumulative.get("estimated_cost_inr"),
+        cumulative.get("known_usage_estimated_cost_inr"), quote.get("rate"),
+        quote.get("as_of"), usage_status,
+    )
     return summary
 
 
@@ -874,6 +1133,7 @@ def _merge_stage_rows(
         "request_count", "input_tokens", "cached_input_tokens",
         "cache_write_tokens", "output_tokens", "reasoning_tokens",
         "total_tokens", "attempt_count", "provider_request_count",
+        "missing_usage_response_count",
     )
     for summary in summaries:
         if not isinstance(summary, dict):
@@ -887,6 +1147,9 @@ def _merge_stage_rows(
                 "lane": key[1],
                 **{name: 0 for name in counters},
                 "estimated_cost_usd": 0.0,
+                "known_usage_estimated_cost_usd": 0.0,
+                "pending_request_count": 0,
+                "unresolved_usage_request_count": 0,
                 "pricing_complete": True,
                 "usage_complete": True,
                 "attempt_coverage_complete": True,
@@ -898,18 +1161,34 @@ def _merge_stage_rows(
             })
             for name in counters:
                 target[name] += _int(row.get(name))
+            pending, unresolved = _summary_usage_counts(row)
+            target["pending_request_count"] += pending
+            target["unresolved_usage_request_count"] += unresolved
+            known_cost = _known_cost(row)
+            if row.get("known_usage_estimated_cost_usd") is None and row.get("estimated_cost_usd") is None:
+                # v2 stage aggregates dropped their subtotal on pricing gaps;
+                # the persisted model matrix still contains the known prices.
+                known_cost = sum(
+                    _known_cost(item)
+                    for item in summary.get("cost_by_stage_lane_model") or []
+                    if (str(item.get("stage") or ""), str(item.get("lane") or "")) == key
+                )
+            target["known_usage_estimated_cost_usd"] = round(
+                target["known_usage_estimated_cost_usd"] + known_cost, 12,
+            )
             target["usage_complete"] = target["usage_complete"] and row.get("usage_complete") is not False
             target["attempt_coverage_complete"] = target["attempt_coverage_complete"] and bool(
                 row.get("attempt_coverage_complete", not row.get("request_count"))
             )
             cost = row.get("estimated_cost_usd")
-            if cost is None or row.get("pricing_complete") is False:
+            if row.get("pricing_complete") is False or (cost is None and row.get("usage_complete") is not False):
                 target["pricing_complete"] = False
+            if cost is None or row.get("pricing_complete") is False:
                 target["estimated_cost_usd"] = None
-            elif target["pricing_complete"]:
+            elif target["estimated_cost_usd"] is not None:
                 try:
                     target["estimated_cost_usd"] = round(
-                        target["estimated_cost_usd"] + float(cost), 6
+                        target["estimated_cost_usd"] + float(cost), 12
                     )
                 except (TypeError, ValueError):
                     target["pricing_complete"] = False
@@ -934,6 +1213,81 @@ def _merge_stage_rows(
     return list(merged.values())
 
 
+def _known_cost(summary: dict[str, Any]) -> float:
+    # A complete historical total is authoritative, even when an older row
+    # does not carry the newer subtotal field. Never reprice its tokens.
+    if summary.get("estimated_cost_usd") is not None and summary.get("pricing_complete") is not False:
+        return _float(summary["estimated_cost_usd"])
+    return _float(summary.get("known_usage_estimated_cost_usd"))
+
+
+_FX_KEYS = ("usd_to_inr_rate", "usd_to_inr_as_of", "usd_to_inr_source", "usd_to_inr_kind")
+
+
+def _fx_fields(quote: dict[str, Any]) -> dict[str, Any]:
+    return dict(zip(_FX_KEYS, (quote.get(key) for key in ("rate", "as_of", "source", "kind"))))
+
+
+def _currency_totals(target: dict[str, Any], rows: list[dict[str, Any]], *, receipts: bool) -> None:
+    """Add frozen INR amounts, retaining unknown historical conversion gaps."""
+    known_inr = Decimal("0")
+    converted_usd = Decimal("0")
+    complete = target.get("estimated_cost_usd") is not None
+    quotes: set[tuple[Any, ...]] = set()
+    for row in rows:
+        amount = row.get("estimated_cost_inr")
+        if amount is None and not receipts:
+            amount = row.get("known_usage_estimated_cost_inr")
+        if amount is not None:
+            known_inr += Decimal(str(amount))
+        if receipts:
+            if amount is not None and row.get("estimated_cost_usd") is not None:
+                converted_usd += Decimal(str(row["estimated_cost_usd"]))
+        elif row.get("inr_conversion_complete") is not True:
+            # Empty old segments have no charge to convert. A nonzero or
+            # unknown historical USD ledger must remain explicitly partial.
+            if (row.get("request_count") or row.get("usage_complete") is False
+                    or ("estimated_cost_usd" in row and row["estimated_cost_usd"] not in (0, 0.0))):
+                complete = False
+        if row.get("usd_to_inr_rate") is not None:
+            quotes.add(tuple(row.get(key) for key in _FX_KEYS))
+        elif amount not in (None, 0, 0.0):
+            quotes.add((None,) * len(_FX_KEYS))
+    if receipts:
+        complete = complete and round(converted_usd, 12) == Decimal(str(_known_cost(target)))
+    total = float(known_inr.quantize(Decimal("0.000000000001")))
+    target.update({
+        "estimated_cost_inr": total if complete else None,
+        "known_usage_estimated_cost_inr": total,
+        "inr_conversion_complete": complete,
+        **dict(zip(_FX_KEYS, next(iter(quotes)) if len(quotes) == 1 else (None,) * len(_FX_KEYS))),
+    })
+
+
+def _add_receipt_currency(summary: dict[str, Any], receipts: list[dict[str, Any]]) -> None:
+    _currency_totals(summary, receipts, receipts=True)
+    for field, keys in (("models", ("model",)), ("stages", ("stage", "lane")),
+                        ("cost_by_stage_lane_model", ("stage", "lane", "model"))):
+        grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+        for receipt in receipts:
+            grouped.setdefault(tuple(str(receipt.get(key) or "") for key in keys), []).append(receipt)
+        for row in summary.get(field) or []:
+            _currency_totals(row, grouped.get(tuple(str(row.get(key) or "") for key in keys), []), receipts=True)
+
+
+def _merge_currency(summary: dict[str, Any], segments: list[dict[str, Any]]) -> None:
+    _currency_totals(summary, segments, receipts=False)
+    for field, keys in (("models", ("model",)), ("stages", ("stage", "lane")),
+                        ("cost_by_stage_lane_model", ("stage", "lane", "model"))):
+        grouped: dict[tuple[str, ...], list[dict[str, Any]]] = {}
+        for segment in segments:
+            rows = segment.get(field) or ([segment] if field == "models" and segment.get("request_count") else [])
+            for row in rows:
+                grouped.setdefault(tuple(str(row.get(key) or "") for key in keys), []).append(row)
+        for row in summary.get(field) or []:
+            _currency_totals(row, grouped.get(tuple(str(row.get(key) or "") for key in keys), []), receipts=False)
+
+
 def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
     """Merge persisted/run summaries without repricing historical usage."""
     accumulator = UsageAccumulator()
@@ -942,16 +1296,27 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
     saw_usage = False
     pricing_dates: set[str] = set()
     elapsed_total = 0.0
+    active_elapsed_total = 0.0
+    review_wait_total = 0.0
+    wall_elapsed_total = 0.0
     for summary in summaries:
         if not isinstance(summary, dict):
             continue
-        elapsed_total += max(0.0, _float(summary.get("elapsed_seconds")))
+        elapsed = max(0.0, _float(summary.get("elapsed_seconds")))
+        active_elapsed_total += max(
+            0.0, _float(summary.get("active_elapsed_seconds", elapsed))
+        )
+        review_wait_total += max(0.0, _float(summary.get("review_wait_seconds")))
+        wall_elapsed_total += max(
+            0.0, _float(summary.get("wall_elapsed_seconds", elapsed))
+        )
+        elapsed_total += elapsed
         if _int(summary.get("request_count")) > 0:
             saw_usage = True
             value = summary.get("estimated_cost_usd")
-            if value is None or summary.get("pricing_complete") is False:
+            if summary.get("pricing_complete") is False or (value is None and summary.get("usage_complete") is not False):
                 pricing_complete = False
-            else:
+            elif value is not None:
                 try:
                     saved_cost += Decimal(str(value))
                 except (ValueError, TypeError):
@@ -997,6 +1362,9 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
     # The fresh accumulator above knows nothing of the inputs' wall-clock
     # or stage attribution — carry both cumulatively.
     merged["elapsed_seconds"] = round(elapsed_total, 3)
+    merged["active_elapsed_seconds"] = round(active_elapsed_total, 3)
+    merged["review_wait_seconds"] = round(review_wait_total, 3)
+    merged["wall_elapsed_seconds"] = round(wall_elapsed_total, 3)
     merged["stages"] = _merge_stage_rows(summaries)
     valid_summaries = [row for row in summaries if isinstance(row, dict)]
     attempts: dict[str, dict[str, Any]] = {}
@@ -1046,10 +1414,13 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         else sum(_int(row.get("provider_request_count")) for row in valid_summaries)
     )
     merged["missing_usage_response_count"] = sum(_int(row.get("missing_usage_response_count")) for row in valid_summaries)
+    state_counts = [_summary_usage_counts(row) for row in valid_summaries]
+    merged["pending_request_count"] = sum(pending for pending, _ in state_counts)
+    merged["unresolved_usage_request_count"] = sum(unresolved for _, unresolved in state_counts)
     merged["untracked_response_count"] = sum(_int(row.get("untracked_response_count")) for row in valid_summaries)
     merged["usage_complete"] = all(row.get("usage_complete") is not False for row in valid_summaries)
     merged["known_usage_estimated_cost_usd"] = round(sum(
-        _float(row.get("known_usage_estimated_cost_usd", row.get("estimated_cost_usd")))
+        _known_cost(row)
         for row in valid_summaries
     ), 12)
     merged["attempt_coverage_complete"] = all(
@@ -1061,7 +1432,6 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         for row in valid_summaries
     )
     if not merged["usage_complete"]:
-        merged["pricing_complete"] = False
         merged["estimated_cost_usd"] = None
     merged["cost_by_stage_lane_model"] = [
         {"stage": stage, "lane": lane, **_model_summary(item)}
@@ -1071,11 +1441,17 @@ def merge_summaries(*summaries: dict[str, Any] | None) -> dict[str, Any]:
         {"stage": stage, "elapsed_seconds": round(seconds, 3)}
         for stage, seconds in timings.items()
     ]
+    merged["latest_request"] = next((copy.deepcopy(row["latest_request"])
+                                      for row in reversed(valid_summaries)
+                                      if row.get("latest_request") is not None), None)
+    _merge_currency(merged, valid_summaries)
     return merged
 
 
-def _pricing_for(model: str) -> Pricing | None:
-    lowered = model.lower()
+def _pricing_for(model: str, *, priced_at: float | None = None) -> Pricing | None:
+    lowered = model.lower().removeprefix("models/")
+    if lowered.startswith("gemini-"):
+        return _gemini_pricing(model, priced_at=priced_at)
     for prefix, pricing in _PRICING:
         if lowered.startswith(prefix):
             return pricing
@@ -1089,9 +1465,10 @@ def _request_cost(
     cached_input_tokens: int,
     cache_write_tokens: int,
     output_tokens: int,
+    priced_at: float | None = None,
 ) -> Decimal | None:
     """Price one response so per-request cache/long-context rules stay exact."""
-    pricing = _pricing_for(model)
+    pricing = _pricing_for(model, priced_at=priced_at)
     if pricing is None:
         return None
     ordinary_input = max(
@@ -1137,7 +1514,9 @@ def _model_summary(item: ModelUsage) -> dict[str, Any]:
         "estimated_cost_usd": cost,
         "known_usage_estimated_cost_usd": round(float(item.estimated_cost_usd), 12),
         "pricing_complete": item.pricing_complete,
-        "pricing_source": pricing.source if pricing else DEFAULT_PRICING_SOURCE,
+        "pricing_source": (pricing.source if pricing else GEMINI_PRICING_SOURCE
+                           if item.model.lower().removeprefix("models/").startswith("gemini-")
+                           else DEFAULT_PRICING_SOURCE),
     }
 
 
@@ -1151,6 +1530,16 @@ def _get(obj: Any, name: str, default: Any = None) -> Any:
     if isinstance(obj, dict):
         return obj.get(name, default)
     return getattr(obj, name, default) if obj is not None else default
+
+
+def _first_present(obj: Any, *names: str) -> Any:
+    return next((value for name in names if (value := _get(obj, name)) is not None), None)
+
+
+def _reported_count(value: Any) -> int | None:
+    # Preserve absence separately from a reported zero. Invalid counters do
+    # not become made-up zero-token receipts or billable estimates.
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
 
 def _int(value: Any) -> int:

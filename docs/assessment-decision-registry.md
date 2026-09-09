@@ -9,11 +9,11 @@ module's kernel contract and the adopted architecture/handoff.
 
 | Kind | Current policy | Semantic owner | Stable row audit |
 |---|---|---|---|
-| `assessment.cell` | `assessment-cell-3` | Source-atom blueprint axes and marks under the resolved assessment-format policy | `_aegis_assessment_cell_verdict` |
-| `assessment.generated_cell` | `assessment-generated-cell-3` | Generated pre-learning blueprint axes and marks under the resolved assessment-format policy | `_aegis_assessment_cell_verdict` |
-| `assessment.materialize` | `assessment-materialize-11` | Question and complete unweighted semantic answer/rubric content; exclusive main-versus-subquestion scoring; Subjective placeholders; canonical rich-text and option-label mechanics; selected Master answer-slot capacity | `_aegis_assessment_materialization` |
+| `assessment.cell` | `assessment-cell-4-response-mechanism-sop-2026-09-09` | Source-atom blueprint axes and marks under the resolved assessment-format policy, with the owner-attached response-mechanism lane policy | `_aegis_assessment_cell_verdict` |
+| `assessment.generated_cell` | `assessment-generated-cell-4-response-mechanism-sop-2026-09-09` | Generated pre-learning blueprint axes and marks under the resolved assessment-format policy, with the owner-attached response-mechanism lane policy | `_aegis_assessment_cell_verdict` |
+| `assessment.materialize` | `assessment-materialize-16-selection-mode` (source-task variant `assessment-materialize-17-source-task-selection-mode`) | Question and complete unweighted semantic answer/rubric content; source option cardinality; single/multiple Objective markers; exclusive main-versus-subquestion scoring; Subjective placeholders; canonical rich-text and option-label mechanics; selected Master answer-slot capacity | `_aegis_assessment_materialization` |
 | `assessment.answer_restriction` | `assessment-answer-restriction-3` plus both v2.0 registry hashes | Open/Specific answer-space verdict | `_aegis_assessment_answer_restriction` |
-| `assessment.marking` | `assessment-marking-7` | Model-authored weight decomposition, exact policy-bound duration, and keyboard mode; the recorded cell owns total marks | `_aegis_assessment_marking` |
+| `assessment.marking` | `assessment-marking-9-column-spec` | Model-authored weight decomposition, exact policy-bound duration, and keyboard mode; the recorded cell owns total marks and its Objective selection mode | `_aegis_assessment_marking` |
 | `assessment.route` | `assessment-route-2` | One released concept home | `_aegis_assessment_route` |
 | `assessment.level` | `assessment-level-1` | Basic/Intermediate/Advanced verdict | `_aegis_assessment_level_verdict` |
 | `assessment.variant_cluster` | `assessment-variant-cluster-1` | Same-tier variant families | `_aegis_assessment_variant_cluster` |
@@ -102,3 +102,15 @@ and are stripped before concept-row database publication. Durable assessment
 snapshots use the same stage order and contain their own ordered-row SHA-256.
 The Master Refiner also stores its ordered, stable before/after diff on the
 assessment release; no new visible workbook sheet or schema field is created.
+
+The owner-attached response-mechanism policy is recorded in
+`assessment_response_policy.POLICY_VERSION` and included in both cell-author
+and cell-critic prompts. Its current cell decision identities are
+`assessment-cell-4-response-mechanism-sop-2026-09-09` and
+`assessment-generated-cell-4-response-mechanism-sop-2026-09-09`. The policy
+classifies only by the learner's required response: Objective selects from
+two or more explicit predefined options; Subjective supplies a short fixed
+factual entry (including every True/False item); Descriptive constructs an
+explanation, reasoning, calculation, drawing, map or extended answer. Marks,
+verbs and answer length are not classification evidence. Prior cell records
+under the v3 policy remain immutable and replayable under their original keys.

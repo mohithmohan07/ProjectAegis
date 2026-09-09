@@ -691,7 +691,8 @@ def test_a_finished_run_is_not_offered_for_resume_again(db):
     assert job.checkpoint_available is True
 
 
-def test_versioned_attempt_and_mechanical_telemetry_round_trip_without_repricing(db):
+@pytest.mark.parametrize("usage_schema_version", [2, 3])
+def test_versioned_attempt_and_mechanical_telemetry_round_trip_without_repricing(db, usage_schema_version):
     from types import SimpleNamespace
 
     original = _job(db)
@@ -706,7 +707,15 @@ def test_versioned_attempt_and_mechanical_telemetry_round_trip_without_repricing
             ))
             openai_usage.record_service_ended()
         historical = openai_usage.current_summary()
-    assert historical["usage_schema_version"] == 2
+    assert historical["usage_schema_version"] == 3
+    if usage_schema_version == 2:
+        historical["usage_schema_version"] = 2
+        historical.pop("pending_request_count")
+        historical.pop("unresolved_usage_request_count")
+        for row in historical["stages"]:
+            for field in ("known_usage_estimated_cost_usd", "pending_request_count",
+                          "unresolved_usage_request_count", "missing_usage_response_count"):
+                row.pop(field)
     original.openai_usage = historical
     db.commit()
     _, raw_bytes = checkpoints.export_bundle(db, original.id)

@@ -31,6 +31,25 @@ _history: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
 _track: contextvars.ContextVar[list | None] = contextvars.ContextVar(
     "aegis_progress_track", default=None,
 )
+# A stream can continue a run whose previous HTTP request already advanced
+# the bar.  The floor is scoped to that stream and makes every later update
+# monotonic across a Concept-review handoff or a reconnect.
+_progress_floor: contextvars.ContextVar[float] = contextvars.ContextVar(
+    "aegis_progress_floor", default=0.0,
+)
+# A sink is one logical streamed operation. Direct service tests and legacy
+# callers can install a new sink without going through ``stream``'s worker
+# setup; seeing a different sink is therefore also a progress-scope boundary.
+_progress_sink_scope: contextvars.ContextVar[object | None] = contextvars.ContextVar(
+    "aegis_progress_sink_scope", default=None,
+)
+# Optional fixed allocation for a workflow stage. The generation services may
+# report their historical 0..1 values; a review-gated run maps those values
+# into its Concept band so a terminal 1.0 from the source stage cannot leak
+# through the review pause.
+_progress_allocation: contextvars.ContextVar[tuple[float, float] | None] = (
+    contextvars.ContextVar("aegis_progress_allocation", default=None)
+)
 
 # The active worker label (e.g. "Refine 12/58"): parallel workers set it so
 # every log line says which unit produced it, in the live console and in the
@@ -57,6 +76,23 @@ def current_stage() -> str:
 def current_lane() -> str:
     """The composed worker-label scope active in this context ("" outside)."""
     return _label.get()
+
+
+@contextlib.contextmanager
+def fixed_allocation(start: float, end: float):
+    """Map raw stage progress into the caller's fixed progress band."""
+    lower = max(0.0, min(1.0, float(start)))
+    upper = max(lower, min(1.0, float(end)))
+    # Non-streaming callers do not get ``stream``'s per-worker floor token.
+    # Starting an explicitly allocated stage is the only durable boundary
+    # they expose, so discard a stale floor from a prior completed operation.
+    if _sink.get() is None and _track.get() is None and _history.get() is None:
+        _progress_floor.set(lower)
+    token = _progress_allocation.set((lower, upper))
+    try:
+        yield
+    finally:
+        _progress_allocation.reset(token)
 
 
 @contextlib.contextmanager
@@ -135,7 +171,20 @@ def set_progress(value: float, *, label: str = "") -> None:
     a rate-derived ETA to be honest, so the stream reports what actually
     happened (steps, logs, percent) and nothing predictive.
     """
-    v = max(0.0, min(1.0, float(value)))
+    sink = _sink.get()
+    if sink is not None and _progress_sink_scope.get() is not sink:
+        _progress_floor.set(0.0)
+        _progress_sink_scope.set(sink)
+    raw = max(0.0, min(1.0, float(value)))
+    allocation = _progress_allocation.get()
+    if allocation is not None:
+        lower, upper = allocation
+        raw = lower + (upper - lower) * raw
+    v = max(
+        _progress_floor.get(),
+        raw,
+    )
+    _progress_floor.set(v)
     with _emit_lock:
         track = _track.get()
         if track is not None:
@@ -146,9 +195,17 @@ def set_progress(value: float, *, label: str = "") -> None:
 def current_value() -> float:
     """The last progress fraction emitted by the active run (0.0 if none)."""
     track = _track.get()
-    if track:
-        return float(track[-1][1])
-    return 0.0
+    return max(
+        _progress_floor.get(),
+        float(track[-1][1]) if track else 0.0,
+    )
+
+
+def seed_progress(value: float, *, label: str = "") -> None:
+    """Seed a stream from durable run state before new work emits progress."""
+    _progress_floor.set(max(0.0, min(1.0, float(value))))
+    if value:
+        set_progress(value, label=label)
 
 
 class Span:
@@ -239,11 +296,31 @@ def current_events(*, limit: int | None = None) -> list[dict]:
     return events
 
 
+@contextlib.contextmanager
+def capture_history() -> Iterator[list[dict]]:
+    """Capture diagnostic events for a non-streaming worker operation.
+
+    ``stream`` owns this context for NDJSON requests. Small API mutations
+    which still run provider work in a threadpool use the same bounded event
+    history so ``uploads.run_with_openai_usage`` can persist charge and error
+    lines beside the cumulative ledger.
+    """
+    token = _history.set([])
+    history = _history.get()
+    try:
+        yield history if history is not None else []
+    finally:
+        _history.reset(token)
+
+
 def stream(
     fn: Callable[[], Any],
     *,
     title: str = "",
     journal_job_id: int | None = None,
+    initial_progress: float | None = None,
+    initial_progress_label: str = "",
+    continue_journal: bool = False,
 ) -> "StreamingResponse":  # type: ignore[name-defined]
     """Run ``fn`` in a worker thread, streaming its progress as NDJSON.
 
@@ -266,7 +343,9 @@ def stream(
         from . import run_journal
 
         try:
-            journal = run_journal.RunJournal(journal_job_id)
+            journal = run_journal.RunJournal(
+                journal_job_id, continue_existing=continue_journal,
+            )
         except OSError:
             journal = None  # an assist, never a gate
 
@@ -283,10 +362,17 @@ def stream(
         token = _sink.set(sink)
         history_token = _history.set([])
         track_token = _track.set([])
+        floor_token = _progress_floor.set(
+            max(0.0, min(1.0, float(initial_progress or 0.0)))
+        )
         from . import openai_usage
 
         usage_token = openai_usage.start_tracking()
         try:
+            if initial_progress:
+                seed_progress(
+                    initial_progress, label=initial_progress_label,
+                )
             if title:
                 log(title)
             result = fn()
@@ -309,6 +395,7 @@ def stream(
         finally:
             openai_usage.stop_tracking(usage_token)
             _track.reset(track_token)
+            _progress_floor.reset(floor_token)
             _history.reset(history_token)
             _sink.reset(token)
             if journal is not None:

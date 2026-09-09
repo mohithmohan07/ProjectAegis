@@ -354,7 +354,7 @@ def _versioned_telemetry_sample():
 
 
 @pytest.mark.parametrize("path,value", [
-    (("usage_schema_version",), 3),
+    (("usage_schema_version",), 4),
     (("usage_schema_version",), 2.0),
     (("request_attempts", 0, "queue_seconds"), -1),
     (("request_attempts", 0, "usage_reported"), "yes"),

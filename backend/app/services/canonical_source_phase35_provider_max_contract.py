@@ -115,6 +115,7 @@ def install() -> None:
         model: str | None = None,
         image_urls: list[str] | None = None,
         response_schema=None,
+        stage: str = "",
     ) -> dict:
         _log_policy_once()
         effective = (
@@ -148,6 +149,8 @@ def install() -> None:
             # images.  A stale wrapper signature previously rejected this
             # keyword before the provider call and crashed the live run.
             kwargs["image_urls"] = image_urls
+        if stage:
+            kwargs["stage"] = stage
         if response_schema is not None:
             # Strict response envelopes are independent of token ceilings.
             # Forward opt-in only, preserving legacy injected signatures.

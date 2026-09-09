@@ -1,7 +1,8 @@
 """Closed, versioned checkpoint schema for runtime telemetry extensions.
 
 Validation does not coerce, strip, reprice or rewrite imported records. Legacy
-usage remains under the existing checkpoint schema; new records declare v2.
+usage remains under the existing checkpoint schema; v2 remains readable and
+new records declare v3 to distinguish live requests from unresolved usage.
 """
 from __future__ import annotations
 
@@ -9,7 +10,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+MIN_SCHEMA_VERSION = 2
 Count = Annotated[int, Field(ge=0, le=10**15)]
 Seconds = Annotated[float, Field(ge=0, le=366 * 24 * 60 * 60)]
 Timestamp = Annotated[float, Field(ge=0, le=10**11)]
@@ -29,7 +31,18 @@ class Backoff(Closed):
     elapsed_seconds: Seconds
 
 
-class Attempt(Closed):
+class CurrencyFields(Closed):
+    # Optional additions preserve v2/v3 historical USD-only ledgers verbatim.
+    estimated_cost_inr: Annotated[float, Field(ge=0, le=10**12)] | None = None
+    known_usage_estimated_cost_inr: Annotated[float, Field(ge=0, le=10**12)] | None = None
+    inr_conversion_complete: bool | None = None
+    usd_to_inr_rate: Annotated[str, Field(max_length=128)] | None = None
+    usd_to_inr_as_of: Label | None = None
+    usd_to_inr_source: Annotated[str, Field(max_length=2048)] | None = None
+    usd_to_inr_kind: Label | None = None
+
+
+class Attempt(CurrencyFields):
     attempt_id: Identifier
     stage: Label
     lane: Label
@@ -66,9 +79,19 @@ class Attempt(Closed):
     cache_write_tokens: Count | None = None
     output_tokens: Count | None = None
     reasoning_tokens: Count | None = None
+    total_tokens: Count | None = None
+    reported_input_tokens: Count | None = None
+    reported_cached_input_tokens: Count | None = None
+    reported_output_tokens: Count | None = None
+    reported_reasoning_tokens: Count | None = None
+    reported_total_tokens: Count | None = None
+    usage_accounting_basis: Label | None = None
     estimated_cost_usd: Cost | None = None
     pricing_as_of: Label | None = None
-    pricing_basis: Literal["standard_text_token_rates", "unpriced_model_or_service_tier"] | None = None
+    pricing_basis: Literal["standard_text_token_rates", "unpriced_model_or_service_tier", "incomplete_usage_receipt"] | None = None
+    pricing_effective_date: Label | None = None
+    pricing_policy: Label | None = None
+    pricing_source: Annotated[str, Field(max_length=2048)] | None = None
 
 
 class StageTiming(Closed):
@@ -76,7 +99,7 @@ class StageTiming(Closed):
     elapsed_seconds: Seconds
 
 
-class CostMatrixRow(Closed):
+class CostMatrixRow(CurrencyFields):
     stage: Label
     lane: Label
     model: Label
@@ -109,7 +132,7 @@ class MechanicalSpan(Closed):
     outcome: Literal["running", "success", "error"]
 
 
-class UsageExtensionsV2(Closed):
+class UsageExtensionsV2(CurrencyFields):
     usage_schema_version: Annotated[int, Field(ge=2, le=2)]
     attempt_count: Count
     provider_request_count: Count
@@ -121,6 +144,7 @@ class UsageExtensionsV2(Closed):
     usage_complete: bool
     known_usage_estimated_cost_usd: Cost
     request_attempts: list[Attempt] = Field(max_length=20_000)
+    latest_request: Attempt | None = None
     cost_by_stage_lane_model: list[CostMatrixRow] = Field(max_length=20_000)
     stage_timings: list[StageTiming] = Field(max_length=20_000)
     mechanical_spans: list[MechanicalSpan] = Field(max_length=20_000)
@@ -128,9 +152,23 @@ class UsageExtensionsV2(Closed):
     mechanical_wall_seconds: Seconds
     mechanical_thread_cpu_seconds: Seconds
     mechanical_cpu_complete: bool
+    # Added as optional fields so a v3 receipt downgraded for a legacy
+    # checkpoint export remains readable without losing its timing facts.
+    active_elapsed_seconds: Seconds = 0.0
+    review_wait_seconds: Seconds = 0.0
+    wall_elapsed_seconds: Seconds = 0.0
 
 
-class StageExtensions(Closed):
+class UsageExtensionsV3(UsageExtensionsV2):
+    usage_schema_version: Annotated[int, Field(ge=3, le=3)]
+    pending_request_count: Count
+    unresolved_usage_request_count: Count
+    # Run-level timing is separate from provider request time.  Processing
+    # pauses while the reviewer edits the Concept files, then resumes for the
+    # Master build; all three values remain in the same durable receipt.
+
+
+class StageExtensions(CurrencyFields):
     # Optional for imported legacy stage rows. Validation never inserts these
     # defaults into the caller's stored historical object.
     attempt_count: Count = 0
@@ -139,10 +177,22 @@ class StageExtensions(Closed):
     attempt_coverage_complete: bool = False
     elapsed_scope: Literal["shared_stage_window_do_not_sum_lanes"] | None = None
     active_request_seconds: Seconds = 0.0
+    known_usage_estimated_cost_usd: Cost | None = None
+    pending_request_count: Count = 0
+    unresolved_usage_request_count: Count = 0
+    missing_usage_response_count: Count = 0
 
 
-TOP_EXTENSION_FIELDS = frozenset(UsageExtensionsV2.model_fields)
+TOP_EXTENSION_FIELDS = frozenset(UsageExtensionsV3.model_fields)
 STAGE_EXTENSION_FIELDS = frozenset(StageExtensions.model_fields)
+CURRENCY_FIELDS = frozenset(CurrencyFields.model_fields)
+
+
+def validate_currency_fields(value: dict, path: str) -> None:
+    try:
+        CurrencyFields.model_validate({key: value[key] for key in CURRENCY_FIELDS if key in value}, strict=True)
+    except ValueError as exc:
+        raise ValueError(f"{path} INR telemetry schema is invalid: {exc}") from exc
 
 
 def validate_extensions(value: dict, path: str) -> None:
@@ -150,7 +200,8 @@ def validate_extensions(value: dict, path: str) -> None:
     if not extensions:
         return
     try:
-        UsageExtensionsV2.model_validate(extensions, strict=True)
+        schema = UsageExtensionsV3 if value.get("usage_schema_version") == 3 else UsageExtensionsV2
+        schema.model_validate(extensions, strict=True)
     except ValueError as exc:
         raise ValueError(f"{path} runtime telemetry schema is invalid: {exc}") from exc
 

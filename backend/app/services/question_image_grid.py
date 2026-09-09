@@ -67,6 +67,16 @@ def image_tags(text: str) -> list[dict[str, str]]:
 
 
 def _download(url: str) -> bytes:
+    # Our published images already have verified bytes on this volume.
+    # Avoid sending an internal stitch through Fly's public HTTP route,
+    # which adds latency and can fail while the local source is available.
+    # The existing evidence reader binds origin, route, hash, image format
+    # and size; a lookalike external URL never reads a local asset.
+    from . import assessment_visual_evidence
+
+    reference, local_data = assessment_visual_evidence._image(url)
+    if local_data is not None:
+        return local_data
     request = urllib.request.Request(url, headers={"User-Agent": "Aegis/1.0"})
     with urllib.request.urlopen(
         request, timeout=_DOWNLOAD_TIMEOUT_SECONDS
@@ -76,6 +86,9 @@ def _download(url: str) -> bytes:
         raise ValueError(f"image at {url!r} exceeds the download byte cap")
     if not data:
         raise ValueError(f"image at {url!r} returned no bytes")
+    expected_hash = reference.get("sha256")
+    if expected_hash and hashlib.sha256(data).hexdigest() != expected_hash:
+        raise ValueError("downloaded source image does not match its content hash")
     return data
 
 
@@ -169,14 +182,15 @@ def consolidate_images(
 
     ``cache`` (one dict per run) makes repeated banks — the same question
     in ``question`` and ``question_text``, or re-used source figures —
-    stitch and publish exactly once per distinct ordered src list.
+    stitch and publish exactly once per distinct ordered (src, alt) list.
+    The labels are drawn into the pixels, so a new label is a new bank.
     """
     source = str(text or "")
     tags = image_tags(source)
     if len(tags) < 2:
         return source, None
 
-    key = tuple(tag["src"] for tag in tags)
+    key = tuple((tag["src"], tag["alt"]) for tag in tags)
     record: dict[str, Any] = {
         "source_images": [
             {"src": tag["src"], "alt": tag["alt"]} for tag in tags

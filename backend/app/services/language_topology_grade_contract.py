@@ -14,10 +14,10 @@ independently teachable, where a support block belongs, and how the grade and
 board should shape the writing. Deterministic code validates only the plan's
 IDs, role vocabulary and exact accounting.
 
-Version 5 deliberately re-keys the content-addressed plan cache. It retains the
-sourcebook-faithful literary grain and explicit support transport introduced by
-version 4, while preserving opening Warm-ups, coherent separately headed
-grammar mini-units and the teachable grain of short prose.
+Version 6 re-keys new plan decisions for source-supported analytical dimensions
+and dimension-first ownership of whole-work questions. It retains the literary
+grain, whole support transport, opening Warm-ups and independently taught
+grammar mini-units from the preceding versions.
 """
 from __future__ import annotations
 
@@ -25,10 +25,11 @@ import importlib
 import sys
 
 from . import language_topology as topology
+from .source_topic_policy import SOURCE_TOPIC_POLICY
 
 
-CONTRACT_VERSION = 5
-LANGUAGE_ADAPTER_VERSION = "language-topology-5"
+CONTRACT_VERSION = 6
+LANGUAGE_ADAPTER_VERSION = "language-topology-6"
 SEMANTIC_ROLES = (
     "ordinary",
     "stanza_culmination",
@@ -67,7 +68,7 @@ POEM MODE
    teach what the stanza's meanings, form/rhyme and other elements do together;
    it must not merely list or repeat the earlier concept names.
 
-PROSE MODE — INCLUDING FABLES, STORIES AND PLAYS
+PROSE MODE — INCLUDING FABLES, STORIES, PLAYS AND ENGLISH NONFICTION PASSAGES
 1. Put Topics at sizeable narrative teaching breaks: coherent changes of
    scene, conflict, decision, perspective or development that a teacher would
    plan separately. A play is narrative literature and is read through its
@@ -81,6 +82,13 @@ PROSE MODE — INCLUDING FABLES, STORIES AND PLAYS
    concept that teaches the episode pattern or development as a whole, never a
    name list. This culmination rule does not turn a separately headed language
    mini-unit into a story episode.
+4. For factual prose, use its meaningful informational progression and
+   independently teachable ideas/evidence in place of narrative episodes.
+   Source-grounded titles describe those ideas; dramatic titles, fictional
+   characters, conflict, invented plot and setting are inappropriate when the
+   passage does not teach them. The final Detailed Analysis uses applicable
+   Main Idea / Supporting Evidence, Development of Ideas and Informative
+   Language interpretations of the standard lenses.
 
 {topology.SOURCE_FAITHFUL_PROSE_ROUTING_POLICY}
 
@@ -119,7 +127,8 @@ plan, not merely in prose:
 DETAILED ANALYSIS — BOTH MODES
 After all stanza/story Topics and any source-aligned instructional mini-unit
 Topics, create the final Topic with display_name exactly matching
-detailed_analysis_title. Its concepts appear in this order:
+detailed_analysis_title. Include only source-supported, grade-appropriate
+analytical concepts from these dimensions, in this order:
 1. Theme / Central Idea
 2. Plot / Development of Ideas
 3. Characterisation / Speaker
@@ -127,13 +136,25 @@ detailed_analysis_title. Its concepts appear in this order:
 5. Language & Literary Devices
 6. one chapter_culmination
 
-Use the work-appropriate interpretation of every lens. For example, a lyric
+These dimensions are not a quota. Omit an unsupported lens instead of inventing
+content or duplicating another capability. Keep one final chapter_culmination.
+Use the work-appropriate interpretation of every supported lens. Nonfiction
+prose uses Main Idea / Supporting Evidence and Informative Language when those
+are its supported capabilities; a factual passage does not require fictional
+characterisation or a setting. For example, a lyric
 poem's development of ideas is not an invented plot, and Characterisation /
 Speaker analyses the speaking voice when there is no cast. The Language &
 Literary Devices concept is the one proper standalone home for a device such as
 alliteration; the source box may still be carried whole in the earlier
 line-concept whose quotation it illustrates. The final culmination synthesizes
 the whole work and never repeats a list of headings.
+
+Whole-work questions go to their matching analytical concept before Culmination:
+characterisation to Characterisation / Speaker, theme to Theme / Central Idea,
+and similarly development, setting and literary language. Evidence spanning
+several episodes does not itself make a question mixed synthesis. Only genuine
+integration across distinct analytical capabilities belongs to Culmination.
+Account for every supplied task_qid exactly once under its truthful concept.
 
 For every concept:
 - display_name is a learner-facing concept title;
@@ -146,7 +167,9 @@ For every concept:
 Account for every source block exactly once or through an explicit shared
 teaching use: concept source_block_ids, Topic evidence_block_ids,
 threaded_components or non_teaching_block_ids. Nothing is silently dropped.
-There is no target count other than the sourcebook reading structure above."""
+There is no target count other than the sourcebook reading structure above.
+
+{SOURCE_TOPIC_POLICY}"""
 
 CRITIC_SYSTEM = """\
 You are the independent critic of a model-authored language-chapter topology.
@@ -157,13 +180,18 @@ For a poem, verify that every real stanza is its own Topic, no concept spans
 stanzas, meaning-bearing line units are neither fragmented nor collapsed, each
 stanza closes with one substantive culmination, local device/vocabulary labels
 have not displaced the line meanings, and the final Detailed Analysis topic is
-last with the six required whole-work lenses.
+last with the applicable source-supported whole-work lenses and a final
+substantive chapter culmination. Detect unsupported dimensions invented only
+to fill a standard lens; the lens list is not a quota.
 
 For prose or a play, verify that sizeable story/scene breaks became Topics,
 semantically distinct episodes remain distinct concepts with dramatic titles,
 every local narrative Topic closes with a substantive culmination, and short
 prose has not been split into one unit per minor dialogue, reaction, plan or
 decision beat.
+For factual English prose, audit informational progression, main idea,
+supporting evidence and informative language; do not demand invented narrative
+plot, characterisation or setting. Its final Detailed Analysis still applies.
 
 For both modes, detect an opening Warm-up re-parented to a later plot event; a
 coherent separately headed grammar mini-unit buried in story analysis or
@@ -178,7 +206,11 @@ dropped or summarized when it must be carried whole; descriptions that would
 merely retell instead of teach; duplicated mastery capabilities; and any source
 task or block left without a truthful home. Never audit by a preferred count or
 by physical line arithmetic. Your dissent is advisory and must be precise; it
-never blocks or rewrites the author's plan."""
+never blocks or rewrites the author's plan.
+Check every task_qid has one owner, and whole-work character, theme, development,
+setting and language questions sit under their matching analysis concept.
+Chapter-wide scope alone must not divert them to Culmination.
+""" + "\n" + SOURCE_TOPIC_POLICY
 
 
 def _current_topology_modules():

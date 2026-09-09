@@ -123,6 +123,12 @@ class UploadJobOut(BaseModel):
     generation_running: bool = False
     generation_log: list = Field(default_factory=list)
     openai_usage: dict = Field(default_factory=dict)
+    run_id: str = ""
+    run_state: dict = Field(default_factory=dict)
+    # Present only for Q41 review-gated runs; old jobs return an empty object.
+    concept_review: dict = Field(default_factory=dict)
+    # Additive frontend alias for the same durable marker.
+    review_workflow: dict = Field(default_factory=dict)
     created_at: datetime
 
 
@@ -138,6 +144,9 @@ class ResumableCheckpointSummary(BaseModel):
     checkpoint_progress: float = 0.0
     checkpoint_target_identity: dict = Field(default_factory=dict)
     generation_running: bool = False
+    run_id: str = ""
+    run_state: dict = Field(default_factory=dict)
+    review_workflow: dict = Field(default_factory=dict)
     created_at: datetime
 
 
@@ -496,6 +505,21 @@ class ReleaseReviewConceptOut(BaseModel):
     release_errors: list[str] = Field(default_factory=list)
 
 
+class ReleaseReviewQuestionOut(BaseModel):
+    """A complete source/generated question shown beside its Concept row."""
+
+    identity: str = ""
+    source_qid: str = ""
+    question_kind: str = "source"
+    source_label: str = ""
+    question_text: str = ""
+    raw_task: str = ""
+    normalized_public_text: str = ""
+    options: list = Field(default_factory=list)
+    source_evidence: dict = Field(default_factory=dict)
+    editable: bool = True
+
+
 class ReleaseReviewTopicOut(BaseModel):
     topic: str = ""
     concepts: list[ReleaseReviewConceptOut] = Field(default_factory=list)
@@ -534,3 +558,5 @@ class ReleaseReviewViewOut(BaseModel):
     topics: list[ReleaseReviewTopicOut] = Field(default_factory=list)
     issues: list[ReleaseReviewIssueOut] = Field(default_factory=list)
     versions: list[ReleaseReviewVersionOut] = Field(default_factory=list)
+    questions: list[ReleaseReviewQuestionOut] = Field(default_factory=list)
+    concept_review: dict = Field(default_factory=dict)

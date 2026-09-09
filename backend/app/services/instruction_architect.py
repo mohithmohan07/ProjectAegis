@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .. import config
+from . import model_provider
 from . import prompts
 
 # ``architect-2`` adds the ``publication_label`` slot (owner audit
@@ -92,6 +93,9 @@ _FROZEN_CORE_PROMPT_KEYS = (
     # superseded rules; the key change re-hashes the instruction set, which
     # correctly invalidates verdicts cached under the old rules.
     "content.katex_rules.v2",
+    # Mode selection is a semantic input too: English nonfiction must not
+    # replay an older expository decision after the author policy changes.
+    "architect.assemble.system",
 )
 
 # Phase 3 system prompts are module constants (no registry backing yet); they
@@ -188,9 +192,15 @@ ARCHITECT_SYSTEM = prompts.register(
         "sentence-complexity calibration for this grade band so authored "
         "content reads at the learners' level. language_mode: select the "
         "mode that matches how the source teaches — 'poem' for "
-        "stanza-structured literature, 'prose' for story or narrative "
-        "literature, 'expository' for everything else (the default for "
-        "non-literature chapters) — and state the evidence in rationale. "
+        "stanza-structured literature, 'prose' for stories, plays, narrative "
+        "literature and English nonfiction reading-passage chapters. English "
+        "factual prose still needs source-grounded whole-passage Detailed "
+        "Analysis: main idea, supporting evidence, factual development and "
+        "informative language as applicable, without inventing plot, setting "
+        "or characterisation. Use 'expository' for other informational or "
+        "standalone instructional chapters; it remains the default for "
+        "non-language subjects. Decide from subject context and the complete "
+        "source, never a filename or isolated cue, and state the evidence in rationale. "
         "You SELECT and record the mode only; its topology adapter is "
         "implemented elsewhere. board_publication_conventions: "
         "terminology, notation, and exercise-structure conventions of this "
@@ -397,7 +407,7 @@ def _finalize(
     slots_source: str,
     review_flags: list[str],
 ) -> dict[str, Any]:
-    return {
+    result = {
         "architect_version": ARCHITECT_VERSION,
         "metadata": identity,
         "slots": slots,
@@ -407,6 +417,10 @@ def _finalize(
         "review_flags": list(review_flags),
         "instruction_set_sha256": instruction_set_sha256(slots, frozen_core),
     }
+    profile = model_provider.bound_profile()
+    if profile is not None:
+        result[model_provider.PROFILE_KEY] = profile
+    return result
 
 
 def assemble_instruction_set(
@@ -550,6 +564,8 @@ def _stored_set_reusable(
     if not isinstance(stored, Mapping):
         return False
     if str(stored.get("architect_version") or "") != ARCHITECT_VERSION:
+        return False
+    if stored.get(model_provider.PROFILE_KEY) != model_provider.bound_profile():
         return False
     slots = stored.get("slots")
     if _slot_defects(slots):

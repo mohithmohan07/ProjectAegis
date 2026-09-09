@@ -19,6 +19,9 @@ from . import (
     autonomous_resolution,
     generation,
     grounding_certificate,
+    model_provider,
+    model_routing_run,
+    run_state,
     uploads,
     usage_schema,
 )
@@ -82,11 +85,12 @@ _PAYLOAD_KEYS = {
     "job", "generation_checkpoint", "question_inventory",
     "openai_usage", "generation_log",
 }
+_OPTIONAL_PAYLOAD_KEYS = {model_provider.PROFILE_KEY, "run_state"}
 _JOB_KEYS = {
     "module", "upload_type", "learning_kind", "source_book", "filename",
     "mmd_text", "deposit_scope_type", "deposit_scope_ids",
 }
-_OPTIONAL_JOB_KEYS = {"chapter_duration_minutes"}
+_OPTIONAL_JOB_KEYS = {"chapter_duration_minutes", "run_id"}
 _USAGE_INTS = {
     "request_count": MAX_REQUEST_COUNT,
     "input_tokens": MAX_TOKEN_COUNT,
@@ -105,8 +109,10 @@ _USAGE_TOP_KEYS = {
     # 2026-08-28 (owner request: one cumulative cost + time record, stage
     # wise). Optional, so pre-existing bundles stay valid.
     "elapsed_seconds", "stages",
+    "active_elapsed_seconds", "review_wait_seconds", "wall_elapsed_seconds",
 }
 _USAGE_MODEL_KEYS = {
+    *usage_schema.CURRENCY_FIELDS,
     "model", *_USAGE_INTS, "estimated_cost_usd",
     "pricing_complete", "pricing_source",
     "known_usage_estimated_cost_usd",
@@ -1442,7 +1448,7 @@ def _validate_usage_row(
         # schema. Older exports remain valid and are interpreted as zero
         # cache-write tokens by the usage merger.
         required=(
-            allowed - {"cache_write_tokens", "known_usage_estimated_cost_usd"}
+            allowed - {"cache_write_tokens", "known_usage_estimated_cost_usd"} - usage_schema.CURRENCY_FIELDS
             if model_row
             else set()
         ),
@@ -1450,6 +1456,7 @@ def _validate_usage_row(
     for field, maximum in _USAGE_INTS.items():
         if field in value:
             _integer(value[field], f"{path}.{field}", maximum)
+    usage_schema.validate_currency_fields(value, path)
     if "model" in value:
         _string(
             value["model"],
@@ -1531,12 +1538,17 @@ def _validate_stage_row(value: Any, path: str) -> None:
             f"{path}.elapsed_seconds",
             MAX_ELAPSED_SECONDS,
         )
+    for field in (
+        "active_elapsed_seconds", "review_wait_seconds", "wall_elapsed_seconds",
+    ):
+        if field in value:
+            _number(value[field], f"{path}.{field}", MAX_ELAPSED_SECONDS)
 
 
 def _validate_usage(value: Any, path: str) -> None:
     _validate_usage_row(value, path, model_row=False)
     if "usage_schema_version" in value:
-        _integer(value["usage_schema_version"], f"{path}.usage_schema_version", usage_schema.SCHEMA_VERSION, minimum=usage_schema.SCHEMA_VERSION)
+        _integer(value["usage_schema_version"], f"{path}.usage_schema_version", usage_schema.SCHEMA_VERSION, minimum=usage_schema.MIN_SCHEMA_VERSION)
     usage_schema.validate_extensions(value, path)
     for index, row in enumerate(value.get("cost_by_stage_lane_model") or []):
         _validate_usage_row(
@@ -1549,6 +1561,11 @@ def _validate_usage(value: Any, path: str) -> None:
             f"{path}.elapsed_seconds",
             MAX_ELAPSED_SECONDS,
         )
+    for field in (
+        "active_elapsed_seconds", "review_wait_seconds", "wall_elapsed_seconds",
+    ):
+        if field in value:
+            _number(value[field], f"{path}.{field}", MAX_ELAPSED_SECONDS)
     stages = value.get("stages")
     if stages is not None:
         stage_rows = _object_list(stages, f"{path}.stages", 512)
@@ -1697,7 +1714,10 @@ def _validate_job(value: Any, path: str) -> tuple[str, str]:
 def _validate_payload(payload: Any) -> tuple[dict, str, str]:
     if not isinstance(payload, dict):
         raise ValueError("checkpoint bundle payload is missing")
-    _exact_keys(payload, _PAYLOAD_KEYS, "payload")
+    _exact_keys(payload, _PAYLOAD_KEYS | _OPTIONAL_PAYLOAD_KEYS, "payload", required=_PAYLOAD_KEYS)
+    profile = payload.get(model_provider.PROFILE_KEY)
+    if profile is not None:
+        model_provider.validate_profile(profile)
     job, kind_and_text = payload["job"], _validate_job(
         payload["job"], "payload.job")
     kind, mmd_text = kind_and_text
@@ -1710,11 +1730,24 @@ def _validate_payload(payload: Any) -> tuple[dict, str, str]:
     _validate_inventory(payload["question_inventory"], "payload.question_inventory")
     _validate_usage(payload["openai_usage"], "payload.openai_usage")
     _validate_log(payload["generation_log"], "payload.generation_log")
+    if "run_state" in payload:
+        run_state.validate(payload["run_state"], path="payload.run_state")
+        if "run_id" in job:
+            bundle_run_id = _string(
+                job["run_id"], "payload.job.run_id", run_state.MAX_RUN_ID,
+                nonempty=True,
+            )
+            if bundle_run_id != payload["run_state"]["run_id"]:
+                raise ValueError(
+                    "payload.job.run_id does not match payload.run_state.run_id"
+                )
     return job, kind, mmd_text
 
 
 def _portable_payload(job: models.UploadJob) -> dict:
+    profile = model_routing_run.recorded_profile_for_job(job)
     return {
+        **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
         "job": {
             "module": job.module,
             "upload_type": job.upload_type,
@@ -1727,12 +1760,17 @@ def _portable_payload(job: models.UploadJob) -> dict:
             "mmd_text": job.mmd_text,
             "deposit_scope_type": job.deposit_scope_type,
             "deposit_scope_ids": list(job.deposit_scope_ids or []),
+            **({"run_id": str(job.run_id)}
+               if str(getattr(job, "run_id", "") or "") else {}),
         },
         "generation_checkpoint": copy.deepcopy(
             job.generation_checkpoint or {}),
         "question_inventory": copy.deepcopy(job.question_inventory or {}),
         "openai_usage": copy.deepcopy(job.openai_usage or {}),
         "generation_log": copy.deepcopy(job.generation_log or []),
+        **({"run_state": copy.deepcopy(job.run_state)}
+           if isinstance(getattr(job, "run_state", None), dict)
+           and job.run_state else {}),
     }
 
 
@@ -1920,11 +1958,15 @@ def import_bundle(
             payload["generation_checkpoint"]),
         generation_log=copy.deepcopy(payload["generation_log"]),
         openai_usage=copy.deepcopy(payload["openai_usage"]),
+        run_id=str(job_data.get("run_id") or ""),
+        run_state=copy.deepcopy(payload.get("run_state") or {}),
         detail=(
             "Portable checkpoint restored. Choose the matching chapter and "
             "resume generation."
         ),
     )
+    routing_record_path = None
+    imported_committed = False
     try:
         db.add(imported)
         # The bundle's source job ID is intentionally not portable. Allocate
@@ -1935,10 +1977,19 @@ def import_bundle(
             imported.generation_checkpoint,
             job_id=imported.id,
         )
+        # Restore the run policy before it can resume under its new job/source
+        # identity. Pre-policy bundles deliberately freeze the legacy None.
+        model_routing_run.save_profile_for_job(
+            imported, payload.get(model_provider.PROFILE_KEY)
+        )
+        routing_record_path = model_routing_run._record_path(imported)
         db.commit()
+        imported_committed = True
         db.refresh(imported)
     except Exception:
         db.rollback()
+        if routing_record_path is not None and not imported_committed:
+            routing_record_path.unlink(missing_ok=True)
         raise
     return imported
 
@@ -2116,6 +2167,9 @@ def resumable_jobs(
             saved_at.label("checkpoint_saved_at"),
             progress_value.label("checkpoint_progress"),
             target_identity.label("checkpoint_target_identity"),
+            models.UploadJob.run_id,
+            models.UploadJob.run_state,
+            models.UploadJob.question_inventory,
             models.UploadJob.created_at,
         )
         .filter(*filters)
@@ -2144,6 +2198,21 @@ def resumable_jobs(
                 else {}
             ),
             "generation_running": uploads.is_job_running(row.id),
+            "run_id": str(row.run_id or ""),
+            "run_state": (
+                copy.deepcopy(row.run_state)
+                if isinstance(row.run_state, dict) else {}
+            ),
+            "review_workflow": (
+                copy.deepcopy(
+                    (row.question_inventory or {}).get("_aegis_concept_review")
+                )
+                if isinstance(row.question_inventory, dict)
+                and isinstance(
+                    (row.question_inventory or {}).get("_aegis_concept_review"),
+                    dict,
+                ) else {}
+            ),
             "created_at": row.created_at,
         }
         for row in rows

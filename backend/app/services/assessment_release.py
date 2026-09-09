@@ -22,6 +22,7 @@ from typing import Any, Iterable, Mapping
 
 from .. import bulk_import as bi
 from . import assessment_profile
+from . import assessment_response_policy as response_policy
 from . import column_spec
 # Aliased: three functions in this module use ``identity`` as a local.
 from . import identity as identity_mod
@@ -537,6 +538,20 @@ def validate_candidate(
             f"source_policy {GENERATED_SOURCE_POLICY!r}"
         )
     kind = candidate.get("sheet_kind")
+    selection_mode = candidate.get("selection_mode", "")
+    if not isinstance(selection_mode, str):
+        errors.append("selection_mode must be a string")
+        selection_mode = ""
+    selection_mode = selection_mode.strip()
+    if kind == "objective":
+        if selection_mode and selection_mode not in response_policy.SELECTION_MODES:
+            errors.append(
+                "Objective selection_mode must be exactly one of "
+                f"{response_policy.SELECTION_MODES} "
+                f"(got {candidate.get('selection_mode')!r})"
+            )
+    elif selection_mode:
+        errors.append("selection_mode must be blank for non-Objective candidates")
     allowed_kinds = assessment_profile.sheet_kinds(profile)
     if kind not in allowed_kinds:
         errors.append(
@@ -681,11 +696,22 @@ def validate_candidate(
             answer for answer in answers
             if is_correct_option(answer.get("correct_answer"))
         ]
-        if len(correct) != 1:
+        if selection_mode and len(answers) < 2:
+            errors.append(
+                f"Objective selection_mode requires at least two options "
+                f"(got {len(answers)})"
+            )
+        if selection_mode == "multiple" and len(correct) < 2:
+            errors.append(
+                f"Objective multiple selection requires at least two correct "
+                f"options (got {len(correct)})"
+            )
+        elif selection_mode != "multiple" and len(correct) != 1:
             errors.append(
                 f"objective requires exactly one correct option (got "
                 f"{len(correct)})"
             )
+        objective_weights: list[Decimal] = []
         for position, answer in enumerate(answers, start=1):
             weight = finite(answer.get("answer_weightage"))
             if weight is None:
@@ -693,11 +719,34 @@ def validate_candidate(
                     f"objective answer {position} weightage must be finite"
                 )
                 continue
-            expected = marks if answer in correct else Decimal(0)
-            if weight != expected:
+            if selection_mode == "multiple":
+                if answer in correct and weight <= 0:
+                    errors.append(
+                        f"objective correct answer {position} weightage "
+                        "must be positive in multiple selection mode"
+                    )
+                elif answer not in correct and weight != Decimal(0):
+                    errors.append(
+                        f"objective wrong answer {position} weightage "
+                        "must be exact zero"
+                    )
+            else:
+                expected = marks if answer in correct else Decimal(0)
+                if weight != expected:
+                    errors.append(
+                        f"objective answer {position} weightage {weight:g} != "
+                        f"{expected:g}"
+                    )
+            objective_weights.append(weight)
+        if selection_mode == "multiple":
+            if (
+                len(objective_weights) == len(answers)
+                and marks > 0
+                and exact_weight_sum(objective_weights) != marks
+            ):
                 errors.append(
-                    f"objective answer {position} weightage {weight:g} != "
-                    f"{expected:g}"
+                    f"objective answer weightage sum "
+                    f"{exact_weight_sum(objective_weights):g} != marks {marks:g}"
                 )
         if subquestions:
             errors.append("objective candidate must not have subquestions")
@@ -1458,13 +1507,16 @@ def _cell_shape_findings(
     reads what the text says.
     """
     from ..bulk_import import assessment_workbook as workbook
+    from ..bulk_import.presentation import is_equation_field, to_display_rich_text
 
     findings: list[dict] = []
     for field, value in record.items():
-        # Measured on the ``<br>``-projected text the cell will hold (§17),
-        # exactly as the renderer's cell writer measures it.
+        # Include the visible Excel LF paired with each ``<br>`` token,
+        # exactly as the renderer's final cell writer measures it.
         projected = (
-            bi.to_workbook_rich_text(value) if isinstance(value, str)
+            to_display_rich_text(
+                value, raw_equation=is_equation_field(field, record),
+            ) if isinstance(value, str)
             else value
         )
         for defect in workbook.cell_text_defects(projected):

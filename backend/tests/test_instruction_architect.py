@@ -220,6 +220,36 @@ def test_critic_dissent_flags_never_gate(monkeypatch):
     )
 
 
+def test_english_nonfiction_mode_is_api_owned_and_author_policy_is_hashed(monkeypatch):
+    _live(monkeypatch)
+    source = "A chimpanzee uses a stick to reach food and learns through observation."
+    metadata = {**SAMPLE_METADATA, "subject": "English", "chapter_title": "Smart Chimp"}
+    authored = _authored_slots()
+    authored["language_mode"] = {
+        "mode": "prose", "rationale": "An English factual reading passage.",
+    }
+    authored["subject_topology_guidance"] = "Main idea, supporting evidence and informative language."
+
+    def api(system, user, **kwargs):
+        assert "English nonfiction reading-passage chapters" in system
+        assert "without inventing plot, setting" in system
+        assert json.loads(user)["source_text"] == source
+        return authored
+
+    seen = []
+    result = architect.assemble_instruction_set(
+        metadata=metadata, source_text=source, api_call=api,
+        critic=lambda payload: seen.append(payload) or {"verdict": "verified", "confidence": 1.0},
+    )
+    assert result["slots"]["language_mode"] == authored["language_mode"]
+    assert seen[0]["source_text"] == source
+    assert seen[0]["proposed_decision"]["language_mode"] == authored["language_mode"]
+    entries = architect._frozen_core_entries()
+    assert next(row for row in entries if row["key"] == "architect.assemble.system")["sha256"] == (
+        architect._sha256_text(prompts.get_text("architect.assemble.system"))
+    )
+
+
 def test_critic_failure_is_flagged_not_fatal(monkeypatch):
     _live(monkeypatch)
 

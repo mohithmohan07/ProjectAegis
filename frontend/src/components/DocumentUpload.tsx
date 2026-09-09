@@ -5,6 +5,7 @@ import { useRunConsole } from "../RunConsole";
 import type { UploadJob } from "../types";
 import MmdViewer from "./MmdViewer";
 import SourceBookInput from "./SourceBookInput";
+import { isConceptReviewWaiting } from "./ConceptReviewWorkflow";
 
 type Module = "assessments" | "concepts";
 type MasterLane = "post" | "pre";
@@ -202,6 +203,7 @@ export default function DocumentUpload({
   const currentJobRef = useRef<UploadJob | null>(job);
   currentJobRef.current = job;
   const controlsDisabled = busy || disabled;
+  const diagnosticsBusy = controlsDisabled || Boolean(job?.generation_running);
   const inputRef = useRef<HTMLInputElement>(null);
   const checkpointInputRef = useRef<HTMLInputElement>(null);
   const savedJobRequestGenerationRef = useRef(0);
@@ -729,6 +731,8 @@ export default function DocumentUpload({
     || Boolean(job.mmd_text)
     || job.checkpoint_available
   );
+  const conceptReviewWaiting = module === "concepts"
+    && isConceptReviewWaiting(job);
 
   // Step 3 — uploaded (and maybe converted). The run-outputs and
   // source-details cards render as SIBLINGS of the upload card: the four
@@ -858,16 +862,28 @@ export default function DocumentUpload({
             >
               Download checkpoint
             </a>
-            <a
-              className="button-link ghost"
-              href={api.runDiagnosticsUrl(job.id)}
-              download
-              title={"Everything this run saved — every checkpoint stage, "
-                + "the full generation log, and per-stage artifacts — in "
-                + "one shareable zip, whether or not the run finished."}
-            >
-              Download run diagnostics
-            </a>
+            {diagnosticsBusy ? (
+              <span>
+                <button className="ghost" disabled>
+                  Download run diagnostics
+                </button>
+                <span className="hint">
+                  {" Full diagnostics are available when this run stops. "}
+                  Use Download snapshot in the Console for its current log and usage.
+                </span>
+              </span>
+            ) : (
+              <a
+                className="button-link ghost"
+                href={api.runDiagnosticsUrl(job.id)}
+                download
+                title={"Saved checkpoints, the generation log and source "
+                  + "artifacts in one ZIP. Available after completion, "
+                  + "failure or a pause."}
+              >
+                Download run diagnostics
+              </a>
+            )}
             {DRIVE_BACKUP_FOLDER_URL && (
               <a
                 className="button-link ghost"
@@ -899,8 +915,11 @@ export default function DocumentUpload({
           actionsDisabled={controlsDisabled}
           manifest={job.source_artifacts}
           jobId={job.id}
-          jobRunning={Boolean(job.generation_running)}
-          showRunOutputs={module === "concepts"}
+          jobRunning={Boolean(job.generation_running) || disabled}
+          // Concept-first jobs render their Concept downloads and corrected
+          // input controls in ConceptReviewWorkflow. Legacy generated and
+          // released jobs keep the historical four-output/publish surface.
+          showRunOutputs={module === "concepts" && !conceptReviewWaiting}
           generationBlocked={nonResumable}
           onPublished={(freshJob) => {
             // Child actions may finish after Start new upload or after a
@@ -1473,6 +1492,18 @@ function SourceArtifactsCard({
         </div>
         <div className="row">
           {evidence.map((artifact) => (
+            (artifact.kind === "release_diagnostics"
+              || artifact.kind === "pre_release_diagnostics")
+              && (jobRunning || actionsDisabled || anyMasterRebuilding) ? (
+              <button
+                className="ghost"
+                disabled
+                key={artifact.kind}
+                title="Full diagnostics are available when this run stops. Use Download snapshot in the Console for its current log and usage."
+              >
+                {artifact.label}
+              </button>
+            ) : (
             <a
               className="button-link ghost"
               href={artifact.download_url}
@@ -1484,6 +1515,7 @@ function SourceArtifactsCard({
             >
               {artifact.label}
             </a>
+            )
           ))}
         </div>
         </details>

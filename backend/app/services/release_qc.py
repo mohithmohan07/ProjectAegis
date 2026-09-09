@@ -307,6 +307,8 @@ def _pre_coverage_rule_findings(
         tier = str(question.get("tier") or "").strip()
         by_tier = counts.setdefault(concept_id, {})
         by_tier[tier] = by_tier.get(tier, 0) + 1
+    if pre_coverage.is_adaptive(rule):
+        return _adaptive_pre_coverage_findings(payload, rule, counts)
     issues: list[dict[str, Any]] = []
     blocking: list[str] = []
     expected = dict(rule["per_tier"])
@@ -326,6 +328,66 @@ def _pre_coverage_rule_findings(
             f"owner's coverage rule {rule['version']} "
             f"({pre_coverage.describe(rule)}); re-run the Pre lane so the "
             "questions are authored to the rule"
+        )
+        issues.append(_issue(
+            code=PRE_CONCEPT_COVERAGE_OFF_RULE,
+            message=message,
+            severity="error",
+            phase="release_qc",
+            unit_id=concept_id,
+        ))
+        blocking.append(f"{PRE_CONCEPT_COVERAGE_OFF_RULE}: {message}")
+    return issues, blocking
+
+
+def _adaptive_pre_coverage_findings(
+    payload: Mapping[str, Any],
+    rule: Mapping[str, Any],
+    counts: Mapping[str, Mapping[str, int]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Hold generated items to their own accepted plans, never a fixed quota.
+
+    The model chose each concept's total and tier split. Release checks only
+    that the same recorded plan reached the artifact without lost or added
+    questions or changed tier labels. The existing unassessed-concept pass
+    continues to account for zero plans and blocked authoring.
+    """
+    from .phase3 import prequestions
+
+    plans = payload.get("pre_question_plans")
+    plans = plans if isinstance(plans, Mapping) else {}
+    issues: list[dict[str, Any]] = []
+    blocking: list[str] = []
+    for position, row in enumerate(_records(payload), start=1):
+        concept_id = str(row.get("_pre_concept_id") or "").strip()
+        plan = plans.get(concept_id)
+        defects: list[str] = []
+        if not concept_id:
+            defects.append("no pre_concept_id identifies its accepted coverage plan")
+        elif not isinstance(plan, Mapping):
+            defects.append("no model-authored coverage plan was recorded")
+        else:
+            defects = prequestions._plan_checker([concept_id], rule)({
+                "plans": [{**plan, "pre_concept_id": concept_id}],
+            })
+            if not defects:
+                expected = {
+                    str(entry["tier"]): int(entry["count"])
+                    for entry in plan["split"] if entry["count"] > 0
+                }
+                actual = dict(counts.get(concept_id) or {})
+                if actual != expected:
+                    defects.append(
+                        f"recorded plan asks for {plan['total']} question(s) "
+                        f"with tier counts {expected}; staged counts are {actual}"
+                    )
+        if not defects:
+            continue
+        message = (
+            f"row {position} ({str(row.get('concept_title') or '')!r}, "
+            f"{concept_id or '<missing identity>'}) does not match its "
+            f"accepted adaptive coverage plan under {rule['version']}: "
+            + "; ".join(defects)
         )
         issues.append(_issue(
             code=PRE_CONCEPT_COVERAGE_OFF_RULE,

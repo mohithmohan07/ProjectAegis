@@ -33,6 +33,7 @@ CORPUS = {
         "tasks": 26,
         "blocks": 341,
         "status": "ready",
+        "phase2_table_repairs": {},
         "issues": {},
     },
     "jemh105 (1).mmd": {
@@ -40,7 +41,7 @@ CORPUS = {
             "0f5b7f6498607a9e54206c17f0eaeceff00033ee0038e6ab48fb91430e4e0349"
         ),
         "source_contract_hash": (
-            "46d6f2a57a9700003963ef676182a8aeb5a00ccf7484a5b06eff83b04f6ce36b"
+            "75679bc60f7a3f6d38d4ecf715ddb35aea9ee1439bb3fd3cea7930423d293670"
         ),
         "metadata": {
             "subject": "Mathematics",
@@ -50,6 +51,7 @@ CORPUS = {
         "tasks": 65,
         "blocks": 331,
         "status": "ready",
+        "phase2_table_repairs": {"QINV-0015": ["katex_row_spacing", "raw_latex"]},
         "issues": {},
     },
     "Class 10 Chapter 5 Electricity.mmd": {
@@ -57,7 +59,7 @@ CORPUS = {
             "86e6c6a0c42932d01c51d8fcad82974d4b1c8440ad4d6853b53fe09e0aaacdcc"
         ),
         "source_contract_hash": (
-            "15df36c6f3ef4d3cab3b0bf155e300af18cdaf5d7cfc86c748344cdd5b2e2188"
+            "86677f1237615fdf03e488e512ee36267f3da559d8d4350b082895eda8c53b6f"
         ),
         "metadata": {
             "subject": "Science",
@@ -66,10 +68,23 @@ CORPUS = {
         "topics": 8,
         "tasks": 60,
         "blocks": 375,
-        "status": "review_required",
+        "status": "failed",
+        "phase2_table_repairs": {
+            "QINV-0009": ["raw_latex"], "QINV-0049": ["katex_row_spacing"],
+        },
         "issues": {
             "converter_semantic_markup_requires_pdf_reconciliation": [
                 "BLK-00061"
+            ],
+            "semantic_source_rich_text": [
+                "BLK-00025", "BLK-00027", "BLK-00050", "BLK-00052",
+                "BLK-00061", "BLK-00063", "BLK-00082", "BLK-00084",
+                "BLK-00110", "BLK-00112", "BLK-00114", "BLK-00116",
+                "BLK-00120", "BLK-00200", "BLK-00202", "BLK-00218",
+                "BLK-00220", "BLK-00222", "BLK-00224", "BLK-00226",
+                "BLK-00228", "BLK-00268", "BLK-00270", "BLK-00333",
+                "BLK-00335", "BLK-00339", "BLK-00341", "BLK-00350",
+                "BLK-00352",
             ],
         },
     },
@@ -102,8 +117,12 @@ def test_corpus_rebuilds_exact_grounding_preconditions(filename: str):
         metadata=expected["metadata"],
     )
 
-    assert compiled.canonical["phase2_inventory_ready"] is True
-    assert compiled.report["phase2_issues"] == []
+    # Lossless table transport now exposes historic incomplete task-table
+    # boundaries instead of accepting their earlier flattened rendering.
+    expected_repairs = expected["phase2_table_repairs"]
+    assert compiled.canonical["phase2_inventory_ready"] is (not expected_repairs)
+    assert all(issue["code"] == "phase2_task_rich_text_invalid" for issue in compiled.report["phase2_issues"])
+    assert {issue["qid"]: issue["rich_text_issues"] for issue in compiled.report["phase2_issues"]} == expected_repairs
     assert graph["source_contract_hash"] == expected["source_contract_hash"]
     assert graph["source_contract_hash"] == phase3.source_contract_hash(
         compiled.canonical

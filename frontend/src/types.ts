@@ -87,7 +87,34 @@ export interface Stats {
 /** Per-(stage, lane) usage attribution for the run console's stage cards.
     Cumulative: merged across run segments (the parse run and every
     generation attempt), persisted with the summary. */
-export interface StageUsageRow {
+export interface InrUsage {
+  /** API-converted amounts use the exchange rate recorded for each request. */
+  estimated_cost_inr?: number | null;
+  known_usage_estimated_cost_inr?: number | null;
+  inr_conversion_complete?: boolean;
+  usd_to_inr_rate?: string | null;
+  usd_to_inr_as_of?: string | null;
+  usd_to_inr_source?: string | null;
+  usd_to_inr_kind?: string | null;
+}
+
+export interface ProviderRequestUsage extends InrUsage {
+  attempt_id: string;
+  model?: string;
+  requested_model?: string;
+  actual_model?: string | null;
+  stage?: string;
+  lane?: string;
+  status?: string;
+  outcome?: string;
+  usage_reported?: boolean;
+  total_tokens?: number;
+  estimated_cost_usd?: number | null;
+  service_started_at?: number | null;
+  service_ended_at?: number | null;
+}
+
+export interface StageUsageRow extends InrUsage {
   stage: string;
   lane: string;
   request_count: number;
@@ -97,6 +124,10 @@ export interface StageUsageRow {
   usage_complete?: boolean;
   attempt_coverage_complete?: boolean;
   missing_usage_response_count?: number;
+  /** Requests still running; their eventual tokens/cost are not yet recorded. */
+  pending_request_count?: number;
+  /** Finished provider requests whose usage could not be recovered. */
+  unresolved_usage_request_count?: number;
   input_tokens: number;
   cached_input_tokens?: number;
   cache_write_tokens?: number;
@@ -104,6 +135,8 @@ export interface StageUsageRow {
   reasoning_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number | null;
+  /** Recorded priced usage only, retained even when the full total is unknown. */
+  known_usage_estimated_cost_usd?: number;
   pricing_complete: boolean;
   first_ts: number;
   last_ts: number;
@@ -111,10 +144,10 @@ export interface StageUsageRow {
   elapsed_seconds?: number;
 }
 
-export interface OpenAIUsage {
+export interface OpenAIUsage extends InrUsage {
   model: string;
   stages?: StageUsageRow[];
-  models?: Array<{
+  models?: Array<InrUsage & {
     model: string;
     request_count: number;
     input_tokens: number;
@@ -127,12 +160,16 @@ export interface OpenAIUsage {
     estimated_cost_usd: number | null;
   }>;
   request_count: number;
+  request_attempts?: ProviderRequestUsage[];
+  latest_request?: ProviderRequestUsage | null;
   /** request_count remains the legacy count of usage-bearing responses. */
   provider_request_count?: number;
   attempt_count?: number;
   usage_complete?: boolean;
   attempt_coverage_complete?: boolean;
   missing_usage_response_count?: number;
+  pending_request_count?: number;
+  unresolved_usage_request_count?: number;
   untracked_response_count?: number;
   mechanical_wall_seconds?: number;
   mechanical_thread_cpu_seconds?: number;
@@ -146,6 +183,8 @@ export interface OpenAIUsage {
   reasoning_tokens: number;
   total_tokens: number;
   estimated_cost_usd: number | null;
+  /** Recorded priced usage only; excludes pending and unresolved charges. */
+  known_usage_estimated_cost_usd?: number;
   currency?: "USD" | string;
   pricing_source?: string;
   pricing_as_of?: string;
@@ -153,6 +192,44 @@ export interface OpenAIUsage {
   /** Cumulative wall-clock seconds across the parse run and every
       generation attempt. */
   elapsed_seconds?: number;
+  /** Active provider/pipeline processing time, excluding human review wait. */
+  active_elapsed_seconds?: number;
+  /** Time spent waiting for the reviewer at the Concept → Master boundary. */
+  review_wait_seconds?: number;
+  /** Total wall time from the first Concept stage through completion. */
+  wall_elapsed_seconds?: number;
+}
+
+/** Durable same-run lifecycle and timing state returned with an upload job. */
+export interface DurableRunState {
+  schema_version: number;
+  run_id: string;
+  status: "processing" | "review" | "master" | "completed" | "failed";
+  stage: string;
+  progress: number;
+  started_at?: string;
+  started_at_epoch?: number;
+  active_started_at_epoch?: number | null;
+  active_elapsed_seconds: number;
+  review_started_at_epoch?: number | null;
+  review_wait_seconds: number;
+  wall_elapsed_seconds: number;
+  last_updated_at?: string;
+  finished_at?: string;
+  finished_at_epoch?: number | null;
+  stage_history?: Array<{
+    stage: string;
+    progress: number;
+    started_at: string;
+    ended_at: string;
+    active_elapsed_seconds: number;
+  }>;
+  progress_events?: Array<{
+    at: string;
+    value: number;
+    label: string;
+    stage: string;
+  }>;
 }
 
 export type SemanticDecisionChoice =
@@ -411,6 +488,38 @@ export interface SourceArtifactManifest {
   files: SourceArtifactFile[];
 }
 
+/** Durable state for the Concept-first workflow.  Legacy jobs omit this
+ * projection and continue to use the released-output surface below. */
+export type ConceptReviewStatus =
+  | "pending_review"
+  | "reviewed"
+  | "master_building"
+  | "master_ready"
+  | "master_failed";
+
+export interface CorrectedConceptInput {
+  lane: "post" | "pre";
+  filename?: string;
+  uploaded_at?: string;
+  status?: string;
+  accepted?: boolean;
+  [key: string]: unknown;
+}
+
+export interface ReviewWorkflow {
+  status?: ConceptReviewStatus;
+  concepts_ready?: boolean;
+  masters_ready?: boolean;
+  checkpoint_progress?: number;
+  progress?: number;
+  corrected_inputs?: Partial<Record<"post" | "pre", CorrectedConceptInput | boolean | string>>;
+  concept_files?: Partial<Record<"post" | "pre", SourceArtifactFile>>;
+  reviewed_at?: string;
+  master_started_at?: string;
+  master_completed_at?: string;
+  [key: string]: unknown;
+}
+
 export interface UploadJob {
   id: number;
   module: string;
@@ -446,6 +555,10 @@ export interface UploadJob {
   }>;
   created_at: string;
   openai_usage?: OpenAIUsage;
+  run_id?: string;
+  run_state?: DurableRunState;
+  /** New Concept-first workflow state; absent on historical full-run jobs. */
+  review_workflow?: ReviewWorkflow | null;
 }
 
 export interface GenerationRecovery {
@@ -498,6 +611,11 @@ export interface ResumableCheckpoint {
   checkpoint_progress?: number;
   checkpoint_target_identity?: Record<string, string>;
   generation_running?: boolean;
+  /** Additive projections used to distinguish a Master continuation from
+   * replay of the earlier Concept segment when attaching after refresh. */
+  review_workflow?: ReviewWorkflow | null;
+  run_id?: string;
+  run_state?: DurableRunState;
   created_at: string;
 }
 

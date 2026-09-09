@@ -391,6 +391,7 @@ def plan_defects(
     tasks: Sequence[Mapping[str, str]],
     *,
     work_name: str,
+    adapter_version: str | None = None,
 ) -> list[str]:
     defects: list[str] = []
     block_ids = {str(b.get("block_id") or "") for b in blocks}
@@ -405,6 +406,7 @@ def plan_defects(
     seen_concept_ids: set[str] = set()
     first_plan_concept_id = ""
     accounted: set[str] = set()
+    task_owners: dict[str, list[str]] = {}
     roles_last_topic: list[str] = []
 
     for index, topic in enumerate(topics):
@@ -444,6 +446,7 @@ def plan_defects(
             for qid in concept.get("task_qids") or []:
                 if str(qid) not in task_qids:
                     defects.append(f"concept {cid} names unknown task {qid}")
+                task_owners.setdefault(str(qid), []).append(cid)
 
     final = topics[-1]
     expected = detailed_analysis_title(work_name)
@@ -508,6 +511,13 @@ def plan_defects(
             "unaccounted source blocks (closed world, R4): "
             + ", ".join(unaccounted[:12])
         )
+    if (adapter_version or LANGUAGE_ADAPTER_VERSION) == "language-topology-6":
+        for qid in sorted(task_qids):
+            owners = task_owners.get(qid, [])
+            if not owners:
+                defects.append(f"source task {qid} has no concept owner")
+            elif len(owners) != 1:
+                defects.append(f"source task {qid} has duplicate concept ownership")
     return defects
 
 
@@ -691,7 +701,8 @@ def author_language_plan(
     cached = _read_cached(key)
     if cached is not None:
         defects = plan_defects(
-            cached.get("plan") or {}, blocks, tasks, work_name=work_name
+            cached.get("plan") or {}, blocks, tasks, work_name=work_name,
+            adapter_version=str(cached.get("adapter_version") or "language-topology-1"),
         )
         # Audit F8: the sealed hash must authenticate the sealed body — a
         # well-formed edit that kept the old plan_sha256 is a miss.
@@ -885,6 +896,7 @@ def ensure_language_plan(
                 _content_blocks(canonical),
                 _task_payloads(canonical),
                 work_name=work_name,
+                adapter_version=str(stored.get("adapter_version") or "language-topology-1"),
             )
         ):
             replayed = dict(stored)

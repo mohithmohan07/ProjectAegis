@@ -11,6 +11,7 @@ from app.services import (
     canonical_source_phase2 as phase2,
     canonical_source_phase3 as phase3,
     grounding_certificate,
+    model_provider,
     openai_usage,
     placement_policy,
 )
@@ -84,6 +85,37 @@ def test_post_learning_creates_concepts(client, db, first_chapter, monkeypatch):
     assert [row["concept_title"] for row in payload["records"]] == titles
     assert client.get(result["release_bulk_import_url"]).status_code == 200
 
+    # This fixture exercises a post-only source, so Phase 03 has no
+    # prerequisite map to project automatically. Record the explicit empty
+    # Pre decision so the four-output review gate has a real Output 01/02
+    # sibling before its Master build is requested.
+    release_contract.release.stage_pre_release(
+        db,
+        db.get(models.UploadJob, job["id"]),
+        target_chapter_id=first_chapter["id"],
+        pre_map={
+            "rows": [],
+            "pre_lane_verdict": {"verdict": "assumes_nothing"},
+        },
+        pre_questions={"questions": {}},
+        inventory={"items": []},
+    )
+
+    blocked = client.post(result["database_upload_url"])
+    assert blocked.status_code == 400
+    assert "Concept review" in blocked.json()["detail"]
+    monkeypatch.setattr(
+        release_contract,
+        "_build_master_siblings",
+        lambda *_args, **_kwargs: {
+            "pre": {"release_id": "test-pre-master"},
+            "post": {"release_id": "test-post-master"},
+        },
+    )
+    master_result = stream_result(client.post(
+        f"/build-concepts/uploads/{job['id']}/concept-review/master",
+    ))
+    assert master_result["all_four_outputs_ready"] is True
     published = client.post(result["database_upload_url"])
     assert published.status_code == 200, published.text
     receipt = published.json()
@@ -146,6 +178,37 @@ def test_post_learning_groups_concepts_under_one_topic(
     assert [row["concept_title"] for row in payload["records"]] == [
         row["concept_title"] for row in authored
     ]
+
+    # This fixture exercises a post-only source, so Phase 03 has no
+    # prerequisite map to project automatically. Record the explicit empty
+    # Pre decision so the four-output review gate has a real Output 01/02
+    # sibling before its Master build is requested.
+    release_contract.release.stage_pre_release(
+        db,
+        db.get(models.UploadJob, job["id"]),
+        target_chapter_id=first_chapter["id"],
+        pre_map={
+            "rows": [],
+            "pre_lane_verdict": {"verdict": "assumes_nothing"},
+        },
+        pre_questions={"questions": {}},
+        inventory={"items": []},
+    )
+    blocked = client.post(result["database_upload_url"])
+    assert blocked.status_code == 400
+    assert "Concept review" in blocked.json()["detail"]
+    monkeypatch.setattr(
+        release_contract,
+        "_build_master_siblings",
+        lambda *_args, **_kwargs: {
+            "pre": {"release_id": "test-pre-master"},
+            "post": {"release_id": "test-post-master"},
+        },
+    )
+    master_result = stream_result(client.post(
+        f"/build-concepts/uploads/{job['id']}/concept-review/master",
+    ))
+    assert master_result["all_four_outputs_ready"] is True
     published = client.post(result["database_upload_url"])
     assert published.status_code == 200, published.text
     assert len(published.json()["created_concept_ids"]) == len(authored)
@@ -528,36 +591,38 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     monkeypatch.setattr(
         build_concepts.generation.config, "use_live_generation", lambda: True,
     )
-    # Replay the real persisted Architect assembly during both live-mode
-    # resumes; its identity must agree with the seeded checkpoint envelope.
-    instruction_set = build_concepts.instruction_architect.ensure_instruction_set(
-        metadata={
-            "board": chapter.board,
-            "grade": chapter.grade,
-            "subject": chapter.subject,
-            "unit": chapter.unit,
-            "chapter_title": chapter.chapter_title,
-            "chapter_id": chapter.id,
-            "chapter_code": chapter.chapter_code,
-            "learning_kind": "Post",
-            "source_book": job.source_book,
-        },
-        source_text=source,
-        artifact_dir=build_concepts.uploads.source_artifact_directory(job.id),
-        api_call=lambda *_args, **_kwargs: {
-            "subject_topology_guidance": "Follow the source topic T.",
-            "grade_band_vocabulary": "Use the source terminology.",
-            "language_mode": {
-                "mode": "expository", "rationale": "A source explanation.",
+    # This pre-existing converted/checkpointed job has no routing record.
+    # Seed its Architect under the same historical profile the HTTP resumes
+    # bind, preserving the real cache check and the no-provider-call guard.
+    with model_provider.bind_profile(None):
+        instruction_set = build_concepts.instruction_architect.ensure_instruction_set(
+            metadata={
+                "board": chapter.board,
+                "grade": chapter.grade,
+                "subject": chapter.subject,
+                "unit": chapter.unit,
+                "chapter_title": chapter.chapter_title,
+                "chapter_id": chapter.id,
+                "chapter_code": chapter.chapter_code,
+                "learning_kind": "Post",
+                "source_book": job.source_book,
             },
-            "board_publication_conventions": "",
-            "publication_label": job.source_book,
-            "chapter_cautions": [],
-        },
-        critic=lambda _payload: {
-            "verdict": "verified", "confidence": 1.0, "issues": [],
-        },
-    )
+            source_text=source,
+            artifact_dir=build_concepts.uploads.source_artifact_directory(job.id),
+            api_call=lambda *_args, **_kwargs: {
+                "subject_topology_guidance": "Follow the source topic T.",
+                "grade_band_vocabulary": "Use the source terminology.",
+                "language_mode": {
+                    "mode": "expository", "rationale": "A source explanation.",
+                },
+                "board_publication_conventions": "",
+                "publication_label": job.source_book,
+                "chapter_cautions": [],
+            },
+            critic=lambda _payload: {
+                "verdict": "verified", "confidence": 1.0, "issues": [],
+            },
+        )
     instruction_hash = instruction_set["instruction_set_sha256"]
 
     details = (
@@ -689,9 +754,14 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
         release_contract.release_refiner, "refine_release",
         lambda rows, **_kwargs: (copy.deepcopy(rows), {"changes": []}, []),
     )
+    master_calls = []
+
+    def masters_not_started(*args, **kwargs):
+        master_calls.append((args, kwargs))
+        return {}
+
     monkeypatch.setattr(
-        release_contract, "_build_master_siblings",
-        lambda *_args, **_kwargs: {},
+        release_contract, "_build_master_siblings", masters_not_started,
     )
     def prepare_grounded(current):
         grounded = copy.deepcopy(current)
@@ -865,6 +935,11 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     refused = client.post(first_result["database_upload_url"])
     assert refused.status_code == 400
     assert "terminal" in refused.json()["detail"]
+    # The incomplete first attempt is allowed to record its unavailable
+    # Master seam. The successful retry now pauses at the explicit Concept
+    # review gate, so no new Master authoring may begin until review accepts
+    # the staged Concept files.
+    master_calls.clear()
 
     db.expire_all()
     saved = db.get(models.UploadJob, job.id)
@@ -910,6 +985,14 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     assert result["job_id"] == job.id
     assert accepted[0][0] == "Prior-stage concept"
     assert result["released"] is True
+    assert result["review_required"] is True
+    assert result["concept_review"]["status"] == "pending_review"
+    assert result["all_four_outputs_ready"] is False
+    assert all(
+        not output["ready"]
+        for output in result["master_outputs"].values()
+    )
+    assert master_calls == []
     assert "run_incomplete" not in result
     assert result["database_uploaded"] is False
     assert result["row_count"] == 2
@@ -921,9 +1004,14 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
     assert client.get(result["release_bulk_import_url"]).status_code == 200
     db.expire_all()
     completed = db.get(models.UploadJob, job.id)
-    assert completed.status == "released"
-    # Staging retains the terminal receipt for diagnostics; publication is
-    # still a separate act and the upload cannot restart a completed run.
+    assert completed.status == "concept_review"
+    review_state = completed.question_inventory.get(
+        release_contract.release.CONCEPT_REVIEW_KEY
+    )
+    assert review_state["status"] == "pending_review"
+    assert review_state["master_outputs"] == {}
+    # Staging retains the terminal receipt for diagnostics; Master authoring
+    # is a separate act after the reviewer accepts the Concept files.
     assert completed.generation_checkpoint["stage"] == "final_content_ready"
     assert completed.generation_checkpoint["instruction_set_sha256"] == (
         instruction_hash
@@ -943,13 +1031,19 @@ def test_post_learning_api_discards_invalid_final_and_completes_retry_without_ap
 
     completed_status = client.get(
         f"/build-concepts/uploads/{job.id}").json()
-    assert completed_status["checkpoint_available"] is False
+    # The terminal Concept receipt remains resumable as a review-gated run;
+    # its checkpoint is available for the explicit Concept review/Master
+    # lifecycle even though generation itself completed.
+    assert completed_status["checkpoint_available"] is True
     assert completed_status["checkpoint_stage"] == "final_content_ready"
     assert completed_status["checkpoint_progress"] == 0.98
-    assert client.post(
+    retry_response = client.post(
         f"/build-concepts/post-learning/uploads/{job.id}/generate",
         json={"target_chapter_id": chapter.id},
-    ).status_code == 409
+    )
+    assert retry_response.status_code == 200
+    retry_result = stream_result(retry_response)
+    assert retry_result["all_four_outputs_ready"] is False, retry_result
 
 
 def test_post_learning_preserves_invalid_checkpoint_and_requires_start_over(

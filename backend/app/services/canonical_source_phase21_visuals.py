@@ -455,6 +455,54 @@ def orphan_figure_issues(canonical: dict[str, Any]) -> list[dict[str, Any]]:
             task.get("display_figure_refs") or task.get("figure_refs") or []
         )
     }
+    tables_by_id = {
+        str(block.get("block_id") or ""): block
+        for block in canonical.get("blocks") or []
+        if isinstance(block, dict) and block.get("kind") == "table"
+        and block.get("asset_scope") == "full_table"
+    }
+    figures_by_id = {
+        str(figure.get("figure_id") or ""): figure
+        for figure in canonical.get("figures") or [] if isinstance(figure, dict)
+    }
+    blocks_by_id = {
+        str(block.get("block_id") or ""): block
+        for block in canonical.get("blocks") or [] if isinstance(block, dict)
+    }
+    for task in canonical.get("tasks") or []:
+        if not isinstance(task, dict):
+            continue
+        rendered_urls = {match.group("src") for match in _IMAGE_TAG_RE.finditer(str(task.get("shared_context") or ""))}
+        for context in (task.get("content_objects") or {}).get("shared_context_blocks") or []:
+            if not isinstance(context, dict):
+                continue
+            table = tables_by_id.get(str(context.get("block_id") or ""))
+            if (not table or context.get("asset_scope") != "full_table"
+                    or not table.get("asset_url")
+                    or context.get("asset_url") != table["asset_url"]
+                    or table["asset_url"] not in rendered_urls):
+                continue
+            # Exact recorded cell ownership plus the rendered complete table
+            # accounts for a child image; keeping an unused URL in an audit
+            # never makes an orphan learner image acceptable.
+            for visual in table.get("table_cell_visuals") or []:
+                if isinstance(visual, dict) and visual.get("asset_url") and any(
+                    isinstance(ref, dict) and all(ref.get(key) == visual.get(key) for key in ("row_index", "column_index", "figure_ref"))
+                    for ref in table.get("table_cell_visual_refs") or []
+                ):
+                    figure_id = str(visual.get("figure_id") or "")
+                    figure = figures_by_id.get(figure_id, {})
+                    block_id = str(visual.get("block_id") or "")
+                    block = blocks_by_id.get(block_id, {})
+                    # Content hashes identify bytes, not source occurrences.
+                    # The same symbol printed under another task is a distinct
+                    # obligation, even when both crops have the same URL.
+                    if (figure_id and block_id and figure.get("block_id") == block_id
+                            and block.get("kind") == "figure"
+                            and figure.get("source_page_block_ref") == visual.get("figure_ref")
+                            and block.get("source_page_block_ref") == visual.get("figure_ref")
+                            and visual["asset_url"] in (figure.get("image_urls") or [])):
+                        owned_figures.add(figure_id)
     figure_by_block = {
         str(figure.get("block_id") or ""): figure
         for figure in canonical.get("figures") or []

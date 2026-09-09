@@ -125,7 +125,7 @@ def test_post_questions_are_the_sources_wording_verbatim_by_rule():
     # The retired latitude is gone from the author's rules.
     assert "write a clear, complete, self-contained item" not in rules
     assert assessment_materialization.MATERIALIZE_POLICY_VERSION == (
-        "assessment-materialize-15-column-spec"
+        "assessment-materialize-16-selection-mode"
     )
     critic = assessment_materialization.MATERIALIZE_CRITIC_SYSTEM
     assert "source wording" in critic

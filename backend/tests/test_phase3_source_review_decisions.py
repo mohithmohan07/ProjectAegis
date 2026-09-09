@@ -872,6 +872,9 @@ def test_prepare_turns_exact_generic_rich_text_failure_into_one_decision(
                 "section_id": row["section_id"],
                 "role": row["baseline_role"],
                 "parent_section_id": "",
+                "topic_display_name": (
+                    row["title"] if row["baseline_role"] == "main_topic" else ""
+                ),
                 "confidence": 0.999,
                 "evidence": ["verified test hierarchy"],
             } for row in payload["sections"]]
@@ -1673,8 +1676,19 @@ def test_pending_source_review_preserves_usage_and_repeat_generate_is_free(
         for key in expected
     } == expected
     # A free replay preserves charges while recording the time spent serving it.
-    assert {key: value for key, value in job.openai_usage.items() if key != "elapsed_seconds"} == {
-        key: value for key, value in durable_before.items() if key != "elapsed_seconds"
+    dynamic_timing_fields = {
+        "elapsed_seconds",
+        "active_elapsed_seconds",
+        "review_wait_seconds",
+        "wall_elapsed_seconds",
+        "stage_timings",
+    }
+    assert {
+        key: value for key, value in job.openai_usage.items()
+        if key not in dynamic_timing_fields
+    } == {
+        key: value for key, value in durable_before.items()
+        if key not in dynamic_timing_fields
     }
     assert job.openai_usage["elapsed_seconds"] >= durable_before["elapsed_seconds"]
 

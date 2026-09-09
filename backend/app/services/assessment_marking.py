@@ -24,6 +24,7 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_response_policy as response_policy
 from . import column_spec
 from .response_schemas import advisory_critic_schema
 from . import assessment_visual_evidence as visual_evidence
@@ -75,8 +76,11 @@ MARKING_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUALITY 
     "subpoints and make duration its exact prescribed multiple; otherwise "
     "return duration_basis_count as null. For a marks-matrix rule, read the "
     "minutes under the cell's mark tier and then its difficulty.\n"
-    "For Objective, exactly one correct option receives the cell's total "
-    "marks and every wrong option receives exact zero. For Subjective, every "
+    "For Objective, follow the explicit blueprint selection_mode. In single "
+    "mode exactly one correct option receives the cell's total marks; in "
+    "multiple mode every correct option receives a positive authored share "
+    "and all shares together sum exactly to the cell's total marks. Every "
+    "wrong option receives exact zero in either mode. For Subjective, every "
     "expected-answer weight is positive and their exact sum is the cell "
     "total. For a single-part Descriptive item, every answer/rubric weight is "
     "positive and their exact sum is the cell total. A 4-mark single-part "
@@ -116,7 +120,8 @@ MARKING_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALI
     "keyboard mode against the complete finalized candidate, its adopted "
     "Open/Specific answer-space contract, metadata, and the supplied explicit "
     "blueprint cell. Check semantic preservation, scoring coverage, correct "
-    "option treatment, exact arithmetic, grade fit, duration, and whether a "
+    "option treatment under the cell's explicit single or multiple "
+    "selection_mode, exact arithmetic, grade fit, duration, and whether a "
     "math keyboard is actually needed. Verify that represented working and "
     "diagram contributions receive explicit marks, every represented "
     "subquestion matches the stem, and redundant steps receive no marks. "
@@ -442,6 +447,29 @@ def _prepare_pair(
             f"marking candidate {candidate_id!r} sheet_kind differs from "
             f"explicit blueprint cell {cell_id!r}"
         )
+    cell_selection_mode = str(cell.get("selection_mode") or "").strip()
+    candidate_selection_mode = str(
+        candidate.get("selection_mode") or ""
+    ).strip()
+    for mode, owner in (
+        (cell_selection_mode, "blueprint cell"),
+        (candidate_selection_mode, "candidate"),
+    ):
+        if mode and mode not in response_policy.SELECTION_MODES:
+            raise MarkingError(
+                f"marking {owner} {cell_id!r} has unsupported "
+                f"selection_mode {mode!r}"
+            )
+    if kind != "objective" and (cell_selection_mode or candidate_selection_mode):
+        raise MarkingError(
+            f"marking non-Objective candidate {candidate_id!r} must keep "
+            "selection_mode blank"
+        )
+    if cell_selection_mode != candidate_selection_mode:
+        raise MarkingError(
+            f"marking candidate {candidate_id!r} selection_mode differs from "
+            f"explicit blueprint cell {cell_id!r}"
+        )
     for field in ("question_category", "cognitive_skill", "difficulty"):
         if candidate.get(field) != cell.get(field):
             raise MarkingError(
@@ -486,7 +514,13 @@ def _prepare_pair(
             for answer in candidate.get("answers") or []
             if rel.is_correct_option(answer.get("correct_answer"))
         )
-        if correct_count != 1:
+        if cell_selection_mode == "multiple" and correct_count < 2:
+            raise MarkingError(
+                f"objective marking candidate {candidate_id!r} requires "
+                f"at least two correct options in multiple selection mode "
+                f"(got {correct_count})"
+            )
+        if cell_selection_mode != "multiple" and correct_count != 1:
             raise MarkingError(
                 f"objective marking candidate {candidate_id!r} requires "
                 f"exactly one correct option (got {correct_count})"
@@ -550,7 +584,7 @@ def _semantic_subquestions(value: Any) -> list[dict[str, Any]] | None:
 def _weight_defects(
     response: Mapping[str, Any], *, kind: str, total_marks: Decimal,
     marks_rule: Mapping[str, Any],
-    half_step: bool = False,
+    half_step: bool = False, selection_mode: str = "",
 ) -> list[str]:
     defects: list[str] = []
     answers = response.get("answers")
@@ -559,13 +593,23 @@ def _weight_defects(
 
     answer_weights: list[Decimal] = []
     if kind == "objective":
+        selection_mode = str(selection_mode or "").strip()
+        if selection_mode not in ("", *response_policy.SELECTION_MODES):
+            defects.append(
+                f"objective selection_mode {selection_mode!r} is unsupported"
+            )
         correct_positions = [
             position
             for position, answer in enumerate(answers, start=1)
             if isinstance(answer, Mapping)
             and rel.is_correct_option(answer.get("correct_answer"))
         ]
-        if len(correct_positions) != 1:
+        if selection_mode == "multiple" and len(correct_positions) < 2:
+            defects.append(
+                "objective multiple selection requires at least two correct "
+                f"options (got {len(correct_positions)})"
+            )
+        elif selection_mode != "multiple" and len(correct_positions) != 1:
             defects.append(
                 f"objective requires exactly one correct option "
                 f"(got {len(correct_positions)})"
@@ -581,7 +625,11 @@ def _weight_defects(
                 continue
             answer_weights.append(weight)
             if position in correct_positions:
-                if weight <= 0 or weight != total_marks:
+                if weight <= 0:
+                    defects.append(
+                        f"correct option {position} weight must be positive"
+                    )
+                elif selection_mode != "multiple" and weight != total_marks:
                     defects.append(
                         f"correct option {position} weight must equal total "
                         f"marks {total_marks}"
@@ -829,6 +877,7 @@ def _checker(
     column_policy: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
     column_policy = column_policy or {}
+    selection_mode = str(candidate.get("selection_mode") or "").strip()
     candidate_evidence = _content_evidence(candidate)
     expected_answers = _semantic_answers(candidate_evidence.get("answers"))
     expected_subquestions = _semantic_subquestions(
@@ -1022,6 +1071,7 @@ def _checker(
                 total_marks=total_marks,
                 marks_rule=marks_rule,
                 half_step=bool(column_policy.get("rubric_half_step")),
+                selection_mode=selection_mode,
             )
         )
         return defects

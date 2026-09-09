@@ -41,6 +41,7 @@ from . import katex_rules as kr
 from . import progress
 from . import semantic_confidence_policy as confidence_policy
 from . import semantic_recovery
+from . import source_topic_policy
 
 PHASE = "phase-3-semantic-graph"
 SCHEMA_NAME = "Aegis Universal Semantic Source Graph"
@@ -535,6 +536,10 @@ def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
     instruction = str(metadata.get("instruction_set_sha256") or "").strip()
     if instruction:
         identity["instruction_set_sha256"] = instruction
+    if "model_routing_policy" in metadata:
+        identity["model_routing_policy"] = copy.deepcopy(
+            metadata["model_routing_policy"]
+        )
     return _sha256_json(identity)
 
 
@@ -1025,6 +1030,8 @@ def _classification_payload(
             "unit": str(metadata.get("unit") or ""),
             "chapter": str(metadata.get("chapter_title") or ""),
             "subject_adapter": subject_adapter(metadata.get("subject")),
+            **({"source_topic_policy_version": metadata["source_topic_policy_version"]}
+               if source_topic_policy.enabled(metadata) else {}),
         },
         "sections": sections,
         "verified_pdf_headings": _vision_heading_evidence(page_bundle),
@@ -1137,11 +1144,17 @@ def _classify_hierarchy_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "boxes, review questions, and editorial labels are never main topics. "
         "Preserve the chapter's physical order. Return every section exactly once."
     )
+    policy_active = source_topic_policy.enabled(payload.get("metadata"))
+    if policy_active:
+        system += "\n" + source_topic_policy.SOURCE_TOPIC_POLICY
+        system += "\n" + source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
     return phase22._openai_multimodal_json(
         system=system,
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         pages=[],
-        response_schema=_hierarchy_response_schema(section_ids),
+        response_schema=source_topic_policy.hierarchy_schema(
+            _hierarchy_response_schema(section_ids), active=policy_active,
+        ),
         purpose="concept_mapping",
         max_tokens=max(6000, min(24000, len(section_ids) * 260)),
     )
@@ -1156,11 +1169,17 @@ def _critic_hierarchy_via_openai(payload: dict[str, Any]) -> dict[str, Any]:
         "topic, and any order drift. Use only supplied IDs and allowed roles. "
         "Return repairs only when source evidence supports them."
     )
+    policy_active = source_topic_policy.enabled(payload.get("metadata"))
+    if policy_active:
+        system += "\n" + source_topic_policy.SOURCE_TOPIC_POLICY
+        system += "\n" + source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
     return phase22._openai_multimodal_json(
         system=system,
         prompt=json.dumps(payload, ensure_ascii=False, indent=2),
         pages=[],
-        response_schema=_hierarchy_critic_schema(section_ids),
+        response_schema=source_topic_policy.hierarchy_schema(
+            _hierarchy_critic_schema(section_ids), active=policy_active,
+        ),
         purpose="advisory_critic",
         max_tokens=max(4000, min(16000, len(section_ids) * 180)),
     )
@@ -1231,6 +1250,8 @@ def _apply_critic_repairs(
             raise ValueError("Phase 3 hierarchy critic invented a section ID")
         repaired[section_id]["role"] = str(row.get("role") or repaired[section_id]["role"])
         repaired[section_id]["parent_section_id"] = str(row.get("parent_section_id") or "")
+        if "topic_display_name" in row:
+            repaired[section_id]["topic_display_name"] = str(row["topic_display_name"])
         repaired[section_id]["critic_reason"] = str(row.get("reason") or "")
     repairs = [row for row in critic.get("repairs") or [] if isinstance(row, dict)]
     if issues and not repairs:
@@ -1590,11 +1611,17 @@ def compile_semantic_graph(
             advisory_issues.extend(critic_advisory_issues)
             classification_mode = "api_classified_and_verified"
 
-    # The source numbering contract outranks semantic model drift.
+    # Fresh policy-bound API decisions own meaning; recorded source numbering
+    # remains provenance. Unversioned/historical compiles retain their contract.
+    semantic_topic_ownership = (
+        source_topic_policy.enabled(metadata) and hierarchy_provider is not None
+    )
     _forced_structural_roles(
         canonical,
         classifications,
-        numbered_hierarchy_active=numbered_hierarchy_active,
+        numbered_hierarchy_active=(
+            numbered_hierarchy_active and not semantic_topic_ownership
+        ),
         # Unnumbered parser results are candidates, not semantic authority. They
         # remain deterministic fallbacks only when no hierarchy API was used.
         fallback_main_section_ids=(
@@ -1611,7 +1638,7 @@ def compile_semantic_graph(
                     "publisher-neutral fallback heading hierarchy"
                 ]
     for section in sections:
-        if section.get("phase3_virtual"):
+        if section.get("phase3_virtual") and not semantic_topic_ownership:
             sid = str(section.get("section_id") or "")
             classifications[sid] = {
                 "section_id": sid,
@@ -1667,6 +1694,13 @@ def compile_semantic_graph(
             number = str(numbered_binding.get("number") or number)
             title = str(numbered_binding.get("expected_title") or title)
         title = _plain_title(title or section.get("title")) or f"Topic {index}"
+        if semantic_topic_ownership:
+            authored_title = classifications[section_id].get("topic_display_name")
+            if not isinstance(authored_title, str) or not authored_title.strip():
+                raise ValueError(
+                    f"source topic {section_id} has no API-authored display name"
+                )
+            title = authored_title.strip()
         topic = {
             "topic_id": f"TOPIC-{index:04d}",
             "order": index,
@@ -1714,6 +1748,19 @@ def compile_semantic_graph(
         prior = [row for row in topics if int(row["source_start"]) <= position]
         return prior[-1] if prior else topics[0]
 
+    def topic_for_declared_ancestry(section_id: str) -> dict[str, Any] | None:
+        """Follow only recorded parent IDs, never heading text or proximity."""
+        seen: set[str] = set()
+        current = section_id
+        while current and current not in seen:
+            if current in topic_by_section:
+                return topic_by_section[current]
+            seen.add(current)
+            current = str((classifications.get(current) or {}).get("parent_section_id") or "")
+        if current:
+            raise ValueError("source hierarchy contains a cyclic parent-section binding")
+        return None
+
     # Build stable subtopic nodes. Numbered ancestry is authoritative; API may
     # also identify unnumbered pedagogical subtopics.
     subtopic_sections = [
@@ -1729,7 +1776,10 @@ def compile_semantic_graph(
     for section in subtopic_sections:
         sid = str(section.get("section_id") or "")
         parent_sid = str(classifications[sid].get("parent_section_id") or "")
-        parent_topic = topic_by_section.get(parent_sid)
+        parent_topic = (
+            topic_for_declared_ancestry(parent_sid)
+            if semantic_topic_ownership else topic_by_section.get(parent_sid)
+        )
         if parent_topic is None:
             parent_topic = topic_for_position(int(section.get("source_start") or 0))
         counts_by_topic[parent_topic["topic_id"]] = counts_by_topic.get(
@@ -1770,7 +1820,12 @@ def compile_semantic_graph(
     for section in sections:
         sid = str(section.get("section_id") or "")
         position = int(section.get("source_start") or 0)
-        topic = topic_by_section.get(sid) or topic_for_position(position)
+        parent_sid = str(classifications[sid].get("parent_section_id") or "")
+        topic = (
+            topic_by_section.get(sid)
+            or (topic_for_declared_ancestry(parent_sid) if semantic_topic_ownership else None)
+            or topic_for_position(position)
+        )
         subtopic = subtopic_by_section.get(sid) or subtopic_for_position(
             topic["topic_id"], position
         )
@@ -1789,6 +1844,9 @@ def compile_semantic_graph(
             "parent_section_id": str(classifications[sid].get("parent_section_id") or ""),
             "confidence": float(classifications[sid].get("confidence") or 0.0),
             "evidence": list(classifications[sid].get("evidence") or []),
+            **({"topic_display_name": str(
+                classifications[sid].get("topic_display_name") or ""
+            )} if semantic_topic_ownership else {}),
             "phase3_virtual": bool(section.get("phase3_virtual")),
             "phase3_numbered_projection": bool(
                 section.get("phase3_numbered_projection")
@@ -1978,6 +2036,10 @@ def _clean_table(value: str, *, flatten: bool = False) -> str:
     parse or patch individual cells pass ``flatten=True`` for pipe rows.
     """
     text = str(value or "")
+    if not flatten:
+        # A public display cannot discard spanning instructions or table
+        # boundaries. Unsupported structures remain whole for API repair.
+        return structure.normalize_task_table_markup(text)
     # Preserve the learner-visible cell content of common publisher layout
     # macros while discarding only their row/column spanning instructions.
     text = re.sub(
@@ -1993,11 +2055,7 @@ def _clean_table(value: str, *, flatten: bool = False) -> str:
         flags=re.I,
     )
     text = re.sub(r"\\cline\{[^{}]*\}", "\n", text, flags=re.I)
-    text = (
-        structure.flatten_table_markup(text)
-        if flatten
-        else structure.normalize_task_table_markup(text)
-    )
+    text = structure.flatten_table_markup(text)
     text = _TABLE_BEGIN_RE.sub("\n", text)
     return text
 
@@ -2143,8 +2201,14 @@ def _clean_public_text(
     code_protected: list[tuple[str, str]] = []
     if preserve_markdown_code:
         text, code_protected = _protect_markdown_code(text)
+    # Render the complete table before masking its math/images. Encoding a
+    # masked token as a KaTeX text atom would prevent its exact restoration.
+    text = _clean_table(text)
+    # Protect remaining unsupported table spans while still normalizing
+    # unrelated prose and cross-block formulas around them.
+    text, table_protected = kr._protect_table_markup(text)
     text, protected = _protect_rich_tokens(text)
-    text = _clean_list(_clean_table(text))
+    text = _clean_list(text)
     text = _LAYOUT_COMMAND_RE.sub(" ", text)
     text = _ENV_RE.sub("\n", text)
     text = re.sub(r"\\(?:section|subsection|subsubsection|chapter)\*?\{([^{}]*)\}", r"\1", text)
@@ -2163,11 +2227,17 @@ def _clean_public_text(
         repaired = kr.repair_unwrapped_math(text)
         if not kr.rich_text_issues(repaired):
             text = repaired
-    # Any residual layout/control command is not learner-visible source text.
+    # Layout cleanup applies only outside rich tokens: array rules and
+    # supported math spacing are part of the authored table, not furniture.
+    text, final_protected = _protect_rich_tokens(text)
     text = re.sub(r"\\(?:hline|vspace|hspace|noindent|smallskip|medskip|bigskip)\b", " ", text)
     lines = [re.sub(r"[ \t]+", " ", line).strip() for line in text.splitlines()]
     text = "\n".join(line for line in lines if line).strip()
-    return _restore_markdown_code(text, code_protected)
+    return _restore_markdown_code(
+        kr._restore_table_markup(
+            _restore_rich_tokens(text, final_protected), table_protected,
+        ), code_protected,
+    )
 
 
 def _graph_block_text(
@@ -2455,6 +2525,10 @@ def _candidate_anomaly_packet(
             "text": str(block.get("text") or ""),
             "latex": str(block.get("latex") or ""),
             "table_rows": copy.deepcopy(block.get("table_rows") or []),
+            "table_cell_visual_refs": copy.deepcopy(block.get("table_cell_visual_refs") or []),
+            "asset_scope": str(block.get("asset_scope") or ""),
+            "asset_url": str(block.get("asset_url") or ""),
+            "asset_bbox": copy.deepcopy(block.get("asset_bbox") or []),
             "linked_visual_orders": [
                 int(value) for value in block.get("linked_visual_orders") or []
             ],
@@ -2469,14 +2543,17 @@ def _candidate_anomaly_packet(
             "kind": canonical_kind,
             "source_start": int(canonical_block.get("source_start") or 0),
             "source_end": int(canonical_block.get("source_end") or 0),
-            "raw_text": source_text[:10000],
+            "raw_text": source_text,
         },
         "candidate_blocks": candidate_blocks,
         "candidate_page_numbers": sorted(candidate_page_numbers),
         "instruction": (
             "Select the one already-verified original-PDF page block that "
             "contains the visible source evidence needed to replace the "
-            "converter-only semantic markup. Do not write replacement text."
+            "converter-only semantic markup. For a table, select a full_table "
+            "asset only when its complete crop preserves every source header, "
+            "row, column, blank and required visual; a single symbol or partial "
+            "table cannot replace the whole source table. Do not write replacement text."
         ),
     }
 
@@ -2723,7 +2800,19 @@ def _patch_suspicious_table(
             patched_any = True
     if not patched_any:
         raise ValueError("canonical table no longer contains the reported anomaly")
-    return "\n".join(" | ".join(row) for row in canonical_rows)
+    rendered = kr._table_array(canonical_rows, "c" * len(canonical_rows[0]))
+    if rendered is None:
+        raise ValueError("verified visual or spanning table requires a complete table crop")
+    return rendered
+
+
+def _full_table_asset(block: dict[str, Any]) -> str:
+    if block.get("kind") != "table" or block.get("asset_scope") != "full_table":
+        return ""
+    url = str(block.get("asset_url") or "").strip()
+    if not url:
+        return ""
+    return kr.image(url, str(block.get("caption") or "Complete source table"))
 
 
 def _render_verified_page_block(
@@ -2731,10 +2820,15 @@ def _render_verified_page_block(
 ) -> str:
     kind = str(block.get("kind") or "")
     if kind == "table":
-        return "\n".join(
-            " | ".join(_render_page_cell(cell, page) for cell in row)
-            for row in block.get("table_rows") or []
-        )
+        full_image = _full_table_asset(block)
+        if full_image:
+            return full_image
+        rows = [[_render_page_cell(cell, page) for cell in row]
+                for row in block.get("table_rows") or []]
+        rendered = kr._table_array(rows, "c" * len(rows[0])) if rows else None
+        if rendered is None:
+            raise ValueError("verified visual or spanning table requires a complete table crop")
+        return rendered
     if kind == "math":
         latex = str(block.get("latex") or "").strip()
         return kr.katex(latex) if latex else ""
@@ -2762,7 +2856,7 @@ def _resolve_verified_page_candidate(
         if selected_block.get("kind") != "table":
             raise ValueError(
                 "table anomaly must be resolved by a verified table block")
-        resolved = _patch_suspicious_table(
+        resolved = _full_table_asset(selected_block) or _patch_suspicious_table(
             canonical_text,
             selected_block=selected_block,
             selected_page=selected_page,
@@ -4780,6 +4874,13 @@ def _numbered_main_topic_mismatches(
     """Return structured numbered-topic drift without parsing error prose."""
 
     bindings = _numbered_main_binding_rows(canonical)
+    semantic_topics = source_topic_policy.enabled(graph.get("metadata")) and str(
+        graph.get("classification_mode") or ""
+    ).startswith("api_classified")
+    semantic_sections = {
+        str(row.get("section_id") or ""): row
+        for row in graph.get("sections") or [] if isinstance(row, dict)
+    }
     if len(bindings) < 2:
         return []
     topics = [
@@ -4804,14 +4905,24 @@ def _numbered_main_topic_mismatches(
     for binding in bindings:
         section_id = str(binding.get("resolved_section_id") or "")
         expected_title = str(binding.get("expected_title") or "").strip()
+        recorded_section = semantic_sections.get(section_id, {})
+        expects_topic = not semantic_topics or recorded_section.get("role") == "main_topic"
+        if semantic_topics and expects_topic:
+            expected_title = str(recorded_section.get("topic_display_name") or "").strip()
         expected_number = str(binding.get("number") or "")
         section_topics = topics_by_section.get(section_id, [])
         topic = section_topics[0] if len(section_topics) == 1 else None
         reasons: list[str] = []
+        if semantic_topics and not recorded_section:
+            reasons.append("missing_recorded_section_decision")
+        if semantic_topics and expects_topic and not expected_title:
+            reasons.append("missing_recorded_topic_display_name")
         if not section_id or binding_counts.get(section_id, 0) != 1:
             reasons.append("non_unique_canonical_section_binding")
-        if len(section_topics) != 1:
+        if expects_topic and len(section_topics) != 1:
             reasons.append("missing_or_duplicate_topic_for_section")
+        elif not expects_topic and section_topics:
+            reasons.append("topic_conflicts_with_recorded_section_role")
         if isinstance(topic, dict) and (
             _semantic_title_key(topic.get("title"))
             != _semantic_title_key(expected_title)
@@ -4845,6 +4956,8 @@ def _numbered_main_topic_mismatches(
                 != str(topic.get("topic_id") or "")
             ):
                 reasons.append("heading_block_topic_mismatch")
+        if not expects_topic and not reasons:
+            continue
         if (
             isinstance(topic, dict)
             and not reasons
@@ -4916,6 +5029,26 @@ def validate_graph(
         str(row.get("qid") or "") for row in canonical.get("tasks") or []
         if isinstance(row, dict)
     }
+    if source_topic_policy.enabled(graph.get("metadata")) and str(
+        graph.get("classification_mode") or ""
+    ).startswith("api_classified"):
+        decisions = {
+            str(row.get("section_id") or ""): row
+            for row in graph.get("sections") or [] if isinstance(row, dict)
+        }
+        for topic in graph.get("topics") or []:
+            sid = str(topic.get("section_id") or "")
+            decision = decisions.get(sid)
+            if sid == "PHASE3-SYNTHETIC-TOPIC":
+                continue
+            if not decision or decision.get("role") != "main_topic" or (
+                str(topic.get("title") or "")
+                != str(decision.get("topic_display_name") or "").strip()
+            ):
+                errors.append({
+                    "severity": "error", "code": "source_topic_decision_mismatch",
+                    "message": f"Topic {topic.get('topic_id')} differs from its recorded API section decision.",
+                })
     # Two or more numbered main headings are unambiguous chapter-topology
     # evidence. Every one must retain its own graph topic. A stale block-to-
     # section association is rebound from exact canonical evidence above; this
@@ -6979,6 +7112,13 @@ def prepare_generation_graph(
         _critic_hierarchy_via_openai
         if verify_semantics and semantic_api_enabled() else None
     )
+    # All replay/review-return paths precede this point. Only a genuinely new
+    # hierarchy decision adopts the latest topic-ownership policy.
+    if hierarchy_provider is not None:
+        metadata = {
+            **(metadata or {}),
+            "source_topic_policy_version": source_topic_policy.SOURCE_TOPIC_POLICY_VERSION,
+        }
     graph, report = compile_semantic_graph(
         canonical,
         source_text=source_text,

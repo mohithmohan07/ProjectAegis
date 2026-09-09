@@ -31,6 +31,7 @@ from . import (
 )
 from . import layouts
 from . import assessment_workbook as workbook_contract
+from .presentation import is_equation_field
 from .layouts import WorkbookLayoutError  # noqa: F401  (re-exported for api)
 from .. import models
 from ..services import assessment_profile
@@ -51,9 +52,12 @@ def _block(
     Every reader of a data cell goes through this so a re-imported
     generated workbook round-trips byte-for-byte on the model side.
     """
+    record = sheet_layout.block_values(row, block)
     return {
-        field: from_workbook_rich_text(value)
-        for field, value in sheet_layout.block_values(row, block).items()
+        field: from_workbook_rich_text(
+            value, raw_equation=is_equation_field(field, record),
+        )
+        for field, value in record.items()
     }
 
 

@@ -270,7 +270,7 @@ def test_non_resumable_pdf_cannot_bypass_through_installed_reader(
     assert job.openai_usage == {}
 
 
-def test_ordinary_concept_upload_can_still_replace_and_convert(client):
+def test_ordinary_concept_upload_can_still_replace_and_convert(client, db):
     staged = client.post(
         "/build-concepts/post-learning/uploads",
         files={"file": ("first.txt", io.BytesIO(b"first"), "text/plain")},
@@ -289,3 +289,10 @@ def test_ordinary_concept_upload_can_still_replace_and_convert(client):
     result = convert_concept_upload(client, staged["id"])
     assert result["status"] == "converted"
     assert "allowed" in result["mmd_text"]
+    from app.services import model_provider, model_routing_run
+
+    job = db.get(models.UploadJob, staged["id"])
+    db.refresh(job)
+    # The installed source-shadow compiler clears its artifact directory.
+    # The new run's routing receipt must survive that conversion cleanup.
+    assert model_routing_run.profile_for_job(job) == model_provider.new_profile()

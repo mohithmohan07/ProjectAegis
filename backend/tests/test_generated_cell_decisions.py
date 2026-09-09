@@ -191,6 +191,7 @@ def _cell_verdict_author(payload):
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 2,
+        "selection_mode": "",
         "rationale": "a recall prerequisite answered in a short phrase",
     }
 

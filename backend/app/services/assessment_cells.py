@@ -20,11 +20,12 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_response_policy as response_policy
 from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 
-CELL_POLICY_VERSION = "assessment-cell-3-column-spec"
+CELL_POLICY_VERSION = "assessment-cell-4-response-mechanism-sop-2026-09-09"
 
 CELL_SYSTEM = (
     column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-cell author. For ONE source-owned question "
@@ -37,6 +38,8 @@ CELL_SYSTEM = (
     "categories, skills, difficulties, or marks. The no-local-fallback "
     "invariant applies; give your evidence-bound verdict rather than applying "
     "a default.\n"
+    + response_policy.AUTHOR_RULES
+    + "\n"
     "sheet_kind must be one of the exact values supplied under "
     "profile.allowed_sheet_kinds. question_category must be one exact key "
     "supplied for that sheet under "
@@ -55,10 +58,13 @@ CELL_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"source_qid":"","sheet_kind":"","question_category":"",'
     '"cognitive_skill":"","difficulty":"","marks":1,'
+    '"selection_mode":"single|multiple|",'
     '"rationale":"evidence-bound reason"}')
 )
 
-GENERATED_CELL_POLICY_VERSION = "assessment-generated-cell-3-column-spec"
+GENERATED_CELL_POLICY_VERSION = (
+    "assessment-generated-cell-4-response-mechanism-sop-2026-09-09"
+)
 
 GENERATED_CELL_SYSTEM = (
     column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-cell author for ONE GENERATED "
@@ -75,6 +81,8 @@ GENERATED_CELL_SYSTEM = (
     "categories, skills, difficulties, or marks. The no-local-fallback "
     "invariant applies; give your evidence-bound verdict rather than "
     "applying a default.\n"
+    + response_policy.AUTHOR_RULES
+    + "\n"
     "sheet_kind must be one of the exact values supplied under "
     "profile.allowed_sheet_kinds. question_category must be one exact key "
     "supplied for that sheet under "
@@ -91,6 +99,7 @@ GENERATED_CELL_SYSTEM = (
     "Return ONLY strict JSON:\n"
     '{"pre_question_id":"","sheet_kind":"","question_category":"",'
     '"cognitive_skill":"","difficulty":"","marks":1,'
+    '"selection_mode":"single|multiple|",'
     '"rationale":"evidence-bound reason"}')
 )
 
@@ -99,7 +108,9 @@ GENERATED_CELL_CRITIC_SYSTEM = (
     "verdict over a GENERATED pre-learning question. Audit the proposed "
     "sheet kind, category, cognitive skill, difficulty, and marks against "
     "the complete question, its answer, its rationale, the pre-learning "
-    "concept it checks, the metadata, and the active profile. Never infer "
+    "concept it checks, the metadata, and the active profile.\n"
+    + response_policy.CRITIC_RULES
+    + "Never infer "
     "meaning from length or question volume. There is no quota. Do not "
     "revise, gate, retry, or replace the verdict; dissent ships as review "
     "evidence while the recorded verdict stands. State your honest "
@@ -113,7 +124,9 @@ CELL_CRITIC_SYSTEM = (
     "verdict. Audit the proposed sheet kind, category, cognitive skill, "
     "difficulty, and marks against the complete source task, answer evidence, "
     "shared context, alternatives, multipart relationships, assets, metadata, "
-    "and active profile. Never infer meaning from length, print position, "
+    "and active profile.\n"
+    + response_policy.CRITIC_RULES
+    + "Never infer meaning from length, print position, "
     "neighbours, or question volume. There is no quota. Do not revise, gate, "
     "retry, or replace the verdict; dissent ships as review evidence while the "
     "recorded verdict stands. State your honest confidence.\n"
@@ -193,6 +206,7 @@ def _verdict_checker(
     id_value: str,
     allowed_sheet_kinds: tuple[str, ...],
     format_policy: Mapping[str, Any],
+    source_atom: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
     """Mechanics only: identity, required fields, enums, and numeric shape.
 
@@ -213,6 +227,35 @@ def _verdict_checker(
                 f"{allowed_sheet_kinds} (got {response.get('sheet_kind')!r})"
             )
         sheet_kind = str(response.get("sheet_kind") or "")
+        selection_mode = response.get("selection_mode")
+        if not isinstance(selection_mode, str):
+            defects.append("selection_mode must be a string")
+            selection_mode = ""
+        if sheet_kind == "objective":
+            if selection_mode not in response_policy.SELECTION_MODES:
+                defects.append(
+                    "Objective selection_mode must be exactly one of "
+                    f"{response_policy.SELECTION_MODES} "
+                    f"(got {response.get('selection_mode')!r})"
+                )
+            source_options = (
+                source_atom.get("options")
+                if isinstance(source_atom, Mapping)
+                else None
+            )
+            if (
+                isinstance(source_options, list)
+                and source_options
+                and len(source_options) < 2
+            ):
+                defects.append(
+                    "Objective source options must contain at least two "
+                    f"predefined choices (got {len(source_options)})"
+                )
+        elif selection_mode != "":
+            defects.append(
+                "selection_mode must be blank for non-Objective cells"
+            )
         formats_by_sheet = format_policy.get("formats_by_sheet")
         if not isinstance(formats_by_sheet, Mapping):
             formats_by_sheet = {}
@@ -360,9 +403,11 @@ def _cell_checker(
     source_qid: str,
     allowed_sheet_kinds: tuple[str, ...],
     format_policy: Mapping[str, Any],
+    source_atom: Mapping[str, Any] | None = None,
 ) -> kernel.Checker:
     return _verdict_checker(
-        "source_qid", source_qid, allowed_sheet_kinds, format_policy
+        "source_qid", source_qid, allowed_sheet_kinds, format_policy,
+        source_atom,
     )
 
 
@@ -541,7 +586,7 @@ def decide_cells(
             payload=payload,
             provider=provider,
             checker=_cell_checker(
-                source_qid, allowed_sheet_kinds, format_policy
+                source_qid, allowed_sheet_kinds, format_policy, source_atom
             ),
             critic=critic,
             store=store,
@@ -554,6 +599,7 @@ def decide_cells(
             "cell_id": "CELL-" + decision_key[:16],
             "sheet_kind": str(response.get("sheet_kind") or ""),
             "question_category": str(response.get("question_category") or ""),
+            "selection_mode": str(response.get("selection_mode") or ""),
             "cognitive_skill": str(response.get("cognitive_skill") or ""),
             "difficulty": str(response.get("difficulty") or ""),
             "marks": float(response["marks"]),
@@ -763,6 +809,7 @@ def decide_generated_cells(
         return {
             "sheet_kind": str(response.get("sheet_kind") or ""),
             "question_category": str(response.get("question_category") or ""),
+            "selection_mode": str(response.get("selection_mode") or ""),
             "cognitive_skill": str(response.get("cognitive_skill") or ""),
             "difficulty": str(response.get("difficulty") or ""),
             "marks": float(response["marks"]),

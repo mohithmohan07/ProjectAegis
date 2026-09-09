@@ -254,11 +254,14 @@ def test_page_batches_extract_in_parallel_and_assemble_in_order(
 
 def test_build_concepts_pdf_converts_through_the_gpt_reader(
     client,
+    db,
     tmp_path: Path,
     monkeypatch,
 ):
     """A PDF upload reaches canonical source through the reader, end to end."""
     from app import config
+    from app import models
+    from app.services import model_provider, model_routing_run
     from tests.conftest import convert_concept_upload
 
     pdf = tmp_path / "source.pdf"
@@ -271,6 +274,7 @@ def test_build_concepts_pdf_converts_through_the_gpt_reader(
     real_reconstruct = fallback.reconstruct_pdf_to_acsd
 
     def verified_reconstruct(path, **kwargs):
+        assert model_provider.bound_profile() == model_provider.new_profile()
         return real_reconstruct(path, provider=_verified_provider, **kwargs)
 
     monkeypatch.setattr(fallback, "reconstruct_pdf_to_acsd", verified_reconstruct)
@@ -280,6 +284,10 @@ def test_build_concepts_pdf_converts_through_the_gpt_reader(
         files={"file": ("source.pdf", pdf.read_bytes(), "application/pdf")},
     ).json()
     converted = convert_concept_upload(client, job["id"])
+
+    stored_job = db.get(models.UploadJob, job["id"])
+    db.refresh(stored_job)
+    assert model_routing_run.profile_for_job(stored_job) == model_provider.new_profile()
 
     assert converted["conversion_source"] == fallback.FALLBACK_ORIGIN
     reconstruction = converted["source_artifacts"]["source_reconstruction"]

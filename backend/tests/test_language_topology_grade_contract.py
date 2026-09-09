@@ -323,7 +323,7 @@ def test_prompt_preserves_source_faithful_short_prose_and_routing():
     author = " ".join(contract.AUTHOR_SYSTEM.split())
     critic = " ".join(contract.CRITIC_SYSTEM.split())
 
-    assert contract.CONTRACT_VERSION == 5
+    assert contract.CONTRACT_VERSION == 6
     assert "For short prose" in author
     assert "Never re-parent it to a later plot event" in author
     assert "may remain its own source-aligned Topic or concept" in author
@@ -331,6 +331,9 @@ def test_prompt_preserves_source_faithful_short_prose_and_routing():
     assert "short prose has not been split into one unit per minor" in critic
     assert "opening Warm-up re-parented to a later plot event" in critic
     assert "grammar mini-unit buried in story analysis" in critic
+    assert "These dimensions are not a quota" in author
+    assert "matching analytical concept before Culmination" in author
+    assert "Chapter-wide scope alone" in critic
 
 
 def test_adapter_version_rekeys_retired_grouped_stanza_plan_identity(monkeypatch):

@@ -323,6 +323,9 @@ def _blocks_and_sections(
                     block["table_rows"] = copy.deepcopy(
                         page_block.get("table_rows") or []
                     )
+                    for key in ("table_cell_visual_refs", "asset_scope", "asset_url", "asset_filename", "asset_bbox", "asset_page_number", "full_table_crop_review"):
+                        if key in page_block:
+                            block[key] = copy.deepcopy(page_block[key])
                 if page_block.get("linked_visual_orders"):
                     block["linked_visual_orders"] = [
                         int(value)

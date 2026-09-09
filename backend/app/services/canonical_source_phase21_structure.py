@@ -116,12 +116,6 @@ def strip_leading_task_cue(value: object, *, label: object = None) -> str:
     return (match.group("body") if match else text).strip()
 
 
-_TABULAR_BLOCK_RE = re.compile(
-    r"\\begin\{tabular\}\{(?P<spec>[^{}]*)\}(?P<body>.*?)\\end\{tabular\}",
-    re.IGNORECASE | re.DOTALL,
-)
-
-
 def flatten_table_markup(value: object) -> str:
     """Legacy pipe-row flattening, kept for TEXT COMPARISON only.
 
@@ -150,96 +144,14 @@ def flatten_table_markup(value: object) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
-def _katex_array_cell(cell: str) -> str:
-    """Project one source tabular cell into valid KaTeX array content.
-
-    Table cells often mix prose with Mathpix inline-math spans.  Converting
-    the whole cell to ``\\text{...}`` escapes the argument braces of commands
-    such as ``\\mathrm{m}``, leaving malformed ``\\mathrm\\{m\\}`` on the
-    public wire.  Reuse the rich-text-to-Equation projection so prose becomes
-    explicit text atoms while each inline formula retains its own TeX syntax.
-    The bounded legacy repair runs on this derived cell only; canonical source
-    bytes and their contract hash remain untouched.
-    """
-    cell = re.sub(r"\s+", " ", str(cell or "")).strip()
-    if not cell:
-        return ""
-    rich = kr.legacy_export_rich_text(kr.canonicalize_rich_text(cell))
-    return kr.raw_equation_cell(rich)
-
-
 def normalize_task_table_markup(value: object) -> str:
-    """Render Mathpix tabular layout as a canonical KaTeX array block.
+    """Preserve complete source tables as arrays; retain defects for repair.
 
-    Reviewers rejected the earlier pipe-flattened tables: the public wire
-    format for a source table is ``[Katex] \\begin{array}{...} ... [/Katex]``
-    with every row ruled, so the table survives as a table. Markup the
-    block regex cannot parse falls back to the legacy readable flattening.
+    The shared serializer accounts for escaped delimiters, blank cells and
+    marked mathematics. Malformed or visual tables keep their original
+    structure for source review instead of flattening it into pipe prose.
     """
-    text = str(value or "")
-    if not _TABLE_HINT_RE.search(text):
-        return text
-
-    def _convert(match: re.Match) -> str:
-        spec = re.sub(
-            r"[^lcr|]", "",
-            (match.group("spec") or "").replace("p", "c").replace("X", "c"),
-        )
-        rows: list[str] = []
-        for raw_row in re.split(r"\\\\", match.group("body") or ""):
-            row = re.sub(r"\\hline", " ", raw_row, flags=re.IGNORECASE)
-            row = re.sub(r"\s+", " ", row).strip()
-            if not row:
-                continue
-            rows.append(
-                " & ".join(_katex_array_cell(c) for c in row.split("&"))
-            )
-        if not rows:
-            return " "
-        if not spec:
-            ncols = max(row.count("&") + 1 for row in rows)
-            spec = "|" + "c|" * ncols
-        array = (
-            r"\begin{array}{" + spec + r"} \hline "
-            + r" \\ \hline ".join(rows)
-            + r" \\ \hline \end{array}"
-        )
-        return " [Katex] " + array + " [/Katex] "
-
-    text = _TABULAR_BLOCK_RE.sub(_convert, text)
-    # The converted arrays live inside [Katex] tags; mask them so the
-    # legacy fallback below only ever touches markup OUTSIDE them.
-    masked: list[str] = []
-
-    def _stash(match: re.Match) -> str:
-        masked.append(match.group(0))
-        return f"{len(masked) - 1}"
-
-    text = re.sub(
-        r"\[Katex\].*?\[/Katex\]", _stash, text, flags=re.DOTALL,
-    )
-    if not _TABLE_HINT_RE.search(text):
-        text = re.sub(r"[ \t]+", " ", text)
-        for index, block in enumerate(masked):
-            text = text.replace(f"{index}", block)
-        return text.strip()
-    # Legacy fallback for malformed table markup the block regex missed.
-    text = re.sub(
-        r"\\begin\{tabular\}\{[^{}]*\}",
-        "\n",
-        text,
-        flags=re.IGNORECASE,
-    )
-    text = re.sub(r"\\end\{tabular\}", "\n", text, flags=re.IGNORECASE)
-    text = _TABLE_COLUMN_SPEC_RE.sub("\n", text)
-    text = re.sub(r"\\hline\b", "\n", text, flags=re.IGNORECASE)
-    text = re.sub(r"\\\\(?=\s|$)", "\n", text)
-    text = re.sub(r"\s*&\s*", " | ", text)
-    lines = [re.sub(r"[ \t]+", " ", line).strip(" |	") for line in text.splitlines()]
-    text = "\n".join(line for line in lines if line).strip()
-    for index, block in enumerate(masked):
-        text = text.replace(f"{index}", block)
-    return text
+    return kr.replace_unsupported_tables(str(value or ""))
 
 
 def canonical_task_display(value: object) -> str:
@@ -563,19 +475,31 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
         for leaf_index, leaf in enumerate(provisional, start=1):
             leaf_qid = f"{parent_qid}.{leaf_index}"
             is_base = bool(leaf.get("base_task")) and not leaf.get("subpart_label")
+            resolver_parts = [
+                str(leaf.get("shared_context") or "").strip(),
+                str(leaf.get("display_prompt") or "").strip(),
+                str(leaf.get("raw_prompt") or "").strip(),
+            ]
+            if gpt_parts:
+                # A page/task relationship can point at a figure in the
+                # shared parent instruction even when the independent part
+                # repeats no ``Fig. N`` text. Include that source-owned parent
+                # wording when resolving media for every model-decided leaf.
+                resolver_parts.extend([
+                    str(task.get("display_prompt") or "").strip(),
+                    str(task.get("raw_prompt") or "").strip(),
+                ])
+            resolver_prompt = "\n\n".join(value for value in resolver_parts if value)
             figures, urls, unresolved, ambiguous = _resolved_leaf_figures(
                 canonical,
                 # The visual reference is commonly carried by the shared
                 # instruction rather than repeated in every enumerated item.
-                prompt="\n\n".join(
-                    part for part in (
-                        str(leaf.get("shared_context") or "").strip(),
-                        str(leaf.get("display_prompt") or "").strip(),
-                        str(leaf.get("raw_prompt") or "").strip(),
-                    )
-                    if part
-                ),
-                inherited=task if is_base else None,
+                # The outline judge has already decided that these are
+                # independent task leaves; retaining the verified parent
+                # relationship on each leaf preserves a shared source visual
+                # without using proximity or a second semantic opinion.
+                prompt=resolver_prompt,
+                inherited=task if gpt_parts else (task if is_base else None),
             )
             identity_material = "\u241f".join([
                 parent_identity,
@@ -617,14 +541,7 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
                 "image_urls": urls,
                 "_image_captions": {},
                 "explicit_figure_reference_ids": _figure_reference_ids(
-                    "\n\n".join(
-                        part for part in (
-                            str(leaf.get("shared_context") or "").strip(),
-                            str(leaf.get("display_prompt") or "").strip(),
-                            str(leaf.get("raw_prompt") or "").strip(),
-                        )
-                        if part
-                    )
+                    resolver_prompt
                 ),
                 "unresolved_figure_reference_ids": unresolved,
                 "ambiguous_figure_reference_ids": ambiguous,

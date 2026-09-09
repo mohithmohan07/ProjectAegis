@@ -1,4 +1,4 @@
-"""Pass 4 — source-preserving wording for Concept Examples.
+"""Pass 4 — source-preserving task wording for Concepts and the Post Master.
 
 Step 4 of ``docs/build-concepts-manual-process.md``. Textbook phrasing is
 often unusable as a standalone test item — "Look at the figure once again and
@@ -20,8 +20,9 @@ single function all public Example wording flows through.
 
 An independent critic reviews each batch against the original evidence;
 its dissent is advisory and travels in ``polish_audit`` with the source and
-author proposal. This derived Concept Example wording does not authorize
-rewriting source questions in the Master (Q27).
+author proposal. New policy-marked wording is also the frozen Post Master
+task under the owner's source-format amendment to Q27; historical inventories
+retain their recorded wording and authority.
 
 Polished wording ships flagged for review (Rule 1, amended): a batch the
 model fumbles keeps its original wording and is flagged ``kept_original`` —
@@ -39,8 +40,10 @@ from typing import Any, Callable
 from .. import config
 from . import column_spec, containers
 from . import progress, prompts
+from . import assessment_visual_evidence as visual_evidence
+from . import source_task_polishing_policy as source_format
 
-POLISHING_VERSION = 3
+POLISHING_VERSION = 4
 
 # Flags recorded on inventory items. Absent flag == untouched source wording.
 FLAG_POLISHED = "polished_for_review"
@@ -77,10 +80,10 @@ FRAGMENT_MINING_NOTE = (
 
 POLISH_SYSTEM = prompts.register(
     "concepts.question_polishing.system",
-    label="Question polishing — source-preserving Example wording",
+    label="Question polishing — source-preserving task wording",
     category="Question polishing (Pass 4)",
     description=(
-        "Clarifies Concept Example wording without changing the source ask, "
+        "Clarifies source task wording without changing the source ask, "
         "skill or response modality; an independent critic records its review."
     ),
     default=(column_spec.OUTPUT_DISCIPLINE +
@@ -89,9 +92,15 @@ POLISH_SYSTEM = prompts.register(
         "often presumes the book is open at a page: 'Look at the figure "
         "once again and guess why…', 'as discussed above', 'in the picture "
         "on the previous page'. Your job is to rewrite each question as a "
-        "properly phrased, self-contained Concept Example wherever the supplied "
-        "evidence permits. This is a derived display artifact only: never "
-        "authorize rewriting source question/question_text in the Master (Q27).\n"
+        "properly phrased, self-contained Aegis source task wherever the supplied "
+        "evidence permits. The owner's 9 September 2026 task-format amendment "
+        "to Q27 permits this existing upstream polishing pass to adapt source "
+        "response layouts. Its accepted wording is frozen before Type/Case "
+        "clustering for both Concept Examples and the Post Master. The Post "
+        "Master contains ONLY questions from the supplied source; no new "
+        "question, demand, distractor, operand, condition or example may be "
+        "created. Raw and normalized source remain separate unchanged audit "
+        "evidence. Later Master stages cannot re-polish this task.\n"
         "\n"
         "Return ONE JSON object:\n"
         '{"items": [{"qid": "...", "polished_task": "...", "note": ""}]}\n'
@@ -159,6 +168,25 @@ POLISH_SYSTEM = prompts.register(
         "only the required supplied context; preserve its numbers, facts, "
         "conditions, wording of passages and visual references. If it is "
         "insufficient, keep the source wording and explain the gap in note.\n"
+        "10. Inspect source task layouts, including early-grade picture tasks, "
+        "boxes to tick, circles to mark, empty spaces to write numbers, "
+        "matching columns and visual ordering tasks. Express the SAME "
+        "instruction and response demand clearly in Aegis form. Preserve "
+        "every source choice, operand, unit, pictured object, part, ordering "
+        "and relationship between a response space and its object. A source "
+        "tick instruction may become a clear selection instruction; it must "
+        "not become an explanation, an invented MCQ or a changed response "
+        "modality. Writing numbers into boxes keeps exactly what those "
+        "numbers represent; do not fill the boxes, infer missing values, "
+        "invent additional blanks or expose answers. Carry all necessary "
+        "supplied tables/figures immediately beneath their owning instruction "
+        "(or inside the owning ordered part), using complete KaTeX arrays "
+        "under the existing rules or one faithful supplied complete image. "
+        "Do not flatten a visual comparison or table into coordinate prose. "
+        "These are source questions regardless of page layout; preserve the "
+        "whole task without adding a new question or part. If pixels or "
+        "essential source context are unavailable, keep the source wording "
+        "and record the specific missing evidence rather than guessing.\n"
         "\n"
         "Return every qid you were given, exactly once."
     ),
@@ -168,7 +196,7 @@ POLISH_CRITIC_SYSTEM = prompts.register(
     "concepts.question_polishing.critic",
     label="Question polishing — independent source review",
     category="Question polishing (Pass 4)",
-    description="Advisory review of Concept Example wording against source evidence.",
+    description="Advisory review of frozen task wording against source evidence.",
     default=(column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY +
         "You are the independent advisory critic of Aegis question polishing. "
         "Compare each proposed_task with its original task and source evidence. "
@@ -179,8 +207,15 @@ POLISH_CRITIC_SYSTEM = prompts.register(
         "and practical performance must not become written recall. Context "
         "may only be embedded from supplied evidence; an image URL alone "
         "cannot justify invented visual details. Do not require a written "
-        "substitute for an oral task. This is derived Concept Example wording, "
-        "not permission to rewrite source Master questions under Q27. Source "
+        "substitute for an oral task. Under the owner's 9 September 2026 "
+        "task-format amendment to Q27, this existing upstream pass may "
+        "clarify source boxes, tick/mark/select tasks and write-number spaces "
+        "into Aegis format before wording freezes for Type/Case clustering "
+        "and the Post Master. Verify that every response space still relates "
+        "to the same object/value, every source operand, choice, part and "
+        "their order survives, and no new question, added demand, changed "
+        "modality, guessed visual content or answer leakage appears. Check "
+        "question-owned tables/figures under the owning instruction. Source "
         "page numbering and an embedded textbook answer may be omitted from "
         "this derived display, but never remove an asked part or a condition "
         "needed to answer it. "
@@ -210,6 +245,10 @@ def _eligible(item: dict[str, Any]) -> bool:
     kind = str(item.get("source_kind") or "").strip().lower()
     return (
         kind not in SKIP_KINDS
+        # Recorded decisions, including historical author/critic decisions,
+        # are replay authority. A refreshed checkpoint is never re-polished.
+        and not isinstance(item.get("polish_audit"), dict)
+        and item.get("polish_flag") != FLAG_SPLIT
         and bool(str(item.get("qid") or "").strip())
         and bool(_item_source_text(item))
     )
@@ -228,8 +267,11 @@ def _polish_is_usable(item: dict[str, Any], polished: str) -> str:
     """
     if not str(polished or "").strip():
         return "empty polished wording"
-    for option in item.get("options") or []:
-        text = str(option or "").strip()
+    options = item.get("options") or []
+    for option in options if isinstance(options, list) else []:
+        # Structured/image options are verified from full evidence by the
+        # critic; stringifying a dictionary is not its learner-visible text.
+        text = option.strip() if isinstance(option, str) else ""
         if text and text not in polished:
             return f"dropped MCQ option {text[:60]!r}"
     source_text = _item_source_text(item)
@@ -293,7 +335,7 @@ def _quota_stop(exc: Exception) -> bool:
 
 
 def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
-    return json.dumps({
+    payload = {
         "chapter": {
             key: str(meta.get(key) or "")
             for key in ("subject", "board", "grade", "chapter_title")
@@ -303,7 +345,7 @@ def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
                 "qid": str(item.get("qid") or ""),
                 "source_kind": str(item.get("source_kind") or ""),
                 "task": _item_source_text(item),
-                "options": [str(o) for o in (item.get("options") or [])],
+                "options": copy.deepcopy(item.get("options") or []),
                 "has_images": bool(item.get("image_urls")),
                 "image_urls": copy.deepcopy(item.get("image_urls") or []),
                 "source_evidence": {
@@ -311,7 +353,10 @@ def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
                     for key in (
                         "raw_task", "normalized_task", "raw_solution_or_answer",
                         "source_label", "page_hint", "block_ids", "image_ids",
-                        "content_objects", "requires_visual",
+                        "content_objects", "tables", "assets", "images",
+                        "image_assets", "image_manifest", "source_context",
+                        "sub_questions", "parent_qid", "alternative_set_id",
+                        "requires_visual", "requires_context",
                     )
                     if key in item
                 },
@@ -329,7 +374,8 @@ def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
             }
             for item in batch
         ],
-    }, ensure_ascii=False)
+    }
+    return json.dumps(visual_evidence.bind(payload, batch), ensure_ascii=False)
 
 
 def _review_batch(
@@ -342,6 +388,7 @@ def _review_batch(
             prompts.get_text("concepts.question_polishing.critic"),
             json.dumps(payload, ensure_ascii=False),
             purpose="advisory_critic",
+            image_urls=visual_evidence.image_inputs(payload),
         )
     except Exception as exc:  # the advisory auditor cannot take the run down
         progress.log(
@@ -401,6 +448,7 @@ def _decisions_via_api(
                 system,
                 payload_text,
                 purpose="source_extraction",
+                image_urls=visual_evidence.image_inputs(source_payload),
             )
             if not isinstance(data, dict) or not isinstance(data.get("items"), list):
                 raise ValueError("polishing response must contain an items array")
@@ -419,6 +467,7 @@ def _decisions_via_api(
                     "audit": {
                         "version": POLISHING_VERSION,
                         "source_evidence": evidence,
+                        "visual_evidence": copy.deepcopy(source_payload["visual_evidence"]),
                         "critic": {"verdict": "not_run", "issues": [
                             "author failed; source wording retained unchanged",
                         ]},
@@ -450,6 +499,7 @@ def _decisions_via_api(
             decisions[qid]["audit"] = {
                 "version": POLISHING_VERSION,
                 "source_evidence": evidence,
+                "visual_evidence": copy.deepcopy(source_payload["visual_evidence"]),
                 "author": copy.deepcopy(row),
                 "proposed_task": review_item["proposed_task"],
             }
@@ -651,7 +701,7 @@ def polish_inventory(
             api_call = generation._openai_json
         progress.step(
             "Question polishing — clarify and review source-preserving "
-            "Concept Example wording",
+            "task wording",
             value=0.705,
         )
         decisions = _decisions_via_api(meta or {}, eligible, api_call)
@@ -668,8 +718,18 @@ def polish_inventory(
             item.pop(field, None)
         if isinstance(decision.get("audit"), dict):
             item["polish_audit"] = copy.deepcopy(decision["audit"])
+            item[source_format.FIELD] = source_format.VERSION
+            item["frozen_task_text"] = str(
+                decision.get("polished_task") or _item_source_text(item)
+            )
+            evidence_flags = visual_evidence.review_flags(
+                decision["audit"]
+            )
+            if evidence_flags:
+                item["polish_audit"]["visual_review_flags"] = evidence_flags
             item["polish_review_required"] = (
                 decision["audit"].get("critic", {}).get("verdict") != "verified"
+                or bool(evidence_flags)
             )
         note = str(decision.get("note") or "")
         flag = str(decision.get("flag") or "")

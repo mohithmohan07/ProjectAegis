@@ -301,7 +301,10 @@ SOURCE_DEDUP_SYSTEM = (
     "numbers, or a context are NOT duplicates: they must ask the same "
     "thing with the same answer. Members of one recorded alternative set "
     "(an either/or choice the source paper itself offers) are a "
-    "deliberate pair, never duplicates. When nothing duplicates, return "
+    "deliberate pair, never duplicates. Read the complete source_evidence: "
+    "different table cells, figures, shared context, options or compound "
+    "child tasks can make identical stems different assessments. Do not "
+    "discard a question based on its stem alone. When nothing duplicates, return "
     "an empty duplicate_sets array — removal is never a goal and there "
     "is no quota. Respond with a single JSON object and nothing else:\n"
     '{"duplicate_sets":[{"survivor_source_qid":"",'
@@ -317,7 +320,9 @@ SOURCE_DEDUP_CRITIC_SYSTEM = (
     "a DIFFERENT ask (different answer, different skill) mislabelled as a "
     "duplicate, is a recorded alternative-set pair being wrongly removed, "
     "and is any obvious double-ship missed? Dissent must name the "
-    'source_qid(s). Respond with a single JSON object: '
+    "source_qid(s). Check source_evidence, including the complete tables, "
+    "figures and recorded child tasks, before accepting a duplicate claim. "
+    'Respond with a single JSON object: '
     '{"verdict":"concur|dissent","confidence":0.0,"issues":["..."]}')
 )
 
@@ -382,6 +387,8 @@ def decide_source_duplicates(
             critic = lane_policy.critic_for("dedup", _live_source_dedup_critic)
     store = store or kernel.DecisionStore()
 
+    from .assessment_source_inventory import source_task_evidence
+
     payload = {
         "stage": "assessment.source_dedup",
         "rules": SOURCE_DEDUP_SYSTEM,
@@ -400,6 +407,7 @@ def decide_source_duplicates(
                 "shared_context": copy.deepcopy(a.get("shared_context") or ""),
                 "options": copy.deepcopy(a.get("options") or []),
                 "source_figures": copy.deepcopy(a.get("source_figures") or []),
+                "source_evidence": source_task_evidence(a),
                 "alternative_set_id": str(
                     a.get("alternative_set_id") or ""
                 ),

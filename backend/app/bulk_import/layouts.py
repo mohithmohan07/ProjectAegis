@@ -1309,6 +1309,8 @@ def _write_layout_headers(worksheet, sheet_layout: "SheetLayout") -> None:
         cell.value = name
         cell.font = Font(bold=True, size=9)
     worksheet.freeze_panes = "A3"
+    from .presentation import apply_sheet_presentation
+    apply_sheet_presentation(worksheet, sheet_layout.fields)
 
 
 def _is_blank(value) -> bool:

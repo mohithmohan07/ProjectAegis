@@ -1352,14 +1352,21 @@ def test_method_anchor_topic_is_restored_after_topic_restructuring():
     assert g._method_anchor_covered(out, anchor)
 
 
-def test_numbered_main_section_chapter_title_exception_is_explicit_in_prompts():
+def test_chapter_named_topics_follow_the_accepted_roster_not_printed_numbering():
     skeleton = g.prompts.get_text("concepts.skeleton.system")
     restructuring = g.prompts.get_text("concepts.topic_structure.system")
 
+    # A substantive AP section may legitimately share the chapter's name.
+    # Q39 preserves that accepted teaching topic without granting every
+    # numbered editorial heading (for example Summary) the same authority.
     for prompt in (skeleton, restructuring):
-        assert "numbered MAIN section" in prompt
-        assert "same title as the chapter" in prompt
-        assert "valid topic" in prompt
+        assert "unnumbered or chapter-named topic" in prompt
+        assert "Topics merely because they are headings" in prompt
+    assert "An accepted source-topic roster" in skeleton
+    assert "authoritative for topic names, order and ownership" in skeleton
+    assert "Topic names must be the supplied accepted semantic display names VERBATIM" in restructuring
+    assert "original source headings remain provenance, not competing output names" in restructuring
+    assert "accepted semantic roster gives it that teaching role" in restructuring
 
 
 def test_math_prompts_separate_formula_building_from_problem_inventory():

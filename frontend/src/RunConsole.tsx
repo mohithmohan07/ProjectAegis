@@ -44,6 +44,10 @@ export interface RunState {
 export interface RunReattach<T = unknown> {
   module: "assessments" | "concepts";
   jobId: number;
+  /** Which phase a reattached stream is expected to finish.  A resumed
+   * Master stream can replay the earlier Concept review result from the same
+   * durable journal; that historical terminal event must be ignored. */
+  operation?: "concept" | "master";
   /** Build the resolved value when the run finished while disconnected. */
   recoverResult?: () => Promise<T>;
 }
@@ -51,6 +55,9 @@ export interface RunReattach<T = unknown> {
 export interface RunUsagePresentation {
   cumulative?: boolean;
   resumed?: boolean;
+  /** Keep this job's prior journal, stage history and elapsed clock visible
+   * while a human review boundary is open and the Master half starts later. */
+  continuation?: boolean;
   filename?: string;
   fileLabel?: string;
   initialUsage?: OpenAIUsage | null;
@@ -133,6 +140,8 @@ function visibilitySleep(ms: number): Promise<void> {
 
 export function RunConsoleProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<RunState>(INITIAL);
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const openRef = useRef(!SMALL_SCREEN);
   const runIdRef = useRef(0);
 
@@ -187,20 +196,46 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       initialUsage = null,
       ...presentation
     } = usagePresentation ?? {};
-    setState({
-      active: true,
-      open: true,
-      title,
-      lines: [],
-      progress: 0,
-      startedAt: Date.now() / 1000,
-      // The server's ledger is cumulative across run segments (parse +
-      // every attempt), stage rows included, so durable initial usage is
-      // shown as-is — the first live event carries the same merged table.
-      usage: initialUsage,
-      usagePresentation: usagePresentation ? presentation : null,
-      progressLabel: "Starting…", status: "running",
-    });
+    const previous = stateRef.current;
+    const continuing = Boolean(usagePresentation?.continuation)
+      && previous.status !== "idle";
+    const nextState: RunState = continuing
+      ? {
+        ...previous,
+        active: true,
+        open: true,
+        title,
+        // A continuation is the same durable job. Keep the prior percentage
+        // until the resumed stream reports its next stage; this prevents the
+        // review boundary from flashing back to 0% or claiming 100% done.
+        progress: Math.min(previous.progress, 0.99),
+        progressLabel: "Continuing from the Concept review…",
+        usage: initialUsage ?? previous.usage,
+        usagePresentation: {
+          ...(previous.usagePresentation ?? {}),
+          ...presentation,
+          continuation: true,
+        },
+        // `startedAt` and `lines` are intentionally retained. The server
+        // journal and cumulative usage ledger describe one job across both
+        // segments, including the time and spend already recorded.
+      }
+      : {
+        active: true,
+        open: true,
+        title,
+        lines: [],
+        progress: 0,
+        startedAt: Date.now() / 1000,
+        // The server's ledger is cumulative across run segments (parse +
+        // every attempt), stage rows included, so durable initial usage is
+        // shown as-is — the first live event carries the same merged table.
+        usage: initialUsage,
+        usagePresentation: usagePresentation ? presentation : null,
+        progressLabel: "Starting…", status: "running",
+      };
+    stateRef.current = nextState;
+    setState(nextState);
     openRef.current = true;
 
     // The durable journal's cursor: events carry a monotonic `seq` on
@@ -301,7 +336,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             for (const event of tail.events) {
               if (runIdRef.current !== runId) throw err;
               applyOnce(event);
-              if (event.type === "result") return event.data as T;
+              if (event.type === "result") {
+                if (isHistoricalResult(event.data, reattach.operation)) continue;
+                return event.data as T;
+              }
               if (event.type === "error") throw new Error(event.message);
             }
             if (tail.running) continue;
@@ -333,6 +371,13 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
                 : null;
               return resultWithIncompleteRecovery(recovered, blockedRecovery);
             }
+            if (isConceptReviewJob(job, reattach.operation)) {
+              note("Waiting for the reviewer to approve the Concept Files.");
+              const recovered = reattach.recoverResult
+                ? await reattach.recoverResult()
+                : null;
+              return recovered as T;
+            }
             if (job.status === "generated") {
               note("The run finished while the connection was down.", "info");
               if (reattach.recoverResult) return await reattach.recoverResult();
@@ -345,13 +390,11 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             reattachesLeft -= 1;
             // Re-POST the same request: the server resumes from the
             // durable checkpoint and replays finished work from cache.
-            // A re-POST starts a NEW stream, and the journal restarts
-            // with it (run_journal truncates and seq begins at 1 again)
-            // — so the cursor resets too. Without this, every resumed
-            // event arrived <= the dead run's watermark and was dropped
-            // as a duplicate, the catch-up tail was filtered server-side
-            // forever, and the terminal event could never finish the
-            // run — the client kept polling and re-POSTing instead.
+            // A re-POST starts a NEW stream. Legacy routes may start a fresh
+            // journal, while same-run Concept/Master routes append with a
+            // continued cursor; reset the live cursor in either case so the
+            // next stream's sequence values are accepted from its first
+            // event and the catch-up tail cannot be mistaken for stale data.
             lastSeq = 0;
             // Stage rows are cumulative across attempts now, so the
             // resumed stream's first usage event carries the same merged
@@ -367,14 +410,15 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       .then((data) => {
         if (runIdRef.current === runId) {
           setState((s) => {
-            if (isAwaitingDecisionResult(data)) {
+            if (isPausedResult(data)) {
               const pausedState = stateWithResultUsage(s, data);
+              const progress = pausedProgress(data, s.progress);
               return {
                 ...pausedState,
                 active: false,
                 status: "paused",
-                progress: decisionCheckpointProgress(data) ?? s.progress,
-                progressLabel: "Paused for your decision",
+                progress,
+                progressLabel: pauseLabel(data),
               };
             }
             return terminalResultState(s, data);
@@ -468,6 +512,7 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
           if (runIdRef.current !== runId) return { kind: "detached" };
           applyOnce(event);
           if (event.type === "result") {
+            if (isHistoricalResult(event.data, reattach.operation)) continue;
             return { kind: "result", data: event.data as T };
           }
           if (event.type === "error") throw new Error(event.message);
@@ -506,6 +551,10 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
             kind: "result",
             data: resultWithIncompleteRecovery(recovered, blockedRecovery),
           };
+        }
+        if (isConceptReviewJob(job, reattach.operation)) {
+          note("Waiting for the reviewer to approve the Concept Files.");
+          return { kind: "stopped" };
         }
         if (job.status === "generated") {
           note("The run finished.", "info");
@@ -557,9 +606,11 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
 
   const clear = useCallback(() => {
     runIdRef.current += 1;
-    setState((s) => ({
-      ...INITIAL, open: s.open, status: "idle",
-    }));
+    const cleared = {
+      ...INITIAL, open: stateRef.current.open, status: "idle",
+    } as RunState;
+    stateRef.current = cleared;
+    setState(cleared);
   }, []);
 
   const api = useMemo<RunConsoleApi>(
@@ -743,20 +794,89 @@ function resultWithIncompleteRecovery<T>(
   return { ...base, run_incomplete: recovery } as T;
 }
 
-function isAwaitingDecisionResult(data: unknown): boolean {
+/** A stream can pause at a semantic gate (legacy) or at the deliberate
+ * Concept-review boundary (new workflow). Both are waiting states, while
+ * only the former asks the reviewer to choose a semantic option. */
+function isPausedResult(data: unknown): boolean {
   if (!data || typeof data !== "object" || Array.isArray(data)) return false;
   const result = data as Record<string, unknown>;
-  return result.status === "awaiting_decision"
-    && Boolean(result.pending_decision);
+  if (result.status === "awaiting_decision" && Boolean(result.pending_decision)) {
+    return true;
+  }
+  return isConceptReviewJob(result);
+}
+
+function isConceptReviewJob(
+  data: unknown,
+  operation?: "concept" | "master",
+): boolean {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return false;
+  const record = data as Record<string, unknown>;
+  const status = reviewWorkflowStatus(record);
+  // A Master continuation has its own operation boundary. Its replay may
+  // contain the prior Concept result, but that result cannot pause the active
+  // Master attach or recovery path.
+  if (operation === "master") return false;
+  return status !== null && [
+    "pending_review",
+    "reviewed",
+    "master_building",
+    "master_failed",
+  ].includes(status);
+}
+
+function reviewWorkflowStatus(data: unknown): string | null {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return null;
+  const record = data as Record<string, unknown>;
+  // Job reads use `review_workflow`; current stream results use the same
+  // backend object under its persisted `concept_review` name.
+  const workflow = record.review_workflow ?? record.concept_review;
+  if (!workflow || typeof workflow !== "object" || Array.isArray(workflow)) return null;
+  const status = (workflow as Record<string, unknown>).status;
+  return typeof status === "string" ? status.toLowerCase() : null;
+}
+
+function isHistoricalResult(data: unknown, operation?: "concept" | "master"): boolean {
+  if (operation !== "master") return false;
+  const status = reviewWorkflowStatus(data);
+  // A Master continuation may replay the Concept-stage terminal event from
+  // seq 0. It is history, not the answer to this Master request.
+  return status === "pending_review" || status === "reviewed";
+}
+
+function pauseLabel(data: unknown): string {
+  if (
+    data && typeof data === "object" && !Array.isArray(data)
+    && (data as Record<string, unknown>).status === "awaiting_decision"
+  ) return "Paused for your decision";
+  return "Waiting for Concept review";
+}
+
+function pausedProgress(data: unknown, prior: number): number {
+  const reported = decisionCheckpointProgress(data);
+  const value = reported ?? prior;
+  // A review boundary is intentionally incomplete. A stale/premature 1.0
+  // from an older server must never render as a finished run.
+  return Number.isFinite(value) ? Math.max(0, Math.min(value, 0.99)) : 0.99;
 }
 
 function decisionCheckpointProgress(data: unknown): number | null {
   if (!data || typeof data !== "object" || Array.isArray(data)) return null;
   const result = data as Record<string, unknown>;
   const pending = result.pending_decision;
+  const workflow = result.review_workflow ?? result.concept_review;
+  const workflowProgress = workflow && typeof workflow === "object"
+    && !Array.isArray(workflow)
+    ? (workflow as Record<string, unknown>).checkpoint_progress
+      ?? (workflow as Record<string, unknown>).progress
+    : undefined;
   const raw = pending && typeof pending === "object" && !Array.isArray(pending)
     ? (pending as Record<string, unknown>).checkpoint_progress
-    : result.checkpoint_progress;
+      ?? workflowProgress
+    : result.checkpoint_progress
+      ?? result.review_progress
+      ?? result.progress
+      ?? workflowProgress;
   return typeof raw === "number" && Number.isFinite(raw)
     ? Math.max(0, Math.min(1, raw))
     : null;

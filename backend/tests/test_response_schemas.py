@@ -95,6 +95,7 @@ def _stub_transport(monkeypatch, responses, *, provider="openai"):
     monkeypatch.setattr(openai, "OpenAI", lambda **kwargs: client)
     monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-5.6-luna")
     monkeypatch.setattr(model_provider, "active_provider", lambda: provider)
+    monkeypatch.setattr(model_provider, "active_model", lambda: "gpt-5.6-luna")
     monkeypatch.setattr(model_provider, "client_kwargs", lambda: {})
     monkeypatch.setattr(generation, "_openai_gate", None)
     monkeypatch.setattr(openai_usage, "record_response", lambda *a, **kw: receipts.append(a))
@@ -134,3 +135,10 @@ def test_single_attempt_schema_failure_never_spends_again(monkeypatch):
             purpose="advisory_critic", response_schema=advisory_critic_schema(),
         )
     assert len(calls) == len(receipts) == 1
+
+
+@pytest.fixture(autouse=True)
+def _historical_routing_contract():
+    from app.services import model_provider
+    with model_provider.bind_profile(None):
+        yield
