@@ -2235,6 +2235,89 @@ Fresh source builds use the new table renderer; existing compiled source and
 sealed decisions retain their recorded content. Do not invalidate accepted
 historical runs by globally bumping downstream compiler versions.
 
+
+### Q39 — DECIDED — Meaningful topics, complete source coverage and faithful task polishing
+
+**Owner ruling (9 September 2026).** Summary, Introduction and Exercises must
+not become generic topic containers. Preserve their entire substantive content
+and every task under meaningful topics and concepts. The Frédéric Sorrieu
+opening in RNE is substantive current-chapter teaching despite appearing to be
+an introduction. Short lower-grade chapters require meaningful header-aware,
+capability-level atomisation, never volume-derived counts or thin-content
+merging. The owner supplied 18 Classes 1–3 English, EVS and Mathematics PDFs
+and an English analysis screenshot. Findings are recorded in
+`docs/source-topic-review-2026-09-09.md`.
+
+**Content and question ownership.** API authors and independent critics judge
+source roles and names from meaning. Retain source heading text, every source
+block/task identity, embedded question, sidebar, table, visual, word bank,
+example and dependency. A generic heading can supply context without becoming
+a topic. A substantive opening receives an appropriate teaching title. Recaps
+reinforce existing concepts; their content is not deleted. Each source question
+belongs to the concept it assesses, regardless of exercise-section position.
+Preserve a whole multipart task and its source provenance. An adjacent-chapter
+page or unavailable referenced script remains represented with a source-boundary
+or missing-dependency finding; neither invent the missing source nor discard
+the existing content.
+
+**English final analysis.** Keep the final topic `Detailed Analysis of '<Name>'`.
+Its concepts are distinct whole-work dimensions appropriate to the supplied
+prose/poem and grade: Theme/Central Idea, Plot/Development of Ideas,
+Characterisation/Speaker, Setting & Atmosphere, Language & Literary Devices,
+and Culmination where supported. These are analytical functions, not invented
+content quotas. Factual prose can use main idea, supporting evidence and
+informative language rather than fictitious characters/settings. A question
+about characterisation across all episodes belongs to Characterisation, not
+automatically Culmination. Apply that dimension-first placement to all lenses;
+Culmination integrates genuinely different capabilities. Preserve explicit
+grammar/phonics instruction and independent reading passages without forcing
+them into an unrelated story event. Use only the uploaded work, including an
+abridgement's actual ending.
+
+**Post source only, with bounded format polishing.** No new Post questions,
+variants or gap-filling generation are permitted. A source-given creative,
+personal-response, drawing, shading, speaking or observation task remains a
+source task. This ruling expressly narrows Q27's verbatim restriction to permit
+faithful task-format adaptation in the existing upstream question-polishing
+pass: tick/cross, number-in-box, picture classification, grids, word banks and
+other primary-grade layouts become clear, self-contained Aegis questions.
+Preserve every original demand, value, option, response cardinality, part,
+order, source stimulus, visual dependency and givens. Do not add explanations,
+convert multi-select into single-select, substitute picture answers for the
+pictures, or change drawing/ordering into recognition. Required tables/images
+stay under their question under Q38's KaTeX/image rules.
+
+The immutable raw/normalised source remains evidence. The independent polishing
+critic compares the proposed form with that evidence. New items carry a
+versioned polishing receipt; their accepted wording is frozen before Type/Case
+clustering and carried to Master author/reviewer. The Master Refiner still
+cannot alter `question` or `question_text`. Historical unmarked items retain
+Q27's raw-source authority. Review flags and incomplete-source findings remain
+visible; the existing release/publication distinction stands.
+
+**Pre prior knowledge only.** Retain every necessary, independently teachable
+prior-grade/year foundation, with the actual source demand, necessity and
+prior-learning basis. Being useful, appearing early, sharing a subject or
+being familiar to an adult is not evidence of prior learning. New concepts,
+newly taught vocabulary, story events and future extensions cannot be promoted
+to Pre. Genuine earlier-learning recaps may support eligibility, judged by
+content. Unsupported, current-taught and unnecessary candidates are explicitly
+disposed by the existing API authority with their full provenance preserved.
+Map descriptions, mastery, learner analysis and generated Pre questions stay
+inside retained prerequisite scope; fixed 5 Basic + 5 Intermediate coverage
+does not license new teaching. Do not manufacture prerequisites for a first-year
+learner. Q37's complete evidence and omission review remain.
+
+**Compatibility and operations.** Apply the new topic and Pre policies only to
+freshly sealed Phase 3 envelopes; absent-key historical envelopes retain their
+recorded suffixes and decisions. New source/planning/polishing decisions carry
+the revised policy identity. No stages, reviewers or refiners are removed;
+Luna/uniform-xhigh, Q30 coverage, exact fields, source identities and rendering
+gates remain. Keep PR #297 a draft; no merge, deploy, restart, provider change
+or paid generation while the owner's files are running. Offline regressions
+verify transport, invariants and replay; they do not establish the pedagogical
+quality of a newly generated live output.
+
 ---
 
 *Prepared from Aegis.docx (the soul), the SOP Bulk-Import Fill Guide, the
@@ -2242,3 +2325,133 @@ Open/Specific rubrics (v1 and the corrected v2.0 registry), the
 Question-Paper Blueprint, the GPT Restructuring Architecture v1.0
 (alignment-audited), the repo's decision documents, and a six-area map of the
 ProjectAegis codebase.*
+
+
+### Q40 — DECIDED — Stage model routing, adaptive Pre coverage and INR cost logs
+
+**Owner ruling (9 September 2026).** Use Gemini 3.8 Flash only for building Pre
+questions, concept-detail writing on Luna at xhigh, and GPT-5.4 mini/Luna for
+other stages according to role and complete-context capacity. Complete the
+Gemini API workflow. Omit the fixed 5 Basic + 5 Intermediate rule: author only
+as much diagnostic coverage as the actual prerequisite warrants. No padding,
+forced tiers or scope expansion. All prior-only boundaries, source-only Post
+questions and review/refiner stages remain. This expressly supersedes Q30's
+fixed quota and Q31/Q37's uniform model restriction for new work.
+
+**Frozen routing and coverage.** New runs freeze the exact stage profile before
+spend. Context-local request routes choose credentials, endpoint, model,
+reasoning, output capacity, schema and accounting together. Only the explicit
+Pre author stage can use Gemini; its planner/critic/Fixer remain on OpenAI.
+Concept detail authors and final Concept refiners stay Luna xhigh. Narrow
+passes use mini with complete-input capacity checks; exceeding mini capacity
+moves the whole request to Luna instead of trimming evidence. No selector
+changes a process-wide model during concurrent work. Fresh cache identities
+carry the profile; historical unprofiled/5+5 envelopes replay their own policy.
+Adaptive totals and tier splits are semantic API decisions, independently
+reviewed, then mechanically reconciled to their recorded accepted plans.
+
+**Names, images and tables.** Keep source-specific topics and the final English
+`Detailed Analysis of '<actual work>'`, never generic Analysis or a placeholder.
+Image captures retain their source-asset URL tags with their owning concept or
+question, through refinement and both workbooks. A bracket inside a quoted alt
+caption must not truncate the tag. The supplied Council of Ministers/Cabinet
+comparison must render as the complete centered bordered KaTeX array with all
+rows/cells and `\text{}` text, carried intact inside `[Katex]...[/Katex]`.
+
+**Logs and currency.** The owner confirms API credentials are already in
+production and offers read-only Fly access to verify it. Per-request and
+cumulative estimated charges must be visible in rupees. Retain actual provider
+and model, cached input, output/thinking usage, retries and missing-usage states.
+USD remains the provider ledger; INR estimates retain the conversion quote and
+date. Cumulative/resumed totals sum recorded amounts rather than revaluing old
+requests at a new rate. Unknown bills are not zero. The conversion reference
+and pricing date are visible for reconciliation.
+
+**Deployment boundary.** Prepare and verify locally. No merge, deploy, restart
+or running-job mutation. The earlier GitHub push was rejected by automatic
+approval review; this ruling does not explicitly authorize a new push attempt.
+Implementation/evidence: `docs/model-routing-review-2026-09-09.md`.
+
+
+### Q41 — DECIDED — Complete question membership, response-mechanism classification and Concept review before Masters
+
+**Owner ruling (9 September 2026).** Exercise questions are being extracted,
+but in-text questions are inconsistently missing. Extract every actual
+source-set learner task from the complete source, including activities and info
+hubs. A task in a box or between explanatory paragraphs has the same inventory
+standing as an end-of-chapter exercise. Preserve its necessary context and
+media, then polish it into a standalone Aegis question without adding a new
+assessed demand. Informational prose and dialogue questions in a story/poem
+are not automatically learner tasks; the API decides from the source's role.
+Every source block receives an accountable semantic disposition. Inventory
+coverage must not be limited to the candidates a parser already found.
+
+**Independent and multipart questions.** A heading or instruction such as
+“1. Answer the following questions: (a) Question 01 (b) Question 02” is an
+administrative wrapper when the questions stand independently. Assign each
+independent task its own identity. Only meaningful necessary shared context
+with dependent questions forms one multipart question. Numbering, letters,
+indentation, proximity and membership in the same exercise cannot decide the
+boundary. Preserve genuine multipart tasks whole with every child in source
+order. Existing author and independent advisory review stages make these
+judgments; deterministic code checks identities and exact coverage.
+
+**Question classification SOP.** The supplied three-page
+`SOP_ Classification of Questions.pdf` has SHA-256
+`1f6818d1a13595c1025fb43f25d258d09ee13147f2f1603bd9d236c3357d6e52`.
+It governs new work as summarized in `docs/question-classification-sop.md`:
+Objective selects explicit supplied choices, including multiple selection;
+Subjective supplies a short fixed answer; Descriptive constructs an
+explanation, calculation, reasoning, drawing, map response or extended answer.
+True/False explicitly remains Subjective. A numerical final answer does not
+make a calculation Subjective. Classify by required response mechanism,
+never marks, words, or final-answer length. Record this amendment where older
+single-choice-only Objective examples conflict, preserving sealed historical
+policies and the verbatim master governing contract.
+
+**Concept-first review.** New runs generate complete Pre/Post Concept files,
+including their question examples, source context and media, then pause for
+the owner to review. The owner can reupload corrected Concept inputs and
+continue to Master generation from the accepted input set, or continue with
+the generated files unchanged. No Master authoring is spent before that
+explicit continuation. The review upload stages corrections; it does not
+publish to the CMS. Validate the input set before replacing accepted state,
+retain immutable source and revisions, and ensure Master caches bind the
+accepted corrected snapshot. Corrections to question wording must reach the
+Master. The owner's follow-up explicitly permits the reviewer to omit, add
+and move questions in the Concept file's Types/Cases. That reviewed question
+set is authoritative for Post Master generation: materialize exactly those
+questions, honor their reviewed placement, and never automatically restore
+removed questions or generate extra Post questions. Record manual additions
+as reviewer-authored, and retain original source questions and all
+omitted/changed/added/moved dispositions in the audit trail. Initial source
+extraction must still be complete; intentional reviewer omissions are a later,
+explicitly authorized decision. Pre questions continue to generate
+automatically under Q40 and are not constrained to the reviewed Post question
+bank. Replace the old Review & Edit section with the file download, optional
+corrected upload and Master continuation flow.
+Both Pre and Post have separate Excel upload controls for their original
+downloaded Concept workbook after local edits; a separate correction format
+is not required. Edited Pre concepts are the accepted prerequisite input to
+automatic Pre question generation. The owner specifically requires the UI/UX
+changes and preservation of every earlier request during this restructuring.
+This intentionally authorized boundary supersedes older no-human-review and
+automatic-Master wording. It removes no generation or model review stage.
+
+**One cumulative run.** Preserve the same run identity, chronological logs,
+per-request/cumulative INR receipts, retry costs, processing time, and monotonic
+progress across Concept completion, review, reupload, restart and Master
+continuation. Concept review is a paused state, not 100% completion. Pause the
+active-processing clock during human review; retain review waiting and total
+wall time distinctly. A page refresh or restored checkpoint must recover those
+values without resetting or charging prior work twice.
+
+**Boundaries.** Q39 source-only automatic Post extraction (amended above for
+explicit manual reviewer additions/omissions), bounded Pre, Q40 stage model routing,
+all review stages and immutable historical replay remain. The owner chose to
+skip the live Fly image check; that does not establish a new live verification.
+The owner's subsequent instruction explicitly authorizes pushing and merging
+after the complete implementation and validation. This supersedes the previous
+push-approval block and merge hold; root completes the normal repository gates
+and merges the reviewed changes. No separate manual Fly deployment or restart
+is requested.

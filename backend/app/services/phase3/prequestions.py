@@ -1,5 +1,11 @@
 """Pass 2.9c — Prequestions: the Pre-Learning coverage plan and its questions.
 
+Latest owner amendment (9 September 2026): fresh envelopes carry an explicit
+adaptive coverage policy. The API chooses each prerequisite's sufficient
+total and tier split with no fixed or per-tier quota and no scope expansion.
+The accepted split is carried on authored questions. Historical sealed Q30
+fixed-rule runs and no-rule runs retain their respective behavior below.
+
 docs/aegis-restructure.md §4 Phase 03 (Q4, resolved per D3; the recorded
 numeric calibration targets of Q20 — re-set by owner steer 2026-08-20 and
 2026-08-21, with the tier split left to the model — are superseded by
@@ -131,6 +137,8 @@ hat.
 """
 from __future__ import annotations
 
+from .. import prelearning_capture_policy as capture_policy
+
 import copy
 import re
 from typing import Any, Callable, Mapping
@@ -142,6 +150,7 @@ from ... import config
 from .. import progress
 
 POLICY_VERSION = "prequestions-1"
+ADAPTIVE_POLICY_VERSION = "prequestions-2-adaptive-coverage"
 
 # The generated questions ride their OWN carry channel (the runner's
 # ``pre_questions`` key and its snapshot). They are deliberately not
@@ -253,6 +262,10 @@ def _rule_plan_defects(
     numbers; no judgment about the prerequisite.
     """
 
+    if pre_coverage.is_adaptive(rule):
+        # Count/split arithmetic is already checked against the author's own
+        # numbers. This policy imposes no additional numeric target.
+        return []
     if total == 0 and not counts_by_tier:
         return []
     if total == pre_coverage.total(rule) and dict(counts_by_tier) == dict(
@@ -489,23 +502,106 @@ def _author_checker(
 # live adapters
 
 
+def _plan_system(payload: Mapping[str, Any]) -> str:
+    from . import prompts
+
+    if not pre_coverage.is_adaptive(payload.get("coverage_rule")):
+        return prompts.PREQUESTIONS_PLAN_SYSTEM
+    return prompts._SHARED + (
+        " Task: author the adaptive diagnostic coverage plan for every supplied "
+        "Pre-Learning concept. Response schema: {\"plans\":[{\"pre_concept_id\","
+        "\"total\",\"split\":[{\"tier\":\"Basic|Intermediate|Advanced\",\"count\"}],"
+        "\"rationale\"}]}. "
+        "The explicit adaptive coverage_rule leaves total and tier split to "
+        "your judgment of this prerequisite's retained mastery and prior-grade "
+        "scope. There is no fixed total or per-tier quota. Choose only questions "
+        "that earn their place through distinct diagnostic coverage; never pad, "
+        "fill every tier, balance tiers, or extend teaching to justify more "
+        "questions. Account for every supplied pre_concept_id exactly once. "
+        "All counts are nonnegative integers; the split sums to its own total. "
+        "Every plan explains why its chosen total and split are sufficient "
+        "for the actual prerequisite. A zero plan is a recorded request to drop "
+        "an unassessable concept, not proof that a retained concept is assessed. "
+        "Questions are authored at the tiers you plan; tier is not difficulty. "
+        "Use supplied prerequisite evidence only; no current-chapter task is "
+        "copied, reworded or used to expand the prerequisite."
+    )
+
+
+def _author_system(payload: Mapping[str, Any]) -> str:
+    from . import prompts
+
+    if not pre_coverage.is_adaptive(payload.get("coverage_rule")):
+        return prompts.PREQUESTIONS_AUTHOR_SYSTEM
+    return prompts._SHARED + (
+        " Task: author one Pre-Learning concept's fresh diagnostic questions "
+        "under its accepted adaptive coverage plan. Response schema: "
+        "{\"questions\":[{\"question_id\":\"PRQ-0001\",\"question_text\":\"\","
+        "\"answer\":\"\",\"rationale\":\"\",\"tier\":\"Basic|Intermediate|Advanced\"}]}. "
+        "The plan's total and tier split were chosen from this prerequisite's "
+        "context, not a fixed quota; author exactly that recorded plan without "
+        "padding, repetitions, tier balancing or scope extension. Cite the "
+        "distinct prior capability each question verifies in rationale. Each "
+        "question carries its planned tier and no difficulty label; use "
+        "PRQ-0001, PRQ-0002, … in listing order. Every question is new, for "
+        "the learner's earlier-grade prerequisite only; never copy, paraphrase "
+        "or test a current-chapter source question or add current-chapter "
+        "teaching. Respect supplied grade, subject, board and context. Solve "
+        "each task before returning. question_text contains the complete "
+        "learner task with its required data, options and parts, without "
+        "answers or evaluator commentary. answer gives the complete expected "
+        "response and reasoning. Do not award unasked demands. Wrap mathematics "
+        "as [Katex] valid LaTeX [/Katex]."
+    )
+
+
+def _critic_system(payload: Mapping[str, Any]) -> str:
+    from . import prompts
+    from .. import column_spec
+
+    if not pre_coverage.is_adaptive(payload.get("coverage_rule")):
+        return prompts.PREQUESTIONS_CRITIC_SYSTEM
+    return prompts._SHARED + column_spec.REVIEW_QUALITY + (
+        " Task: independently audit the adaptive Pre question plan or its "
+        "authored questions. For a PLAN, judge sufficiency, proportion and "
+        "rationale against each prerequisite's retained mastery, needed-for "
+        "context and prior-grade boundary. Its total and tier split are "
+        "API-authored choices, never a fixed owner quota. Flag unsupported "
+        "numeric anchoring, automatic equal totals, tier balancing, padding, "
+        "redundancy, missing diagnostic coverage and expanding prerequisite "
+        "scope to justify more questions. A small sufficient plan is correct; "
+        "do not demand a customary count or a question in every tier. For "
+        "QUESTIONS, verify the complete ask and answer, planned coverage, "
+        "tier fit, grade/context calibration, genuine diagnostic variety, "
+        "self-contained wording and absence of answer leakage. Flag current-"
+        "chapter content or tasks reworded as prior learning. The source "
+        "questions are deliberately absent: assess what the question is "
+        "about against the supplied prerequisite evidence; never invent "
+        "source evidence. Response schema: {\"verdict\":\"verified|rejected\","
+        "\"confidence\":0.0,\"issues\":[]}. Dissent is recorded and advisory; "
+        "never rewrite, retry, gate or enlarge the concept or question set."
+    )
+
+
 def _live_plan(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREQUESTIONS_PLAN_SYSTEM, prompts.render(payload),
+        _plan_system(payload) + capture_policy.boundary_instruction(payload), prompts.render(payload),
         purpose="pre_learning",
     )
 
 
 def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
     from . import prompts
-    from .. import generation
+    from .. import generation, model_provider
+    from ..response_schemas import pre_question_author_schema
 
     return generation._openai_json(
-        prompts.PREQUESTIONS_AUTHOR_SYSTEM, prompts.render(payload),
-        purpose="pre_learning",
+        _author_system(payload) + capture_policy.boundary_instruction(payload), prompts.render(payload),
+        purpose="pre_learning", stage="prequestions.author",
+        **({"response_schema": pre_question_author_schema()} if model_provider.bound_profile() is not None else {}),
     )
 
 
@@ -514,7 +610,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREQUESTIONS_CRITIC_SYSTEM, prompts.render(payload),
+        _critic_system(payload) + capture_policy.boundary_instruction(payload), prompts.render(payload),
         purpose="advisory_critic",
     )
 
@@ -578,6 +674,31 @@ def _rule_plan_rules(rules_suffix: str, rule: Mapping[str, Any]) -> str:
 def _plan_rules(
     rules_suffix: str, rule: Mapping[str, Any] | None = None,
 ) -> str:
+    if pre_coverage.is_adaptive(rule):
+        return (
+            "Phase 03: author the context-sufficient diagnostic coverage plan "
+            "for EACH supplied pre-learning concept. The recorded adaptive "
+            f"coverage policy {rule['version']} has no fixed total, per-tier "
+            "quota, mandatory tier balance or target copied from another "
+            "concept. Decide the total and split from the retained prerequisite "
+            "mastery, what the learner must already know in earlier grades, "
+            "and why the current chapter depends on it. State why each planned "
+            "question is necessary for distinct diagnostic coverage; prefer "
+            "a smaller sufficient set; never pad or add variations or drill merely "
+            "to increase its size. Do not introduce new teaching or skills "
+            "to make additional questions possible. No current-chapter source "
+            "task or its paraphrase belongs here. Every plan carries a "
+            "rationale; its tier split sums to its own total. Any subset of "
+            "the allowed tiers may be appropriate, including a single tier. "
+            "The plan's tiers are authored intent, carried on each question "
+            "into grouping; they are not difficulty labels. Decide every "
+            "pre_concept_id exactly once. A zero total with no split remains "
+            "a recorded request to drop an unassessable concept, not coverage "
+            "for a concept retained in the release. This explicit adaptive "
+            "policy supersedes inherited numeric targets; use the following "
+            "instructions for curricular scope and calibration, not to "
+            "reinstate a question quota." + rules_suffix
+        )
     if rule is not None:
         return _rule_plan_rules(rules_suffix, rule)
     return (
@@ -688,6 +809,32 @@ def _rule_author_rules(rules_suffix: str, rule: Mapping[str, Any]) -> str:
 def _author_rules(
     rules_suffix: str, rule: Mapping[str, Any] | None = None,
 ) -> str:
+    if pre_coverage.is_adaptive(rule):
+        return (
+            "Phase 03: author this prerequisite's questions under adaptive "
+            f"coverage policy {rule['version']}. The coverage plan has already "
+            "chosen its own context-sufficient total and tier split. Write "
+            "exactly that total and split, with each question's tier field "
+            "carrying its intended tier; no fixed per-tier quota is in force. "
+            "Stay inside the retained prior-grade description and mastery. "
+            "Use needed-for links to calibrate relevance, never to import "
+            "the current chapter's new teaching, its source questions or "
+            "paraphrases. Questions must be distinct checks of what the "
+            "learner should already know; do not pad, repeat with changed "
+            "numbers/names, balance tiers or enlarge prerequisite scope. "
+            "Basic verifies recognition/direct use of the retained foundation; "
+            "Intermediate and Advanced require only source-supported prior "
+            "transfer/integration when the chosen plan calls for it, not "
+            "knowledge taught in the current chapter. Respect grade, subject, "
+            "board and context. Provide complete self-contained tasks and "
+            "solved expected answers; no solution or hint leaks into the "
+            "learner question. Each rationale explains the prior capability "
+            "checked and its planned tier. Do not assign difficulty. Mint "
+            "PRQ-0001, PRQ-0002, … in listing order. Preserve the accepted "
+            "plan's count and split; an author cannot amend a settled plan. "
+            "Wrap math as [Katex] valid LaTeX [/Katex]. Inherited numeric "
+            "targets do not override this explicit adaptive policy." + rules_suffix
+        )
     if rule is not None:
         return _rule_author_rules(rules_suffix, rule)
     return (
@@ -771,7 +918,8 @@ def build(
         "decision_flags": {},
     }
     if not rows:
-        return empty
+        rule = pre_coverage.rule_for(env)
+        return _with_rule(empty, rule) if pre_coverage.is_adaptive(rule) else empty
 
     if provider is None:
         envelope_mod.require_live_api()
@@ -802,7 +950,13 @@ def build(
     # Register Q30: which coverage posture this run executes under is a
     # recorded fact of its envelope, and it is said out loud either way.
     rule = pre_coverage.rule_for(env)
-    if rule is not None:
+    if pre_coverage.is_adaptive(rule):
+        progress.log(
+            "Pre-Learning questions: adaptive coverage policy "
+            f"{rule['version']} — the API chooses each prerequisite's "
+            "context-sufficient total and tier split, with no padding or quota."
+        )
+    elif rule is not None:
         progress.log(
             "Pre-Learning questions: the owner's coverage rule "
             f"{rule['version']} is in force — every pre-concept is planned "
@@ -828,6 +982,7 @@ def build(
     # the decision key moves with it.
     plan_payload = {
         "stage": "prequestions.plan",
+        **capture_policy.boundary_fields(env),
         "rules": _plan_rules(rules_suffix, rule),
         "chapter": calibration,
         "pre_concepts": evidence,
@@ -870,7 +1025,8 @@ def build(
             checker=_plan_checker(concept_ids, rule),
             critic=critic,
             store=store,
-            policy_version=POLICY_VERSION,
+            policy_version=(ADAPTIVE_POLICY_VERSION
+                            if pre_coverage.is_adaptive(rule) else POLICY_VERSION),
             fixer=fixer,
         )
     except kernel.ContractError as error:
@@ -972,6 +1128,7 @@ def build(
         plan = plans[concept_id]
         payload = {
             "stage": "prequestions.author",
+            **capture_policy.boundary_fields(env),
             "rules": _author_rules(rules_suffix, rule),
             "chapter": calibration,
             "coverage_plan": plan,
@@ -1001,7 +1158,8 @@ def build(
                 ),
                 critic=critic,
                 store=store,
-                policy_version=POLICY_VERSION,
+                policy_version=(ADAPTIVE_POLICY_VERSION
+                                if pre_coverage.is_adaptive(rule) else POLICY_VERSION),
                 fixer=fixer,
             )
         except kernel.ContractError as error:

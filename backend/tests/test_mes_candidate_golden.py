@@ -79,7 +79,10 @@ def _provider(recorded: dict, calls: list[str]) -> kernel.Provider:
         stage = request["stage"]
         calls.append(stage)
         if stage == "assessment.cell":
-            row = cell_rows[request["source_atom"]["source_qid"]]
+            row = copy.deepcopy(
+                cell_rows[request["source_atom"]["source_qid"]]
+            )
+            row.setdefault("selection_mode", "")
         elif stage == "assessment.materialize":
             row = copy.deepcopy(materialized_rows[request["source_atom"]["source_qid"]])
             row["candidate_id"] = request["candidate_id"]
@@ -197,7 +200,7 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
             for key, value in response.items()
             if key != "source_qid"
         }
-        assert cell["authority"]["policy_version"] == "assessment-cell-3-column-spec"
+        assert cell["authority"]["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
 
     candidates = first["materialized"]["candidates"]
     for candidate, response in zip(
@@ -228,7 +231,7 @@ def test_recorded_candidate_verdicts_replay_without_authority_calls() -> None:
         audit = candidate["_aegis_assessment_materialization"]
         assert audit["rationale"] == response["rationale"]
         assert audit["authority"]["policy_version"] == (
-            "assessment-materialize-15-column-spec"
+            "assessment-materialize-16-selection-mode"
         )
 
     for placement, response in zip(

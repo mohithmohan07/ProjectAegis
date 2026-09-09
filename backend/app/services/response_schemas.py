@@ -77,8 +77,28 @@ def provider_response_format(
 ) -> dict[str, Any]:
     if (
         response_schema is not None
-        and provider == "openai"
-        and str(model).lower().startswith("gpt-5.6")
+        and (
+            (provider == "openai" and str(model).lower().startswith(("gpt-5.6", "gpt-5.4-mini")))
+            or (provider == "gemini" and str(model).lower().startswith("gemini-3.8-flash"))
+        )
     ):
         return {"type": "json_schema", "json_schema": response_schema.json_schema()}
     return {"type": "json_object"}
+
+
+class PreQuestionDraft(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    question_id: str
+    question_text: str
+    answer: str
+    rationale: str
+    tier: Literal["Basic", "Intermediate", "Advanced"]
+
+
+class PreQuestionAuthorResponse(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    questions: list[PreQuestionDraft]
+
+
+def pre_question_author_schema() -> ResponseSchema:
+    return ResponseSchema("aegis_pre_question_author_v1", PreQuestionAuthorResponse)

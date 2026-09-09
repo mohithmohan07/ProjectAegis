@@ -1,4 +1,12 @@
-"""The owner's Pre-Learning coverage rule (register Q30, 7 Sep 2026).
+"""Versioned Pre-Learning coverage policy, frozen inside each run envelope.
+
+The latest owner amendment restores adaptive coverage: the API authors the
+context-sufficient total and tier split for each prerequisite, without padding
+or a numeric quota. Fresh runs record that policy explicitly. Historical Q30
+envelopes keep their five-Basic/five-Intermediate rule unchanged; envelopes
+predating a carried rule keep their original no-rule behavior.
+
+Historical Q30 policy:
 
 Owner ruling, 7 Sep 2026: *"I would like 5 basic and 5 intermediate level
 questions per concept of Pre Learning."* Every Pre-Learning concept
@@ -42,10 +50,12 @@ from .. import identity
 # The envelope metadata key the rule rides under.
 RULE_FIELD = "pre_coverage_rule"
 
-OWNER_RULE: dict[str, Any] = {
+LEGACY_OWNER_RULE: dict[str, Any] = {
     "version": "pre-coverage-owner-2026-09-07",
     "per_tier": {"Basic": 5, "Intermediate": 5},
 }
+ADAPTIVE_VERSION = "pre-coverage-adaptive-2026-09-09-v1"
+OWNER_RULE: dict[str, Any] = {"version": ADAPTIVE_VERSION, "mode": "adaptive"}
 
 
 class CoverageRuleError(ValueError):
@@ -58,6 +68,16 @@ def owner_rule() -> dict[str, Any]:
     return copy.deepcopy(OWNER_RULE)
 
 
+def legacy_owner_rule() -> dict[str, Any]:
+    """The historical Q30 rule; never the default for a fresh run."""
+    return copy.deepcopy(LEGACY_OWNER_RULE)
+
+
+def is_adaptive(rule: Mapping[str, Any] | None) -> bool:
+    """Read the explicit policy discriminator, never infer it from a count."""
+    return isinstance(rule, Mapping) and rule.get("version") == ADAPTIVE_VERSION and rule.get("mode") == "adaptive"
+
+
 def validate(rule: object) -> dict[str, Any]:
     """The rule as a plain dict in tier order, or ``CoverageRuleError``."""
 
@@ -66,6 +86,13 @@ def validate(rule: object) -> dict[str, Any]:
     version = str(rule.get("version") or "").strip()
     if not version:
         raise CoverageRuleError("coverage rule has no version")
+    if version == ADAPTIVE_VERSION or rule.get("mode") == "adaptive":
+        if not is_adaptive(rule) or set(rule) != {"version", "mode"}:
+            raise CoverageRuleError(
+                "adaptive coverage requires its recorded version and mode only; "
+                "no fixed total, per-tier count or quota belongs in that policy"
+            )
+        return owner_rule()
     per_tier = rule.get("per_tier")
     if not isinstance(per_tier, Mapping) or not per_tier:
         raise CoverageRuleError("coverage rule names no tier")
@@ -102,29 +129,34 @@ def rule_for(env: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def stamp(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Production envelope metadata with the owner's rule recorded.
+    """Record adaptive coverage at a fresh envelope mint.
 
-    A rule the caller already supplied is kept (an explicit, versioned
-    profile layer may name its own); only its absence is filled, with the
-    owner's rule of record.
+    Sealed historical envelopes bypass this mint and retain their recorded
+    rule. Copied/stale metadata does not reinstate the withdrawn fixed quota
+    in a new run.
     """
 
     out = copy.deepcopy(dict(metadata or {}))
-    if out.get(RULE_FIELD) is None:
-        out[RULE_FIELD] = owner_rule()
+    out[RULE_FIELD] = owner_rule()
     return out
 
 
 def total(rule: Mapping[str, Any]) -> int:
+    if is_adaptive(rule):
+        raise CoverageRuleError("adaptive coverage has no policy total; read the authored concept plan")
     return sum(int(count) for count in rule["per_tier"].values())
 
 
 def tiers(rule: Mapping[str, Any]) -> tuple[str, ...]:
+    if is_adaptive(rule):
+        return tuple(identity.GROUP_TIER_CODES)
     return tuple(rule["per_tier"])
 
 
 def describe(rule: Mapping[str, Any]) -> str:
     """``"5 Basic + 5 Intermediate (10 in all)"`` — for prose and messages."""
 
+    if is_adaptive(rule):
+        return "adaptive coverage: total and tier split authored from prerequisite mastery"
     parts = [f"{count} {tier}" for tier, count in rule["per_tier"].items()]
     return " + ".join(parts) + f" ({total(rule)} in all)"

@@ -162,7 +162,7 @@ def test_cell_routing_and_quality_keep_missing_pixel_flags():
     meta = {"subject": "Mathematics", "grade": "6"}
     profile = assessment_profile.resolve_for_metadata(None, meta)
     cell = cells.decide_cells([source], meta=meta, profile=profile, envelope_sha256="v" * 64,
-        provider=lambda payload: {"source_qid": "Q1", "sheet_kind": "objective", "question_category": "Multiple Choice Question", "difficulty": "Less", "cognitive_skill": "Remember", "marks": 1, "rationale": "The supplied task has a closed option set."},
+        provider=lambda payload: {"source_qid": "Q1", "sheet_kind": "objective", "question_category": "Multiple Choice Question", "difficulty": "Less", "cognitive_skill": "Remember", "marks": 1, "selection_mode": "single", "rationale": "The supplied task has a closed option set."},
         store=kernel.DecisionStore())[0]
     assert any("assessment_visual_evidence_unavailable" in flag for flag in cell["flags"])
     candidate = {"candidate_id": "C1", **source}

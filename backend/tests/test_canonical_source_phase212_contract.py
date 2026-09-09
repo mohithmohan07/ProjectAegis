@@ -116,6 +116,19 @@ def test_outline_lane_is_exempt():
     assert qx_contract.qx_artifact_valid(bundle, {})
 
 
+def test_prior_sealed_qx_artifact_remains_valid_after_carrier_version_bump():
+    """Additive evidence carriers do not invalidate accepted QX 1.0 bundles."""
+    prior = {
+        "used_for_generation": True,
+        qx.LEDGER_KEY: {
+            "version": "1.0.0",
+            "membership_authority": "model_verdict",
+        },
+    }
+    assert qx_contract.membership_adjudicated(prior)
+    assert qx_contract.qx_artifact_valid(prior, {})
+
+
 def test_parser_era_artifact_is_stale_for_generation():
     """The checkpoint re-key: no ledger + active text lane = recompile."""
     parser_era = {"used_for_generation": True, "tasks": [{"qid": "QINV-0001"}]}

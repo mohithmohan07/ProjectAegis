@@ -159,6 +159,55 @@ def test_missed_asks_enter_the_inventory(monkeypatch, tmp_path):
     assert calls["author"] >= 1
 
 
+def test_author_prompt_covers_embedded_source_asks_without_promoting_dialogue():
+    prompt = " ".join(qx._AUTHOR_SYSTEM.split())
+
+    assert "inside an ordinary paragraph" in prompt
+    assert "info-hub/fact box" in prompt
+    assert "do not promote every question mark" in prompt
+
+
+def test_missed_activity_carries_kind_context_and_visual_media(monkeypatch):
+    """Recovered non-question asks keep source-owned relationships."""
+    source = (
+        "# Chapter 1\n\n"
+        "![rocket diagram](https://example.test/rocket.png)\n\n"
+        "Describe what you observe in the diagram.\n"
+    )
+    canonical = phase2.compile_phase2_source(
+        source, source_filename="activity.mmd", consumer_module="qx_tests"
+    ).canonical
+    blocks, _ = qx._content_blocks(canonical)
+    task_block = next(block for block in blocks if "Describe" in block["raw_text"])
+    visual_block = next(block for block in blocks if block.get("kind") == "figure")
+    task = qx._created_task(
+        canonical,
+        task_block,
+        "Describe what you observe in the diagram.",
+        task_ref="NEW-ACTIVITY",
+        block_id=task_block["block_id"],
+        metadata={
+            "task_kind": "activity",
+            "source_label": "",
+            "context_evidence": "",
+            "context_block_ids": [visual_block["block_id"]],
+            "visual_block_ids": [visual_block["block_id"]],
+        },
+    )
+    qx._attach_context_block(canonical, task, visual_block)
+
+    assert task["source_kind"] == "activity"
+    assert task["source_kind_ruling"] == "qx_model_task_kind"
+    assert task["activity_origin"] is True
+    assert task["requires_context"] is True
+    assert visual_block["block_id"] in task["qx_context_block_ids"]
+    assert task["figure_refs"]
+    assert task["image_urls"] == ["https://example.test/rocket.png"]
+    assert task["content_objects"]["shared_context_blocks"][0]["block_id"] == (
+        visual_block["block_id"]
+    )
+
+
 def test_rejected_candidate_is_recorded_not_silent(monkeypatch, tmp_path):
     monkeypatch.setattr(qx, "_CACHE_DIR", tmp_path / "cache")
     canonical = _compiled()

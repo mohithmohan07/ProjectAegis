@@ -475,19 +475,31 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
         for leaf_index, leaf in enumerate(provisional, start=1):
             leaf_qid = f"{parent_qid}.{leaf_index}"
             is_base = bool(leaf.get("base_task")) and not leaf.get("subpart_label")
+            resolver_parts = [
+                str(leaf.get("shared_context") or "").strip(),
+                str(leaf.get("display_prompt") or "").strip(),
+                str(leaf.get("raw_prompt") or "").strip(),
+            ]
+            if gpt_parts:
+                # A page/task relationship can point at a figure in the
+                # shared parent instruction even when the independent part
+                # repeats no ``Fig. N`` text. Include that source-owned parent
+                # wording when resolving media for every model-decided leaf.
+                resolver_parts.extend([
+                    str(task.get("display_prompt") or "").strip(),
+                    str(task.get("raw_prompt") or "").strip(),
+                ])
+            resolver_prompt = "\n\n".join(value for value in resolver_parts if value)
             figures, urls, unresolved, ambiguous = _resolved_leaf_figures(
                 canonical,
                 # The visual reference is commonly carried by the shared
                 # instruction rather than repeated in every enumerated item.
-                prompt="\n\n".join(
-                    part for part in (
-                        str(leaf.get("shared_context") or "").strip(),
-                        str(leaf.get("display_prompt") or "").strip(),
-                        str(leaf.get("raw_prompt") or "").strip(),
-                    )
-                    if part
-                ),
-                inherited=task if is_base else None,
+                # The outline judge has already decided that these are
+                # independent task leaves; retaining the verified parent
+                # relationship on each leaf preserves a shared source visual
+                # without using proximity or a second semantic opinion.
+                prompt=resolver_prompt,
+                inherited=task if gpt_parts else (task if is_base else None),
             )
             identity_material = "\u241f".join([
                 parent_identity,
@@ -529,14 +541,7 @@ def materialize_task_leaf_cases(canonical: dict[str, Any]) -> int:
                 "image_urls": urls,
                 "_image_captions": {},
                 "explicit_figure_reference_ids": _figure_reference_ids(
-                    "\n\n".join(
-                        part for part in (
-                            str(leaf.get("shared_context") or "").strip(),
-                            str(leaf.get("display_prompt") or "").strip(),
-                            str(leaf.get("raw_prompt") or "").strip(),
-                        )
-                        if part
-                    )
+                    resolver_prompt
                 ),
                 "unresolved_figure_reference_ids": unresolved,
                 "ambiguous_figure_reference_ids": ambiguous,

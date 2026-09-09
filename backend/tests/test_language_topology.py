@@ -262,10 +262,14 @@ def test_expository_mode_never_reaches_the_adapter(monkeypatch, tmp_path):
         )
 
 
-def test_final_topic_template_is_mechanical(monkeypatch, tmp_path):
+@pytest.mark.parametrize("display_name", [
+    "Analysis", "Detailed Analysis", "Analysis of the Chapter",
+    "Detailed Analysis of 'Another Work'",
+])
+def test_final_topic_template_is_mechanical(display_name):
     canonical = _canonical()
     plan = _valid_plan(canonical)
-    plan["topics"][-1]["display_name"] = "Detailed Analysis"
+    plan["topics"][-1]["display_name"] = display_name
     defects = lt.plan_defects(
         plan,
         lt._content_blocks(canonical),
@@ -290,6 +294,52 @@ def test_unaccounted_block_is_a_defect(monkeypatch):
         work_name=WORK,
     )
     assert any("unaccounted source blocks" in d for d in defects)
+
+
+@pytest.mark.parametrize("defect", ["missing", "duplicate"])
+def test_every_source_task_requires_exactly_one_planned_concept_owner(defect):
+    canonical = _canonical()
+    plan = _valid_plan(canonical)
+    tasks = lt._task_payloads(canonical)
+    assert tasks
+    first = plan["topics"][0]["concepts"][0]
+    qid = tasks[0]["qid"]
+    if defect == "missing":
+        first["task_qids"].remove(qid)
+    else:
+        plan["topics"][-1]["concepts"][0]["task_qids"].append(qid)
+    defects = lt.plan_defects(
+        plan, lt._content_blocks(canonical), tasks, work_name=WORK,
+    )
+    expected = "no concept owner" if defect == "missing" else "duplicate concept ownership"
+    assert any(qid in message and expected in message for message in defects)
+
+
+def test_whole_work_task_keeps_its_declared_analysis_owner_without_new_questions():
+    canonical = _canonical()
+    plan = _valid_plan(canonical)
+    tasks = lt._task_payloads(canonical)
+    question_ids = list(plan["topics"][0]["concepts"][0]["task_qids"])
+    plan["topics"][0]["concepts"][0]["task_qids"] = []
+    analysis = plan["topics"][-1]["concepts"][0]
+    analysis["display_name"] = "Characterisation / Speaker"
+    analysis["task_qids"] = question_ids
+    assert lt.plan_defects(
+        plan, lt._content_blocks(canonical), tasks, work_name=WORK,
+    ) == []
+    assert analysis["task_qids"] == [task["qid"] for task in tasks]
+    assert plan["topics"][-1]["concepts"][-1]["task_qids"] == []
+
+
+def test_carried_legacy_plan_keeps_its_recorded_task_validation_policy():
+    canonical = _canonical()
+    plan = _valid_plan(canonical)
+    plan["topics"][0]["concepts"][0]["task_qids"] = []
+    arguments = (plan, lt._content_blocks(canonical), lt._task_payloads(canonical))
+    assert lt.plan_defects(*arguments, work_name=WORK, adapter_version="language-topology-5") == []
+    assert any("no concept owner" in issue for issue in lt.plan_defects(
+        *arguments, work_name=WORK, adapter_version="language-topology-6",
+    ))
 
 
 def test_plan_slot_rides_the_phase3_suffix():

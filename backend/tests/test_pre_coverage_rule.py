@@ -38,7 +38,9 @@ from tests.test_phase3_prequestions import (
 )
 
 
-RULE = pre_coverage.owner_rule()
+# Historical Q30 fixtures keep their frozen quota. Fresh production envelopes
+# now stamp the explicit adaptive policy, tested in test_adaptive_pre_coverage.
+RULE = pre_coverage.legacy_owner_rule()
 TIERS = list(RULE["per_tier"])
 TOTAL = pre_coverage.total(RULE)
 
@@ -47,7 +49,9 @@ def _ruled(env: dict) -> dict:
     """The golden envelope with the owner's rule recorded and resealed."""
 
     out = copy.deepcopy(env)
-    out["metadata"] = pre_coverage.stamp(out.get("metadata") or {})
+    out["metadata"] = {
+        **(out.get("metadata") or {}), pre_coverage.RULE_FIELD: copy.deepcopy(RULE),
+    }
     out["envelope_sha256"] = envelope_mod.seal_sha256(out)
     return envelope_mod.validate(out)
 
@@ -108,7 +112,7 @@ def _ruled_provider(plans=None, split_by_concept=None):
 # 1. One place for the numbers; the envelope records the posture
 # --------------------------------------------------------------------------- #
 
-def test_the_owner_rule_is_five_basic_and_five_intermediate():
+def test_the_historical_owner_rule_remains_five_basic_and_five_intermediate():
     assert RULE == {
         "version": "pre-coverage-owner-2026-09-07",
         "per_tier": {"Basic": 5, "Intermediate": 5},
@@ -118,7 +122,7 @@ def test_the_owner_rule_is_five_basic_and_five_intermediate():
     assert pre_coverage.tiers(RULE) == ("Basic", "Intermediate")
 
 
-def test_the_golden_envelope_records_no_rule_and_a_stamped_one_does(
+def test_the_golden_envelope_records_no_rule_and_historical_envelopes_keep_their_rule(
     golden_envelope,
 ):
     assert pre_coverage.rule_for(golden_envelope) is None
@@ -126,10 +130,12 @@ def test_the_golden_envelope_records_no_rule_and_a_stamped_one_does(
     assert pre_coverage.rule_for(ruled) == RULE
     # The rule is inside the seal: the sealed envelope changed identity.
     assert ruled["envelope_sha256"] != golden_envelope["envelope_sha256"]
-    # A rule the caller already supplied is kept, not overwritten.
+    # Historical explicit profile layers are read as recorded; a fresh mint
+    # must adopt adaptive coverage even when its metadata was copied.
     supplied = {"version": "profile-x", "per_tier": {"Advanced": 2}}
+    assert pre_coverage.rule_for({"metadata": {pre_coverage.RULE_FIELD: supplied}}) == supplied
     stamped = pre_coverage.stamp({pre_coverage.RULE_FIELD: supplied})
-    assert stamped[pre_coverage.RULE_FIELD] == supplied
+    assert stamped[pre_coverage.RULE_FIELD] == pre_coverage.owner_rule()
 
 
 @pytest.mark.parametrize("broken", [

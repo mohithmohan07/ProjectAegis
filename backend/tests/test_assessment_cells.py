@@ -68,6 +68,7 @@ def _valid_response(request: dict, **overrides) -> dict:
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "marks": 3,
+        "selection_mode": "",
         "rationale": "The learner must explain linked characteristics.",
     }
     response.update(overrides)
@@ -156,7 +157,7 @@ def test_cell_decision_carries_complete_content_without_print_position(
         "(not_an_authorized_pinned_source_asset)"
     ]
     authority = cell["authority"]
-    assert authority["policy_version"] == "assessment-cell-3-column-spec"
+    assert authority["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
     assert authority["review_flags"] == []
     assert "created_at" not in authority
     assert "provider" not in authority
@@ -349,7 +350,7 @@ def test_mechanical_exhaustion_routes_to_recorded_fixer(monkeypatch) -> None:
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.cell",
         "unit_id": "QINV-0001",
-        "policy_version": "assessment-cell-3-column-spec",
+        "policy_version": "assessment-cell-4-response-mechanism-sop-2026-09-09",
     }
     assert cell["sheet_kind"] == "descriptive"
     assert cell["authority"]["fixer"] is True

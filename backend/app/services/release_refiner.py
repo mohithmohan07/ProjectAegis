@@ -148,15 +148,7 @@ def _is_editable_label(label: str) -> bool:
 def _image_tokens(value: str) -> list[str]:
     from . import katex_rules
 
-    # Canonical tags may contain a closing bracket inside quoted alt text.
-    # Match the complete canonical token before the existing permissive parser,
-    # which also conserves malformed tags until the rich-text repair boundary.
-    pattern = re.compile(
-        katex_rules._CANONICAL_IMAGE_TAG_RE.pattern
-        + "|" + katex_rules._IMAGE_TAG_RE.pattern,
-        re.IGNORECASE,
-    )
-    return [match.group(0) for match in pattern.finditer(value)]
+    return [match.group(0) for match in katex_rules._IMAGE_TAG_RE.finditer(value)]
 
 
 def _identity_violations(
@@ -471,6 +463,7 @@ def _live_call(payload: dict[str, Any], *, critic: bool) -> dict[str, Any]:
         suffix,
         image_urls=assessment_visual_evidence.image_inputs(payload),
         purpose="advisory_critic" if critic else "concept_validation",
+        stage="concepts.refine.critic" if critic else "concepts.refine",
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
             "concept-refiner-critic" if critic else "concept-refiner",

@@ -226,7 +226,7 @@ def _live_author(payload):
     from .phase3 import evidence, prompts
 
     return generation._openai_json(
-        SYSTEM, prompts.render(payload), purpose="concept_mapping",
+        SYSTEM + policy.boundary_instruction(payload), prompts.render(payload), purpose="concept_mapping",
         image_urls=evidence.image_inputs(payload), response_schema=SCHEMA,
     )
 
@@ -236,7 +236,7 @@ def _live_critic(payload):
     from .phase3 import evidence, prompts
 
     return generation._openai_json(
-        CRITIC_SYSTEM, prompts.render(payload), purpose="advisory_critic",
+        CRITIC_SYSTEM + policy.boundary_instruction(payload), prompts.render(payload), purpose="advisory_critic",
         image_urls=evidence.image_inputs(payload),
     )
 
@@ -259,7 +259,9 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
             concerns.append({"concern_id": f"PC-{len(concerns) + 1:04d}", "origin": str(origin), "issue": str(flag)})
     payload = {
         "stage": "prelearn.adjudicate", "capture_policy": policy.VERSION,
-        "rules": SYSTEM, "response_schema": SCHEMA.identity(),
+        **policy.boundary_fields(env),
+        "rules": SYSTEM + policy.boundary_instruction(policy.boundary_fields(env)),
+        "response_schema": SCHEMA.identity(),
         "chapter": legacy._chapter(env),
         "captures": [lookup[ref] for ref in sorted(lookup)],
         "evidence_index": evidence_index,

@@ -325,6 +325,7 @@ def _run_rewritten_phase3(
     from . import canonical_source_phase3 as phase3_core
     from .phase3 import envelope as p3_envelope
     from .phase3 import runner as p3_runner
+    from . import model_provider
 
     session = phase3_core.active_session() or {}
     graph = phase3_core.active_graph() or {}
@@ -420,6 +421,7 @@ def _run_rewritten_phase3(
     if env is None:
         from .phase3 import pre_coverage as p3_coverage
         from . import prelearning_capture_policy
+        from . import source_topic_policy
 
         env = p3_envelope.build(
             graph=graph,
@@ -433,10 +435,14 @@ def _run_rewritten_phase3(
             # rule (or the absence) it was sealed with — decide-once.
             metadata={
                 **p3_coverage.stamp(kwargs.get("meta") or {}),
+                **({model_provider.PROFILE_KEY: model_provider.bound_profile()}
+                   if model_provider.bound_profile() is not None else {}),
                 # New Phase 3 boundaries adopt the complete-evidence/atomic
                 # capture contract. Reused envelopes above remain verbatim,
                 # including the absence of this key on historical runs.
                 prelearning_capture_policy.KEY: prelearning_capture_policy.VERSION,
+                prelearning_capture_policy.BOUNDARY_KEY: prelearning_capture_policy.BOUNDARY_VERSION,
+                "source_topic_policy_version": source_topic_policy.SOURCE_TOPIC_POLICY_VERSION,
             },
         )
         if envelope_path is not None:

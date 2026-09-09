@@ -386,6 +386,12 @@ class UploadJob(Base):
     # Cumulative OpenAI billing-token usage for the currently staged physical
     # file, including billable retries and resumed generation attempts.
     openai_usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Stable identity and state for the complete Concept -> review -> Master
+    # run.  This survives separate HTTP requests and checkpoint import; it is
+    # intentionally separate from the generation checkpoint, whose payload is
+    # allowed to be replaced as each mechanical stage advances.
+    run_id: Mapped[str] = mapped_column(String(128), default="")
+    run_state: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     @property
@@ -454,6 +460,24 @@ class UploadJob(Base):
                     "recovery": _Q24_RECOVERY_MESSAGE,
                 }
         return {}
+
+    @property
+    def concept_review(self) -> dict:
+        """Durable review-gated Concept → Master workflow state.
+
+        Kept as a property for additive compatibility: old database rows and
+        checkpoint bundles have no marker and therefore expose ``{}``.
+        """
+        inventory = self.question_inventory
+        if not isinstance(inventory, dict):
+            return {}
+        value = inventory.get("_aegis_concept_review")
+        return dict(value) if isinstance(value, dict) else {}
+
+    @property
+    def review_workflow(self) -> dict:
+        """Frontend vocabulary for the same durable Concept review marker."""
+        return self.concept_review
 
     @property
     def checkpoint_stage(self) -> str:

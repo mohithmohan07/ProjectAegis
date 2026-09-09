@@ -940,3 +940,10 @@ def test_all_active_runtime_calls_declare_a_known_purpose():
     assert len(workbook_calls) == 5
     assert len(workbook_purposes) == len(workbook_calls)
     assert set(workbook_purposes) <= set(EXPECTED_REASONING_POLICY)
+
+
+@pytest.fixture(autouse=True)
+def _historical_routing_contract():
+    from app.services import model_provider
+    with model_provider.bind_profile(None):
+        yield

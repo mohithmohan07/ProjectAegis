@@ -114,12 +114,16 @@ def syllabus_workbook_dirs() -> list[Path]:
 
 
 def has_openai() -> bool:
-    """A usable model-provider credential is present (OpenAI or Gemini).
+    """OpenAI is required for source/concept work in the stage profile.
 
-    Gemini rides the OpenAI-compatible endpoint through the same client, so
-    for every "can we generate live?" question the two credentials are
-    interchangeable. The name is kept for its long-standing call sites.
+    A historical bound run retains its original interchangeable credential
+    check. New full Concept runs additionally preflight Gemini before spend;
+    a Gemini-only credential never routes their other stages to Google.
     """
+    from .services import model_provider
+
+    if model_provider.bound_profile() is not None:
+        return bool(os.environ.get("OPENAI_API_KEY"))
     return bool(
         os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY")
     )

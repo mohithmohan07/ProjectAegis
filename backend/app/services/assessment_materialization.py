@@ -21,7 +21,9 @@ from .. import bulk_import as bi
 from .. import config
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_response_policy as response_policy
 from . import column_spec
+from . import source_task_polishing_policy as source_format
 from .response_schemas import advisory_critic_schema
 from . import assessment_visual_evidence as visual_evidence
 from . import assessment_release as rel
@@ -44,8 +46,11 @@ from .phase3 import kernel
 # ``-13`` adopts Master Governing Contract v2.0: label-free Objective
 # explanations (§22), identical Descriptive model answers (§24), the True or
 # False Subjective projection (§23.1) and English-only rubric tags (§28).
-MATERIALIZE_POLICY_VERSION = "assessment-materialize-15-column-spec"
+# ``-14`` carries the model-authored Objective selection mode and preserves
+# source option cardinality through materialization and read-back.
+MATERIALIZE_POLICY_VERSION = "assessment-materialize-16-selection-mode"
 SOURCE_WORDING_AUTHORITY_VERSION = "source-master-raw-1"
+SOURCE_FORMAT_MATERIALIZE_POLICY_VERSION = "assessment-materialize-17-source-task-selection-mode"
 
 _PROMPT_CACHE_STABLE_KEYS = (
     "stage",
@@ -162,11 +167,14 @@ MATERIALIZE_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.ASSESSMENT_QUAL
     "assets, source_context, an answer or an audit is not a complete "
     "learner question. Do not create duplicate standalone child questions "
     "or move a child-only stimulus to unrelated tasks.\n"
-    "For Objective cells, return no more than six canonical options with "
-    "exactly one correct marker: each answers[] entry is an object whose "
+    "For Objective cells, return no more than six canonical options and "
+    "preserve every source option in display order. The blueprint cell's "
+    "authored selection_mode controls correct markers: \"single\" uses "
+    "correct_answer \"1\" on exactly one option, while \"multiple\" uses "
+    "it on every correct option supplied by the source. In either mode all "
+    "other options carry \"0\". Each answers[] entry is an object whose "
     "answer_content carries the option text (never empty, never a "
-    "duplicate), whose correct_answer is \"1\" on exactly one option "
-    "and \"0\" on every other, and whose answer_type names the option's "
+    "duplicate), and whose answer_type names the option's "
     "medium — exactly Phrases, Equation, or Image. The answers array is the "
     "paper display order and maps to lowercase a), b), c), d), e), f); option "
     "labels are never uppercase. Do not include a label inside "
@@ -324,6 +332,8 @@ MATERIALIZE_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_Q
     "content, notation and blanks projected, an activity carried as "
     "stated), "
     "source fidelity, answer correctness, answer-space preservation, "
+    "Objective selection_mode fidelity (single has one correct marker; "
+    "multiple retains every source option and its multiple correct markers), "
     "clarity and grade fit, semantic answer/rubric completeness, visual "
     "dependence, answer leakage, stem/option separation (an Objective stem "
     "that enumerates its own options), invented subquestions (a part "
@@ -364,6 +374,22 @@ MATERIALIZE_CRITIC_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_Q
 
 _AUDIT_FIELD = "_aegis_assessment_materialization"
 
+# Reuse the unchanged rendering/answer/rubric sections. These are fixed
+# prompt-section boundaries, not source-content classifiers. The historical
+# system strings above and their kernel policy IDs remain replay-compatible.
+SOURCE_FORMAT_MATERIALIZE_SYSTEM = (
+    MATERIALIZE_SYSTEM.partition("For a source-owned item")[0]
+    + source_format.MATERIALIZE_RULES
+    + "For a poem"
+    + MATERIALIZE_SYSTEM.partition("For a poem")[2]
+)
+SOURCE_FORMAT_CRITIC_SYSTEM = (
+    MATERIALIZE_CRITIC_SYSTEM.partition("for a source-owned Master item")[0]
+    + source_format.REVIEW_RULES
+    + "Judge source fidelity,"
+    + MATERIALIZE_CRITIC_SYSTEM.partition("source fidelity,")[2]
+)
+
 
 class MaterializationError(ValueError):
     """The materialization obligation cannot be bound mechanically."""
@@ -399,6 +425,11 @@ def _validate_obligation(
 ) -> str:
     if atom is not None and not isinstance(atom, Mapping):
         raise MaterializationError("source atom is not an object")
+    if source_format.applies(atom) and (
+        not isinstance(atom.get("frozen_task_text"), str)
+        or not atom["frozen_task_text"].strip()
+    ):
+        raise MaterializationError("source-task-format atom has no frozen task wording")
     if not isinstance(cell, Mapping):
         raise MaterializationError("blueprint cell is not an object")
     if not isinstance(meta, Mapping):
@@ -495,6 +526,7 @@ def _proposal_defects(
     descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
     tags_required: bool | None = None,
     column_policy: Mapping | None = None,
+    atom: Mapping | None = None,
 ) -> list[str]:
     """Validate response mechanics only; semantic quality belongs to models."""
 
@@ -563,21 +595,50 @@ def _proposal_defects(
                     f"answer {position} medium-format: {issue}"
                 )
     if kind == "objective":
+        selection_mode = str(cell.get("selection_mode") or "").strip()
+        if selection_mode and selection_mode not in response_policy.SELECTION_MODES:
+            defects.append(
+                f"objective selection_mode {selection_mode!r} is unsupported"
+            )
         if not 1 <= len(answers) <= MAX_OBJECTIVE_OPTIONS:
             defects.append(
                 f"objective needs 1..{MAX_OBJECTIVE_OPTIONS} options "
                 f"(got {len(answers)})"
             )
+        elif selection_mode and len(answers) < 2:
+            defects.append(
+                "new Objective selection_mode requires at least two "
+                f"options (got {len(answers)})"
+            )
         correct = [
             answer for answer in answers
             if rel.is_correct_option(answer.get("correct_answer"))
         ]
-        if len(correct) != 1:
+        if selection_mode == "multiple" and len(correct) < 2:
+            defects.append(
+                "multiple selection_mode requires at least two correct "
+                f"options (got {len(correct)})"
+            )
+        elif selection_mode != "multiple" and len(correct) != 1:
             defects.append(
                 f"exactly one correct option required (got {len(correct)}): "
                 "each answers[] object needs correct_answer \"1\" on the "
                 "one correct option and \"0\" on the rest"
             )
+        source_options = atom.get("options") if isinstance(atom, Mapping) else None
+        # New SOP-bound Objective cells carry an explicit selection mode. A
+        # missing mode is a historical sealed cell and keeps its old replay
+        # contract, including source rows that used ``options`` as answer
+        # evidence rather than as a complete visible choice set.
+        if selection_mode and isinstance(source_options, list) and source_options:
+            # Option cardinality is source-owned wire evidence. It is safe to
+            # check mechanically, while option meaning and the correct set
+            # remain the author's judgment.
+            if len(answers) != len(source_options):
+                defects.append(
+                    "objective option cardinality must preserve the source "
+                    f"({len(source_options)} supplied, {len(answers)} returned)"
+                )
         contents = [
             str(answer.get("answer_content") or "").strip()
             for answer in answers
@@ -769,6 +830,7 @@ def _checker(
     descriptive_answer_capacity: int = MAX_DESCRIPTIVE_ANSWERS,
     tags_required: bool | None = None,
     column_policy: Mapping | None = None,
+    atom: Mapping | None = None,
 ) -> kernel.Checker:
     def check(response: Mapping[str, Any]) -> list[str]:
         return _proposal_defects(
@@ -778,6 +840,7 @@ def _checker(
             descriptive_answer_capacity=descriptive_answer_capacity,
             tags_required=tags_required,
             column_policy=column_policy,
+            atom=atom,
         )
 
     return check
@@ -791,7 +854,7 @@ def _live_materialize(payload: dict[str, Any]) -> dict[str, Any]:
         stable_keys=_PROMPT_CACHE_STABLE_KEYS,
     )
     return generation._openai_json(
-        MATERIALIZE_SYSTEM,
+        str(payload.get("rules") or MATERIALIZE_SYSTEM),
         suffix,
         purpose="concept_mapping",
         image_urls=visual_evidence.image_inputs(payload),
@@ -812,7 +875,9 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
         stable_keys=_PROMPT_CACHE_STABLE_KEYS,
     )
     return generation._openai_json(
-        MATERIALIZE_CRITIC_SYSTEM,
+        (SOURCE_FORMAT_CRITIC_SYSTEM
+         if source_format.applies(payload.get("source_atom"))
+         else MATERIALIZE_CRITIC_SYSTEM),
         suffix,
         purpose="advisory_critic",
         response_schema=advisory_critic_schema(),
@@ -872,6 +937,9 @@ def _assemble(
     source = dict(atom or {})
     review_flags = _review_flags(decision)
     authority = _stable_authority(decision)
+    if source_format.applies(source) and source.get("polish_review_required"):
+        review_flags.append("source_task_polishing_review: see the retained upstream polish_audit")
+        authority["review_flags"] = list(review_flags)
     audit = {
         "rationale": str(response.get("rationale") or ""),
         "flags": review_flags,
@@ -907,6 +975,9 @@ def _assemble(
         "question_text": question,
         "sheet_kind": str(cell.get("sheet_kind") or ""),
         "question_category": str(cell.get("question_category") or ""),
+        # New cell verdicts carry the model-authored Objective cardinality;
+        # an absent value remains the legacy single-correct profile.
+        "selection_mode": str(cell.get("selection_mode") or ""),
         "cognitive_skill": str(cell.get("cognitive_skill") or ""),
         "difficulty": str(cell.get("difficulty") or ""),
         "marks": cell.get("marks"),
@@ -957,6 +1028,10 @@ def _assemble(
         **({"compound_subparts": copy.deepcopy(source["compound_subparts"])}
            if "compound_subparts" in source else {}),
         "route_evidence": copy.deepcopy(source.get("route_evidence") or {}),
+        **({key: copy.deepcopy(source[key]) for key in (
+            source_format.FIELD, "frozen_task_text", "normalized_source_text",
+            "polish_audit", "polish_review_required",
+        ) if key in source} if source_format.applies(source) else {}),
         "assessment_gist": copy.deepcopy(source.get("assessment_gist")),
         "assessment_eligibility": (
             "flagged" if review_flags else "accepted"
@@ -971,7 +1046,7 @@ def _source_wording_authority(atom: Mapping | None) -> dict[str, Any] | None:
     """Name the source field and its evidence; never choose or rewrite wording."""
     if atom is None:
         return None
-    return {
+    authority = {
         "version": SOURCE_WORDING_AUTHORITY_VERSION,
         "authoritative_field": "source_atom.raw_text",
         "raw_text": copy.deepcopy(atom.get("raw_text")),
@@ -995,6 +1070,16 @@ def _source_wording_authority(atom: Mapping | None) -> dict[str, Any] | None:
             if key in atom
         },
     }
+    if source_format.applies(atom):
+        authority.update({
+            "version": source_format.VERSION,
+            "authoritative_field": "source_atom.frozen_task_text",
+            "frozen_task_text": copy.deepcopy(atom.get("frozen_task_text")),
+            "normalized_source_text": copy.deepcopy(atom.get("normalized_source_text")),
+            "polish_audit": copy.deepcopy(atom.get("polish_audit")),
+        })
+        authority.pop("derived_context_only", None)
+    return authority
 
 
 def _decision_payload(
@@ -1014,7 +1099,8 @@ def _decision_payload(
     return visual_evidence.bind({
         "stage": "assessment.materialize",
         "critic_response_schema": advisory_critic_schema().identity(),
-        "rules": MATERIALIZE_SYSTEM,
+        "rules": (SOURCE_FORMAT_MATERIALIZE_SYSTEM
+                  if source_format.applies(atom) else MATERIALIZE_SYSTEM),
         "candidate_id": candidate_id,
         "metadata": copy.deepcopy(dict(meta)),
         "workbook_capacities": {
@@ -1069,13 +1155,15 @@ def _materialize_prepared(
         checker=_checker(
             cell,
             candidate_id,
+            atom=atom,
             descriptive_answer_capacity=descriptive_answer_capacity,
             tags_required=bool(payload["rubric_tag_policy"]["required"]),
             column_policy=payload["column_spec_policy"],
         ),
         critic=critic,
         store=store,
-        policy_version=MATERIALIZE_POLICY_VERSION,
+        policy_version=(SOURCE_FORMAT_MATERIALIZE_POLICY_VERSION
+                        if source_format.applies(atom) else MATERIALIZE_POLICY_VERSION),
         fixer=fixer,
     )
     result = _assemble(

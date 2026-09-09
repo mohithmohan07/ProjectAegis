@@ -101,6 +101,88 @@ def test_converted_source_table_renders_with_the_actual_target_katex_engine():
     assert len(report["expressions"][0]["rendered_sha256"]) == 64
 
 
+def test_supplied_council_cabinet_table_renders_below_question_in_final_files():
+    """Keep all supplied screenshot wording through the real dual export."""
+    import hashlib
+    from pathlib import Path
+    import shutil
+
+    from app.bulk_import import assessment_workbook as aw
+    from app.services import assessment_release_service as release_service
+    from app.services import canonical_source_phase3 as phase3
+    from app.services import katex_render_validation as validation
+    from tests import test_assessment_master_refiner as fixtures
+
+    engine = Path(__file__).resolve().parents[2] / "frontend/node_modules/katex/package.json"
+    if not shutil.which("node") or not engine.is_file():
+        pytest.skip("Install the exact target KaTeX engine with frontend npm ci")
+
+    # Exact cells of the owner's Council of Ministers / Cabinet screenshot.
+    # Its visual line wrapping is presentation; capitalization and words stay.
+    rows = [
+        ["Council of Ministers", "Cabinet"],
+        ["Consists of all the three categories of ministers.",
+         "Is a group of senior ministers holding important portfolios."],
+        ["The PM may or may not consult them", "The PM always consults them"],
+        ["Rarely meets as a whole", "Meets as frequently as possible"],
+        ["Does not advise the President", "Advises the President through the PM"],
+        ["Larger group", "Smaller group"],
+        ["May or may not hold important Portfolios", "Hold important Portfolios"],
+    ]
+    table = phase3._render_verified_page_block({}, {"kind": "table", "table_rows": rows})
+    assert r"\begin{array}{|c|c|}" in table
+    assert table.count(r"\hline") == len(rows) + 1
+    assert table.count(" & ") == len(rows)
+    for row in rows:
+        for cell in row:
+            assert r"\text{" + cell + "}" in table
+    assert kr.rich_text_issues(table) == []
+
+    # A mechanical placement fixture, not a question inferred from the image.
+    stem = r"\text{Fixture question: inspect the table below.}\\[0.12 cm]"
+    question = kr.katex(stem + kr.unwrap_katex(table))
+    payload = fixtures._payload()
+    concept = payload["concept_snapshot"]["topics"][0]["concepts"][0]
+    concept["concept_details"] = "Description: " + table
+    candidate = next(row for row in payload["candidates"]
+                     if row["candidate_id"] == fixtures.DESCRIPTIVE_ID)
+    candidate["question"] = candidate["question_text"] = question
+    snapshot = release_service.snapshot_from_staged_release(payload)
+    outputs = aw.build_dual_output(snapshot, fixtures._LEGACY_PROFILE)
+    assert outputs["valid"], outputs["manifest"]["read_back"]
+
+    concept_rows = aw.parse_workbook(outputs["concepts_xlsx"])["sheets"]["Objective"]["rows"]
+    assert any(from_workbook_rich_text(row["concept_details"]) == "Description: " + table
+               for row in concept_rows)
+    master_rows = aw.parse_workbook(outputs["master_xlsx"])["sheets"]["Descriptive"]["rows"]
+    exported = next(row for row in master_rows
+                    if row.get("question_label") == candidate["question_label"])
+    assert from_workbook_rich_text(exported["concept_details"]) == "Description: " + table
+    assert from_workbook_rich_text(exported["question"]) == question
+    assert from_workbook_rich_text(exported["question_text"]) == "\n".join(
+        [question, *(part["text"] for part in candidate["sub_questions"])]
+    )
+    for field in ("question", "question_text"):
+        assert stem + kr.unwrap_katex(table) in exported[field]
+        assert exported[field].count(r"\begin{array}{|c|c|}") == 1
+
+    report = validation.validate_workbooks({
+        "03_post_concepts.xlsx": outputs["concepts_xlsx"],
+        "04_post_master.xlsx": outputs["master_xlsx"],
+    })
+    assert validation.report_defects(report) == []
+    assert report["engine_version"] == "0.18.7"
+    assert report["scope"] == "serialized_workbook_cells"
+    assert set(report["workbook_sha256s"]) == {"03_post_concepts.xlsx", "04_post_master.xlsx"}
+    expected_ids = {
+        hashlib.sha256(value[len("[Katex]"):-len("[/Katex]")].encode()).hexdigest()
+        for value in (table, question)
+    }
+    table_receipts = [row for row in report["expressions"] if row["id"] in expected_ids]
+    assert {row["id"] for row in table_receipts} == expected_ids
+    assert all(len(row["rendered_sha256"]) == 64 for row in table_receipts)
+
+
 @pytest.mark.parametrize("wrapper", ["[Katex] {} [/Katex]", r"\[{}\]", "$${}$$"])
 def test_mixed_math_table_wrappers_remain_whole_for_api_repair(wrapper):
     source = wrapper.format(r"x + \begin{tabular}{ll}A&B\\1&2\end{tabular} + y")

@@ -586,7 +586,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _policy_instruction(payload: Mapping[str, Any]) -> str:
-    return ("\n" + capture_policy.CAPTURE_INSTRUCTION) if payload.get("capture_policy") == capture_policy.VERSION else ""
+    return (("\n" + capture_policy.CAPTURE_INSTRUCTION) if payload.get("capture_policy") == capture_policy.VERSION else "") + capture_policy.boundary_instruction(payload)
 
 
 def _vision_kwargs(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -748,6 +748,7 @@ def capture_stage(
 
     payload = {
         "stage": f"prelearn.capture:{stage}",
+        **capture_policy.boundary_fields(env),
         "rules": _capture_rules(stage, rules_suffix),
         "evidence": evidence,
     }
@@ -891,6 +892,7 @@ def merge(
 
     payload = {
         "stage": "prelearn.merge",
+        **capture_policy.boundary_fields(env),
         "rules": _merge_rules(rules_suffix),
         "captures": capture_rows,
     }

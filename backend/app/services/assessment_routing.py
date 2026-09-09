@@ -456,6 +456,48 @@ def route_candidate(
     candidate_id = _candidate_id(candidate)
     route_keys = _concept_keys(concepts)
     envelope_sha = _envelope_hash(envelope_sha256)
+    reviewed_target = candidate.get("reviewed_target")
+    if isinstance(reviewed_target, Mapping):
+        # A reviewed Concept workbook is an accepted identity decision. The
+        # runner supplies its exact staged Concept key; this branch makes the
+        # no-API guarantee explicit and prevents a malformed/stale receipt
+        # from falling through to semantic routing.
+        constrained = _constraint(candidate)
+        if constrained is not None and constrained in route_keys:
+            basis = "reviewed_target"
+            return _placement(
+                candidate,
+                concept_key=constrained,
+                basis=basis,
+                evidence=(
+                    "the accepted reviewed Concept target names this "
+                    "released concept"
+                ),
+                rationale=(
+                    "the reviewed Concept/Type/Case handoff supplies an "
+                    "exact staged Concept identity"
+                ),
+                candidate_routes=route_keys,
+                authority=_mechanical_authority(basis),
+            )
+        basis = "reviewed_target"
+        flag = "reviewed_target_unresolved"
+        return _placement(
+            candidate,
+            concept_key=None,
+            basis=basis,
+            evidence=str(candidate.get("reviewed_target_error") or ""),
+            rationale=(
+                "the accepted reviewed target could not be joined to an "
+                "exact staged Concept; semantic fallback is prohibited"
+            ),
+            flags=[flag],
+            candidate_routes=route_keys,
+            authority={
+                **_mechanical_authority(basis),
+                "review_flags": [flag],
+            },
+        )
     constrained = _constraint(candidate)
     if constrained is not None:
         if constrained in route_keys:

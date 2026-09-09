@@ -935,6 +935,57 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 .output-disabled .output-name { color: var(--text-2); }
 .output-reason { font-size: 11.5px; line-height: 1.5; color: var(--muted); }
 
+/* ======================== Concept-first review ========================== */
+.concept-review-workflow {
+  border-left: 3px solid var(--yellow);
+}
+.concept-review-workflow > .row:first-child {
+  align-items: flex-start;
+}
+.concept-review-workflow .section-title {
+  margin-bottom: 0;
+}
+.concept-review-lanes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.concept-review-lane {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+  padding: 14px 16px;
+}
+.concept-review-lane .button-link,
+.concept-review-lane button {
+  min-height: 36px;
+}
+.concept-review-continue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--border);
+}
+.review-wait-card {
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--panel-2);
+  color: var(--text-2);
+  padding: 12px 14px;
+  line-height: 1.55;
+}
+
+@media (max-width: 700px) {
+  .concept-review-lanes { grid-template-columns: 1fr; }
+  .concept-review-continue { align-items: stretch; flex-direction: column; }
+}
+
 .artifact-evidence { margin-top: 14px; }
 .artifact-evidence > summary { padding: 2px 0; }
 .artifact-evidence .row { margin-top: 10px; }

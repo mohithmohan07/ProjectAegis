@@ -1,6 +1,73 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q38 (9 September 2026).**
+**Latest owner amendment: Q41 (9 September 2026).**
+[Q41](docs/aegis-restructure.md#q41--decided--complete-question-membership-response-mechanism-classification-and-concept-review-before-masters)
+requires every source-set task, including in-text and activity/info-hub prompts,
+to enter the semantic question inventory with its necessary source context and
+media. Numbering and an umbrella instruction do not make independent questions
+multipart. Only a meaningful shared context with dependent questions forms a
+single multipart unit; models decide those boundaries, with advisory review.
+Apply the owner's attached classification SOP by response mechanism: Objective
+selects explicit answer options; Subjective supplies a short fixed response;
+Descriptive constructs reasoning, calculation, explanation, drawing, mapping,
+or an extended response. True/False remains Subjective. See
+`docs/question-classification-sop.md`. New runs produce complete Pre/Post
+Concept files first, pause for optional corrected-workbook uploads, and build
+Masters only when the reviewer continues. This authorized review boundary
+supersedes older unattended-through-Master language; it removes no model stage.
+The owner's follow-up explicitly permits the reviewer to omit, add or move
+Post questions in the Concept file's Types/Cases. The reviewed question set
+is authoritative for the Post Master: preserve exactly that set, including
+manual additions and omissions with revision provenance; the API must not
+invent additional Post questions or restore deliberately removed ones. Pre
+questions continue to be generated automatically under Q40. Replace the old
+Review & Edit section with the download/corrected-file/continue workflow.
+Both Pre and Post accept their same downloaded Concept Excel after local edits;
+neither requires a separate correction template. Edited Pre concepts govern
+the prerequisite bank generated under Q40.
+Corrections are staged inputs, not CMS publication. Preserve the same run's
+logs, all attempts/cost receipts, monotonic progress, and cumulative active
+processing time across review, reupload and resume; distinguish review waiting
+time. Keep immutable source evidence, exact-once reviewed-question provenance, historical
+sealed replay and all Q40 model policies. The owner's latest follow-up
+explicitly authorizes pushing and merging after implementation and validation,
+superseding the prior push-approval block and merge hold. No separate manual
+Fly deployment or restart is requested.
+
+**Previous owner amendment: Q40 (9 September 2026).**
+[Q40](docs/aegis-restructure.md#q40--decided--stage-model-routing-adaptive-pre-coverage-and-inr-cost-logs)
+requires Gemini `gemini-3.8-flash` only for Pre question authoring, Luna
+`gpt-5.6-luna` at `xhigh` for concept writing, and GPT-5.4 mini/Luna according
+to stage and complete-context capacity elsewhere. Preserve every review stage.
+The fixed 5 Basic + 5 Intermediate rule is superseded for new envelopes by an
+API-authored contextual coverage plan; no padding, tier balancing or extra
+prerequisite teaching. Freeze model/coverage policies for new work, retain
+historical sealed decisions and recorded policies. Topic names identify their
+actual content/work. Preserve concept/question-owned image URL tags and the
+complete bordered KaTeX table form. Logs show individual and cumulative
+estimated charges in INR, including Gemini, retries and resumed history, with
+recorded exchange-rate provenance and honest missing-usage states. Production
+API credentials already exist according to the owner; read-only Fly access is
+offered for verification. No merge, deployment or restart is authorized. A
+prior automatic approval review rejected the GitHub push; do not retry without
+explicit authorization. See `docs/model-routing-review-2026-09-09.md`.
+
+**Previous owner amendment: Q39 (9 September 2026).**
+[Q39](docs/aegis-restructure.md#q39--decided--meaningful-topics-complete-source-coverage-and-faithful-task-polishing)
+requires meaningful, source-backed topic/concept ownership without generic
+Introduction/Summary/Exercises buckets or content loss. Short lower-grade
+sections retain independent capabilities. English ends with source-supported
+whole-work Detailed Analysis, with questions allocated to their actual lens.
+Post questions are source-only; the existing upstream polish may faithfully
+adapt boxes/ticks/grids while preserving every demand and visual. Preserve raw
+source and freeze the accepted polished wording before clustering; the Master
+Refiner's question freeze remains. Pre contains only necessary, supported prior
+learning; unsupported candidates have explicit dispositions, not extra teaching.
+New policies are versioned for fresh envelopes/items, preserving historical
+replay. Keep PR #297 a draft with the existing deployment hold. See
+`docs/source-topic-review-2026-09-09.md` for the supplied-source findings.
+
+**Previous owner amendment: Q38 (9 September 2026).**
 [Q38](docs/aegis-restructure.md#q38--decided--question-owned-tables-visible-images-and-readable-excel)
 requires question-owned tables to appear with their question as a complete
 KaTeX array under the existing rules, or one complete faithful image where

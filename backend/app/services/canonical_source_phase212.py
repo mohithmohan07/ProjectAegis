@@ -29,9 +29,9 @@ length bound, or count decides what the source means.
 
 Wiring note (QX2): this module is invoked from the Phase 2.1.2 compile
 contract after Phase 2.1 hardening; it never runs inside artifact
-builders. Visual-ownership normalization runs BEFORE adjudication, so a
-task created here from missed-ask evidence carries no visual ownership
-pass — recorded in the ledger rather than assumed away.
+builders. Visual relationships selected by the author are resolved against
+the canonical block/figure ledger during reconciliation, so a recovered ask
+and its context retain source-owned media without a second semantic pass.
 """
 from __future__ import annotations
 
@@ -45,7 +45,14 @@ from . import canonical_source
 from . import canonical_source_phase21_structure as structure
 from . import progress
 
-QX_VERSION = "1.0.0"
+# 1.1.0 adds source-owned kind and relationship carriers to model-recovered
+# asks.  The cache key includes this version, so historical sealed ledgers are
+# never reinterpreted under the new response shape.
+QX_VERSION = "1.1.0"
+# Kept readable for artifact validation: old sealed ledgers remain accepted
+# as-is, while only the current version is minted by new adjudications.
+LEGACY_QX_VERSIONS = frozenset({"1.0.0"})
+ACCEPTED_QX_VERSIONS = frozenset({QX_VERSION, *LEGACY_QX_VERSIONS})
 QX_COMPILER = "qx-task-membership-1"
 LEDGER_KEY = "task_verdict_ledger"
 
@@ -236,6 +243,13 @@ book asks the learner to do something there.
 Rules:
 - Judge the printed content, in any language. A task needs no question mark,
   no English cue word, no recognised heading, and no particular length.
+- Inspect learner-directed work wherever it appears: inside an ordinary
+  paragraph, prose/poem/passage, table, caption, sidebox, recap, activity, or
+  info-hub/fact box. Recover the exact ask from the block evidence and retain
+  the surrounding passage/figure as selected context. A purely informative
+  box remains source content. An interrogative line in literary, quoted, or
+  character dialogue is source content unless the page explicitly asks the
+  learner to answer or complete it; do not promote every question mark.
 - A rhetorical device the book answers itself is not a learner task.
 - Confirm a candidate when it is a genuine learner ask; reject it when it is
   not (heading banners, exposition fragments, mangled spans).
@@ -243,8 +257,22 @@ Rules:
   VERBATIM from the block text as evidence_text, and give each a stable
   task_ref (e.g. NEW-1). If one ask spans several blocks, declare it once
   and mark the later blocks task_continuation with that reference.
-- A block that only sets up or supports a task (a data table, a scenario)
-  is task_context for the tasks that need it.
+- An umbrella instruction such as ``Answer the following questions`` with
+  independent items under it is NOT multipart: reject the umbrella candidate
+  and report one missed ask, with its own task_ref, for each independent item.
+  Keep subquestions together only when they share a meaningful necessary
+  passage, scenario, data, or figure AND depend on that shared context or on
+  one another's answers; quote the complete shared task once. Numbering,
+  letters, bullets, or a question mark never decide this boundary.
+- A block that only sets up or supports a task (a data table, a scenario,
+  passage, or visual) is task_context for the tasks that need it. A recovered
+  ask may also name exact context_block_ids and visual_block_ids from the
+  supplied block ledger. These are source relationships, not proximity
+  guesses.
+- For each recovered ask, rule task_kind as question, activity, or info_hub
+  from the printed content. Preserve an exact visible source_label when one
+  is printed in the same block; otherwise use an empty string. Never invent
+  a cue or repair source wording.
 - A block with no learner ask at all is not_task.
 - Use uncertain only when you genuinely cannot decide from the evidence;
   it routes the block to a recorded review decision.
@@ -255,7 +283,9 @@ You are correcting your previous question-inventory verdicts. The listed
 defects are MECHANICAL contract violations (missing or duplicate block
 coverage, unknown ids, unlocatable evidence quotes, unruled candidates).
 Return the corrected complete verdict set for the listed blocks. Do not
-change decisions the defects do not touch."""
+change decisions the defects do not touch. Preserve the complete missed_asks
+metadata (task_kind, verbatim source_label/context_evidence, and canonical
+context/visual block IDs) when a recovered ask is part of the correction."""
 
 _FIXER_SYSTEM = """\
 You are The Fixer for a school-textbook question inventory. One source
@@ -263,13 +293,20 @@ block could not be decided by the ordinary author pass. Read the block, its
 neighbours, and the candidate tasks, and record your best-judgment final
 verdict for this block. You MUST decide: "uncertain" is not available to
 you. Your decision is recorded verbatim, flagged for human review, and the
-run completes with it."""
+run completes with it. If you recover an ask, apply the same missed_asks
+contract: classify its task_kind, quote its source_label/context_evidence
+verbatim, and name only ledger block IDs that own required context or
+visuals."""
 
 _CRITIC_SYSTEM = """\
 You are the independent critic of a question-inventory adjudication. You
 receive every block verdict, the candidate rulings, and the resulting task
 list. Look for asks ruled not_task that are really learner tasks, confirmed
 candidates that are not asks, missed groupings, and accounting gaps.
+Check that recovered activity/info_hub prompts remain admitted, that an
+umbrella's independent asks were separated while dependent context-bound
+subquestions stayed together, and that every selected context/visual
+relationship remains attached to its task.
 Your dissent is an advisory review flag for a human reviewer — it blocks
 nothing — so dissent freely and precisely."""
 
@@ -278,10 +315,25 @@ def _missed_ask_schema() -> dict[str, Any]:
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["evidence_text", "task_ref"],
+        "required": [
+            "evidence_text", "task_ref", "task_kind", "source_label",
+            "context_evidence", "context_block_ids", "visual_block_ids",
+        ],
         "properties": {
             "evidence_text": {"type": "string"},
             "task_ref": {"type": "string"},
+            "task_kind": {
+                "type": "string",
+                "enum": ["question", "activity", "info_hub"],
+            },
+            "source_label": {"type": "string"},
+            "context_evidence": {"type": "string"},
+            "context_block_ids": {
+                "type": "array", "items": {"type": "string"},
+            },
+            "visual_block_ids": {
+                "type": "array", "items": {"type": "string"},
+            },
         },
     }
 
@@ -380,7 +432,13 @@ def _block_payload(
         "block_id": str(block.get("block_id") or ""),
         "kind": str(block.get("kind") or ""),
         "section_title": titles.get(str(block.get("section_id") or ""), ""),
+        "source_start": int(block.get("source_start") or 0),
+        "source_end": int(block.get("source_end") or 0),
         "text": str(block.get("raw_text") or ""),
+        # IDs are evidence handles only. The model must select these from the
+        # supplied ledger; the resolver below loads their canonical assets.
+        "figure_id": str(block.get("figure_id") or ""),
+        "image_ids": [str(value) for value in block.get("image_ids") or [] if value],
     }
 
 
@@ -391,6 +449,8 @@ def _author_prompt(
     *,
     context_before: str,
     context_after: str,
+    context_before_block_id: str = "",
+    context_after_block_id: str = "",
 ) -> str:
     batch_ids = {str(block.get("block_id") or "") for block in batch}
     payload = {
@@ -400,6 +460,8 @@ def _author_prompt(
         ),
         "context_before": context_before,
         "context_after": context_after,
+        "context_before_block_id": context_before_block_id,
+        "context_after_block_id": context_after_block_id,
         "blocks": [_block_payload(block, titles) for block in batch],
         "candidates": [
             {
@@ -584,6 +646,79 @@ def verdict_defects(
                     f"{seen_before + 1} not found)",
                     block_id=block_id,
                 )
+            # Relationship and kind fields are semantic decisions supplied by
+            # the model. Validation only proves they remain source-grounded:
+            # references must name canonical blocks and copied text must be
+            # verbatim in the block being ruled.
+            task_kind = str(item.get("task_kind") or "").strip()
+            if task_kind and task_kind not in {"question", "activity", "info_hub"}:
+                defect(
+                    "invalid_missed_ask_kind",
+                    f"missed ask in block {block_id} has invalid task_kind",
+                    block_id=block_id,
+                )
+            source_label = str(item.get("source_label") or "")
+            if source_label and source_label not in block_text:
+                defect(
+                    "missed_ask_source_label_not_verbatim",
+                    f"source_label for missed ask in block {block_id} is not "
+                    "present verbatim in that block",
+                    block_id=block_id,
+                )
+            context_evidence = str(item.get("context_evidence") or "")
+            context_block_ids = [
+                str(value or "") for value in item.get("context_block_ids") or []
+                if str(value or "")
+            ]
+            context_texts = [block_text]
+            context_texts.extend(
+                str(block_by_id[ref].get("raw_text") or "")
+                for ref in context_block_ids if ref in block_by_id
+            )
+            if context_evidence and not any(
+                context_evidence in text for text in context_texts
+            ):
+                defect(
+                    "missed_ask_context_not_verbatim",
+                    f"context_evidence for missed ask in block {block_id} is "
+                    "not present verbatim in its owning or selected context "
+                    "block",
+                    block_id=block_id,
+                )
+            for field, visual_only in (
+                ("context_block_ids", False),
+                ("visual_block_ids", True),
+            ):
+                refs = item.get(field) or []
+                if not isinstance(refs, list):
+                    defect(
+                        "missed_ask_relationships_not_array",
+                        f"{field} for missed ask in block {block_id} is not "
+                        "an array",
+                        block_id=block_id,
+                    )
+                    continue
+                for ref in refs:
+                    ref_id = str(ref or "")
+                    target = block_by_id.get(ref_id)
+                    if target is None:
+                        defect(
+                            "missed_ask_unknown_relationship_block",
+                            f"{field} for missed ask in block {block_id} "
+                            f"names unknown block {ref_id}",
+                            block_id=block_id,
+                        )
+                    elif visual_only and not (
+                        str(target.get("kind") or "") == "figure"
+                        or target.get("figure_id")
+                        or target.get("image_ids")
+                    ):
+                        defect(
+                            "missed_ask_visual_relationship_not_visual",
+                            f"visual_block_ids for missed ask in block {block_id} "
+                            f"names non-visual block {ref_id}",
+                            block_id=block_id,
+                        )
 
     for candidate in candidates:
         cid = candidate["candidate_id"]
@@ -660,6 +795,138 @@ def _section_by_id(canonical: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     }
 
 
+def _attach_block_media(
+    canonical: Mapping[str, Any],
+    block: Mapping[str, Any],
+    task: dict[str, Any],
+) -> None:
+    """Carry media owned by a model-selected source block onto its task.
+
+    The model selects the relationship; this helper only follows canonical
+    block/image/figure identities. It therefore preserves source media without
+    guessing from proximity or interpreting captions.
+    """
+    figures_by_block = {
+        str(figure.get("block_id") or ""): figure
+        for figure in canonical.get("figures") or []
+        if isinstance(figure, Mapping) and figure.get("block_id")
+    }
+    images_by_id = {
+        str(image.get("image_id") or ""): image
+        for image in canonical.get("images") or []
+        if isinstance(image, Mapping) and image.get("image_id")
+    }
+    figure_refs = task.setdefault("figure_refs", [])
+    image_urls = task.setdefault("image_urls", [])
+    captions = task.setdefault("_image_captions", {})
+    raw_figure_refs = task.setdefault("raw_figure_refs", [])
+    raw_image_urls = task.setdefault("raw_image_urls", [])
+    block_id = str(block.get("block_id") or "")
+    figure = figures_by_block.get(block_id)
+    figures = [figure] if figure is not None else []
+    for image_id in block.get("image_ids") or []:
+        image = images_by_id.get(str(image_id or ""))
+        if image is None:
+            continue
+        url = str(image.get("url") or "").strip()
+        if url and url not in image_urls:
+            image_urls.append(url)
+        if url and url not in raw_image_urls:
+            raw_image_urls.append(url)
+        if url:
+            captions.setdefault(
+                url,
+                str(image.get("alt_raw") or "Source visual").strip()
+                or "Source visual",
+            )
+    for figure in figures:
+        figure_id = str(figure.get("figure_id") or "")
+        if figure_id and figure_id not in figure_refs:
+            figure_refs.append(figure_id)
+        if figure_id and figure_id not in raw_figure_refs:
+            raw_figure_refs.append(figure_id)
+        caption = str(
+            figure.get("caption_raw") or figure.get("source_caption")
+            or figure.get("caption") or "Source visual"
+        ).strip() or "Source visual"
+        for url in figure.get("image_urls") or []:
+            url = str(url or "").strip()
+            if not url:
+                continue
+            if url not in image_urls:
+                image_urls.append(url)
+            if url not in raw_image_urls:
+                raw_image_urls.append(url)
+            captions.setdefault(url, caption)
+    if figure_refs or image_urls:
+        task["requires_visual"] = True
+    objects = task.setdefault("content_objects", {})
+    if not isinstance(objects, dict):
+        objects = {}
+        task["content_objects"] = objects
+    visual_blocks = objects.setdefault("source_visual_blocks", [])
+    if not isinstance(visual_blocks, list):
+        visual_blocks = []
+        objects["source_visual_blocks"] = visual_blocks
+    has_visual = bool(figure is not None or block.get("image_ids"))
+    if has_visual and block_id and not any(
+        isinstance(item, Mapping) and str(item.get("block_id") or "") == block_id
+        for item in visual_blocks
+    ):
+        visual_blocks.append({
+            "block_id": block_id,
+            "kind": str(block.get("kind") or ""),
+            "figure_id": str(block.get("figure_id") or ""),
+            "image_ids": [
+                str(value) for value in block.get("image_ids") or [] if value
+            ],
+        })
+
+
+def _attach_context_block(
+    canonical: Mapping[str, Any],
+    task: dict[str, Any],
+    block: Mapping[str, Any],
+) -> None:
+    """Attach exact context text and canonical media from one selected block."""
+    block_id = str(block.get("block_id") or "")
+    raw_text = str(block.get("raw_text") or "").strip()
+    if raw_text:
+        existing = str(task.get("shared_context") or "").strip()
+        if raw_text not in existing:
+            task["shared_context"] = "\n\n".join(
+                part for part in (existing, raw_text) if part
+            )
+        task["requires_context"] = True
+    ids = task.setdefault("qx_context_block_ids", [])
+    if block_id and block_id not in ids:
+        ids.append(block_id)
+    objects = task.setdefault("content_objects", {})
+    if not isinstance(objects, dict):
+        objects = {}
+        task["content_objects"] = objects
+    context_blocks = objects.setdefault("shared_context_blocks", [])
+    if not isinstance(context_blocks, list):
+        context_blocks = []
+        objects["shared_context_blocks"] = context_blocks
+    if block_id and not any(
+        isinstance(item, Mapping) and str(item.get("block_id") or "") == block_id
+        for item in context_blocks
+    ):
+        context_blocks.append({
+            "block_id": block_id,
+            "kind": str(block.get("kind") or ""),
+            "raw_text": raw_text,
+            "source_start": int(block.get("source_start") or 0),
+            "source_end": int(block.get("source_end") or 0),
+            "figure_id": str(block.get("figure_id") or ""),
+            "image_ids": [
+                str(value) for value in block.get("image_ids") or [] if value
+            ],
+        })
+    _attach_block_media(canonical, block, task)
+
+
 def _created_task(
     canonical: Mapping[str, Any],
     block: Mapping[str, Any],
@@ -668,18 +935,20 @@ def _created_task(
     task_ref: str,
     block_id: str,
     search_from: int = 0,
+    metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A task built directly from quoted block evidence.
 
     Field template follows the Phase-2.1 recovery append so every later
     mechanic (renumbering, leaf materialization, inventory render) sees a
-    complete task object. Membership is model-decided; the KIND is a
-    neutral default awaiting a kind ruling, and says so. Explicit figure
-    references in the evidence are resolved mechanically against the
-    canonical Figure ledger (audit F3) — resolved figures ride the task;
-    genuinely unresolved/ambiguous references stay recorded and follow the
-    existing citation policy instead of being cleared.
+    complete task object. Membership and the recovered task kind are model
+    decisions; source text and block relationships are copied or resolved
+    mechanically. Explicit figure references in the evidence are resolved
+    against the canonical Figure ledger (audit F3) — resolved figures ride
+    the task; genuinely unresolved/ambiguous references stay recorded and
+    follow the existing citation policy instead of being cleared.
     """
+    metadata = metadata if isinstance(metadata, Mapping) else {}
     sections = _section_by_id(canonical)
     section_id = str(block.get("section_id") or "")
     section = sections.get(section_id, {})
@@ -690,14 +959,26 @@ def _created_task(
     figure_refs, image_urls, unresolved, ambiguous = (
         structure._resolved_leaf_figures(canonical, prompt=evidence)
     )
+    task_kind = str(metadata.get("task_kind") or "question").strip()
+    source_kind = {
+        "activity": "activity",
+        "info_hub": "info_hub",
+    }.get(task_kind, "checkpoint_question")
+    source_label = str(metadata.get("source_label") or "").strip()
+    context_evidence = str(metadata.get("context_evidence") or "").strip()
+    kind_was_ruled = task_kind in {"question", "activity", "info_hub"}
+    review_flags = [] if kind_was_ruled else [
+        "source kind defaulted pending a kind ruling; task membership "
+        "was decided by the QX author verdict"
+    ]
     return {
         "task_id": "",
         "qid": "",
         "order": 0,
         "order_index": 0,
-        "source_kind": "checkpoint_question",
-        "source_label": "",
-        "parent_source_label": "",
+        "source_kind": source_kind,
+        "source_label": source_label,
+        "parent_source_label": source_label,
         "topic_hint": structure.topic_for_position(canonical, source_start),
         "raw_prompt": evidence,
         "display_prompt": structure.canonical_task_display(evidence),
@@ -710,19 +991,20 @@ def _created_task(
         "source_start": source_start,
         "source_end": source_start + len(evidence),
         "source_location_confidence": "qx_model_missed_ask",
-        "source_kind_ruling": "not_model_ruled_flagged",
-        "review_flags": [
-            "source kind defaulted pending a kind ruling; task membership "
-            "was decided by the QX author verdict"
-        ],
+        "source_kind_ruling": (
+            "qx_model_task_kind" if kind_was_ruled
+            else "not_model_ruled_flagged"
+        ),
+        "review_flags": review_flags,
         "chapter_wide": False,
-        "activity_origin": False,
+        "activity_origin": task_kind == "activity",
         # requires_visual only when a canonical image actually resolved:
         # unresolved/ambiguous references keep their own recorded fields and
         # flow through the existing citation policy — marking them
         # required-with-no-image would trip the wrong gate.
         "requires_visual": bool(image_urls),
-        "requires_context": False,
+        "shared_context": context_evidence,
+        "requires_context": bool(context_evidence),
         "image_urls": list(image_urls),
         "figure_refs": list(figure_refs),
         "explicit_figure_reference_ids": structure._figure_reference_ids(
@@ -733,7 +1015,24 @@ def _created_task(
         "display_overrides": [],
         "membership_authority": "model_verdict",
         "origin": "qx_model_missed_ask",
-        "qx_ruling": {"task_ref": task_ref, "block_id": block_id},
+        "qx_ruling": {
+            "task_ref": task_ref,
+            "block_id": block_id,
+            "task_kind": task_kind,
+        },
+        "qx_missed_ask": {
+            "task_kind": task_kind,
+            "source_label": source_label,
+            "context_evidence": context_evidence,
+            "context_block_ids": [
+                str(value) for value in metadata.get("context_block_ids") or []
+                if str(value or "").strip()
+            ],
+            "visual_block_ids": [
+                str(value) for value in metadata.get("visual_block_ids") or []
+                if str(value or "").strip()
+            ],
+        },
     }
 
 
@@ -846,12 +1145,32 @@ def reconcile(
             created = _created_task(
                 canonical, block, evidence, task_ref=ref,
                 block_id=block_id, search_from=search_from,
+                metadata=item,
             )
             found_at = _locate_evidence(block_text, evidence, search_from)
             cursors[evidence] = (
                 found_at + 1 if found_at >= 0 else search_from + 1
             )
             created_by_ref[ref] = created
+
+    # A recovered ask may own an inline visual, or the author may have linked
+    # a separate context/visual block while recovering it. Resolve those
+    # identities mechanically before any leaf materialization so inventory
+    # renderers receive the same source-owned media packet as parser tasks.
+    for created in created_by_ref.values():
+        ruling = created.get("qx_ruling") or {}
+        owner_block = block_by_id.get(str(ruling.get("block_id") or ""))
+        if owner_block is not None:
+            _attach_block_media(canonical, owner_block, created)
+        metadata = created.get("qx_missed_ask") or {}
+        for field, attach in (
+            ("context_block_ids", _attach_context_block),
+            ("visual_block_ids", _attach_block_media),
+        ):
+            for ref in metadata.get(field) or []:
+                target = block_by_id.get(str(ref or ""))
+                if target is not None:
+                    attach(canonical, created, target)
 
     fixer_flagged: set[str] = set()
     for decision in ledger_core.get("fixer_decisions") or []:
@@ -877,6 +1196,10 @@ def reconcile(
         owner.setdefault("source_followup_prompts", []).append(
             _continuation_row(canonical, block, owner)
         )
+        # The continuation may carry an image block or an inline visual. Keep
+        # the source media on the owner as well as on the follow-up evidence;
+        # the whole-question inventory merge then retains it exactly once.
+        _attach_block_media(canonical, block, owner)
 
     # Audit F3: task_context is ATTACHED, not merely recorded — the ruled
     # stimulus (a data table, a scenario) travels on the task the learner
@@ -914,6 +1237,7 @@ def reconcile(
             owner.setdefault("qx_context_block_ids", [])
             if block_id not in owner["qx_context_block_ids"]:
                 owner["qx_context_block_ids"].append(block_id)
+            _attach_context_block(canonical, owner, block)
             attached.append(ref)
         context_links.append({
             "block_id": block_id,
@@ -1016,6 +1340,45 @@ def reconcile(
         "candidates_rejected": len(rejected_records),
         "rejected_candidates": rejected_records,
         "created_from_missed_asks": len(created_by_ref),
+        # Durable source-only evidence for every recovered occurrence. The
+        # task rows carry the same fields, while this accounting packet makes
+        # coverage auditable even when a later lane filters a task type.
+        "recovered_task_evidence": [
+            {
+                "task_ref": str((task.get("qx_ruling") or {}).get("task_ref") or ""),
+                "block_id": str((task.get("qx_ruling") or {}).get("block_id") or ""),
+                "raw_prompt": str(task.get("raw_prompt") or ""),
+                "task_kind": str((task.get("qx_missed_ask") or {}).get("task_kind") or "question"),
+                "context_block_ids": [
+                    str(value)
+                    for value in (task.get("qx_missed_ask") or {}).get(
+                        "context_block_ids"
+                    ) or []
+                    if value
+                ],
+                "visual_block_ids": [
+                    str(value)
+                    for value in (task.get("qx_missed_ask") or {}).get(
+                        "visual_block_ids"
+                    ) or []
+                    if value
+                ],
+                "figure_refs": [
+                    str(value) for value in task.get("figure_refs") or [] if value
+                ],
+                "image_urls": [
+                    str(value) for value in task.get("image_urls") or [] if value
+                ],
+                "status": "admitted_from_verbatim_source_evidence",
+            }
+            for task in sorted(
+                created_by_ref.values(),
+                key=lambda row: (
+                    int(row.get("source_start") or 0),
+                    str((row.get("qx_ruling") or {}).get("task_ref") or ""),
+                ),
+            )
+        ],
         "task_context_links": context_links,
         "tasks_after": len(canonical.get("tasks") or []),
         # The closed-world proof: nothing may appear here.
@@ -1061,6 +1424,8 @@ def _author_context_sha(
                 str(b.get("block_id") or ""),
                 str(b.get("kind") or ""),
                 titles.get(str(b.get("section_id") or ""), ""),
+                str(b.get("figure_id") or ""),
+                ",".join(str(value) for value in b.get("image_ids") or []),
             ])
             for b in blocks
         ),
@@ -1164,6 +1529,8 @@ def _author_batches(
             titles,
             context_before=str((before or {}).get("raw_text") or ""),
             context_after=str((after or {}).get("raw_text") or ""),
+            context_before_block_id=str((before or {}).get("block_id") or ""),
+            context_after_block_id=str((after or {}).get("block_id") or ""),
         )
         return _call_provider(
             system=_AUTHOR_SYSTEM,
@@ -1297,6 +1664,16 @@ def _critic_review(
             {
                 "qid": str(task.get("qid") or ""),
                 "prompt": str(task.get("display_prompt") or ""),
+                "raw_prompt": str(task.get("raw_prompt") or ""),
+                "source_kind": str(task.get("source_kind") or ""),
+                "source_label": str(task.get("source_label") or ""),
+                "shared_context": str(task.get("shared_context") or ""),
+                "figure_refs": [
+                    str(value) for value in task.get("figure_refs") or [] if value
+                ],
+                "image_urls": [
+                    str(value) for value in task.get("image_urls") or [] if value
+                ],
                 "membership_authority": str(
                     task.get("membership_authority") or ""
                 ),
@@ -1637,10 +2014,10 @@ def _build_ledger(
         ),
         "critic": copy.deepcopy(dict(ledger_core.get("critic") or {})),
         "accounting": copy.deepcopy(dict(accounting)),
-        # Recorded limit: visual-ownership normalization ran before this
-        # adjudication, so a task created from missed-ask evidence has no
-        # visual ownership pass of its own.
+        # Recorded limit: media is resolved only from model-selected canonical
+        # block identities; no independent proximity/ownership judgment runs
+        # after membership adjudication.
         "recorded_limits": [
-            "qx_created_tasks_skip_visual_ownership_pass",
+            "qx_created_tasks_media_resolved_from_selected_blocks",
         ],
     }

@@ -692,12 +692,28 @@ def test_the_post_analyse_base_policy_and_evidence_are_separate(golden_envelope)
     assert preanalyse.mint_item_ids(2) == ["PLA-0001", "PLA-0002"]
 
     # The Post pass's evidence builder still reads the chapter's source
-    # blocks and its question/task inventory, unchanged — the two payload
-    # keys whose absence identifies the Pre payload.
+    # blocks and its question/task inventory, unchanged. The source
+    # coverage ledger is additive evidence for complete membership
+    # accounting; it does not alter the two lane-specific evidence sources
+    # or the Pre payload's absence of current-chapter questions.
     evidence = post.build_evidence(golden_envelope)
-    assert set(evidence) == {"source_blocks", "question_task_inventory"}
+    assert set(evidence) == {
+        "source_blocks", "question_task_inventory", "source_coverage",
+    }
     assert evidence["source_blocks"]
     assert evidence["question_task_inventory"]
+    assert evidence["source_coverage"] == {
+        "source_block_ids": [row["block_id"] for row in evidence["source_blocks"]],
+        "task_qids": [row["qid"] for row in evidence["question_task_inventory"]],
+        "task_membership_authority": "",
+    }
+    for task in evidence["question_task_inventory"]:
+        assert {
+            "qid", "source_kind", "practical_evidence", "text", "raw_text",
+            "source_label", "shared_context", "source_start", "source_end",
+            "source_block_ids", "context_block_ids", "figure_refs", "image_urls",
+            "content_objects", "source_membership",
+        } <= set(task)
 
     # The original base policy is retained. Actual pass replay additionally
     # binds the relevant prompt texts (test_phase3_prompt_replay.py).

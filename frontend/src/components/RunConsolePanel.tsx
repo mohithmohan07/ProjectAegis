@@ -12,7 +12,7 @@ import ApiUsageSummary, {
   formatEstimatedCost,
   formatTokenCount,
 } from "./ApiUsageSummary";
-import { usageCost, usageCostNotes } from "../lib/apiUsage";
+import { usageCost, usageCostInr, usageCostInrNotes } from "../lib/apiUsage";
 import { downloadConsoleSnapshot } from "../lib/runSnapshot";
 
 /* On a phone the console is a bottom sheet: the log needs the room, so
@@ -138,7 +138,8 @@ export default function RunConsolePanel() {
     : state.status === "done"
       ? "final for this run"
       : "recorded so far";
-  const currentCost = state.usage ? usageCost(state.usage) : null;
+  const currentCost = state.usage ? usageCostInr(state.usage) : null;
+  const currentCostUsd = state.usage ? usageCost(state.usage) : null;
 
   const onScroll = () => {
     const el = bodyRef.current;
@@ -224,12 +225,16 @@ export default function RunConsolePanel() {
             {" · "}
             {formatTokenCount(state.usage.total_tokens)} tokens
             {currentCost?.value != null && <>
-              {" · "}{formatEstimatedCost(currentCost.value)}{currentCost.recordedOnly ? " recorded" : ""}
+              {" · "}{formatEstimatedCost(currentCost.value, "INR")}{currentCost.recordedOnly ? " recorded" : ""}
+            </>}
+            {currentCost?.value == null && <> · INR unavailable</>}
+            {currentCost?.conversionMissing && currentCost.value !== null && <> · INR conversion incomplete</>}
+            {currentCost?.conversionMissing && currentCostUsd?.value != null && <>
+              {" ("}{formatEstimatedCost(currentCostUsd.value)}{currentCostUsd.recordedOnly ? " recorded" : ""}{")"}
             </>}
             {currentCost?.pendingCount ? <> · {currentCost.pendingCount} pending</> : null}
             {currentCost?.usageGap && <> · Usage incomplete</>}
             {currentCost?.pricingMissing && <> · Pricing incomplete</>}
-            {currentCost?.value == null && <> · Cost unavailable</>}
           </summary>
           <ApiUsageSummary
             usage={state.usage}
@@ -360,10 +365,17 @@ function StageCard({
           )}
           {cost && (
             <span className="stage-chip" title="Estimated cost of reported, priced usage in this stage">
-              {formatEstimatedCost(cost.cost ?? cost.knownCost)}
-              {(!cost.costComplete || cost.pendingCount > 0) && cost.knownCost !== null ? " recorded" : ""}
+              {cost.costInr !== null || cost.knownCostInr !== null
+                ? formatEstimatedCost(cost.costInr ?? cost.knownCostInr, "INR")
+                : "INR unavailable"}
+              {(!cost.costInrComplete || cost.pendingCount > 0) && cost.knownCostInr !== null ? " recorded" : ""}
+              {cost.conversionMissing && (cost.cost ?? cost.knownCost) !== null && <>
+                {" ("}{formatEstimatedCost(cost.cost ?? cost.knownCost)}
+                {(!cost.costComplete || cost.pendingCount > 0) && cost.knownCost !== null ? " recorded" : ""}{")"}
+              </>}
             </span>
           )}
+          {cost?.conversionMissing && cost.knownCostInr !== null && <span className="stage-chip">INR conversion incomplete</span>}
           {cost && cost.pendingCount > 0 && <span className="stage-chip">{cost.pendingCount} pending</span>}
           {cost?.usageGap && <span className="stage-chip" title="Recorded estimates exclude unresolved charges; the full total is unknown">Usage incomplete</span>}
           {cost?.pricingMissing && <span className="stage-chip" title="Recorded estimates exclude unpriced usage; the full total is unknown">Pricing incomplete</span>}
@@ -397,12 +409,17 @@ function StageCard({
               {(() => {
                 const row = cost?.lanes.find((r) => r.lane === lane);
                 if (!row) return null;
-                const laneCost = usageCost(row);
+                const laneCost = usageCostInr(row);
+                const laneCostUsd = usageCost(row);
                 return (
-                  <span className="stage-lane-cost" title={usageCostNotes(row).join(" ")}>
+                  <span className="stage-lane-cost" title={usageCostInrNotes(row).join(" ")}>
                     {" · "}{formatTokenCount(row.total_tokens)} tok
-                    {" · "}{formatEstimatedCost(laneCost.value)}
+                    {" · "}{laneCost.value !== null ? formatEstimatedCost(laneCost.value, "INR") : "INR unavailable"}
                     {laneCost.recordedOnly && laneCost.value !== null ? " recorded" : ""}
+                    {laneCost.conversionMissing && laneCost.value !== null && <> · INR conversion incomplete</>}
+                    {laneCost.conversionMissing && laneCostUsd.value !== null && <>
+                      {" ("}{formatEstimatedCost(laneCostUsd.value)}{laneCostUsd.recordedOnly ? " recorded" : ""}{")"}
+                    </>}
                     {laneCost.pendingCount > 0 && <> · {laneCost.pendingCount} pending</>}
                     {laneCost.usageGap && <> · Usage incomplete</>}
                     {laneCost.pricingMissing && <> · Pricing incomplete</>}

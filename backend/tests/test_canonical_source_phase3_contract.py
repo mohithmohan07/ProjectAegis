@@ -5,9 +5,12 @@ import copy
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from app.services import canonical_source_phase2 as phase2
 from app.services import canonical_source_phase3 as phase3
 from app.services import build_concepts, generation, uploads
+from app.services import model_provider
 
 
 DATA = Path(__file__).parents[1] / "data" / "Testing"
@@ -230,8 +233,9 @@ def test_only_one_integrated_case_is_cross_topic_synthesis():
     assert mtype["placement_scope"] == "cross_topic_synthesis"
 
 
+@pytest.mark.parametrize("profile", [None, model_provider.new_profile()])
 def test_concepts_wrapper_activates_verified_graph_and_semantic_source(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, profile
 ):
     source = _source()
     canonical = _canonical(source)
@@ -266,7 +270,7 @@ def test_concepts_wrapper_activates_verified_graph_and_semantic_source(
     monkeypatch.setattr(phase3, "prepare_generation_graph", prepare_generation_graph)
     monkeypatch.setattr(phase3, "render_semantic_source", lambda *_args: semantic)
 
-    with phase2.activate(canonical), phase3.activate_session(session):
+    with model_provider.bind_profile(profile), phase2.activate(canonical), phase3.activate_session(session):
         records = generation.concepts_from_mmd(
             source,
             **_metadata(),
@@ -280,6 +284,7 @@ def test_concepts_wrapper_activates_verified_graph_and_semantic_source(
     # graph metadata (docs/aegis-restructure.md §8.1); empty when the caller
     # assembled no set, keeping legacy graph identities unchanged.
     assert observed["metadata"] == {
+        **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
         **_metadata(), "instruction_set_sha256": "",
         # Step 11 (audit F2): the plan slot rides graph metadata; empty on
         # non-literary runs so nothing re-keys.

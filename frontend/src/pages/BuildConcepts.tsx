@@ -12,7 +12,9 @@ import DocumentUpload, {
   hasRunOutputEntries,
 } from "../components/DocumentUpload";
 import SyllabusUploader from "../components/SyllabusUploader";
-import { ConceptReviewPanel } from "../components/ConceptReviewPanel";
+import ConceptReviewWorkflow, {
+  isConceptReviewWaiting,
+} from "../components/ConceptReviewWorkflow";
 import ApiUsageSummary from "../components/ApiUsageSummary";
 import {
   fourOutputCompletionFromManifest,
@@ -20,10 +22,12 @@ import {
   fourOutputResultFields,
 } from "../fourOutputCompletion";
 import type {
+  DurableRunState,
   GenerationRecovery,
   OpenAIUsage,
   PendingSemanticDecision,
   ResumableCheckpoint,
+  ReviewWorkflow,
   Scope,
   UploadJob,
 } from "../types";
@@ -132,16 +136,29 @@ export default function BuildConcepts() {
     setPendingResume(null);
   }
 
-  function watchRunningJob(job: ResumableCheckpoint) {
+  async function watchRunningJob(job: ResumableCheckpoint) {
     // Attach-only: the console tails the durable journal from the start
     // (the replay rebuilds the stage cards with real times and costs).
     // Nothing is POSTed, nothing resumes, nothing bills.
     acknowledgeCheckpointPrompt(ownerKey, job);
     setPendingResume(null);
-    void watchRun(`Watching: ${job.filename}`, {
-      module: "concepts",
-      jobId: job.id,
-    })
+    try {
+      // The resumable summary is intentionally small and may not carry the
+      // phase projection. Read the full job before attaching so a Master
+      // continuation gets the operation boundary that filters old Concept
+      // result events from the replay.
+      let attachJob: UploadJob | null = null;
+      try {
+        attachJob = await api.getUploadJob("concepts", job.id);
+      } catch {
+        // Falling back to the summary still preserves attach-only behavior;
+        // RunConsole will stop safely if it cannot identify a Master phase.
+      }
+      await watchRun(`Watching: ${job.filename}`, {
+        module: "concepts",
+        jobId: job.id,
+        operation: resumableOperation(attachJob ?? job),
+      })
       .then(async () => {
         // The watched run finished: land on the download-and-review
         // page exactly as a run started from this tab would. A stopped
@@ -156,9 +173,9 @@ export default function BuildConcepts() {
           setPath("post");
         }
       })
-      .catch(() => {
-        /* the console already carries the failure line */
-      });
+    } catch {
+      /* the console already carries the failure line */
+    }
   }
 
   async function resumeCheckpoint(job: ResumableCheckpoint) {
@@ -236,6 +253,30 @@ export default function BuildConcepts() {
   );
 }
 
+type OperationProjection = {
+  generation_running?: boolean;
+  review_workflow?: ReviewWorkflow | null;
+  run_state?: DurableRunState;
+  status?: string;
+};
+
+function resumableOperation(job: OperationProjection): "concept" | "master" {
+  // The resumable projection carries the durable phase when available. A
+  // Master attach must pass that boundary to RunConsole so replayed Concept
+  // result events cannot settle the current stream as paused.
+  if (job.run_state?.status === "master") return "master";
+  if (job.review_workflow?.status === "master_building"
+    || job.review_workflow?.status === "master_failed"
+    || job.review_workflow?.status === "master_ready") {
+    return "master";
+  }
+  // Older resumable summaries may omit both projections. A running
+  // ``concept_review`` job is the persisted Master handoff state in that
+  // response shape, so keep the journal boundary safe in this fallback.
+  if (job.generation_running && job.status === "concept_review") return "master";
+  return "concept";
+}
+
 /* ----------------------------- post learning ----------------------------- */
 
 function PostLearningFlow({
@@ -268,21 +309,13 @@ function PostLearningFlow({
         if (active) setModelProviderInfo(info);
       })
       .catch(() => {
-        /* the selector simply stays hidden when the endpoint is unavailable */
+        if (active) setModelProviderError("Could not load the model configuration.");
       });
     return () => {
       active = false;
     };
   }, []);
 
-  const chooseModelProvider = useCallback(async (provider: string) => {
-    setModelProviderError(null);
-    try {
-      setModelProviderInfo(await api.setModelProvider(provider));
-    } catch (choiceError) {
-      setModelProviderError(String(choiceError));
-    }
-  }, []);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [resultResumed, setResultResumed] = useState(false);
@@ -360,6 +393,7 @@ function PostLearningFlow({
               reattached: true,
               job_id: finished.id,
               openai_usage: finished.openai_usage,
+              review_workflow: finished.review_workflow,
               pending_decision: finished.pending_decision,
               ...fourOutputResultFields(outputCompletion),
               ...(recovery?.resume_allowed === false
@@ -429,7 +463,7 @@ function PostLearningFlow({
   }
 
   // Every run parameter is chosen up front (owner request, 2026-08-29):
-  // chapter target, model provider, source book, and the file sit in one
+  // chapter target, model configuration, source book, and the file sit in one
   // view before anything is uploaded, and one action runs the whole
   // upload → parse → generate chain. The panel stays MOUNTED for every
   // pre-generation state — no job, a restored not-yet-parsed upload, a
@@ -445,7 +479,6 @@ function PostLearningFlow({
     : null;
   const generationIncomplete = Boolean(resultIncomplete)
     || job?.generation_recovery?.resume_allowed === false;
-
   return (
     <>
       {parameterPanelOpen ? (
@@ -461,29 +494,26 @@ function PostLearningFlow({
             <SyllabusUploader disabled={busy} onLoaded={() => setTreeReload((n) => n + 1)} />
             {modelProvider && (
               <div className="field mt-16">
-                <label className="field-label" htmlFor="model-provider-select">
-                  Model provider
-                </label>
-                <div className="row">
-                  <select
-                    id="model-provider-select"
-                    value={modelProvider.provider}
-                    disabled={busy}
-                    onChange={(event) =>
-                      void chooseModelProvider(event.target.value)}
-                  >
-                    <option value="openai" disabled={!modelProvider.openai_available}>
-                      OpenAI ({modelProvider.openai_model})
-                    </option>
-                    <option value="gemini" disabled={!modelProvider.gemini_available}>
-                      Gemini ({modelProvider.gemini_model})
-                    </option>
-                  </select>
-                  <span className="hint">
-                    {modelProvider.note
-                      || `Next run uses ${modelProvider.model}.`}
+                <div className="field-label">Models for new runs</div>
+                {modelProvider.stages?.length ? (
+                  <div className="table-wrap">
+                    <table aria-label="Models by stage">
+                      <thead><tr><th>Stage</th><th>Model</th><th>Reasoning</th></tr></thead>
+                      <tbody>{modelProvider.stages.map((stage) => (
+                        <tr key={stage.stage}>
+                          <td>{stage.label}</td>
+                          <td>{stage.model}</td>
+                          <td>{stage.reasoning_effort}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                ) : <span>{modelProvider.model}</span>}
+                {modelProvider.note && (
+                  <span className="hint" role={modelProvider.ready === false ? "status" : undefined}>
+                    {modelProvider.note}
                   </span>
-                </div>
+                )}
               </div>
             )}
             {modelProviderError && (
@@ -573,12 +603,26 @@ function PostLearningFlow({
       {carriedIssue && (
         <CarriedSemanticIssue issue={carriedIssue} />
       )}
+      {job && isConceptReviewWaiting(job) && (
+        <ConceptReviewWorkflow
+          job={job}
+          disabled={busy}
+          onJob={handleJob}
+        />
+      )}
       {job
+        && !isConceptReviewWaiting(job)
         && !generationIncomplete
-        && (result
-          || job.status === "generated"
-          || job.status === "released")
-        && <ConceptReviewPanel jobId={job.id} />}
+        && (result || job.status === "generated" || job.status === "released")
+        && (
+          <div className="card mt-16" data-testid="legacy-review-status">
+            <div className="section-title">Review and correct the output</div>
+            <p className="muted">
+              This historical run keeps its released workbook downloads and
+              explicit publication controls in the Run outputs section.
+            </p>
+          </div>
+        )}
       {error && (
         <div className="error-box mt-16">{error}</div>
       )}
@@ -773,6 +817,9 @@ function resumableCheckpointFromJob(job: UploadJob): ResumableCheckpoint {
     checkpoint_progress: job.checkpoint_progress,
     checkpoint_target_identity: job.checkpoint_target_identity,
     generation_running: Boolean(job.generation_running),
+    review_workflow: job.review_workflow,
+    run_id: job.run_id,
+    run_state: job.run_state,
     created_at: job.created_at,
   };
 }
@@ -888,17 +935,20 @@ function ConceptResult({
   const rowCount = typeof result.row_count === "number" ? result.row_count : null;
   const issueCount = typeof result.issue_count === "number" ? result.issue_count : null;
   const incomplete = incompleteGenerationRecovery(result);
+  const reviewWaiting = isConceptReviewWaiting(result);
   const outputCompletion = fourOutputCompletionFromResult(result);
   const outputSetIncomplete = Boolean(
-    !incomplete && outputCompletion && !outputCompletion.allReady,
+    !incomplete && !reviewWaiting && outputCompletion && !outputCompletion.allReady,
   );
-  const success = !incomplete && !outputSetIncomplete;
+  const success = !incomplete && !outputSetIncomplete && !reviewWaiting;
   return (
     <div className={`card mt-16 ${success ? "success-card" : ""}`}>
       <div className="row">
         <strong>
           {incomplete
             ? "Generation incomplete — the four-output set was not created"
+            : reviewWaiting
+              ? "Concept Files are ready for review"
             : outputSetIncomplete && outputCompletion
               ? `Output set incomplete — ${outputCompletion.readyCount}/4 files ready`
               : outputCompletion?.allReady
@@ -913,7 +963,9 @@ function ConceptResult({
                 {outputCompletion.readyCount}/4 ready
               </span>
             )
-          : status && <span className="badge green">{status}</span>}
+          : reviewWaiting
+            ? <span className="badge yellow">waiting for review</span>
+            : status && <span className="badge green">{status}</span>}
       </div>
       {incomplete && (
         <div className="error-box mt-12" role="alert">
@@ -922,7 +974,17 @@ function ConceptResult({
             || "This generation run did not complete."}
         </div>
       )}
-      {outputSetIncomplete && outputCompletion && (
+        {reviewWaiting && (
+          <div className="review-wait-card mt-12" role="status">
+            Review the downloaded Concept Files before continuing. The Post-
+            Learning file contains the complete source question set with its
+            Types and Cases; you may omit, add or move questions in a
+            corrected workbook. Pre-Learning questions are generated after you
+            continue. Master Files remain paused until the explicit Generate
+            Master Files action.
+          </div>
+        )}
+        {outputSetIncomplete && outputCompletion && (
         <div className="error-box mt-12" role="alert">
           Concept generation completed, but {outputCompletion.missingLabels.join(
             " and ",
@@ -954,12 +1016,15 @@ function ConceptResult({
       />
       {!incomplete && !outputSetIncomplete && (
         <div className="muted mt-12">
-          The four run outputs (Concept and Master Files for both lanes)
-          download from the{" "}
-          {outputsVisible
-            ? <a href="#run-outputs">3 · Run outputs section</a>
-            : "Run outputs section (use Refresh outputs if it has not appeared)"}
-          ; review and publishing stay separate, explicit acts.
+          {reviewWaiting
+            ? "Download both Concept Files below, review the complete question set, "
+              + "then optionally upload corrections before continuing to Master generation."
+            : <>The four run outputs (Concept and Master Files for both lanes)
+              download from the{" "}
+              {outputsVisible
+                ? <a href="#run-outputs">3 · Run outputs section</a>
+                : "Run outputs section (use Refresh outputs if it has not appeared)"}
+              ; review and publishing stay separate, explicit acts.</>}
         </div>
       )}
       <details className="mt-12">

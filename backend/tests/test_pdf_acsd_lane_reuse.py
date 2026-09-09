@@ -129,6 +129,51 @@ def test_unchanged_source_replays_lane_zero_times(lane, tmp_path):
     assert any("Reusing the sealed verified" in m for m in lane["logs"])
 
 
+def test_historical_sealed_outline_replays_without_rejudgment(
+    lane, tmp_path, monkeypatch,
+):
+    """A sealed outline stays immutable while fresh keys evolve."""
+    monkeypatch.setattr(fallback, "_CACHE_DIR", tmp_path / "cache")
+    source_path = tmp_path / "source.pdf"
+    source_path.write_bytes(b"%PDF-fake")
+    historical_outline = {
+        "version": fallback.OUTLINE_VERSION,
+        "ingestion_contract_version": fallback.INGESTION_CONTRACT_VERSION,
+        "chapter_title": "Historical chapter",
+        "topics": [],
+        "task_partitions": [],
+        "whole_tasks": [],
+        "notes": [],
+    }
+    outline_calls = []
+
+    def seal_outline(_bundle):
+        outline_calls.append("called")
+        return copy.deepcopy(historical_outline)
+
+    monkeypatch.setattr(fallback, "derive_chapter_outline", seal_outline)
+    provider_calls = []
+    first = fallback.extract_pdf_to_page_acsd(
+        source_path,
+        provider=lambda batch: (
+            provider_calls.append(batch) or copy.deepcopy(_verified_batch_result())
+        ),
+    )
+    assert first["chapter_outline"] == historical_outline
+    assert outline_calls == ["called"]
+
+    def must_not_rejudge(_bundle):  # pragma: no cover - assertion path
+        raise AssertionError("historical sealed outline must replay")
+
+    monkeypatch.setattr(fallback, "derive_chapter_outline", must_not_rejudge)
+    second = fallback.extract_pdf_to_page_acsd(source_path, provider=lambda _batch: (
+        pytest.fail("historical sealed source must not call the provider")
+    ))
+
+    assert second == first
+    assert len(provider_calls) == 1
+
+
 def test_legacy_sealed_bundle_is_upgraded_without_provider_spend(
     lane,
     tmp_path,

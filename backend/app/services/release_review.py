@@ -141,6 +141,61 @@ def _records(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _review_questions(payload: Mapping[str, Any], lane: str) -> list[dict[str, Any]]:
+    """Project every question input used by the eventual Master.
+
+    Post questions are the recorded source inventory and retain their exact
+    ``qid``.  Pre questions are generated prerequisite questions and use
+    their own question identity.  The projection is deliberately lossless
+    for authored fields so a reviewer can correct wording before the Master
+    pipeline reads the staged slot.
+    """
+
+    rows: object
+    if lane == bcr.LANE_PRE:
+        rows = payload.get("generated_questions") or []
+    else:
+        rows = (payload.get("question_task_inventory") or {}).get("items", [])
+    output: list[dict[str, Any]] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, Mapping):
+            continue
+        identity = str(
+            row.get("qid")
+            or row.get("source_qid")
+            or row.get("question_id")
+            or row.get("pre_question_id")
+            or ""
+        ).strip()
+        if not identity:
+            continue
+        evidence = row.get("source_evidence")
+        if isinstance(evidence, Mapping):
+            evidence_value = copy.deepcopy(dict(evidence))
+        elif evidence:
+            evidence_value = {"value": copy.deepcopy(evidence)}
+        else:
+            evidence_value = {}
+        output.append({
+            "identity": identity,
+            "source_qid": str(row.get("qid") or row.get("source_qid") or ""),
+            "question_kind": "generated" if lane == bcr.LANE_PRE else "source",
+            "source_label": str(row.get("source_label") or ""),
+            "question_text": str(
+                row.get("question_text")
+                or row.get("raw_task")
+                or row.get("normalized_public_text")
+                or ""
+            ),
+            "raw_task": str(row.get("raw_task") or ""),
+            "normalized_public_text": str(row.get("normalized_public_text") or ""),
+            "options": copy.deepcopy(row.get("options") or []),
+            "source_evidence": evidence_value,
+            "editable": True,
+        })
+    return output
+
+
 def _versions(
     db: Session, job_id: int, lane: str
 ) -> list[models.ConceptReleaseVersion]:
@@ -217,6 +272,8 @@ def review_view(
             "warning_count": int(summary.get("warning_count") or 0),
             "database_uploaded": bool(summary.get("database_uploaded")),
         },
+        "questions": _review_questions(payload, lane),
+        "concept_review": bcr.concept_review_state(job),
         "topics": topics,
         # Errors only (owner steer, 2026-08-20): a blocking structural
         # issue belongs in front of the editor; warning-grade transcripts

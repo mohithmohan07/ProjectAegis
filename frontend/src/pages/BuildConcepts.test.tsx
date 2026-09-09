@@ -21,13 +21,19 @@ import BuildConcepts from "./BuildConcepts";
 const apiMock = vi.hoisted(() => ({
   vocab: vi.fn(),
   getModelProvider: vi.fn(() => Promise.resolve({
-    provider: "openai",
+    provider: "mixed",
     model: "gpt-5.6-luna",
     openai_available: true,
     gemini_available: false,
-    gemini_model: "gemini-3.6-flash",
+    gemini_model: "gemini-3.8-flash",
     openai_model: "gpt-5.6-luna",
-    note: "",
+    note: "Gemini is configured for Pre question authoring only.",
+    routing_profile: "owner-stage-model-routing-2026-09-09-v1",
+    ready: true,
+    stages: [
+      { stage: "prequestions.author", label: "Pre question authoring", provider: "gemini", model: "gemini-3.8-flash", reasoning_effort: "high" },
+      { stage: "concepts.detailing", label: "Concept writing", provider: "openai", model: "gpt-5.6-luna", reasoning_effort: "xhigh" },
+    ],
   })),
   setModelProvider: vi.fn(),
   resumableConceptCheckpoints: vi.fn(),
@@ -511,10 +517,11 @@ test("Watch live stays put when the worker stopped mid-run", async () => {
 
   await screen.findByRole("dialog");
   fireEvent.click(screen.getByRole("button", { name: "Watch live" }));
-  // Two job fetches: the watch loop's stopped-worker check, then the
-  // completion handler's look at the final status. Flush both.
+  // The full projection is fetched before attach to identify the operation
+  // boundary, then the watch loop and completion handler each refresh it.
+  // Flush all three reads.
   await waitFor(() => {
-    expect(apiMock.getUploadJob).toHaveBeenCalledTimes(2);
+    expect(apiMock.getUploadJob).toHaveBeenCalledTimes(3);
   });
   await act(async () => {});
 

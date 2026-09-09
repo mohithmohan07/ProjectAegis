@@ -27,13 +27,14 @@ OPENAI_MAX_OUTPUT_TOKENS_ENV: Final = "AEGIS_OPENAI_MAX_OUTPUT_TOKENS"
 class ModelTokenCapacity:
     context_window: int
     max_output_tokens: int
+    input_token_limit: int | None = None
 
     @property
     def max_input_tokens(self) -> int:
         # Chat/Responses context includes both input and generated/reasoning
         # tokens. Reserving the complete provider output allowance makes this the
         # largest safe text-input budget for a request asking for maximum output.
-        return max(1, self.context_window - self.max_output_tokens)
+        return self.input_token_limit or max(1, self.context_window - self.max_output_tokens)
 
 
 # Prefix matching covers aliases and snapshots. Keep the most specific prefixes
@@ -41,8 +42,10 @@ class ModelTokenCapacity:
 MODEL_TOKEN_CAPACITIES: Final[tuple[tuple[str, ModelTokenCapacity], ...]] = (
     ("gpt-5.6", ModelTokenCapacity(1_050_000, 128_000)),
     ("gpt-5.5", ModelTokenCapacity(1_050_000, 128_000)),
+    ("gpt-5.4-mini", ModelTokenCapacity(400_000, 128_000)),
     ("gpt-5", ModelTokenCapacity(400_000, 128_000)),
     # Gemini rides the OpenAI-compatible endpoint; documented capacities.
+    ("gemini-3.8-flash", ModelTokenCapacity(1_048_576, 65_536, 1_048_576)),
     ("gemini-3.6", ModelTokenCapacity(1_000_000, 65_536)),
     ("gemini", ModelTokenCapacity(1_000_000, 65_536)),
 )
@@ -235,6 +238,8 @@ def note_unsupported_reasoning_effort(model: str, effort: str) -> str | None:
     already learned a stricter ceiling is never widened by a slower one.
     """
     current = str(effort or "")
+    if _model_key(model).startswith("gemini-3.8") and current == "low":
+        return None  # Thinking cannot be disabled on Gemini 3.8.
     if current not in REASONING_CAPABILITY_DOWNGRADE:
         return None
     lowered = REASONING_CAPABILITY_DOWNGRADE[current]
@@ -381,6 +386,9 @@ def configured_max_input_tokens(
     *,
     output_tokens: int | None = None,
 ) -> int:
+    capacity = provider_token_capacity(model)
+    if capacity.input_token_limit is not None:
+        return capacity.input_token_limit
     context = configured_context_window_tokens(model)
     output = (
         configured_max_output_tokens(model)
@@ -424,7 +432,7 @@ def supports_reasoning_effort(model: str) -> bool:
     OpenAI-compatible endpoint. Those overrides keep working without receiving
     GPT-5.6-only request parameters.
     """
-    return model.strip().lower().startswith("gpt-5.6")
+    return model.strip().lower().startswith(("gpt-5.6", "gpt-5.4-mini", "gemini-3.8-flash"))
 
 
 def chat_request_policy(
@@ -440,6 +448,8 @@ def chat_request_policy(
     """
     selected = (model or configured_openai_model()).strip() or DEFAULT_OPENAI_MODEL
     effort = reasoning_effort_for(purpose)
+    if selected.lower().startswith("gemini-3.8-flash"):
+        effort = capped_reasoning_effort(effort, "high")
     policy = {"model": selected}
     if supports_reasoning_effort(selected):
         negotiated = capped_reasoning_effort(

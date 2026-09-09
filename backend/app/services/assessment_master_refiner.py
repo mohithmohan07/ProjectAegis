@@ -89,8 +89,8 @@ _INVISIBLE_FILLERS = frozenset({
 # ordered and non-overlapping, so prose may move around a token but may not
 # alter, duplicate, remove, or reorder it.
 _PROTECTED_TOKEN_RE = re.compile(
-    r"\[img\b[^\]]*\]"
-    r"|\[Katex\][\s\S]*?\[/Katex\]"
+    katex_rules._IMAGE_TAG_RE.pattern
+    + r"|\[Katex\][\s\S]*?\[/Katex\]"
     # Keep the full non-whitespace URL token, including balanced or literal
     # closing punctuation used by real URLs. Conservatively binding adjacent
     # punctuation is safer than letting a URL suffix drift invisibly.

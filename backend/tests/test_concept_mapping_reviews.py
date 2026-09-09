@@ -2683,12 +2683,23 @@ def test_chapter_opening_labelled_in_section_chunks():
 
 
 def test_prompts_require_opening_granularity_and_canonical_media_policy():
+    from app.services.source_topic_policy import SOURCE_TOPIC_POLICY
+
     skeleton = g.prompts.get_text("concepts.skeleton.system")
     assert "[Chapter opening]" in skeleton
     assert "lesson-plan" in skeleton and "apart" in skeleton
     assert "Activity/Info" in skeleton
-    assert "Frédéric Sorrieu" not in skeleton
-    assert "Nationalism in Europe" not in skeleton
+    # Q39 explicitly supplies the Sorrieu opening as an ownership example.
+    # The generic skeleton must still contain no chapter-specific template,
+    # and the shared example must never become evidence for another upload.
+    assert skeleton.endswith(SOURCE_TOPIC_POLICY)
+    generic_skeleton = skeleton.removesuffix(SOURCE_TOPIC_POLICY)
+    assert "Frédéric Sorrieu" not in generic_skeleton
+    assert "Nationalism in Europe" not in generic_skeleton
+    policy = " ".join(SOURCE_TOPIC_POLICY.split())
+    assert "Named examples in these instructions illustrate the ownership rule" in policy
+    assert "they are not source evidence" in policy
+    assert "Never import their people, facts, titles, questions or topology into another chapter" in policy
     canonicalize = g.prompts.get_text("concepts.canonicalize.system")
     assert "Belgium vs Sri Lanka" not in canonicalize
     assert "lesson-plan them apart" in canonicalize

@@ -93,6 +93,8 @@ def _ensure_columns() -> None:
         ("upload_jobs", "generation_checkpoint", "TEXT DEFAULT '{}'"),
         ("upload_jobs", "generation_log", "TEXT DEFAULT '[]'"),
         ("upload_jobs", "openai_usage", "TEXT DEFAULT '{}'"),
+        ("upload_jobs", "run_id", "VARCHAR(128) DEFAULT ''"),
+        ("upload_jobs", "run_state", "TEXT DEFAULT '{}'"),
         ("questions", "question_text", "TEXT DEFAULT ''"),
         ("blueprint_batches", "appears_in", "TEXT DEFAULT '[]'"),
         # MES release identity (spec §5.7); model-level only — the workbook's

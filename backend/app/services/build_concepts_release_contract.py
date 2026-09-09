@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import copy
 import inspect
+import json
 import threading
 from contextvars import ContextVar
+from datetime import datetime, timezone
 from functools import wraps
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .. import models
@@ -550,6 +553,8 @@ def _build_master_siblings(
     target_chapter_id: int,
     *,
     owner_sub: str | None = None,
+    progress_start: float = 0.955,
+    progress_end: float = 0.990,
 ) -> dict[str, dict[str, Any] | None]:
     """Outputs 02 and 04, in the same run that produced 01 and 03.
 
@@ -649,9 +654,10 @@ def _build_master_siblings(
             # the frontend creates stage cards from step events.
             progress.step(
                 "Building Master files (Outputs 02/04)",
-                value=0.955,
+                value=progress_start,
             )
-            # The Master builds own 0.955 → 0.990 of the bar and fill it
+            # The Master builds own the caller's fixed band (0.955 → 0.990
+            # for legacy runs; 0.70 → 0.99 after Concept review) and fill it
             # as their stages (and the long fan-outs' units) finish, so
             # the console no longer freezes on one value for the entire
             # build — the "97% for hours" report. One shared span, one
@@ -661,7 +667,8 @@ def _build_master_siblings(
             # percentage, and 99.5% rendered as the same misleading 100% as
             # a genuinely complete four-output set.
             span = progress.Span(
-                0.955, 0.990, label="Building Master files (Outputs 02/04)"
+                progress_start, progress_end,
+                label="Building Master files (Outputs 02/04)"
             )
             stage_index = {
                 name: position
@@ -802,8 +809,72 @@ def _run_generation_release(
       four files are ready when either Master sibling was refused.
     """
 
-    staged = _stage_generation_release(
-        original, db, job_id, target_chapter_id, *args, **kwargs)
+    # This flag is an API lifecycle choice, not a low-level generation
+    # argument.  Remove it before calling the historical generation service so
+    # direct/internal callers keep their old signature and behavior.
+    pause_for_concept_review = bool(kwargs.pop("pause_for_concept_review", False))
+    if pause_for_concept_review:
+        # Historical Concept stages report their own 0..1 values, and some
+        # terminal paths report 0.98/1.0 before the review handoff. Keep the
+        # whole Concept half in its explicit 0..0.70 allocation so the review
+        # pause can never look like a completed run.
+        with progress.fixed_allocation(0.0, 0.70):
+            staged = _stage_generation_release(
+                original, db, job_id, target_chapter_id, *args, **kwargs)
+    else:
+        staged = _stage_generation_release(
+            original, db, job_id, target_chapter_id, *args, **kwargs)
+    if pause_for_concept_review and not isinstance(staged.get("run_incomplete"), Mapping):
+        owner_sub = kwargs.get("owner_sub")
+        current_job = uploads.get_job(
+            db, job_id, owner_sub=owner_sub, module="build_concepts"
+        )
+        concept_review = release.initialize_concept_review(
+            db, current_job, target_chapter_id=target_chapter_id
+        )
+        uploads.pause_run_for_review(
+            db,
+            job_id,
+            progress_value=0.70,
+            stage="Concept files ready for review",
+            owner_sub=owner_sub,
+        )
+        progress.step("Concept files ready for review", value=0.70)
+        progress.log(
+            "Concept files are staged and ready for reviewer corrections. "
+            "Master authoring is paused until the reviewed input is submitted."
+        )
+        result = dict(staged)
+        result.update({
+            "concept_review": concept_review,
+            "review_required": True,
+            "master_outputs": {
+                lane: {"ready": False, "reason": "awaiting Concept review"}
+                for lane in (release.LANE_PRE, release.LANE_POST)
+            },
+            "all_four_outputs_ready": False,
+            "output_completion": {
+                "ready_count": sum(
+                    1 for lane in (release.LANE_PRE, release.LANE_POST)
+                    if release.release_payload(current_job, lane=lane) is not None
+                ),
+                "total_count": 4,
+                "all_ready": False,
+                "missing": [
+                    {
+                        "number": "02" if lane == release.LANE_PRE else "04",
+                        "lane": lane,
+                        "label": (
+                            "Pre-Learning Master File"
+                            if lane == release.LANE_PRE
+                            else "Post-Learning Master File"
+                        ),
+                    }
+                    for lane in (release.LANE_PRE, release.LANE_POST)
+                ],
+            },
+        })
+        return result
     # HONEST PROGRESS (owner report, 2026-08-21: "after 100% it is still
     # running" — and paying). ``_build_master_siblings`` opens the real
     # stage boundary after it confirms at least one lane exists; only a true
@@ -894,6 +965,314 @@ def _run_generation_release(
         # terminal Concept staging path has made Outputs 01/03 durable.
         result["output_completion"] = output_completion
     return result
+
+
+def _regenerate_pre_questions_after_review(
+    db,
+    job: models.UploadJob,
+    *,
+    owner_sub: str | None = None,
+) -> dict[str, Any] | None:
+    """Regenerate the Pre question bank when its reviewed concepts changed.
+
+    Pre questions are generated from the accepted Pre concept map by the
+    existing Phase 03 ``prequestions.build`` path.  A corrected Pre workbook
+    invalidates only that generated bank; Post questions remain the exact
+    reviewed source inventory.  The regenerated bank is staged as one new
+    Pre Concept/Pre Master sibling payload before either Master lane runs.
+    """
+
+    state = release.concept_review_state(job)
+    pre_input = (state.get("corrected_inputs") or {}).get(release.LANE_PRE)
+    if not isinstance(pre_input, Mapping) or not pre_input.get("changed"):
+        return None
+    pre_payload = release.release_payload(job, lane=release.LANE_PRE)
+    if pre_payload is None:
+        return None
+    current_uid = str(pre_payload.get(release.STAGED_RELEASE_UID_FIELD) or "")
+    if (
+        current_uid
+        and str(state.get("pre_questions_regenerated_for_uid") or "")
+        == current_uid
+    ):
+        return None
+
+    # Reuse the canonical-source artifact locator.  ``uploads`` receives the
+    # public helper during service-contract installation, but direct recovery
+    # harnesses can call this workflow before that attribute is attached; the
+    # canonical contract's locator is the same path and keeps the sealed
+    # envelope/decision store join intact in both cases.
+    artifact_helper = getattr(uploads, "source_artifact_directory", None)
+    if not callable(artifact_helper):
+        from . import canonical_source_contract
+        artifact_helper = canonical_source_contract._artifact_directory
+    try:
+        artifact_dir = Path(artifact_helper(int(job.id)))
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError(
+            "the job has no Phase-3 artifact directory for Pre regeneration"
+        ) from exc
+    envelope_path = artifact_dir / "source.phase3-envelope.json"
+    try:
+        wrapper = json.loads(envelope_path.read_text(encoding="utf-8"))
+        envelope = wrapper.get("envelope") if isinstance(wrapper, Mapping) else wrapper
+        if not isinstance(envelope, Mapping):
+            raise ValueError("the stored Phase-3 envelope is not an object")
+        from .phase3 import envelope as phase3_envelope
+        env = phase3_envelope.validate(dict(envelope))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "the job's sealed Phase-3 envelope is unavailable for Pre regeneration: "
+            + str(exc)
+        ) from exc
+
+    pre_map = {
+        "rows": [
+            copy.deepcopy(dict(row))
+            for row in pre_payload.get("records") or []
+            if isinstance(row, Mapping)
+        ],
+        "topics": copy.deepcopy(pre_payload.get("pre_topics") or []),
+        "needed_for": copy.deepcopy(pre_payload.get("needed_for") or {}),
+        "analysis": copy.deepcopy(pre_payload.get("analysis") or {}),
+        "refused": str(pre_payload.get("refused") or ""),
+        "pre_lane_verdict": copy.deepcopy(
+            pre_payload.get(release.PRE_LANE_VERDICT_FIELD) or {}
+        ),
+    }
+    from .phase3 import prequestions
+
+    decision_store = kernel.DecisionStore(artifact_dir / "phase3-decisions")
+    progress.log(
+        "Pre Concept corrections changed the prerequisite base; regenerating "
+        "the Pre question bank from the reviewed concepts."
+    )
+    regenerated = prequestions.build(
+        env,
+        pre_map,
+        store=decision_store,
+    )
+    post_payload = release.release_payload(job, lane=release.LANE_POST) or {}
+    release.stage_pre_release(
+        db,
+        job,
+        target_chapter_id=int(state.get("target_chapter_id") or 0),
+        pre_map=pre_map,
+        pre_questions=regenerated,
+        inventory=copy.deepcopy(post_payload.get("question_task_inventory") or {}),
+        reason="The reviewed Pre Concept base changed; its generated questions were regenerated before Master authoring.",
+    )
+    db.refresh(job)
+    regenerated_payload = release.release_payload(job, lane=release.LANE_PRE) or {}
+    regenerated_uid = str(
+        regenerated_payload.get(release.STAGED_RELEASE_UID_FIELD) or ""
+    )
+    marker = copy.deepcopy(release.concept_review_state(job))
+    marker["pre_questions_regenerated_for_uid"] = regenerated_uid
+    marker["pre_questions_regenerated_at"] = datetime.now(timezone.utc).isoformat()
+    marker["pre_questions_count"] = sum(
+        len(rows)
+        for rows in (regenerated.get("questions") or {}).values()
+        if isinstance(rows, list)
+    )
+    durable = copy.deepcopy(dict(job.question_inventory or {}))
+    durable[release.CONCEPT_REVIEW_KEY] = marker
+    job.question_inventory = durable
+    db.commit()
+    db.refresh(job)
+    return marker
+
+
+def build_review_masters(
+    db,
+    job_id: int,
+    *,
+    owner_sub: str | None = None,
+) -> dict[str, Any]:
+    """Resume the same run and build Masters from the corrected Concept slots.
+
+    The review marker is the lifecycle gate.  Post must be explicitly
+    reviewed; Pre may be uploaded through its own control, but retaining the
+    original staged Pre draft is valid when no Pre correction is needed.
+    ``_build_master_siblings`` remains the one existing Master orchestration
+    seam, preserving its storage reservation, lane isolation, failure ledger,
+    and source snapshot freeze behavior.
+    """
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts"
+    )
+    db.refresh(job)
+    state = release.concept_review_state(job)
+    if not state:
+        raise ValueError(
+            "this upload is not paused for Concept review; use the legacy "
+            "release or Master workflow"
+        )
+    if state.get("status") == release.CONCEPT_REVIEW_MASTER_READY:
+        return {
+            "job_id": int(job_id),
+            "concept_review": state,
+            "review_required": False,
+            "master_outputs": copy.deepcopy(state.get("master_outputs") or {}),
+            "all_four_outputs_ready": True,
+        }
+    required = set(state.get("required_lanes") or [])
+    reviewed = set(state.get("reviewed_lanes") or [])
+    if not required.issubset(reviewed):
+        # Clicking Build Master is also the explicit acceptance action for
+        # unchanged downloaded files.  Record every available lane under the
+        # review marker so an optional Pre upload is never compulsory and the
+        # original Concept payload remains the exact Master input.
+        state = release.accept_concept_review(db, job)
+        required = set(state.get("required_lanes") or [])
+        reviewed = set(state.get("reviewed_lanes") or [])
+        if not required.issubset(reviewed):
+            missing = sorted(required - reviewed)
+            raise ValueError(
+                "Concept review is incomplete; submit the corrected "
+                + ", ".join(missing)
+                + " Concept workbook before building Master files"
+            )
+    if state.get("status") == release.CONCEPT_REVIEW_MASTER_BUILDING:
+        # A worker crash can leave the durable marker at ``master_building``
+        # after the process-local lock has been released.  The API has already
+        # checked that no active operation owns the lock, so this is a safe
+        # resumable retry from the reviewed Concept slots.
+        state = release.update_concept_review_state(
+            db, job, status=release.CONCEPT_REVIEW_REVIEWED
+        )
+
+    # A corrected Pre Concept workbook changes the prerequisite evidence that
+    # owns its generated question bank. Re-enter the existing Phase 03
+    # prequestions path once per corrected Pre release UID before Master
+    # authoring; Post's reviewed source bank is left untouched.
+    if (
+        isinstance(state.get("corrected_inputs"), Mapping)
+        and isinstance(
+            (state.get("corrected_inputs") or {}).get(release.LANE_PRE),
+            Mapping,
+        )
+        and bool(
+            ((state.get("corrected_inputs") or {}).get(release.LANE_PRE) or {}).get(
+                "changed"
+            )
+        )
+    ):
+        _regenerate_pre_questions_after_review(db, job, owner_sub=owner_sub)
+        job = uploads.get_job(
+            db, job_id, owner_sub=owner_sub, module="build_concepts"
+        )
+        state = release.concept_review_state(job)
+
+    started = datetime.now(timezone.utc).isoformat()
+    uploads.update_run_stage(
+        db,
+        job_id,
+        "Building Master files from reviewed Concept files",
+        progress_value=0.70,
+        owner_sub=owner_sub,
+    )
+    db.refresh(job)
+    release.update_concept_review_state(
+        db, job, status=release.CONCEPT_REVIEW_MASTER_BUILDING,
+        master_started_at=started,
+    )
+    try:
+        builds = _build_master_siblings(
+            db, job_id, int(state.get("target_chapter_id") or 0),
+            owner_sub=owner_sub,
+            progress_start=0.70,
+            progress_end=0.99,
+        )
+    except Exception as exc:
+        db.rollback()
+        job = uploads.get_job(
+            db, job_id, owner_sub=owner_sub, module="build_concepts"
+        )
+        release.update_concept_review_state(
+            db, job, status=release.CONCEPT_REVIEW_MASTER_FAILED,
+            master_completed_at=datetime.now(timezone.utc).isoformat(),
+        )
+        progress.log(
+            f"Master authoring failed after Concept review: {exc}",
+            level="error",
+        )
+        raise
+
+    master_outputs = {
+        lane: {
+            "ready": builds.get(lane) is not None,
+            **(builds.get(lane) or {}),
+            **({} if builds.get(lane) is not None else {
+                "reason": "Master lane unavailable; inspect release issues or retry"
+            }),
+        }
+        for lane in (release.LANE_PRE, release.LANE_POST)
+    }
+    concept_ready = all(
+        release.release_payload(job, lane=lane) is not None
+        for lane in (release.LANE_PRE, release.LANE_POST)
+    )
+    all_ready = concept_ready and all(
+        bool(master_outputs[lane].get("ready"))
+        for lane in (release.LANE_PRE, release.LANE_POST)
+    )
+    completed = datetime.now(timezone.utc).isoformat()
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts"
+    )
+    review_status = (
+        release.CONCEPT_REVIEW_MASTER_READY
+        if all_ready else release.CONCEPT_REVIEW_MASTER_FAILED
+    )
+    state = release.update_concept_review_state(
+        db, job, status=review_status, master_outputs=master_outputs,
+        master_completed_at=completed,
+    )
+    job = uploads.get_job(
+        db, job_id, owner_sub=owner_sub, module="build_concepts"
+    )
+    ready_count = sum(
+        release.release_payload(job, lane=lane) is not None
+        for lane in (release.LANE_PRE, release.LANE_POST)
+    ) + sum(bool(master_outputs[lane].get("ready")) for lane in master_outputs)
+    job.status = "generated" if all_ready else "concept_review"
+    job.detail = (
+        "All Concept and Master files are ready for explicit publication."
+        if all_ready else
+        f"Master authoring completed with {ready_count}/4 outputs ready; "
+        "retry the unavailable Master lane(s)."
+    )
+    db.commit()
+    progress.set_progress(
+        1.0 if all_ready else 0.99,
+        label=("All four outputs ready" if all_ready else "Master outputs incomplete"),
+    )
+    uploads.finish_run(
+        db,
+        job_id,
+        progress_value=1.0 if all_ready else 0.99,
+        stage=("All four outputs ready" if all_ready else "Master outputs incomplete"),
+        status="completed",
+        owner_sub=owner_sub,
+    )
+    return {
+        "job_id": int(job_id),
+        "concept_review": state,
+        "review_required": False,
+        "master_outputs": master_outputs,
+        "all_four_outputs_ready": all_ready,
+        "output_completion": {
+            "ready_count": int(ready_count),
+            "total_count": 4,
+            "all_ready": all_ready,
+            "missing": [
+                {"lane": lane, "number": "02" if lane == release.LANE_PRE else "04"}
+                for lane in (release.LANE_PRE, release.LANE_POST)
+                if not master_outputs[lane].get("ready")
+            ],
+        },
+    }
 
 
 def _mark_run_incomplete(

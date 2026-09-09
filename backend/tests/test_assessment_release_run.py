@@ -140,6 +140,7 @@ def _authorities(db, chapter, *, calls=None, qa_payloads=None):
             "cognitive_skill": "Remember" if objective else "Understand",
             "difficulty": "Less" if objective else "Moderate",
             "marks": 1 if objective else 3,
+            "selection_mode": "single" if objective else "",
             "rationale": "scripted from the complete source atom",
         }
 
@@ -521,10 +522,10 @@ def test_full_pipeline_publishes_a_ready_release(db):
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
-        ] == "assessment-cell-3-column-spec"
+        ] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-15-column-spec"
+        ] == "assessment-materialize-16-selection-mode"
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
@@ -1345,4 +1346,4 @@ def test_explicit_subjective_cell_binds_under_its_profile_contract():
     assert bound[0]["accepted_source_qids"] == ["QINV-0001"]
     assert bound[0]["appears_in"] == ["Pre/Post-Worksheet/Test"]
     assert bound[0]["source_policy"] == "reuse"
-    assert bound[0]["authority"]["policy_version"] == "assessment-cell-3-column-spec"
+    assert bound[0]["authority"]["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"

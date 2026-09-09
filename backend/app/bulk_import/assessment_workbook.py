@@ -47,6 +47,7 @@ from ..services import assessment_profile
 from ..services import openai_usage
 from ..services import column_spec
 from ..services import assessment_release as rel
+from ..services import assessment_response_policy as response_policy
 from ..services import identity
 from ..services import katex_rules
 from . import layouts
@@ -1642,7 +1643,7 @@ def _populated(value: Any) -> bool:
 
 def _objective_marking_errors(
     row: Mapping[str, Any], *, label: str, marks: Decimal | None,
-    lane_literal: bool = True,
+    lane_literal: bool = True, selection_mode: str = "",
 ) -> list[str]:
     """Objective read-back marking gate.
 
@@ -1651,6 +1652,12 @@ def _objective_marking_errors(
     with it on, the legacy importer reads normalized values with it off.
     """
     errors: list[str] = []
+    selection_mode = str(selection_mode or "").strip()
+    if selection_mode and selection_mode not in response_policy.SELECTION_MODES:
+        errors.append(
+            f"{label}: unsupported Objective selection_mode "
+            f"{selection_mode!r}"
+        )
     correct_count = 0
     weights: list[Decimal] = []
     populated_options = 0
@@ -1715,7 +1722,11 @@ def _objective_marking_errors(
                 errors.append(
                     f"{label}: correct option {n} weight must be positive"
                 )
-            if marks is not None and weight != marks:
+            if (
+                selection_mode != "multiple"
+                and marks is not None
+                and weight != marks
+            ):
                 errors.append(
                     f"{label}: correct weightage {weight} != marks {marks}"
                 )
@@ -1742,7 +1753,18 @@ def _objective_marking_errors(
             f"{label}: question_text uses uppercase objective option "
             f"label(s) {', '.join(uppercase_labels)}; use lowercase labels"
         )
-    if correct_count != 1:
+    if selection_mode and populated_options < 2:
+        errors.append(
+            f"{label}: Objective selection_mode requires at least two "
+            f"options (got {populated_options})"
+        )
+    if selection_mode == "multiple":
+        if correct_count < 2:
+            errors.append(
+                f"{label}: multiple selection requires at least two correct "
+                f"options (got {correct_count})"
+            )
+    elif correct_count != 1:
         errors.append(f"{label}: {correct_count} correct options")
     if (
         marks is not None
@@ -2292,6 +2314,16 @@ def validate_master_file(
     expected_question_labels: dict[str, list[str]] = {
         name: [] for name in ("Objective", "Subjective", "Descriptive")
     }
+    # The workbook layout has no selection_mode column. Carry the explicit
+    # model-authored mode through the immutable candidate snapshot and use it
+    # only to select the Objective marking contract at read-back.
+    selection_mode_by_label = {
+        str(candidate.get("question_label") or ""): str(
+            candidate.get("selection_mode") or ""
+        ).strip()
+        for candidate in snapshot.get("candidates") or []
+        if str(candidate.get("question_label") or "").strip()
+    }
     # The same count the renderer used: how many question rows each concept
     # actually places. A concept with none gets ONE tail row stopping at the
     # concept columns (OD5/T16) and no Group row at all, so demanding a Group
@@ -2700,6 +2732,7 @@ def validate_master_file(
             if name == "Objective":
                 errors.extend(_objective_marking_errors(
                     row, label=label, marks=marks,
+                    selection_mode=selection_mode_by_label.get(label, ""),
                 ))
                 answers = [{
                     "answer_type": bi.normalize_answer_type(row.get(f"answer_type_{n}")),

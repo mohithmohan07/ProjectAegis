@@ -793,18 +793,31 @@ def instruction_rules_suffix(
     """
 
     metadata = env.get("metadata") if isinstance(env, Mapping) else None
+    # Only new, explicitly policy-bound envelopes adopt the owner amendment.
+    # Keep absent-key historical suffixes and decision identities unchanged.
+    from .. import source_topic_policy, prelearning_capture_policy
+
+    policy_suffix = ""
+    if isinstance(metadata, Mapping):
+        if metadata.get("source_topic_policy_version") == source_topic_policy.SOURCE_TOPIC_POLICY_VERSION:
+            policy_suffix += " OWNER SOURCE POLICY: " + (
+                source_topic_policy.PRE_SOURCE_POLICY
+                if slots in (PRE_LEARNING_SLOTS, PRE_QUESTION_SLOTS)
+                else source_topic_policy.SOURCE_TOPIC_POLICY
+            )
+        policy_suffix += prelearning_capture_policy.boundary_instruction(metadata)
     authored = (
         metadata.get("instruction_slots")
         if isinstance(metadata, Mapping)
         else None
     )
     if not isinstance(authored, Mapping):
-        return ""
+        return policy_suffix
     parts: list[str] = []
     for label, key in slots:
         text = _slot_text(authored.get(key))
         if text:
             parts.append(f"{label}: {text}")
     if not parts:
-        return ""
-    return " RUN INSTRUCTIONS (Architect): " + " ".join(parts)
+        return policy_suffix
+    return " RUN INSTRUCTIONS (Architect): " + " ".join(parts) + policy_suffix

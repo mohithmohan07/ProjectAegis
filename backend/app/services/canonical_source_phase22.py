@@ -655,21 +655,28 @@ def _openai_multimodal_json(
     )
     from . import model_provider
 
-    selected_model = str(model or config.OPENAI_MODEL)
-    request_policy = chat_request_policy(purpose, model=selected_model)
+    route = model_provider.resolve_route(
+        purpose, stage="source.multimodal", model=model,
+        input_text=(str(system) + json.dumps(content, ensure_ascii=False)
+                    + json.dumps(response_schema, ensure_ascii=False)),
+        image_count=len(pages), max_output_tokens=max_tokens,
+    )
+    selected_model = route.model
+    request_policy = route.request_policy(purpose)
+    max_tokens = route.output_limit(max_tokens) if route.profile_version else max_tokens
     client = OpenAI(
         timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
-        **model_provider.client_kwargs(),
+        **(model_provider.client_kwargs(route) if route.profile_version else model_provider.client_kwargs()),
     )
     gate = generation._get_openai_gate()
     transient = 0
     hard = 0
     last_error: Exception | None = None
     while True:
-        with openai_usage.request_attempt(
+        with model_provider.bind_call(route), openai_usage.request_attempt(
             requested_model=str(request_policy["model"]), purpose=purpose,
-            provider=model_provider.active_provider(),
+            provider=route.provider,
             reasoning_effort=str(request_policy.get("reasoning_effort") or ""),
             service_tier=str(request_policy.get("service_tier") or ""),
         ):
@@ -1028,6 +1035,10 @@ def _cache_key(
         _pdf_sha256(source_path),
         str(packet.get("fingerprint") or ""),
     ])
+    from . import model_provider
+    profile = model_provider.bound_profile()
+    if profile is not None:
+        material += "\u241f" + json.dumps(profile, sort_keys=True, separators=(",", ":"))
     return _sha256_text(material)
 
 

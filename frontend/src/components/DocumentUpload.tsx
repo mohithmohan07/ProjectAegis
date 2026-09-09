@@ -5,6 +5,7 @@ import { useRunConsole } from "../RunConsole";
 import type { UploadJob } from "../types";
 import MmdViewer from "./MmdViewer";
 import SourceBookInput from "./SourceBookInput";
+import { isConceptReviewWaiting } from "./ConceptReviewWorkflow";
 
 type Module = "assessments" | "concepts";
 type MasterLane = "post" | "pre";
@@ -730,6 +731,8 @@ export default function DocumentUpload({
     || Boolean(job.mmd_text)
     || job.checkpoint_available
   );
+  const conceptReviewWaiting = module === "concepts"
+    && isConceptReviewWaiting(job);
 
   // Step 3 — uploaded (and maybe converted). The run-outputs and
   // source-details cards render as SIBLINGS of the upload card: the four
@@ -913,7 +916,10 @@ export default function DocumentUpload({
           manifest={job.source_artifacts}
           jobId={job.id}
           jobRunning={Boolean(job.generation_running) || disabled}
-          showRunOutputs={module === "concepts"}
+          // Concept-first jobs render their Concept downloads and corrected
+          // input controls in ConceptReviewWorkflow. Legacy generated and
+          // released jobs keep the historical four-output/publish surface.
+          showRunOutputs={module === "concepts" && !conceptReviewWaiting}
           generationBlocked={nonResumable}
           onPublished={(freshJob) => {
             // Child actions may finish after Start new upload or after a

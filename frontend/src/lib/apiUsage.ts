@@ -1,3 +1,5 @@
+import type { InrUsage } from "../types";
+
 /** Keep legacy usage receipts distinct from complete provider-attempt counts. */
 interface RequestUsage {
   request_count?: number;
@@ -9,7 +11,7 @@ interface RequestUsage {
   unresolved_usage_request_count?: number;
 }
 
-interface CostUsage extends RequestUsage {
+interface CostUsage extends RequestUsage, InrUsage {
   estimated_cost_usd?: number | null;
   known_usage_estimated_cost_usd?: number;
   pricing_complete?: boolean;
@@ -77,6 +79,34 @@ export function usageCostNotes(usage: CostUsage): string[] {
   }
   if (cost.pricingMissing || (!cost.complete && !cost.usageGap)) {
     notes.push("Pricing is not configured for every model or service tier used. Recorded estimates exclude unpriced usage; the full total is unknown.");
+  }
+  return notes;
+}
+
+/** Use recorded request conversions; never reprice historical USD in the browser. */
+export function usageCostInr(usage: CostUsage) {
+  const dollars = usageCost(usage);
+  const total = usage.estimated_cost_inr;
+  const known = usage.known_usage_estimated_cost_inr;
+  const convertedTotal = typeof total === "number" && Number.isFinite(total);
+  const convertedKnown = typeof known === "number" && Number.isFinite(known);
+  const conversionMissing = usage.inr_conversion_complete === false
+    || (!convertedTotal && !convertedKnown && dollars.value !== null);
+  const complete = dollars.complete && convertedTotal && !conversionMissing;
+  const value = complete ? total : convertedKnown ? known : null;
+  return {
+    ...dollars,
+    value,
+    complete,
+    recordedOnly: !complete || dollars.pendingCount > 0,
+    conversionMissing,
+  };
+}
+
+export function usageCostInrNotes(usage: CostUsage): string[] {
+  const notes = usageCostNotes(usage);
+  if (usageCostInr(usage).conversionMissing) {
+    notes.push("INR conversion is unavailable for some recorded charges. Rupee subtotals include only charges with a recorded exchange rate.");
   }
   return notes;
 }

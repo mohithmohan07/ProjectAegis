@@ -56,6 +56,7 @@ from .. import config
 from . import canonical_source_phase22 as phase22
 from . import canonical_source_phase3 as phase3
 from . import progress
+from . import source_topic_policy
 from .phase3 import kernel
 
 _CONTRACT_VERSION = 3
@@ -368,12 +369,19 @@ def _resilient_openai_multimodal_json(
     )
     from . import model_provider
 
-    selected_model = str(model or config.OPENAI_MODEL)
-    base_policy = chat_request_policy(purpose, model=selected_model)
+    route = model_provider.resolve_route(
+        purpose, stage="source.multimodal", model=model,
+        input_text=(str(system) + json.dumps(content, ensure_ascii=False)
+                    + json.dumps(response_schema, ensure_ascii=False)),
+        image_count=len(pages), max_output_tokens=max_tokens,
+    )
+    selected_model = route.model
+    base_policy = route.request_policy(purpose)
+    max_tokens = route.output_limit(max_tokens) if route.profile_version else max_tokens
     client = OpenAI(
         timeout=config.OPENAI_REQUEST_TIMEOUT_SECONDS,
         max_retries=0,
-        **model_provider.client_kwargs(),
+        **(model_provider.client_kwargs(route) if route.profile_version else model_provider.client_kwargs()),
     )
     gate = generation._get_openai_gate()
     current_budget = max(1000, int(max_tokens or 0))
@@ -413,9 +421,9 @@ def _resilient_openai_multimodal_json(
                 "brief, do not restate the input, and spend tokens on completing "
                 "every required opaque ID exactly once."
             )
-        with openai_usage.request_attempt(
+        with model_provider.bind_call(route), openai_usage.request_attempt(
             requested_model=str(request_policy["model"]), purpose=purpose,
-            provider=model_provider.active_provider(),
+            provider=route.provider,
             reasoning_effort=str(request_policy.get("reasoning_effort") or ""),
             service_tier=str(request_policy.get("service_tier") or ""),
         ):
@@ -671,7 +679,10 @@ def _write_cache_entry(key: str, value: dict[str, Any]) -> None:
         cache = _read_cache()
         if cache.get("version") != _TURNOVER_VERSION:
             cache = {"version": _TURNOVER_VERSION, "entries": {}}
+        from . import model_provider
+        profile = model_provider.bound_profile()
         cache.setdefault("entries", {})[key] = {
+            **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
             "created_at": time.time(),
             "model": str(config.OPENAI_MODEL),
             "result": copy.deepcopy(value),
@@ -688,7 +699,10 @@ def _cache_key(
     payload: dict[str, Any],
     target_ids: list[str],
 ) -> str:
+    from . import model_provider
+    profile = model_provider.bound_profile()
     return phase3._sha256_json({
+        **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
         "version": _TURNOVER_VERSION,
         "compiler": phase3.COMPILER_VERSION,
         "model": str(config.OPENAI_MODEL),
@@ -1156,6 +1170,8 @@ def _compact_proposed_hierarchy(
             "parent_section_id": str(row.get("parent_section_id") or ""),
             "confidence": float(row.get("confidence") or 0.0),
         }
+        if "topic_display_name" in row:
+            compact["topic_display_name"] = str(row["topic_display_name"])
         if compact["section_id"] in target:
             compact["evidence"] = [
                 str(value)
@@ -1253,12 +1269,21 @@ def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         "Preserve physical order, use only opaque IDs, and return every target "
         "exactly once with concise evidence."
     )
+    policy_active = source_topic_policy.enabled(payload.get("metadata"))
+    if policy_active:
+        system += "\n" + source_topic_policy.SOURCE_TOPIC_POLICY
+        system += "\n" + source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
     batches = [
         all_ids[start:start + size] for start in range(0, len(all_ids), size)
     ]
 
     def classify_batch(target_ids: list[str]):
         batch_payload = _classification_payload_for_batch(payload, target_ids)
+        if policy_active:
+            batch_payload["source_topic_policy_sha256"] = phase3._sha256_text(
+                source_topic_policy.SOURCE_TOPIC_POLICY
+                + source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
+            )
         key = _cache_key(
             kind="classifier",
             payload=batch_payload,
@@ -1272,7 +1297,9 @@ def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
                 system=system,
                 prompt=json.dumps(batch_payload, ensure_ascii=False, indent=2),
                 pages=[],
-                response_schema=_hierarchy_schema(target_ids, all_ids),
+                response_schema=source_topic_policy.hierarchy_schema(
+                    _hierarchy_schema(target_ids, all_ids), active=policy_active,
+                ),
                 purpose="concept_mapping",
                 max_tokens=max(6000, min(18000, len(target_ids) * 480 + 3000)),
             )
@@ -1281,6 +1308,12 @@ def _classify_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
             target_ids=target_ids,
             all_ids=all_id_set,
         )
+        if policy_active:
+            for row in rows:
+                if not isinstance(row.get("topic_display_name"), str) or (
+                    row["role"] == "main_topic" and not row["topic_display_name"].strip()
+                ):
+                    raise ValueError("source hierarchy omitted an authored topic display name")
         if cached is None:
             _write_cache_entry(key, {"sections": rows})
         return rows, cache_state
@@ -1343,6 +1376,10 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
         "parents, wrong parent links, and order drift. Use only supplied IDs. "
         "Return concise repairs only for targeted IDs and never rewrite source."
     )
+    policy_active = source_topic_policy.enabled(payload.get("metadata"))
+    if policy_active:
+        system += "\n" + source_topic_policy.SOURCE_TOPIC_POLICY
+        system += "\n" + source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
     # The caller starts this pass only after the complete authored hierarchy
     # is available. Every independent critic batch sees that same proposal.
     batches = [
@@ -1351,6 +1388,11 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
 
     def audit_batch(target_ids: list[str]):
         batch_payload = _critic_payload_for_batch(payload, target_ids)
+        if policy_active:
+            batch_payload["source_topic_policy_sha256"] = phase3._sha256_text(
+                source_topic_policy.SOURCE_TOPIC_POLICY
+                + source_topic_policy.HIERARCHY_TOPIC_INSTRUCTION
+            )
         key = _cache_key(
             kind="critic",
             payload=batch_payload,
@@ -1364,7 +1406,9 @@ def _critic_hierarchy_batched(payload: dict[str, Any]) -> dict[str, Any]:
                 system=system,
                 prompt=json.dumps(batch_payload, ensure_ascii=False, indent=2),
                 pages=[],
-                response_schema=_hierarchy_critic_schema(target_ids, all_ids),
+                response_schema=source_topic_policy.hierarchy_schema(
+                    _hierarchy_critic_schema(target_ids, all_ids), active=policy_active,
+                ),
                 purpose="concept_validation",
                 max_tokens=max(5000, min(14000, len(target_ids) * 360 + 2500)),
             )

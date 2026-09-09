@@ -141,3 +141,33 @@ test("records an explicit Phase 3 source evidence choice by generic target id", 
   );
   expect(fetchMock.mock.calls[0][0]).not.toContain("/generate");
 });
+
+test("stages corrected Concept workbooks and keeps Master continuation explicit", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ accepted: true }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await api.uploadCorrectedConceptInput(
+    42,
+    "pre",
+    new File(["xlsx"], "pre-edited.xlsx"),
+  );
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/build-concepts/uploads/42/concept-review/submit?lane=pre",
+    ),
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: expect.any(FormData),
+    }),
+  );
+  expect(api.paths.masterGenerate(42)).toBe(
+    "/build-concepts/uploads/42/concept-review/master",
+  );
+  expect(fetchMock.mock.calls[0][0]).not.toContain("upload-edited-workbook");
+});

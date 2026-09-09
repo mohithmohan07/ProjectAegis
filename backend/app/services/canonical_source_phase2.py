@@ -898,6 +898,16 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
                 or task.get("identity_key")
                 or ""
             )
+            row_start = int(row.get("source_start") or task.get("source_start") or 0)
+            row_end = int(row.get("source_end") or task.get("source_end") or row_start)
+            source_block_ids = [
+                str(block.get("block_id") or "")
+                for block in canonical.get("blocks") or []
+                if isinstance(block, dict)
+                and str(block.get("block_id") or "")
+                and row_start < int(block.get("source_end") or 0)
+                and row_end > int(block.get("source_start") or 0)
+            ]
             item: dict[str, Any] = {
                 "qid": qid,
                 "case_id": str(row.get("case_id") or ""),
@@ -919,6 +929,23 @@ def inventory_from_canonical(canonical: dict[str, Any]) -> dict[str, Any]:
                 ),
                 "shared_context": str(row.get("shared_context") or ""),
                 "image_urls": image_urls,
+                "figure_refs": [
+                    str(value) for value in row.get("figure_refs") or [] if value
+                ],
+                "source_start": row_start,
+                "source_end": row_end,
+                "source_block_ids": source_block_ids,
+                "context_block_ids": [
+                    str(value) for value in row.get("qx_context_block_ids") or []
+                    if value
+                ],
+                "source_membership": {
+                    "authority": str(row.get("membership_authority") or ""),
+                    "origin": str(row.get("origin") or ""),
+                    "review_flags": [
+                        str(flag) for flag in row.get("review_flags") or []
+                    ],
+                },
                 "content_objects": copy.deepcopy(row.get("content_objects") or {}),
                 "_activity_origin": bool(row.get("activity_origin")),
                 "_chapter_wide_task": bool(row.get("chapter_wide")),

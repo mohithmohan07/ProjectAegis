@@ -8,6 +8,7 @@ progress logs.
 from __future__ import annotations
 
 import re
+import json
 import threading
 import time
 import traceback
@@ -20,7 +21,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .. import config, models
-from . import auth, generation_recovery, mmd, openai_usage, progress
+from . import auth, generation_recovery, mmd, openai_usage, progress, run_state
 
 
 _usage_job_locks: dict[int, threading.Lock] = {}
@@ -155,6 +156,145 @@ def upload_file_path(job: models.UploadJob) -> Path:
     return config.UPLOAD_DIR / Path(job.filename).name
 
 
+def _job_run_state(job: models.UploadJob) -> dict:
+    state = run_state.for_job(job)
+    job_run_id = str(getattr(job, "run_id", "") or "")
+    if state and not state.get("run_id"):
+        state["run_id"] = job_run_id
+    elif not state and job_run_id:
+        # Older rows may receive the scalar identity before the JSON state is
+        # backfilled. Preserve that identity when their first resumed request
+        # opens the richer timing record.
+        state = {"run_id": job_run_id}
+    return state
+
+
+def start_or_resume_run(
+    db: Session,
+    job_id: int,
+    *,
+    owner_sub: str | None = None,
+    stage: str = "",
+    progress_value: float | None = None,
+) -> dict:
+    """Open processing for this run, retaining its id/history across requests."""
+    job = get_job(db, job_id, owner_sub=owner_sub)
+    current = _job_run_state(job)
+    state = run_state.start(
+        current,
+        stage=stage,
+        progress=progress_value,
+    )
+    job.run_id = state["run_id"]
+    run_state.set_for_job(job, state)
+    db.commit()
+    db.refresh(job)
+    if progress_value is not None:
+        progress.seed_progress(progress_value, label=stage)
+    elif state.get("progress"):
+        progress.seed_progress(state["progress"], label=state.get("stage", ""))
+    return state
+
+
+def update_run_stage(
+    db: Session,
+    job_id: int,
+    stage: str,
+    *,
+    progress_value: float | None = None,
+    owner_sub: str | None = None,
+) -> dict:
+    job = get_job(db, job_id, owner_sub=owner_sub)
+    current = _job_run_state(job)
+    if not current:
+        current = run_state.new(stage=stage, progress=progress_value or 0.0)
+    state = run_state.stage(current, stage, progress=progress_value)
+    job.run_id = state["run_id"]
+    run_state.set_for_job(job, state)
+    db.commit()
+    db.refresh(job)
+    progress.seed_progress(state["progress"], label=stage)
+    return state
+
+
+def pause_run_for_review(
+    db: Session,
+    job_id: int,
+    *,
+    progress_value: float | None = None,
+    stage: str = "Concept files ready for review",
+    owner_sub: str | None = None,
+) -> dict:
+    """Persist the review handoff and stop the active processing clock."""
+    job = get_job(db, job_id, owner_sub=owner_sub)
+    current = _job_run_state(job)
+    if not current:
+        current = run_state.new(stage=stage, progress=progress_value or 0.0)
+    state = run_state.pause_for_review(
+        current, progress=progress_value, stage=stage,
+    )
+    job.run_id = state["run_id"]
+    run_state.set_for_job(job, state)
+    db.commit()
+    db.refresh(job)
+    progress.seed_progress(state["progress"], label=stage)
+    progress.log(
+        "Concept files are ready for review. Processing time is paused; "
+        "the same run will resume after the reviewed file is received."
+    )
+    return state
+
+
+def resume_run_after_review(
+    db: Session,
+    job_id: int,
+    *,
+    stage: str = "Building Master files from reviewed Concept files",
+    progress_value: float | None = None,
+    owner_sub: str | None = None,
+) -> dict:
+    """Resume processing after review without reopening a new billing run."""
+    job = get_job(db, job_id, owner_sub=owner_sub)
+    current = _job_run_state(job)
+    if not current:
+        current = run_state.new(stage=stage, progress=progress_value or 0.0)
+    state = run_state.resume(
+        current, stage=stage, progress=progress_value,
+    )
+    job.run_id = state["run_id"]
+    run_state.set_for_job(job, state)
+    db.commit()
+    db.refresh(job)
+    progress.seed_progress(state["progress"], label=stage)
+    progress.log("Resuming the same run after Concept review.")
+    return state
+
+
+def finish_run(
+    db: Session,
+    job_id: int,
+    *,
+    progress_value: float | None = None,
+    stage: str = "",
+    status: str = "completed",
+    owner_sub: str | None = None,
+) -> dict:
+    """Close the run's active/review clocks at its real terminal boundary."""
+    job = get_job(db, job_id, owner_sub=owner_sub)
+    current = _job_run_state(job)
+    if not current:
+        current = run_state.new(stage=stage, progress=progress_value or 0.0)
+    state = run_state.finish(
+        current, progress=progress_value, stage=stage, status=status,
+    )
+    job.run_id = state["run_id"]
+    run_state.set_for_job(job, state)
+    db.commit()
+    db.refresh(job)
+    progress.seed_progress(state["progress"], label=stage)
+    return state
+
+
 def replace_file(
     db: Session,
     job_id: int,
@@ -229,11 +369,13 @@ def convert_job(
         progress.set_progress(0.1, label="Reading file")
         progress.log("Normalizing document to MMD…")
         progress.set_progress(0.3, label="Converting to MMD")
-        mmd_text = mmd.to_mmd(path)
+        from . import model_routing_run
+
+        with model_routing_run.bind_job(job):
+            mmd_text = mmd.to_mmd(path)
         job.mmd_text = mmd_text
         job.question_inventory = {}
         job.generation_checkpoint = {}
-        job.generation_log = []
         job.status = "converted"
         db.commit()
         db.refresh(job)
@@ -269,6 +411,19 @@ def persist_current_openai_usage(
         existing,
         persistence_key=f"upload-job:{job.id}",
     )
+    # The billing ledger is cumulative by receipt; the run clock is
+    # cumulative by explicit processing/review transitions. Join them at the
+    # persistence boundary so a live event, checkpoint, and job GET agree.
+    state = _job_run_state(job)
+    if state:
+        # Fold the open interval into durable run_state and rebase its anchor
+        # before writing the usage snapshot. A checkpoint exported after this
+        # call must carry the elapsed time already paid for; retaining the old
+        # anchor would count that interval again when the restored run starts.
+        state = run_state.materialize(state)
+        job.run_id = state["run_id"]
+        run_state.set_for_job(job, state)
+        merged = openai_usage.apply_run_timing(merged, state)
     job.openai_usage = merged
     db.commit()
     db.refresh(job)
@@ -285,11 +440,27 @@ def persist_current_generation_log(
 ) -> list[dict]:
     """Persist the latest browser-visible run log for diagnostics and export."""
     job = get_job(db, job_id, owner_sub=owner_sub)
-    events = [
+    current_events = [
         event
         for event in progress.current_events(limit=1200)
         if event.get("type") in {"log", "step", "progress"}
     ]
+    # Checkpoint writes can happen several times during one stream. Append to
+    # the durable same-run log, but dedupe the exact event objects so a
+    # repeated persistence call never doubles its lines. New events with the
+    # same message but a different timestamp remain valid separate events.
+    events: list[dict] = []
+    seen: set[str] = set()
+    for event in [*(job.generation_log or []), *current_events]:
+        try:
+            key = json.dumps(event, ensure_ascii=False, sort_keys=True,
+                             separators=(",", ":"))
+        except (TypeError, ValueError):
+            key = repr(event)
+        if key in seen:
+            continue
+        seen.add(key)
+        events.append(event)
     if error is not None:
         frames: list[dict] = []
         for frame in traceback.extract_tb(error.__traceback__)[-8:]:
@@ -363,6 +534,20 @@ def run_with_openai_usage(
         if job.status == "generated":
             raise ValueError(
                 "this upload has already been generated; start a new upload")
+        # Bind the stable run before the first provider call. If the previous
+        # request paused at Concept review, this reopens processing while
+        # preserving every receipt, stage and progress sample.
+        # Keep an explicit stage selected by the workflow owner (for example
+        # the Master handoff). The generic usage wrapper must open the clock
+        # without replacing that stage with a transport-level label.
+        run_stage = str(_job_run_state(job).get("stage") or "Processing this run")
+        start_or_resume_run(
+            db,
+            job_id,
+            owner_sub=owner_sub,
+            stage=run_stage,
+        )
+        db.refresh(job)
         cumulative = openai_usage.bind_persisted_summary(
             f"upload-job:{job.id}",
             job.openai_usage if isinstance(job.openai_usage, dict) else {},
@@ -372,11 +557,24 @@ def run_with_openai_usage(
             # before the first new provider response arrives.
             progress.usage(cumulative)
         try:
-            result = fn()
+            from . import model_routing_run
+
+            with model_routing_run.bind_job(
+                job, require_pre=job.module == "build_concepts"
+            ):
+                result = fn()
         except Exception as exc:
             # A failed generation transaction must not erase usage from provider
             # responses already received (and therefore potentially billed).
             db.rollback()
+            try:
+                finish_run(
+                    db, job_id, owner_sub=owner_sub,
+                    progress_value=run_state.for_job(job).get("progress"),
+                    status="failed",
+                )
+            except Exception:  # pragma: no cover - preserve provider error
+                db.rollback()
             try:
                 persist_current_openai_usage(
                     db, job_id, owner_sub=owner_sub)

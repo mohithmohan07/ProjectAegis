@@ -26,12 +26,15 @@ from typing import Any, Mapping
 
 from .. import config
 from . import assessment_profile
+from . import assessment_response_policy as response_policy
 from . import column_spec
+from . import source_task_polishing_policy as source_format
 from .response_schemas import item_review_schema
 from . import assessment_visual_evidence as visual_evidence
 from .phase3 import kernel
 
 ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-4-adopted-evidence"
+SOURCE_FORMAT_ITEM_REVIEW_POLICY_VERSION = "assessment-item-review-5-source-task-format"
 AUDIT_FIELD = "_aegis_assessment_item_review"
 WARNING = "assessment_item_review"
 UNAVAILABLE_WARNING = "assessment_item_review_unavailable"
@@ -46,7 +49,9 @@ _PROMPT_CACHE_STABLE_KEYS = (
 
 ITEM_REVIEW_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY + (
     "You are the independent joint reviewer of ONE finished Aegis "
-    "assessment item (Master Governing Contract v2.0 §27 step 6). You see "
+    "assessment item (Master Governing Contract v2.0 §27 step 6).\n"
+    + response_policy.CRITIC_RULES
+    + "You see "
     "the source atom (when the item is source-owned), the recorded blueprint "
     "cell, the complete materialized item, its recorded Open/Specific "
     "answer-space verdict and its recorded mark decomposition. Verify, "
@@ -100,6 +105,13 @@ ITEM_REVIEW_SYSTEM = column_spec.OUTPUT_DISCIPLINE + column_spec.REVIEW_QUALITY 
 )
 
 
+SOURCE_FORMAT_ITEM_REVIEW_SYSTEM = (
+    ITEM_REVIEW_SYSTEM.partition("fidelity — a source-owned question")[0]
+    + "fidelity — " + source_format.REVIEW_RULES
+    + "(2) lane and " + ITEM_REVIEW_SYSTEM.partition("(2) lane and ")[2]
+)
+
+
 class ItemReviewError(ValueError):
     """The review input cannot be bound mechanically."""
 
@@ -139,7 +151,7 @@ def _live_review(payload: dict[str, Any]) -> dict[str, Any]:
         payload, stable_keys=_PROMPT_CACHE_STABLE_KEYS,
     )
     return generation._openai_json(
-        ITEM_REVIEW_SYSTEM,
+        str(payload.get("rules") or ITEM_REVIEW_SYSTEM),
         suffix,
         purpose="advisory_critic",
         response_schema=item_review_schema(),
@@ -178,7 +190,8 @@ def _payload(
     return visual_evidence.bind({
         "stage": "assessment.item_review",
         "response_schema_contract": item_review_schema().identity(),
-        "rules": ITEM_REVIEW_SYSTEM,
+        "rules": (SOURCE_FORMAT_ITEM_REVIEW_SYSTEM
+                  if source_format.applies(atom) else ITEM_REVIEW_SYSTEM),
         "metadata": copy.deepcopy(dict(meta)),
         "assessment_format_policy": copy.deepcopy(dict(format_policy)),
         "rubric_tag_policy": assessment_profile.rubric_tag_policy(meta),
@@ -295,7 +308,8 @@ def review_items(
                 checker=_checker(candidate_id),
                 critic=None,
                 store=decision_store,
-                policy_version=ITEM_REVIEW_POLICY_VERSION,
+                policy_version=(SOURCE_FORMAT_ITEM_REVIEW_POLICY_VERSION
+                                if source_format.applies(atom) else ITEM_REVIEW_POLICY_VERSION),
                 fixer=None,
             )
         except Exception as exc:  # noqa: BLE001 — the auditor never blocks

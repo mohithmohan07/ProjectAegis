@@ -26,6 +26,11 @@ from . import canonical_source_phase212 as phase212
 from . import progress
 
 _CONTRACT_VERSION = 1
+# A sealed artifact that already carries a complete QX decision remains a
+# valid source authority across additive carrier changes. New adjudications
+# use ``phase212.QX_VERSION`` (and therefore a new cache key), while accepted
+# historical 1.0.0 artifacts are not globally invalidated or rewritten.
+_ACCEPTED_QX_VERSIONS = phase212.ACCEPTED_QX_VERSIONS
 
 
 def _gpt_page_ledger_reader(canonical: dict[str, Any]) -> bool:
@@ -67,7 +72,7 @@ def membership_adjudicated(canonical: dict[str, Any]) -> bool:
     return (
         isinstance(ledger, dict)
         and str(ledger.get("membership_authority") or "") == "model_verdict"
-        and str(ledger.get("version") or "") == phase212.QX_VERSION
+        and str(ledger.get("version") or "") in _ACCEPTED_QX_VERSIONS
     )
 
 

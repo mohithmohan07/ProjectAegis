@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import type { StreamEvent } from "./api/client";
 import { RunConsoleProvider, useRunConsole } from "./RunConsole";
@@ -77,6 +77,15 @@ function Probe() {
       >
         Watch
       </button>
+      <button
+        onClick={() => void watch("Master watch", {
+          module: "concepts",
+          jobId: 7,
+          operation: "master",
+        }).catch(() => undefined)}
+      >
+        Watch master
+      </button>
       <output data-testid="line-count">{state.lines.length}</output>
       <output data-testid="console-lines">
         {state.lines.map((line) => line.message).join(" | ")}
@@ -97,6 +106,23 @@ function Probe() {
         )}
       >
         Retry
+      </button>
+      <button
+        onClick={() => void run(
+          "Master continuation",
+          "/master",
+          {},
+          {
+            cumulative: true,
+            continuation: true,
+            resumed: true,
+            filename: "chapter.pdf",
+            initialUsage: usageWithStage(600, "Concept stage"),
+          },
+          { module: "concepts", jobId: 7, operation: "master" },
+        )}
+      >
+        Continue
       </button>
       <output data-testid="usage">{state.usage?.total_tokens ?? "none"}</output>
       <output data-testid="usage-stages">
@@ -166,6 +192,35 @@ test("a checkpoint retry starts from and preserves the cumulative file total", (
 
   act(() => pending[0].onEvent({ type: "usage", data: usage(550) }));
   expect(screen.getByTestId("usage").textContent).toBe("550");
+});
+
+test("live Gemini request charges and cumulative rupees survive terminal usage", async () => {
+  pending.length = 0;
+  render(<RunConsoleProvider><Probe /><RunConsolePanel /></RunConsoleProvider>);
+  fireEvent.click(screen.getByText("First"));
+  const receipt = {
+    attempt_id: "gemini-review-1", actual_model: "gemini-3.1-pro-preview",
+    stage: "Master review", outcome: "response_received", usage_reported: true,
+    estimated_cost_usd: 0.01, estimated_cost_inr: 0.875, total_tokens: 150,
+    usd_to_inr_rate: "87.5", usd_to_inr_as_of: "2026-09-08",
+  };
+  const live: OpenAIUsage = {
+    ...usage(150), model: "gemini-3.1-pro-preview",
+    estimated_cost_usd: 0.01, estimated_cost_inr: 0.875,
+    inr_conversion_complete: true, latest_request: receipt,
+  };
+  act(() => pending[0].onEvent({ type: "usage", data: live }));
+  expect(screen.getByText("Latest request", { selector: "dt" }).parentElement?.textContent)
+    .toContain("₹0.8750");
+
+  const final = { ...live, total_tokens: 400, estimated_cost_usd: 0.03,
+    estimated_cost_inr: 2.735, request_attempts: [receipt] };
+  await act(async () => pending[0].resolve({ openai_usage: final }));
+  expect(screen.getByTestId("status").textContent).toBe("done");
+  expect(screen.getByText("Estimated cost", { selector: "dt" }).parentElement?.textContent)
+    .toContain("₹2.74");
+  expect(screen.getByText("Latest request", { selector: "dt" }).parentElement?.textContent)
+    .toContain("₹0.8750");
 });
 
 test("a stream heartbeat makes a long final step visibly active", () => {
@@ -275,6 +330,100 @@ test("an awaiting-decision result stays paused at its checkpoint", async () => {
   expect(screen.getByTestId("progress-label").textContent).toBe(
     "Paused for your decision",
   );
+});
+
+test("a Concept review wait is paused below 100% and continuation keeps the same history", async () => {
+  pending.length = 0;
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("First"));
+  await act(async () => {
+    pending[0].onEvent({
+      type: "step",
+      label: "Concept authoring",
+      ts: 10,
+      seq: 1,
+    });
+    pending[0].onEvent({
+      type: "log",
+      message: "Concept Files staged",
+      ts: 11,
+      seq: 2,
+    });
+    pending[0].resolve({
+      status: "released",
+      review_workflow: { status: "pending_review", progress: 1 },
+      checkpoint_progress: 1,
+      openai_usage: usageWithStage(500, "Concept authoring"),
+    });
+  });
+
+  expect(screen.getByTestId("status").textContent).toBe("paused");
+  expect(screen.getByTestId("progress").textContent).toBe("0.99");
+  expect(screen.getByTestId("progress-label").textContent).toBe(
+    "Waiting for Concept review",
+  );
+  expect(screen.getByTestId("console-lines").textContent).toContain(
+    "Concept Files staged",
+  );
+
+  fireEvent.click(screen.getByText("Continue"));
+  expect(pending).toHaveLength(2);
+  await act(async () => {
+    pending[1].onEvent({
+      type: "result",
+      data: { status: "generated", review_workflow: { status: "master_ready" } },
+      ts: 20,
+      seq: 3,
+    });
+    pending[1].resolve({
+      status: "generated",
+      review_workflow: { status: "master_ready" },
+      openai_usage: usageWithStage(700, "Master authoring"),
+    });
+  });
+
+  expect(screen.getByTestId("status").textContent).toBe("done");
+  expect(screen.getByTestId("console-lines").textContent).toContain(
+    "Concept Files staged",
+  );
+  expect(screen.getByTestId("usage").textContent).toBe("700");
+});
+
+test("Master reattach ignores the earlier Concept review terminal event", async () => {
+  pending.length = 0;
+  getRunEventsMock
+    .mockResolvedValueOnce({
+      running: false,
+      events: [{
+        type: "result",
+        data: {
+          status: "released",
+          review_workflow: { status: "pending_review" },
+        },
+        seq: 1,
+      }, {
+        type: "result",
+        data: {
+          status: "generated",
+          review_workflow: { status: "master_ready" },
+        },
+        seq: 2,
+      }],
+    });
+  getUploadJobMock.mockResolvedValue({ status: "generated" });
+  render(
+    <RunConsoleProvider>
+      <Probe />
+    </RunConsoleProvider>,
+  );
+
+  fireEvent.click(screen.getByText("Watch master"));
+  await waitFor(() => expect(screen.getByTestId("status").textContent).toBe("done"));
 });
 
 test("a non-resumable incomplete result names the new-upload recovery", async () => {

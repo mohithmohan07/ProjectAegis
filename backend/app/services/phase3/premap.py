@@ -1017,7 +1017,7 @@ def _live_links(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREMAP_NEEDED_FOR_SYSTEM, prompts.render(payload),
+        prompts.PREMAP_NEEDED_FOR_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
         purpose="concept_mapping",
     )
 
@@ -1034,7 +1034,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _map_policy_instruction(payload: Mapping[str, Any]) -> str:
-    return ("\n" + capture_policy.MAP_INSTRUCTION) if payload.get("capture_policy") == capture_policy.VERSION else ""
+    return (("\n" + capture_policy.MAP_INSTRUCTION) if payload.get("capture_policy") == capture_policy.VERSION else "") + capture_policy.boundary_instruction(payload)
 
 
 def _map_rules(rules_suffix: str, *, atomic: bool = False) -> str:
@@ -1302,6 +1302,7 @@ def build(
     evidence = map_evidence(env, {"prerequisites": captured}, qids)
     payload = {
         "stage": "premap.map",
+        **capture_policy.boundary_fields(env),
         "rules": _map_rules(rules_suffix, atomic=capture_policy.active(env)),
         "chapter": chapter_calibration(env),
         "evidence": evidence,
@@ -1480,6 +1481,7 @@ def build(
             batch = pre_payload[start:start + _LINK_BATCH_SIZE]
             request = {
                 "stage": "premap.needed_for",
+                **capture_policy.boundary_fields(env),
                 "rules": _links_rules(rules_suffix),
                 "chapter": chapter_calibration(env),
                 "pre_concepts": batch,

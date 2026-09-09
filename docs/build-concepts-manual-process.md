@@ -5,6 +5,21 @@ as specified by Mohith Mohan (Founder, UpSchool) for Project Aegis. It is the
 process an expert would follow doing the job manually, and the pipeline's job
 is to mirror it. These are product decisions, not engineering preferences.
 
+**Q41 amendment (9 September 2026):** the automated Concept stage completes
+first with its questions, examples, context and media. The owner may then
+download and correct the Pre/Post Concept workbooks and reupload them as staged
+inputs before explicitly continuing to Master generation. All model review
+stages remain. The same run's accounting, logs, progress and active processing
+time continue across that review boundary; review waiting time is separate.
+The reviewer may omit, add or move Post questions in Types/Cases. The Post
+Master uses exactly that accepted question set, with revisions recorded and
+original source evidence retained. Automatic extraction does not invent Post
+questions; reviewer-authored additions are an explicit later input. Pre
+questions continue to generate automatically. The old Review & Edit interface
+is replaced by this file-based workflow.
+This intentional stage boundary supersedes older statements below that the
+entire Concept-to-Master workflow cannot wait for human review.
+
 Where this document and an implementation disagree, this document is correct
 and the implementation is a defect. It composes with
 `concept-placement-rules.md`: every placement decision named below is governed
@@ -79,9 +94,14 @@ Polishing rules:
 * The polished question is a **derived artifact**. The original wording is
   preserved beside it, and the polished form carries the source QID as
   provenance.
-* A question is **never split**. A multi-part question (sub-parts a), b),
-  c) …) is one question and stays one question — every part kept, in
-  order, inside the polished form. A question whose parts genuinely span
+* First establish the **semantic question boundary**. An umbrella instruction
+  such as “Answer the following questions” does not combine independent
+  lettered tasks into one question. Each independent task receives its own
+  identity. A meaningful shared passage, scenario, table, diagram or other
+  necessary context with dependent questions forms a genuine multipart unit.
+  The API author and advisory critic decide this from source meaning, never
+  numbering alone. An established multipart question is **never split**:
+  every part stays in order inside the polished form. A question whose parts genuinely span
   more than one concept or topic is a **culmination-level** question: it is
   classified and placed whole, at the level that teaches everything it
   asks, never broken into fragments. (Legacy note: inventories persisted by
@@ -90,7 +110,9 @@ Polishing rules:
   to honour their provenance, but no new split is ever made.)
 * Polished wording ships **flagged for review**, the same way as every other
   best-judgement output (Rule 1, amended). The reviewer corrects wording in
-  the delivered workbook; the run never waits on it.
+  the delivered Concept workbook. Under Q41 the run then pauses at the explicit
+  Concept review boundary before Master generation; it does not demand
+  mid-stage semantic choices.
 
 ### Step 5 — Classify into Types and Cases, then allot
 

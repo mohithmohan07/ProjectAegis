@@ -84,14 +84,18 @@ def test_prepare_final_routes_through_the_rewrite(
 
     assert rows == [{"concept_title": "Stub Row"}]
     # The seam sealed the exact envelope the golden fixture records, plus
-    # the owner's Pre coverage and atomic capture policies, frozen inside
-    # the new seal. The golden fixture predates both policies.
+    # the owner's Pre coverage, atomic capture, prior-learning boundary and
+    # source-topic policies, frozen inside the new seal. The golden fixture
+    # predates these policies; its source/skeleton bytes remain unchanged.
     from app.services.phase3 import pre_coverage
-    from app.services import prelearning_capture_policy
+    from app.services import model_provider, prelearning_capture_policy, source_topic_policy
 
     expected = copy.deepcopy(fixture_env)
     expected["metadata"] = pre_coverage.stamp(expected["metadata"])
+    expected["metadata"][model_provider.PROFILE_KEY] = model_provider.new_profile()
     expected["metadata"][prelearning_capture_policy.KEY] = prelearning_capture_policy.VERSION
+    expected["metadata"][prelearning_capture_policy.BOUNDARY_KEY] = prelearning_capture_policy.BOUNDARY_VERSION
+    expected["metadata"]["source_topic_policy_version"] = source_topic_policy.SOURCE_TOPIC_POLICY_VERSION
     expected["envelope_sha256"] = envelope_mod.seal_sha256(expected)
     assert captured["env"]["metadata"][pre_coverage.RULE_FIELD] == (
         pre_coverage.owner_rule()

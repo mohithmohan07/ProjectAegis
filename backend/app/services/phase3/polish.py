@@ -274,7 +274,7 @@ def _live_polish(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         prompts.POLISH_SYSTEM,
         prompts.render(payload),
-        purpose="concept_validation", image_urls=image_inputs(payload),
+        purpose="concept_validation", stage="concepts.polish", image_urls=image_inputs(payload),
     )
 
 

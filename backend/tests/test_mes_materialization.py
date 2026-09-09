@@ -199,7 +199,7 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-15-column-spec"
+        "assessment-materialize-16-selection-mode"
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
@@ -864,7 +864,7 @@ def test_english_post_materialization_honors_thirty_answer_master_capacity():
     assert len(candidate["answers"]) == 30
     assert candidate["assessment_eligibility"] == "accepted"
     assert candidate["authority"]["policy_version"] == (
-        "assessment-materialize-15-column-spec"
+        "assessment-materialize-16-selection-mode"
     )
 
 

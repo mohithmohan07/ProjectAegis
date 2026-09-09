@@ -133,9 +133,46 @@ def build_evidence(env: Mapping[str, Any]) -> dict[str, Any]:
             "source_kind": kind,
             "practical_evidence": kind in _PRACTICAL_KINDS
             or bool(item.get("_activity_origin")),
+            # Keep the source-owned task packet available to the analysis
+            # author. The rendered text is useful for readability; these raw
+            # and relationship fields make omissions auditable and preserve
+            # context/media selected upstream by the source author.
             "text": generation._inventory_task_text(item),
+            "raw_text": str(item.get("raw_task") or ""),
+            "source_label": str(item.get("source_label") or ""),
+            "shared_context": str(item.get("shared_context") or ""),
+            "source_start": int(item.get("source_start") or 0),
+            "source_end": int(item.get("source_end") or 0),
+            "source_block_ids": [
+                str(value) for value in item.get("source_block_ids") or []
+                if value
+            ],
+            "context_block_ids": [
+                str(value) for value in item.get("context_block_ids") or []
+                if value
+            ],
+            "figure_refs": [
+                str(value) for value in item.get("figure_refs") or [] if value
+            ],
+            "image_urls": [
+                str(value) for value in item.get("image_urls") or [] if value
+            ],
+            "content_objects": item.get("content_objects") or {},
+            "source_membership": item.get("source_membership") or {},
         })
-    return {"source_blocks": blocks, "question_task_inventory": tasks}
+    return {
+        "source_blocks": blocks,
+        "question_task_inventory": tasks,
+        "source_coverage": {
+            "source_block_ids": [row["block_id"] for row in blocks],
+            "task_qids": [row["qid"] for row in tasks],
+            "task_membership_authority": str(
+                (env.get("canonical", {}).get("task_membership") or {}).get(
+                    "authority"
+                ) or ""
+            ),
+        },
+    }
 
 
 def _inventory_checker() -> Callable[[Mapping[str, Any]], list[str]]:

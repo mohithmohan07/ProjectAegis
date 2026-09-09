@@ -30,6 +30,60 @@ class SnapshotError(ValueError):
     """
 
 
+def reviewed_target_concept_key(
+    target: Mapping[str, Any] | None,
+    concepts: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+) -> tuple[str, str]:
+    """Resolve one accepted review target against this release's concepts.
+
+    ``concept_row_index`` is persisted by the review handoff after it has
+    been rebound to the staged record index.  It is therefore the identity
+    join.  The reviewed Concept title/topic are checked as a guard against a
+    stale or malformed receipt; neither is used as a fuzzy or first-match
+    fallback.  A failure returns an audit message so the runner can keep the
+    candidate visible while refusing an unowned route without spending on a
+    semantic router.
+    """
+    if not isinstance(target, Mapping):
+        return "", "reviewed target is not an object"
+    raw_index = target.get("concept_row_index")
+    try:
+        index = int(raw_index)
+    except (TypeError, ValueError):
+        return "", "reviewed target has no integer concept_row_index"
+    if index < 0:
+        return "", "reviewed target concept_row_index is negative"
+    matches = [
+        concept for concept in concepts
+        if isinstance(concept, Mapping)
+        and concept.get("source_record_index") == index
+    ]
+    if len(matches) != 1:
+        return "", (
+            f"reviewed target concept_row_index {index} does not name "
+            f"exactly one staged concept (matches={len(matches)})"
+        )
+    concept = matches[0]
+    target_title = str(target.get("concept_title") or "").strip()
+    actual_title = str(concept.get("concept_title") or "").strip()
+    if not target_title or target_title != actual_title:
+        return "", (
+            "reviewed target concept title disagrees with its staged row "
+            f"(reviewed={target_title!r}, staged={actual_title!r})"
+        )
+    target_topic = str(target.get("topic") or "").strip()
+    actual_topic = str(concept.get("topic_title") or "").strip()
+    if target_topic and target_topic != actual_topic:
+        return "", (
+            "reviewed target topic disagrees with its staged row "
+            f"(reviewed={target_topic!r}, staged={actual_topic!r})"
+        )
+    key = str(concept.get("concept_key") or "").strip()
+    if not key:
+        return "", "reviewed target staged concept has no concept_key"
+    return key, ""
+
+
 # The two row-level codes ``build`` records instead of raising.
 SNAPSHOT_ROW_UNADDRESSABLE = "snapshot_row_unaddressable"
 SNAPSHOT_ROW_UNNAMED = "snapshot_row_unnamed"
@@ -236,6 +290,10 @@ def build(
         row_identity = _record_identity(record, position)
         row = {
             "concept_key": concept_key,
+            # The review handoff's reviewed target is rebound to this staged
+            # record index before it is committed. Keep the join private to
+            # the route projection; it is not learner-visible workbook data.
+            "source_record_index": int(position - 1),
             "concept_machine_id": machine_id,
             "release_row_identity": row_identity,
             # The Pre lane's mechanical join: a staged Pre row carries the
@@ -261,6 +319,8 @@ def build(
         carried.append(concept)
         route_row = {
             "concept_key": concept_key,
+            "source_record_index": int(position - 1),
+            "topic_title": str(concept.topic.topic_title or ""),
             "concept_title": title,
             "concept_display_name": display_name,
             "teaching_description": str(concept.concept_details or ""),

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from types import SimpleNamespace
 
 import pytest
@@ -945,7 +946,7 @@ def test_hierarchy_batches_overlap_with_bounded_ordered_application(
     monkeypatch.setattr(phase34, "_write_cache_entry", cache_result)
     monkeypatch.setattr(phase34.progress, "log", lambda message, **_: logs.append(message))
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(invoke)
+        future = executor.submit(copy_context().run, invoke)
         try:
             assert second_cached.wait(5), "hierarchy batch calls were serialized"
             assert not third_started.is_set()
@@ -1091,3 +1092,10 @@ def test_graph_compilation_finishes_every_author_batch_before_criticism(
         )
     assert graph["classification_mode"] == "api_classified_and_verified"
     assert critic_ids == expected_ids
+
+
+@pytest.fixture(autouse=True)
+def _historical_routing_contract():
+    from app.services import model_provider
+    with model_provider.bind_profile(None):
+        yield

@@ -73,7 +73,7 @@ def test_category_checker_uses_canonical_labels_without_local_classification():
         profile.assessment_format_policy(current),
     )
     response = {"source_qid": "Q1", "sheet_kind": "subjective", "question_category": "Fill in the blanks",
-                "cognitive_skill": "Understand", "difficulty": "Moderate", "marks": 2,
+                "selection_mode": "", "cognitive_skill": "Understand", "difficulty": "Moderate", "marks": 2,
                 "rationale": "The item requires a supplied term."}
     assert check(response) == []
     assert any("question_category" in issue for issue in check({**response, "question_category": "FIB"}))

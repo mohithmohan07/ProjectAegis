@@ -313,7 +313,13 @@ def lowercase_objective_option_labels(
     return _UPPERCASE_OBJECTIVE_OPTION_RE.sub(replace, value)
 
 
-_IMAGE_TAG_RE = re.compile(r"\[img\b[^\]]*\]", re.IGNORECASE)
+# A closing bracket inside a quoted URL or alt belongs to that attribute,
+# not to the token boundary. Keep the permissive fallback so malformed tags
+# still reach rich-text validation/repair without silently dropping content.
+_IMAGE_TAG_RE = re.compile(
+    r'''\[img\b(?:"[^"]*"|'[^']*'|[^\]"'])*\]|\[img\b[^\]]*\]''',
+    re.IGNORECASE,
+)
 _CANONICAL_IMAGE_TAG_RE = re.compile(
     r'\[img src="(?P<src>https://[^"]+)" alt="(?P<alt>[^"]+)"\]'
 )

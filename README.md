@@ -65,22 +65,30 @@ backend/
 frontend/             React + Vite + TypeScript UI (the two modules + Database)
 ```
 
-## Dry vs live mode
+## Model workflow and cost logs
 
-Every generation step has a **dry** path (deterministic, realistic stub content,
-no API keys — used for the MVP and tests) and a **live** hook that delegates to
-the vendored scripts. Live mode activates when the relevant environment
-variable is set:
+New Build Concepts runs use Gemini 3.8 Flash only to author Pre questions,
+Luna at xhigh for concept writing and semantic decisions, and GPT-5.4 mini for
+narrow passes. Contextual Pre coverage replaces the fixed 5+5 quota. Every
+existing review/refinement stage remains. The full model profile is recorded
+before the first request and carried into the sealed envelope; replay retains
+its recorded decisions.
 
-```bash
-export OPENAI_API_KEY=...                 # question / concept generation,
-                                          # and PDF → canonical source
-```
+Production needs both `OPENAI_API_KEY` and `GEMINI_API_KEY`; they remain server
+secrets. Conversion needs OpenAI, and the complete Concept run checks both
+credentials before generation. The UI shows the stage assignments and readiness.
+There is no application-wide switch that can send Post work to Gemini.
 
-PDFs are read by the GPT PDF-to-ACSD reader, so `OPENAI_API_KEY` is the only
-credential a conversion needs. There is no separate OCR service.
+Logs and usage panels show per-request and cumulative estimated charges in INR.
+The provider's USD ledger remains available for reconciliation. Each request
+retains its FX rate and observation date; resumed totals add saved receipts.
+The default reference comes from ECB daily data with a dated cache fallback.
+`AEGIS_USD_TO_INR_RATE` and `AEGIS_USD_TO_INR_AS_OF` select an explicit reference
+instead. Missing provider usage or historical conversion is shown as incomplete.
 
-The `_live_*` hooks in the service layer mark exactly where inputs must be wired.
+Dry stubs require `AEGIS_ALLOW_DRY=1` and are for tests only. Details, exact API
+endpoints, model routing, pricing dates and verification limits are recorded in
+[the workflow review](docs/model-routing-review-2026-09-09.md).
 
 ## Run locally
 
