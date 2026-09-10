@@ -112,6 +112,22 @@ SOURCE_FORMAT_ITEM_REVIEW_SYSTEM = (
 )
 
 
+def _foundation_fields(env: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry the recorded Grade 1 foundation policy when present."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.fields(env)
+
+
+def _foundation_instruction(payload: Mapping[str, Any]) -> str:
+    """Return the active foundation instruction, or nothing historically."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.instruction(payload)
+
+
 class ItemReviewError(ValueError):
     """The review input cannot be bound mechanically."""
 
@@ -187,11 +203,13 @@ def _payload(
             ("required_elements", list), ("accepted_variations", list),
         ) if not isinstance(contract.get(field), expected_type)
     ]
-    return visual_evidence.bind({
+    foundation_fields = _foundation_fields({"metadata": meta})
+    payload: dict[str, Any] = {
         "stage": "assessment.item_review",
         "response_schema_contract": item_review_schema().identity(),
         "rules": (SOURCE_FORMAT_ITEM_REVIEW_SYSTEM
                   if source_format.applies(atom) else ITEM_REVIEW_SYSTEM),
+        **foundation_fields,
         "metadata": copy.deepcopy(dict(meta)),
         "assessment_format_policy": copy.deepcopy(dict(format_policy)),
         "rubric_tag_policy": assessment_profile.rubric_tag_policy(meta),
@@ -209,7 +227,9 @@ def _payload(
         },
         "answer_contract_availability": "recorded" if not missing_contract_fields else "missing",
         "answer_contract_missing_fields": missing_contract_fields,
-    }, atom, item)
+    }
+    payload["rules"] += _foundation_instruction(payload)
+    return visual_evidence.bind(payload, atom, item)
 
 
 def review_items(

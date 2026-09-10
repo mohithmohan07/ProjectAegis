@@ -161,6 +161,7 @@ from ... import config
 from .. import katex_rules as kr
 from .. import progress
 from .. import prelearning_capture_policy as capture_policy
+from .. import prelearning_foundation_policy as foundation_policy
 from . import evidence as visual_evidence
 
 # The run the map belongs to, stamped on the map itself (register Q29).
@@ -908,7 +909,9 @@ def _live_empty_capture(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREMAP_EMPTY_CAPTURE_SYSTEM, prompts.render(payload),
+        prompts.PREMAP_EMPTY_CAPTURE_SYSTEM
+        + capture_policy.boundary_instruction(payload),
+        prompts.render(payload),
         purpose="concept_mapping",
     )
 
@@ -918,7 +921,9 @@ def _live_empty_capture_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM, prompts.render(payload),
+        prompts.PREMAP_EMPTY_CAPTURE_CRITIC_SYSTEM
+        + capture_policy.boundary_instruction(payload),
+        prompts.render(payload),
         purpose="advisory_critic",
     )
 
@@ -977,6 +982,20 @@ def empty_capture_verdict(
         "chapter": chapter_calibration(env),
         "evidence": empty_capture_evidence(env, qids),
     }
+    # The empty audit must use the same new eligibility boundary as capture.
+    # Keep the legacy empty payload byte-identical when this policy is absent;
+    # fresh envelopes carry both its stamp and the boundary instruction.
+    foundation_fields = foundation_policy.fields(env)
+    if foundation_fields:
+        boundary_fields = capture_policy.boundary_fields(env)
+        payload.update(boundary_fields)
+        boundary_suffix = capture_policy.boundary_instruction(boundary_fields)
+        # ``rules_suffix`` normally already carries this through the
+        # Architect.  Direct callers may omit it, so fill it only when the
+        # complete stamped suffix is absent; this keeps the request readable
+        # while the live adapter also receives the policy in its system text.
+        if boundary_suffix and boundary_suffix not in payload["rules"]:
+            payload["rules"] += boundary_suffix
     # The same pre-spend post-condition the map payload carries: the
     # chapter's own question identities must not reach a Pre-lane payload.
     _refuse_source_qids(
@@ -990,7 +1009,8 @@ def empty_capture_verdict(
         checker=_empty_capture_checker,
         critic=critic,
         store=store,
-        policy_version=EMPTY_CAPTURE_POLICY_VERSION,
+        policy_version=EMPTY_CAPTURE_POLICY_VERSION
+        + (";" + foundation_policy.VERSION if foundation_fields else ""),
         fixer=fixer,
     )
     response = decision.get("response") or {}
@@ -1182,6 +1202,7 @@ def build(
         "decision_flags": {},
         "validation": [],
         RUN_IDENTITY_FIELD: run_identity(env),
+        **foundation_policy.fields(env),
     }
     if not captured:
         # D8.3 / S9 — ONE verdict, not an inference. This branch used to
@@ -1330,7 +1351,9 @@ def build(
         checker=_map_checker(prerequisite_ids),
         critic=critic,
         store=store,
-        policy_version=_policy_version("PREMAP_SYSTEM") + (";" + capture_policy.VERSION if enhanced else ""),
+        policy_version=_policy_version("PREMAP_SYSTEM")
+        + (";" + capture_policy.VERSION if enhanced else "")
+        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else ""),
         fixer=fixer,
     )
     map_flags = list(decision.get("review_flags") or [])
@@ -1686,6 +1709,7 @@ def build(
         "decision_flags": decision_flags,
         "validation": validation,
         RUN_IDENTITY_FIELD: run_identity(env),
+        **foundation_policy.fields(env),
     }
 
 

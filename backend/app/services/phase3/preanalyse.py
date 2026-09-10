@@ -84,6 +84,19 @@ from .. import progress
 POLICY_VERSION = "pre-analysis-1"
 
 
+def _foundation_policy_suffix(payload: Mapping[str, Any]) -> str:
+    """Identify the foundation policy in the durable decision audit."""
+
+    from .. import prelearning_foundation_policy
+
+    return (
+        ";" + prelearning_foundation_policy.VERSION
+        if payload.get(prelearning_foundation_policy.KEY)
+        == prelearning_foundation_policy.VERSION
+        else ""
+    )
+
+
 def _policy_version(author_system: str) -> str:
     """Bind saved judgments to the exact author and independent critic."""
     from . import prompts
@@ -258,7 +271,9 @@ def _live_build(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREANALYSE_INVENTORY_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
+        prompts.PREANALYSE_INVENTORY_SYSTEM
+        + capture_policy.boundary_instruction(payload),
+        prompts.render(payload),
         purpose="concept_mapping",
     )
 
@@ -268,7 +283,9 @@ def _live_allot(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREANALYSE_ALLOT_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
+        prompts.PREANALYSE_ALLOT_SYSTEM
+        + capture_policy.boundary_instruction(payload),
+        prompts.render(payload),
         purpose="concept_mapping",
     )
 
@@ -278,7 +295,9 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        prompts.PREANALYSE_CRITIC_SYSTEM + capture_policy.boundary_instruction(payload), prompts.render(payload),
+        prompts.PREANALYSE_CRITIC_SYSTEM
+        + capture_policy.boundary_instruction(payload),
+        prompts.render(payload),
         purpose="advisory_critic",
     )
 
@@ -401,7 +420,10 @@ def analyse(
         checker=_inventory_checker(),
         critic=critic,
         store=store,
-        policy_version=_policy_version("PREANALYSE_INVENTORY_SYSTEM"),
+        policy_version=(
+            _policy_version("PREANALYSE_INVENTORY_SYSTEM")
+            + _foundation_policy_suffix(build_payload)
+        ),
         fixer=fixer,
     )
     inventory: list[dict[str, Any]] = []
@@ -493,7 +515,10 @@ def analyse(
             ),
             critic=critic,
             store=store,
-            policy_version=_policy_version("PREANALYSE_ALLOT_SYSTEM"),
+            policy_version=(
+                _policy_version("PREANALYSE_ALLOT_SYSTEM")
+                + _foundation_policy_suffix(payload)
+            ),
             fixer=fixer,
         )
         decided = {

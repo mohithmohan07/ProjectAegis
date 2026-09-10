@@ -152,6 +152,44 @@ from .. import progress
 POLICY_VERSION = "prequestions-1"
 ADAPTIVE_POLICY_VERSION = "prequestions-2-adaptive-coverage"
 
+_FOUNDATION_QUESTION_GUIDANCE = """
+For a Grade 1 foundation, keep each generated check at simple readiness and
+within the child's demonstrated level. Prefer one short step, recognition or
+an explicit correct choice, or a tiny familiar response. Do not ask for an
+essay, a why justification, technical grammar terminology, or multi-step
+reasoning. Do not inflate a plan with Advanced questions; an Intermediate
+question is allowed only when the retained, source-supported prior capability
+is still within the child's level. Choose a modest context-based set and use
+only the tiers the evidence needs; never force a trio, balance tiers, or add a
+question to fill a customary count. The question must not introduce chapter
+teaching or a future-grade extension.
+""".strip()
+
+
+def _foundation_instruction(payload: Mapping[str, Any]) -> str:
+    """Return only question-specific guidance after shared policy text."""
+
+    from .. import prelearning_foundation_policy
+
+    instruction = prelearning_foundation_policy.instruction(payload)
+    if not instruction:
+        return ""
+    return "\n" + _FOUNDATION_QUESTION_GUIDANCE
+
+
+def _foundation_policy_suffix(payload: Mapping[str, Any]) -> str:
+    """Identify the foundation policy in the durable decision audit."""
+
+    from .. import prelearning_foundation_policy
+
+    return (
+        ";" + prelearning_foundation_policy.VERSION
+        if payload.get(prelearning_foundation_policy.KEY)
+        == prelearning_foundation_policy.VERSION
+        else ""
+    )
+
+
 # The generated questions ride their OWN carry channel (the runner's
 # ``pre_questions`` key and its snapshot). They are deliberately not
 # stamped into the Pre concept detailing here: putting a question under a
@@ -588,7 +626,10 @@ def _live_plan(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        _plan_system(payload) + capture_policy.boundary_instruction(payload), prompts.render(payload),
+        _plan_system(payload)
+        + capture_policy.boundary_instruction(payload)
+        + _foundation_instruction(payload),
+        prompts.render(payload),
         purpose="pre_learning",
     )
 
@@ -599,7 +640,10 @@ def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
     from ..response_schemas import pre_question_author_schema
 
     return generation._openai_json(
-        _author_system(payload) + capture_policy.boundary_instruction(payload), prompts.render(payload),
+        _author_system(payload)
+        + capture_policy.boundary_instruction(payload)
+        + _foundation_instruction(payload),
+        prompts.render(payload),
         purpose="pre_learning", stage="prequestions.author",
         **({"response_schema": pre_question_author_schema()} if model_provider.bound_profile() is not None else {}),
     )
@@ -610,7 +654,10 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from .. import generation
 
     return generation._openai_json(
-        _critic_system(payload) + capture_policy.boundary_instruction(payload), prompts.render(payload),
+        _critic_system(payload)
+        + capture_policy.boundary_instruction(payload)
+        + _foundation_instruction(payload),
+        prompts.render(payload),
         purpose="advisory_critic",
     )
 
@@ -1025,8 +1072,11 @@ def build(
             checker=_plan_checker(concept_ids, rule),
             critic=critic,
             store=store,
-            policy_version=(ADAPTIVE_POLICY_VERSION
-                            if pre_coverage.is_adaptive(rule) else POLICY_VERSION),
+            policy_version=(
+                ADAPTIVE_POLICY_VERSION
+                if pre_coverage.is_adaptive(rule)
+                else POLICY_VERSION
+            ) + _foundation_policy_suffix(plan_payload),
             fixer=fixer,
         )
     except kernel.ContractError as error:
@@ -1158,8 +1208,11 @@ def build(
                 ),
                 critic=critic,
                 store=store,
-                policy_version=(ADAPTIVE_POLICY_VERSION
-                                if pre_coverage.is_adaptive(rule) else POLICY_VERSION),
+                policy_version=(
+                    ADAPTIVE_POLICY_VERSION
+                    if pre_coverage.is_adaptive(rule)
+                    else POLICY_VERSION
+                ) + _foundation_policy_suffix(payload),
                 fixer=fixer,
             )
         except kernel.ContractError as error:

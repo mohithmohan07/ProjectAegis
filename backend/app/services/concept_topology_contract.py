@@ -420,7 +420,7 @@ def _run_rewritten_phase3(
             env = None
     if env is None:
         from .phase3 import pre_coverage as p3_coverage
-        from . import prelearning_capture_policy
+        from . import prelearning_capture_policy, prelearning_foundation_policy
         from . import source_topic_policy
 
         env = p3_envelope.build(
@@ -442,6 +442,7 @@ def _run_rewritten_phase3(
                 # including the absence of this key on historical runs.
                 prelearning_capture_policy.KEY: prelearning_capture_policy.VERSION,
                 prelearning_capture_policy.BOUNDARY_KEY: prelearning_capture_policy.BOUNDARY_VERSION,
+                prelearning_foundation_policy.KEY: prelearning_foundation_policy.VERSION,
                 "source_topic_policy_version": source_topic_policy.SOURCE_TOPIC_POLICY_VERSION,
             },
         )

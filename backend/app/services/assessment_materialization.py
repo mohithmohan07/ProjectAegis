@@ -383,6 +383,22 @@ SOURCE_FORMAT_MATERIALIZE_SYSTEM = (
     + "For a poem"
     + MATERIALIZE_SYSTEM.partition("For a poem")[2]
 )
+
+
+def _foundation_fields(env: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry the recorded Grade 1 foundation policy when present."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.fields(env)
+
+
+def _foundation_instruction(payload: Mapping[str, Any]) -> str:
+    """Return the active foundation instruction, or nothing historically."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.instruction(payload)
 SOURCE_FORMAT_CRITIC_SYSTEM = (
     MATERIALIZE_CRITIC_SYSTEM.partition("for a source-owned Master item")[0]
     + source_format.REVIEW_RULES
@@ -875,9 +891,10 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
         stable_keys=_PROMPT_CACHE_STABLE_KEYS,
     )
     return generation._openai_json(
-        (SOURCE_FORMAT_CRITIC_SYSTEM
-         if source_format.applies(payload.get("source_atom"))
-         else MATERIALIZE_CRITIC_SYSTEM),
+        str(payload.get("critic_rules") or (
+            SOURCE_FORMAT_CRITIC_SYSTEM
+            if source_format.applies(payload.get("source_atom"))
+            else MATERIALIZE_CRITIC_SYSTEM)),
         suffix,
         purpose="advisory_critic",
         response_schema=advisory_critic_schema(),
@@ -1096,11 +1113,16 @@ def _decision_payload(
     # mechanical checker. Part of the payload, so the decision key changes
     # with the rule (a replay under another subject never reuses it).
     tag_policy = assessment_profile.rubric_tag_policy(meta)
-    return visual_evidence.bind({
+    foundation_fields = _foundation_fields({"metadata": meta})
+    rules = (SOURCE_FORMAT_MATERIALIZE_SYSTEM
+             if source_format.applies(atom) else MATERIALIZE_SYSTEM)
+    critic_rules = (SOURCE_FORMAT_CRITIC_SYSTEM
+                    if source_format.applies(atom) else MATERIALIZE_CRITIC_SYSTEM)
+    payload: dict[str, Any] = {
         "stage": "assessment.materialize",
         "critic_response_schema": advisory_critic_schema().identity(),
-        "rules": (SOURCE_FORMAT_MATERIALIZE_SYSTEM
-                  if source_format.applies(atom) else MATERIALIZE_SYSTEM),
+        "rules": rules,
+        **foundation_fields,
         "candidate_id": candidate_id,
         "metadata": copy.deepcopy(dict(meta)),
         "workbook_capacities": {
@@ -1121,7 +1143,15 @@ def _decision_payload(
     # Source ownership names the item's complete visual dependencies. The
     # released hierarchy may contain every other chapter figure; attaching
     # those to each source question would add cost and unrelated evidence.
-    }, atom if atom is not None else cell)
+    }
+    # ``critic_rules`` did not exist on historical materialization payloads;
+    # add it only for the versioned foundation lane so old payloads remain
+    # byte-for-byte compatible while both model passes receive the policy.
+    foundation_suffix = _foundation_instruction(payload)
+    if foundation_suffix:
+        payload["rules"] += foundation_suffix
+        payload["critic_rules"] = critic_rules + foundation_suffix
+    return visual_evidence.bind(payload, atom if atom is not None else cell)
 
 
 def _materialize_prepared(

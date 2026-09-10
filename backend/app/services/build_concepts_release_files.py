@@ -84,6 +84,15 @@ def pre_lane_empty_reason(payload: Mapping[str, Any] | None) -> str:
         if isinstance(verdict_row, Mapping) else ""
     )
     if verdict == PRE_LANE_ASSUMES_NOTHING:
+        from . import prelearning_foundation_policy
+
+        if prelearning_foundation_policy.instruction(payload):
+            return (
+                "No prerequisite concepts are required for this chapter at "
+                "the learner's level. The Pre files are intentionally empty; "
+                "Post Master generation can continue. "
+                + (f"Rationale: {rationale}" if rationale else "")
+            ).strip()
         return (
             "The run decided this chapter assumes no prior knowledge, so "
             "the Pre files are genuinely empty (recorded verdict "

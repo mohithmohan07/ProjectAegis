@@ -3555,7 +3555,7 @@ def _refine_pre_records(
     stages the UNREFINED rows with an availability flag.
     """
 
-    from . import release_refiner
+    from . import release_refiner, prelearning_foundation_policy
 
     records = [
         copy.deepcopy(dict(row))
@@ -3576,6 +3576,7 @@ def _refine_pre_records(
             models.Chapter, int((job.deposit_scope_ids or [0])[0] or 0)
         )
         metadata = {
+            **prelearning_foundation_policy.fields({"metadata": pre_map}),
             "board": chapter.board if chapter else "",
             "grade": chapter.grade if chapter else "",
             "subject": chapter.subject if chapter else "",
@@ -4359,6 +4360,9 @@ def stage_pre_release(
     if pre_map is None:
         return None
     source = copy.deepcopy(dict(pre_map))
+    from . import prelearning_foundation_policy
+
+    foundation_fields = prelearning_foundation_policy.fields({"metadata": source})
     questions_source = copy.deepcopy(dict(pre_questions or {}))
     raw_rows = [
         copy.deepcopy(dict(row))
@@ -4486,6 +4490,7 @@ def stage_pre_release(
         # publication) to stamp Pre topics. It is a PROJECTION detail, not
         # the lane's authority — the slot is (spec T3).
         "learning_kind": LANE_PRE,
+        **foundation_fields,
         "source_book": job.source_book,
         "filename": job.filename,
         "source_document_hash": source_document_hash,
