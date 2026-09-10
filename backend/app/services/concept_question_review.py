@@ -14,7 +14,7 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
-POLICY = "concept-question-review-2026-09-09-v1"
+POLICY = "concept-question-review-2026-09-10-v2"
 
 AUTHOR = """Read the complete edited Concept workbook rows and the original
 accepted question bank. The reviewer edits the SAME Concept Excel, chiefly
@@ -36,12 +36,26 @@ A deliberate omission stays omitted. Distinguish a list of independent tasks
 under 'Answer the following' from a genuine shared-context multipart task.
 Preserve the whole genuine multipart question and all its dependent children.
 
-question_text must be an EXACT contiguous quote from the chosen edited row's
-concept_details. Exclude the Example label and supplied worked solution from
-that quote; carry separately quoted shared_context and source_answer when
-present. Keep every question demand, option, number, table, image URL and
-subquestion inside the quote. If question wording spans formatting tokens,
-copy those tokens too. Do not polish or solve the question in this call.
+question_text must be an EXACT quote from the chosen edited row's
+concept_details. Normally it is one contiguous quote. The payload also
+provides concept_details_view, a display-only representation that changes
+only CRLF/line endings and HTML <br> markers; copying that view is allowed
+because the server maps it back to the exact raw cell text. The edited cell is
+the wording authority: corrections such as replacing a blank glyph with
+underscores or removing a duplicated passage are intentional. Never copy the
+old original-bank wording for the quote and never Markdown-escape edited
+underscores. The original bank supplies identity and untouched dependencies
+only. Exclude the
+Example label and supplied worked solution from that quote; carry separately
+quoted shared_context and source_answer when present. Keep every question
+demand, option, number, table, image URL and subquestion inside the quote. If
+the reviewed wording is split by an interleaved source label or answer
+material that is deliberately excluded, return ordered question_text_spans.
+Each span must be copied exactly from concept_details (or its display view),
+and the spans must concatenate to question_text; include any needed spaces,
+punctuation and formatting in the spans. Never invent a separator. If
+question wording spans formatting tokens, copy those tokens too. Do not polish
+or solve the question in this call.
 The independent Master stages perform their existing faithful formatting and
 answer construction against the accepted question later.
 
@@ -53,6 +67,14 @@ old dependencies. New options must be exact quotes in the edited row; do not
 invent distractors, tables, givens, figures or solutions. List the selected
 options verbatim only when the reviewer changed or added the option set;
 otherwise options=[] and preserve_source_dependencies=true keeps the old set.
+For an existing source question, if the edited cell does not contain an exact
+shared context or answer, return
+an empty shared_context/source_answer and preserve_source_dependencies=true;
+the old dependency is then carried mechanically. Do not copy context from a
+Description or mastery paragraph merely because it explains the task. Empty
+does not mean invented replacement. For an added question always set
+preserve_source_dependencies=false and quote any necessary context from its
+edited question material.
 
 Choose concept_row from the supplied edited row_index, never from print order
 or an old route after the reviewer moved a question. type_id and case_id name
@@ -71,6 +93,9 @@ no Description/definition/misconception prose became an invented question,
 additions/omissions/identity were not inferred by position or numbering, and
 reviewed Concept/Type/Case placement is honored. Check all question demands,
 options, media, source context and genuine multipart children are preserved.
+Check that each accepted question quote (and every question_text_spans part)
+is grounded in the selected edited row's raw text or its stated display view;
+do not approve a paraphrase merely because it is semantically similar.
 The reviewer may intentionally add, omit, edit and move questions. Do not
 restore omissions or invent questions. Your dissent is advisory: report it
 precisely without changing the accepted author verdict or asking for a rerun.
@@ -85,6 +110,9 @@ class ReviewedQuestion(_Strict):
     source_qid: str
     concept_row: int
     question_text: str
+    # Optional transport for source-backed wording split by excluded source
+    # material.  It is deliberately additive so legacy adapters may omit it.
+    question_text_spans: list[str] = []
     shared_context: str
     source_answer: str
     options: list[str]
@@ -134,7 +162,7 @@ def _call(system: str, payload: dict, *, critic: bool = False) -> dict:
         system,
         json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
         response_schema=ResponseSchema(
-            "concept_question_review_critic_v1" if critic else "concept_question_review_author_v1",
+            "concept_question_review_critic_v2" if critic else "concept_question_review_author_v2",
             ReviewCritic if critic else ReviewVerdict,
         ),
         purpose="advisory_critic" if critic else "source_extraction",
@@ -172,20 +200,34 @@ def _validate(verdict: dict, rows: list[dict], originals: list[dict],
         if not 0 <= index < len(rows):
             defects.append(f"unknown edited Concept row {index}")
             continue
+        target = rows[index]
+        location = (
+            f"{target.get('sheet') or 'Concept workbook'!r} row "
+            f"{target.get('row', index + 1)} ({target.get('concept_title') or 'Concept Details'})"
+        )
         text = str(rows[index].get("concept_details") or "")
         prompt = question["question_text"]
-        if not prompt.strip() or prompt not in text:
-            defects.append(f"question in row {index} is not an exact nonempty edited-text quote")
+        spans = question.get("question_text_spans") or []
+        span_materialized = None
+        if spans:
+            from .concept_question_quote import materialize_spans, view
+            span_materialized = materialize_spans(text, spans)
+            if span_materialized is None or view(span_materialized) != view(prompt):
+                defects.append(f"question spans in {location} are not ordered exact edited-text quotes")
+        if not prompt.strip() or (
+            prompt not in text and span_materialized is None and not spans
+        ):
+            defects.append(f"question in {location} is not an exact nonempty edited-text quote")
         for name in ("shared_context", "source_answer"):
             value = question[name]
             if value and value not in text:
-                defects.append(f"{name} in row {index} is not an exact edited-text quote")
+                defects.append(f"{name} in {location} is not an exact edited-text quote")
         if any(not option or option not in text for option in question["options"]):
-            defects.append(f"options in row {index} contain unquoted content")
+            defects.append(f"options in {location} contain unquoted content")
         for name in ("type_title", "type_definition", "case_definition"):
             value = question[name]
             if value and value not in text:
-                defects.append(f"{name} in row {index} is not an exact edited-text quote")
+                defects.append(f"{name} in {location} is not an exact edited-text quote")
         if original_routes is not None:
             for field in ("type_id", "case_id"):
                 if question[field] and question[field] not in route_ids[field]:
@@ -202,7 +244,59 @@ def _validate(verdict: dict, rows: list[dict], originals: list[dict],
     kept = {item["source_qid"] for item in dispositions if item["disposition"] != "omitted"}
     if kept != set(accepted_ids):
         defects.append("accepted source questions disagree with their explicit dispositions")
-    return defects
+    # A single malformed question can trigger the bounded correction pass;
+    # avoid repeating the same contract defect in the user-facing blocker.
+    return list(dict.fromkeys(defects))
+
+
+def _repair_quote_transport(verdict: dict, rows: list[dict]) -> None:
+    """Map display-view quotes back to raw source without semantic repair.
+
+    Models often copy a rendered line break for a workbook ``<br>`` token.
+    ``locate`` accepts that reversible representation and returns the raw
+    source slice.  A split question may instead use explicitly ordered exact
+    spans.  Any unlocatable text remains untouched and is rejected by the
+    normal validator.
+    """
+
+    from .concept_question_quote import locate, materialize_spans
+    quote_fields = (
+        "question_text", "shared_context", "source_answer", "type_title",
+        "type_definition", "case_definition",
+    )
+    for question in verdict.get("questions") or []:
+        if not isinstance(question, dict):
+            continue
+        index = question.get("concept_row")
+        if type(index) is not int or not 0 <= index < len(rows):
+            continue
+        source = str(rows[index].get("concept_details") or "")
+        for name in quote_fields:
+            value = question.get(name)
+            if isinstance(value, str) and value:
+                match = locate(source, value)
+                if match is not None:
+                    question[name] = match.raw
+        spans = question.get("question_text_spans")
+        if isinstance(spans, list) and spans:
+            materialized = materialize_spans(source, spans)
+            prompt = question.get("question_text")
+            if materialized is not None and isinstance(prompt, str):
+                # The model's visible rendering and source-backed spans must
+                # describe the same wording before the raw transport wins.
+                from .concept_question_quote import view
+                if view(materialized) == view(prompt):
+                    question["question_text"] = materialized
+        options = question.get("options")
+        if isinstance(options, list):
+            repaired: list[str] = []
+            for option in options:
+                if not isinstance(option, str):
+                    repaired.append(option)
+                    continue
+                match = locate(source, option)
+                repaired.append(match.raw if match is not None else option)
+            question["options"] = repaired
 
 
 def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[dict]) -> ReviewRows:
@@ -222,20 +316,26 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
     rows = [copy.deepcopy(dict(row)) for row in concept_rows]
     evidence = {
         "policy": POLICY,
-        "edited_concepts": [dict(row, row_index=index) for index, row in enumerate(rows)],
+        "edited_concepts": [],
         "original_concepts": copy.deepcopy(payload.get("records") or []),
         "original_questions": originals,
         "original_routes": copy.deepcopy(payload.get("type_case_rows") or []),
         "chapter_meta": copy.deepcopy(payload.get("chapter_meta") or {}),
     }
+    from .concept_question_quote import add_view
+    evidence["edited_concepts"] = [
+        add_view(dict(row, row_index=index)) for index, row in enumerate(rows)
+    ]
     fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True, ensure_ascii=False,
                                              default=str).encode()).hexdigest()
     verdict = _call(AUTHOR, evidence)
+    _repair_quote_transport(verdict, rows)
     defects = _validate(verdict, rows, originals, evidence["original_routes"])
     if defects:
         # A bounded mechanical correction is not a second semantic opinion.
         verdict = _call(AUTHOR + "\nCorrect only the listed mechanical contract defects.",
                         dict(evidence, previous_verdict=verdict, mechanical_defects=defects))
+        _repair_quote_transport(verdict, rows)
         defects = _validate(verdict, rows, originals, evidence["original_routes"])
     if defects:
         raise ReviewedQuestionSetError("edited question review cannot be applied: " + "; ".join(defects))

@@ -1,5 +1,19 @@
 # Aegis — working rules
 
+**Corrected-workbook follow-up (10 September 2026).**
+The owner's job 124 attachments ending `(1)` are the edited Concept files;
+the other two files are original outputs. Accept explicitly added Pre concepts
+even when the staged Pre capture was empty, with fresh internal identities and
+recorded reviewer provenance. Preserve edited Post question wording from its
+Concept Details/Types/Cases rather than requiring separate question columns.
+Semantic question membership and grouping remain model decisions; quote
+transport may only reconstruct exact source spans or reversible display
+representations. Keep original releases and evidence immutable. An explicit
+new Pre correction adopts Q44 for its new Pre question/Master revision;
+historical sealed source and Post decisions are unchanged. Preserve pending
+corrections through unchanged-file acceptance and identical reuploads. See the
+Q44 corrected-workbook follow-up in docs/aegis-restructure.md.
+
 **Latest owner amendment: Q44 (10 September 2026).**
 Grade 01 Pre-Learning may include a small set of relevant, familiar literacy
 foundations such as initial capitals, basic punctuation and everyday vocabulary.

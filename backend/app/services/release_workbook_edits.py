@@ -17,8 +17,9 @@ Matching is mechanical and loud:
   authority for the tag);
 * fallback, for a row whose tag was lost in editing, exact
   (topic, concept title) match against the staged records;
-* a workbook row that matches no staged record is REFUSED with its sheet
-  and row named — never silently dropped, never invented as a concept row.
+* unmatched Post concepts are refused with their sheet and row named.
+  Explicit new Pre rows may be added, including to an empty original,
+  after their chapter/lane identity is checked and their provenance recorded.
   Reviewer-added Post questions are accepted only through the explicit
   reviewed Types/Cases or Concept Details question surface and receive a
   stable question identity with provenance.
@@ -54,6 +55,117 @@ from . import release_review
 
 class WorkbookEditError(ValueError):
     """The uploaded workbook cannot be applied mechanically."""
+
+
+def _is_release_concept_tag(tag: object) -> bool:
+    """Whether a title tag is one of Aegis' own concept identities.
+
+    Aegis' own tags have the lane/topic/concept grammar parsed by
+    ``identity.minted_concept_ordinal``.  This is a mechanical grammar check;
+    whether an identity belongs to this release is checked separately against
+    the target chapter/lane and staged tag map.
+    """
+
+    value = str(tag or "").strip()
+    return bool(value and identity.minted_concept_ordinal(value) is not None)
+
+
+def _is_expected_pre_tag(
+    db: Session,
+    payload: Mapping[str, Any],
+    tag: object,
+) -> bool:
+    """Recognize a chapter's own Pre tag used as display metadata.
+
+    Corrected canonical workbooks may have been produced by the catalogue
+    importer before this staged release existed.  Their concept titles carry
+    the chapter's normal ``..._PrL_T##_C##`` tag even when no staged PRC id
+    exists.  Such a tag can be accepted as an addition hint only when its
+    chapter/lane prefix agrees with this job; a tag from another chapter or a
+    stale arbitrary identity remains a refusal.
+    """
+
+    value = str(tag or "").strip()
+    if not value or not _is_release_concept_tag(value):
+        return False
+    try:
+        chapter_id = int(payload.get("target_chapter_id") or 0)
+        chapter = db.get(models.Chapter, chapter_id)
+        if chapter is None:
+            return False
+        chapter_key = identity.chapter_key(
+            chapter, chapter_id=chapter_id, session=db,
+        )
+    except Exception:
+        return False
+    return value.startswith(
+        f"{chapter_key}_{identity.LANE_PRE_TOKEN}_"
+    )
+
+
+def _fresh_pre_concept_ids(
+    records: list[Any], count: int,
+) -> list[str]:
+    """Mint collision-free internal Pre ids without re-keying old rows."""
+
+    used = {
+        str(row.get("_pre_concept_id") or "").strip()
+        for row in records
+        if isinstance(row, Mapping)
+    }
+    output: list[str] = []
+    number = 1
+    while len(output) < count:
+        candidate = f"PRC-{number:04d}"
+        number += 1
+        if candidate in used:
+            continue
+        used.add(candidate)
+        output.append(candidate)
+    return output
+
+
+def _new_pre_record(
+    row: Mapping[str, Any],
+    pre_concept_id: str,
+    *,
+    round_stamp: str,
+    owner_sub: str,
+) -> dict[str, Any]:
+    """Build a reviewer-added Pre row from authored cells only.
+
+    The row deliberately carries no source block, semantic topic id, or
+    prerequisite provenance: those values were not supplied by the reviewer.
+    Empty lane-private collections are explicit so later Pre regeneration can
+    key exactly on ``_pre_concept_id`` without treating the row as a source
+    capture.
+    """
+
+    return {
+        "topic": str(row.get("topic") or "").strip(),
+        "parent_concept": str(row.get("parent_concept") or "").strip(),
+        "concept_title": str(row.get("concept_title") or "").strip(),
+        "concept_details": str(row.get("concept_details") or ""),
+        "keywords": str(row.get("keywords") or "").strip(),
+        "_pre_concept_id": pre_concept_id,
+        "_reviewed_pre_identity_tag": str(row.get("tag") or "").strip(),
+        "_aegis_pre_prerequisites": [],
+        "_aegis_needed_for": [],
+        "_aegis_pre_related_concepts": "",
+        "_aegis_pre_related_concepts_unresolved": [],
+        bcr.RELEASE_ROW_LANE_FIELD: bcr.LANE_PRE,
+        bcr.RELEASE_ROW_STATUS_FIELD: "ready",
+        bcr.RELEASE_ROW_ERRORS_FIELD: [],
+        "review_flags": [
+            "manual reviewer addition: Pre concept added from corrected workbook",
+        ],
+        bcr.MANUAL_EDIT_TRAIL_FIELD: [{
+            "kind": "addition",
+            "at": round_stamp,
+            "editor": owner_sub or "local:default",
+            "pre_concept_id": pre_concept_id,
+        }],
+    }
 
 
 def _refresh_edited_validation_reports(
@@ -969,7 +1081,12 @@ def apply_workbook_for_review(
         raise WorkbookEditError(
             "the uploaded file is not a canonical Concept workbook: " + str(error)
         ) from error
-    records = payload.get("records") or []
+    raw_records = payload.get("records")
+    records = (
+        copy.deepcopy(raw_records)
+        if isinstance(raw_records, list)
+        else []
+    )
     if not parsed and records:
         raise WorkbookEditError(
             "the corrected workbook carries no Concept rows; refusing to "
@@ -977,15 +1094,44 @@ def apply_workbook_for_review(
         )
     tag_map, by_title = _staged_maps(db, job, payload)
     concept_edits: list[dict[str, Any]] = []
+    additions: list[dict[str, Any]] = []
+    if lane == bcr.LANE_PRE:
+        for index, record in enumerate(records):
+            if not isinstance(record, Mapping):
+                continue
+            alias = str(record.get("_reviewed_pre_identity_tag") or "").strip()
+            if not alias:
+                continue
+            if alias in tag_map and tag_map[alias] != index:
+                raise WorkbookEditError(
+                    "a previously reviewed Pre identity now refers to two concepts; "
+                    "download the current Concept file before applying further edits"
+                )
+            tag_map[alias] = index
     matched_indices: set[int] = set()
     consumed: set[int] = set()
     bound_indices: dict[int, int] = {}
     unmatched: list[str] = []
+    # Pre additions are minted only after every existing row has been bound;
+    # this makes allocation independent of workbook row order and guarantees
+    # that no new row can consume an existing record by position.
+    addition_rows: list[dict[str, Any]] = []
     for row in parsed:
         index: int | None = None
         if row["tag"] and row["tag"] in tag_map:
             index = tag_map[row["tag"]]
-        else:
+        elif (
+            row["tag"]
+            and not (
+                lane == bcr.LANE_PRE
+                and _is_expected_pre_tag(db, payload, row["tag"])
+            )
+        ):
+            # An Aegis identity claim cannot be rescued by a title fallback:
+            # that would turn a stale/foreign id into an edit of whichever
+            # row happens to share its current display text.
+            index = None
+        elif not row["tag"]:
             index = next(
                 (
                     candidate for candidate in by_title.get(
@@ -995,12 +1141,52 @@ def apply_workbook_for_review(
                 ),
                 None,
             )
+        else:
+            # A chapter/lane tag that is not in ``tag_map`` is an addition
+            # hint, never a fallback to a same-title existing row.
+            index = None
+        # A tag outside this job's chapter/lane identity is an identity claim
+        # and must remain a loud refusal. Corrected catalogue workbooks may
+        # carry this job's own chapter/lane tag even when the original staged
+        # Pre capture was empty; that tag is display metadata for the explicit
+        # addition (its text is removed by ``strip_title_tag``).
+        if (
+            index is None
+            and row["tag"]
+            and not (
+                lane == bcr.LANE_PRE
+                and _is_expected_pre_tag(db, payload, row["tag"])
+            )
+        ):
+            unmatched.append(
+                f"{row['sheet']!r} row {row['row']}: stale or foreign "
+                f"staged concept identity {row['tag']!r}"
+            )
+            continue
         if index is not None and index in consumed:
             unmatched.append(
                 f"{row['sheet']!r} row {row['row']}: duplicate staged concept identity"
             )
             continue
         if index is None or not isinstance(records[index], Mapping):
+            if lane == bcr.LANE_PRE:
+                # Explicit reviewer additions are allowed in Pre, including
+                # an empty original capture. They carry authored cells only;
+                # no title/topic similarity or row position is used to bind
+                # them to an old record.
+                if not str(row.get("topic") or "").strip():
+                    unmatched.append(
+                        f"{row['sheet']!r} row {row['row']}: added Pre concept "
+                        "has no topic"
+                    )
+                elif not str(row.get("concept_title") or "").strip():
+                    unmatched.append(
+                        f"{row['sheet']!r} row {row['row']}: added Pre concept "
+                        "has no concept title"
+                    )
+                else:
+                    addition_rows.append(row)
+                continue
             unmatched.append(
                 f"{row['sheet']!r} row {row['row']}: {row['concept_title']!r}"
             )
@@ -1032,13 +1218,35 @@ def apply_workbook_for_review(
                     "before": current,
                     "after": after,
                 })
+    if lane == bcr.LANE_PRE and addition_rows:
+        round_stamp = datetime.now(timezone.utc).isoformat()
+        new_ids = _fresh_pre_concept_ids(records, len(addition_rows))
+        for row, pre_concept_id in zip(addition_rows, new_ids):
+            index = len(records)
+            records.append(_new_pre_record(
+                row,
+                pre_concept_id,
+                round_stamp=round_stamp,
+                owner_sub=owner_sub,
+            ))
+            additions.append({
+                "record_index": index,
+                "pre_concept_id": pre_concept_id,
+                "topic": str(row.get("topic") or "").strip(),
+                "concept_title": str(row.get("concept_title") or "").strip(),
+                "concept_details": str(row.get("concept_details") or ""),
+                "keywords": str(row.get("keywords") or "").strip(),
+                "workbook_identity_tag": str(row.get("tag") or "").strip(),
+                "source": "reviewer_workbook",
+            })
     if unmatched:
         raise WorkbookEditError(
             "refusing the upload — workbook rows match no staged concept: "
             + "; ".join(unmatched[:10])
         )
-    if records and matched_indices != set(range(len(records))):
-        missing = sorted(set(range(len(records))) - matched_indices)
+    original_record_count = len(records) - len(additions)
+    if original_record_count and matched_indices != set(range(original_record_count)):
+        missing = sorted(set(range(original_record_count)) - matched_indices)
         raise WorkbookEditError(
             "refusing the upload — corrected Concept input omitted staged "
             "record(s): " + ", ".join(str(value + 1) for value in missing[:20])
@@ -1071,6 +1279,10 @@ def apply_workbook_for_review(
     # corrections and preserves the current set for compatibility with older
     # review workbooks.
     candidate = copy.deepcopy(payload)
+    # ``records`` is a validated working copy.  In particular, assigning it
+    # here matters for an empty staged list: ``payload.get('records') or []``
+    # would otherwise append additions to a detached temporary list.
+    candidate["records"] = copy.deepcopy(records)
     question_operations: list[dict[str, Any]] = []
     if question_rows is not None:
         question_operations = _apply_question_review(
@@ -1114,12 +1326,17 @@ def apply_workbook_for_review(
         if note not in flags:
             flags.append(note)
         all_operations.append(dict(edit))
-    if not concept_edits and not question_operations:
+    all_operations.extend({
+        "kind": "concept_addition",
+        **addition,
+    } for addition in additions)
+    if not concept_edits and not question_operations and not additions:
         return {
             "lane": lane,
             "workbook_rows": len(parsed),
             "question_rows": len(question_rows or []),
             "matched_rows": len(matched_indices),
+            "added_rows": 0,
             "changed_fields": 0,
             "round_recorded": False,
             "review": release_review.review_view(db, job, lane),
@@ -1131,7 +1348,70 @@ def apply_workbook_for_review(
             synchronize_reviewed_catalog(candidate, question_rows)
         except ReviewedQuestionSetError as exc:
             raise WorkbookEditError(str(exc)) from exc
-    if concept_edits:
+    # A corrected Pre workbook is an explicit reviewer revision.  Adopt the
+    # current foundation-policy stamp on this new staged payload only; the
+    # original sealed envelope and prior release version remain immutable.
+    # The marker gives the regeneration contract a durable join for the exact
+    # release it must rebuild, including the uploaded file receipt.
+    if lane == bcr.LANE_PRE and (concept_edits or additions):
+        from . import prelearning_foundation_policy
+
+        try:
+            workbook_sha256 = hashlib.sha256(
+                workbook_path.read_bytes()
+            ).hexdigest()
+        except OSError:
+            workbook_sha256 = ""
+        candidate[prelearning_foundation_policy.KEY] = (
+            prelearning_foundation_policy.VERSION
+        )
+        candidate["_reviewed_pre_input"] = {
+            "version": "reviewed-pre-input-1",
+            "policy_key": prelearning_foundation_policy.KEY,
+            "policy_version": prelearning_foundation_policy.VERSION,
+            "parent_release_uid": str(
+                payload.get(bcr.STAGED_RELEASE_UID_FIELD) or ""
+            ),
+            "workbook_filename": workbook_path.name,
+            "workbook_sha256": workbook_sha256,
+            "accepted_at": datetime.now(timezone.utc).isoformat(),
+            "added_pre_concept_ids": [
+                str(item.get("pre_concept_id") or "")
+                for item in additions
+            ],
+            "workbook_identity_tags": [
+                str(item.get("workbook_identity_tag") or "")
+                for item in additions
+            ],
+        }
+        if additions and original_record_count == 0:
+            # The reviewer has explicitly replaced the empty capture with
+            # authored rows. Retire only its empty-capture diagnostics; a
+            # source-integrity refusal or unreadable snapshot stays visible.
+            retired_codes = {
+                "pre_learning_empty_capture_verdict",
+                "pre_learning_empty_capture_review_flag",
+            }
+            retired_issues = [
+                copy.deepcopy(issue) for issue in candidate.get("issues") or []
+                if isinstance(issue, Mapping) and issue.get("code") in retired_codes
+            ]
+            candidate["_reviewed_pre_superseded"] = {
+                "reason": "The reviewer supplied concepts in the corrected Pre workbook.",
+                "pre_lane_verdict": copy.deepcopy(
+                    candidate.get(bcr.PRE_LANE_VERDICT_FIELD) or {}
+                ),
+                "issues": retired_issues,
+            }
+            candidate[bcr.PRE_LANE_VERDICT_FIELD] = {}
+            candidate["issues"] = [
+                issue for issue in candidate.get("issues") or []
+                if not isinstance(issue, Mapping) or issue.get("code") not in retired_codes
+            ]
+        candidate[bcr.STAGED_ROW_DEFECTS_FIELD] = bcr.staged_row_defects(
+            candidate.get("records") or []
+        )
+    if concept_edits or additions:
         _refresh_edited_validation_reports(candidate)
     candidate["summary"] = bcr._release_summary(
         [row for row in candidate.get("records") or [] if isinstance(row, Mapping)],
@@ -1152,6 +1432,7 @@ def apply_workbook_for_review(
         operations=all_operations,
         diff={
             "changes": concept_edits,
+            "additions": copy.deepcopy(additions),
             "question_review": copy.deepcopy(candidate.get("review_question_audit") or {}),
         },
         parent_uid=current_uid,
@@ -1161,7 +1442,10 @@ def apply_workbook_for_review(
         "workbook_rows": len(parsed),
         "question_rows": len(question_rows or []),
         "matched_rows": len(matched_indices),
-        "changed_fields": len(concept_edits),
+        "added_rows": len(additions),
+        # Count each added row as a changed input so lifecycle callers that
+        # only inspect ``changed_fields`` still trigger Pre regeneration.
+        "changed_fields": len(concept_edits) + len(additions),
         "question_operations": len(question_operations),
         "round_recorded": True,
         "review": release_review.review_view(db, job, lane),

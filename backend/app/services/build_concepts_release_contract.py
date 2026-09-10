@@ -1028,6 +1028,35 @@ def _regenerate_pre_questions_after_review(
 
     from . import prelearning_foundation_policy
 
+    reviewed_input = pre_payload.get("_reviewed_pre_input")
+    reviewed_generation: dict[str, Any] = {}
+    if (
+        isinstance(reviewed_input, Mapping)
+        and pre_payload.get(prelearning_foundation_policy.KEY)
+        == prelearning_foundation_policy.VERSION
+    ):
+        # An explicit corrected workbook is a new Pre authority, including
+        # when its original run predates the foundational-readiness policy.
+        # Derive a separate sealed decision input; never overwrite the source
+        # envelope or change already paid Post decisions/model policies.
+        source_seal = str(env.get("envelope_sha256") or "")
+        env["metadata"] = copy.deepcopy(dict(env.get("metadata") or {}))
+        env["metadata"][prelearning_foundation_policy.KEY] = (
+            prelearning_foundation_policy.VERSION
+        )
+        env["metadata"]["_reviewed_pre_input"] = {
+            **copy.deepcopy(dict(reviewed_input)),
+            "release_uid": current_uid,
+            "source_envelope_sha256": source_seal,
+        }
+        env["envelope_sha256"] = phase3_envelope.seal_sha256(env)
+        env = phase3_envelope.validate(env)
+        reviewed_generation = {
+            "reviewed_release_uid": current_uid,
+            "source_envelope_sha256": source_seal,
+            "generation_envelope_sha256": env["envelope_sha256"],
+        }
+
     pre_map = {
         **prelearning_foundation_policy.fields({"metadata": pre_payload}),
         "rows": [
@@ -1043,6 +1072,14 @@ def _regenerate_pre_questions_after_review(
             pre_payload.get(release.PRE_LANE_VERDICT_FIELD) or {}
         ),
     }
+    if isinstance(reviewed_input, Mapping):
+        pre_map["_reviewed_pre_input"] = copy.deepcopy(dict(reviewed_input))
+    if reviewed_generation:
+        pre_map["_reviewed_pre_generation"] = reviewed_generation
+    if isinstance(pre_payload.get("_reviewed_pre_superseded"), Mapping):
+        pre_map["_reviewed_pre_superseded"] = copy.deepcopy(
+            pre_payload["_reviewed_pre_superseded"]
+        )
     from .phase3 import prequestions
 
     decision_store = kernel.DecisionStore(artifact_dir / "phase3-decisions")

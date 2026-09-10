@@ -169,7 +169,9 @@ export default function ConceptReviewWorkflow({
           status: durableMeta?.status || responseMeta?.status || "accepted",
         },
       }));
-      setNotice(`${laneLabel(lane)} corrected Concept File uploaded for Master generation.`);
+      const added = Number(responseRecord?.added_rows ?? 0);
+      setNotice(`${laneLabel(lane)} corrected Concept File uploaded for Master generation.`
+        + (added > 0 ? ` ${added} new concept${added === 1 ? "" : "s"} accepted.` : ""));
     } catch (uploadError) {
       setError(`${laneLabel(lane)} corrected input could not be uploaded: ${readableError(uploadError)}`);
     } finally {
@@ -247,7 +249,8 @@ export default function ConceptReviewWorkflow({
             concept, Type and Case. In the Post-Learning file you may omit,
             add or move questions when correcting it. Upload the same edited
             Excel only when you need one; a file you leave unchanged is
-            retained as generated input.
+            retained as generated input. You may also add relevant prerequisite
+            concepts to the Pre-Learning file, including when it was empty.
           </p>
         </div>
         <div className="spacer" />

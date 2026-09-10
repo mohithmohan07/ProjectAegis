@@ -641,6 +641,7 @@ def update_concept_review_state(
         if required and required.issubset(set(state["reviewed_lanes"])):
             state["status"] = CONCEPT_REVIEW_REVIEWED
         inputs = copy.deepcopy(state.get("corrected_inputs") or {})
+        previous_input = inputs.get(lane) or {}
         inputs[lane] = {
             "lane": lane,
             "filename": str(corrected_filename or "edited Concept workbook"),
@@ -649,7 +650,12 @@ def update_concept_review_state(
             "accepted": True,
         }
         if corrected_changed is not None:
-            inputs[lane]["changed"] = bool(corrected_changed)
+            # An identical reupload must not cancel an earlier correction
+            # whose question bank has not yet been regenerated. The release
+            # UID marker makes completed regeneration idempotent.
+            inputs[lane]["changed"] = bool(
+                corrected_changed or previous_input.get("changed")
+            )
         state["corrected_inputs"] = inputs
     if master_outputs is not None:
         state["master_outputs"] = copy.deepcopy(dict(master_outputs))
@@ -699,9 +705,18 @@ def accept_concept_review(
     requested = available if lanes is None else [normalize_lane(lane) for lane in lanes]
     reviewed = list(state.get("reviewed_lanes") or [])
     accepted = list(state.get("accepted_without_upload_lanes") or [])
+    inputs = copy.deepcopy(state.get("corrected_inputs") or {})
+    unchanged_lanes: list[str] = []
     for lane in requested:
         if lane not in available:
             continue
+        if isinstance(inputs.get(lane), Mapping) and inputs[lane].get("accepted"):
+            # Continue also accepts the other, unchanged workbook. Preserve
+            # any uploaded lane's filename, provenance and pending change.
+            if lane not in reviewed:
+                reviewed.append(lane)
+            continue
+        unchanged_lanes.append(lane)
         if lane not in reviewed:
             reviewed.append(lane)
         if lane not in accepted:
@@ -711,8 +726,7 @@ def accept_concept_review(
     ]
     state["accepted_without_upload_lanes"] = accepted
     state["accepted_at"] = datetime.now(timezone.utc).isoformat()
-    inputs = copy.deepcopy(state.get("corrected_inputs") or {})
-    for lane in requested:
+    for lane in unchanged_lanes:
         if lane in available:
             inputs[lane] = {
                 "lane": lane,
@@ -4567,6 +4581,11 @@ def stage_pre_release(
     }
     if refinements is not None:
         payload["refinements"] = _json_safe(dict(refinements))
+    for review_key in (
+        "_reviewed_pre_input", "_reviewed_pre_generation", "_reviewed_pre_superseded",
+    ):
+        if isinstance(source.get(review_key), Mapping):
+            payload[review_key] = _json_safe(copy.deepcopy(dict(source[review_key])))
     payload = _account_for_source_identity(job, payload, inventory)
     durable_inventory = copy.deepcopy(dict(job.question_inventory or {}))
     durable_inventory[PRE_RELEASE_KEY] = copy.deepcopy(payload)
