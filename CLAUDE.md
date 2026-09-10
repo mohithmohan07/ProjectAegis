@@ -13,6 +13,11 @@ new Pre correction adopts Q44 for its new Pre question/Master revision;
 historical sealed source and Post decisions are unchanged. Preserve pending
 corrections through unchanged-file acceptance and identical reuploads. See the
 Q44 corrected-workbook follow-up in docs/aegis-restructure.md.
+The subsequent Post-upload HTTP 500 repair keeps the quote-span field required
+on the strict provider schema (an empty list represents a contiguous quote),
+surfaces request failures without raw provider details, and preserves accepted
+upload acknowledgements when a later status refresh fails. It changes no
+question membership, model routing or review stages.
 
 **Latest owner amendment: Q44 (10 September 2026).**
 Grade 01 Pre-Learning may include a small set of relevant, familiar literacy

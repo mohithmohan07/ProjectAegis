@@ -14,7 +14,7 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
-POLICY = "concept-question-review-2026-09-10-v2"
+POLICY = "concept-question-review-2026-09-10-v3"
 
 AUTHOR = """Read the complete edited Concept workbook rows and the original
 accepted question bank. The reviewer edits the SAME Concept Excel, chiefly
@@ -53,7 +53,8 @@ the reviewed wording is split by an interleaved source label or answer
 material that is deliberately excluded, return ordered question_text_spans.
 Each span must be copied exactly from concept_details (or its display view),
 and the spans must concatenate to question_text; include any needed spaces,
-punctuation and formatting in the spans. Never invent a separator. If
+punctuation and formatting in the spans. Return question_text_spans=[] when
+one contiguous quote is sufficient. Never invent a separator. If
 question wording spans formatting tokens, copy those tokens too. Do not polish
 or solve the question in this call.
 The independent Master stages perform their existing faithful formatting and
@@ -110,9 +111,10 @@ class ReviewedQuestion(_Strict):
     source_qid: str
     concept_row: int
     question_text: str
-    # Optional transport for source-backed wording split by excluded source
-    # material.  It is deliberately additive so legacy adapters may omit it.
-    question_text_spans: list[str] = []
+    # Strict provider schemas require every property, including empty lists.
+    # A Python default makes this optional in model_json_schema() and causes
+    # the provider to reject the entire request before reading the workbook.
+    question_text_spans: list[str]
     shared_context: str
     source_answer: str
     options: list[str]
@@ -155,19 +157,30 @@ class ReviewRows(list):
         self.receipt = dict(receipt or {})
 
 
+class QuestionReviewRequestError(RuntimeError):
+    """Question review failed before the corrected release could be applied.
+
+    The original request error remains the message/cause for the existing
+    redacted run diagnostics; the HTTP boundary returns a readable summary.
+    """
+
+
 def _call(system: str, payload: dict, *, critic: bool = False) -> dict:
     from . import generation
     from .response_schemas import ResponseSchema
-    return generation._openai_json(
-        system,
-        json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
-        response_schema=ResponseSchema(
-            "concept_question_review_critic_v2" if critic else "concept_question_review_author_v2",
-            ReviewCritic if critic else ReviewVerdict,
-        ),
-        purpose="advisory_critic" if critic else "source_extraction",
-        stage="concept_review.critic" if critic else "concept_review.author",
-    )
+    try:
+        return generation._openai_json(
+            system,
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
+            response_schema=ResponseSchema(
+                "concept_question_review_critic_v3" if critic else "concept_question_review_author_v3",
+                ReviewCritic if critic else ReviewVerdict,
+            ),
+            purpose="advisory_critic" if critic else "source_extraction",
+            stage="concept_review.critic" if critic else "concept_review.author",
+        )
+    except RuntimeError as exc:
+        raise QuestionReviewRequestError(str(exc)) from exc
 
 
 def _qid(row: Mapping[str, Any]) -> str:

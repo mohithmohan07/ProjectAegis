@@ -47,7 +47,7 @@ function workflowState(record: Record<string, unknown>): ReviewWorkflow | null {
     : null;
 }
 
-function inputForLane(job: UploadJob, lane: Lane): unknown {
+function inputForLane(job: UploadJob | Record<string, unknown>, lane: Lane): unknown {
   const record = job as unknown as Record<string, unknown>;
   const workflow = workflowState(record);
   const nested = workflow?.corrected_inputs?.[lane];
@@ -145,34 +145,64 @@ export default function ConceptReviewWorkflow({
       // call the legacy uploadEditedWorkbook route here: that route performs
       // an authenticated CMS publication for historical releases.
       const response = await api.uploadCorrectedConceptInput(job.id, lane, file);
+      const responseRecord = response && typeof response === "object"
+        && !Array.isArray(response) ? response as Record<string, unknown> : null;
       let fresh: UploadJob | null = isUploadJob(response)
         ? response
         : null;
+      let refreshError: unknown = null;
       if (!fresh) {
-        fresh = await api.getUploadJob("concepts", job.id);
+        try {
+          fresh = await api.getUploadJob("concepts", job.id);
+        } catch (error) {
+          // The submit response has already committed the review round. Keep
+          // its lane projection available when the follow-up GET is the part
+          // that fails (for example, a transient 500).
+          refreshError = error;
+        }
       }
-      onJob(fresh);
       // The API has validated and persisted this file. Prefer its durable
       // projection for filename/time/state; the selected browser filename is
       // only a fallback until a projection is available.
-      const durableMeta = inputMetaFor(inputForLane(fresh, lane));
-      const responseRecord = response && typeof response === "object"
-        && !Array.isArray(response) ? response as Record<string, unknown> : null;
-      const responseMeta = inputMetaFor(responseRecord?.corrected_input);
-      setLocalInputs((current) => ({
-        ...current,
-        [lane]: {
-          filename: durableMeta?.filename
-            || responseMeta?.filename
-            || inputFilenameFromResponse(response, fresh, lane, file.name),
-          acceptedAt: durableMeta?.acceptedAt || responseMeta?.acceptedAt || "",
-          status: durableMeta?.status || responseMeta?.status || "accepted",
-        },
-      }));
+      const durableMeta = fresh ? inputMetaFor(inputForLane(fresh, lane)) : undefined;
+      const responseMeta = inputMetaFor(responseRecord?.corrected_input)
+        || (responseRecord
+          ? inputMetaFor(inputForLane(responseRecord, lane))
+          : undefined);
+      if (fresh) onJob(fresh);
+      if (durableMeta || responseMeta) {
+        setLocalInputs((current) => ({
+          ...current,
+          [lane]: {
+            filename: durableMeta?.filename
+              || responseMeta?.filename
+              || file.name,
+            acceptedAt: durableMeta?.acceptedAt || responseMeta?.acceptedAt || "",
+            status: durableMeta?.status || responseMeta?.status || "accepted",
+          },
+        }));
+      }
       const added = Number(responseRecord?.added_rows ?? 0);
       setNotice(`${laneLabel(lane)} corrected Concept File uploaded for Master generation.`
         + (added > 0 ? ` ${added} new concept${added === 1 ? "" : "s"} accepted.` : ""));
+      if (refreshError) {
+        setError(`${laneLabel(lane)} upload was accepted, but the latest job status could not be refreshed: ${readableError(refreshError)}`);
+      }
     } catch (uploadError) {
+      // A provider or proxy can report an error after the review round has
+      // committed. Refresh once and adopt only the lane state returned by the
+      // server; otherwise leave any previously accepted lane (such as Pre)
+      // untouched and do not infer acceptance from the failed request.
+      try {
+        const fresh = await api.getUploadJob("concepts", job.id);
+        onJob(fresh);
+        const durableMeta = inputMetaFor(inputForLane(fresh, lane));
+        if (durableMeta) {
+          setLocalInputs((current) => ({ ...current, [lane]: durableMeta }));
+        }
+      } catch {
+        // Keep the original upload error visible when recovery also fails.
+      }
       setError(`${laneLabel(lane)} corrected input could not be uploaded: ${readableError(uploadError)}`);
     } finally {
       setBusyLane(null);
@@ -378,21 +408,6 @@ function inputMetaFor(value: unknown): {
       : typeof record.accepted_at === "string" ? record.accepted_at : "",
     status: typeof record.status === "string" ? record.status : "accepted",
   };
-}
-
-function inputFilenameFromResponse(
-  response: unknown,
-  fresh: UploadJob,
-  lane: Lane,
-  fallback: string,
-): string {
-  const responseRecord = response && typeof response === "object"
-    && !Array.isArray(response) ? response as Record<string, unknown> : null;
-  const responseInput = responseRecord?.corrected_input;
-  const responseMeta = inputMetaFor(responseInput);
-  if (responseMeta?.filename) return responseMeta.filename;
-  const persistedMeta = inputMetaFor(inputForLane(fresh, lane));
-  return persistedMeta?.filename || fallback;
 }
 
 function formatAcceptedAt(value: string): string {
