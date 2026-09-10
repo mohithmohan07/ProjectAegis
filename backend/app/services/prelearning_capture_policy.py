@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
+from . import prelearning_foundation_policy as foundation
+
 KEY = "_prelearning_capture_policy"
 VERSION = "prelearn-evidence-atomic-2026-09-09"
 
@@ -46,15 +48,18 @@ BOUNDARY_INSTRUCTION = (
 
 
 def boundary_fields(env: Mapping[str, Any]) -> dict[str, str]:
+    fields: dict[str, str] = {}
     if (env.get("metadata") or {}).get(BOUNDARY_KEY) == BOUNDARY_VERSION:
-        return {BOUNDARY_KEY: BOUNDARY_VERSION}
-    return {}
+        fields[BOUNDARY_KEY] = BOUNDARY_VERSION
+    fields.update(foundation.fields(env))
+    return fields
 
 
 def boundary_instruction(payload: Mapping[str, Any]) -> str:
+    suffix = ""
     if payload.get(BOUNDARY_KEY) == BOUNDARY_VERSION:
-        return "\n" + BOUNDARY_INSTRUCTION
-    return ""
+        suffix += "\n" + BOUNDARY_INSTRUCTION
+    return suffix + foundation.instruction(payload)
 
 
 def active(env: Mapping[str, Any]) -> bool:

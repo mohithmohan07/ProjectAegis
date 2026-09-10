@@ -80,6 +80,7 @@ from . import envelope as envelope_mod
 from . import kernel
 from .. import progress
 from .. import prelearning_capture_policy as capture_policy
+from .. import prelearning_foundation_policy as foundation_policy
 from . import evidence as visual_evidence
 
 POLICY_VERSION = "prelearn-1"
@@ -118,6 +119,17 @@ _CITABLE_ID_KEYS: dict[str, tuple[tuple[str, str], ...]] = {
 
 def _normal(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _chapter_calibration(env: Mapping[str, Any]) -> dict[str, str]:
+    """Project sealed chapter metadata for fresh foundation decisions."""
+
+    metadata = env.get("metadata") if isinstance(env, Mapping) else None
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    return {
+        key: _normal(metadata.get(key))
+        for key in ("board", "grade", "subject", "unit", "chapter_title")
+    }
 
 
 def mint_prerequisite_ids(count: int) -> list[str]:
@@ -744,7 +756,13 @@ def capture_stage(
     envelope_sha = str(env.get("envelope_sha256") or "")
     from . import prompts as prompts_mod
 
-    rules_suffix = prompts_mod.instruction_rules_suffix(env)
+    rules_suffix = (
+        prompts_mod.instruction_rules_suffix(
+            env, slots=prompts_mod.PRE_LEARNING_SLOTS,
+        )
+        if foundation_policy.fields(env)
+        else prompts_mod.instruction_rules_suffix(env)
+    )
 
     payload = {
         "stage": f"prelearn.capture:{stage}",
@@ -752,6 +770,10 @@ def capture_stage(
         "rules": _capture_rules(stage, rules_suffix),
         "evidence": evidence,
     }
+    if foundation_policy.fields(env):
+        # Fresh foundation policy decisions must receive the same grade
+        # calibration that the empty-capture audit already receives.
+        payload["chapter"] = _chapter_calibration(env)
     if enhanced:
         payload["capture_policy"] = capture_policy.VERSION
         payload["rules"] += " " + capture_policy.CAPTURE_INSTRUCTION
@@ -765,7 +787,9 @@ def capture_stage(
         checker=_capture_checker(known_ids),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION + (";" + capture_policy.VERSION if enhanced else ""),
+        policy_version=POLICY_VERSION
+        + (";" + capture_policy.VERSION if enhanced else "")
+        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else ""),
         fixer=fixer,
     )
     items: list[dict[str, Any]] = []
@@ -888,7 +912,13 @@ def merge(
     envelope_sha = str(env.get("envelope_sha256") or "")
     from . import prompts as prompts_mod
 
-    rules_suffix = prompts_mod.instruction_rules_suffix(env)
+    rules_suffix = (
+        prompts_mod.instruction_rules_suffix(
+            env, slots=prompts_mod.PRE_LEARNING_SLOTS,
+        )
+        if foundation_policy.fields(env)
+        else prompts_mod.instruction_rules_suffix(env)
+    )
 
     payload = {
         "stage": "prelearn.merge",
@@ -896,6 +926,8 @@ def merge(
         "rules": _merge_rules(rules_suffix),
         "captures": capture_rows,
     }
+    if foundation_policy.fields(env):
+        payload["chapter"] = _chapter_calibration(env)
     if enhanced:
         payload["capture_policy"] = capture_policy.VERSION
         payload["prior_review_flags"] = copy.deepcopy(decision_flags)
@@ -918,7 +950,9 @@ def merge(
         ),
         critic=critic,
         store=store,
-        policy_version=POLICY_VERSION + (";" + capture_policy.VERSION if enhanced else ""),
+        policy_version=POLICY_VERSION
+        + (";" + capture_policy.VERSION if enhanced else "")
+        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else ""),
         fixer=fixer,
     )
     by_ref = {row["capture_ref"]: row for row in capture_rows}

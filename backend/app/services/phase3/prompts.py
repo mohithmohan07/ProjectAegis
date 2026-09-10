@@ -795,7 +795,7 @@ def instruction_rules_suffix(
     metadata = env.get("metadata") if isinstance(env, Mapping) else None
     # Only new, explicitly policy-bound envelopes adopt the owner amendment.
     # Keep absent-key historical suffixes and decision identities unchanged.
-    from .. import source_topic_policy, prelearning_capture_policy
+    from .. import source_topic_policy, prelearning_capture_policy, prelearning_foundation_policy
 
     policy_suffix = ""
     if isinstance(metadata, Mapping):
@@ -805,7 +805,16 @@ def instruction_rules_suffix(
                 if slots in (PRE_LEARNING_SLOTS, PRE_QUESTION_SLOTS)
                 else source_topic_policy.SOURCE_TOPIC_POLICY
             )
-        policy_suffix += prelearning_capture_policy.boundary_instruction(metadata)
+        # Q44 calibrates Pre work only. Default slots also serve Post
+        # topology/teaching, whose scope must not inherit the new readiness
+        # restrictions. Preserve the legacy boundary suffix for those calls.
+        boundary_metadata = metadata
+        if slots not in (PRE_LEARNING_SLOTS, PRE_QUESTION_SLOTS):
+            boundary_metadata = {
+                key: value for key, value in metadata.items()
+                if key != prelearning_foundation_policy.KEY
+            }
+        policy_suffix += prelearning_capture_policy.boundary_instruction(boundary_metadata)
     authored = (
         metadata.get("instruction_slots")
         if isinstance(metadata, Mapping)

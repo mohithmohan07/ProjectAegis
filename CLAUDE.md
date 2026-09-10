@@ -1,6 +1,25 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q43 (9 September 2026).**
+**Latest owner amendment: Q44 (10 September 2026).**
+Grade 01 Pre-Learning may include a small set of relevant, familiar literacy
+foundations such as initial capitals, basic punctuation and everyday vocabulary.
+These are candidates for API judgment, never compulsory topics or a generic
+bank. Keep learner-facing concepts, mastery, questions, answers and rubrics
+minimal and within supported prior learning. Prefer short, single-demand
+recognition, choosing the correct alternative or a tiny familiar response;
+do not inflate the task with formal grammar, long explanations, multi-step
+work or higher-grade knowledge. Difficulty tiers and question counts must not
+force extra complexity or coverage. The independent reviewers apply the same
+boundary through Concept and Master generation, including corrected Excel
+inputs. Empty-capture review must distinguish no eligible teachable prerequisite
+from an actual missed eligible fundamental; generic literacy or following a
+worksheet direction alone does not establish a missing Pre concept. New chapter
+teaching stays in Post. Freeze this additive policy on new envelopes and carry
+it into staged Pre releases and Master metadata; historical sealed decisions
+retain their recorded policy. Q40 routing and Q41 review/resume/accounting stay
+in effect. See Q44 in docs/aegis-restructure.md.
+
+**Previous owner amendment: Q43 (9 September 2026).**
 The final follow-up requires Copy to remain visible beside the console title,
 and corrects the supplied Grade 01 NCF Maths pairs: unit Time and Measurement
 contains chapter Measurement; unit Playing with Numbers contains chapter

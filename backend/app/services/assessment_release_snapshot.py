@@ -432,6 +432,12 @@ def build(
         "chapter_title": str(chapter.chapter_title or ""),
         "chapter_code": str(chapter.chapter_code or ""),
     }
+    # The Pre policy follows the reviewed, staged Concept release into every
+    # Master author/reviewer. An unstamped historical release stays unstamped.
+    from . import prelearning_foundation_policy
+
+    if release.get("learning_kind") == "pre":
+        metadata.update(prelearning_foundation_policy.fields({"metadata": release}))
     question_task_inventory = copy.deepcopy(
         release.get("question_task_inventory") or {}
     )

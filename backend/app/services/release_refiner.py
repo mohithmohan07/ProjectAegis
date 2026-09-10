@@ -791,6 +791,10 @@ def _refine(
     from .phase3 import prompts
 
     rules = _RULES + column_spec.CONCEPT_QUALITY + _instruction_suffix(instruction_set)
+    if output_kind == "pre_concepts_release":
+        from . import prelearning_foundation_policy
+
+        rules += prelearning_foundation_policy.instruction(metadata)
     # Saved verdicts belong to the exact author/reviewer instructions. A
     # changed review must run even when the rendered row is byte-identical.
     prompt_sha256 = hashlib.sha256(

@@ -175,6 +175,22 @@ CRITIC_SYSTEM = (
 )
 
 
+def _foundation_fields(env: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry the recorded Grade 1 foundation policy when present."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.fields(env)
+
+
+def _foundation_instruction(payload: Mapping[str, Any]) -> str:
+    """Return the active foundation instruction, or nothing historically."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.instruction(payload)
+
+
 class MasterRefinerError(ValueError):
     """The assessment Refiner input cannot be bound mechanically."""
 
@@ -581,7 +597,9 @@ def _live_author(request: dict[str, Any]) -> dict[str, Any]:
         request, stable_keys=("stage", "unit_kind", "rules", "critic_rules", "metadata", "column_spec_policy"),
     )
     return generation._openai_json(
-        system, suffix, purpose="concept_mapping",
+        system + _foundation_instruction(request),
+        suffix,
+        purpose="concept_mapping",
         image_urls=visual_evidence.image_inputs(request),
         prompt_cache_prefix=prefix,
         prompt_cache_key=generation._prompt_cache_key(
@@ -597,7 +615,7 @@ def _live_critic(request: dict[str, Any]) -> dict[str, Any]:
         request, stable_keys=("stage", "unit_kind", "rules", "critic_rules", "metadata", "column_spec_policy"),
     )
     return generation._openai_json(
-        CRITIC_SYSTEM,
+        str(request.get("critic_rules") or CRITIC_SYSTEM),
         suffix,
         purpose="advisory_critic",
         response_schema=advisory_critic_schema(),
@@ -1049,6 +1067,7 @@ def _unit_payload(
     context: Mapping[str, Any],
 ) -> dict[str, Any]:
     rules = CANDIDATE_SYSTEM if unit_kind == "candidate" else GROUP_SYSTEM
+    foundation_fields = _foundation_fields({"metadata": metadata})
     payload: dict[str, Any] = {
         "stage": (
             CANDIDATE_KIND if unit_kind == "candidate" else GROUP_KIND
@@ -1057,6 +1076,7 @@ def _unit_payload(
         "row_ref": unit_id,
         "rules": rules + _instruction_suffix(instruction_set),
         "critic_rules": CRITIC_SYSTEM,
+        **foundation_fields,
         "critic_response_schema": advisory_critic_schema().identity(),
         "metadata": _content_evidence(metadata),
         "column_spec_policy": column_spec.from_metadata(metadata),
@@ -1071,6 +1091,10 @@ def _unit_payload(
             for key in ("answer_restriction", "answer_space_contract", "required_elements", "accepted_variations")
             if isinstance(contract, Mapping) and key in contract
         }
+    foundation_suffix = _foundation_instruction(payload)
+    if foundation_suffix:
+        payload["rules"] += foundation_suffix
+        payload["critic_rules"] += foundation_suffix
     return visual_evidence.bind(payload, record, rendered_rows, context)
 
 

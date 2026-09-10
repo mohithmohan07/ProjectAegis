@@ -1026,7 +1026,10 @@ def _regenerate_pre_questions_after_review(
             + str(exc)
         ) from exc
 
+    from . import prelearning_foundation_policy
+
     pre_map = {
+        **prelearning_foundation_policy.fields({"metadata": pre_payload}),
         "rows": [
             copy.deepcopy(dict(row))
             for row in pre_payload.get("records") or []

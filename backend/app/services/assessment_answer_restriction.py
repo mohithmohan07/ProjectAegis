@@ -126,6 +126,22 @@ ANSWER_RESTRICTION_CRITIC_SYSTEM = (
 )
 
 
+def _foundation_fields(env: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry the recorded Grade 1 foundation policy when present."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.fields(env)
+
+
+def _foundation_instruction(payload: Mapping[str, Any]) -> str:
+    """Return the active foundation instruction, or nothing historically."""
+
+    from . import prelearning_foundation_policy
+
+    return prelearning_foundation_policy.instruction(payload)
+
+
 _PRINT_POSITION_FIELDS = frozenset({
     "bbox",
     "example_number",
@@ -358,7 +374,7 @@ def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(candidate, Mapping) else ""
     )
     return generation._openai_json(
-        ANSWER_RESTRICTION_SYSTEM,
+        str(payload.get("rules") or ANSWER_RESTRICTION_SYSTEM),
         suffix,
         purpose="concept_mapping",
         image_urls=visual_evidence.image_inputs(payload),
@@ -384,7 +400,7 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
         if isinstance(candidate, Mapping) else ""
     )
     return generation._openai_json(
-        ANSWER_RESTRICTION_CRITIC_SYSTEM,
+        str(payload.get("critic_rules") or ANSWER_RESTRICTION_CRITIC_SYSTEM),
         suffix,
         purpose="advisory_critic",
         response_schema=advisory_critic_schema(),
@@ -521,11 +537,13 @@ def _decision_payload(
     meta: Mapping[str, Any],
     registry: Mapping[str, str],
 ) -> dict[str, Any]:
-    return visual_evidence.bind({
+    foundation_fields = _foundation_fields({"metadata": meta})
+    payload: dict[str, Any] = {
         "stage": "assessment.answer_restriction",
         "critic_response_schema": advisory_critic_schema().identity(),
         "rules": ANSWER_RESTRICTION_SYSTEM,
         "critic_rules": ANSWER_RESTRICTION_CRITIC_SYSTEM,
+        **foundation_fields,
         "metadata": _content_evidence(meta),
         "policy_registry": {
             **_registry_identity(registry),
@@ -534,7 +552,12 @@ def _decision_payload(
             "markdown_text": registry["markdown_text"],
         },
         "candidate": _content_evidence(candidate),
-    }, candidate)
+    }
+    foundation_suffix = _foundation_instruction(payload)
+    if foundation_suffix:
+        payload["rules"] += foundation_suffix
+        payload["critic_rules"] += foundation_suffix
+    return visual_evidence.bind(payload, candidate)
 
 
 def _assemble(

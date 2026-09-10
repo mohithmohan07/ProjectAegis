@@ -2531,3 +2531,47 @@ chapter rows while retaining their IDs and attached content. Update the
 catalogue expectations accordingly. The owner expressly requests no further
 testing and immediate PR update/merge; the checks above preceded these final
 Copy/catalogue changes.
+
+### Q44 — DECIDED — simple foundational Pre concepts and Grade 01 assessments
+
+**Owner ruling (10 September 2026).** For a foundational chapter such as
+*Thank You, Taffy*, consider small, relevant literacy prerequisites: familiar
+vocabulary, starting with a capital letter, and elementary punctuation where
+appropriate. The model selects the actual prerequisites from the source demands
+and learner context. These examples do not require three topics, a fixed bank,
+or prior teaching of the chapter's new language patterns. A Grade 01 learner
+may have supported foundational readiness without a previous numbered school
+grade; never fabricate curriculum history or treat every assumed ability as an
+independent prerequisite concept.
+
+**Concepts and Masters.** Keep titles, descriptions and mastery narrow and
+plain. Questions should normally ask the child to recognise, choose the correct
+alternative or give a tiny familiar response, with one short demand at a time.
+Avoid technical grammar terminology, extended explanations, hidden follow-up
+demands and multi-step or later-grade tasks. The coverage plan may be small and
+must not force tier balance, an Advanced group, or the former 5+5 count.
+An Intermediate item must still fit the child's prior learning and reading
+load. Answers, answer-space decisions, marking criteria and refinement must
+not expand the accepted question's demand. Apply the classification SOP by
+actual response mechanism. Gemini remains solely the Pre question author;
+Luna xhigh remains the concept writer. The reviewed Pre Concept workbook is
+the Master prerequisite scope.
+
+**Empty capture.** Judge emptiness against the same eligible, independently
+teachable prerequisite boundary used by capture and final adjudication.
+Recognising a chapter's general reliance on language or its printed directions
+does not itself prove an omitted Pre concept. A genuinely unnecessary Pre set
+is a successful empty output with a readable explanation, no question-author
+spend, and continued availability of Post Masters. An actual omitted eligible
+fundamental remains an explicitly recorded capture issue; uncertainty must not
+be converted into invented prior learning.
+
+**Versioning and review.** Fresh Phase 3 envelopes record
+`_prelearning_foundation_policy: prelearn-foundations-2026-09-10`. Carry that
+same policy through Pre map refinement, staged release, corrected-workbook
+reconstruction and the Master metadata bridge. Previously sealed envelopes
+keep their original policy and decisions; a software update does not silently
+regenerate a saved run. Keep existing Post question ownership, output schemas,
+review stages, question-text freeze, logging, cost and resume contracts.
+No local test suite or paid generation run was started for this follow-up;
+the existing fresh-envelope expectation is updated for the additive stamp.

@@ -66,6 +66,53 @@ GENERATED_CELL_POLICY_VERSION = (
     "assessment-generated-cell-4-response-mechanism-sop-2026-09-09"
 )
 
+_GENERATED_FOUNDATION_GUIDANCE = """
+For an age-appropriate Grade 1 foundation assessment, preserve the generated
+question's actual simple demand. Prefer a one-step recognition or explicit
+correct-choice check, or a tiny familiar response. Do not expand it into an
+essay, why justification, technical grammar terminology, or multi-step
+reasoning; do not add subpoints or rubric demands that the question does not
+ask. Keep any Intermediate classification within the child's level and never
+inflate Advanced merely to fill a tier or batch. The cell and its rubric must
+represent the supplied question and curriculum context exactly.
+""".strip()
+
+
+def _foundation_fields(meta: Mapping[str, Any]) -> dict[str, Any]:
+    """Carry the recorded Pre foundation policy for generated cells only."""
+
+    from . import prelearning_foundation_policy
+
+    # Assessment cell callers pass envelope metadata rather than the full
+    # envelope.  Wrap it in the small envelope shape expected by the shared
+    # policy accessor; explicit/source-owned cells never call this helper.
+    return prelearning_foundation_policy.fields({"metadata": dict(meta)})
+
+
+def _foundation_instruction(payload: Mapping[str, Any]) -> str:
+    """Return the versioned age/scope suffix for generated-cell decisions."""
+
+    from . import prelearning_foundation_policy
+
+    instruction = prelearning_foundation_policy.instruction(payload)
+    if not instruction:
+        return ""
+    return instruction + "\n" + _GENERATED_FOUNDATION_GUIDANCE
+
+
+def _foundation_policy_suffix(payload: Mapping[str, Any]) -> str:
+    """Identify the foundation policy in the generated-cell audit."""
+
+    from . import prelearning_foundation_policy
+
+    return (
+        ";" + prelearning_foundation_policy.VERSION
+        if payload.get(prelearning_foundation_policy.KEY)
+        == prelearning_foundation_policy.VERSION
+        else ""
+    )
+
+
 GENERATED_CELL_SYSTEM = (
     column_spec.OUTPUT_DISCIPLINE + ("You are the Aegis assessment-cell author for ONE GENERATED "
     "pre-learning question. The question was authored for a prerequisite "
@@ -468,7 +515,7 @@ def _live_generated_cell(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
     return generation._openai_json(
-        GENERATED_CELL_SYSTEM,
+        GENERATED_CELL_SYSTEM + _foundation_instruction(payload),
         json.dumps(payload, ensure_ascii=False),
         purpose="concept_mapping",
         image_urls=visual_evidence.image_inputs(payload),
@@ -479,7 +526,7 @@ def _live_generated_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
     from . import generation
 
     return generation._openai_json(
-        GENERATED_CELL_CRITIC_SYSTEM,
+        GENERATED_CELL_CRITIC_SYSTEM + _foundation_instruction(payload),
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
         image_urls=visual_evidence.image_inputs(payload),
@@ -772,6 +819,7 @@ def decide_generated_cells(
             "stage": "assessment.generated_cell",
             "rules": GENERATED_CELL_SYSTEM,
             "metadata": copy.deepcopy(dict(meta)),
+            **_foundation_fields(meta),
             "profile": copy.deepcopy(profile_evidence),
             "generated_question": {
                 "pre_question_id": pre_question_id,
@@ -797,7 +845,10 @@ def decide_generated_cells(
             ),
             critic=critic,
             store=store,
-            policy_version=GENERATED_CELL_POLICY_VERSION,
+            policy_version=(
+                GENERATED_CELL_POLICY_VERSION
+                + _foundation_policy_suffix(payload)
+            ),
             fixer=fixer,
         )
         response = copy.deepcopy(dict(decision["response"]))

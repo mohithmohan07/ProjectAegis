@@ -88,13 +88,14 @@ def test_prepare_final_routes_through_the_rewrite(
     # source-topic policies, frozen inside the new seal. The golden fixture
     # predates these policies; its source/skeleton bytes remain unchanged.
     from app.services.phase3 import pre_coverage
-    from app.services import model_provider, prelearning_capture_policy, source_topic_policy
+    from app.services import model_provider, prelearning_capture_policy, prelearning_foundation_policy, source_topic_policy
 
     expected = copy.deepcopy(fixture_env)
     expected["metadata"] = pre_coverage.stamp(expected["metadata"])
     expected["metadata"][model_provider.PROFILE_KEY] = model_provider.new_profile()
     expected["metadata"][prelearning_capture_policy.KEY] = prelearning_capture_policy.VERSION
     expected["metadata"][prelearning_capture_policy.BOUNDARY_KEY] = prelearning_capture_policy.BOUNDARY_VERSION
+    expected["metadata"][prelearning_foundation_policy.KEY] = prelearning_foundation_policy.VERSION
     expected["metadata"]["source_topic_policy_version"] = source_topic_policy.SOURCE_TOPIC_POLICY_VERSION
     expected["envelope_sha256"] = envelope_mod.seal_sha256(expected)
     assert captured["env"]["metadata"][pre_coverage.RULE_FIELD] == (
@@ -109,10 +110,11 @@ def test_prepare_final_routes_through_the_rewrite(
 
 def test_historical_sealed_envelope_keeps_legacy_capture_policy(monkeypatch, tmp_path, fixture_env):
     """New code must not rebill Pre judgments sealed before the new policy."""
-    from app.services import prelearning_capture_policy
+    from app.services import prelearning_capture_policy, prelearning_foundation_policy
 
     original = copy.deepcopy(fixture_env)
     assert prelearning_capture_policy.KEY not in original["metadata"]
+    assert prelearning_foundation_policy.KEY not in original["metadata"]
     (tmp_path / "source.phase3-envelope.json").write_text(json.dumps({
         "boundary_skeleton_sha256": phase3._sha256_json(original["skeleton_rows"]),
         "envelope": original,
