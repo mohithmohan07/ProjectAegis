@@ -2575,3 +2575,39 @@ regenerate a saved run. Keep existing Post question ownership, output schemas,
 review stages, question-text freeze, logging, cost and resume contracts.
 No local test suite or paid generation run was started for this follow-up;
 the existing fresh-envelope expectation is updated for the additive stamp.
+
+**Corrected-workbook follow-up (10 September 2026).** The owner supplied job
+124's original and edited Concept workbooks, identifying the `(1)` files as
+the corrections. The original Pre workbook has no concept rows; the edited
+one adds eight concepts across three topics. The importer must accept these
+explicit additions with new internal Pre identities and reviewer provenance,
+without borrowing old records by position or trusting foreign chapter/lane
+identities. Retain original empty-capture findings in revision history and
+supersede only the findings made obsolete by this explicit populated input.
+
+Post retains 36 concepts with questions inside Concept Details. Empty standalone
+question columns are valid for a Concept workbook. The edited cells include
+replacement of blank-box glyphs with underscores. The model must read the
+edited question text as authoritative, preserve original dependencies unless
+the reviewer replaces them, and record additions, omissions and moves. Exact
+quote validation remains: reversible line-break representations map back to
+raw cell slices, and a model-selected multipart quote must consist of ordered
+exact source spans. No fuzzy wording match or Python question-grouping rule is
+introduced. The independent review remains advisory; a mechanically invalid
+result is retried once before a deduplicated workbook-location error, with no
+partial revision committed.
+
+An accepted Pre correction is a newly requested revision. Stamp Q44 on that
+revision and derive a separate sealed input for its question generation from
+the original source envelope, retaining both seals and the reviewed release
+UID. Do not overwrite the original envelope, replay completed Post stages or
+change frozen provider/coverage settings. Carry the reviewed provenance and
+foundation policy through Pre staging and Masters. Clicking Generate Master
+Files to accept the other unchanged lane, or reuploading an identical file,
+must preserve the earlier Pre correction's pending-generation state. The
+existing same-job journal continues to accumulate usage, costs and time.
+
+The source attachments remain unchanged. No local test suite or paid provider
+generation is requested for this repair; read-only workbook comparison and
+code review establish the diagnosed paths, without claiming a live upload
+or generated assessment has been validated.
