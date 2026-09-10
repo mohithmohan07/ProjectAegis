@@ -369,9 +369,9 @@ def test_corrected_upload_failure_persists_usage_and_run_history(
         "apply_workbook_for_review",
         failed_review,
     )
-    from fastapi import UploadFile
+    from fastapi import HTTPException, UploadFile
 
-    with pytest.raises(RuntimeError, match="review provider failed"):
+    with pytest.raises(HTTPException) as caught:
         asyncio.run(release_api._concept_review_upload_endpoint(
             job.id,
             lane="post",
@@ -379,6 +379,14 @@ def test_corrected_upload_failure_persists_usage_and_run_history(
             db=db,
             user=auth.LOCAL_PRINCIPAL,
         ))
+
+    assert caught.value.status_code == 500
+    assert "could not finish the corrected-file upload response" in (
+        caught.value.detail
+    )
+    assert "review provider failed" not in caught.value.detail
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert str(caught.value.__cause__) == "review provider failed"
 
     db.expire_all()
     saved = uploads.get_job(db, job.id)
@@ -417,9 +425,9 @@ def test_corrected_upload_retry_keeps_run_id_and_adds_only_new_receipt(
         "apply_workbook_for_review",
         apply_review,
     )
-    from fastapi import UploadFile
+    from fastapi import HTTPException, UploadFile
 
-    with pytest.raises(RuntimeError, match="transient review failure"):
+    with pytest.raises(HTTPException) as caught:
         asyncio.run(release_api._concept_review_upload_endpoint(
             job.id,
             lane="post",
@@ -427,6 +435,13 @@ def test_corrected_upload_retry_keeps_run_id_and_adds_only_new_receipt(
             db=db,
             user=auth.LOCAL_PRINCIPAL,
         ))
+    assert caught.value.status_code == 500
+    assert "could not finish the corrected-file upload response" in (
+        caught.value.detail
+    )
+    assert "transient review failure" not in caught.value.detail
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert str(caught.value.__cause__) == "transient review failure"
     db.expire_all()
     first = uploads.get_job(db, job.id)
     run_id = first.run_id

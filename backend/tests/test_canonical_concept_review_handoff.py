@@ -42,18 +42,24 @@ def _concept_details_cell(workbook):
     raise AssertionError("canonical workbook has no Concept Details row")
 
 
-def _author_verdict():
-    return {
+def _author_verdict(*, resolved=False):
+    verdict = {
         "questions": [
             {
                 "source_qid": "QINV-0001",
                 "concept_row": 0,
                 "placement_section": "types",
                 "question_text": "Explain the FIRST method now.",
+                "question_text_spans": ["Explain the FIRST", " method now."],
                 "shared_context": "",
+                "context_review": {
+                    "action": "inherit",
+                    "sources": [],
+                    "rationale": "The original supporting context remains applicable.",
+                },
                 "source_answer": "",
                 "options": [],
-                "preserve_source_dependencies": True,
+                "removed_dependencies": [],
                 "type_id": "TYPE-0001",
                 "type_title": "",
                 "type_definition": "",
@@ -66,10 +72,21 @@ def _author_verdict():
                 "concept_row": 0,
                 "placement_section": "types",
                 "question_text": "Describe the manually added method.",
+                "question_text_spans": [],
                 "shared_context": "Manual context.",
+                "context_review": {
+                    "action": "replace",
+                    "sources": [{
+                        "kind": "edited_concept",
+                        "concept_row": 0,
+                        "source_qid": "",
+                        "reason": "The edited row supplies the added context.",
+                    }],
+                    "rationale": "The edited row supplies the context for the added task.",
+                },
                 "source_answer": "Manual answer.",
                 "options": ["Manual option A", "Manual option B"],
-                "preserve_source_dependencies": False,
+                "removed_dependencies": [],
                 "type_id": "TYPE-0001",
                 "type_title": "",
                 "type_definition": "",
@@ -95,6 +112,11 @@ def _author_verdict():
             "rationale": "The edited Types/Cases surface is authoritative.",
         }],
     }
+    if resolved:
+        # The server resolves an explicit inherit decision before the critic
+        # and before persisting the accepted author receipt.
+        verdict["questions"][0]["shared_context"] = "Shared original context."
+    return verdict
 
 
 def _canonical_release(db):
@@ -138,7 +160,7 @@ def test_canonical_three_sheet_upload_reconciles_exact_reviewed_bank(
         "// Types: Type 01: Evidence-based explanation "
         "Case 01: Explain the foundational relationship. "
         "Case 02: Apply the reusable method later. "
-        "Example 01: Explain the FIRST method now. "
+        "Example 01: Explain the FIRST [review note omitted] method now. "
         "Example 02: Describe the manually added method. "
         "Manual context. Manual answer. Manual option A. Manual option B."
     )
@@ -189,12 +211,16 @@ def test_canonical_three_sheet_upload_reconciles_exact_reviewed_bank(
     assert added["_aegis_reviewed_target"]["case_id"] == "CASE-0002"
 
     audit = payload["review_question_audit"]
+    assert audit["model_review_receipt"]["author"]["questions"][0]["question_text_spans"] == [
+        "Explain the FIRST", " method now."
+    ]
     assert audit["original_ids"] == ["QINV-0001", "QINV-0002"]
     assert audit["omitted"] == ["QINV-0002"]
     assert audit["added"] == [added["qid"]]
     assert any(move["identity"] == "QINV-0001" for move in audit["moved"])
     assert audit["model_review_receipt"]["critic"]["verdict"] == "verified"
-    assert audit["model_review_receipt"]["author"] == _author_verdict()
+    assert audit["model_review_receipt"]["author_attempts"][0] == _author_verdict()
+    assert audit["model_review_receipt"]["author"] == _author_verdict(resolved=True)
     assert result["round_recorded"] is True
     assert [call["critic"] for call in calls] == [False, True]
 

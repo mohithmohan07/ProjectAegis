@@ -2678,3 +2678,17 @@ model routing and Master question ownership retain their existing contracts.
 No local test suite, paid generation or production upload replay was run for
 this follow-up. The review covered the supplied workbook differences, the full
 correction-to-Master dependency path, Python syntax and emitted strict schemas.
+
+**CI repair follow-up.** The owner reported that PR303 did not clear all CI
+tests. Its backend run completed with 8 failures and 4,337 passes; frontend CI
+passed. The same eight tests already failed on PR302. Six used mocked author
+responses predating the required quote-span field; v4 also requires explicit
+context/dependency decisions. Two expected raw RuntimeError exceptions even
+though the HTTP boundary now returns readable errors while preserving the cause
+and recording usage/history. These are stale test contracts and must be updated
+without weakening the production schema or removing the underlying assertions.
+
+The affected offline tests and the normal full PR checks must pass before the
+CI repair is merged. This follow-up supersedes the earlier no-testing preference
+for this repair; no paid generation or production upload is needed to exercise
+these mocked provider and HTTP contracts.
