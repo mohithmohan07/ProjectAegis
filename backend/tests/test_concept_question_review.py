@@ -21,8 +21,17 @@ def payload():
 def question(qid, row, text):
     return {
         "source_qid": qid, "concept_row": row, "question_text": text,
-        "shared_context": "", "source_answer": "", "options": [],
-        "preserve_source_dependencies": bool(qid), "type_id": "T1",
+        "question_text_spans": [], "shared_context": "", "source_answer": "",
+        "context_review": {
+            "action": "inherit" if qid else "remove",
+            "sources": [],
+            "rationale": (
+                "The existing supporting context remains applicable."
+                if qid else
+                "The added question has no separate supporting context."
+            ),
+        },
+        "options": [], "removed_dependencies": [], "type_id": "T1",
         "placement_section": "types",
         "type_title": "", "type_definition": "", "case_id": "C1",
         "case_definition": "", "rationale": "The complete edited row supports this identity and placement.",
@@ -136,3 +145,48 @@ def test_unknown_route_identity_cannot_orphan_an_accepted_question():
         current, [{"concept_details": "Text"}],
         payload()["question_task_inventory"]["items"], payload()["type_case_rows"],
     ) == []
+
+
+def test_author_review_emits_closed_v4_schema_with_required_question_fields(monkeypatch):
+    """The provider receives the same strict schema used by local validation."""
+
+    captured = {}
+
+    def fake_openai(system, user, **kwargs):
+        captured.update(kwargs)
+        return {"questions": [], "original_dispositions": [], "row_dispositions": []}
+
+    from app.services import generation
+
+    monkeypatch.setattr(generation, "_openai_json", fake_openai)
+    wires = {}
+    for critic, expected_name in (
+        (False, "concept_question_review_author_v4"),
+        (True, "concept_question_review_critic_v4"),
+    ):
+        review._call("review", {"evidence": "fixture"}, critic=critic)
+        wire = captured["response_schema"].json_schema()
+        wires[critic] = wire
+        assert wire["name"] == expected_name
+        assert wire["strict"] is True
+
+        def assert_closed_and_required(node):
+            if not isinstance(node, dict):
+                return
+            if node.get("type") == "object":
+                assert node["additionalProperties"] is False
+                assert set(node["properties"]) <= set(node["required"])
+            for value in node.values():
+                if isinstance(value, dict):
+                    assert_closed_and_required(value)
+                elif isinstance(value, list):
+                    for child in value:
+                        assert_closed_and_required(child)
+
+        assert_closed_and_required(wire["schema"])
+
+    question_schema = wires[False]["schema"]["$defs"]["ReviewedQuestion"]
+    assert {
+        "question_text_spans", "context_review", "removed_dependencies",
+    } <= set(question_schema["required"])
+    assert "preserve_source_dependencies" not in question_schema["properties"]

@@ -1,5 +1,14 @@
 # Aegis — working rules
 
+**CI follow-up (10 September 2026).**
+The owner reports that CI did not pass after PR303. Resolve the failing checks,
+run the affected offline tests, and wait for all normal PR checks to succeed
+before merging this repair. This supersedes the earlier no-testing preference
+for the CI repair. Preserve the strict current provider schema and readable HTTP
+error contract; update stale test fixtures/expectations without removing their
+question-identity, usage, history or retry assertions. Do not use paid generation
+as a substitute for offline regression coverage.
+
 **Flexible corrected-input follow-up (10 September 2026).**
 The owner reports repeated Post upload failures for supporting context, including
 unchanged workbook rows. Keep question wording quoted from the edited cell or
