@@ -1,5 +1,23 @@
 # Aegis — working rules
 
+**Flexible corrected-input follow-up (10 September 2026).**
+The owner reports repeated Post upload failures for supporting context, including
+unchanged workbook rows. Keep question wording quoted from the edited cell or
+ordered exact spans; do not impose that single-cell quote rule on supporting
+context. The v4 author explicitly inherits context, replaces it using cited
+edited rows/source questions, or removes it. Context relevance and faithful
+assembly remain API judgments with the existing independent advisory critic.
+Validate actual evidence addresses and retain the full original/resolved receipt.
+Preserve options, answers, media, tables and multipart children independently;
+only explicit per-dependency removals clear them. Synchronize effective fields
+with nested source_context before the Master snapshot. Preserve span proofs and
+the exact target-cell digest through row rebinding and catalog synchronization.
+Identical tagged Concept projections repeated across different workbook sheets
+may coalesce mechanically with their locations retained; conflicting identities
+remain a readable refusal. Retain the original chapter/source selection and
+accepted Pre input. No test suite or paid generation is requested; the existing
+merge/deployment authorization continues. See the Q44 follow-up below.
+
 **Corrected-workbook follow-up (10 September 2026).**
 The owner's job 124 attachments ending `(1)` are the edited Concept files;
 the other two files are original outputs. Accept explicitly added Pre concepts

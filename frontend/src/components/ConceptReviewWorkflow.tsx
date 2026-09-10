@@ -281,6 +281,9 @@ export default function ConceptReviewWorkflow({
             Excel only when you need one; a file you leave unchanged is
             retained as generated input. You may also add relevant prerequisite
             concepts to the Pre-Learning file, including when it was empty.
+            The original chapter and source selection stays locked; keep the
+            concept ID when renaming or moving a concept. Context, images and
+            other dependencies stay attached unless you deliberately edit them.
           </p>
         </div>
         <div className="spacer" />

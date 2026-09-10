@@ -292,7 +292,7 @@ def _staged_maps(
     return tag_map, by_title
 
 
-def _workbook_rows(path: Path) -> list[dict[str, str]]:
+def _workbook_rows(path: Path) -> list[dict[str, Any]]:
     """Every content row's topic/concept projection, layout-identified."""
 
     wb = openpyxl.load_workbook(path, data_only=True, read_only=True)
@@ -364,7 +364,8 @@ def _workbook_rows(path: Path) -> list[dict[str, str]]:
                     ),
                     "keywords": str(con.get("keywords") or "").strip(),
                 })
-        return rows
+        from .concept_workbook_rows import coalesce_repeated_sheet_rows
+        return coalesce_repeated_sheet_rows(rows)
     finally:
         wb.close()
 
@@ -373,6 +374,12 @@ _QUESTION_FIELDS = (
     "raw_task", "normalized_task", "polished_task", "frozen_task_text",
     "normalized_public_text", "question_text", "topic_hint", "options",
     "raw_solution_or_answer", "answer", "rationale",
+)
+_QUESTION_AUDIT_FIELDS = _QUESTION_FIELDS + (
+    "shared_context", "source_context", "source_answer", "assets", "image_urls",
+    "image_assets", "image_manifest", "images", "tables", "content_objects",
+    "compound_subparts", "sub_questions", "requires_visual", "requires_context",
+    "_image_captions", "reviewed_context",
 )
 
 
@@ -729,7 +736,7 @@ def _apply_question_review(
             before_topic = ""
             added.append(identity)
         before_values = {
-            key: copy.deepcopy(current.get(key)) for key in _QUESTION_FIELDS
+            key: copy.deepcopy(current.get(key)) for key in _QUESTION_AUDIT_FIELDS
         }
         original_raw = str(current.get("raw_task") or "")
         original_normalized = str(current.get("normalized_task") or "")
@@ -773,7 +780,7 @@ def _apply_question_review(
             answer = str(row.get("raw_solution_or_answer") or "")
             if answer or not preserve_dependencies:
                 current["raw_solution_or_answer"] = answer
-        if not preserve_dependencies and (
+        if not isinstance(row.get("context_review"), Mapping) and not preserve_dependencies and (
             "shared_context" in row
             or "raw_solution_or_answer" in row
             or "options" in row
@@ -812,6 +819,11 @@ def _apply_question_review(
             "case_id": str(row.get("case_id") or ""),
             "case_definition": str(row.get("case_definition") or ""),
             "preserve_source_dependencies": preserve_dependencies,
+            **({
+                "context_review": copy.deepcopy(row["context_review"]),
+                "removed_dependencies": copy.deepcopy(row.get("removed_dependencies") or []),
+                "concept_details_sha256": row.get("concept_details_sha256"),
+            } if isinstance(row.get("context_review"), Mapping) else {}),
         }
         if any(value not in (None, "", []) for value in reviewed_target.values()):
             current["_aegis_reviewed_target"] = reviewed_target
@@ -847,10 +859,12 @@ def _apply_question_review(
             raise WorkbookEditError(
                 f"Source Questions row {row.get('row')} has no question text"
             )
+        from .concept_review_context import apply_support_decisions
+        apply_support_decisions(current, row)
         if str(current.get("topic_hint") or "") != before_topic and identity in original_by_id:
             moved.append({"identity": identity, "from": before_topic, "to": str(current.get("topic_hint") or "")})
         changed_fields = [
-            key for key in _QUESTION_FIELDS
+            key for key in _QUESTION_AUDIT_FIELDS
             if before_values.get(key) != current.get(key)
         ]
         if changed_fields:
@@ -858,7 +872,7 @@ def _apply_question_review(
                 "identity": identity,
                 "fields": changed_fields,
                 "before": before_values,
-                "after": {key: copy.deepcopy(current.get(key)) for key in _QUESTION_FIELDS},
+                "after": {key: copy.deepcopy(current.get(key)) for key in _QUESTION_AUDIT_FIELDS},
             })
         current.setdefault("qid", identity)
         current["_review_identity"] = identity

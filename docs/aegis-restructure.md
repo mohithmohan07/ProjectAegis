@@ -2636,3 +2636,45 @@ properties are now required, every object is closed, and the span list has no
 default. No local test suite or paid generation was run. The production
 traceback was unavailable in this workspace; this diagnosis is supported by
 the deployed code and emitted request schema, not a retrieved Fly log.
+
+**Flexible supporting-context follow-up.** The next screenshot rejects
+`shared_context` at Objective rows 22, 28 and 34. The supplied original and
+corrected Post workbooks show rows 22 and 28 are unchanged. Row 34 removes an
+attribution while preserving the story passage. Requiring every supporting
+context to be one exact substring of the selected edited cell is the wrong
+contract: an existing task may need a source word bank or context already held
+in its original question, or source details assembled across rows.
+
+The v4 review separates these decisions. Accepted question wording still must
+be an exact edited-cell quote or ordered exact spans; the model must not invent
+Post questions. For supporting context the author explicitly chooses `inherit`,
+`replace` with valid cited edited-row/source-QID evidence, or `remove`. Faithful
+assembly and relevance are model judgments reviewed by the existing advisory
+critic, not substring or similarity gates. Replacement context may use needed
+facts from Description without turning Description into a generated question.
+It must not restore an attribution, duplicate passage or other material the
+reviewer deliberately removed. Raw author attempts, resolved context, frozen
+edited-row evidence, source identities and the independent review are recorded
+beside the immutable accepted revision.
+
+Options, source answers, media, tables, content objects and genuine multipart
+children are retained independently. Only an explicit dependency removal clears
+its corresponding fields; editing context must not erase every dependency.
+Before snapshot creation, normalize direct and nested context projections to
+the effective reviewed wording/context/options/answer, retaining unrelated
+evidence. Historical nested-only context and dependencies remain available to
+inheritance. The catalog handoff revalidates ordered question spans against the
+rebound Concept cell and its SHA-256 digest, so a valid split quote is not
+rejected by a later contiguous-only validator.
+
+Exact tagged Concept copies repeated on different workbook sheets coalesce as
+transport duplicates, retaining their sheet/row provenance. Conflicting copies,
+same-sheet duplicate identities and missing/foreign identities are not guessed.
+The UI explains that chapter/source metadata remains the pre-run selection and
+that concept IDs must stay intact when renaming or moving concepts. Source
+files, accepted Pre corrections, staged review/resume, cumulative accounting,
+model routing and Master question ownership retain their existing contracts.
+
+No local test suite, paid generation or production upload replay was run for
+this follow-up. The review covered the supplied workbook differences, the full
+correction-to-Master dependency path, Python syntax and emitted strict schemas.

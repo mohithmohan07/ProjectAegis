@@ -77,9 +77,7 @@ def synchronize_reviewed_catalog(payload: dict[str, Any], reviewed_rows) -> None
         index = row.get("concept_row_index")
         if type(index) is not int or not 0 <= index < len(records):
             raise ReviewedQuestionSetError("reviewed question has no exact staged Concept target")
-        text = str(row.get("question_text") or "")
-        if not text.strip() or text not in str(records[index].get("concept_details") or ""):
-            raise ReviewedQuestionSetError("reviewed question quote does not occur at its accepted Concept target")
+        _verify_reviewed_question_quote(row, records[index])
         type_id = str(row.get("type_id") or "")
         if type_id:
             hosted.setdefault(type_id, set()).add(index)
@@ -181,6 +179,68 @@ def synchronize_reviewed_catalog(payload: dict[str, Any], reviewed_rows) -> None
 
 def _text(value: Any) -> str:
     return str(value or "").strip()
+
+
+def _concept_details_sha256(value: Any) -> str:
+    """Hash the raw Concept Details cell used as the quote authority."""
+
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _verify_reviewed_question_quote(
+    row: Mapping[str, Any], record: Mapping[str, Any],
+) -> None:
+    """Prove a reviewed quote against its exact staged Concept cell.
+
+    Canonical Concept review can return a question split into ordered source
+    spans when excluded material sits between wording parts.  The old
+    catalog handoff only accepted a contiguous substring and therefore
+    rejected an otherwise valid author verdict after the caller rebound the
+    edited row to its staged record index.  This check remains mechanical:
+    digest the target raw cell, materialize each exact span in order, and
+    compare only the reversible rendered view to the returned concatenation.
+    """
+
+    source = str(record.get("concept_details") or "")
+    expected_digest = row.get("concept_details_sha256")
+    spans = row.get("question_text_spans")
+    if spans is not None and not isinstance(spans, list):
+        raise ReviewedQuestionSetError(
+            "reviewed question spans must be an array of exact source strings"
+        )
+    spans_present = isinstance(spans, list) and bool(spans)
+    if spans_present and expected_digest is None:
+        raise ReviewedQuestionSetError(
+            "reviewed question spans require a Concept Details digest"
+        )
+    if spans_present and any(not isinstance(span, str) for span in spans):
+        raise ReviewedQuestionSetError(
+            "reviewed question spans must contain only exact source strings"
+        )
+    if expected_digest is not None:
+        expected = str(expected_digest or "").strip().lower()
+        actual = _concept_details_sha256(source)
+        if not expected or expected != actual:
+            raise ReviewedQuestionSetError(
+                "reviewed question Concept Details digest disagrees with its "
+                "exact staged target"
+            )
+
+    text = str(row.get("question_text") or "")
+    if spans_present:
+        from .concept_question_quote import materialize_spans, view
+
+        materialized = materialize_spans(source, spans)
+        if materialized is None or view(materialized) != view(text):
+            raise ReviewedQuestionSetError(
+                "reviewed question spans are not ordered exact quotes from "
+                "their staged Concept Details target"
+            )
+        return
+    if not text.strip() or text not in source:
+        raise ReviewedQuestionSetError(
+            "reviewed question quote does not occur at its accepted Concept target"
+        )
 
 
 def _list(value: Any) -> list[str]:

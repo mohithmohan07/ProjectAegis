@@ -14,7 +14,9 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
-POLICY = "concept-question-review-2026-09-10-v3"
+from .concept_review_context import ContextReview, RemovedDependency
+
+POLICY = "concept-question-review-2026-09-10-v4"
 
 AUTHOR = """Read the complete edited Concept workbook rows and the original
 accepted question bank. The reviewer edits the SAME Concept Excel, chiefly
@@ -46,8 +48,8 @@ underscores or removing a duplicated passage are intentional. Never copy the
 old original-bank wording for the quote and never Markdown-escape edited
 underscores. The original bank supplies identity and untouched dependencies
 only. Exclude the
-Example label and supplied worked solution from that quote; carry separately
-quoted shared_context and source_answer when present. Keep every question
+Example label and supplied worked solution from that quote; carry supporting
+shared_context and separately quoted source_answer when present. Keep every question
 demand, option, number, table, image URL and subquestion inside the quote. If
 the reviewed wording is split by an interleaved source label or answer
 material that is deliberately excluded, return ordered question_text_spans.
@@ -60,22 +62,48 @@ or solve the question in this call.
 The independent Master stages perform their existing faithful formatting and
 answer construction against the accepted question later.
 
-Preserve unchanged source options/context/media when the reviewed question
-still depends on them: set preserve_source_dependencies=true. Set false only
-when the reviewed wording explicitly replaces that evidence; then its complete
-replacement must appear in the quoted text/context. An added question has no
-old dependencies. New options must be exact quotes in the edited row; do not
-invent distractors, tables, givens, figures or solutions. List the selected
-options verbatim only when the reviewer changed or added the option set;
-otherwise options=[] and preserve_source_dependencies=true keeps the old set.
-For an existing source question, if the edited cell does not contain an exact
-shared context or answer, return
-an empty shared_context/source_answer and preserve_source_dependencies=true;
-the old dependency is then carried mechanically. Do not copy context from a
-Description or mastery paragraph merely because it explains the task. Empty
-does not mean invented replacement. For an added question always set
-preserve_source_dependencies=false and quote any necessary context from its
-edited question material.
+Supporting context is NOT subject to the question's exact single-cell quote
+rule. Choose context_review.action explicitly for each accepted question:
+- inherit: the existing source_qid's supporting context still applies unchanged.
+  Return shared_context="" and sources=[]; the server carries the original
+  context, even if the edited cell does not repeat it. Only existing QIDs may
+  inherit. Any redundant retyped context is recorded in the receipt but is not
+  used: the inherit action always selects the original context. Valid optional
+  sources may document the decision. Do not inherit an attribution, duplicate passage or other material
+  that the reviewer deliberately removed or corrected.
+- replace: supply only the source-grounded context needed to make this reviewed
+  task complete. You may faithfully assemble a passage, word bank, givens or
+  image references from the edited rows and original questions. Prefer exact
+  reviewed wording where present; minimal connecting prose is allowed. Every
+  fact must be supported by the cited evidence. Preserve exact word choices,
+  numbers, URLs and KaTeX. Do not add a new task demand, solve the question, or
+  restore deliberately removed text. Necessary contextual data may come from
+  Description, but that does NOT authorize turning Description into a question.
+  Cite each source in context_review.sources: kind=edited_concept uses the
+  supplied concept_row (row_index), source_qid=""; kind=source_question uses a
+  valid source_qid and concept_row=-1. State why each is needed. Cross-row
+  context is allowed; it does not transfer question identity or ownership.
+- remove: this question needs no separate context or the reviewer deliberately
+  removed it. Return shared_context="". This affects ONLY supporting context.
+Give a rationale for every context decision. The server will resolve inherited
+context before the independent critic sees the accepted review.
+
+Source options, answers, images, tables and genuine multipart children are
+retained independently of the context decision. Return removed_dependencies=[]
+normally. Only list a dependency when the reviewer deliberately removed it or
+made it inapplicable: options, source_answer, media, tables, content_objects,
+subquestions. Explain each removal in rationale. Editing wording, context or
+an attribution is not permission to erase images, answer choices or children.
+An added question has no inherited dependencies. New options and source_answer
+must be exact quotes from the edited row; do not invent distractors, tables,
+givens, figures or solutions. Return options=[] and source_answer="" to keep
+unchanged source values. Nonempty values replace only their corresponding
+field. Do not both replace and remove the same dependency. Preserve all needed
+new visuals, tables and subquestions in the reviewed question/context text.
+When a task or its options changed, decide whether the old answer and structured
+children still apply. Explicitly remove obsolete source_answer or subquestions
+when the reviewed text replaces them; do not let stale answer/child projections
+override the edited task. Never invent a replacement answer in this review.
 
 Choose concept_row from the supplied edited row_index, never from print order
 or an old route after the reviewer moved a question. type_id and case_id name
@@ -94,6 +122,13 @@ no Description/definition/misconception prose became an invented question,
 additions/omissions/identity were not inferred by position or numbering, and
 reviewed Concept/Type/Case placement is honored. Check all question demands,
 options, media, source context and genuine multipart children are preserved.
+Audit context_review and removed_dependencies independently of question quotes:
+inherited context must still apply, and assembled replacement context must be
+fully grounded in its explicitly cited edited rows/source questions. It need
+not be one verbatim substring. Check that removed attributions or duplicated
+passages are not restored, and that a context correction never erases unrelated
+images, options, answers or dependent children. Report unsupported contextual
+facts or unjustified dependency removals precisely.
 Check that each accepted question quote (and every question_text_spans part)
 is grounded in the selected edited row's raw text or its stated display view;
 do not approve a paraphrase merely because it is semantically similar.
@@ -116,9 +151,10 @@ class ReviewedQuestion(_Strict):
     # the provider to reject the entire request before reading the workbook.
     question_text_spans: list[str]
     shared_context: str
+    context_review: ContextReview
     source_answer: str
     options: list[str]
-    preserve_source_dependencies: bool
+    removed_dependencies: list[RemovedDependency]
     placement_section: Literal["types", "activity", "info_hub"]
     type_id: str
     type_title: str
@@ -173,7 +209,7 @@ def _call(system: str, payload: dict, *, critic: bool = False) -> dict:
             system,
             json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
             response_schema=ResponseSchema(
-                "concept_question_review_critic_v3" if critic else "concept_question_review_author_v3",
+                "concept_question_review_critic_v4" if critic else "concept_question_review_author_v4",
                 ReviewCritic if critic else ReviewVerdict,
             ),
             purpose="advisory_critic" if critic else "source_extraction",
@@ -231,7 +267,10 @@ def _validate(verdict: dict, rows: list[dict], originals: list[dict],
             prompt not in text and span_materialized is None and not spans
         ):
             defects.append(f"question in {location} is not an exact nonempty edited-text quote")
-        for name in ("shared_context", "source_answer"):
+        from .concept_review_context import validate_context
+        defects.extend(f"{defect} in {location}" for defect in
+                       validate_context(question, rows, originals_by_id))
+        for name in ("source_answer",):
             value = question[name]
             if value and value not in text:
                 defects.append(f"{name} in {location} is not an exact edited-text quote")
@@ -250,8 +289,6 @@ def _validate(verdict: dict, rows: list[dict], originals: list[dict],
             accepted_ids.append(source_qid)
             if source_qid not in originals_by_id:
                 defects.append(f"unknown source question {source_qid}")
-        elif question["preserve_source_dependencies"]:
-            defects.append("an added question cannot preserve nonexistent source dependencies")
     if len(accepted_ids) != len(set(accepted_ids)):
         defects.append("a source question was accepted more than once")
     kept = {item["source_qid"] for item in dispositions if item["disposition"] != "omitted"}
@@ -274,7 +311,7 @@ def _repair_quote_transport(verdict: dict, rows: list[dict]) -> None:
 
     from .concept_question_quote import locate, materialize_spans
     quote_fields = (
-        "question_text", "shared_context", "source_answer", "type_title",
+        "question_text", "source_answer", "type_title",
         "type_definition", "case_definition",
     )
     for question in verdict.get("questions") or []:
@@ -341,17 +378,30 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
     ]
     fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True, ensure_ascii=False,
                                              default=str).encode()).hexdigest()
+    attempts = []
     verdict = _call(AUTHOR, evidence)
+    attempts.append(copy.deepcopy(verdict))
     _repair_quote_transport(verdict, rows)
     defects = _validate(verdict, rows, originals, evidence["original_routes"])
     if defects:
         # A bounded mechanical correction is not a second semantic opinion.
         verdict = _call(AUTHOR + "\nCorrect only the listed mechanical contract defects.",
                         dict(evidence, previous_verdict=verdict, mechanical_defects=defects))
+        attempts.append(copy.deepcopy(verdict))
         _repair_quote_transport(verdict, rows)
         defects = _validate(verdict, rows, originals, evidence["original_routes"])
     if defects:
         raise ReviewedQuestionSetError("edited question review cannot be applied: " + "; ".join(defects))
+    from .concept_review_context import resolve_contexts
+    unresolved = copy.deepcopy(verdict)
+    verdict = resolve_contexts(verdict, {_qid(item): item for item in originals})
+    context_resolutions = [{
+        "question_index": index,
+        "source_qid": question["source_qid"],
+        "action": question["context_review"]["action"],
+        "supplied_context": unresolved["questions"][index]["shared_context"],
+        "resolved_context": question["shared_context"],
+    } for index, question in enumerate(verdict["questions"])]
     try:
         critic = _call(CRITIC, dict(evidence, proposed_verdict=verdict), critic=True)
         ReviewCritic.model_validate(critic, strict=True)
@@ -360,6 +410,11 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
         # explicit review evidence, never a reason to drop finished questions.
         critic = {"verdict": "unavailable", "issues": [f"{type(exc).__name__}: {exc}"]}
     receipt = {"policy": POLICY, "input_sha256": fingerprint,
+               # Context references use these frozen edited row indexes;
+               # workbook reordering later cannot retarget their evidence.
+               "edited_concepts": copy.deepcopy(evidence["edited_concepts"]),
+               "author_attempts": attempts,
+               "context_resolutions": context_resolutions,
                "author": copy.deepcopy(verdict), "critic": copy.deepcopy(critic)}
     accepted = []
     for question in verdict["questions"]:
@@ -376,12 +431,18 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
             "concept_title": str(target.get("concept_title") or ""),
             "concept_row_index": index,
             "question_text": question["question_text"],
+            "question_text_spans": copy.deepcopy(question["question_text_spans"]),
+            "concept_details_sha256": hashlib.sha256(
+                str(target.get("concept_details") or "").encode("utf-8")
+            ).hexdigest(),
             "raw_task": "",
             "normalized_public_text": question["question_text"],
             "options": copy.deepcopy(question["options"]),
             "raw_solution_or_answer": question["source_answer"],
             "shared_context": question["shared_context"],
-            "preserve_source_dependencies": question["preserve_source_dependencies"],
+            "context_review": copy.deepcopy(question["context_review"]),
+            "removed_dependencies": copy.deepcopy(question["removed_dependencies"]),
+            "preserve_source_dependencies": bool(source_qid),
             "placement_section": question["placement_section"],
             "provenance": "source" if source_qid else "reviewer_added",
             **{key: question[key] for key in (
