@@ -31,6 +31,7 @@ from . import build_concepts as svc
 from . import build_concepts_release as release_svc
 from . import build_concepts_release_contract as release_contract
 from . import release_workbook_edits
+from .concept_question_review import QuestionReviewRequestError
 from ..api.upload_limits import read_limited_upload
 
 
@@ -342,8 +343,29 @@ async def _concept_review_upload_endpoint(
         raise HTTPException(409, str(exc)) from exc
     except release_workbook_edits.WorkbookEditError as exc:
         raise HTTPException(422, str(exc)) from exc
+    except QuestionReviewRequestError as exc:
+        raise HTTPException(
+            502,
+            "The question-review service could not complete the Post-Learning "
+            "upload. This corrected Post file has not been applied. Previously "
+            "accepted Concept files are preserved. The detailed failure is "
+            "saved in this job's run log and diagnostic snapshot.",
+        ) from exc
     except generation_recovery.NonResumableRunError as exc:
         raise HTTPException(409, str(exc)) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Do not expose an unhelpful bare 500 or raw provider/SQL details.
+        # A response can fail after the revision commit, so let the frontend
+        # refresh the durable state instead of falsely declaring it unsaved.
+        raise HTTPException(
+            500,
+            "Aegis could not finish the corrected-file upload response. "
+            "Refresh this job to check which files were accepted before "
+            "retrying. Check the run log and diagnostic snapshot for "
+            "processing details.",
+        ) from exc
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)

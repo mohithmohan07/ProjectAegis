@@ -2611,3 +2611,28 @@ The source attachments remain unchanged. No local test suite or paid provider
 generation is requested for this repair; read-only workbook comparison and
 code review establish the diagnosed paths, without claiming a live upload
 or generated assessment has been validated.
+
+**Post upload HTTP 500 follow-up.** The owner reported successful Pre upload
+and an HTTP 500 for Post after PR301. Static inspection identified a regression
+in that patch: `question_text_spans = []` made the new field optional in the
+raw Pydantic JSON Schema sent with `strict: true`. The provider requires every
+property to be required; see [Structured Outputs requirements](https://developers.openai.com/api/docs/guides/structured-outputs#all-fields-must-be-required).
+Pre upload does not enter this Post-only question-review call. An upstream
+request rejection becomes a RuntimeError in generation and previously escaped
+the corrected-file route without a readable response.
+
+The v3 question-review schema requires the list and explicitly permits an empty
+list for contiguous quotes. Question wording, exact grounding and both review
+passes are unchanged. Request failures retain their original cause in the
+existing redacted job diagnostics and return a readable HTTP 502; other upload
+failures return a readable HTTP 500 without claiming an already committed
+revision was lost. The frontend reads the submit response's durable
+`concept_review.corrected_inputs` acknowledgement and distinguishes a failed
+status refresh from a failed upload. A subsequent failed Post request refreshes
+the job once and preserves previously accepted Pre state.
+
+The emitted schema was inspected without contacting a provider: all declared
+properties are now required, every object is closed, and the span list has no
+default. No local test suite or paid generation was run. The production
+traceback was unavailable in this workspace; this diagnosis is supported by
+the deployed code and emitted request schema, not a retrieved Fly log.
