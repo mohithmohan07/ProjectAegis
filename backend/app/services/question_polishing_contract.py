@@ -25,13 +25,47 @@ independent advisory review through extraction without changing source fields.
 New source-task-format decisions also carry frozen_task_text and their policy
 into source atoms, so Post materialization reads the same question that Type/
 Case mining classified. No replay upgrades a recorded historical audit.
+
+Three-step workflow (Q51, ``reviewed_file_workflow_policy.V2``): Step 1
+extracts every question AS IS under its Types/Cases, so the two inventory
+wrappers above do not run Pass 4 for a run bound to (or metadata stamped
+with) the current workflow version. The inventory leaves the join with its
+raw wording, recomputed ``stats`` and an explicit ``question_polishing_deferred``
+marker; polishing runs in Step 2 over the reviewed Post questions. V1 runs
+and historical runs (no recorded version) keep the Step 1 polish unchanged.
+The display override needs no gate: an item without polish fields already
+renders its raw wording byte-identically.
 """
 from __future__ import annotations
 
+import copy
 from types import ModuleType
 
+from . import progress
 from . import question_polishing
+from . import reviewed_file_workflow_policy as workflow
 from . import source_task_polishing_policy as source_format
+
+DEFERRED_KEY = "question_polishing_deferred"
+DEFERRED_STAGE = "step_2_reviewed_file"
+DEFERRED_REASON = (
+    "Step 1 extracts questions as is; polishing runs in Step 2 on the "
+    "reviewed Post questions"
+)
+
+
+def deferred_marker() -> dict:
+    """The recorded Step 1 decision that Pass 4 belongs to Step 2."""
+    return {
+        "policy": workflow.V2,
+        "stage": DEFERRED_STAGE,
+        "reason": DEFERRED_REASON,
+    }
+
+
+def polishing_deferred(meta) -> bool:
+    """Whether this run's recorded workflow moves Pass 4 to Step 2."""
+    return bool(workflow.defers_polishing(meta) or workflow.run_defers_polishing())
 
 
 def install(generation: ModuleType | None = None) -> None:
@@ -41,6 +75,26 @@ def install(generation: ModuleType | None = None) -> None:
         generation = generation_module
 
     def _polish_finished_inventory(inventory, meta):
+        if polishing_deferred(meta):
+            # Q51 Step 1: the inventory ships as extracted. Same copy
+            # discipline as the polish (callers never receive an alias);
+            # only stats and the recorded deferral marker are added. The
+            # inline extraction wrapper re-enters here after the join
+            # wrapper, so the marker also keeps the log line to one.
+            deferred = copy.deepcopy(inventory or {})
+            already_marked = isinstance(deferred.get(DEFERRED_KEY), dict)
+            deferred[DEFERRED_KEY] = deferred_marker()
+            deferred["stats"] = generation._inventory_stats([
+                item for item in deferred.get("items") or []
+                if isinstance(item, dict)
+            ])
+            if not already_marked:
+                progress.log(
+                    "Step 1 keeps every extracted question as is: question "
+                    "polishing is deferred to Step 2, where it runs on the "
+                    "reviewed Post questions before the Master is authored."
+                )
+            return deferred
         polished = question_polishing.polish_inventory(inventory, meta=meta or {})
         polished["stats"] = generation._inventory_stats([
             item for item in polished.get("items") or []
