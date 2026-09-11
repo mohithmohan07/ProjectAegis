@@ -742,7 +742,7 @@ def _table_cell_equation(value: str) -> str | None:
     for the existing API repair/crop decision.  The serializer cannot choose
     a substitute stimulus or flatten a visual's relationship to its cell.
     """
-    cell = re.sub(r"[ \t]*[\r\n]+[ \t]*", " ", str(value or "")).strip()
+    cell = re.sub(r"[ \t]*[\r\n]+[ \t]*", " ", str(value if value is not None else "")).strip()
     if (
         re.search(
             r"(?i)\[img\b|!\[|<[^>]+>|\\(?:includegraphics|begin|end|multicolumn|multirow)\b",
@@ -855,6 +855,10 @@ def _replace_markdown_tables(value: str) -> str:
         ) + "|"
         index += 2
         while index < len(lines) and "|" in lines[index] and lines[index].strip():
+            # A new explicit header/separator pair starts the next table.
+            # Do not ingest it as data or merge adjacent source datasets.
+            if _markdown_table_start(lines, index):
+                break
             rows.append(_markdown_table_cells(lines[index]))
             index += 1
         rendered = _table_array(rows, columns)

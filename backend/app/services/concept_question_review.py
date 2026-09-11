@@ -15,6 +15,7 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict
 
 from .concept_review_context import ContextReview, RemovedDependency
+from . import generation_quality_policy as quality
 
 POLICY = "concept-question-review-2026-09-10-v4"
 
@@ -135,6 +136,23 @@ do not approve a paraphrase merely because it is semantically similar.
 The reviewer may intentionally add, omit, edit and move questions. Do not
 restore omissions or invent questions. Your dissent is advisory: report it
 precisely without changing the accepted author verdict or asking for a rerun.
+"""
+
+CONTEXT_QUALITY = """\
+The recorded generation quality policy distinguishes accepted learner_context
+from broad raw shared_context/source_context evidence. For a marked original
+question, inherit selects its accepted learner_context, including an explicit
+empty value; it must not restore chapter extracts from raw evidence. Resolve
+inherit/replace/remove against the actual edited question: an original
+context no longer needed after rewording must not survive automatically.
+Use replace only for the minimum complete, source-grounded context the
+edited task still needs; use remove for no separate context. Preserve
+essential passages/poems, all asked givens, complete tables and figures.
+The exact edited question quote remains unchanged; separately accepted
+context can be projected once beside it by the existing mechanical display.
+Do not repeat context already within that quote, restore deleted exposition
+or copy question-only setup into Concept Description. The critic applies
+these same rules using the complete raw evidence and the resolved context.
 """
 
 
@@ -366,6 +384,8 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
     rows = [copy.deepcopy(dict(row)) for row in concept_rows]
     evidence = {
         "policy": POLICY,
+        **quality.fields(payload),
+        **quality.fields(payload.get("chapter_meta")),
         "edited_concepts": [],
         "original_concepts": copy.deepcopy(payload.get("records") or []),
         "original_questions": originals,
@@ -379,13 +399,16 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
     fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True, ensure_ascii=False,
                                              default=str).encode()).hexdigest()
     attempts = []
-    verdict = _call(AUTHOR, evidence)
+    context_instruction = "\n" + CONTEXT_QUALITY if quality.active(evidence) else ""
+    author_rules = AUTHOR + context_instruction
+    critic_rules = CRITIC + context_instruction
+    verdict = _call(author_rules, evidence)
     attempts.append(copy.deepcopy(verdict))
     _repair_quote_transport(verdict, rows)
     defects = _validate(verdict, rows, originals, evidence["original_routes"])
     if defects:
         # A bounded mechanical correction is not a second semantic opinion.
-        verdict = _call(AUTHOR + "\nCorrect only the listed mechanical contract defects.",
+        verdict = _call(author_rules + "\nCorrect only the listed mechanical contract defects.",
                         dict(evidence, previous_verdict=verdict, mechanical_defects=defects))
         attempts.append(copy.deepcopy(verdict))
         _repair_quote_transport(verdict, rows)
@@ -403,13 +426,14 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
         "resolved_context": question["shared_context"],
     } for index, question in enumerate(verdict["questions"])]
     try:
-        critic = _call(CRITIC, dict(evidence, proposed_verdict=verdict), critic=True)
+        critic = _call(critic_rules, dict(evidence, proposed_verdict=verdict), critic=True)
         ReviewCritic.model_validate(critic, strict=True)
     except Exception as exc:
         # The accepted author remains authoritative; an unavailable critic is
         # explicit review evidence, never a reason to drop finished questions.
         critic = {"verdict": "unavailable", "issues": [f"{type(exc).__name__}: {exc}"]}
-    receipt = {"policy": POLICY, "input_sha256": fingerprint,
+    receipt = {"policy": POLICY + quality.suffix(evidence), "input_sha256": fingerprint,
+               **quality.fields(evidence),
                # Context references use these frozen edited row indexes;
                # workbook reordering later cannot retarget their evidence.
                "edited_concepts": copy.deepcopy(evidence["edited_concepts"]),
@@ -422,6 +446,7 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
         target = rows[index]
         source_qid = question["source_qid"]
         accepted.append({
+            **quality.fields(evidence),
             "row": f"Concept Details:{target.get('row', index + 1)}",
             "kind": "source" if source_qid else "reviewer_added",
             "question_id": source_qid,
@@ -440,6 +465,8 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
             "options": copy.deepcopy(question["options"]),
             "raw_solution_or_answer": question["source_answer"],
             "shared_context": question["shared_context"],
+            **({"learner_context": question["shared_context"]}
+               if quality.active(evidence) else {}),
             "context_review": copy.deepcopy(question["context_review"]),
             "removed_dependencies": copy.deepcopy(question["removed_dependencies"]),
             "preserve_source_dependencies": bool(source_qid),

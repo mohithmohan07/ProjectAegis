@@ -13,6 +13,7 @@ from typing import Any, Literal, Mapping
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from . import prelearning_capture_policy as policy
+from . import generation_quality_policy as quality
 from .response_schemas import ResponseSchema
 
 
@@ -127,7 +128,9 @@ VERSION = policy.VERSION + ";authority:" + hashlib.sha256(
 ).hexdigest()
 
 
-def _evidence(merged: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def _evidence(
+    merged: Mapping[str, Any], *, complete_demands: bool = False,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     from .phase3 import prelearn
 
     index: dict[str, Any] = {}
@@ -139,16 +142,38 @@ def _evidence(merged: Mapping[str, Any]) -> tuple[dict[str, Any], list[dict[str,
             index.setdefault(ref, []).extend(entries)
         # These units already express the chapter's authored teaching and
         # source task patterns. No text/size heuristic creates a demand.
-        section, field = {
-            "settle": ("settled_concepts", "concept_id"),
-            "host": ("type_case_units", "unit_id"),
-        }.get(stage, ("", ""))
-        for row in packet.get(section) or []:
-            if isinstance(row, Mapping) and row.get(field):
-                demands.append({
-                    "demand_ref": f"{stage}:{row[field]}",
-                    "evidence_id": str(row[field]),
-                })
+        sections = {
+            "settle": (("settled_concepts", "concept_id"),),
+            "host": (("type_case_units", "unit_id"),),
+        }.get(stage, ())
+        if complete_demands:
+            # Enumerate supplied evidence addresses, not locally inferred
+            # pedagogical demands. The model may explicitly return no prior
+            # learning for any address; no block/task creates a concept quota.
+            sections = {
+                "settle": (
+                    ("source_blocks", "block_id"),
+                    ("settled_concepts", "concept_id"),
+                ),
+                "host": (
+                    ("type_case_units", "unit_id"), ("questions", "qid"),
+                ),
+                "place": (
+                    ("pooled_hub_items", "item_ref"),
+                    ("pooled_figures", "item_ref"),
+                ),
+                "analyse": (("analysis_inventory", "item_id"),),
+            }.get(stage, ())
+        for section, field in sections:
+            for row in packet.get(section) or []:
+                if isinstance(row, Mapping) and row.get(field):
+                    demands.append({
+                        "demand_ref": (
+                            f"{stage}:{section}:{row[field]}" if complete_demands
+                            else f"{stage}:{row[field]}"
+                        ),
+                        "evidence_id": str(row[field]),
+                    })
     return index, demands
 
 
@@ -252,7 +277,8 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
         critic = critic or _live_critic
         fixer = fixer or fixer_mod.live_fixer
     lookup = legacy._capture_lookup(merged)
-    evidence_index, demands = _evidence(merged)
+    refined = quality.active(env)
+    evidence_index, demands = _evidence(merged, complete_demands=refined)
     concerns = []
     for origin, flags in (merged.get("stage_flags") or {}).items():
         for flag in flags or []:
@@ -273,7 +299,8 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
         kind="prelearn.adjudicate", unit_id="chapter",
         envelope_sha256=str(env.get("envelope_sha256") or ""), payload=payload,
         provider=provider, critic=critic, checker=checker(payload),
-        store=store or kernel.DecisionStore(), fixer=fixer, policy_version=VERSION,
+        store=store or kernel.DecisionStore(), fixer=fixer,
+        policy_version=VERSION + (";" + quality.VERSION if refined else ""),
     )
     response = decision["response"]
     atoms = {row["atom_id"]: row for row in response["atoms"]}
@@ -298,6 +325,10 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
                 # BLK closure needed by the task-free Pre teaching map.
                 "source_block_ids": [ref for ref in resolved if ref in source_blocks],
                 "stages": list(dict.fromkeys(lookup[ref]["stage"] for ref in refs)),
+                **({"retained_atoms": [
+                    {"atom_id": atom["atom_id"], "text": atom["text"]}
+                    for atom in owned
+                ]} if refined and field == "prerequisites" else {}),
             })
     result["atoms"] = copy.deepcopy(response["atoms"])
     result["demand_coverage"] = copy.deepcopy(response["demand_coverage"])
@@ -308,7 +339,8 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
         for row in result["prerequisites"]
     }
     result["adjudication"] = {
-        "policy_version": VERSION, "decision_key": decision["key"],
+        "policy_version": VERSION + (";" + quality.VERSION if refined else ""),
+        "decision_key": decision["key"],
         "capture_count": len(lookup), "atom_count": len(atoms),
         "prerequisite_count": len(result["prerequisites"]),
         "disposed_atom_count": sum(len(row["atoms"]) for row in result["dispositions"]),

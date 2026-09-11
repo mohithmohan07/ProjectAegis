@@ -269,6 +269,9 @@ def test_cached_page_acsd_replay_is_scrubbed_at_consume_time():
     rows = page_acsd["pages"][0]["blocks"][0]["table_rows"]
     assert rows[0][0] == "Pyramid / Prism"
     assert rows[1][0] == "No. of vertical faces"
-    assert fallback._page_context_text(
+    context = fallback._page_context_text(
         page_acsd["pages"][0]["blocks"][0]
-    ).startswith("Pyramid / Prism | Triangular")
+    )
+    assert r"\text{Pyramid / Prism} & \text{Triangular}" in context
+    assert r"\text{No. of vertical faces} & \text{3}" in context
+    assert context.count(r"\begin{array}") == 1

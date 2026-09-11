@@ -1814,6 +1814,7 @@ def run_release_for_job(
     source_context_dispositions: list[dict] = []
     compound_parents_represented: list[dict] = []
     source_duplicates_represented: list[dict] = []
+    source_teaching_order: dict = {}
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
         # is built and none is classified: both of those stages hard-assume
@@ -2004,6 +2005,17 @@ def run_release_for_job(
             source_document_hash=str(bridge["source_document_hash"]),
         )
         atoms = built["atoms"]
+        # Project the accepted Concept API order only after source inventory
+        # parsing, whose recorded context/compound relationships retain their
+        # original adjacency. All later passes preserve this atom sequence.
+        from . import assessment_teaching_order
+
+        try:
+            atoms, source_teaching_order = assessment_teaching_order.project_atoms(
+                atoms, staged_release,
+            )
+        except assessment_teaching_order.TeachingOrderError as exc:
+            raise ReleaseRunError(str(exc)) from exc
         source_context_dispositions = list(built.get("context_only") or [])
         if source_context_dispositions:
             progress.log(
@@ -2240,6 +2252,10 @@ def run_release_for_job(
         for flag in upstream.get("flags") or []:
             _append_warning(candidate, str(flag))
         candidate["route_evidence"] = (atom or {}).get("route_evidence") or {}
+        if atom is not None and atom.get("_aegis_source_teaching_order"):
+            candidate["_aegis_source_teaching_order"] = copy.deepcopy(
+                atom["_aegis_source_teaching_order"]
+            )
         candidate[_CELL_AUDIT_FIELD] = dict(
             cell.get(_CELL_AUDIT_FIELD) or {}
         )
@@ -3151,6 +3167,12 @@ def run_release_for_job(
         # reviewable the same way as the dispositions above.
         "source_duplicates_represented": source_duplicates_represented,
     }
+    if source_teaching_order:
+        payload["source_teaching_order"] = {
+            **copy.deepcopy(source_teaching_order),
+            "accepted_atom_qids": [str(atom.get("source_qid") or "") for atom in atoms],
+            "candidate_ids": [str(candidate.get("candidate_id") or "") for candidate in candidates],
+        }
     if source_context_dispositions:
         # An auditable zero-loss disposition: the source row survives in each
         # named child's shared context but is not itself a question obligation.

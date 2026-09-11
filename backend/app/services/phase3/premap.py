@@ -150,6 +150,7 @@ omissions:
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import re
 from typing import Any, Callable, Mapping
@@ -162,6 +163,7 @@ from .. import katex_rules as kr
 from .. import progress
 from .. import prelearning_capture_policy as capture_policy
 from .. import prelearning_foundation_policy as foundation_policy
+from .. import generation_quality_policy as quality
 from . import evidence as visual_evidence
 
 # The run the map belongs to, stamped on the map itself (register Q29).
@@ -579,6 +581,10 @@ def map_evidence(
         for row in env["graph"]["blocks"]
         if isinstance(row, Mapping)
     }
+    if quality.active(env):
+        for row in env["canonical"]["blocks"]:
+            if isinstance(row, Mapping) and row.get("block_id"):
+                kind_by_id.setdefault(str(row["block_id"]), str(row.get("kind") or ""))
     contexts = {
         str(row.get("block_id") or ""): _redact_evidence_ids(
             visual_evidence.block_context(row), qids,
@@ -602,6 +608,9 @@ def map_evidence(
             "text": _redact_ids(_normal(item.get("text")), qids),
             "rationale": _redact_ids(_normal(item.get("rationale")), qids),
             "source_block_ids": blocks,
+            **({"retained_atoms": _redact_evidence_ids(
+                copy.deepcopy(item.get("retained_atoms") or []), qids,
+            )} if quality.active(env) else {}),
         })
     return {
         "prerequisites": rows,
@@ -646,6 +655,15 @@ def empty_capture_evidence(
     """
 
     qids = list(qids or [])
+    if quality.active(env):
+        from . import prelearn
+
+        # The fallback must inspect the same complete source as normal
+        # capture, including table cells, ownership and attached figures.
+        packet = prelearn.stage_evidence(env, "settle")
+        return {"source_blocks": _redact_evidence_ids(
+            packet["source_blocks"], qids,
+        )}
     text_by_id = {
         str(row.get("block_id") or ""): str(row.get("display_text") or "")
         for row in env["canonical"]["blocks"]
@@ -913,6 +931,8 @@ def _live_empty_capture(payload: dict[str, Any]) -> dict[str, Any]:
         + capture_policy.boundary_instruction(payload),
         prompts.render(payload),
         purpose="concept_mapping",
+        **({"image_urls": visual_evidence.image_inputs(payload)}
+           if quality.active(payload) else {}),
     )
 
 
@@ -925,6 +945,8 @@ def _live_empty_capture_critic(payload: dict[str, Any]) -> dict[str, Any]:
         + capture_policy.boundary_instruction(payload),
         prompts.render(payload),
         purpose="advisory_critic",
+        **({"image_urls": visual_evidence.image_inputs(payload)}
+           if quality.active(payload) else {}),
     )
 
 
@@ -986,7 +1008,7 @@ def empty_capture_verdict(
     # Keep the legacy empty payload byte-identical when this policy is absent;
     # fresh envelopes carry both its stamp and the boundary instruction.
     foundation_fields = foundation_policy.fields(env)
-    if foundation_fields:
+    if foundation_fields or quality.active(env):
         boundary_fields = capture_policy.boundary_fields(env)
         payload.update(boundary_fields)
         boundary_suffix = capture_policy.boundary_instruction(boundary_fields)
@@ -1000,7 +1022,11 @@ def empty_capture_verdict(
     # chapter's own question identities must not reach a Pre-lane payload.
     _refuse_source_qids(
         payload, qids, where="the Pre empty-capture verdict payload")
-    decision = kernel.decide(
+    decide = (
+        visual_evidence.decide_with_visual_evidence
+        if quality.active(env) else kernel.decide
+    )
+    decision = decide(
         kind=EMPTY_CAPTURE_KIND,
         unit_id="chapter",
         envelope_sha256=str(env.get("envelope_sha256") or ""),
@@ -1010,7 +1036,8 @@ def empty_capture_verdict(
         critic=critic,
         store=store,
         policy_version=EMPTY_CAPTURE_POLICY_VERSION
-        + (";" + foundation_policy.VERSION if foundation_fields else ""),
+        + (";" + foundation_policy.VERSION if foundation_fields else "")
+        + (";" + quality.VERSION if quality.active(env) else ""),
         fixer=fixer,
     )
     response = decision.get("response") or {}
@@ -1203,6 +1230,7 @@ def build(
         "validation": [],
         RUN_IDENTITY_FIELD: run_identity(env),
         **foundation_policy.fields(env),
+        **quality.fields(env),
     }
     if not captured:
         # D8.3 / S9 — ONE verdict, not an inference. This branch used to
@@ -1331,6 +1359,8 @@ def build(
     enhanced = capture_policy.active(env)
     if enhanced:
         payload["capture_policy"] = capture_policy.VERSION
+    if quality.active(env):
+        payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
     # The model is never SHOWN a source question's identity: the
     # capture's citations are filtered to block ids and its free text is
     # redacted (``_redact_ids`` records why redaction, not refusal, is
@@ -1353,7 +1383,8 @@ def build(
         store=store,
         policy_version=_policy_version("PREMAP_SYSTEM")
         + (";" + capture_policy.VERSION if enhanced else "")
-        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else ""),
+        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
+        + (";" + quality.VERSION if quality.active(env) else ""),
         fixer=fixer,
     )
     map_flags = list(decision.get("review_flags") or [])
@@ -1373,6 +1404,12 @@ def build(
         )
         for row in captured
     }
+    atoms_by_prerequisite = {
+        str(row.get("prerequisite_id") or ""): _redact_evidence_ids(
+            copy.deepcopy(row.get("retained_atoms") or []), qids,
+        )
+        for row in captured
+    } if quality.active(env) else {}
     rows: list[dict[str, Any]] = []
     topics: list[dict[str, Any]] = []
     review_flags: dict[str, list[str]] = {}
@@ -1426,6 +1463,8 @@ def build(
                     {
                         "prerequisite_id": ref,
                         "text": text_by_prerequisite[ref],
+                        **({"retained_atoms": atoms_by_prerequisite[ref]}
+                           if quality.active(env) else {}),
                     }
                     for ref in refs
                 ],
@@ -1710,6 +1749,7 @@ def build(
         "validation": validation,
         RUN_IDENTITY_FIELD: run_identity(env),
         **foundation_policy.fields(env),
+        **quality.fields(env),
     }
 
 

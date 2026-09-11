@@ -123,3 +123,19 @@ duplicating source content or source questions in this Pre output. Preserve
 retained prerequisite identity and scope; never fill an empty concept with
 current-chapter content or generate extra teaching to support a question count.
 """
+
+
+# Applied only by the explicit generation_quality_policy stamp. Do not append
+# this text to SOURCE_TOPIC_POLICY: that would rewrite historical decisions.
+POST_COHERENCE_INSTRUCTION = """POST-LEARNING COHERENCE AND SOURCE PROGRESSION
+Audit the complete chapter, including Host-created concepts, for repeated
+capabilities. Consolidate genuine semantic duplicates while preserving distinct
+capabilities, source-block coverage, every original question occurrence and
+recorded literary-plan identities. Different labels are not proof of different
+concepts; similar labels are not proof of equivalence. Keep explanations focused
+on teaching the capability, without repeated large chapter extracts. Concept,
+Type and Case progression follows the source's meaningful teaching sequence;
+questions within each Case follow the source's local task progression. Decide
+these relationships from complete source evidence through the API and its
+independent critic. Only exact identity accounting and transport happen in code.
+"""

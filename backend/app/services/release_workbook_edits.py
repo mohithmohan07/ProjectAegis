@@ -379,7 +379,8 @@ _QUESTION_AUDIT_FIELDS = _QUESTION_FIELDS + (
     "shared_context", "source_context", "source_answer", "assets", "image_urls",
     "image_assets", "image_manifest", "images", "tables", "content_objects",
     "compound_subparts", "sub_questions", "requires_visual", "requires_context",
-    "_image_captions", "reviewed_context",
+    "_image_captions", "reviewed_context", "learner_context",
+    "generation_quality_policy", "source_task_polishing_policy",
 )
 
 
@@ -738,6 +739,15 @@ def _apply_question_review(
         before_values = {
             key: copy.deepcopy(current.get(key)) for key in _QUESTION_AUDIT_FIELDS
         }
+        from . import generation_quality_policy as quality
+        from . import source_task_polishing_policy as source_format
+        if lane == bcr.LANE_POST and quality.active(row):
+            current.update(quality.fields(row))
+            # This is a newly accepted, explicitly reviewed source task. Its
+            # quote and separate context, including an empty context, are the
+            # same authority later passed to the frozen Master.
+            current[source_format.FIELD] = source_format.VERSION
+            current.setdefault("frozen_task_text", str(current.get("raw_task") or ""))
         original_raw = str(current.get("raw_task") or "")
         original_normalized = str(current.get("normalized_task") or "")
         original_polished = str(current.get("polished_task") or "")
@@ -855,6 +865,16 @@ def _apply_question_review(
             if original_frozen:
                 current["frozen_task_text"] = supplied_raw
             current["normalized_public_text"] = supplied_raw
+        if quality.active(current):
+            # Dedicated complete-question/Example edits have no separately
+            # reviewed context field. The edited wording is their complete
+            # authority; the canonical API path sets accepted context below.
+            effective = str(current.get("frozen_task_text") or current.get("raw_task") or "")
+            previous = original_frozen or original_polished or original_normalized or original_raw
+            if effective != previous:
+                current["learner_context"] = ""
+            if source_format.applies(current):
+                current["frozen_task_text"] = str(current.get("raw_task") or "")
         if not str(current.get("raw_task") or current.get("question_text") or "").strip():
             raise WorkbookEditError(
                 f"Source Questions row {row.get('row')} has no question text"

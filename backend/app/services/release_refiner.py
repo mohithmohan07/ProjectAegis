@@ -795,6 +795,20 @@ def _refine(
         from . import prelearning_foundation_policy
 
         rules += prelearning_foundation_policy.instruction(metadata)
+    from . import generation_quality_policy as quality, prelearning_capture_policy
+    if quality.active(metadata):
+        rules += "\n" + (
+            prelearning_capture_policy.QUALITY_INSTRUCTION
+            if output_kind == "pre_concepts_release"
+            else quality.POST_DESCRIPTION_INSTRUCTION
+        )
+        rules += (
+            "\nThis Refiner preserves the accepted concept identities, scope, "
+            "Type/Case/question wording and teaching order. Apply these review "
+            "rules only within the existing prose whitelist; report an "
+            "unrepairable coverage or duplication issue instead of creating, "
+            "merging, dropping or reclassifying content."
+        )
     # Saved verdicts belong to the exact author/reviewer instructions. A
     # changed review must run even when the rendered row is byte-identical.
     prompt_sha256 = hashlib.sha256(
@@ -805,6 +819,7 @@ def _refine(
         for key in ("board", "grade", "subject", "chapter_title")
     }
     meta_block["pre_post_learning"] = _pre_post(metadata)
+    meta_block.update(quality.fields(metadata))
     chapter_evidence = _chapter_evidence(metadata, original)
 
     refined = copy.deepcopy(original)
@@ -865,7 +880,7 @@ def _refine(
             checker=_checker(unit_id),
             critic=critic,
             store=store,
-            policy_version=REFINER_POLICY_VERSION,
+            policy_version=REFINER_POLICY_VERSION + quality.suffix(metadata),
         )
         decision = copy.deepcopy(decision)
         decision.setdefault("review_flags", []).extend(

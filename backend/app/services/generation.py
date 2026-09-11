@@ -2602,11 +2602,12 @@ def _metadata(
     instruction_set_sha256: str = "",
     instruction_slots: dict | None = None,
 ) -> dict:
-    from . import model_provider
+    from . import model_provider, generation_quality_policy
 
     profile = model_provider.bound_profile()
     return {
         **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
+        **generation_quality_policy.run_fields(),
         "subject": subject or "",
         "board": board or "",
         "grade": grade or "",
@@ -2679,6 +2680,10 @@ def _metadata_block(meta: dict) -> str:
     slot_lines = _instruction_slot_lines(meta.get("instruction_slots") or {})
     if slot_lines:
         block += "\nRUN INSTRUCTIONS (Architect):\n" + "\n".join(slot_lines)
+    from . import generation_quality_policy, source_topic_policy
+    if generation_quality_policy.active(meta) and meta.get("learning_kind", "Post") == "Post":
+        block += "\n" + source_topic_policy.POST_COHERENCE_INSTRUCTION
+        block += "\n" + generation_quality_policy.POST_DESCRIPTION_INSTRUCTION
     return block
 
 
@@ -19777,6 +19782,7 @@ def phase3_pre_release_bundle(
     pre_questions: Mapping[str, Any],
     *,
     snapshot_writes: Mapping[str, Any] | None = None,
+    generation_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """The exact Phase 3 Pre output carried through checkpoint and release.
 
@@ -19788,7 +19794,10 @@ def phase3_pre_release_bundle(
     dormant for it rather than guessing.
     """
 
+    from . import generation_quality_policy
     bundle = {
+        **(generation_quality_policy.fields(generation_policy)
+           or generation_quality_policy.fields(pre_map)),
         "schema_version": PHASE3_PRE_RELEASE_SCHEMA,
         "pre_map": copy.deepcopy(dict(pre_map)),
         "pre_questions": copy.deepcopy(dict(pre_questions)),
@@ -22580,6 +22589,7 @@ def concepts_from_mmd(
                 phase3_pre_release_authority = phase3_pre_release_bundle(
                     pre_map,
                     pre_questions,
+                    generation_policy=phase3_carry,
                     snapshot_writes=(
                         phase3_carry.get("pre_snapshot_writes") or {}
                     ),

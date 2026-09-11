@@ -174,7 +174,9 @@ def from_profile(profile: Mapping[str, Any] | None) -> dict[str, Any]:
 
 
 def bind_metadata(metadata: Mapping[str, Any], profile: Mapping[str, Any]) -> dict:
+    from . import generation_quality_policy
     result = copy.deepcopy(dict(metadata))
+    result.update(generation_quality_policy.fields(profile))
     result[POLICY_KEY] = from_profile(profile)
     return result
 

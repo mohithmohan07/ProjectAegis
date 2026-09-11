@@ -11,6 +11,8 @@ new verdict while immutable historical decisions remain replayable.
 """
 from __future__ import annotations
 
+from typing import Any, Mapping
+
 
 POLICY_VERSION = "assessment-response-mechanism-1-sop-2026-09-09"
 
@@ -90,6 +92,83 @@ gate, retry or replace the author's verdict.
 """
 
 
+# Additive guidance for explicitly stamped new work. Keep the earlier SOP
+# strings intact: they are also part of historical decision payloads.
+QUALITY_AUTHOR_RULES = """\
+FULL-CREDIT RESPONSE DEMAND — OWNER GENERATION QUALITY REFINEMENT
+Apply this clarification before the older ordered examples. The API decides
+the response mechanism from the complete accepted task and its evidence.
+First identify everything the LEARNER must submit for full credit; distinguish
+that from the concise final answer, an answer key, or an evaluator's optional
+explanation. Judge the supplied demand, without adding working, explanation
+or complexity that the learner was never asked to provide.
+
+- Descriptive covers independently constructed calculation/working,
+  explanation, reasoning, comparison, interpretation, drawing, mapping or
+  justification. A calculation or interpretation of a data/frequency table
+  remains Descriptive when its final result is one fixed number or word.
+  A unique correct answer, an answer line, a box, a blank in a worksheet or
+  a short model answer does not turn constructed work into Subjective.
+- Objective requires an actual supplied answer-choice set and a full-credit
+  response that selects from it. Values in a data table, observations,
+  frequencies, interval labels, objects in a diagram, examples, and premises
+  are input evidence, not answer choices merely because they form a list.
+  A question that only asks the learner to select an option remains Objective
+  even if mental calculation is useful for choosing it. If the learner must
+  also submit independent working or justification, preserve that constructed
+  demand and every dependent child's response in the integrated task.
+- Subjective requires only a bounded factual entry, direct identification,
+  recall, or direct lookup with no independently constructed solution or
+  explanation. A direct reading from a table can qualify; deriving a result
+  from its data is a different demand. The SOP's True/False component remains
+  Subjective; a separate required explanation retains its constructed demand.
+
+Choose the response mechanism before choosing the closest allowed question
+category and marks contract. The category name, nominal marks, Bloom level,
+answer restriction Specific/Open, and output sheet layout do not decide the
+lane. Never invent alternatives, insert answer placeholders, remove working,
+or simplify a source/generated task merely to fit a chosen lane. Preserve
+every given, table, visual, option and dependent part needed for the task.
+If a recorded lane cannot represent the accepted demand, state that concrete
+incompatibility in rationale/review evidence; do not disguise it by changing
+the task or silently substitute a different lane downstream.
+
+For a cell verdict, rationale must identify the required learner response,
+the source/task evidence supporting it, and why a tempting neighbouring lane
+does not fit. Use the actual evidence, not a category-name restatement. These
+are API judgments; do not introduce a keyword, length or numeric heuristic.
+"""
+
+QUALITY_REVIEW_RULES = """\
+Review the complete required response independently of the proposed lane.
+Check specifically for constructed work reduced to its short final answer,
+table/list inputs treated as answer options, and changed wording, invented
+options or blanks used to force a lane. Compare every child and dependency
+with the accepted task; an answer key or an evaluator explanation must not
+invent an extra learner demand. Name the evidence and any classification
+disagreement in issues. This remains an independent advisory review; it does
+not replace, gate, retry or rewrite the recorded author verdict.
+"""
+
+
+def quality_instruction(payload: Mapping[str, Any] | None) -> str:
+    """Return the stronger response test only for carried new-run policy."""
+    from . import generation_quality_policy
+
+    return (
+        QUALITY_AUTHOR_RULES
+        if generation_quality_policy.is_current(payload) else ""
+    )
+
+
+def quality_review_instruction(payload: Mapping[str, Any] | None) -> str:
+    """Give the independent reviewer the same test and review boundary."""
+    instruction = quality_instruction(payload)
+    return instruction + "\n" + QUALITY_REVIEW_RULES if instruction else ""
+
+
 __all__ = [
     "POLICY_VERSION", "SELECTION_MODES", "AUTHOR_RULES", "CRITIC_RULES",
+    "QUALITY_AUTHOR_RULES", "QUALITY_REVIEW_RULES", "quality_instruction",
+    "quality_review_instruction",
 ]

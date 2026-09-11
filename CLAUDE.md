@@ -1,5 +1,22 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q47 (11 September 2026).**
+Refine question classification using the complete required response: descriptive
+work must not become Objective or Subjective simply because its final answer is
+fixed, and tables of data are not answer options. Capture all supported Pre
+fundamentals from the complete book evidence and carry each retained capability
+through Concept and Master generation, preserving Q44's prior-learning boundary.
+Resolve in-text referents before question wording is frozen; retain only the
+necessary learner context in the question and keep full raw extracts in audit.
+Do not restore discarded exposition or copy it into concept descriptions.
+Review the whole Post chapter for duplicate capabilities and coherent Concept,
+Type, Case and question teaching order, with independent API review and Fixer.
+Keep complete statistical tables, headers, units, zeroes, blanks and mathematics
+faithful through both workbook exports and KaTeX rendering. All semantic choices
+remain API-owned. Version new run policies and preserve historical decisions;
+keep the closed CMS lists, mini routing, review stages and publication contract.
+Continue the already authorized push, CI, merge and deployment workflow.
+
 **Latest owner amendment: Q46 (11 September 2026).**
 The owner instructs: “Change all models to 5.4 mini.” All stages in new runs
 use OpenAI `gpt-5.4-mini`, including source/visual reading, concept writing,

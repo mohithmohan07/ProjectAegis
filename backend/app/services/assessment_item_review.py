@@ -28,6 +28,7 @@ from .. import config
 from . import assessment_profile
 from . import assessment_response_policy as response_policy
 from . import column_spec
+from . import generation_quality_policy as quality
 from . import source_task_polishing_policy as source_format
 from .response_schemas import item_review_schema
 from . import assessment_visual_evidence as visual_evidence
@@ -126,6 +127,13 @@ def _foundation_instruction(payload: Mapping[str, Any]) -> str:
     from . import prelearning_foundation_policy
 
     return prelearning_foundation_policy.instruction(payload)
+
+
+def _quality_fields(*values: Mapping[str, Any] | None) -> dict[str, str]:
+    return (
+        {quality.KEY: quality.VERSION}
+        if any(quality.is_current(value) for value in values) else {}
+    )
 
 
 class ItemReviewError(ValueError):
@@ -229,6 +237,15 @@ def _payload(
         "answer_contract_missing_fields": missing_contract_fields,
     }
     payload["rules"] += _foundation_instruction(payload)
+    payload.update(_quality_fields(meta, candidate, cell, atom))
+    if quality.is_current(payload):
+        payload["rules"] += (
+            "\n" + response_policy.quality_review_instruction(payload)
+            + source_format.context_review_rules(payload)
+            + "\nThe finished question, question_text, options and parts are "
+            "already frozen. Report any demand/lane inconsistency or missing "
+            "context in issues; never rewrite the item into options or blanks."
+        )
     return visual_evidence.bind(payload, atom, item)
 
 
@@ -257,6 +274,7 @@ def review_items(
     metadata = dict(meta) if isinstance(meta, Mapping) else {}
     run_profile = assessment_profile.resolve_for_metadata(profile, metadata)
     metadata = column_spec.bind_metadata(metadata, run_profile)
+    metadata.update(quality.fields({"metadata": meta, "profile": profile}))
     format_policy = assessment_profile.assessment_format_policy(
         run_profile, metadata,
     )
@@ -283,7 +301,10 @@ def review_items(
     if not prepared:
         return []
 
-    def unavailable(candidate_id: str, exc: BaseException) -> dict[str, Any]:
+    def unavailable(
+        candidate_id: str, exc: BaseException,
+        policy_version: str = ITEM_REVIEW_POLICY_VERSION,
+    ) -> dict[str, Any]:
         return {
             "candidate_id": candidate_id,
             "verdict": "unavailable",
@@ -293,7 +314,7 @@ def review_items(
                 f"{UNAVAILABLE_WARNING}: the joint item review could not "
                 f"complete ({type(exc).__name__}: {exc})"
             ],
-            "authority": {"policy_version": ITEM_REVIEW_POLICY_VERSION},
+            "authority": {"policy_version": policy_version},
         }
 
     if provider is None:
@@ -305,8 +326,13 @@ def review_items(
             # The auditor never blocks (Q10): with no live API and no
             # injected reviewer every item ships carrying the named flag.
             return [
-                unavailable(candidate_id, exc)
-                for candidate_id, _candidate, _cell, _atom in prepared
+                unavailable(
+                    candidate_id, exc,
+                    ITEM_REVIEW_POLICY_VERSION + quality.suffix(
+                        _quality_fields(metadata, candidate, cell, atom)
+                    ),
+                )
+                for candidate_id, candidate, cell, atom in prepared
             ]
         provider = _live_review
     decision_store = store or kernel.DecisionStore()
@@ -318,6 +344,10 @@ def review_items(
         payload = _payload(
             candidate, cell, atom, meta=metadata, format_policy=format_policy,
         )
+        policy_version = (
+            SOURCE_FORMAT_ITEM_REVIEW_POLICY_VERSION
+            if source_format.applies(atom) else ITEM_REVIEW_POLICY_VERSION
+        ) + quality.suffix(payload)
         try:
             decision = kernel.decide(
                 kind="assessment.item_review",
@@ -328,12 +358,15 @@ def review_items(
                 checker=_checker(candidate_id),
                 critic=None,
                 store=decision_store,
-                policy_version=(SOURCE_FORMAT_ITEM_REVIEW_POLICY_VERSION
-                                if source_format.applies(atom) else ITEM_REVIEW_POLICY_VERSION),
+                policy_version=policy_version,
                 fixer=None,
             )
         except Exception as exc:  # noqa: BLE001 — the auditor never blocks
-            return unavailable(candidate_id, exc)
+            return unavailable(
+                candidate_id, exc,
+                policy_version if quality.is_current(payload)
+                else ITEM_REVIEW_POLICY_VERSION,
+            )
         response = dict(decision.get("response") or {})
         issues = [
             str(item).strip() for item in response.get("issues") or []

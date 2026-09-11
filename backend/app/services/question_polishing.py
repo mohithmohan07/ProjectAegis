@@ -42,6 +42,7 @@ from . import column_spec, containers
 from . import progress, prompts
 from . import assessment_visual_evidence as visual_evidence
 from . import source_task_polishing_policy as source_format
+from . import generation_quality_policy as quality
 
 POLISHING_VERSION = 4
 
@@ -288,11 +289,25 @@ def _cache_key(items: list[dict[str, Any]], meta: dict | None = None) -> str:
     payload = "\0".join((
         f"question-polishing-v{POLISHING_VERSION}",
         config.OPENAI_MODEL,
-        _sha256_text(prompts.get_text("concepts.question_polishing.system")),
-        _sha256_text(prompts.get_text("concepts.question_polishing.critic")),
+        _sha256_text(_author_system(meta or {})),
+        _sha256_text(_critic_system(meta or {})),
         _sha256_text(_batch_payload(meta or {}, items)),
     ))
     return _sha256_text(payload)[:32]
+
+
+def _author_system(payload: dict[str, Any]) -> str:
+    return (
+        prompts.get_text("concepts.question_polishing.system")
+        + source_format.context_polish_rules(payload)
+    )
+
+
+def _critic_system(payload: dict[str, Any]) -> str:
+    return (
+        prompts.get_text("concepts.question_polishing.critic")
+        + ("\n" + source_format.CONTEXT_REVIEW_RULES if quality.active(payload) else "")
+    )
 
 
 def _cache_path(key: str):
@@ -336,6 +351,7 @@ def _quota_stop(exc: Exception) -> bool:
 
 def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
     payload = {
+        **({quality.KEY: quality.VERSION} if quality.active(meta) else {}),
         "chapter": {
             key: str(meta.get(key) or "")
             for key in ("subject", "board", "grade", "chapter_title")
@@ -385,7 +401,7 @@ def _review_batch(
     qids = [question["qid"] for question in payload["questions"]]
     try:
         data = api_call(
-            prompts.get_text("concepts.question_polishing.critic"),
+            _critic_system(payload),
             json.dumps(payload, ensure_ascii=False),
             purpose="advisory_critic",
             image_urls=visual_evidence.image_inputs(payload),
@@ -435,7 +451,7 @@ def _decisions_via_api(
 ) -> dict[str, Any]:
     """One author and one independent advisory critic call per successful batch."""
     decisions: dict[str, Any] = {}
-    system = prompts.get_text("concepts.question_polishing.system")
+    system = _author_system(meta)
     batches = [
         eligible[start:start + _BATCH_SIZE]
         for start in range(0, len(eligible), _BATCH_SIZE)
@@ -490,12 +506,19 @@ def _decisions_via_api(
                     "note": "qid missing, duplicated, or malformed in response",
                 }
             else:
-                decisions[qid] = _decision_for(item, row)
+                decisions[qid] = _decision_for(
+                    item, row, context_policy=quality.active(meta),
+                )
             # Critic sees the proposed shipping wording and original evidence,
             # not the author's reasoning, so it can assess the edit independently.
             review_item["proposed_task"] = (
                 decisions[qid].get("polished_task") or _item_source_text(item)
             )
+            if quality.active(meta):
+                if "learner_context" in decisions[qid]:
+                    review_item["learner_context"] = decisions[qid]["learner_context"]
+                else:
+                    review_item["context_decision_status"] = "not_accepted"
             decisions[qid]["audit"] = {
                 "version": POLISHING_VERSION,
                 "source_evidence": evidence,
@@ -510,21 +533,36 @@ def _decisions_via_api(
     return decisions
 
 
-def _decision_for(item: dict[str, Any], row: dict[str, Any]) -> dict[str, Any]:
+def _decision_for(
+    item: dict[str, Any], row: dict[str, Any], *, context_policy: bool = False,
+) -> dict[str, Any]:
     polished = str(row.get("polished_task") or "").strip()
     defect = _polish_is_usable(item, polished)
     if defect:
         return {"flag": FLAG_KEPT, "note": defect}
 
+    accepted_context: dict[str, str] = {}
+    if context_policy:
+        learner_context = row.get("learner_context")
+        if not isinstance(learner_context, str):
+            return {"flag": FLAG_KEPT, "note": "missing learner_context decision"}
+        if learner_context and learner_context not in polished:
+            return {
+                "flag": FLAG_KEPT,
+                "note": "accepted learner_context is absent from polished_task",
+            }
+        accepted_context["learner_context"] = learner_context
+
     # Questions are never split: any fragments a model returns are ignored;
     # the whole question's polished form is the only shipping artifact.
     unchanged = _squash(polished) == _squash(_item_source_text(item))
     if unchanged:
-        return {"note": str(row.get("note") or "")[:300]}
+        return {"note": str(row.get("note") or "")[:300], **accepted_context}
     return {
         "polished_task": polished,
         "flag": FLAG_POLISHED,
         "note": str(row.get("note") or "")[:300],
+        **accepted_context,
     }
 
 
@@ -718,6 +756,17 @@ def polish_inventory(
             item.pop(field, None)
         if isinstance(decision.get("audit"), dict):
             item["polish_audit"] = copy.deepcopy(decision["audit"])
+            if quality.active(meta):
+                item["polish_audit"][quality.KEY] = quality.VERSION
+                if "learner_context" in decision:
+                    item[quality.KEY] = quality.VERSION
+                    item["learner_context"] = decision["learner_context"]
+                else:
+                    # A rejected/missing context decision has no authority to
+                    # suppress raw source context. Keep the complete existing
+                    # fallback and its visible review flag, not an invented
+                    # explicit empty-context approval.
+                    item.pop("learner_context", None)
             item[source_format.FIELD] = source_format.VERSION
             item["frozen_task_text"] = str(
                 decision.get("polished_task") or _item_source_text(item)
@@ -730,6 +779,7 @@ def polish_inventory(
             item["polish_review_required"] = (
                 decision["audit"].get("critic", {}).get("verdict") != "verified"
                 or bool(evidence_flags)
+                or (quality.active(meta) and decision.get("flag") == FLAG_KEPT)
             )
         note = str(decision.get("note") or "")
         flag = str(decision.get("flag") or "")

@@ -26,6 +26,9 @@ from .. import config
 from ..bulk_import import assessment_workbook
 from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
+from . import assessment_response_policy as response_policy
+from . import generation_quality_policy as quality
+from . import source_task_polishing_policy as source_format
 from . import openai_usage
 from . import column_spec
 from .response_schemas import advisory_critic_schema
@@ -189,6 +192,26 @@ def _foundation_instruction(payload: Mapping[str, Any]) -> str:
     from . import prelearning_foundation_policy
 
     return prelearning_foundation_policy.instruction(payload)
+
+
+def _quality_fields(*values: Mapping[str, Any] | None) -> dict[str, str]:
+    return (
+        {quality.KEY: quality.VERSION}
+        if any(quality.is_current(value) for value in values) else {}
+    )
+
+
+_QUALITY_FROZEN_BOUNDARY = """\
+This Master pass cannot change any frozen question wording, question_text,
+sheet_kind, question category, options, blanks, parts, source tables or
+context. Apply the quality review to identify issues, not to reclassify or
+redesign an accepted task. Do not manufacture options, placeholders, extra
+working or a different answer demand to fit its recorded lane. Preserve the
+record and name an unrepairable classification/context inconsistency in the
+author rationale or the critic's issues. Only the existing answer/rubric
+prose and occupied-group description whitelist may be polished, within its
+settled meaning, demand, scoring and protected-token boundaries.
+"""
 
 
 class MasterRefinerError(ValueError):
@@ -593,11 +616,17 @@ def _live_author(request: dict[str, Any]) -> dict[str, Any]:
         if request.get("unit_kind") == "candidate"
         else GROUP_SYSTEM
     )
+    if quality.is_current(request):
+        # New stamped payloads carry the authoritative additive review rules.
+        # Keep the historical static-system path exactly as recorded.
+        system = str(request.get("rules") or system)
+    else:
+        system += _foundation_instruction(request)
     prefix, suffix = generation._json_prompt_cache_parts(
         request, stable_keys=("stage", "unit_kind", "rules", "critic_rules", "metadata", "column_spec_policy"),
     )
     return generation._openai_json(
-        system + _foundation_instruction(request),
+        system,
         suffix,
         purpose="concept_mapping",
         image_urls=visual_evidence.image_inputs(request),
@@ -1056,6 +1085,37 @@ def _model_record(record: Mapping[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def _quality_unit_context(
+    payload: Mapping[str, Any], unit_kind: str, record: Mapping[str, Any],
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Join recorded task evidence by identity for the stamped review only."""
+    member_ids = set(record.get("member_candidate_ids") or [])
+    members = [record] if unit_kind == "candidate" else [
+        candidate for candidate in payload.get("candidates") or []
+        if isinstance(candidate, Mapping) and candidate.get("candidate_id") in member_ids
+    ]
+    source_ids = {
+        source_id for member in members for source_id in member.get("source_atom_ids") or []
+    }
+    source_atoms = [
+        atom for atom in payload.get("source_atoms") or []
+        if isinstance(atom, Mapping) and atom.get("source_qid") in source_ids
+    ]
+    fields = _quality_fields(metadata, payload, record, *members, *source_atoms)
+    if not fields:
+        return {}
+    cell_ids = {member.get("blueprint_cell_id") for member in members}
+    return {
+        **fields,
+        "source_atoms": _content_evidence(source_atoms),
+        "blueprint_cells": _content_evidence([
+            cell for cell in payload.get("blueprint_cells") or []
+            if isinstance(cell, Mapping) and cell.get("cell_id") in cell_ids
+        ]),
+    }
+
+
 def _unit_payload(
     *,
     unit_kind: str,
@@ -1095,6 +1155,15 @@ def _unit_payload(
     if foundation_suffix:
         payload["rules"] += foundation_suffix
         payload["critic_rules"] += foundation_suffix
+    payload.update(_quality_fields(metadata, record, context))
+    if quality.is_current(payload):
+        quality_rules = (
+            "\n" + response_policy.quality_review_instruction(payload)
+            + source_format.context_review_rules(payload)
+            + "\n" + _QUALITY_FROZEN_BOUNDARY
+        )
+        payload["rules"] += quality_rules
+        payload["critic_rules"] += quality_rules
     return visual_evidence.bind(payload, record, rendered_rows, context)
 
 
@@ -1423,6 +1492,9 @@ def refine_master(
                     "candidate_id" if unit_kind == "candidate" else "group_key"
                 )
                 unit_id = str(record.get(id_field) or "").strip()
+                quality_context = _quality_unit_context(
+                    current, unit_kind, record, metadata,
+                )
                 entry: dict[str, Any] = {
                     "unit_kind": unit_kind,
                     "index": index,
@@ -1432,7 +1504,7 @@ def refine_master(
                         CANDIDATE_POLICY_VERSION
                         if unit_kind == "candidate"
                         else GROUP_POLICY_VERSION
-                    ),
+                    ) + quality.suffix(quality_context),
                     "kind": (
                         CANDIDATE_KIND
                         if unit_kind == "candidate"
@@ -1458,6 +1530,7 @@ def refine_master(
                     instruction_set=instruction_set,
                     context={
                         **context,
+                        **quality_context,
                         "member_questions": [
                             {
                                 "candidate_id": str(

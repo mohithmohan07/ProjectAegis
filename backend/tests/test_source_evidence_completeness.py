@@ -94,9 +94,14 @@ def test_qualified_context_table_cells_and_source_captions_survive(tmp_path, mon
     task = canonical["tasks"][0]
     assert task["content_objects"]["shared_context_blocks"][0]["source_id"] == "PDF-PAGE-0001-BLOCK-0003"
     assert task["content_objects"]["shared_context_blocks"][0]["table_cell_visual_refs"][0]["row_index"] == 1
-    assert "Solid | Faces" in task["shared_context"]
+    expected_table = task["shared_context"]
+    assert r"\begin{tabular}{|l|l|}" in expected_table
+    assert r"Solid & Faces \\" in expected_table
+    assert r"] &  \\" in expected_table  # the learner's Faces cell stays blank
+    assert r"\end{tabular}" in expected_table
     assert "[img " in task["shared_context"]
     assert len(task["image_urls"]) == 1
+    assert task["image_urls"][0] in expected_table
     figure = next(fig for fig in canonical["figures"] if fig["figure_id"] in task["figure_refs"])
     assert figure["source_caption"] == "Fig. 1 — Cube"
     assert figure["public_alt"] == "Solid with labelled vertices"
@@ -114,7 +119,7 @@ def test_qualified_context_table_cells_and_source_captions_survive(tmp_path, mon
     task["content_objects"]["shared_context_blocks"] = [{"source_id": "PRIOR-SOURCE", "display_text": task["shared_context"]}]
     fallback.apply_page_acsd_relationships(canonical, page_acsd)
     assert "Previously recorded source condition must remain." in task["shared_context"]
-    assert "Solid | Faces" in task["shared_context"]
+    assert expected_table in task["shared_context"]
     before = task["shared_context"]
     fallback.apply_page_acsd_relationships(canonical, page_acsd)
     assert task["shared_context"] == before
@@ -139,7 +144,7 @@ def test_qualified_context_table_cells_and_source_captions_survive(tmp_path, mon
     task["shared_context"] = ""
     task["content_objects"] = {}
     fallback.apply_page_acsd_relationships(canonical, page_acsd)
-    assert "Solid | Faces" in task["shared_context"]
+    assert expected_table in task["shared_context"]
     assert "[img " in task["shared_context"]
     assert task["gpt_pdf_acsd_relationship"]["linked_context_refs"] == [{"page_id": "PDF-PAGE-0001", "reading_order": 3}]
 

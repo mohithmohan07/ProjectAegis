@@ -14,7 +14,7 @@ import tempfile
 from contextlib import contextmanager
 
 from .. import config
-from . import canonical_source_contract, model_provider
+from . import canonical_source_contract, model_provider, generation_quality_policy as quality
 
 
 def _record_path(job):
@@ -37,11 +37,15 @@ def recorded_profile_for_job(job):
     return None if profile is None else model_provider.validate_profile(profile)
 
 
-def save_profile_for_job(job, profile):
+def save_profile_for_job(job, profile, *, quality_version=None):
     """Persist an explicit run profile, including None for historical restore."""
     profile = None if profile is None else model_provider.validate_profile(profile)
     path = _record_path(job)
     record = {"version": 1, "profile": profile}
+    if quality_version is not None:
+        if quality_version != quality.VERSION:
+            raise ValueError("Unknown saved generation quality policy")
+        record[quality.KEY] = quality_version
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
@@ -64,13 +68,17 @@ def profile_for_job(job):
         job.mmd_text or job.generation_checkpoint or job.question_inventory
         or (job.openai_usage or {}).get("request_count")
     )
-    return save_profile_for_job(job, None if historical else model_provider.new_profile())
+    return save_profile_for_job(
+        job, None if historical else model_provider.new_profile(),
+        quality_version=None if historical else quality.VERSION,
+    )
 
 
 @contextmanager
 def bind_job(job, *, require_pre: bool = False):
     profile = profile_for_job(job)
-    with model_provider.bind_profile(profile):
+    record = json.loads(_record_path(job).read_text(encoding="utf-8"))
+    with model_provider.bind_profile(profile), quality.bind_run(record.get(quality.KEY)):
         if profile is not None and not config.allow_dry() and not config._live_disabled():
             providers = {
                 route["provider"] for name, route in profile["routes"].items()
