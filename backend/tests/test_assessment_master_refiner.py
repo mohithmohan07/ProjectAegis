@@ -23,6 +23,7 @@ import pytest
 from app.bulk_import import assessment_workbook as aw
 from app.services import assessment_master_refiner as refiner
 from app.services import assessment_profile
+from app.services import assessment_output_vocabulary as output_vocabulary
 from app.services import assessment_release as rel
 from app.services import assessment_release_service as release_service
 from app.services import column_spec
@@ -52,6 +53,12 @@ _LEGACY_PROFILE = assessment_profile.resolve_for_metadata(
     {"board": "MSBSHSE", "grade": "6", "subject": "Mathematics"},
 )
 _LEGACY_PROFILE.pop(column_spec.POLICY_KEY)
+# This is a sealed pre-CMS-catalogue corpus, not a new run whose labels can
+# follow today's catalogue. Rebuild its format snapshot from its own v1
+# vocabulary so the legacy Subjective spelling remains explicit evidence.
+_LEGACY_PROFILE[output_vocabulary.POLICY_KEY] = output_vocabulary.legacy_snapshot()
+_LEGACY_PROFILE.pop(output_vocabulary.FORMAT_SNAPSHOT_KEY)
+_LEGACY_PROFILE = assessment_profile.resolve_for_metadata(_LEGACY_PROFILE, {})
 
 _METADATA = {
     "board": "MSBSHSE",
@@ -120,6 +127,7 @@ def _payload() -> dict:
     }
     concept_snapshot = {
         "source_concept_release_sha256": "s" * 64,
+        "source_book": PUBLICATION,
         "target_chapter_id": 1,
         "concept_provenance": [{
             "concept_key": CONCEPT_KEY,

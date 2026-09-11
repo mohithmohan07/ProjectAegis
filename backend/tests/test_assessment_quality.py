@@ -12,7 +12,7 @@ def test_prompt_assembly_combines_all_blocks():
     p = ap.build_prompt(
         question_type="descriptive", difficulty="High", skill="Evaluate",
         subject="Science", grade="08", board="CBSE", marks=5,
-        category="Long Answer", purpose="Pre-test, Test",
+        category="Long Answer Type (5 Marks)", purpose="Pre-test, Test",
     )
     assert "DIFFICULTY: HIGH" in p
     assert "COGNITIVE SKILL: EVALUATE" in p
@@ -53,7 +53,7 @@ def test_stem_variety_within_batch(db, first_concept):
     concept = _concept(db, first_concept)
     recs = generation.generate_questions_for_concept(
         concept, question_type="subjective", cognitive_skill="Understand",
-        difficulty="Moderate", category="Short Answer", count=5,
+        difficulty="Moderate", category="Short Answer Type (3 Marks)", count=5,
         marks=3, question_duration=5, math_keyboard="No",
         start_index=1, live=False,
     )
@@ -104,7 +104,7 @@ def test_subjective_rubric_markwise_and_sums_to_marks(db, first_concept):
     concept = _concept(db, first_concept)
     rec = generation.generate_questions_for_concept(
         concept, question_type="subjective", cognitive_skill="Apply",
-        difficulty="Moderate", category="Short Answer", count=1,
+        difficulty="Moderate", category="Short Answer Type (3 Marks)", count=1,
         marks=3, question_duration=5, math_keyboard="No", live=False,
     )[0]
     weights = [float(a["weightage"]) for a in rec["answers"]]
@@ -116,7 +116,7 @@ def test_descriptive_rubric_placement(db, first_concept):
     concept = _concept(db, first_concept)
     rec = generation.generate_questions_for_concept(
         concept, question_type="descriptive", cognitive_skill="Evaluate",
-        difficulty="High", category="Long Answer", count=1,
+        difficulty="High", category="Long Answer Type (5 Marks)", count=1,
         marks=5, question_duration=10, math_keyboard="No", live=False,
     )[0]
     # display_answer = model answer (not "Yes"); answer_content = rubric points.
@@ -167,7 +167,7 @@ def test_review_passes_good_question(db, first_concept):
     concept = _concept(db, first_concept)
     rec = generation.generate_questions_for_concept(
         concept, question_type="descriptive", cognitive_skill="Analyse",
-        difficulty="High", category="Long Answer", count=1,
+        difficulty="High", category="Long Answer Type (5 Marks)", count=1,
         marks=5, question_duration=10, math_keyboard="No", live=False,
     )[0]
     assert ap.review_question(rec) == []

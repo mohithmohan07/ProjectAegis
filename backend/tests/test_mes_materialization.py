@@ -6,6 +6,7 @@ import copy
 import pytest
 
 from app.services import assessment_materialization as am
+from app.services import assessment_output_vocabulary as output_vocabulary
 from app.services.phase3 import kernel
 
 ENVELOPE_SHA256 = "e" * 64
@@ -28,7 +29,7 @@ def _cell(**changes) -> dict:
     cell = {
         "cell_id": "CELL-abc123",
         "sheet_kind": "objective",
-        "question_category": "MCQ",
+        "question_category": "Multiple Choice Question",
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 1.0,
@@ -199,7 +200,7 @@ def test_recorded_candidate_preserves_complete_evidence_and_stable_audit():
     assert audit["flags"] == []
     assert audit["authority"]["decision_key"]
     assert audit["authority"]["policy_version"] == (
-        "assessment-materialize-16-selection-mode"
+        "assessment-materialize-16-selection-mode;" + output_vocabulary.VERSION
     )
     assert "created_at" not in audit["authority"]
     assert "provider" not in audit["authority"]
@@ -244,7 +245,7 @@ def test_source_master_authority_is_raw_text_even_when_example_conflicts(
         return _verified(request)
 
     candidate = am.materialize_candidate(
-        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        atom, _cell(sheet_kind="descriptive", question_category="Short Answer Type (2 Marks)", marks=2),
         meta={"subject": subject, "grade": "06"}, context={"chapter": "source corpus"},
         envelope_sha256=ENVELOPE_SHA256, provider=provider, critic=critic,
         store=kernel.DecisionStore(),
@@ -281,7 +282,7 @@ def test_source_wording_critic_can_flag_corrected_printed_error_without_rewritin
         ]}
 
     candidate = am.materialize_candidate(
-        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        atom, _cell(sheet_kind="descriptive", question_category="Short Answer Type (2 Marks)", marks=2),
         meta={"subject": "Science", "grade": "06"},
         envelope_sha256=ENVELOPE_SHA256, provider=provider, critic=critic,
         store=kernel.DecisionStore(),
@@ -325,7 +326,7 @@ def test_complete_required_excerpt_reaches_author_and_independent_critic():
         return _verified(request)
 
     candidate = am.materialize_candidate(
-        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        atom, _cell(sheet_kind="descriptive", question_category="Short Answer Type (2 Marks)", marks=2),
         meta=META, envelope_sha256=ENVELOPE_SHA256, provider=provider,
         critic=critic, store=kernel.DecisionStore(),
     )
@@ -361,7 +362,7 @@ def test_missing_listening_transcript_is_flagged_without_a_substitute_stimulus()
         ]}
 
     candidate = am.materialize_candidate(
-        atom, _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2),
+        atom, _cell(sheet_kind="descriptive", question_category="Short Answer Type (2 Marks)", marks=2),
         meta=META, envelope_sha256=ENVELOPE_SHA256, provider=provider,
         critic=critic, store=kernel.DecisionStore(),
     )
@@ -526,7 +527,7 @@ def test_marking_fields_are_not_part_of_the_materialization_checker():
     )
 
     descriptive_cell = _cell(
-        sheet_kind="descriptive", question_category="Long Answer", marks=5.0,
+        sheet_kind="descriptive", question_category="Long Answer Type (5 Marks)", marks=5.0,
     )
     descriptive_id = am._candidate_id(_atom(), descriptive_cell)
     descriptive = _descriptive_response({"candidate_id": descriptive_id})
@@ -587,7 +588,7 @@ def test_subjective_blank_materializes_with_ordered_placeholder_contract():
 
 def test_multipart_descriptive_uses_only_subquestion_rubrics():
     cell = _cell(
-        sheet_kind="descriptive", question_category="Long Answer", marks=4,
+        sheet_kind="descriptive", question_category="Long Answer Type (4 Marks)", marks=4,
     )
     candidate_id = am._candidate_id(_atom(), cell)
     subquestions = [{
@@ -775,7 +776,7 @@ def test_batch_preserves_order_and_rejects_duplicate_candidate_identity(
 
 def test_nested_rich_text_is_mechanical_but_marking_arithmetic_is_later():
     cell = _cell(
-        sheet_kind="descriptive", question_category="Long Answer", marks=5.0,
+        sheet_kind="descriptive", question_category="Long Answer Type (5 Marks)", marks=5.0,
     )
     candidate_id = am._candidate_id(_atom(), cell)
     request = {"candidate_id": candidate_id}
@@ -800,7 +801,7 @@ def test_nested_rich_text_is_mechanical_but_marking_arithmetic_is_later():
 
 def test_answer_medium_and_four_mark_rubric_shape_are_mechanical():
     cell = _cell(
-        sheet_kind="descriptive", question_category="Long Answer", marks=4.0,
+        sheet_kind="descriptive", question_category="Long Answer Type (4 Marks)", marks=4.0,
     )
     candidate_id = am._candidate_id(_atom(), cell)
     response = _descriptive_response(
@@ -825,7 +826,7 @@ def test_english_post_materialization_honors_thirty_answer_master_capacity():
     }
     cell = _cell(
         sheet_kind="descriptive",
-        question_category="Long Answer",
+        question_category="Long Answer Type (5 Marks)",
         marks=5.0,
     )
     seen = {}
@@ -864,7 +865,7 @@ def test_english_post_materialization_honors_thirty_answer_master_capacity():
     assert len(candidate["answers"]) == 30
     assert candidate["assessment_eligibility"] == "accepted"
     assert candidate["authority"]["policy_version"] == (
-        "assessment-materialize-16-selection-mode"
+        "assessment-materialize-16-selection-mode;" + output_vocabulary.VERSION
     )
 
 

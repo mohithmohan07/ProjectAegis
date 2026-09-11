@@ -22,7 +22,7 @@ import hashlib
 import json
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 
 class AdvisoryCriticResponse(BaseModel):
@@ -70,6 +70,47 @@ def advisory_critic_schema() -> ResponseSchema:
 
 def item_review_schema() -> ResponseSchema:
     return ResponseSchema("aegis_item_review_v1", ItemReviewResponse)
+
+
+def assessment_cell_schema(
+    *, identity_field: str, identity_value: str,
+    sheet_kinds: tuple[str, ...], question_categories: tuple[str, ...],
+    cognitive_skills: tuple[str, ...],
+) -> ResponseSchema:
+    """Close the cell author's fixed object using the run's frozen labels.
+
+    The model still selects meaning from complete task evidence. This wire
+    contract only limits the answer to supplied identifiers and enum values;
+    the caller retains its cross-field marks and response-mechanism checks.
+    """
+    from . import assessment_output_vocabulary as output_vocabulary
+
+    if identity_field not in {"source_qid", "pre_question_id"}:
+        raise ValueError("unknown assessment-cell identity field")
+    if not identity_value or not all(
+        values and all(isinstance(value, str) and value for value in values)
+        for values in (sheet_kinds, question_categories, cognitive_skills)
+    ):
+        raise ValueError("assessment-cell schema requires complete frozen enums")
+    if any(value not in output_vocabulary.QUESTION_CATEGORIES for value in question_categories):
+        raise ValueError("assessment-cell schema categories must be owner-approved values")
+    if any(value not in output_vocabulary.COGNITIVE_SKILLS for value in cognitive_skills):
+        raise ValueError("assessment-cell schema cognitive skills must be owner-approved values")
+    model = create_model(
+        "AssessmentCellResponse",
+        __config__=ConfigDict(strict=True, extra="forbid", allow_inf_nan=False),
+        **{
+            identity_field: (Literal[identity_value], ...),
+            "sheet_kind": (Literal[sheet_kinds], ...),
+            "question_category": (Literal[question_categories], ...),
+            "cognitive_skill": (Literal[cognitive_skills], ...),
+            "difficulty": (Literal["Less", "Moderate", "High"], ...),
+            "marks": (float, ...),
+            "selection_mode": (Literal["single", "multiple", ""], ...),
+            "rationale": (str, ...),
+        },
+    )
+    return ResponseSchema("aegis_assessment_cell_v2", model)
 
 
 def provider_response_format(

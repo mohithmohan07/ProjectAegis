@@ -1,5 +1,31 @@
 # Aegis — working rules
 
+**Q45 publishing authorization (11 September 2026).**
+The owner explicitly instructs: “Please go ahead push it till deploy.” Push
+the approved-vocabulary implementation to `mohithmohan07/ProjectAegis`, open
+the PR, resolve any CI failures, then merge after the normal checks pass and
+verify the existing main-branch Fly deployment. This supersedes the preceding
+automatic push-approval block for this change. Do not bypass checks or access
+controls and do not run paid generation to validate deployment.
+
+**Latest owner amendment: Q45 (11 September 2026).**
+The owner's attached `CMS clean-up: Finalised Question Categories_ Sources_
+Cognitive Skills` is the closed vocabulary for newly generated question fields:
+exactly 26 categories, 9 sources and 6 cognitive skills. Use only those labels,
+with no abbreviations, synonyms, case changes or additional items. See
+`docs/cms-approved-question-vocabulary.md` for the complete lists and provenance.
+Freeze this vocabulary on new runs and give authors, reviewers and the Fixer
+the same contract. Category and response-mechanism fit remain API judgments;
+strict membership is a schema check, never a local classifier. Preserve source
+provenance: generated questions use `UpSchool DB`, extracted questions use their
+recorded approved publication. Never guess `NON - NCERT` for an unknown source.
+Disallowed values cannot populate normal question fields or pass publication:
+keep unresolved fields blank with visible errors and retain the original values
+in evidence so downloadable artifacts remain available. Check parent and child
+questions and read the rendered workbook back. Historical sealed policies and
+already released artifacts retain their recorded contract. This amendment
+changes none of the other output columns, model routes or review stages.
+
 **CI follow-up (10 September 2026).**
 The owner reports that CI did not pass after PR303. Resolve the failing checks,
 run the affected offline tests, and wait for all normal PR checks to succeed

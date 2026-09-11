@@ -20,7 +20,7 @@ def _generate_one_question(client, concept_id):
         "scope_type": "concept", "scope_ids": [concept_id],
     }).json()
     client.post(f"/build-assessments/sessions/{s['id']}/batches", json={
-        "cognitive_skills": ["Understanding"], "difficulty_levels": ["Moderate"],
+        "cognitive_skills": ["Understand"], "difficulty_levels": ["Moderate"],
         "categories": ["Multiple Choice Question"], "question_type": "objective",
         "num_questions": 1,
     })

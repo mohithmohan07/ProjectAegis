@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 from decimal import Decimal
 
@@ -28,9 +29,9 @@ SUBJECTIVE_PROFILE = {
 }
 # Master Governing Contract v2.0 §21: every True or False item is a
 # Subjective row (statement + "Answer: $$a$$", one placeholder-bound
-# accepted answer).  Both the generic and the MSBSHSE spellings project the
-# same way.
-_TRUE_FALSE_CATEGORIES = ("True or False", "True/False")
+# accepted answer). Current generic and MSBSHSE policies use the exact
+# owner-approved category; old output aliases are no longer valid verdicts.
+_TRUE_FALSE_CATEGORIES = ("True or False",)
 # Master Governing Contract v2.0 §27.5 (RUB-002): every Descriptive rubric
 # criterion carries exactly 0.5 or 1 mark, so a single-part fixture needs
 # enough discrete criteria to reach its cell total in those quanta.  Two
@@ -106,8 +107,10 @@ def _cell(
 ) -> dict:
     default_categories = {
         "objective": "Multiple Choice Question",
-        "subjective": "Short Answer",
-        "descriptive": "Long Answer",
+        "subjective": "Fill in the Blanks",
+        # This fixture varies marks to exercise scoring arithmetic, so its
+        # category deliberately carries no fixed mark total.
+        "descriptive": "Numerical/application based",
     }
     return {
         "cell_id": cell_id,
@@ -368,11 +371,13 @@ def test_marking_uses_complete_candidate_cell_and_adopted_contract(
     payload = author_requests[0]
     assert payload["stage"] == "assessment.marking"
     assert payload["candidate"] == candidate
-    assert payload["assessment_format_policy"] == (
+    # Generic approved categories now carry literal mark contracts. Their
+    # Python tuples travel as JSON arrays in the author evidence payload.
+    assert payload["assessment_format_policy"] == json.loads(json.dumps(
         marking.assessment_profile.assessment_format_policy(
             marking.assessment_profile.resolve_for_metadata(None, META), META,
         )
-    )
+    ))
     assert payload["adopted_answer_contract"] == {
         "answer_restriction": "Open",
         "restriction_reason": candidate["restriction_reason"],
@@ -1411,13 +1416,13 @@ def test_msbshse_matrix_duration_rejects_a_positive_but_wrong_value(
     [
         # The Objective wire has one correct-option score, so compound
         # source tasks must be split into one-subpoint cells.
-        ("objective", "Match the Following", 1, 1),
-        ("objective", "Fill in the blanks", 1, 1),
+        ("objective", "Match the following Questions", 1, 1),
+        ("objective", "Fill in the Blanks", 1, 1),
         # Contract v2.0 §21: True or False is a Subjective row with one
         # placeholder-bound answer, so it is likewise a one-subpoint cell.
-        ("subjective", "True/False", 1, 1),
+        ("subjective", "True or False", 1, 1),
         # The Subjective fixture contains two declared response slots.
-        ("subjective", "Fill in the blanks", 2, 2),
+        ("subjective", "Fill in the Blanks", 2, 2),
     ],
 )
 def test_msbshse_per_subpoint_duration_uses_contract_bound_basis(
@@ -1456,10 +1461,10 @@ def test_msbshse_per_subpoint_duration_uses_contract_bound_basis(
 @pytest.mark.parametrize(
     ("kind", "category"),
     [
-        ("objective", "Match the Following"),
-        ("objective", "Fill in the blanks"),
+        ("objective", "Match the following Questions"),
+        ("objective", "Fill in the Blanks"),
         # Contract v2.0 §21: True or False lives on the Subjective sheet.
-        ("subjective", "True/False"),
+        ("subjective", "True or False"),
     ],
 )
 def test_msbshse_compound_subpoints_fail_before_provider(
@@ -1505,7 +1510,7 @@ def test_marking_rejects_malformed_max_subpoints_before_provider_spend(
             "policy_id": "malformed-maximum-test",
             "formats_by_sheet": {
                 "objective": {
-                    "Match the Following": {
+                    "Match the following Questions": {
                         "marks": {
                             "mode": "per_subpoint",
                             "marks_per_subpoint": 1,
@@ -1523,13 +1528,13 @@ def test_marking_rejects_malformed_max_subpoints_before_provider_spend(
         cell_id="CELL-BAD-MAX",
         kind="objective",
         marks=1,
-        category="Match the Following",
+        category="Match the following Questions",
     )
     cell = _cell(
         "CELL-BAD-MAX",
         kind="objective",
         marks=1,
-        category="Match the Following",
+        category="Match the following Questions",
     )
 
     with pytest.raises(
@@ -1554,13 +1559,13 @@ def test_msbshse_subjective_each_answer_uses_the_policy_mark_unit(
         cell_id="CELL-UNIT",
         kind="subjective",
         marks=2,
-        category="Fill in the blanks",
+        category="Fill in the Blanks",
     )
     cell = _cell(
         "CELL-UNIT",
         kind="subjective",
         marks=2,
-        category="Fill in the blanks",
+        category="Fill in the Blanks",
     )
 
     def uneven(request: dict) -> dict:
@@ -1602,13 +1607,13 @@ def test_msbshse_per_subpoint_duration_fails_closed(
         cell_id="CELL-SUBPOINT",
         kind="subjective",
         marks=3,
-        category="Fill in the blanks",
+        category="Fill in the Blanks",
     )
     cell = _cell(
         "CELL-SUBPOINT",
         kind="subjective",
         marks=3,
-        category="Fill in the blanks",
+        category="Fill in the Blanks",
     )
 
     def invalid(request: dict) -> dict:

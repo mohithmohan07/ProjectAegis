@@ -59,16 +59,28 @@ def test_cognitive_normalization_map():
         "Remember | Understand"
 
 
-def test_batch_normalizes_old_cognitive_values(client, first_concept):
+def test_new_batch_requires_exact_approved_cognitive_values(client, first_concept):
     s = client.post("/build-assessments/sessions", json={
         "scope_type": "concept", "scope_ids": [first_concept["id"]],
     }).json()
-    batch = client.post(f"/build-assessments/sessions/{s['id']}/batches", json={
+    payload = {
         "cognitive_skills": ["Remembering", "Understanding"],
         "difficulty_levels": ["Less"],
         "categories": ["Multiple Choice Question"],
         "question_type": "objective", "num_questions": 1,
-    }).json()
+    }
+    rejected = client.post(
+        f"/build-assessments/sessions/{s['id']}/batches", json=payload,
+    )
+    assert rejected.status_code == 400
+    assert "cognitive_skill" in rejected.json()["detail"]
+
+    payload["cognitive_skills"] = ["Remember", "Understand"]
+    accepted = client.post(
+        f"/build-assessments/sessions/{s['id']}/batches", json=payload,
+    )
+    assert accepted.status_code == 200
+    batch = accepted.json()
     assert batch["cognitive_skills"] == ["Remember", "Understand"]
 
 
@@ -94,8 +106,8 @@ def test_generated_questions_populate_question_text(client, first_concept, db):
     }).json()
     categories = {
         "objective": "Multiple Choice Question",
-        "subjective": "Short Answer",
-        "descriptive": "Long Answer",
+        "subjective": "Short Answer Type (3 Marks)",
+        "descriptive": "Long Answer Type (5 Marks)",
     }
     for q_type in ("objective", "subjective", "descriptive"):
         client.post(f"/build-assessments/sessions/{s['id']}/batches", json={

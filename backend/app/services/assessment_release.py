@@ -473,12 +473,18 @@ def validate_source_atom(atom: Mapping) -> list[str]:
 
 
 def _category_label_errors(
-    record: Mapping, profile: Mapping | str | None,
+    record: Mapping, profile: Mapping | str | None, *, include_source: bool = False,
 ) -> list[str]:
     """Check fresh run labels without deciding what category fits the task."""
     from . import assessment_output_vocabulary as vocabulary
 
     resolved = profile if isinstance(profile, Mapping) else assessment_profile.resolve(profile)
+    policy = resolved.get(vocabulary.POLICY_KEY)
+    strict_vocabulary = vocabulary.is_current(policy)
+    errors = (
+        output_vocabulary_errors(record, resolved, include_source=include_source)
+        if strict_vocabulary else []
+    )
     if vocabulary.POLICY_KEY not in resolved:
         return []
     category = assessment_profile.output_question_category(
@@ -487,12 +493,65 @@ def _category_label_errors(
     allowed = assessment_profile.question_categories(resolved).get(
         str(record.get("sheet_kind") or ""), (),
     )
-    if category not in allowed:
-        return [
+    if category not in allowed and (
+        not strict_vocabulary or category in policy.get("question_categories", ())
+    ):
+        errors.append(
             f"question_category must be one of {allowed} for sheet_kind "
             f"{record.get('sheet_kind')!r} (got {record.get('question_category')!r})"
-        ]
-    return []
+        )
+    return errors
+
+
+def output_vocabulary_errors(
+    record: Mapping, profile: Mapping | str | None, *, include_source: bool = False,
+) -> list[str]:
+    """Validate exact taxonomy, including metadata carried by question children.
+
+    Parent fields are required. Children inherit their parent's metadata when
+    absent, but an explicitly populated child field may never escape the
+    same vocabulary. This gate reads field values, not question meaning.
+    """
+    from . import assessment_output_vocabulary as vocabulary
+
+    resolved = profile if isinstance(profile, Mapping) else assessment_profile.resolve(profile)
+    policy = resolved.get(vocabulary.POLICY_KEY)
+    if not vocabulary.is_current(policy):
+        return []
+    errors = vocabulary.field_errors(
+        record, policy, include_source=include_source or "question_source" in record,
+    )
+
+    def visit(parent: Mapping, prefix: str) -> None:
+        children = parent.get("sub_questions")
+        if not isinstance(children, list):
+            return
+        for position, child in enumerate(children, start=1):
+            if not isinstance(child, Mapping):
+                continue
+            path = f"{prefix}sub_questions[{position}]"
+            populated_fields = {
+                field for field in (
+                    "question_category", "cognitive_skill", "cognitive_skills",
+                    "question_source",
+                )
+                if field in child and child[field] not in (None, "")
+            }
+            child_errors = vocabulary.field_errors(
+                {**child, "sheet_kind": child.get("sheet_kind", parent.get("sheet_kind"))},
+                policy, include_source="question_source" in populated_fields,
+            )
+            errors.extend(
+                f"{path}: {error}" for error in child_errors
+                if any(error.startswith(f"{field} ") for field in populated_fields)
+            )
+            visit(
+                {**child, "sheet_kind": child.get("sheet_kind", parent.get("sheet_kind"))},
+                f"{path}.",
+            )
+
+    visit(record, "")
+    return errors
 
 
 def validate_blueprint_cell(
@@ -514,13 +573,17 @@ def validate_blueprint_cell(
 
 def validate_candidate(
     candidate: Mapping, profile: Mapping | str | None = None,
+    *, include_source: bool = False,
 ) -> list[str]:
     # Imported at call time to avoid the bulk-import package's workbook ->
     # release import cycle while still sharing its declared wire enum.
     from .. import bulk_import as bi
 
     errors = [f"missing {f}" for f in _missing(candidate, _CANDIDATE_REQUIRED)]
-    errors.extend(_category_label_errors(candidate, profile))
+    errors.extend(_category_label_errors(
+        candidate, profile,
+        include_source=include_source or "question_source" in candidate,
+    ))
     # Explicit, deliberate, and independent of ``_missing``'s string
     # coercion (see ``_CANDIDATE_REQUIRED``).  Identity accounting only:
     # it reads no meaning out of the ids, it just states which lane may
@@ -1826,7 +1889,7 @@ def freeze_payload(
     for cell in payload.get("blueprint_cells") or []:
         errors.extend(validate_blueprint_cell(cell, profile))
     for candidate in payload.get("candidates") or []:
-        errors.extend(validate_candidate(candidate, profile))
+        errors.extend(validate_candidate(candidate, profile, include_source=True))
     errors.extend(assessment_format_contract_errors(payload, profile))
     errors.extend(parent_child_candidate_errors(payload))
     for group in payload.get("groups") or []:

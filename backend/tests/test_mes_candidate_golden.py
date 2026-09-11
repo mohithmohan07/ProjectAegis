@@ -8,6 +8,7 @@ from pathlib import Path
 
 from app.services import assessment_cells as cells
 from app.services import assessment_materialization as materialization
+from app.services import assessment_output_vocabulary as output_vocabulary
 from app.services import assessment_routing as routing
 from app.services.phase3 import envelope as envelope_mod
 from app.services.phase3 import kernel
@@ -121,10 +122,21 @@ def _run(
     fixer: kernel.Provider,
 ) -> dict:
     atoms = copy.deepcopy(recorded["atoms"])
+    # The recorded JSON predates the closed CMS vocabulary. Carry its legacy
+    # policy through both authoring stages instead of changing its semantic
+    # verdicts or accidentally treating the fixture as a fresh current run.
+    historical_profile = {
+        **copy.deepcopy(recorded["profile"]),
+        "_resolved_metadata": {
+            key: recorded["metadata"][key]
+            for key in ("board", "grade", "subject")
+        },
+        output_vocabulary.POLICY_KEY: output_vocabulary.legacy_snapshot(),
+    }
     decided_cells = cells.decide_cells(
         atoms,
         meta=recorded["metadata"],
-        profile=recorded["profile"],
+        profile=historical_profile,
         envelope_sha256=envelope["envelope_sha256"],
         provider=provider,
         critic=critic,
@@ -134,6 +146,7 @@ def _run(
     materialized = materialization.materialize_candidates(
         list(zip(atoms, decided_cells)),
         meta=recorded["metadata"],
+        profile=historical_profile,
         context={
             "source_concept_release_sha256": recorded[
                 "source_concept_release_sha256"

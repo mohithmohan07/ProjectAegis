@@ -182,8 +182,8 @@ def test_non_english_runs_share_column_rules_but_reject_rubric_tags(subject):
     assert policy["rubric_tags"] == []
 
     candidate = _english_snapshot(subject)["candidates"][1]
-    # _profile supplies no board, so this is the generic format vocabulary.
-    candidate["question_category"] = "Long Answer"
+    # The fresh generic profile uses the supplied exact 4-mark category.
+    candidate["question_category"] = "Long Answer Type (4 Marks)"
     criteria = candidate["sub_questions"][0]["keywords"]
     criteria[0]["weightage"], criteria[1]["weightage"] = "1.5", "0.5"
     assert release.validate_candidate(candidate, profile) == []
@@ -231,7 +231,7 @@ def test_frozen_v1_keeps_its_creative_tag_and_fixed_english_keyboard():
         "math_keyboard": "No",
     })
     candidate = _english_snapshot()["candidates"][1]
-    candidate["question_category"] = "Long Answer"
+    candidate["question_category"] = "Long Answer Type (4 Marks)"
     criterion = candidate["sub_questions"][0]["keywords"][0]
     criterion["keyword"] = "[creative]: Supplies an original example."
     assert release.validate_candidate(candidate, profile) == []
@@ -278,14 +278,15 @@ def test_legacy_live_generator_stamps_generated_source(db, monkeypatch):
     chapter = _chapter_with_concepts(db)
     concept = next(concept for topic in chapter.topics for concept in topic.concepts)
     monkeypatch.setattr(generation, "_openai_json", lambda *args, **kwargs: {
-        "questions": [{"question": "Which shape is a solid?", "question_text": "Which shape is a solid?\na) Cube\nb) Circle", "answer_explanation": "Cube. It occupies space.", "answers": [
+        "questions": [{"question_category": "Multiple Choice Question", "cognitive_skills": "Remember",
+        "question": "Which shape is a solid?", "question_text": "Which shape is a solid?\na) Cube\nb) Circle", "answer_explanation": "Cube. It occupies space.", "answers": [
             {"answer_type": "Words", "answer_content": "Cube", "correct_answer": "Yes", "answer_weightage": 1},
             {"answer_type": "Words", "answer_content": "Circle", "correct_answer": "No", "answer_weightage": 0},
         ]}]
     })
     rows = generation._live_questions_for_concept(
         concept, question_type="objective", cognitive_skill="Remember",
-        difficulty="Less", category="MCQ", count=1, start_index=1,
+        difficulty="Less", category="Multiple Choice Question", count=1, start_index=1,
         marks=1, question_duration=1, math_keyboard="No",
     )
     assert rows[0]["question_source"] == "UpSchool DB"

@@ -430,21 +430,28 @@ def _strict_assessment_policy_issues(
     if not policy_id or policy_id == "generic-cms":
         return []
     # Import may receive an old frozen workbook or a freshly projected
-    # vocabulary. Match only the documented exact label aliases, retaining
-    # the original stored category and all local marks/duration rules.
+    # vocabulary. New generation has a closed vocabulary, while importing
+    # an existing workbook must still validate its original mark/time rule.
+    # Select only exact configuration labels; never rename the stored row.
     from ..services import assessment_output_vocabulary as output_vocabulary
 
+    original_policy = policy
     vocabulary = output_vocabulary.snapshot()
-    policy = output_vocabulary.format_policy(policy, vocabulary)
+    policy = output_vocabulary.format_policy(original_policy, vocabulary)
+    category = str(question.get("question_category") or "").strip()
+    current_formats = policy.get("formats_by_sheet") or {}
+    if category not in (current_formats.get(kind) or {}):
+        historical_vocabulary = output_vocabulary.legacy_snapshot()
+        policy = output_vocabulary.format_policy(
+            original_policy, historical_vocabulary,
+        )
+        category = output_vocabulary.category_label(category, historical_vocabulary)
     formats = policy.get("formats_by_sheet")
     if not isinstance(formats, Mapping):
         return [
             f"{row_label}: assessment policy {policy_id!r} has no "
             "formats_by_sheet mapping"
         ]
-    category = output_vocabulary.category_label(
-        str(question.get("question_category") or "").strip(), vocabulary,
-    )
     sheet_formats = formats.get(kind)
     rule = (
         sheet_formats.get(category)

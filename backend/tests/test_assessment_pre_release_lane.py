@@ -125,7 +125,7 @@ def _cells(count: int, concept_key: str) -> list[dict]:
     return [
         {
             "sheet_kind": "descriptive",
-            "question_category": "Long Answer",
+            "question_category": "Short Answer Type (2 Marks)",
             "cognitive_skill": "Remember",
             "difficulty": "Less",
             "marks": 2,

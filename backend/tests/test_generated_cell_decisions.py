@@ -187,7 +187,11 @@ def _cell_verdict_author(payload):
         # A member of the CMS's descriptive vocabulary — the cell checker
         # now gates question_category per sheet kind (owner review: "MCQ"
         # / "Multiple Choice" / "Multiple Choice Question" on siblings).
-        "question_category": "Long Answer",
+        "question_category": (
+            "Short Answer Type (2 Marks)"
+            if payload.get("profile", {}).get("output_vocabulary")
+            else "Long Answer"
+        ),
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 2,
@@ -386,7 +390,7 @@ def test_materialize_candidates_returns_a_blocked_marker_in_place():
     cell = {
         "cell_id": "CELL-x",
         "sheet_kind": "descriptive",
-        "question_category": "Short Answer",
+        "question_category": "Short Answer Type (2 Marks)",
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 2,

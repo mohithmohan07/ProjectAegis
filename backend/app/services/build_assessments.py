@@ -30,13 +30,14 @@ from .. import config, models
 from ..bulk_import import workbook_sync
 from . import (
     assessment_blueprint, assessment_grouping, assessment_release,
+    assessment_output_vocabulary as output_vocabulary,
     assessment_routing, auth, directory, generation, identity, mmd,
     post_generation, progress, uploads,
 )
 from .phase3 import kernel
 
 
-_LEGACY_CELL_MARK_POLICY_VERSION = "assessment-legacy-cell-contract-2"
+_LEGACY_CELL_MARK_POLICY_VERSION = "assessment-legacy-cell-contract-3-cms-2026-09-11"
 
 _LEGACY_CELL_MARK_SYSTEM = (
     "You are the Aegis legacy blueprint-cell marks author. The user has "
@@ -152,7 +153,7 @@ def add_batch(
     session = get_session(db, session_id, owner_sub=owner_sub)
     with _exclusive_session_generation(session.id):
         db.refresh(session)
-        if session.status == "generated":
+        if session.status == "generated" or session.generated_question_ids:
             raise ValueError(
                 "this assessment session has already been generated; "
                 "create a new session"
@@ -177,18 +178,22 @@ def add_batch(
                 f"unknown appears_in values: {invalid_purposes!r}"
             )
         purposes = list(appears_in or [])
-        normalized_skills = [
-            bi.normalize_cognitive_skills(value)
-            for value in cognitive_skills
-        ]
+        # A newly selected axis must already be an exact approved label. Do
+        # not silently turn a synonym or a combined value into a new decision.
+        vocabulary = output_vocabulary.snapshot()
+        for category in categories:
+            for skill in cognitive_skills:
+                defects = output_vocabulary.field_errors({
+                    "sheet_kind": question_type,
+                    "question_category": category,
+                    "cognitive_skill": skill,
+                }, vocabulary)
+                if defects:
+                    raise ValueError("; ".join(defects))
         normalized_difficulties = [
             bi.normalize_difficulty(value)
             for value in difficulty_levels
         ]
-        if any(value not in bi.COGNITIVE_SKILLS for value in normalized_skills):
-            raise ValueError(
-                f"cognitive_skills must be chosen from {bi.COGNITIVE_SKILLS}"
-            )
         if any(
             value not in bi.DIFFICULTY_LEVELS
             for value in normalized_difficulties
@@ -198,10 +203,9 @@ def add_batch(
             )
         batch = models.BlueprintBatch(
             session_id=session_id,
-            # Old gerund forms normalize to standard action-verb values.
-            cognitive_skills=normalized_skills,
+            cognitive_skills=list(cognitive_skills),
             difficulty_levels=normalized_difficulties,
-            categories=[str(value).strip() for value in categories],
+            categories=list(categories),
             question_type=question_type,
             num_questions=int(num_questions),
             appears_in=purposes,
@@ -336,7 +340,7 @@ def _live_legacy_cell_mark_critic(payload: dict) -> dict:
 
 
 def _legacy_cell_mark_checker(
-    cell_id: str, sheet_kind: str,
+    cell_id: str, sheet_kind: str, question_category: str = "",
 ) -> kernel.Checker:
     """Mechanics only: identity, finite positive numeric shape, rationale."""
 
@@ -354,6 +358,14 @@ def _legacy_cell_mark_checker(
                 numeric = float(marks)
                 if not math.isfinite(numeric) or numeric <= 0:
                     defects.append("marks must be finite and positive")
+                declared_marks = output_vocabulary.CATEGORY_FIXED_MARKS.get(
+                    question_category,
+                )
+                if declared_marks is not None and numeric != declared_marks:
+                    defects.append(
+                        f"marks must be exactly {declared_marks} for the "
+                        f"already-selected approved category {question_category!r}"
+                    )
             except (TypeError, ValueError):
                 defects.append("marks must be numeric")
         duration = response.get("question_duration")
@@ -446,6 +458,18 @@ def _recorded_cell_marks(
             "metadata": dict(meta),
             "blueprint_cell": blueprint_cell,
             "concept": copy.deepcopy(concept_payload),
+            "approved_category_marks_contract": {
+                "question_category": cell.get("question_category"),
+                "fixed_marks": output_vocabulary.CATEGORY_FIXED_MARKS.get(
+                    cell.get("question_category"),
+                ),
+                "rule": (
+                    "When fixed_marks is supplied, author exactly that total "
+                    "for this already-selected category. Never select or "
+                    "change a category from the mark value."
+                ),
+            },
+            output_vocabulary.POLICY_KEY: output_vocabulary.snapshot(),
         }
         decision = kernel.decide(
             kind="assessment.legacy_cell_contract",
@@ -454,7 +478,8 @@ def _recorded_cell_marks(
             payload=payload,
             provider=provider,
             checker=_legacy_cell_mark_checker(
-                cell_id, str(cell.get("sheet_kind") or "")),
+                cell_id, str(cell.get("sheet_kind") or ""),
+                str(cell.get("question_category") or "")),
             critic=critic,
             store=store,
             policy_version=_LEGACY_CELL_MARK_POLICY_VERSION,
@@ -580,6 +605,24 @@ def _generate_session(
 ) -> dict:
     session_id = session.id
     owner_sub = session.owner_sub
+    if session.generated_question_ids:
+        # Questions already committed before an output failure are immutable
+        # generated work. Retry their output without generating duplicate rows.
+        created_ids = list(session.generated_question_ids)
+        pipeline = post_generation.run(db, created_ids)
+        blockers = list(pipeline.get("appended", {}).get("output_vocabulary_defects") or [])
+        session.status = "draft" if blockers else "generated"
+        db.commit()
+        progress.set_progress(1.0, label="Output metadata blocked" if blockers else "Done")
+        progress.log(
+            f"Re-exported {len(created_ids)} saved questions.",
+            level="warning" if blockers else "success",
+        )
+        return {
+            "session_id": session_id, "created": len(created_ids),
+            "question_ids": created_ids, "pipeline": pipeline,
+            "blockers": blockers, "notes": [],
+        }
     if not session.batches:
         raise ValueError("add at least one blueprint batch before generating")
 
@@ -593,6 +636,13 @@ def _generate_session(
         session.batches,
         concepts=concepts,
     )
+    vocabulary = output_vocabulary.snapshot()
+    for cell in cells:
+        defects = output_vocabulary.field_errors(cell, vocabulary)
+        if defects:
+            raise ValueError(
+                f"blueprint cell {cell['cell_id']}: " + "; ".join(defects)
+            )
     prompt_concepts_by_id = {concept.id: concept for concept in concepts}
     session_envelope_sha256 = assessment_release.sha256_json({
         "kind": "legacy-assessment-session",
@@ -602,6 +652,7 @@ def _generate_session(
         "scope_ids": list(session.scope_ids or []),
         "blueprint_cells": cells,
         "concepts": [_legacy_concept(concept) for concept in concepts],
+        output_vocabulary.POLICY_KEY: vocabulary,
     })
     decision_store = _legacy_decision_store("sessions", session_id)
     cell_contract_by_id = _recorded_cell_marks(
@@ -655,6 +706,15 @@ def _generate_session(
                 f"questions but its recorded author returned {len(records)}; "
                 "refusing partial persistence"
             )
+        # Validate the entire generated batch before reserving identities or
+        # writing any question. The final constructor repeats this exact gate.
+        for record in records:
+            _question_kwargs(record)
+            if record["question_source"] != "UpSchool DB":
+                raise ValueError(
+                    "generated question_source must retain the recorded "
+                    "UpSchool DB provenance"
+                )
         prompt_indices[concept.id] += len(records)
         identified_records = [
             (
@@ -743,16 +803,25 @@ def _generate_session(
                 question = models.Question(
                     group_id=group.id,
                     blueprint_cell_id=cell_id,
+                    route_audit={
+                        output_vocabulary.POLICY_KEY: vocabulary,
+                        "question_source_provenance": {
+                            "question_source": "UpSchool DB",
+                            "origin": "generated_from_concept_mapping",
+                            "session_id": session_id,
+                        },
+                    },
                     **_question_kwargs(record)
                 )
                 db.add(question)
                 db.flush()
                 created_ids.append(question.id)
+        session.generated_question_ids = created_ids
         db.commit()
 
         pipeline = post_generation.run(db, created_ids)
-        session.status = "generated"
-        session.generated_question_ids = created_ids
+        blockers = list(pipeline.get("appended", {}).get("output_vocabulary_defects") or [])
+        session.status = "draft" if blockers else "generated"
         db.commit()
 
     # Quality review summary: deterministic checks + anti-monotony report.
@@ -768,12 +837,16 @@ def _generate_session(
         }):
             problems.append(f"{q.question_label}: {p}")
     monotony = ap.stem_monotony_report([q.question for q in created])
-    progress.set_progress(1.0, label="Done")
-    progress.log(f"Created {len(created_ids)} questions.", level="success")
+    progress.set_progress(1.0, label="Output metadata blocked" if blockers else "Done")
+    progress.log(
+        f"Created {len(created_ids)} questions.",
+        level="warning" if blockers else "success",
+    )
     return {
         "session_id": session_id, "created": len(created_ids),
         "question_ids": created_ids,
         "pipeline": pipeline,
+        "blockers": blockers,
         "notes": label_family_notes,
         "review": {"problems": problems[:50],
                    "monotony": {k: monotony[k] for k in
@@ -797,17 +870,16 @@ def _legacy_label_family_notes(concepts, bases: dict[int, str]) -> list[dict]:
 
 
 def _question_kwargs(rec: dict) -> dict:
+    defects = output_vocabulary.field_errors(
+        rec, output_vocabulary.snapshot(), include_source=True,
+    )
+    if defects:
+        raise ValueError("; ".join(defects))
     sheet_kind = str(rec.get("sheet_kind") or "").strip()
     if sheet_kind not in {"objective", "subjective", "descriptive"}:
         raise ValueError("question record has no valid recorded sheet_kind")
-    category = str(rec.get("question_category") or "").strip()
-    if not category:
-        raise ValueError("question record has no recorded question_category")
-    cognitive_skill = bi.normalize_cognitive_skills(
-        rec.get("cognitive_skills") or "")
-    if cognitive_skill not in bi.COGNITIVE_SKILLS:
-        raise ValueError(
-            "question record has no valid recorded cognitive_skills")
+    category = rec["question_category"]
+    cognitive_skill = rec.get("cognitive_skills", rec.get("cognitive_skill"))
     difficulty = bi.normalize_difficulty(
         rec.get("level_of_difficulty") or "")
     if difficulty not in bi.DIFFICULTY_LEVELS:
@@ -912,7 +984,7 @@ def create_upload_job(
         owner_sub=uploads.normalize_owner_sub(owner_sub),
         module="build_assessments", upload_type=upload_type,
         filename=Path(filename).name, mmd_text="", status="uploaded",
-        source_book=source_book.strip(),
+        source_book=source_book,
     )
     return uploads.persist_new_job(db, job, raw_bytes)
 
@@ -993,6 +1065,15 @@ def generate_from_upload(
         raise ValueError("convert the uploaded document to MMD before generating")
     if job.status != "deposited":
         raise ValueError("set a deposit scope before generating")
+    extract = generation._identify_is_extract(job.upload_type, job.textbook_mode)
+    question_source = job.source_book if extract else "UpSchool DB"
+    if question_source not in output_vocabulary.QUESTION_SOURCES:
+        raise ValueError(
+            "question_source must be the exact approved publication before "
+            f"extraction (got {question_source!r}); allowed values are "
+            f"{output_vocabulary.QUESTION_SOURCES}"
+        )
+    vocabulary = output_vocabulary.snapshot()
 
     concepts = directory.resolve_scope_concepts(db, job.deposit_scope_type, job.deposit_scope_ids)
     progress.log(
@@ -1001,11 +1082,12 @@ def generate_from_upload(
         job.mmd_text, upload_type=job.upload_type, question_type=question_type,
         textbook_mode=job.textbook_mode,
     )
-    if job.source_book:
-        records = [
-            {**record, "question_source": job.source_book}
-            for record in records
-        ]
+    records = [
+        {**record, "question_source": question_source}
+        for record in records
+    ]
+    for record in records:
+        _question_kwargs(record)
     candidate_ids = [
         f"LEGACY-UPLOAD-{job.id}-{index:04d}"
         for index in range(1, len(records) + 1)
@@ -1030,6 +1112,7 @@ def generate_from_upload(
         "scope_ids": list(job.deposit_scope_ids or []),
         "candidates": candidate_payloads,
         "concepts": concept_payloads,
+        output_vocabulary.POLICY_KEY: vocabulary,
     })
     decision_store = _legacy_decision_store("uploads", job.id)
     # Routing happens outside the workbook lock (it may call the model). Every
@@ -1090,8 +1173,8 @@ def generate_from_upload(
             raise ValueError(
                 "deposit selection changed while questions were generated")
 
-        # Cross-book duplicate check: existing question texts in the deposit
-        # chapters. A duplicate is not re-added; its sources are merged instead.
+        # A duplicate keeps its existing source identity. Additional provenance
+        # is evidence, never a pipe-joined value in the closed source field.
         chapter_ids = {c.topic.chapter_id for c in concepts}
         existing_by_text: dict[str, models.Question] = {}
         for qq in (
@@ -1105,10 +1188,12 @@ def generate_from_upload(
 
         created_ids: list[int] = []
         merged_ids: list[int] = []
+        unresolved_duplicates: list[dict] = []
+        source_receipts: list[dict] = []
         label_bases: dict[int, str] = {
             c.id: identity.machine_id_for_concept(c) for c in concepts
         }
-        # Preserve supplied labels and merge duplicate sources as before.
+        # Preserve supplied labels and record duplicate provenance separately.
         # Reserve only the new rows that actually need an identifier. Supplied
         # labels in this same batch advance the floor before any allocation.
         label_counts: dict[str, int] = {}
@@ -1145,9 +1230,61 @@ def generate_from_upload(
                         "different routed home concept; refusing to relocate "
                         "or silently overwrite its semantic placement"
                     )
-                dup.question_source = bi.merge_sources(
-                    dup.question_source, rec.get("question_source", "")
+                original_fields = {
+                    "sheet_kind": dup.sheet_kind,
+                    "question_category": dup.question_category,
+                    "cognitive_skills": dup.cognitive_skills,
+                    "question_source": dup.question_source,
+                }
+                defects = output_vocabulary.field_errors(
+                    original_fields, vocabulary, include_source=True,
                 )
+                original_source_provenance = (
+                    (dup.route_audit or {}).get("question_source_provenance")
+                )
+                if (
+                    isinstance(original_source_provenance, dict)
+                    and original_source_provenance.get("question_source")
+                    != dup.question_source
+                ):
+                    defects.append(
+                        "question_source differs from the existing question's "
+                        "recorded source provenance"
+                    )
+                receipt = {
+                    "job_id": job.id,
+                    "candidate_id": candidate_id,
+                    "existing_question_id": dup.id,
+                    "original_fields": original_fields,
+                    "original_source_provenance": copy.deepcopy(original_source_provenance),
+                    "incoming_source": rec["question_source"],
+                    "incoming_record": copy.deepcopy(rec),
+                    "disposition": (
+                        "unresolved_existing_vocabulary" if defects
+                        else "retained_existing_source"
+                    ),
+                    "errors": defects,
+                }
+                source_receipts.append(receipt)
+                if defects:
+                    # Historical combined sources and unapproved labels are
+                    # not mechanically classifiable. Preserve the existing DB
+                    # question byte-for-byte and retain incoming evidence on
+                    # the upload; valid new rows can still be exported.
+                    unresolved_duplicates.append(receipt)
+                    continue
+                audit = copy.deepcopy(dup.route_audit or {})
+                provenance = list(audit.get("additional_source_receipts") or [])
+                if receipt not in provenance:
+                    provenance.append(receipt)
+                audit["additional_source_receipts"] = provenance
+                audit[output_vocabulary.POLICY_KEY] = vocabulary
+                audit["question_source_provenance"] = {
+                    "question_source": original_fields["question_source"],
+                    "origin": "retained_existing_question",
+                    "existing_question_id": dup.id,
+                }
+                dup.route_audit = audit
                 merged_ids.append(dup.id)
                 continue
             base = label_bases[concept.id]
@@ -1161,6 +1298,13 @@ def generate_from_upload(
             q = models.Question(
                 group_id=group.id,
                 route_audit={
+                    output_vocabulary.POLICY_KEY: vocabulary,
+                    "question_source_provenance": {
+                        "question_source": question_source,
+                        "origin": "extracted_upload" if extract else "generated_from_upload",
+                        "job_id": job.id,
+                        "recorded_source_book": job.source_book,
+                    },
                     "concept_key": placement["concept_key"],
                     "basis": placement["basis"],
                     "evidence": placement["evidence"],
@@ -1175,28 +1319,55 @@ def generate_from_upload(
             if norm:
                 existing_by_text[norm] = q
             created_ids.append(q.id)
+        # Retain receipts and accepted identities atomically with the DB rows,
+        # so a later workbook failure cannot lose unresolved source evidence.
+        inventory = copy.deepcopy(job.question_inventory or {})
+        prior_receipts = list(inventory.get("_assessment_source_receipts") or [])
+        for receipt in source_receipts:
+            if receipt not in prior_receipts:
+                prior_receipts.append(receipt)
+        inventory["_assessment_source_receipts"] = prior_receipts
+        job.question_inventory = inventory
+        job.result_ids = list(dict.fromkeys([
+            *(job.result_ids or []), *created_ids, *merged_ids,
+        ]))
         db.commit()
 
-        # Run the pipeline over new questions AND source-merged duplicates so
-        # the output workbook's question_source cells refresh in place.
+        # Only new/approved rows reach the current output boundary. Unresolved
+        # historical duplicates retain their existing output and source bytes.
         pipeline = post_generation.run(db, created_ids + merged_ids)
-        job.status = "generated"
-        job.result_ids = created_ids
+        export_blockers = list(
+            pipeline.get("appended", {}).get("output_vocabulary_defects") or []
+        )
+        blockers = [*unresolved_duplicates, *export_blockers]
+        # Deposited is the existing retryable state. Never report a successful
+        # complete upload while a duplicate still has unresolved metadata.
+        job.status = "deposited" if blockers else "generated"
         job.detail = (
             f"identified {len(records)} questions from {job.upload_type} upload "
             f"({len(created_ids)} new, {len(merged_ids)} duplicates "
-            "source-merged)"
+            "with source provenance retained, "
+            f"{len(unresolved_duplicates)} unresolved duplicates; "
+            f"{len(export_blockers)} output metadata blockers)"
         )
         db.commit()
 
-    progress.set_progress(1.0, label="Done")
+    progress.set_progress(
+        1.0, label="Output metadata blocked" if blockers else "Done",
+    )
     progress.log(
         f"Created {len(created_ids)} new questions "
-        f"({len(merged_ids)} duplicates source-merged).", level="success")
+        f"({len(merged_ids)} duplicate source receipts retained; "
+        f"{len(unresolved_duplicates)} unresolved duplicates; "
+        f"{len(export_blockers)} output metadata blockers).",
+        level="warning" if blockers else "success",
+    )
     return {
         "job_id": job_id, "created": len(created_ids),
         "duplicates_merged": len(merged_ids),
         "question_ids": created_ids + merged_ids,
         "pipeline": pipeline,
         "notes": label_family_notes,
+        "blockers": blockers,
+        "source_receipts": source_receipts,
     }

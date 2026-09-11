@@ -103,7 +103,7 @@ def test_generation_appends_to_output_workbook(client, first_concept):
         "scope_type": "concept", "scope_ids": [first_concept["id"]],
     }).json()
     client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
-        "cognitive_skills": ["Understanding"], "difficulty_levels": ["Moderate"],
+        "cognitive_skills": ["Understand"], "difficulty_levels": ["Moderate"],
         "categories": ["Multiple Choice Question"], "question_type": "objective",
         "num_questions": 1,
     })
@@ -123,8 +123,8 @@ def test_append_only_never_overwrites(client, first_concept, db):
         "scope_type": "concept", "scope_ids": [first_concept["id"]],
     }).json()
     client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
-        "cognitive_skills": ["Applying"], "difficulty_levels": ["High"],
-        "categories": ["Long Answer"], "question_type": "descriptive",
+        "cognitive_skills": ["Apply"], "difficulty_levels": ["High"],
+        "categories": ["Long Answer Type (5 Marks)"], "question_type": "descriptive",
         "num_questions": 1,
     })
     from tests.conftest import stream_result
@@ -145,7 +145,7 @@ def test_export_questions_selection(client, first_concept):
         "scope_type": "concept", "scope_ids": [first_concept["id"]],
     }).json()
     client.post(f"/build-assessments/sessions/{session['id']}/batches", json={
-        "cognitive_skills": ["Understanding"], "difficulty_levels": ["Moderate"],
+        "cognitive_skills": ["Understand"], "difficulty_levels": ["Moderate"],
         "categories": ["Multiple Choice Question"], "question_type": "objective",
         "num_questions": 2,
     })

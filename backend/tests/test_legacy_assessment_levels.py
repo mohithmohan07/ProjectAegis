@@ -227,17 +227,26 @@ def test_production_legacy_levels_have_no_local_authority() -> None:
     assert 'kind="assessment.legacy_cell_contract"' in source
     assert (
         '_LEGACY_CELL_MARK_POLICY_VERSION = '
-        '"assessment-legacy-cell-contract-2"'
+        '"assessment-legacy-cell-contract-3-cms-2026-09-11"'
     ) in source
     assert 'kind="assessment.cell"' not in source
 
 
-def test_legacy_cell_contract_redecides_under_its_distinct_kind(db) -> None:
+@pytest.mark.parametrize(
+    ("sheet_kind", "category", "marks", "fixed_marks", "math_keyboard"),
+    [
+        ("objective", "Multiple Choice Question", 1, None, ""),
+        ("descriptive", "Long Answer Type (4 Marks)", 4, 4, "No"),
+    ],
+)
+def test_legacy_cell_contract_redecides_under_its_distinct_kind(
+    db, sheet_kind, category, marks, fixed_marks, math_keyboard,
+) -> None:
     concept = _new_concept(db)
     cell = {
         "cell_id": "CELL-LEGACY-CONTRACT",
-        "sheet_kind": "objective",
-        "question_category": "Multiple Choice Question",
+        "sheet_kind": sheet_kind,
+        "question_category": category,
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "count": 1,
@@ -264,9 +273,9 @@ def test_legacy_cell_contract_redecides_under_its_distinct_kind(db) -> None:
     }
     response = {
         "cell_id": cell["cell_id"],
-        "marks": 1,
+        "marks": marks,
         "question_duration": 2,
-        "math_keyboard": "",
+        "math_keyboard": math_keyboard,
         "rationale": "Recorded fixture cell contract.",
     }
     store = kernel.DecisionStore()
@@ -292,8 +301,11 @@ def test_legacy_cell_contract_redecides_under_its_distinct_kind(db) -> None:
 
     new_calls = []
 
-    def new_provider(_request: dict) -> dict:
+    def new_provider(request: dict) -> dict:
         new_calls.append(1)
+        contract = request["approved_category_marks_contract"]
+        assert contract["question_category"] == category
+        assert contract["fixed_marks"] == fixed_marks
         return dict(response)
 
     decided = build_assessments._recorded_cell_marks(
@@ -308,12 +320,32 @@ def test_legacy_cell_contract_redecides_under_its_distinct_kind(db) -> None:
     assert new_calls == [1]
     assert len(store.keys()) == 2
     authority = decided[cell["cell_id"]]["authority"]
-    assert authority["policy_version"] == "assessment-legacy-cell-contract-2"
+    assert authority["policy_version"] == (
+        "assessment-legacy-cell-contract-3-cms-2026-09-11"
+    )
     assert authority["decision_key"] != old_decision["key"]
     new_record = store.get(authority["decision_key"])
     assert new_record is not None
     assert new_record["kind"] == "assessment.legacy_cell_contract"
     db.rollback()
+
+
+def test_legacy_cell_checker_preserves_explicit_category_marks() -> None:
+    check = build_assessments._legacy_cell_mark_checker(
+        "CELL-FOUR-MARKS", "descriptive", "Long Answer Type (4 Marks)",
+    )
+    response = {
+        "cell_id": "CELL-FOUR-MARKS",
+        "marks": 5,
+        "question_duration": 8,
+        "math_keyboard": "No",
+        "rationale": "Recorded fixture category contract.",
+    }
+    assert check(response) == [
+        "marks must be exactly 4 for the already-selected approved category "
+        "'Long Answer Type (4 Marks)'"
+    ]
+    assert check({**response, "marks": 4}) == []
 
 
 @pytest.mark.parametrize(
@@ -334,7 +366,7 @@ def test_legacy_blueprint_refuses_unselected_axes(
     arguments = {
         "cognitive_skills": ["Understand"],
         "difficulty_levels": ["Moderate"],
-        "categories": ["Long Answer"],
+        "categories": ["Short Answer Type (3 Marks)"],
         "question_type": "descriptive",
         "num_questions": 1,
     }
@@ -398,6 +430,7 @@ def test_question_kwargs_requires_recorded_marks_and_duration() -> None:
         "sheet_kind": "objective",
         "question_category": "Multiple Choice Question",
         "cognitive_skills": "Understand",
+        "question_source": "UpSchool DB",
         "level_of_difficulty": "Moderate",
         "marks": 1,
         "question_duration": 2,

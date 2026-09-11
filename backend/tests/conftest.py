@@ -141,13 +141,15 @@ def _recorded_legacy_assessment_level_authority(monkeypatch):
     def cell_provider(payload: dict) -> dict:
         cell = payload["blueprint_cell"]
         kind = cell["sheet_kind"]
+        fixed_marks = payload["approved_category_marks_contract"]["fixed_marks"]
+        marks = fixed_marks if fixed_marks is not None else {
+            "objective": 1.0,
+            "subjective": 3.0,
+            "descriptive": 5.0,
+        }[kind]
         return {
             "cell_id": cell["cell_id"],
-            "marks": {
-                "objective": 1.0,
-                "subjective": 3.0,
-                "descriptive": 5.0,
-            }[kind],
+            "marks": marks,
             "question_duration": {
                 "objective": 2.0,
                 "subjective": 5.0,
@@ -193,8 +195,8 @@ def _recorded_legacy_assessment_level_authority(monkeypatch):
                 "sheet_kind": kind,
                 "question_category": {
                     "objective": "Multiple Choice Question",
-                    "subjective": "Short Answer",
-                    "descriptive": "Long Answer",
+                    "subjective": "Short Answer Type (3 Marks)",
+                    "descriptive": "Long Answer Type (5 Marks)",
                 }[kind],
                 "cognitive_skills": "Understand",
                 "level_of_difficulty": "Moderate",

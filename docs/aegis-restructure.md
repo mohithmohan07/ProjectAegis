@@ -2692,3 +2692,34 @@ The affected offline tests and the normal full PR checks must pass before the
 CI repair is merged. This follow-up supersedes the earlier no-testing preference
 for this repair; no paid generation or production upload is needed to exercise
 these mocked provider and HTTP contracts.
+
+### Q45 — DECIDED — Closed CMS question categories, sources and cognitive skills
+
+**Owner instruction (11 September 2026):** “I want all these to be set as hard
+rules, while generating the output files. Don’t use anything apart from the
+given items.” The attached `CMS clean-up: Finalised Question Categories_ Sources_
+Cognitive Skills` supplies 26 question categories, 9 question sources and 6
+cognitive skills. The complete exact lists and cell provenance are recorded in
+[`cms-approved-question-vocabulary.md`](cms-approved-question-vocabulary.md).
+
+New generation freezes the closed vocabulary and carries it through existing
+API authoring, independent review, Fixer decisions, rendering and readback.
+Output values must use the supplied spelling verbatim; Q35's earlier aliases
+do not rename new decisions. Only the two source-cell trailing whitespace
+artifacts are removed when transcribing the registry. Any old format-rule
+spelling transport must be explicit and preserve the complete rule without
+reclassifying a question or inferring a mark-bearing category.
+
+Q41 response mechanisms and Q44 Grade 01 Pre scope still apply. Category and
+cognitive-skill selection remain API judgments. Exact membership and the marks
+explicitly stated in category labels are schema facts. Sources remain recorded
+provenance: generated questions use `UpSchool DB`; an unsupported publication
+must not be guessed into `NON - NCERT` or another permitted source.
+
+Apply the same checks to parent and child records and the actual output cells.
+Unresolved values remain visible in evidence and issues; normal question fields
+stay blank rather than carrying disallowed labels. Artifacts remain downloadable
+but do not pass publication with unresolved vocabulary errors, including under
+Fixer acceptance. Historical sealed policies and existing artifacts retain
+their recorded contract. No other field vocabulary, question wording, model
+route, review stage or upload boundary is changed by this decision.
