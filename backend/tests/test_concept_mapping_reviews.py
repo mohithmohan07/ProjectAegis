@@ -5529,7 +5529,7 @@ def test_repair_does_not_double_append_shared_normalized_inventory_prompts():
 def test_default_openai_model_is_gpt_54_mini():
     from aegis_pipeline.openai_policy import DEFAULT_OPENAI_MODEL
 
-    assert DEFAULT_OPENAI_MODEL == "gpt-5.4-mini"
+    assert DEFAULT_OPENAI_MODEL == "gpt-5.6-luna"
 
 
 def test_every_inventory_prompt_participates_in_coverage_however_short():

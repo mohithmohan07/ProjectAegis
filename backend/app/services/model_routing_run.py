@@ -119,6 +119,6 @@ def bind_job(job, *, require_pre: bool = False):
                     "This run requires " + " and ".join(missing)
                     + ". Configure the missing server credential before starting. "
                     + ("Its recorded v1 policy uses Gemini 3.8 Flash for Pre question authoring."
-                       if "gemini" in providers else "All stages in this run use OpenAI GPT-5.4 mini.")
+                       if "gemini" in providers else "All stages in this run use OpenAI " + profile["routes"]["default"]["model"] + ".")
                 )
         yield profile

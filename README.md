@@ -67,16 +67,16 @@ frontend/             React + Vite + TypeScript UI (the two modules + Database)
 
 ## Model workflow and cost logs
 
-New runs use `gpt-5.4-mini` for every stage: source and image reading, concept
+New runs use `gpt-5.6-luna` for every stage: source and image reading, concept
 writing, Pre/Post questions, independent reviews, refiners, metadata and the
 Fixer. Existing stage-specific reasoning efforts and contextual Pre coverage
 remain. The full model profile is recorded before the first request and carried
 into the sealed envelope; historical profiles retain their recorded routes and
-decisions. New runs never switch to Luna or Gemini for larger inputs.
+decisions. New runs retain Luna for larger inputs without switching providers.
 
 Production needs `OPENAI_API_KEY`, kept as a server secret. `GEMINI_API_KEY` is
 needed only for historical profiles that recorded Gemini. The UI shows the
-stage assignments and readiness. GPT-5.4 mini has a 400,000-token context and
+stage assignments and readiness. GPT-5.6 Luna has a 1,050,000-token context and
 128,000-token maximum output; existing lossless batching uses its capacity.
 Complete evidence is preserved, and provider context errors remain explicit.
 

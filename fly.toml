@@ -14,7 +14,7 @@ primary_region = 'ams'
   AEGIS_AUTH_MODE = 'google'
   AEGIS_DATA_DIR = '/data'
   AEGIS_DB_URL = 'sqlite:////data/aegis.db'
-  AEGIS_OPENAI_MODEL = 'gpt-5.4-mini'
+  AEGIS_OPENAI_MODEL = 'gpt-5.6-luna'
   AEGIS_PUBLIC_BASE_URL = 'https://projectaegis.fly.dev'
   # The rewritten Phase 3 is the only post-81% pipeline; the old
   # AEGIS_PHASE3_REWRITE migration flag is retired (legacy lane deleted).
@@ -30,7 +30,7 @@ primary_region = 'ams'
   AEGIS_PHASE3_DECISION_WORKERS = '16'
   AEGIS_SOURCE_CHUNK_WORKERS = '10'
   AEGIS_GPT_PDF_ACSD_PARALLEL_BATCHES = '3'
-  # Q46: new runs freeze GPT-5.4 mini for every author, reviewer and Fixer.
+  # Q50: new runs freeze GPT-5.6 Luna for every author, reviewer and Fixer.
   # Stage-specific reasoning effort remains in the recorded model profile.
   # OPENAI_API_KEY is a server secret; Gemini is only for historical replay.
   # This legacy effort setting preserves historical unprofiled runs.

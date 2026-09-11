@@ -60,7 +60,7 @@ def test_corrected_post_author_critic_and_master_use_mini_without_replacing_sour
         profile = model_provider.bound_profile()
         calls.append((kwargs["stage"], copy.deepcopy(profile)))
         assert profile == model_provider.new_profile()
-        assert {route["model"] for route in profile["routes"].values()} == {"gpt-5.4-mini"}
+        assert {route["model"] for route in profile["routes"].values()} == {"gpt-5.6-luna"}
         if kwargs["stage"] == "concept_review.critic":
             return {"verdict": "verified", "issues": []}
         return canonical._author_verdict()
@@ -98,7 +98,7 @@ def test_corrected_post_author_critic_and_master_use_mini_without_replacing_sour
         assert profile == model_provider.new_profile()
         assert bridge["metadata"][model_provider.PROFILE_KEY] == profile
         assert {route["provider"] for route in profile["routes"].values()} == {"openai"}
-        assert {route["model"] for route in profile["routes"].values()} == {"gpt-5.4-mini"}
+        assert {route["model"] for route in profile["routes"].values()} == {"gpt-5.6-luna"}
         raise MasterBoundaryReached
 
     monkeypatch.setattr(snapshot, "build", inspect_master)

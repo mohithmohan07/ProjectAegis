@@ -420,7 +420,7 @@ def test_multimodal_call_uses_source_adjudication_policy(monkeypatch):
     call = calls[-1]
     # The current frozen profile governs even if an old deployment setting
     # still names Luna. Source adjudication uses mini with complete evidence.
-    assert call["model"] == "gpt-5.4-mini"
+    assert call["model"] == "gpt-5.6-luna"
     # Default profile uniform-xhigh (register Q31).
     assert call["reasoning_effort"] == "xhigh"
     assert call["response_format"]["type"] == "json_schema"

@@ -32,7 +32,7 @@ def test_profile_is_frozen_by_copy_and_unknown_versions_refuse():
         original["routes"]["default"]["model"] = "changed"
         exposed = model_provider.bound_profile()
         exposed["routes"]["default"]["model"] = "also changed"
-        assert model_provider.active_model() == "gpt-5.4-mini"
+        assert model_provider.active_model() == "gpt-5.6-luna"
     with pytest.raises(ValueError, match="Unknown or altered"):
         with model_provider.bind_profile(original):
             pass
@@ -57,10 +57,10 @@ def test_recorded_v1_profile_remains_byte_compatible_with_its_serialized_contrac
     assert model_provider.validate_profile(recorded) == recorded
     with model_provider.bind_profile(recorded):
         assert model_provider.active_model() == "gpt-5.6-luna"
-    assert model_provider.active_model() == "gpt-5.4-mini"
+    assert model_provider.active_model() == "gpt-5.6-luna"
 
 
-@pytest.mark.parametrize("profile_name", ["new_profile", "legacy_profile"])
+@pytest.mark.parametrize("profile_name", ["new_profile", "mini_profile", "legacy_profile"])
 def test_unknown_versions_and_modified_efforts_cannot_change_frozen_profiles(profile_name):
     original = getattr(model_provider, profile_name)()
     altered = copy.deepcopy(original)
@@ -74,31 +74,31 @@ def test_unknown_versions_and_modified_efforts_cannot_change_frozen_profiles(pro
 
 
 @pytest.mark.parametrize("purpose,stage,provider,model,effort", [
-    ("pre_learning", "prequestions.author", "openai", "gpt-5.4-mini", "high"),
-    ("pre_learning", "prequestions.plan", "openai", "gpt-5.4-mini", "xhigh"),
-    ("concept_detailing", "", "openai", "gpt-5.4-mini", "xhigh"),
-    ("concept_mapping", "", "openai", "gpt-5.4-mini", "xhigh"),
-    ("semantic_resolution", "", "openai", "gpt-5.4-mini", "xhigh"),
-    ("assessment_generation", "", "openai", "gpt-5.4-mini", "xhigh"),
-    ("concept_validation", "", "openai", "gpt-5.4-mini", "high"),
-    ("concept_validation", "concepts.refine", "openai", "gpt-5.4-mini", "xhigh"),
-    ("concept_validation", "concepts.polish", "openai", "gpt-5.4-mini", "xhigh"),
-    ("advisory_critic", "", "openai", "gpt-5.4-mini", "medium"),
-    ("metadata", "", "openai", "gpt-5.4-mini", "low"),
+    ("pre_learning", "prequestions.author", "openai", "gpt-5.6-luna", "high"),
+    ("pre_learning", "prequestions.plan", "openai", "gpt-5.6-luna", "xhigh"),
+    ("concept_detailing", "", "openai", "gpt-5.6-luna", "xhigh"),
+    ("concept_mapping", "", "openai", "gpt-5.6-luna", "xhigh"),
+    ("semantic_resolution", "", "openai", "gpt-5.6-luna", "xhigh"),
+    ("assessment_generation", "", "openai", "gpt-5.6-luna", "xhigh"),
+    ("concept_validation", "", "openai", "gpt-5.6-luna", "high"),
+    ("concept_validation", "concepts.refine", "openai", "gpt-5.6-luna", "xhigh"),
+    ("concept_validation", "concepts.polish", "openai", "gpt-5.6-luna", "xhigh"),
+    ("advisory_critic", "", "openai", "gpt-5.6-luna", "medium"),
+    ("metadata", "", "openai", "gpt-5.6-luna", "low"),
 ])
-def test_all_current_stage_routes_use_mini_and_keep_their_effort(purpose, stage, provider, model, effort):
+def test_all_current_stage_routes_use_luna_and_keep_their_effort(purpose, stage, provider, model, effort):
     route = model_provider.resolve_route(purpose, stage=stage)
     assert (route.provider, route.model, route.reasoning_effort) == (provider, model, effort)
     assert route.request_policy(purpose) == {"model": model, "reasoning_effort": effort}
 
 
 @pytest.mark.parametrize("purpose", sorted(openai_policy.REASONING_EFFORT_BY_PURPOSE))
-def test_every_registered_purpose_uses_mini_despite_config_overrides(monkeypatch, purpose):
-    monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-5.6-luna")
-    monkeypatch.setenv(openai_policy.OPENAI_MODEL_ENV, "gpt-5.6-luna")
+def test_every_registered_purpose_uses_luna_despite_config_overrides(monkeypatch, purpose):
+    monkeypatch.setattr(config, "OPENAI_MODEL", "gpt-5.4-mini")
+    monkeypatch.setenv(openai_policy.OPENAI_MODEL_ENV, "gpt-5.4-mini")
     monkeypatch.setenv("AEGIS_GEMINI_MODEL", "gemini-3.8-flash")
     route = model_provider.resolve_route(purpose)
-    assert (route.provider, route.model) == ("openai", "gpt-5.4-mini")
+    assert (route.provider, route.model) == ("openai", "gpt-5.6-luna")
 
 
 def test_no_text_or_explicit_model_can_route_post_to_gemini():
@@ -110,14 +110,14 @@ def test_no_text_or_explicit_model_can_route_post_to_gemini():
         model_provider.resolve_route("assessment_generation", model="gemini-3.8-flash")
 
 
-def test_large_or_unbounded_visual_evidence_stays_on_mini_without_trimming():
+def test_large_or_unbounded_visual_evidence_stays_on_luna_without_trimming():
     full = "source evidence " * 30_000
     route = model_provider.resolve_route("advisory_critic", input_text=full)
-    assert route.model == "gpt-5.4-mini"
+    assert route.model == "gpt-5.6-luna"
     assert route.capacity_fallback == ""
     assert len(full) == len("source evidence ") * 30_000
     visual = model_provider.resolve_route("advisory_critic", image_count=1)
-    assert (visual.model, visual.capacity_fallback) == ("gpt-5.4-mini", "")
+    assert (visual.model, visual.capacity_fallback) == ("gpt-5.6-luna", "")
 
 
 def test_legacy_binding_restores_after_new_profile_and_keeps_old_effort():
@@ -128,7 +128,7 @@ def test_legacy_binding_restores_after_new_profile_and_keeps_old_effort():
         assert old.profile_version == ""
         with model_provider.bind_profile(model_provider.new_profile()):
             current = model_provider.resolve_route("pre_learning", stage="prequestions.author")
-            assert (current.provider, current.model, current.reasoning_effort) == ("openai", "gpt-5.4-mini", "high")
+            assert (current.provider, current.model, current.reasoning_effort) == ("openai", "gpt-5.6-luna", "high")
         assert model_provider.bound_profile() is None
         assert model_provider.resolve_route("pre_learning", stage="prequestions.author") == old
 
@@ -142,13 +142,13 @@ def test_global_selector_is_disabled_without_model_mutation():
     assert not (config.DATA_DIR / "model_provider.json").exists()
 
 
-def test_describe_shows_only_mini_routes_and_requires_only_openai(monkeypatch):
+def test_describe_shows_only_luna_routes_and_requires_only_openai(monkeypatch):
     assert model_provider.describe()["ready"] is True
     monkeypatch.delenv("GEMINI_API_KEY")
     description = model_provider.describe()
     assert description["ready"] is True
     assert description["provider"] == "openai"
-    assert {(row["provider"], row["model"]) for row in description["stages"]} == {("openai", "gpt-5.4-mini")}
+    assert {(row["provider"], row["model"]) for row in description["stages"]} == {("openai", "gpt-5.6-luna")}
     monkeypatch.delenv("OPENAI_API_KEY")
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
     missing = model_provider.describe()
@@ -185,7 +185,7 @@ def test_concurrent_calls_bind_distinct_provider_credentials_and_keep_full_input
         assert a.result() == b.result() == {"ok": True}
     indexed = {r["model"]: (c, r) for c, r in calls}
     gemini_client, gemini = indexed["gemini-3.8-flash"]
-    openai_client, mini = indexed["gpt-5.4-mini"]
+    openai_client, mini = indexed["gpt-5.6-luna"]
     assert gemini_client["base_url"] == model_provider.GEMINI_BASE_URL
     assert gemini_client["api_key"] == "test-gemini-key"
     assert "base_url" not in openai_client
@@ -207,10 +207,10 @@ def test_recorded_v1_and_new_threads_do_not_share_routing():
         old = pool.submit(route, model_provider.legacy_profile())
         new = pool.submit(route, model_provider.new_profile())
     assert (old.result().provider, old.result().model) == ("gemini", "gemini-3.8-flash")
-    assert (new.result().provider, new.result().model) == ("openai", "gpt-5.4-mini")
+    assert (new.result().provider, new.result().model) == ("openai", "gpt-5.6-luna")
 
 
-def test_current_mini_receives_complete_text_and_every_visual(monkeypatch):
+def test_current_luna_receives_complete_text_and_every_visual(monkeypatch):
     calls = _fake_clients(monkeypatch)
     complete = "source evidence " * 30_000
     images = ["https://example.test/source-one.png", "https://example.test/source-two.png"]
@@ -222,7 +222,7 @@ def test_current_mini_receives_complete_text_and_every_visual(monkeypatch):
     assert len(calls) == 1
     credentials, request = calls[0]
     assert "base_url" not in credentials
-    assert request["model"] == "gpt-5.4-mini"
+    assert request["model"] == "gpt-5.6-luna"
     assert request["reasoning_effort"] == "medium"
     assert request["messages"][-1]["content"] == [
         {"type": "text", "text": complete},
@@ -267,7 +267,7 @@ def test_pre_author_schema_rejects_incomplete_draft_before_returning(monkeypatch
     result = prequestions._live_author({"stage": "prequestions.author", "pre_concept": {"mastery": "Add two small numbers"}})
     assert result == complete
     assert len(calls) == 2
-    assert all(call["model"] == "gpt-5.4-mini" for call in calls)
+    assert all(call["model"] == "gpt-5.6-luna" for call in calls)
     assert all(call["response_format"]["type"] == "json_schema" for call in calls)
     schema = calls[0]["response_format"]["json_schema"]
     assert schema["name"] == "aegis_pre_question_author_v1"
@@ -281,7 +281,7 @@ def test_pre_author_schema_rejects_incomplete_draft_before_returning(monkeypatch
     ('{"questions":[{"question_id":"PRQ-0001"}]}', "stop", None),
 ])
 @pytest.mark.parametrize("profile_name,expected_model", [
-    ("new_profile", "gpt-5.4-mini"),
+    ("new_profile", "gpt-5.6-luna"),
     ("legacy_profile", "gemini-3.8-flash"),
 ])
 def test_bad_or_blocked_reply_never_returns_silent_content_or_switches_provider(monkeypatch, content, finish, refusal, profile_name, expected_model):
@@ -331,18 +331,18 @@ def test_source_caches_separate_new_routes_and_keep_legacy_identity(monkeypatch)
         assert phase34._cache_key(**kwargs34) == old34
 
 
-@pytest.mark.parametrize("model", ["gpt-5.6-luna", "gemini-3.8-flash", "gemini-3.6-flash", "custom-model"])
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "gemini-3.8-flash", "gemini-3.6-flash", "custom-model"])
 @pytest.mark.parametrize("purpose,stage", [
     ("concept_detailing", ""), ("advisory_critic", ""), ("pre_learning", "prequestions.author"),
 ])
-def test_current_explicit_non_mini_models_are_rejected(model, purpose, stage):
+def test_current_explicit_non_luna_models_are_rejected(model, purpose, stage):
     with pytest.raises(ValueError, match="frozen routing profile"):
         model_provider.resolve_route(purpose, stage=stage, model=model)
 
 
-def test_explicit_mini_keeps_the_current_stage_effort():
-    review = model_provider.resolve_route("advisory_critic", model="gpt-5.4-mini")
-    assert (review.model, review.reasoning_effort) == ("gpt-5.4-mini", "medium")
+def test_explicit_luna_keeps_the_current_stage_effort():
+    review = model_provider.resolve_route("advisory_critic", model="gpt-5.6-luna")
+    assert (review.model, review.reasoning_effort) == ("gpt-5.6-luna", "medium")
 
 
 def test_recorded_v1_preserves_model_override_and_luna_capacity_contract():
@@ -365,3 +365,15 @@ def _assert_recorded_v1_model_overrides():
         model_provider.resolve_route("pre_learning", stage="prequestions.author", model="gpt-5.6-luna")
     with pytest.raises(ValueError, match="outside this run's frozen routing profile"):
         model_provider.resolve_route("pre_learning", stage="prequestions.author", model="gemini-3.6-flash")
+
+
+def test_recorded_v2_retains_its_routes_and_is_separate_from_luna():
+    profile = model_provider.mini_profile()
+    assert profile["version"] == "owner-stage-model-routing-2026-09-11-v2"
+    assert profile["capacity_policy"] == "complete-input-mini-only-provider-limit-v2"
+    assert {route["model"] for route in profile["routes"].values()} == {"gpt-5.4-mini"}
+    with model_provider.bind_profile(profile):
+        assert model_provider.resolve_route("advisory_critic").model == "gpt-5.4-mini"
+        with pytest.raises(ValueError, match="frozen routing profile"):
+            model_provider.resolve_route("advisory_critic", model="gpt-5.6-luna")
+    assert model_provider.resolve_route("advisory_critic").model == "gpt-5.6-luna"

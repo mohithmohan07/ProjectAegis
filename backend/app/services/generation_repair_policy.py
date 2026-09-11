@@ -52,7 +52,7 @@ def run_fields() -> dict[str, str]:
     if value is _UNBOUND:
         from . import model_provider
         profile = model_provider.bound_profile()
-        value = VERSION if profile and profile.get("version") == model_provider.PROFILE_VERSION else None
+        value = VERSION if profile and profile.get("version") in {model_provider.PROFILE_VERSION, model_provider.MINI_PROFILE_VERSION} else None
     return {KEY: VERSION} if value == VERSION else {}
 
 
