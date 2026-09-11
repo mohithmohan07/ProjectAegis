@@ -540,8 +540,9 @@ def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
         identity["model_routing_policy"] = copy.deepcopy(
             metadata["model_routing_policy"]
         )
-    from . import generation_quality_policy
+    from . import generation_quality_policy, generation_repair_policy
     identity.update(generation_quality_policy.fields(metadata))
+    identity.update(generation_repair_policy.fields(metadata))
     return _sha256_json(identity)
 
 

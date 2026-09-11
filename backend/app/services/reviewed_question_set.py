@@ -382,6 +382,8 @@ def reconcile_post_review(
         route_rows = []
     selected: list[dict[str, Any]] = []
     selected_ids: set[str] = set()
+    represented_sources: set[str] = set()
+    grouped_sources: list[dict[str, Any]] = []
     added: list[str] = []
     edited: list[dict[str, Any]] = []
     moved: list[dict[str, Any]] = []
@@ -403,6 +405,7 @@ def reconcile_post_review(
                 "case_id", "case_definition", "owner_topic_ids", "qids",
                 "example_qid", "example_prompt", "example_number",
                 "is_activity", "audit_status", "error",
+                "source_qids", "source_dependency_reviews",
             )
             if key in row
         }
@@ -411,6 +414,16 @@ def reconcile_post_review(
         qids = _list(row.get("qids"))
         qid = _text(row.get("example_qid") or row.get("qid") or row.get("source_qid"))
         if kind in {"example", "reviewer_added"}:
+            from .concept_review_context import source_group_ids, apply_source_group
+            members = source_group_ids(dict(row, source_qid=qid)) if (
+                "source_qids" in row or kind == "example"
+            ) else []
+            if len(members) != len(set(members)) or any(member in represented_sources for member in members):
+                raise ReviewedQuestionSetError("a source question belongs to more than one accepted question")
+            if any(member not in original_by_id for member in members):
+                raise ReviewedQuestionSetError("a reviewed source group names an unknown source question")
+            if "source_qids" in row and ((qid and (not members or members[0] != qid)) or (not qid and members)):
+                raise ReviewedQuestionSetError("the accepted source group must start with its primary question ID")
             # An ordinary Example without an identity is ambiguous.  The
             # canonical Concept Details parser may leave an unresolved
             # Example blank, but the author/critic adapter must explicitly
@@ -445,6 +458,15 @@ def reconcile_post_review(
                 "learner_context", "generation_quality_policy",
             )}
             _copy_reviewed_wording(item, prompt)
+            apply_source_group(item, row, original_by_id)
+            represented_sources.update(members)
+            if len(members) > 1:
+                grouped_sources.append({
+                    "identity": qid,
+                    "source_qids": copy.deepcopy(members),
+                    "source_dependency_reviews": copy.deepcopy(row.get("source_dependency_reviews") or []),
+                    "source_evidence": [copy.deepcopy(original_by_id[member]) for member in members],
+                })
             after = {field: copy.deepcopy(item.get(field)) for field in before}
             if before != after:
                 edited.append({"identity": qid, "before": before, "after": after})
@@ -508,7 +530,7 @@ def reconcile_post_review(
         elif kind == "case":
             route["qids"] = list(dict.fromkeys(by_case.get((type_id, case_id), [])))
 
-    omitted = [qid for qid in original_by_id if qid not in selected_ids]
+    omitted = [qid for qid in original_by_id if qid not in selected_ids | represented_sources]
     stamp = now or datetime.now(timezone.utc).isoformat()
     audit = {
         "version": "reviewed-types-cases-1",
@@ -518,6 +540,7 @@ def reconcile_post_review(
         "added": added,
         "moved": moved,
         "edited": edited,
+        **({"grouped": grouped_sources} if grouped_sources else {}),
         "reviewed_at": stamp,
     }
     inventory["items"] = selected

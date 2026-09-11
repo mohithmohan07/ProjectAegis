@@ -203,6 +203,7 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     "_aegis_structure_original",
     "_aegis_polish_repairs",
     "_aegis_concept_coherence",
+    "_aegis_reviewed_pre_scope",
     # The Phase 03 Pre-Learning map's row-private records (doc §4,
     # phase3/premap.py): the captured prerequisites a pre-concept teaches,
     # and its explicit needed-for links to the Post concepts that require
@@ -3622,7 +3623,7 @@ def _refine_pre_records(
     stages the UNREFINED rows with an availability flag.
     """
 
-    from . import release_refiner, prelearning_foundation_policy, generation_quality_policy
+    from . import release_refiner, prelearning_foundation_policy, generation_quality_policy, generation_repair_policy
 
     records = [
         copy.deepcopy(dict(row))
@@ -3645,6 +3646,7 @@ def _refine_pre_records(
         metadata = {
             **prelearning_foundation_policy.fields({"metadata": pre_map}),
             **generation_quality_policy.fields(pre_map),
+            **generation_repair_policy.fields(pre_map),
             "board": chapter.board if chapter else "",
             "grade": chapter.grade if chapter else "",
             "subject": chapter.subject if chapter else "",
@@ -4428,7 +4430,7 @@ def stage_pre_release(
     if pre_map is None:
         return None
     source = copy.deepcopy(dict(pre_map))
-    from . import prelearning_foundation_policy, generation_quality_policy
+    from . import prelearning_foundation_policy, generation_quality_policy, generation_repair_policy, model_provider
 
     foundation_fields = prelearning_foundation_policy.fields({"metadata": source})
     questions_source = copy.deepcopy(dict(pre_questions or {}))
@@ -4560,6 +4562,9 @@ def stage_pre_release(
         "learning_kind": LANE_PRE,
         **foundation_fields,
         **generation_quality_policy.fields(source),
+        **generation_repair_policy.fields(source),
+        **({model_provider.PROFILE_KEY: model_provider.validate_profile(source[model_provider.PROFILE_KEY])}
+           if generation_repair_policy.active(source) and source.get(model_provider.PROFILE_KEY) is not None else {}),
         "source_book": job.source_book,
         "filename": job.filename,
         "source_document_hash": source_document_hash,

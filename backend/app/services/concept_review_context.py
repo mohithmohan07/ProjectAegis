@@ -9,11 +9,13 @@ judges relevance by text similarity or manufactures a learner task.
 from __future__ import annotations
 
 import copy
+from collections import Counter
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 
 
 class ContextSource(BaseModel):
@@ -46,6 +48,124 @@ DEPENDENCY_FIELDS = {
     "content_objects": ("content_objects",),
     "subquestions": ("compound_subparts", "sub_questions"),
 }
+
+
+def source_group_ids(row: Mapping[str, Any]) -> list[str]:
+    """Read an explicit accepted grouping; never infer one from the wording."""
+    if "source_qids" in row:
+        return list(row["source_qids"])
+    qid = str(row.get("source_qid") or "")
+    return [qid] if qid else []
+
+
+def _remove_dependency(support: dict, dependency: str) -> None:
+    for field in DEPENDENCY_FIELDS[dependency]:
+        support.pop(field, None)
+    # A previously corrected group can itself be retained or regrouped in a
+    # later explicit revision. Apply its new decision to all active aliases;
+    # predecessor receipts retain the unmodified source evidence.
+    for member in support.get("reviewed_source_dependencies") or []:
+        if isinstance(member, dict):
+            _remove_dependency(member, dependency)
+    if isinstance(support.get("source_context"), dict):
+        _remove_dependency(support["source_context"], dependency)
+
+
+def validate_source_group(question: Mapping[str, Any], originals: Mapping[str, dict]) -> list[str]:
+    members = source_group_ids(question)
+    primary = question["source_qid"]
+    defects: list[str] = []
+    if (not primary and members) or (primary and (not members or members[0] != primary)):
+        defects.append("source_qids must start with source_qid; added questions have no source group")
+    if any(not member or member not in originals for member in members):
+        defects.append("source group cites an unknown source question")
+    if len(members) != len(set(members)):
+        defects.append("source group repeats a source question")
+    decisions = question["source_dependency_reviews"]
+    if Counter(item["source_qid"] for item in decisions) != Counter(members):
+        defects.append("every grouped source needs exactly one dependency decision")
+    for decision in decisions:
+        if not decision["rationale"].strip():
+            defects.append("source dependency decision needs an explicit rationale")
+        removed = decision["removed_dependencies"]
+        if len(removed) != len(set(removed)):
+            defects.append("a grouped source dependency was removed more than once")
+    if question["context_review"]["action"] == "inherit" and all(member in originals for member in members):
+        contexts = [inherited_context(originals[member]) for member in members]
+        if contexts and any(context != contexts[0] for context in contexts[1:]):
+            defects.append("grouped inheritance needs identical contexts; explicitly replace or remove instead")
+    return defects
+
+
+def apply_source_group(current: dict, row: Mapping[str, Any], originals: Mapping[str, dict]) -> None:
+    """Project the API's source group without manufacturing a combined task.
+
+    Only declared dependencies enter the active task. Full originals are kept
+    separately in the review audit, so their raw excerpts cannot become context.
+    Answers/options remain source-addressed rather than being combined into an
+    invalid whole-question answer or an invented choice set.
+    """
+    if "source_qids" not in row:
+        return
+    members = source_group_ids(row)
+    decisions = {item["source_qid"]: item for item in row.get("source_dependency_reviews") or []}
+    current.update(repair.fields(row))
+    current["reviewed_source_qids"] = copy.deepcopy(members)
+    current["source_dependency_reviews"] = copy.deepcopy(row.get("source_dependency_reviews") or [])
+    if not members:
+        return
+    dependencies = []
+    all_fields = tuple(dict.fromkeys(field for fields in DEPENDENCY_FIELDS.values() for field in fields)) + (
+        "reviewed_source_dependencies",
+    )
+    for member in members:
+        original = originals[member]
+        nested = original.get("source_context")
+        nested_support = {field: copy.deepcopy(nested[field]) for field in all_fields if field in nested} if isinstance(nested, Mapping) else {}
+        support = copy.deepcopy(nested_support)
+        for field in all_fields:
+            if field in original and (field not in support or original[field] not in (None, "", [])):
+                support[field] = copy.deepcopy(original[field])
+        conflicts = {field: value for field, value in nested_support.items() if support.get(field) != value}
+        if conflicts:
+            support["source_context"] = conflicts
+        removed = decisions.get(member, {}).get("removed_dependencies") or []
+        for dependency in removed:
+            _remove_dependency(support, dependency)
+        dependencies.append({"source_qid": member, **support})
+    # The accepted global replacement/removal is applied later by the existing
+    # support-decision projection. Single-source reviews retain its old shape.
+    if len(members) == 1:
+        for dependency in decisions.get(members[0], {}).get("removed_dependencies") or []:
+            _remove_dependency(current, dependency)
+            if isinstance(current.get("source_context"), dict):
+                _remove_dependency(current["source_context"], dependency)
+        return
+    context = copy.deepcopy(dict(current.get("source_context") or {}))
+    for field in all_fields:
+        current.pop(field, None)
+        context.pop(field, None)
+    for dependency in ("media", "tables", "content_objects", "subquestions"):
+        for field in DEPENDENCY_FIELDS[dependency]:
+            values = [support[field] for support in dependencies if field in support]
+            if not values:
+                continue
+            if all(isinstance(value, list) for value in values):
+                combined = []
+                for value in values:
+                    for item in value:
+                        if item not in combined:
+                            combined.append(copy.deepcopy(item))
+                current[field] = combined
+            elif all(isinstance(value, bool) for value in values):
+                current[field] = any(values)
+            elif all(value == values[0] for value in values):
+                current[field] = copy.deepcopy(values[0])
+            # Incompatible structured aliases remain source-addressed below;
+            # no local conversion guesses their semantics or overwrites one.
+    context["reviewed_source_qids"] = copy.deepcopy(members)
+    context["reviewed_source_dependencies"] = dependencies
+    current["source_context"] = context
 
 
 def validate_context(question: Mapping[str, Any], rows: list[dict],
@@ -138,9 +258,8 @@ def apply_support_decisions(current: dict, row: Mapping[str, Any]) -> None:
     if not current.get("options") and "options" in context:
         current["options"] = copy.deepcopy(context["options"])
     for dependency in row.get("removed_dependencies") or []:
-        for field in DEPENDENCY_FIELDS[dependency]:
-            current.pop(field, None)
-            context.pop(field, None)
+        _remove_dependency(current, dependency)
+        _remove_dependency(context, dependency)
     if decision["action"] == "remove":
         current["requires_context"] = False
     elif current["shared_context"]:

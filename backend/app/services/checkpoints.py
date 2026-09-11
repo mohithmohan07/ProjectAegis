@@ -19,6 +19,7 @@ from . import (
     autonomous_resolution,
     generation,
     generation_quality_policy,
+    generation_repair_policy,
     grounding_certificate,
     model_provider,
     model_routing_run,
@@ -87,7 +88,8 @@ _PAYLOAD_KEYS = {
     "openai_usage", "generation_log",
 }
 _OPTIONAL_PAYLOAD_KEYS = {
-    model_provider.PROFILE_KEY, generation_quality_policy.KEY, "run_state",
+    model_provider.PROFILE_KEY, generation_quality_policy.KEY,
+    generation_repair_policy.KEY, "run_state",
 }
 _JOB_KEYS = {
     "module", "upload_type", "learning_kind", "source_book", "filename",
@@ -1726,6 +1728,11 @@ def _validate_payload(payload: Any) -> tuple[dict, str, str]:
         and payload[generation_quality_policy.KEY] != generation_quality_policy.VERSION
     ):
         raise ValueError("Unknown saved generation quality policy")
+    if (
+        generation_repair_policy.KEY in payload
+        and payload[generation_repair_policy.KEY] != generation_repair_policy.VERSION
+    ):
+        raise ValueError("Unknown saved generation repair policy")
     job, kind_and_text = payload["job"], _validate_job(
         payload["job"], "payload.job")
     kind, mmd_text = kind_and_text
@@ -1765,6 +1772,8 @@ def _portable_payload(job: models.UploadJob) -> dict:
         # policy. Absence stays explicit historical behavior after restore.
         **({generation_quality_policy.KEY: routing_record[generation_quality_policy.KEY]}
            if generation_quality_policy.KEY in routing_record else {}),
+        **({generation_repair_policy.KEY: routing_record[generation_repair_policy.KEY]}
+           if generation_repair_policy.KEY in routing_record else {}),
         "job": {
             "module": job.module,
             "upload_type": job.upload_type,
@@ -1999,6 +2008,7 @@ def import_bundle(
         model_routing_run.save_profile_for_job(
             imported, payload.get(model_provider.PROFILE_KEY),
             quality_version=payload.get(generation_quality_policy.KEY),
+            repair_version=payload.get(generation_repair_policy.KEY),
         )
         routing_record_path = model_routing_run._record_path(imported)
         db.commit()

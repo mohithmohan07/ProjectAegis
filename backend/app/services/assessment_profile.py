@@ -893,8 +893,9 @@ def resolve_for_metadata(
     """Resolve one run profile and apply only conclusive metadata overrides."""
 
     resolved = resolve(profile)
-    from . import generation_quality_policy
+    from . import generation_quality_policy, generation_repair_policy
     resolved.update(generation_quality_policy.fields(metadata))
+    resolved.update(generation_repair_policy.fields(metadata))
     was_resolved = "_resolved_metadata" in resolved
     # A resolved profile is persisted with its selector metadata and can pass
     # through this boundary again during release/build orchestration.  Start

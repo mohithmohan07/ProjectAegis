@@ -26,6 +26,7 @@ from . import assessment_response_policy as response_policy
 from . import column_spec
 from . import source_task_polishing_policy as source_format
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 from .response_schemas import advisory_critic_schema
 from . import assessment_visual_evidence as visual_evidence
 from . import assessment_release as rel
@@ -398,9 +399,14 @@ def _foundation_fields(env: Mapping[str, Any]) -> dict[str, Any]:
 def _foundation_instruction(payload: Mapping[str, Any]) -> str:
     """Return the active foundation instruction, or nothing historically."""
 
-    from . import prelearning_foundation_policy
+    from . import prelearning_foundation_policy, prelearning_capture_policy
+    from . import generation_repair_policy as repair
 
-    return prelearning_foundation_policy.instruction(payload)
+    return (
+        prelearning_foundation_policy.instruction(payload)
+        + prelearning_capture_policy.assessment_instruction(payload)
+        + repair.grouped_source_instruction(payload)
+    )
 SOURCE_FORMAT_CRITIC_SYSTEM = (
     MATERIALIZE_CRITIC_SYSTEM.partition("for a source-owned Master item")[0]
     + source_format.REVIEW_RULES
@@ -992,6 +998,8 @@ def _assemble(
 
     return {
         "candidate_id": candidate_id,
+        **repair.fields(atom),
+        **repair.fields(cell),
         "source_atom_ids": (
             [str(atom.get("source_qid"))]
             if atom and atom.get("source_qid") else []
@@ -1171,6 +1179,9 @@ def _decision_payload(
     # ``critic_rules`` did not exist on historical materialization payloads;
     # add it only for the versioned foundation lane so old payloads remain
     # byte-for-byte compatible while both model passes receive the policy.
+    context_members = context.get("source_atoms") or [] if isinstance(context, Mapping) else []
+    for source in (meta, atom, cell, context, *context_members):
+        payload.update(repair.fields(source))
     foundation_suffix = _foundation_instruction(payload)
     if context_rules:
         payload["critic_rules"] = critic_rules
@@ -1248,6 +1259,7 @@ def _materialize_prepared(
         decision["response"], atom, cell,
         candidate_id=candidate_id, decision=decision,
     )
+    result.update(repair.fields(payload))
     flags = visual_evidence.review_flags(payload)
     if column_spec.from_metadata(meta).get("multipart_parent_projection") == "ordered_child_union":
         criterion_count = sum(len(part.get("keywords") or []) for part in result["sub_questions"])

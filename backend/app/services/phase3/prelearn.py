@@ -82,6 +82,7 @@ from .. import progress
 from .. import prelearning_capture_policy as capture_policy
 from .. import prelearning_foundation_policy as foundation_policy
 from .. import generation_quality_policy as quality
+from .. import generation_repair_policy as repair
 from . import evidence as visual_evidence
 
 POLICY_VERSION = "prelearn-1"
@@ -786,7 +787,7 @@ def capture_stage(
         "rules": _capture_rules(stage, rules_suffix),
         "evidence": evidence,
     }
-    if foundation_policy.fields(env):
+    if foundation_policy.fields(env) or repair.active(env):
         # Fresh foundation policy decisions must receive the same grade
         # calibration that the empty-capture audit already receives.
         payload["chapter"] = _chapter_calibration(env)
@@ -795,6 +796,7 @@ def capture_stage(
         payload["rules"] += " " + capture_policy.CAPTURE_INSTRUCTION
     if quality.active(env):
         payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
+    payload["rules"] += capture_policy.repair_instruction(payload)
     decide = visual_evidence.decide_with_visual_evidence if enhanced else kernel.decide
     decision = decide(
         kind="prelearn.capture",
@@ -808,7 +810,8 @@ def capture_stage(
         policy_version=POLICY_VERSION
         + (";" + capture_policy.VERSION if enhanced else "")
         + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
-        + (";" + quality.VERSION if quality.active(env) else ""),
+        + (";" + quality.VERSION if quality.active(env) else "")
+        + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )
     items: list[dict[str, Any]] = []
@@ -945,10 +948,11 @@ def merge(
         "rules": _merge_rules(rules_suffix),
         "captures": capture_rows,
     }
-    if foundation_policy.fields(env):
+    if foundation_policy.fields(env) or repair.active(env):
         payload["chapter"] = _chapter_calibration(env)
     if quality.active(env):
         payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
+    payload["rules"] += capture_policy.repair_instruction(payload)
     if enhanced:
         payload["capture_policy"] = capture_policy.VERSION
         payload["prior_review_flags"] = copy.deepcopy(decision_flags)
@@ -974,7 +978,8 @@ def merge(
         policy_version=POLICY_VERSION
         + (";" + capture_policy.VERSION if enhanced else "")
         + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
-        + (";" + quality.VERSION if quality.active(env) else ""),
+        + (";" + quality.VERSION if quality.active(env) else "")
+        + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )
     by_ref = {row["capture_ref"]: row for row in capture_rows}

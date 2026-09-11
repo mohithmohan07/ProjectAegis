@@ -29,6 +29,7 @@ from . import assessment_profile
 from . import assessment_response_policy as response_policy
 from . import column_spec
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 from . import source_task_polishing_policy as source_format
 from .response_schemas import item_review_schema
 from . import assessment_visual_evidence as visual_evidence
@@ -124,9 +125,14 @@ def _foundation_fields(env: Mapping[str, Any]) -> dict[str, Any]:
 def _foundation_instruction(payload: Mapping[str, Any]) -> str:
     """Return the active foundation instruction, or nothing historically."""
 
-    from . import prelearning_foundation_policy
+    from . import prelearning_foundation_policy, prelearning_capture_policy
+    from . import generation_repair_policy as repair
 
-    return prelearning_foundation_policy.instruction(payload)
+    return (
+        prelearning_foundation_policy.instruction(payload)
+        + prelearning_capture_policy.assessment_instruction(payload)
+        + repair.grouped_source_instruction(payload)
+    )
 
 
 def _quality_fields(*values: Mapping[str, Any] | None) -> dict[str, str]:
@@ -236,6 +242,8 @@ def _payload(
         "answer_contract_availability": "recorded" if not missing_contract_fields else "missing",
         "answer_contract_missing_fields": missing_contract_fields,
     }
+    for source in (meta, candidate, cell, atom):
+        payload.update(repair.fields(source))
     payload["rules"] += _foundation_instruction(payload)
     payload.update(_quality_fields(meta, candidate, cell, atom))
     if quality.is_current(payload):

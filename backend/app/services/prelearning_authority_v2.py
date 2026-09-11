@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from . import prelearning_capture_policy as policy
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 from .response_schemas import ResponseSchema
 
 
@@ -278,6 +279,10 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
         fixer = fixer or fixer_mod.live_fixer
     lookup = legacy._capture_lookup(merged)
     refined = quality.active(env)
+    policy_version = (
+        VERSION + (";" + quality.VERSION if refined else "")
+        + (";" + repair.VERSION if repair.active(env) else "")
+    )
     evidence_index, demands = _evidence(merged, complete_demands=refined)
     concerns = []
     for origin, flags in (merged.get("stage_flags") or {}).items():
@@ -300,12 +305,13 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
         envelope_sha256=str(env.get("envelope_sha256") or ""), payload=payload,
         provider=provider, critic=critic, checker=checker(payload),
         store=store or kernel.DecisionStore(), fixer=fixer,
-        policy_version=VERSION + (";" + quality.VERSION if refined else ""),
+        policy_version=policy_version,
     )
     response = decision["response"]
     atoms = {row["atom_id"]: row for row in response["atoms"]}
     flags = list(decision.get("review_flags") or [])
     result = copy.deepcopy(dict(merged))
+    result.update(repair.fields(env))
     source_blocks = {
         str(row.get("block_id") or "")
         for row in (env.get("canonical") or {}).get("blocks") or []
@@ -339,7 +345,7 @@ def adjudicate(env, merged, *, provider=None, critic=None, store=None, fixer=Non
         for row in result["prerequisites"]
     }
     result["adjudication"] = {
-        "policy_version": VERSION + (";" + quality.VERSION if refined else ""),
+        "policy_version": policy_version,
         "decision_key": decision["key"],
         "capture_count": len(lookup), "atom_count": len(atoms),
         "prerequisite_count": len(result["prerequisites"]),

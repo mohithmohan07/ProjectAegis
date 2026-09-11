@@ -10,14 +10,17 @@ import copy
 import hashlib
 import json
 from collections import Counter
+from contextlib import nullcontext
 from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
 from .concept_review_context import ContextReview, RemovedDependency
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 
 POLICY = "concept-question-review-2026-09-10-v4"
+GROUP_POLICY = "concept-question-review-2026-09-11-v5"
 
 AUTHOR = """Read the complete edited Concept workbook rows and the original
 accepted question bank. The reviewer edits the SAME Concept Excel, chiefly
@@ -155,6 +158,42 @@ or copy question-only setup into Concept Description. The critic applies
 these same rules using the complete raw evidence and the resolved context.
 """
 
+GROUP_REPAIR = """\
+The reviewer may combine source fragments that belong to ONE dependent multipart
+question. For each accepted question return ordered source_qids: every prior
+question absorbed by this exact edited question, including its source_qid first.
+Keep source_qid as that group's accepted identity. For a single retained source
+use [source_qid]; for a genuinely new human question use source_qid="" and [].
+Each original QID belongs to at most one accepted question or is explicitly
+omitted. An absorbed source is edited, retained or moved, never omitted merely
+because its demands now belong to a combined question. Preserve the edited quote
+as ONE question with its complete dependent children. Do not concatenate source
+questions yourself, split the edited multipart quote, infer groups by numbering,
+or merge independent tasks merely because their topic or Type is similar.
+The edited group has ONE reviewed Concept/Type/Case placement; old routes remain
+provenance and do not force unrelated Types into the new accepted group.
+
+In source_dependency_reviews return one record for every source_qid in source_qids,
+including single-source questions: source_qid, removed_dependencies and rationale.
+An empty removed_dependencies list explicitly preserves that member's options,
+answer evidence, media, complete tables, content objects and dependent children.
+Only explicitly remove a member's dependency when the human edit has made it
+obsolete; explain why. Secondary members' dependencies are as important as the
+primary's. Grouped options and answers remain addressed to their own source,
+not an invented overall option set or answer. The original complete sources
+remain immutable audit evidence. Do not create new questions from this evidence.
+
+Assess context against the exact revised question, even if the original source
+is historical or has a very large excerpt. When the reviewer has reworded an
+in-text question to stand alone, choose remove for redundant chapter exposition.
+Do not inherit a removed paragraph just because the source QID was retained.
+For a merged question, inherit is allowed only when every member's accepted
+context is exactly the same; otherwise choose a single minimum sufficient
+replace context with cited sources, or remove. Preserve an essential tested
+passage, all required givens, tables and figures; length alone is not a reason
+to remove them. The critic must check the complete group and these decisions.
+"""
+
 
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -188,6 +227,17 @@ class OriginalDisposition(_Strict):
     rationale: str
 
 
+class SourceDependencyReview(_Strict):
+    source_qid: str
+    removed_dependencies: list[RemovedDependency]
+    rationale: str
+
+
+class GroupedReviewedQuestion(ReviewedQuestion):
+    source_qids: list[str]
+    source_dependency_reviews: list[SourceDependencyReview]
+
+
 class RowDisposition(_Strict):
     concept_row: int
     rationale: str
@@ -197,6 +247,10 @@ class ReviewVerdict(_Strict):
     questions: list[ReviewedQuestion]
     original_dispositions: list[OriginalDisposition]
     row_dispositions: list[RowDisposition]
+
+
+class GroupedReviewVerdict(ReviewVerdict):
+    questions: list[GroupedReviewedQuestion]
 
 
 class ReviewCritic(_Strict):
@@ -220,19 +274,27 @@ class QuestionReviewRequestError(RuntimeError):
 
 
 def _call(system: str, payload: dict, *, critic: bool = False) -> dict:
-    from . import generation
+    from . import generation, model_provider
     from .response_schemas import ResponseSchema
     try:
-        return generation._openai_json(
-            system,
-            json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
-            response_schema=ResponseSchema(
-                "concept_question_review_critic_v4" if critic else "concept_question_review_author_v4",
-                ReviewCritic if critic else ReviewVerdict,
-            ),
-            purpose="advisory_critic" if critic else "source_extraction",
-            stage="concept_review.critic" if critic else "concept_review.author",
-        )
+        grouped = repair.active(payload)
+        # A v5 correction is newly requested work, even when its immutable
+        # source upload has a historical routing profile. Bind this revision's
+        # mini policy without replacing that source's saved model record.
+        binding = model_provider.bind_profile(model_provider.new_profile()) if grouped else nullcontext()
+        with binding:
+            return generation._openai_json(
+                system,
+                json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str),
+                response_schema=ResponseSchema(
+                    ("concept_question_review_critic_v5" if critic else "concept_question_review_author_v5")
+                    if grouped else
+                    ("concept_question_review_critic_v4" if critic else "concept_question_review_author_v4"),
+                    ReviewCritic if critic else (GroupedReviewVerdict if grouped else ReviewVerdict),
+                ),
+                purpose="advisory_critic" if critic else "source_extraction",
+                stage="concept_review.critic" if critic else "concept_review.author",
+            )
     except RuntimeError as exc:
         raise QuestionReviewRequestError(str(exc)) from exc
 
@@ -242,10 +304,10 @@ def _qid(row: Mapping[str, Any]) -> str:
 
 
 def _validate(verdict: dict, rows: list[dict], originals: list[dict],
-              original_routes: list[dict] | None = None) -> list[str]:
+              original_routes: list[dict] | None = None, *, grouped: bool = False) -> list[str]:
     """Only exact IDs, closed-world accounting and quoted evidence checks."""
     try:
-        ReviewVerdict.model_validate(verdict, strict=True)
+        (GroupedReviewVerdict if grouped else ReviewVerdict).model_validate(verdict, strict=True)
     except Exception as exc:
         return [f"invalid review schema: {exc}"]
     defects: list[str] = []
@@ -303,10 +365,14 @@ def _validate(verdict: dict, rows: list[dict], originals: list[dict],
                 if question[field] and question[field] not in route_ids[field]:
                     defects.append(f"unknown original {field} {question[field]}; new definitions require an empty ID")
         source_qid = question["source_qid"]
-        if source_qid:
-            accepted_ids.append(source_qid)
-            if source_qid not in originals_by_id:
-                defects.append(f"unknown source question {source_qid}")
+        source_qids = question["source_qids"] if grouped else ([source_qid] if source_qid else [])
+        if grouped:
+            from .concept_review_context import validate_source_group
+            defects.extend(validate_source_group(question, originals_by_id))
+        accepted_ids.extend(source_qids)
+        for member in source_qids:
+            if member not in originals_by_id:
+                defects.append(f"unknown source question {member}")
     if len(accepted_ids) != len(set(accepted_ids)):
         defects.append("a source question was accepted more than once")
     kept = {item["source_qid"] for item in dispositions if item["disposition"] != "omitted"}
@@ -383,7 +449,8 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
         raise ReviewedQuestionSetError("original reviewed bank has missing or duplicate question IDs")
     rows = [copy.deepcopy(dict(row)) for row in concept_rows]
     evidence = {
-        "policy": POLICY,
+        "policy": GROUP_POLICY if repair.active(payload) else POLICY,
+        **repair.fields(payload),
         **quality.fields(payload),
         **quality.fields(payload.get("chapter_meta")),
         "edited_concepts": [],
@@ -399,20 +466,23 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
     fingerprint = hashlib.sha256(json.dumps(evidence, sort_keys=True, ensure_ascii=False,
                                              default=str).encode()).hexdigest()
     attempts = []
+    grouped = repair.active(evidence)
     context_instruction = "\n" + CONTEXT_QUALITY if quality.active(evidence) else ""
+    if grouped:
+        context_instruction += "\n" + GROUP_REPAIR
     author_rules = AUTHOR + context_instruction
     critic_rules = CRITIC + context_instruction
     verdict = _call(author_rules, evidence)
     attempts.append(copy.deepcopy(verdict))
     _repair_quote_transport(verdict, rows)
-    defects = _validate(verdict, rows, originals, evidence["original_routes"])
+    defects = _validate(verdict, rows, originals, evidence["original_routes"], grouped=grouped)
     if defects:
         # A bounded mechanical correction is not a second semantic opinion.
         verdict = _call(author_rules + "\nCorrect only the listed mechanical contract defects.",
                         dict(evidence, previous_verdict=verdict, mechanical_defects=defects))
         attempts.append(copy.deepcopy(verdict))
         _repair_quote_transport(verdict, rows)
-        defects = _validate(verdict, rows, originals, evidence["original_routes"])
+        defects = _validate(verdict, rows, originals, evidence["original_routes"], grouped=grouped)
     if defects:
         raise ReviewedQuestionSetError("edited question review cannot be applied: " + "; ".join(defects))
     from .concept_review_context import resolve_contexts
@@ -432,8 +502,10 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
         # The accepted author remains authoritative; an unavailable critic is
         # explicit review evidence, never a reason to drop finished questions.
         critic = {"verdict": "unavailable", "issues": [f"{type(exc).__name__}: {exc}"]}
-    receipt = {"policy": POLICY + quality.suffix(evidence), "input_sha256": fingerprint,
+    receipt = {"policy": evidence["policy"] + quality.suffix(evidence), "input_sha256": fingerprint,
                **quality.fields(evidence),
+               **repair.fields(evidence),
+               **({"original_questions": copy.deepcopy(originals)} if grouped else {}),
                # Context references use these frozen edited row indexes;
                # workbook reordering later cannot retarget their evidence.
                "edited_concepts": copy.deepcopy(evidence["edited_concepts"]),
@@ -447,6 +519,10 @@ def review_canonical_questions(payload: Mapping[str, Any], concept_rows: list[di
         source_qid = question["source_qid"]
         accepted.append({
             **quality.fields(evidence),
+            **repair.fields(evidence),
+            **({"source_qids": copy.deepcopy(question["source_qids"]),
+                "source_dependency_reviews": copy.deepcopy(question["source_dependency_reviews"])}
+               if grouped else {}),
             "row": f"Concept Details:{target.get('row', index + 1)}",
             "kind": "source" if source_qid else "reviewer_added",
             "question_id": source_qid,

@@ -28,6 +28,7 @@ from . import assessment_lane_policy as lane_policy
 from . import assessment_profile
 from . import assessment_response_policy as response_policy
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 from . import source_task_polishing_policy as source_format
 from . import openai_usage
 from . import column_spec
@@ -189,9 +190,14 @@ def _foundation_fields(env: Mapping[str, Any]) -> dict[str, Any]:
 def _foundation_instruction(payload: Mapping[str, Any]) -> str:
     """Return the active foundation instruction, or nothing historically."""
 
-    from . import prelearning_foundation_policy
+    from . import prelearning_foundation_policy, prelearning_capture_policy
+    from . import generation_repair_policy as repair
 
-    return prelearning_foundation_policy.instruction(payload)
+    return (
+        prelearning_foundation_policy.instruction(payload)
+        + prelearning_capture_policy.assessment_instruction(payload)
+        + repair.grouped_source_instruction(payload)
+    )
 
 
 def _quality_fields(*values: Mapping[str, Any] | None) -> dict[str, str]:
@@ -1151,6 +1157,8 @@ def _unit_payload(
             for key in ("answer_restriction", "answer_space_contract", "required_elements", "accepted_variations")
             if isinstance(contract, Mapping) and key in contract
         }
+    for source in (metadata, record, context, *(context.get("source_atoms") or [])):
+        payload.update(repair.fields(source))
     foundation_suffix = _foundation_instruction(payload)
     if foundation_suffix:
         payload["rules"] += foundation_suffix

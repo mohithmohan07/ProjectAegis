@@ -10,6 +10,7 @@ import pytest
 from app import models
 from app.services import checkpoints, generation, model_provider, model_routing_run
 from app.services import generation_quality_policy as quality
+from app.services import generation_repair_policy as repair
 from app.services import build_concepts_release_files as release_files
 from tests.test_concept_checkpoint_bundles import _job, _resign
 
@@ -31,6 +32,7 @@ def test_versioned_profile_roundtrips_before_phase3_and_drives_restored_metadata
     payload = json.loads(raw)["payload"]
     assert payload[model_provider.PROFILE_KEY] == profile
     assert quality.KEY not in payload
+    assert repair.KEY not in payload
     assert "envelope" not in payload["generation_checkpoint"]
     restored = checkpoints.import_bundle(db, raw)
     assert restored.id != original.id
@@ -38,6 +40,7 @@ def test_versioned_profile_roundtrips_before_phase3_and_drives_restored_metadata
     with model_routing_run.bind_job(restored):
         assert generation._metadata()[model_provider.PROFILE_KEY] == profile
         assert quality.KEY not in generation._metadata()
+        assert repair.KEY not in generation._metadata()
         assert model_provider.resolve_route("pre_learning", stage="prequestions.author").model == expected_model
     _, reexported = checkpoints.export_bundle(db, restored.id)
     assert json.loads(reexported)["payload"][model_provider.PROFILE_KEY] == profile
@@ -122,6 +125,7 @@ def test_current_quality_stamp_roundtrips_and_drives_restored_metadata(db, inter
         _, raw = exporter(db, original.id)
     payload = json.loads(raw)["payload"]
     assert payload[quality.KEY] == quality.VERSION
+    assert repair.KEY not in payload
     assert payload[model_provider.PROFILE_KEY] == profile
 
     restored = checkpoints.import_bundle(db, raw)
@@ -130,6 +134,7 @@ def test_current_quality_stamp_roundtrips_and_drives_restored_metadata(db, inter
     with model_routing_run.bind_job(restored):
         assert generation._metadata() == original_metadata
         assert quality.run_fields() == {quality.KEY: quality.VERSION}
+        assert repair.run_fields() == {}
     _, reexported = checkpoints.export_bundle(db, restored.id)
     assert json.loads(reexported)["payload"][quality.KEY] == quality.VERSION
 

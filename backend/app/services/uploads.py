@@ -559,8 +559,27 @@ def run_with_openai_usage(
         try:
             from . import model_routing_run
 
+            require_pre = job.module == "build_concepts"
+            if require_pre:
+                from . import build_concepts_release
+
+                review = build_concepts_release.concept_review_state(job)
+                release_uids = review.get("concept_release_uids")
+                # A recorded Concept-review boundary has already completed
+                # source generation. Its remaining historical stages use
+                # OpenAI; a newly requested Pre revision binds its own mini
+                # profile inside that workflow. Do not require the retired
+                # v1 Pre author's credential before the workflow can enter.
+                # A status label or an empty marker alone proves no boundary.
+                review_boundary = (
+                    review.get("version") == build_concepts_release.CONCEPT_REVIEW_VERSION
+                    and review.get("status") in build_concepts_release.CONCEPT_REVIEW_STATUSES
+                    and isinstance(release_uids, dict)
+                    and any(str(value or "").strip() for value in release_uids.values())
+                )
+                require_pre = not review_boundary
             with model_routing_run.bind_job(
-                job, require_pre=job.module == "build_concepts"
+                job, require_pre=require_pre
             ):
                 result = fn()
         except Exception as exc:

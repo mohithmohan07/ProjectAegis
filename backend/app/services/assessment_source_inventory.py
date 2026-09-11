@@ -22,6 +22,7 @@ from typing import Any, Mapping
 from . import assessment_release as rel
 from . import source_task_polishing_policy as source_format
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 
 
 class SourceInventoryError(ValueError):
@@ -362,6 +363,7 @@ def source_atom_from_item(
         "polish_flag": str(item.get("polish_flag") or ""),
         "assets": _assets_of(item),
         "route_evidence": route_evidence,
+        **repair.fields(item),
         **({
             source_format.FIELD: source_format.VERSION,
             **({quality.KEY: quality.VERSION,
@@ -383,7 +385,7 @@ def source_atom_from_item(
             for key in (
                 "tables", "content_objects", "image_manifest", "image_urls",
                 "image_assets", "images", "source_context", "requires_visual",
-                "requires_context", "sub_questions",
+                "requires_context", "sub_questions", "compound_subparts",
             )
             if key in item
         },

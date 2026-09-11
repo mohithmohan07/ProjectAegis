@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from . import prelearning_foundation_policy as foundation
 from . import generation_quality_policy as quality
+from . import generation_repair_policy as repair
 
 KEY = "_prelearning_capture_policy"
 VERSION = "prelearn-evidence-atomic-2026-09-09"
@@ -54,6 +55,7 @@ def boundary_fields(env: Mapping[str, Any]) -> dict[str, str]:
         fields[BOUNDARY_KEY] = BOUNDARY_VERSION
     fields.update(foundation.fields(env))
     fields.update(quality.fields(env))
+    fields.update(repair.fields(env))
     return fields
 
 
@@ -64,6 +66,43 @@ def boundary_instruction(payload: Mapping[str, Any]) -> str:
     return (
         suffix + foundation.instruction(payload)
         + ("\n" + QUALITY_INSTRUCTION if quality.active(payload) else "")
+        + repair_instruction(payload)
+    )
+
+
+def repair_instruction(payload: Mapping[str, Any]) -> str:
+    return "\n" + REPAIR_INSTRUCTION if repair.active(payload) else ""
+
+
+def assessment_instruction(payload: Mapping[str, Any]) -> str:
+    """Apply accepted-scope guidance only to an explicitly identified Pre lane."""
+
+    if not repair.active(payload):
+        return ""
+    output_kind = payload.get("output_kind")
+    if output_kind == "pre_concepts_release":
+        is_pre = True
+    else:
+        is_pre = False
+        metadata = payload.get("metadata")
+        for source in (payload, metadata if isinstance(metadata, Mapping) else {}):
+            lane = next((source.get(key) for key in (
+                "pre_post_learning", "learning_kind", "pre_post",
+            ) if source.get(key)), None)
+            if lane is not None:
+                is_pre = str(lane).strip().lower() in {"pre", "pre-learning", "pre_learning"}
+                break
+    if not is_pre:
+        return ""
+    return (
+        repair_instruction(payload) + "\n" + repair.PRE_ASSESSMENT_INSTRUCTION
+        + "\nCoverage planning belongs to the upstream planner. This pass "
+        "performs only its assigned materialization, review or refinement; "
+        "it cannot add, drop or reclassify accepted concepts or questions. "
+        "Preserve frozen question wording, options, multipart grouping and "
+        "the adopted answer contract. A Refiner may edit only its existing "
+        "prose whitelist. Record an unrepairable scope concern as advisory "
+        "evidence, without restoring superseded prerequisite content."
     )
 
 
@@ -129,4 +168,51 @@ eligibility boundary at every grade. An evidence-supported empty Pre set is
 valid. No current-chapter teaching, generic bank or extra tier is added to make
 an output look fuller. All semantic choices remain with the API and its
 independent advisory critic; preserve existing review and Fixer stages.
+"""
+
+
+REPAIR_INSTRUCTION = """\
+PRE-LEARNING CALIBRATION AND TEACHABLE SCOPE
+Apply this clarification to the earlier prior-learning boundary. A separate
+curriculum document, an explicit statement 'previously learned', or an exact
+prior school year is NOT required to recognise a supported prerequisite. The
+source's observable assumptions together with the supplied learner grade and
+subject can support an API judgment that a bounded capability is prior learning.
+State the source demand, the capability it assumes, and the basis for that
+inference. Distinguish inference from supplied fact; never invent a syllabus,
+curriculum record, prior chapter or school year. Grade alone and general
+usefulness alone are insufficient. Do not reject a source-supported inference
+solely because no external curriculum record was supplied.
+
+Distinguish a transferable capability from this chapter's specific application.
+For example, reading a familiar graph's labelled axes is different from learning
+this chapter's findings, and following sequence, cause or quoted evidence in a
+short text is different from analysing this chapter's particular biography.
+These are candidates for source-based judgment, never compulsory Pre topics.
+Judge whether the source assumes, recalls or newly teaches the capability. A
+brief supporting definition or reminder is not automatically new teaching just
+because its words occur in the current chapter. Nor is every explained term a
+prerequisite. Keep genuinely new chapter knowledge and unsupported extensions
+in their appropriate lane, with an explicit disposition when excluded from Pre.
+
+Every retained prerequisite must express concrete knowledge or an observable
+capability that can be taught and diagnosed independently. 'Remember having
+studied X', 'recognise X as a previously studied topic', and vague 'introductory
+study' are not sufficient scope or mastery. Describe the supported fundamental
+itself at an appropriate level. Do not reduce an accepted substantive capability
+to awareness of a term simply because its exact prior-year attribution is
+unknown. Descriptions teach that bounded fundamental; mastery states what the
+learner can do with it. Analysis diagnoses learner misunderstanding of that
+knowledge, not compliance with a pipeline scope rule. Preserve distinct retained
+fundamentals without generic banks, quotas or forced difficulty tiers.
+
+The independent critic checks both unjustified rejection and scope expansion:
+whether a claimed chapter-taught disposition confuses application or recap with
+new teaching, whether documentary provenance was incorrectly made mandatory,
+and whether the retained description and mastery have assessable substance.
+Resolve disputes through the existing API authority and review/Fixer stages;
+no local classifier or automatic retention follows from these examples. Keep
+Grade 1 foundations small, familiar and single-demand under Q44; do not apply
+that minimal scope indiscriminately to older learners. An evidence-supported
+empty Pre set remains valid.
 """

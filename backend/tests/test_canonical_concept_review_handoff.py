@@ -112,6 +112,15 @@ def _author_verdict(*, resolved=False):
             "rationale": "The edited Types/Cases surface is authoritative.",
         }],
     }
+    # A newly submitted Post correction uses the grouped v5 wire contract,
+    # including explicit singleton/added membership and dependency choices.
+    for question in verdict["questions"]:
+        qid = question["source_qid"]
+        question["source_qids"] = [qid] if qid else []
+        question["source_dependency_reviews"] = [{
+            "source_qid": qid, "removed_dependencies": [],
+            "rationale": "The source dependencies remain applicable.",
+        }] if qid else []
     if resolved:
         # The server resolves an explicit inherit decision before the critic
         # and before persisting the accepted author receipt.
@@ -211,6 +220,9 @@ def test_canonical_three_sheet_upload_reconciles_exact_reviewed_bank(
     assert added["_aegis_reviewed_target"]["case_id"] == "CASE-0002"
 
     audit = payload["review_question_audit"]
+    from app.services import generation_repair_policy as repair
+    assert payload[repair.KEY] == repair.VERSION
+    assert audit["model_review_receipt"]["policy"].startswith(concept_question_review.GROUP_POLICY)
     assert audit["model_review_receipt"]["author"]["questions"][0]["question_text_spans"] == [
         "Explain the FIRST", " method now."
     ]
@@ -272,6 +284,8 @@ def test_unchanged_canonical_three_sheet_roundtrip_preserves_review_bank(
     assert result["round_recorded"] is False
     payload = release.release_payload(job, lane="post")
     assert payload is not None
+    from app.services import generation_repair_policy as repair
+    assert not repair.active(payload)
     assert [item["qid"] for item in payload["question_task_inventory"]["items"]] == [
         "QINV-0001", "QINV-0002"
     ]
