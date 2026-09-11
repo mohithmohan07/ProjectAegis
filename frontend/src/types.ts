@@ -553,10 +553,48 @@ export interface MasterReviewDatabaseReceipt {
   [key: string]: unknown;
 }
 
+/** One reviewed cell edit, as `master_review.py` records it: one entry per
+ * changed cell, each naming the question it belongs to. */
+export interface MasterReviewFieldEdit {
+  question_label?: string;
+  field?: string;
+  before?: unknown;
+  after?: unknown;
+  [key: string]: unknown;
+}
+
+/** One question the reviewer dropped from (or added to) the Master file. */
+export interface MasterReviewQuestionChange {
+  question_label?: string;
+  candidate_id?: string;
+  sheet_kind?: string;
+  group_key?: string;
+  concept_key?: string;
+  [key: string]: unknown;
+}
+
+/** The backend emits these as lists of records; a bare count is tolerated so
+ * an older or summarising payload still renders. */
+export type MasterReviewEdits = MasterReviewFieldEdit[] | number;
+export type MasterReviewQuestionChanges = MasterReviewQuestionChange[] | number;
+
+/** The CMS workbook half of a Master publication. `status` is `published` or
+ * `queued`; a queued append kept the committed database write and names its
+ * `queued_reason`, and the publish act converges when it is repeated. */
+export interface MasterReviewCmsReceipt {
+  status?: string;
+  queued_reason?: string;
+  path?: string;
+  [key: string]: unknown;
+}
+
 export interface MasterReviewPublication {
   uploaded_at?: string;
   database?: MasterReviewDatabaseReceipt | null;
-  cms_workbook?: Record<string, unknown> | null;
+  cms_workbook?: MasterReviewCmsReceipt | null;
+  /** Carried from a publish response (`published` or `queued`) so a local
+   * receipt knows its own state before the marker refreshes. */
+  publication_status?: string;
   [key: string]: unknown;
 }
 
@@ -569,9 +607,9 @@ export interface MasterReviewLaneState {
   release_id?: number;
   release_uid?: string;
   version?: number;
-  changed_fields?: number;
-  omitted?: number;
-  added?: number;
+  changed_fields?: MasterReviewEdits;
+  omitted?: MasterReviewQuestionChanges;
+  added?: MasterReviewQuestionChanges;
   readiness?: string;
   issues?: string[];
   status?: string;
@@ -603,9 +641,9 @@ export interface MasterReviewSubmitResult {
   release_uid?: string;
   version?: number;
   round_recorded?: boolean;
-  changed_fields?: number;
-  omitted_questions?: number;
-  added_questions?: number;
+  changed_fields?: MasterReviewEdits;
+  omitted_questions?: MasterReviewQuestionChanges;
+  added_questions?: MasterReviewQuestionChanges;
   readiness?: string;
   issues?: string[];
   master_review?: MasterReviewLaneState;
@@ -620,7 +658,9 @@ export interface MasterReviewPublishResult {
   release_uid?: string;
   version?: number;
   database?: MasterReviewDatabaseReceipt | null;
-  cms_workbook?: Record<string, unknown> | null;
+  cms_workbook?: MasterReviewCmsReceipt | null;
+  /** `published` once the CMS workbook append landed; `queued` when only the
+   * database half is committed and the act must be repeated. */
   publication_status?: string;
   master_review?: MasterReviewLaneState;
   review_workflow?: ReviewWorkflow;

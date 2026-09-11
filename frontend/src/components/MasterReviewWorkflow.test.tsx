@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { RunConsoleProvider } from "../RunConsole";
+import { RunConsoleProvider, useRunConsole } from "../RunConsole";
 import type { SourceArtifactFile, UploadJob } from "../types";
 import MasterReviewWorkflow, {
   conceptPublicationState,
@@ -443,4 +443,218 @@ test("an active run locks every Step 03 control", () => {
     expect((screen.getByTestId(id) as HTMLButtonElement).disabled).toBe(true);
   }
   expect(screen.getByText("run active")).toBeDefined();
+});
+
+// --------------------------------------------------------------------- //
+// Finding 1 — the backend records edits and omissions as LISTS.
+// --------------------------------------------------------------------- //
+
+const EDIT_RECORDS = [
+  { question_label: "Q-0001", field: "question_text", before: "old", after: "new" },
+  { question_label: "Q-0001", field: "keywords", before: "a, b", after: "a, c" },
+  { question_label: "Q-0002", field: "marks", before: 1, after: 2 },
+];
+const OMITTED_RECORDS = [
+  { question_label: "Q-0007", candidate_id: "c7", sheet_kind: "Objective", group_key: "", concept_key: "k1" },
+  { question_label: "Q-0008", candidate_id: "c8", sheet_kind: "Descriptive", group_key: "g2", concept_key: "k2" },
+];
+
+test("the durable receipt counts the backend's edit and omission records (finding 1)", () => {
+  renderWorkflow(job({
+    review_workflow: {
+      status: "master_ready",
+      master_review: {
+        post: {
+          filename: "post-master-reviewed.xlsx",
+          uploaded_at: "2026-09-11T09:30:00Z",
+          version: 4,
+          changed_fields: EDIT_RECORDS,
+          omitted: OMITTED_RECORDS,
+          added: [],
+          readiness: "ready",
+          issues: [],
+          status: "accepted",
+        },
+      },
+    },
+  }));
+
+  const receipt = screen.getByTestId("master-receipt-post");
+  expect(receipt.textContent).toContain("3 fields in 2 questions");
+  expect(receipt.textContent).toContain("2 omitted questions");
+  expect(receipt.textContent).toContain("0 added questions");
+  expect(receipt.textContent).not.toContain("0 fields");
+});
+
+test("the upload acknowledgement counts list-shaped records (finding 1)", async () => {
+  apiMock.uploadReviewedMaster.mockResolvedValue({
+    lane: "post",
+    filename: "post-master-reviewed.xlsx",
+    release_id: 22,
+    release_uid: "REL-22",
+    version: 3,
+    round_recorded: true,
+    changed_fields: EDIT_RECORDS,
+    omitted_questions: OMITTED_RECORDS,
+    added_questions: [],
+    readiness: "ready",
+    issues: [],
+    master_review: {
+      filename: "post-master-reviewed.xlsx",
+      uploaded_at: "2026-09-11T09:30:00Z",
+      version: 3,
+      changed_fields: EDIT_RECORDS,
+      omitted: OMITTED_RECORDS,
+      added: [],
+      readiness: "ready",
+      issues: [],
+      status: "accepted",
+    },
+    review_workflow: { status: "master_ready" },
+  });
+  renderWorkflow(job());
+
+  fireEvent.change(screen.getByTestId("reviewed-master-input-post"), {
+    target: { files: [new File(["xlsx"], "post-master-reviewed.xlsx", { type: XLSX })] },
+  });
+
+  const receipt = await screen.findByTestId("master-receipt-post");
+  expect(receipt.textContent).toContain("3 fields in 2 questions");
+  expect(receipt.textContent).toContain("2 omitted questions");
+});
+
+// --------------------------------------------------------------------- //
+// Finding 2 — a queued CMS workbook append is not a finished publication.
+// --------------------------------------------------------------------- //
+
+const QUEUED_REASON = "the database write is complete; the CMS workbook append was "
+  + "interrupted (OSError) and completes on the next publish act";
+
+function queuedPublication() {
+  return {
+    uploaded_at: "2026-09-11T10:05:00Z",
+    database: { groups_created: 1, questions_created: 3, labels_reissued: 0 },
+    cms_workbook: {
+      path: "bulk_import.xlsx",
+      question_ids: [1, 2, 3],
+      status: "queued",
+      queued_reason: QUEUED_REASON,
+    },
+  };
+}
+
+function ConsoleProbe() {
+  const { state } = useRunConsole();
+  return (
+    <ul data-testid="console-lines">
+      {state.lines.map((line, index) => (
+        <li key={`${index}-${line.ts}`}>{`[${line.level}] ${line.message}`}</li>
+      ))}
+    </ul>
+  );
+}
+
+function renderWorkflowWithConsole(current: UploadJob, onJob = vi.fn()) {
+  render(
+    <RunConsoleProvider>
+      <MasterReviewWorkflow job={current} onJob={onJob} />
+      <ConsoleProbe />
+    </RunConsoleProvider>,
+  );
+  return onJob;
+}
+
+test("a queued CMS append is not shown or logged as a finished publication (finding 2)", async () => {
+  apiMock.publishReviewedMaster.mockResolvedValue({
+    lane: "post",
+    release_id: 22,
+    release_uid: "REL-22",
+    version: 2,
+    database: { groups_created: 1, questions_created: 3, labels_reissued: 0 },
+    cms_workbook: queuedPublication().cms_workbook,
+    publication_status: "queued",
+    master_review: {
+      filename: "post-master-reviewed.xlsx",
+      version: 2,
+      status: "reviewed",
+      published: queuedPublication(),
+    },
+    review_workflow: { status: "master_ready" },
+  });
+  const current = job({}, { conceptPublished: { post: true } });
+  apiMock.getUploadJob.mockResolvedValue(current);
+  renderWorkflowWithConsole(current);
+
+  fireEvent.click(screen.getByTestId("publish-master-post"));
+  await waitFor(() => expect(apiMock.publishReviewedMaster).toHaveBeenCalledWith(55, "post"));
+
+  const publication = await screen.findByTestId("master-publication-post");
+  expect(publication.textContent).toContain("3 questions");
+  expect(screen.getByTestId("master-publication-queued-post").textContent)
+    .toContain("completes on the next publish act");
+  // The act is not finished: the button stays enabled so it can be repeated.
+  const publishButton = screen.getByTestId("publish-master-post") as HTMLButtonElement;
+  await waitFor(() => expect(publishButton.disabled).toBe(false));
+  expect(publishButton.textContent).not.toContain("Master file published");
+  expect(screen.queryByText("Master published")).toBeNull();
+
+  const lines = screen.getByTestId("console-lines").textContent ?? "";
+  expect(lines).not.toContain("[success]");
+  expect(lines).toContain("[warn]");
+  expect(lines).toContain("queued");
+  expect(screen.queryByText("Post-Learning Master file published to the database and CMS."))
+    .toBeNull();
+});
+
+test("a durable queued publication keeps the lane publishable after a refresh (finding 2)", () => {
+  renderWorkflow(job({
+    review_workflow: {
+      status: "master_ready",
+      master_review: {
+        post: {
+          filename: "post-master-reviewed.xlsx",
+          uploaded_at: "2026-09-11T09:30:00Z",
+          version: 2,
+          status: "reviewed",
+          published: queuedPublication(),
+        },
+      },
+    },
+  }, { conceptPublished: { post: true } }));
+
+  expect((screen.getByTestId("publish-master-post") as HTMLButtonElement).disabled).toBe(false);
+  expect(screen.queryByText("Master published")).toBeNull();
+  expect(screen.getByTestId("master-publication-queued-post").textContent)
+    .toContain("CMS workbook append");
+});
+
+// --------------------------------------------------------------------- //
+// Finding 3 — a version alone is not proof that a reviewed file arrived.
+// --------------------------------------------------------------------- //
+
+test("a lane published without any reviewed upload shows no accepted-file receipt (finding 3)", () => {
+  renderWorkflow(job({
+    review_workflow: {
+      status: "published",
+      master_review: {
+        post: {
+          lane: "post",
+          release_id: 22,
+          release_uid: "REL-22",
+          version: 2,
+          status: "published",
+          published: {
+            uploaded_at: "2026-09-11T10:05:00Z",
+            database: { groups_created: 1, questions_created: 3, labels_reissued: 0 },
+            cms_workbook: { path: "bulk_import.xlsx", status: "published", rows: 3 },
+          },
+        },
+      },
+    },
+  }, { conceptPublished: { post: true } }));
+
+  expect(screen.queryByTestId("master-receipt-post")).toBeNull();
+  expect(screen.queryByText(/Accepted file/)).toBeNull();
+  expect(screen.getByTestId("master-publication-post").textContent).toContain("3 questions");
+  expect(screen.getByTestId("publish-master-post").textContent).toBe("Master file published");
 });

@@ -98,8 +98,32 @@ function formatTime(value: string): string {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 }
 
+/** The backend records edits and omissions as LISTS of records; a bare count
+ * is still accepted so an older or summarising payload renders. */
 function count(value: unknown): number | null {
+  if (Array.isArray(value)) return value.length;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** How many distinct questions a list of edit records touches. */
+function editedQuestions(value: unknown): number {
+  if (!Array.isArray(value)) return 0;
+  const labels = new Set<string>();
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const label = (item as Record<string, unknown>).question_label;
+    if (typeof label === "string" && label) labels.add(label);
+  }
+  return labels.size;
+}
+
+/** "3 fields in 2 questions" — one backend record per edited cell, each
+ * naming its question. A bare count renders without the question half. */
+function describeChanges(value: unknown): string {
+  const fields = count(value) ?? 0;
+  const questions = editedQuestions(value);
+  return plural(fields, "field")
+    + (questions > 0 ? ` in ${plural(questions, "question")}` : "");
 }
 
 function plural(value: number, noun: string): string {
@@ -114,11 +138,16 @@ function laneStateFromMarker(job: UploadJob, lane: Lane): MasterReviewLaneState 
     : null;
 }
 
+/**
+ * Whether a reviewed Master file was really accepted for this lane. Only the
+ * submit paths write `filename`/`uploaded_at`; publication merges the release
+ * identity (which always carries `version`) into the same lane state, so a
+ * version on its own proves nothing about an upload.
+ */
 function hasReceipt(state: MasterReviewLaneState | null | undefined): boolean {
   return Boolean(state && (
     typeof state.filename === "string"
     || typeof state.uploaded_at === "string"
-    || typeof state.version === "number"
   ));
 }
 
@@ -161,7 +190,40 @@ function publicationFromPublish(
     uploaded_at: nested?.uploaded_at,
     database: nested?.database ?? response.database ?? null,
     cms_workbook: nested?.cms_workbook ?? response.cms_workbook ?? null,
+    publication_status: response.publication_status,
   };
+}
+
+export type MasterPublicationState = "published" | "queued";
+
+/**
+ * A receipt whose CMS workbook append is `queued` is NOT a finished
+ * publication: the backend committed the database half, recorded the queued
+ * reason and expects the publish act to be repeated (it is idempotent and
+ * converges). A receipt without a status is a historical one and complete.
+ */
+export function masterPublicationState(
+  publication: MasterReviewPublication | null | undefined,
+): MasterPublicationState | null {
+  if (!publication) return null;
+  const cms = publication.cms_workbook;
+  const cmsStatus = cms && typeof cms === "object" && !Array.isArray(cms)
+    ? String(cms.status ?? "")
+    : "";
+  const declared = typeof publication.publication_status === "string"
+    ? publication.publication_status
+    : "";
+  return cmsStatus === "queued" || declared === "queued" ? "queued" : "published";
+}
+
+function queuedReason(publication: MasterReviewPublication): string {
+  const cms = publication.cms_workbook;
+  const reason = cms && typeof cms === "object" && !Array.isArray(cms)
+    ? cms.queued_reason
+    : undefined;
+  return typeof reason === "string" && reason
+    ? reason
+    : "the database write is complete; the CMS workbook append has not finished";
 }
 
 function describeDatabase(publication: MasterReviewPublication): string {
@@ -336,17 +398,25 @@ export default function MasterReviewWorkflow({
       const response = await api.publishReviewedMaster(job.id, lane);
       const publication = publicationFromPublish(response ?? { lane });
       const cms = describeCms(publication);
+      const queued = masterPublicationState(publication) === "queued";
       record(
         job,
-        `${label} Master file published · database: ${describeDatabase(publication)}`
-          + (cms ? ` · CMS workbook: ${cms}` : ""),
-        "success",
+        queued
+          ? `${label} Master file written to the database `
+            + `(${describeDatabase(publication)}); the CMS workbook append is `
+            + `queued — ${queuedReason(publication)}`
+          : `${label} Master file published · database: ${describeDatabase(publication)}`
+            + (cms ? ` · CMS workbook: ${cms}` : ""),
+        queued ? "warn" : "success",
       );
       setLocalPublications((current) => ({ ...current, [lane]: publication }));
       const { error: refreshError } = await refreshJob();
-      setNotice(`${label} Master file published to the database and CMS.`);
+      setNotice(queued
+        ? `${label} Master file was written to the database, but the CMS `
+          + "workbook append is queued. Publish this lane again to complete it."
+        : `${label} Master file published to the database and CMS.`);
       if (refreshError) {
-        setError(`${label} Master publication succeeded, but the latest job status could not be refreshed: ${readableError(refreshError)}`);
+        setError(`${label} Master publication was recorded, but the latest job status could not be refreshed: ${readableError(refreshError)}`);
       }
     } catch (publishError) {
       record(job, `${label} Master publication failed: ${readableError(publishError)}`, "error");
@@ -391,12 +461,15 @@ export default function MasterReviewWorkflow({
           lane, label, master, receipt, publication, conceptState, conceptPublished,
         }) => {
           const masterAvailable = Boolean(master && !master.disabled && master.download_url);
-          const masterPublished = Boolean(publication);
+          const publicationState = masterPublicationState(publication);
+          // A queued CMS append leaves the act unfinished: the lane stays
+          // publishable so the reviewer can repeat it.
+          const masterPublished = publicationState === "published";
           const inputId = `reviewed-master-input-${job.id}-${lane}`;
           const laneBusy = busy?.lane === lane ? busy.kind : null;
           const masterPublishBlocked = !conceptPublished
             ? `Publish the ${label} Concept file first.`
-            : !masterAvailable && !receipt
+            : !masterAvailable && !receipt && !publication
               ? `No ${label} Master file is available to publish.`
               : "";
           return (
@@ -406,9 +479,11 @@ export default function MasterReviewWorkflow({
                 <div className="spacer" />
                 {masterPublished
                   ? <span className="badge green">Master published</span>
-                  : receipt
-                    ? <span className="badge green">Reviewed Master received</span>
-                    : null}
+                  : publicationState === "queued"
+                    ? <span className="badge yellow">CMS append queued</span>
+                    : receipt
+                      ? <span className="badge green">Reviewed Master received</span>
+                      : null}
                 {conceptPublished && !masterPublished && (
                   <span className="badge accent">Concept file published</span>
                 )}
@@ -491,7 +566,7 @@ export default function MasterReviewWorkflow({
                     {receipt.version != null && <> · Version {receipt.version}</>}
                   </span>
                   <span>
-                    Changes: {plural(count(receipt.changed_fields) ?? 0, "field")}
+                    Changes: {describeChanges(receipt.changed_fields)}
                     {" · "}{plural(count(receipt.omitted) ?? 0, "omitted question")}
                     {" · "}{plural(count(receipt.added) ?? 0, "added question")}
                     {receipt.readiness && <> · Readiness: <strong>{receipt.readiness}</strong></>}
@@ -507,8 +582,11 @@ export default function MasterReviewWorkflow({
                 </div>
               ) : (
                 <div className="hint mt-8">
-                  No reviewed Master uploaded; the generated {label} Master
-                  File will be published as is.
+                  {publication
+                    ? `No reviewed ${label} Master file was uploaded; the `
+                      + "generated Master File was published as is."
+                    : `No reviewed Master uploaded; the generated ${label} `
+                      + "Master File will be published as is."}
                 </div>
               )}
 
@@ -539,7 +617,9 @@ export default function MasterReviewWorkflow({
                     ? <><span className="spinner" aria-hidden="true" /> Publishing…</>
                     : masterPublished
                       ? "Master file published"
-                      : `Publish ${label} Master file to database & CMS`}
+                      : publicationState === "queued"
+                        ? `Complete the ${label} Master publication`
+                        : `Publish ${label} Master file to database & CMS`}
                 </button>
               </div>
               {conceptState.state === "unavailable" && !conceptPublished && (
@@ -553,12 +633,20 @@ export default function MasterReviewWorkflow({
               {publication && (
                 <div className="hint mt-8 master-review-receipt" role="status" data-testid={`master-publication-${lane}`}>
                   <span>
-                    <strong>Published</strong>
+                    <strong>
+                      {publicationState === "queued" ? "Publication incomplete" : "Published"}
+                    </strong>
                     {publication.uploaded_at && <> {formatTime(publication.uploaded_at)}</>}
                     {" · "}Database: {describeDatabase(publication)}
                   </span>
                   {describeCms(publication) && (
                     <span>CMS workbook: {describeCms(publication)}</span>
+                  )}
+                  {publicationState === "queued" && (
+                    <span data-testid={`master-publication-queued-${lane}`}>
+                      CMS workbook append queued — {queuedReason(publication)}.
+                      {" "}Publish this lane again to complete it.
+                    </span>
                   )}
                 </div>
               )}
