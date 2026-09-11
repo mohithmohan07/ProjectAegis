@@ -1749,3 +1749,9 @@ def test_source_topology_and_new_concepts_use_source_critical_confidence(
             "source_critical" in flag and "flagged for review" in flag
             for flag in result.review_flags
         )
+
+
+def test_recorded_v2_resolver_still_ignores_deployment_override(monkeypatch):
+    monkeypatch.setenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-luna")
+    with model_provider.bind_profile(model_provider.mini_profile()):
+        assert resolver.resolution_model() == "gpt-5.4-mini"

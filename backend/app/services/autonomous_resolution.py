@@ -143,7 +143,7 @@ def maximum_pathway_turns() -> int:
 def resolution_model() -> str:
     """Return the planner/solver model used for semantic discrepancies.
 
-    Current runs use their frozen GPT-5.4 mini route, including when an old
+    Single-model runs use their frozen model route, including when an old
     deployment environment still contains a resolver-specific override.
     Recorded v1 runs retain their explicit environment override and otherwise
     use their frozen default. Explicitly unprofiled runs retain their historical
@@ -154,7 +154,7 @@ def resolution_model() -> str:
     from . import model_provider
 
     profile = model_provider.bound_profile()
-    if profile is not None and profile["version"] == model_provider.PROFILE_VERSION:
+    if profile is not None and profile["version"] in {model_provider.PROFILE_VERSION, model_provider.MINI_PROFILE_VERSION}:
         return str(profile["routes"]["default"]["model"])
     override = os.environ.get(_RESOLUTION_MODEL_ENV, "").strip()
     if override:
