@@ -464,6 +464,12 @@ export interface SourceArtifactFile {
    */
   note?: string;
   requires_confirmation?: boolean;
+  /** Publication entries (`database_upload` / `pre_database_upload`) carry
+   * the staged release's recorded state; `disabled` there means the lane's
+   * Concept file is already uploaded, unless a `disabled_reason` explains
+   * that the lane was never staged. */
+  release_state?: string;
+  structural_defects?: unknown;
 }
 
 export interface SourceArtifactManifest {
@@ -527,7 +533,8 @@ export type ConceptReviewStatus =
   | "reviewed"
   | "master_building"
   | "master_ready"
-  | "master_failed";
+  | "master_failed"
+  | "published";
 
 export interface CorrectedConceptInput {
   lane: "post" | "pre";
@@ -535,6 +542,78 @@ export interface CorrectedConceptInput {
   uploaded_at?: string;
   status?: string;
   accepted?: boolean;
+  [key: string]: unknown;
+}
+
+/** Counts the backend records when one lane's Master is published. */
+export interface MasterReviewDatabaseReceipt {
+  groups_created?: number;
+  questions_created?: number;
+  labels_reissued?: number;
+  [key: string]: unknown;
+}
+
+/** One reviewed cell edit, as `master_review.py` records it: one entry per
+ * changed cell, each naming the question it belongs to. */
+export interface MasterReviewFieldEdit {
+  question_label?: string;
+  field?: string;
+  before?: unknown;
+  after?: unknown;
+  [key: string]: unknown;
+}
+
+/** One question the reviewer dropped from (or added to) the Master file. */
+export interface MasterReviewQuestionChange {
+  question_label?: string;
+  candidate_id?: string;
+  sheet_kind?: string;
+  group_key?: string;
+  concept_key?: string;
+  [key: string]: unknown;
+}
+
+/** The backend emits these as lists of records; a bare count is tolerated so
+ * an older or summarising payload still renders. */
+export type MasterReviewEdits = MasterReviewFieldEdit[] | number;
+export type MasterReviewQuestionChanges = MasterReviewQuestionChange[] | number;
+
+/** The CMS workbook half of a Master publication. `status` is `published` or
+ * `queued`; a queued append kept the committed database write and names its
+ * `queued_reason`, and the publish act converges when it is repeated. */
+export interface MasterReviewCmsReceipt {
+  status?: string;
+  queued_reason?: string;
+  path?: string;
+  [key: string]: unknown;
+}
+
+export interface MasterReviewPublication {
+  uploaded_at?: string;
+  database?: MasterReviewDatabaseReceipt | null;
+  cms_workbook?: MasterReviewCmsReceipt | null;
+  /** Carried from a publish response (`published` or `queued`) so a local
+   * receipt knows its own state before the marker refreshes. */
+  publication_status?: string;
+  [key: string]: unknown;
+}
+
+/** Step 03 state for one lane: the accepted reviewed Master file (if any)
+ * and, once published, the database/CMS receipt. */
+export interface MasterReviewLaneState {
+  filename?: string;
+  sha256?: string;
+  uploaded_at?: string;
+  release_id?: number;
+  release_uid?: string;
+  version?: number;
+  changed_fields?: MasterReviewEdits;
+  omitted?: MasterReviewQuestionChanges;
+  added?: MasterReviewQuestionChanges;
+  readiness?: string;
+  issues?: string[];
+  status?: string;
+  published?: MasterReviewPublication | null;
   [key: string]: unknown;
 }
 
@@ -546,9 +625,45 @@ export interface ReviewWorkflow {
   progress?: number;
   corrected_inputs?: Partial<Record<"post" | "pre", CorrectedConceptInput | boolean | string>>;
   concept_files?: Partial<Record<"post" | "pre", SourceArtifactFile>>;
+  master_review?: Partial<Record<"post" | "pre", MasterReviewLaneState>>;
   reviewed_at?: string;
   master_started_at?: string;
   master_completed_at?: string;
+  [key: string]: unknown;
+}
+
+/** Acknowledgement for a reviewed Master file (Step 03 upload). */
+export interface MasterReviewSubmitResult {
+  lane: "post" | "pre";
+  filename?: string;
+  input_sha256?: string;
+  release_id?: number;
+  release_uid?: string;
+  version?: number;
+  round_recorded?: boolean;
+  changed_fields?: MasterReviewEdits;
+  omitted_questions?: MasterReviewQuestionChanges;
+  added_questions?: MasterReviewQuestionChanges;
+  readiness?: string;
+  issues?: string[];
+  master_review?: MasterReviewLaneState;
+  review_workflow?: ReviewWorkflow;
+  [key: string]: unknown;
+}
+
+/** Receipt for one lane's Master publication to the database and CMS. */
+export interface MasterReviewPublishResult {
+  lane: "post" | "pre";
+  release_id?: number;
+  release_uid?: string;
+  version?: number;
+  database?: MasterReviewDatabaseReceipt | null;
+  cms_workbook?: MasterReviewCmsReceipt | null;
+  /** `published` once the CMS workbook append landed; `queued` when only the
+   * database half is committed and the act must be repeated. */
+  publication_status?: string;
+  master_review?: MasterReviewLaneState;
+  review_workflow?: ReviewWorkflow;
   [key: string]: unknown;
 }
 

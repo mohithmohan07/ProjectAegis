@@ -17,6 +17,13 @@ must stay Post). The checker is mechanics only: every cited qid exists,
 no qid is claimed twice, every claim carries a reason. An empty claim is
 a legitimate verdict — most chapters have no recap material.
 
+Q51/D4 (owner approval, 2026-09-11) bounds WHEN this verdict is asked
+for, never how it decides: a Post bank extracted from the team's reviewed
+Concept file is the reviewer's authoritative question set (Q41), so the
+release run does not call this pass for it and records that it did not
+(``reviewed_question_set_authoritative`` on the payload). Every caller
+whose inventory came from the source book calls it exactly as before.
+
 Two standing rules are explicitly UNCHANGED. The 17-Aug steer stands: a
 claimed question is never lifted into any Pre artefact — Output 04 stays
 generated-only and its leak barrier still refuses every source qid,

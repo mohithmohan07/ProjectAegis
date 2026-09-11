@@ -166,12 +166,19 @@ CONCEPT_REVIEW_REVIEWED = "reviewed"
 CONCEPT_REVIEW_MASTER_BUILDING = "master_building"
 CONCEPT_REVIEW_MASTER_READY = "master_ready"
 CONCEPT_REVIEW_MASTER_FAILED = "master_failed"
+# Step 03 (owner's three-step workflow): every available lane's reviewed
+# Master has been written to the database and appended to the shared CMS
+# workbook through ``services.master_review``. Recorded on the same marker
+# so the console reads one lifecycle; legacy jobs without the marker never
+# reach it.
+CONCEPT_REVIEW_PUBLISHED = "published"
 CONCEPT_REVIEW_STATUSES = (
     CONCEPT_REVIEW_PENDING,
     CONCEPT_REVIEW_REVIEWED,
     CONCEPT_REVIEW_MASTER_BUILDING,
     CONCEPT_REVIEW_MASTER_READY,
     CONCEPT_REVIEW_MASTER_FAILED,
+    CONCEPT_REVIEW_PUBLISHED,
 )
 
 _RELEASE_AUDIT_FIELDS = frozenset({
@@ -562,6 +569,10 @@ def concept_review_state(job: models.UploadJob) -> dict[str, Any]:
     state.setdefault("concept_release_uids", {})
     state.setdefault("master_outputs", {})
     state.setdefault("corrected_inputs", {})
+    # Step 03: per-lane reviewed-Master rounds and publication receipts,
+    # written only by ``services.master_review``. Empty for every marker
+    # that predates the step.
+    state.setdefault("master_review", {})
     return state
 
 
@@ -671,8 +682,15 @@ def update_concept_review_state(
     master_completed_at: str | None = None,
     corrected_filename: str | None = None,
     corrected_changed: bool | None = None,
+    master_review: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Update only lifecycle bookkeeping for a new review-gated run."""
+    """Update only lifecycle bookkeeping for a new review-gated run.
+
+    ``master_review`` merges per-lane Step 03 state (``{lane: {...}}``)
+    into the marker's ``master_review`` map; lanes it does not name keep
+    their recorded state. It is bookkeeping written by
+    ``services.master_review`` and judges nothing.
+    """
 
     state = concept_review_state(job)
     if not state:
@@ -681,6 +699,11 @@ def update_concept_review_state(
         if status not in CONCEPT_REVIEW_STATUSES:
             raise ValueError(f"unknown Concept review status {status!r}")
         state["status"] = status
+    if master_review is not None:
+        merged = copy.deepcopy(dict(state.get("master_review") or {}))
+        for lane_name, lane_state in dict(master_review).items():
+            merged[normalize_lane(lane_name)] = copy.deepcopy(dict(lane_state or {}))
+        state["master_review"] = merged
     if reviewed_lane:
         lane = normalize_lane(reviewed_lane)
         reviewed = list(state.get("reviewed_lanes") or [])

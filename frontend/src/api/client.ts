@@ -12,6 +12,8 @@ import type {
   Stats,
   ConceptRevision,
   ConceptRevisionList,
+  MasterReviewPublishResult,
+  MasterReviewSubmitResult,
   ReleaseInstructionBody,
   ReleaseManualEditBody,
   ReleaseReviewLane,
@@ -428,6 +430,31 @@ export const api = {
   /** Stream the explicit second half of a Concept-first run. */
   generateMaster: (jobId: number) =>
     `/build-concepts/uploads/${jobId}/concept-review/master`,
+
+  /**
+   * Step 03: store the reviewer's edited Master workbook for one lane. This
+   * records a review round on the lane's release and publishes nothing; the
+   * database/CMS write is the separate ``publishReviewedMaster`` act.
+   */
+  uploadReviewedMaster: (jobId: number, lane: "post" | "pre", file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http<MasterReviewSubmitResult>(
+      `/build-concepts/uploads/${jobId}/master-review/submit?lane=${lane}`,
+      { method: "POST", body: fd },
+    );
+  },
+  /**
+   * Step 03: publish one lane's (possibly reviewed) Master to the database
+   * and CMS. `lane` is mandatory for the same reason as uploadConceptRelease.
+   * The server answers 409 while that lane's Concept file is unpublished or
+   * the release is blocked; the readable `detail` names the reason.
+   */
+  publishReviewedMaster: (jobId: number, lane: "post" | "pre") =>
+    http<MasterReviewPublishResult>(
+      `/build-concepts/uploads/${jobId}/master-review/publish?lane=${lane}`,
+      { method: "POST" },
+    ),
 
   // Release review (step 9): read the staged release, edit it in place or
   // via a plain-language instruction. Every write carries the

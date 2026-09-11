@@ -1,9 +1,18 @@
 """Write normalized questions back to the canonical Bulk Import workbook.
 
 Two header rows are emitted per content sheet (section bands + field names).
-Writes are **append-only**: ``append_questions`` reads existing
+Writes are **append-only by default**: ``append_questions`` reads existing
 ``question_label`` values across all tabs and skips anything already present,
 so re-running a generation never overwrites or deletes prior rows.
+
+One explicit, opt-in exception (register Q51 D14, owner-approved): a caller
+that NAMES question labels in ``append_questions(..., refresh_labels=...)``
+asks for exactly those labels' existing rows to be re-projected in place from
+the current database question — the Question band only, at the row's own
+position, the way ``_refresh_concept_rows`` re-projects the Concept band for
+``append_concepts``. A caller that names nothing (the default) can still not
+overwrite a single cell of an existing row beyond the source/taxonomy merge
+that has always been there.
 """
 from __future__ import annotations
 
@@ -13,7 +22,7 @@ import json
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from pathlib import Path
 
@@ -1918,6 +1927,45 @@ def _row_has_question(ws, row_i: int, q_start: int) -> bool:
     )
 
 
+def _refresh_question_band(
+    ws,
+    row_i: int,
+    q: models.Question,
+    sheet_layout: layouts.SheetLayout,
+    *,
+    decisions: list[dict] | None = None,
+) -> int:
+    """Re-project one EXISTING row's Question band from the current question.
+
+    The twin of ``_refresh_concept_rows`` for the other half of the sheet:
+    the row keeps its identity, its position and every other band (Chapter,
+    Topic, Concept, Group), and only the Question-band cells this question
+    owns are rewritten. Nothing is moved, duplicated or reordered, and no
+    other row is touched. Returns the number of cells whose stored value
+    actually changed, so a repeat converges visibly at zero.
+    """
+    values = _question_band_values(q, sheet_layout)
+    if decisions is not None:
+        decisions.extend(values.get("_taxonomy_output_defects") or [])
+    start = sheet_layout.block_start("question")
+    changed = 0
+
+    def _stored(value):
+        # An empty cell round-trips as ``None`` and is written back as ``""``;
+        # that is the same emptiness, not a change, or the count would never
+        # settle and a repeat would look like a rewrite forever.
+        return "" if value is None else value
+
+    for offset, field in enumerate(sheet_layout.block_fields("question")):
+        cell = ws.cell(row=row_i, column=start + offset + 1)
+        before = _stored(cell.value)
+        _set_cell_value(cell, values.get(field, ""))
+        if _stored(cell.value) != before:
+            changed += 1
+    _write_question_taxonomy_notes(ws, row_i, q, sheet_layout)
+    return changed
+
+
 def _refresh_concept_rows(
     wb,
     index: WorkbookIndex,
@@ -2558,13 +2606,42 @@ def write_subject_workbook(
 
 
 @workbook_sync.synchronized_output_workbook
-def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[str, int]:
+def append_questions(
+    db: Session,
+    path: Path,
+    question_ids: list[int],
+    *,
+    refresh_labels: Iterable[str] | None = None,
+) -> dict[str, int]:
     """Append-only write, placement-aware.
 
     Adds one row per (question, placement) — the authoring home plus every tag —
     skipping any (label, ancestor-path) already present. A repeated label under
     a *new* placement is therefore written as a tag rather than skipped.
+
+    ``refresh_labels`` is the one opt-in exception (Q51 D14). It NAMES the
+    question labels whose already-present rows this caller is entitled to
+    rewrite — for example the set of labels a publication just updated in the
+    database. For a named label, the existing row's Question band is
+    re-projected in place from the current database question
+    (``_refresh_question_band``): same row, same position, same Chapter /
+    Topic / Concept / Group cells, no new or removed row. Every other label
+    keeps the historical append-only behaviour, and a caller that passes
+    nothing (the default) cannot rewrite anything at all — "refresh
+    everything" is deliberately not expressible.
+
+    The receipt gains ``refreshed`` (rows whose cells actually changed),
+    ``refreshed_unchanged`` (named rows already carrying this content — how a
+    repeat proves it converged), ``refreshed_labels`` and ``skipped_reasons``
+    only when a refresh set was supplied, so existing callers' receipts are
+    byte-for-byte what they were.
     """
+    refresh_requested = refresh_labels is not None
+    refresh = {
+        str(label).strip()
+        for label in (refresh_labels or ())
+        if str(label or "").strip()
+    }
     index = scan_workbook(path)
     if path.exists():
         wb = openpyxl.load_workbook(path)
@@ -2574,6 +2651,9 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
 
     appended: dict = {"objective": 0, "subjective": 0, "descriptive": 0,
                       "tagged": 0, "skipped": 0, "sources_updated": 0}
+    refreshed_labels: list[str] = []
+    refreshed_unchanged_labels: list[str] = []
+    skipped_reasons: dict[str, int] = {}
     if migrated_cells:
         appended["legacy_cells_normalized"] = migrated_cells
     decisions: list[dict] = []
@@ -2588,11 +2668,58 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                 existing_key = visible_question_placement_key(
                     q.question_label, group)
             if q.question_label and existing_key in index.q_placements:
+                loc = index.q_rows.get(existing_key)
+                if loc is not None and str(q.question_label).strip() in refresh:
+                    # Q51 D14: this caller named the label, so the row it
+                    # already has is rewritten from the current question
+                    # rather than left carrying superseded wording.
+                    sheet_name, row_i = loc
+                    header = next(
+                        wb[sheet_name].iter_rows(
+                            min_row=2, max_row=2, values_only=True), (),
+                    )
+                    current_layout = _identified_sheet(
+                        sheet_name, header, q.sheet_kind,
+                        mismatches=index.mismatches)
+                    try:
+                        changed = _refresh_question_band(
+                            wb[sheet_name], row_i, q, current_layout,
+                            decisions=decisions,
+                        )
+                    except (WorkbookCapacityError, ExcelCellLimitError) as exc:
+                        decisions.append(_fixer_decision(
+                            WORKBOOK_CAPACITY_ERROR,
+                            detail=str(exc),
+                            context={
+                                "question_id": q.id,
+                                "question_label": q.question_label,
+                                "sheet_kind": q.sheet_kind,
+                                "group_id": group.id,
+                                "operation": "refresh_existing_row",
+                            },
+                        ))
+                        appended["skipped"] += 1
+                        skipped_reasons["not_representable"] = (
+                            skipped_reasons.get("not_representable", 0) + 1)
+                        continue
+                    if changed:
+                        appended["refreshed"] = (
+                            appended.get("refreshed", 0) + 1)
+                        if q.question_label not in refreshed_labels:
+                            refreshed_labels.append(str(q.question_label))
+                    else:
+                        appended["refreshed_unchanged"] = (
+                            appended.get("refreshed_unchanged", 0) + 1)
+                        if q.question_label not in refreshed_unchanged_labels:
+                            refreshed_unchanged_labels.append(
+                                str(q.question_label))
+                    continue
                 appended["skipped"] += 1
+                skipped_reasons["already_present"] = (
+                    skipped_reasons.get("already_present", 0) + 1)
                 # Existing row: refresh its question_source in place so a
                 # duplicate question arriving from another book accumulates
                 # sources instead of duplicating the row.
-                loc = index.q_rows.get(existing_key)
                 col = (
                     (index.sheet_meta.get(loc[0]) or {}).get("q_src_col")
                     if loc else None
@@ -2650,6 +2777,8 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
                     },
                 ))
                 appended["skipped"] += 1
+                skipped_reasons["not_representable"] = (
+                    skipped_reasons.get("not_representable", 0) + 1)
                 continue
             # Do not reserve the placement until the row has proved it can be
             # represented.  A recorded capacity defect must remain retryable
@@ -2663,6 +2792,16 @@ def append_questions(db: Session, path: Path, question_ids: list[int]) -> dict[s
             if is_tag:
                 appended["tagged"] += 1
 
+    if refresh_requested:
+        # Only an opt-in caller sees these keys, so no existing receipt
+        # changes shape. ``refreshed`` counts rows whose stored cells really
+        # moved; ``refreshed_unchanged`` is the converged repeat.
+        appended.setdefault("refreshed", 0)
+        appended.setdefault("refreshed_unchanged", 0)
+        appended["refreshed_labels"] = list(refreshed_labels)
+        appended["refreshed_unchanged_labels"] = list(refreshed_unchanged_labels)
+        appended["refresh_labels_requested"] = sorted(refresh)
+        appended["skipped_reasons"] = dict(skipped_reasons)
     workbook_sync.atomic_save_workbook(wb, path)
     fixer_decisions = [decision for decision in decisions if "decision_sha256" in decision]
     if fixer_decisions:

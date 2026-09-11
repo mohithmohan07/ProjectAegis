@@ -513,6 +513,19 @@ def rebuild_lane_master(
                 from . import reviewed_file_input
                 reviewed_job = uploads.get_job(db, job_id, owner_sub=owner_sub, module="build_concepts")
                 reviewed_file_input.prepare(db, reviewed_job, lane=lane, owner_sub=owner_sub)
+                if lane == release.LANE_POST:
+                    # Q51 (V2 workflow): the reviewed Post questions are
+                    # polished once, by the same author + independent critic
+                    # pass Step 1 used to run, before the Master is authored.
+                    from . import reviewed_question_polishing
+                    reviewed_job = uploads.get_job(
+                        db, job_id, owner_sub=owner_sub, module="build_concepts"
+                    )
+                    reviewed_question_polishing.polish_reviewed_post_questions(
+                        db, reviewed_job,
+                        payload=release.release_payload(reviewed_job, lane=lane),
+                        owner_sub=owner_sub,
+                    )
                 if lane == release.LANE_PRE:
                     reviewed_job = uploads.get_job(
                         db, job_id, owner_sub=owner_sub, module="build_concepts"
@@ -1306,10 +1319,12 @@ def build_review_masters(
             "this upload is not paused for Concept review; use the legacy "
             "release or Master workflow"
         )
-    if (
+    if state.get("status") == release.CONCEPT_REVIEW_PUBLISHED or (
         state.get("status") == release.CONCEPT_REVIEW_MASTER_READY
         and not _reviewed_pre_recovery_needed(job, state)
     ):
+        # Q51: a published run is complete; Step 2 is never re-entered after
+        # Step 3 (a different Concept input needs a new run).
         return {
             "job_id": int(job_id),
             "concept_review": state,
@@ -1354,6 +1369,18 @@ def build_review_masters(
                     or workflow.active(release.release_payload(job, lane=reviewed_lane))):
                 with storage_capacity.reserve_master_capacity(job_id=job_id, lane=reviewed_lane):
                     reviewed_file_input.prepare(db, job, lane=reviewed_lane, owner_sub=owner_sub)
+
+        # Q51 (V2 workflow): Step 1 extracted the questions AS IS, so the
+        # reviewed Post questions are polished here, once, by the same author
+        # + independent critic pass, before any Master authoring. V1 payloads
+        # were polished in Step 1 and the pass leaves them untouched.
+        from . import reviewed_question_polishing
+        post_payload = release.release_payload(job, lane=release.LANE_POST)
+        if reviewed_question_polishing.applies(post_payload):
+            with storage_capacity.reserve_master_capacity(job_id=job_id, lane=release.LANE_POST):
+                reviewed_question_polishing.polish_reviewed_post_questions(
+                    db, job, payload=post_payload, owner_sub=owner_sub,
+                )
 
         # A corrected Pre Concept workbook changes the prerequisite evidence that
         # owns its generated question bank. Re-enter the existing Phase 03

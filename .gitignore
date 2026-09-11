@@ -45,6 +45,9 @@ backend/data/uploads/
 backend/data/pdf-acsd-cache/
 # Durable content-addressed store for published image crops (Q8 step 10).
 backend/data/source-asset-store/
+# Published Master/Concept release directories (Q51 Step 03 publishes into
+# them, and an offline test run creates them too). Runtime state, not source.
+backend/data/assessment_releases/
 # The append-only generation output is runtime state, not source.
 backend/data/bulk_import_output.xlsx
 # ...and so is the pre-migration copy a layout migration retains beside it

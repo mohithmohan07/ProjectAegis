@@ -790,3 +790,204 @@ def test_ordinary_edited_workbook_route_still_reads_and_dispatches(
     )
     assert response.status_code == 200, response.text
     assert dispatched == [(job.id, "post")]
+
+
+# --------------------------------------------------------------------------- #
+# Q51 / review decision D7 — the legacy post-run review surfaces are closed
+# for jobs that run the owner's three-step workflow.
+#
+# The gate reads the durable Concept-review marker, so a HISTORICAL job (no
+# marker) keeps every one of these routes exactly as it has them today, and a
+# three-step job is told which step owns the correction it was trying to make.
+# Read-only history stays open for both.
+# --------------------------------------------------------------------------- #
+
+def _three_step_job(db):
+    """The same staged job, plus the durable Concept-review marker.
+
+    The marker is written by the production call, not hand-built, so the test
+    pins the real discriminator the routes consult.
+    """
+
+    job = _staged_job(db)
+    release.initialize_concept_review(
+        db, job, target_chapter_id=_chapter(db).id,
+    )
+    db.refresh(job)
+    assert release.concept_review_state(job), "the review marker is the gate"
+    return job
+
+
+def _forbid_every_review_mutation(monkeypatch):
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("a gated route reached a mutating service")
+
+    async def forbidden_read(*_args, **_kwargs):
+        raise AssertionError("a gated route read the uploaded file")
+
+    monkeypatch.setattr(review, "apply_manual_edits", forbidden)
+    monkeypatch.setattr(review, "apply_instruction_round", forbidden)
+    monkeypatch.setattr(release, "force_release", forbidden)
+    monkeypatch.setattr(release, "backfill_missing_pre_release", forbidden)
+    monkeypatch.setattr(
+        release_workbook_edits, "apply_workbook_and_publish", forbidden
+    )
+    monkeypatch.setattr(
+        "app.api.build_concepts.read_limited_upload", forbidden_read
+    )
+
+
+def test_three_step_job_is_refused_by_every_legacy_writing_route(
+    client, db, monkeypatch,
+):
+    """409 naming the owning step, and nothing is mutated or spent."""
+
+    job = _three_step_job(db)
+    payload_before = copy.deepcopy(_slot(job))
+    versions_before = len(_version_rows(db, job))
+    marker_before = copy.deepcopy(release.concept_review_state(job))
+    uid = _uid(job)
+    _forbid_every_review_mutation(monkeypatch)
+
+    staged_again = client.post(f"/build-concepts/uploads/{job.id}/release")
+    assert staged_again.status_code == 409, staged_again.text
+    assert "staging another release by hand" in staged_again.json()["detail"]
+
+    manual = client.post(
+        f"/build-concepts/uploads/{job.id}/release-review/manual-edit",
+        json={
+            "lane": "post", "staged_release_uid": uid,
+            "edits": [{"record_index": 0, "field": "keywords",
+                       "before": "alpha", "after": "alpha, edited"}],
+        },
+    )
+    assert manual.status_code == 409, manual.text
+    assert "editing the staged release in place" in manual.json()["detail"]
+
+    instruction = client.post(
+        f"/build-concepts/uploads/{job.id}/release-review/apply-instruction",
+        json={
+            "lane": "post", "staged_release_uid": uid,
+            "instruction": "Clarify the second concept.",
+        },
+    )
+    assert instruction.status_code == 409, instruction.text
+    assert "applying an instruction to the staged release" in (
+        instruction.json()["detail"]
+    )
+
+    workbook = client.post(
+        f"/build-concepts/uploads/{job.id}/upload-edited-workbook",
+        params={"lane": "post"},
+        files={"file": (
+            "edited.xlsx", io.BytesIO(b"must not be read"),
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet",
+        )},
+    )
+    assert workbook.status_code == 409, workbook.text
+    assert "publishing an edited Concept workbook" in workbook.json()["detail"]
+
+    # Every refusal names both destinations, so the reader knows where to go.
+    for response in (staged_again, manual, instruction, workbook):
+        detail = response.json()["detail"]
+        assert "Step 02" in detail and "Step 03" in detail, detail
+        assert "three-step review workflow" in detail
+
+    db.refresh(job)
+    assert _slot(job) == payload_before
+    assert len(_version_rows(db, job)) == versions_before
+    assert release.concept_review_state(job) == marker_before
+
+
+def test_three_step_job_keeps_the_read_only_review_history(client, db):
+    """Reading recorded history spends nothing and stays available."""
+
+    job = _three_step_job(db)
+    view = client.get(
+        f"/build-concepts/uploads/{job.id}/release-review",
+        params={"lane": "post"},
+    )
+    assert view.status_code == 200, view.text
+    body = view.json()
+    assert body["job_id"] == job.id
+    assert body["staged_release_uid"] == _uid(job)
+    # The projection still renders the staged rows and their (empty, on a
+    # freshly staged job) round history.
+    assert body["topics"][0]["concepts"][0]["keywords"] == "alpha"
+    assert body["versions"] == []
+
+    revisions = client.get(f"/build-concepts/uploads/{job.id}/revisions")
+    assert revisions.status_code == 200, revisions.text
+    assert revisions.json()["revisions"] == []
+
+
+def test_a_historical_job_keeps_every_legacy_review_route(
+    client, db, monkeypatch,
+):
+    """The same fixture without the marker: today's behaviour, unchanged."""
+
+    job = _staged_job(db)
+    assert release.concept_review_state(job) == {}
+    uid = _uid(job)
+
+    staged_again = client.post(f"/build-concepts/uploads/{job.id}/release")
+    assert staged_again.status_code == 200, staged_again.text
+
+    manual = client.post(
+        f"/build-concepts/uploads/{job.id}/release-review/manual-edit",
+        json={
+            "lane": "post", "staged_release_uid": uid,
+            "edits": [{"record_index": 0, "field": "keywords",
+                       "before": "alpha", "after": "alpha, edited"}],
+        },
+    )
+    assert manual.status_code == 200, manual.text
+    edited_uid = manual.json()["staged_release_uid"]
+    assert edited_uid != uid
+
+    monkeypatch.setattr(
+        "app.services.release_review._default_provider",
+        _scripted({
+            "change_summary": "Clarified.",
+            "changes": [{
+                "record_id": "REC-0002", "field": "concept_details",
+                "after": "Description: clarified for the legacy route.",
+                "reason": "requested",
+            }],
+            "additions": [],
+        }),
+    )
+    instruction = client.post(
+        f"/build-concepts/uploads/{job.id}/release-review/apply-instruction",
+        json={
+            "lane": "post", "staged_release_uid": edited_uid,
+            "instruction": "Clarify the second concept.",
+        },
+    )
+    assert instruction.status_code == 200, instruction.text
+    assert instruction.json()["topics"][0]["concepts"][1][
+        "concept_details"
+    ] == "Description: clarified for the legacy route."
+
+    dispatched: list[tuple[int, str]] = []
+
+    def capture(_db, received_job, *, lane, workbook_path, owner_sub):
+        assert workbook_path.read_bytes() == b"legacy workbook"
+        dispatched.append((received_job.id, lane))
+        return {"job_id": received_job.id, "publication": "staged"}
+
+    monkeypatch.setattr(
+        release_workbook_edits, "apply_workbook_and_publish", capture
+    )
+    workbook = client.post(
+        f"/build-concepts/uploads/{job.id}/upload-edited-workbook",
+        params={"lane": "post"},
+        files={"file": (
+            "edited.xlsx", io.BytesIO(b"legacy workbook"),
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet",
+        )},
+    )
+    assert workbook.status_code == 200, workbook.text
+    assert dispatched == [(job.id, "post")]

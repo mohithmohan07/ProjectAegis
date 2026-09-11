@@ -688,3 +688,66 @@ def test_dropped_inline_image_reverts_mechanically_and_records_review():
     assert item["polish_flag"] == question_polishing.FLAG_KEPT
     assert item["polish_note"] == "dropped inline source image URL"
     assert item["polish_audit"]["critic"]["verdict"] == "verified"
+
+
+def test_option_retention_is_measured_against_the_item_source_text():
+    """Only an option the source wording carries can be "dropped" by a rewrite.
+
+    Step 1 splices its rendered options into ``raw_task``
+    (``generation._sanitize_inventory_item``), so its option check is unchanged.
+    A Q51 Step 2 reviewed item keeps its extracted ``options`` beside a
+    ``raw_task`` that is only the reviewed question spans; reverting that
+    item's polish for an option the reviewed wording never contained threw
+    away a paid author+critic round for no defect.
+    """
+    in_source = _item(
+        "QINV-0001",
+        "Which treaty? (A) Vienna (B) Versailles",
+        source_kind="mcq",
+        options=["(A) Vienna", "(B) Versailles"],
+    )
+    assert question_polishing._polish_is_usable(
+        in_source, "Which treaty restored conservative power? (A) Vienna",
+    ) == "dropped MCQ option '(B) Versailles'"
+    assert question_polishing._polish_is_usable(
+        in_source,
+        "Which treaty restored conservative power? (A) Vienna (B) Versailles",
+    ) == ""
+
+    outside_source = _item(
+        "QFILE-0001",
+        "Which molecule carries genetic information?",
+        source_kind="reviewed_file",
+        options=["(a) DNA", "(b) RNA"],
+    )
+    assert question_polishing._polish_is_usable(
+        outside_source,
+        "Which molecule carries genetic information in a cell?",
+    ) == ""
+
+
+def test_reviewed_options_outside_the_question_wording_do_not_revert_the_polish():
+    polished = "Which molecule carries the genetic information of a cell?"
+    source = _item(
+        "QFILE-0001",
+        "Which molecule carries genetic information?",
+        source_kind="reviewed_file",
+        options=["(a) DNA", "(b) RNA"],
+    )
+
+    def author_and_critic(system, user, **kwargs):
+        if kwargs["purpose"] == "advisory_critic":
+            return {"items": [{"qid": source["qid"], "verdict": "verified", "issues": []}]}
+        request = json.loads(user)
+        assert request["questions"][0]["options"] == ["(a) DNA", "(b) RNA"]
+        return {"items": [{"qid": source["qid"], "polished_task": polished}]}
+
+    result = question_polishing.polish_inventory(
+        {"items": [source]}, meta=META, api_call=author_and_critic,
+    )
+
+    item = result["items"][0]
+    assert item["polish_flag"] == question_polishing.FLAG_POLISHED
+    assert item["polished_task"] == item["frozen_task_text"] == polished
+    assert item["options"] == ["(a) DNA", "(b) RNA"]
+    assert item["raw_task"] == "Which molecule carries genetic information?"

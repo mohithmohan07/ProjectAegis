@@ -41,7 +41,7 @@ def recorded_profile_for_job(job):
         raise ValueError("invalid saved model routing record")
     if repair.KEY in record and record[repair.KEY] != repair.VERSION:
         raise ValueError("Unknown saved generation repair policy")
-    if workflow.KEY in record and record[workflow.KEY] != workflow.VERSION:
+    if workflow.KEY in record and record[workflow.KEY] not in workflow.VERSIONS:
         raise ValueError("Unknown saved reviewed-file workflow policy")
     profile = record["profile"]
     return None if profile is None else model_provider.validate_profile(profile)
@@ -61,7 +61,7 @@ def save_profile_for_job(job, profile, *, quality_version=None, repair_version=N
             raise ValueError("Unknown saved generation repair policy")
         record[repair.KEY] = repair_version
     if workflow_version is not None:
-        if workflow_version != workflow.VERSION:
+        if workflow_version not in workflow.VERSIONS:
             raise ValueError("Unknown saved reviewed-file workflow policy")
         record[workflow.KEY] = workflow_version
     path.parent.mkdir(parents=True, exist_ok=True)

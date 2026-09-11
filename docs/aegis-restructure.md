@@ -2922,3 +2922,168 @@ capacity policy, and keep v1/v2 records valid without rewriting historical
 receipts or cache identities. New reviewed-file revisions use v3 as well.
 No output rules, CMS lists, review stages or publication gates change.
 Verify offline and complete the authorized CI, merge and deployment flow.
+
+### Q51 — DECIDED — three-step workflow: as-is Concept questions, Step 2 polishing and reviewed Master publication
+
+**Owner instruction (11 September 2026).** The whole run is three explicit
+parts. Step 01 generates the Concept files and "extracts all the questions as
+it is under types, cases". Step 02: the team reviews the Concept files, makes
+its changes (remove, add, move concepts, topics and questions) and uploads the
+same files; Aegis generates the Post Masters from the reviewed file and NEW Pre
+assessments instead of extraction. Step 03: the team reviews and edits the
+Master files and uploads them to the CMS and to the database. Work that only
+serves later steps ("the polishing of question, or writing output files")
+leaves Step 01. After the reviewed upload the Step 01 source artifacts are
+"completely invalid" and "nowhere connected to the second step". Nothing
+repetitive may run. Every detail is conserved; only ordering changes, with a
+few deletions and additions the owner is consulted on. The evidence and the
+disposition of every stage are in
+`docs/three-step-workflow-review-2026-09-11.md`.
+
+**Step 01.** New uploads freeze `concepts-then-reviewed-masters-2026-09-11-v2`.
+Under v2 the source-question polishing pass no longer runs before the Concept
+files are staged: inventory items carry the source wording, the Example lines
+under each Type/Case show that wording with its necessary shared context and
+images, and the inventory records an explicit `question_polishing_deferred`
+marker. Every other Step 01 stage is unchanged: source reading and
+verification, task-membership ledger, skeleton, topics, descriptions,
+inventory, Type mining, culminations, Phase 3 (Settle, Host, coherence, Place,
+Analyse, Polish, prerequisite captures and merge, Assemble, Pre map with
+related concepts and Pre analysis), final validation, the Concept Refiner over
+both lanes, release QC, KaTeX render validation and the Concept files. Pre
+question generation stays deferred (Q49). Step 01 writes no Master output;
+release.json, inventory.csv and the diagnostics archive remain download-time
+projections. Recorded v1 runs, envelopes, payloads and checkpoints keep v1
+behaviour: the policy echoes the recorded version and never upgrades it.
+
+**Step 02.** Reviewed uploads stay transport only (Q49). Generate Master Files
+extracts concepts and questions from each reviewed file with the independent
+author, critic and Fixer, then — for v2 runs — polishes the reviewed **Post**
+questions once with the existing polishing author and independent critic,
+using the reviewed file blocks as the complete evidence under a versioned
+Step 2 rule (`reviewed-question-polishing-2026-09-11-v1`): make each reviewed
+question a standalone Aegis task, keep every demand, option, table, image,
+ordered part and response mode, never add, remove, merge, split or reorder
+questions, never restore removed content. The polished wording is the frozen
+Master task; the reviewed quote stays as source evidence. File-supplied Pre
+questions are the reviewer's own and are not polished; missing Pre questions
+are generated from the accepted Pre concepts only. Every Step 2 payload records
+the run's workflow version. Each reviewed concept records the reviewed order of
+its questions, so the teaching-order projection maps every reviewed question
+instead of flagging it. Explicit per-lane Master retries now persist their
+provider receipts and run log on the job like the review handoff does. Step 2
+reads from Step 01 only the chapter and publication selection, database
+identities, the artifact directory as a path, and images the reviewed file
+itself cites; the audit list is in the review document §4.
+
+**Step 03.** Two acts per lane, both model-free. Upload reviewed Master file:
+the edited Master workbook (same layout as the download) is parsed with the
+existing read-back parser, rows are matched by `question_label`, every changed
+question-band cell is applied verbatim as the reviewer's decision, absent rows
+are omissions, a row with an unknown or blank label is refused with guidance to
+add the question in Step 02's Concept file (a Master row carries no source
+provenance and the Post Master is source-only), and a new immutable release
+version is rendered, read back and validated exactly
+like the Step 2 version (a value outside the closed CMS vocabulary blocks
+publication with the issue named; the reviewer's value is retained in the
+receipt). Publish: the lane's Concept file publishes first through the
+existing database-and-CMS act; the Master then publishes through the existing
+hash-verified database upload and its questions are appended to the shared
+Bulk Import output workbook under the same lock and outbox discipline the
+Concept act uses. Receipts ride the review marker, which reads `published`
+when every available lane's Master is published. Concept editing is not
+reopened in Step 03 because a new Concept identity stales the Step 2 Master.
+
+**Frontend.** One page shows Step 01 · Generate Concept Files, Step 02 ·
+Review Concept files and generate Masters, Step 03 · Review Master files and
+publish, with the current step highlighted from the review marker. The Step 02
+component is retained; a Step 03 component adds per-lane Master download,
+reviewed Master upload, Concept publication and Master publication with
+receipts; the badge that read "uploaded to database" before anything was
+published is corrected. Historical jobs without the review marker keep their
+existing surface. Backend progress labels are unchanged so stage cards keep
+their cost attribution.
+
+**Verification and review.** The change was reviewed adversarially across the
+policy, Step 2, Step 3 and frontend surfaces with every finding independently
+verified; one blocker (a second reviewed Master round reaching neither the
+database nor the CMS while reporting success), two major and four minor defects
+were fixed, and one report was refuted. Review outcome and the offline suite
+results are recorded in `docs/three-step-workflow-review-2026-09-11.md` §8.
+A second reviewed round updates the published database rows; the shared CMS
+output workbook stays append-only by contract, so its existing row keeps the
+earlier wording until re-export, and the publication receipt says so (D14).
+
+**Not changed — owner approval requested (review document §7).** Skipping the
+Q18 pre-learning claim and the P3 source-duplicate verdict on reviewed Post
+sets (D4); trusting the reviewed-file author's placement instead of the regex
+governing-instruction fold on reviewed items (D5); gating the legacy
+force-release, revisions and release-review routes for review-workflow jobs
+(D7); the unchanged-lane re-extraction mandated by Q49 (D3, default kept);
+the Q31 critic stack and per-row Concept Refiner (D6, kept); mechanical
+display rendering of file-supplied Pre questions (D8, kept). No stage is
+removed by this entry. Q39/Q41 wording "polished before Type/Case mining" and
+the Q49 sentence that Step 1 still ran polishing are superseded for v2 runs;
+their sealed decisions stand. Verify offline and continue the authorized push,
+CI, merge and Fly deployment workflow.
+
+### Q52 — DECIDED — the reviewed set is authoritative, and Step 03 reaches the CMS
+
+**Owner ruling (11 September 2026).** Answering the decisions Q51 left open in
+`docs/three-step-workflow-review-2026-09-11.md` §7, the owner approved: the two
+chapter-wide membership verdicts stop judging a reviewed Post set; the
+governing-instruction pattern match stops judging reviewed items; a
+re-published question rewrites its row in the shared CMS output workbook; the
+legacy review acts close for three-step jobs; Step 03 accepts a brand-new
+Master row; and an unchanged lane keeps the Q49 re-extraction.
+
+**Reviewed membership (D4).** When the Post inventory came from a reviewed
+file, the Q18 pre-learning claim and the P3 source-duplicate verdict are not
+asked for: the team fixed that set in Step 02 and Q41 makes it authoritative,
+while either verdict could drop a question the reviewer deliberately kept. The
+skip is recorded as an explicit disposition on the release with a log line
+naming the reason, so it can never read as a verdict that found nothing. A
+source-extracted bank keeps both decisions, and the Pre lane's generated
+question dedup is untouched.
+
+**Reviewed placement (D5).** A row carrying reviewed-file provenance keeps the
+placement its extraction author decided. The governing-instruction pattern is
+never applied to it, and a neighbouring source directive cannot absorb it into
+shared context. Each exemption is recorded and the zero-loss accounting is
+unchanged; source-extracted rows fold exactly as before. This removes a
+deterministic judgment of meaning from the reviewed path (Rule 1).
+
+**CMS row refresh (D14).** The shared Bulk Import output workbook was strictly
+append-only, so a question re-published with edited content kept its earlier
+wording there. The writer now accepts an explicit set of labels a caller may
+rewrite and re-projects only those rows' question band in place, at their own
+coordinates, under the same lock and durable outbox as the append; a caller
+that names nothing keeps the append-only behaviour byte for byte. The Master
+publication names the labels its database upload reported as updated, and the
+receipt states what was appended, rewritten, already current or skipped.
+
+**Reviewer-authored Master rows (D9 addition).** A row the reviewer writes into
+the Master workbook under an existing group is accepted: its cells are applied
+verbatim through the same projection an edit uses, it is minted a durable label
+under Q36, and it is recorded as reviewer-authored on the release, on its
+blueprint cell and on the published row's own audit, with no invented source
+provenance. Every contract gate runs normally, so a value outside the closed
+vocabulary or unbalanced marks blocks readiness with the issue named. A row
+naming no resolvable group is refused readably.
+
+**Legacy acts (D7).** A job carrying the Concept review marker refuses staging
+another release by hand, publishing an edited Concept workbook, a reviewer
+instruction round against the live database concepts, and the two
+release-review edit paths, each with a message naming the step that owns the
+correction. One of them re-read the Step 01 source text after Step 02 had made
+the reviewed file the only authority. The read-only history projections stay
+open and historical jobs keep every route unchanged.
+
+**Unchanged lanes (D3).** A lane the team did not edit keeps the Q49 handoff:
+the generated workbook is re-read by the same independent author and critic, so
+Step 02 has one authority path and Step 01 rows never re-enter it.
+
+Nothing else changes: the Q31 critic stack, the per-row Concept Refiner, the
+mechanical display rendering of file-supplied Pre questions and the orphaned
+frontend surfaces stand as recorded. Historical runs replay unchanged. Verify
+offline and continue the authorized PR, CI, merge and Fly deployment workflow.

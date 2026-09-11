@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from .. import schemas
 from ..db import SessionLocal, get_db
@@ -121,6 +122,56 @@ def _require_recovery_mutation(job, *, operation: str) -> None:
         )
     except generation_recovery.NonResumableRunError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+
+# --------------------------------------------------------------------------- #
+# Q51 / review decision D7 — the legacy post-run review surfaces are closed
+# for jobs that run the owner's three-step workflow.
+#
+# ``POST /release``, ``POST /upload-edited-workbook``, ``POST /revisions`` and
+# the two writing ``release-review`` acts predate Q41/Q49/Q51. They stage
+# another release by hand, edit or republish the staged Concept release, or
+# run reviewer instruction rounds against the live database concepts — and
+# ``apply-instruction`` hands ``job.mmd_text`` back to a model as evidence,
+# which is exactly the Step 01 source artifact the owner ruled "nowhere
+# connected" to the later steps once the reviewed file is the authority. A
+# Concept correction at this point also mints a new staged identity, which
+# stales the Step 2 Master that was built from the reviewed Concept file.
+#
+# The test is the DURABLE REVIEW MARKER, never ``job.status`` and never a
+# heuristic: ``concept_review_state`` answers ``{}`` for every historical job,
+# and those jobs keep these routes with the exact behaviour they have today.
+# It is the same marker the Step 03 routes above and
+# ``build_concepts_release_publication.upload_release_to_database`` consult.
+#
+# Only the acts that MUTATE or SPEND are gated. ``GET /revisions`` and
+# ``GET /release-review`` stay open for every job: they are read-only
+# projections of recorded history that cost nothing and damage nothing, and
+# their evidence is still worth reading while the three-step run proceeds.
+# --------------------------------------------------------------------------- #
+
+_THREE_STEP_ROUTE_CLOSED = (
+    "this upload runs the three-step review workflow, so {action} is closed "
+    "here. Concept corrections belong to Step 02: edit the Concept file you "
+    "downloaded and upload it with Generate Master Files. Master corrections "
+    "belong to Step 03: edit the Master file you downloaded and upload it "
+    "with the reviewed-Master upload. Recorded review history on this upload "
+    "stays readable, and historical uploads without the Concept review gate "
+    "keep this route unchanged."
+)
+
+
+def _require_legacy_review_job(job, *, action: str) -> None:
+    """409 for a three-step job; a historical job passes straight through.
+
+    Mechanics, not judgment (CLAUDE.md): it reads one durable marker and
+    declines a request the workflow no longer owns, naming the step that
+    does, so the caller knows where to go instead of being told only "no".
+    """
+
+    if not release_svc.concept_review_state(job):
+        return
+    raise HTTPException(409, _THREE_STEP_ROUTE_CLOSED.format(action=action))
 
 
 # --------------------------------------------------------------------------- #
@@ -389,6 +440,9 @@ def release_latest_output(
     try:
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts")
+        _require_legacy_review_job(
+            job, action="staging another release by hand"
+        )
         _require_recovery_mutation(
             job, operation="stage another release from this run"
         )
@@ -612,6 +666,13 @@ async def upload_edited_workbook_to_cms(
         job = uploads.get_job(
             db, job_id, owner_sub=user.sub, module="build_concepts"
         )
+        # Before the request body is read: a three-step job's Concept
+        # corrections belong to Step 02, and publishing an edited Concept
+        # workbook here would mint a staged identity the Step 2 Master no
+        # longer matches.
+        _require_legacy_review_job(
+            job, action="publishing an edited Concept workbook"
+        )
         _require_recovery_mutation(
             job, operation="upload and publish an edited workbook"
         )
@@ -651,6 +712,147 @@ async def upload_edited_workbook_to_cms(
 
 
 # --------------------------------------------------------------------------- #
+# Step 03 — the reviewed Master file (owner's three-step workflow).
+#
+# ``submit`` applies the reviewer's edited Master workbook verbatim as a new
+# release version and computes its readiness; ``publish`` writes the lane's
+# live Master to the database and appends its questions to the shared CMS
+# workbook. Both are explicit, authenticated, lane-named acts on a job that
+# reached the Concept review gate; legacy jobs without the marker are refused
+# and keep their existing routes. Neither route calls a model.
+# --------------------------------------------------------------------------- #
+
+def _master_review_http_error(exc: Exception) -> HTTPException:
+    """One readable HTTP mapping for both Step 03 routes."""
+
+    from ..services import master_review
+
+    if isinstance(exc, (uploads.UploadJobNotFound, release_svc.ReleaseUnavailableError,
+                        master_review.MasterReviewNotFound)):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, (master_review.MasterReviewConflict,
+                        uploads.JobAlreadyRunningError,
+                        generation_recovery.NonResumableRunError)):
+        return HTTPException(409, str(exc))
+    if isinstance(exc, master_review.MasterReviewRefused):
+        return HTTPException(422, str(exc))
+    if isinstance(exc, master_review.MasterReviewError):
+        return HTTPException(500, str(exc))
+    return HTTPException(
+        500,
+        "the Master review act failed before anything was published "
+        f"({type(exc).__name__}); the current Master version is unchanged",
+    )
+
+
+@router.post("/uploads/{job_id}/master-review/submit")
+async def submit_reviewed_master_file(
+    job_id: int,
+    lane: str = PUBLISH_LANE_QUERY,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Apply the team's edited Master workbook as a new release version.
+
+    The file is the lane's downloaded Master (same layout). Cell edits are
+    reversed through the exact render projection and applied verbatim;
+    omitted rows are recorded omissions; unknown rows are refused with the
+    Step 02 path named. The new version is rendered, read back and its
+    readiness computed — a blocked readiness is reported, never hidden, and
+    is what the publish act refuses on.
+    """
+
+    from ..services import master_review
+
+    resolved = _publish_lane(lane)
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts",
+        )
+        raw_bytes = await read_limited_upload(
+            file, description="reviewed Master workbook",
+        )
+
+        def apply_reviewed_master():
+            # Its own session, exactly as the Concept review upload does
+            # (build_concepts_release_api_contract.py:339): the request session
+            # belongs to the event loop's thread, and a Session is not shared
+            # across threads.
+            worker_db = SessionLocal()
+            try:
+                worker_job = uploads.get_job(
+                    worker_db, job_id, owner_sub=user.sub,
+                    module="build_concepts",
+                )
+                return master_review.submit_reviewed_master(
+                    worker_db, worker_job,
+                    lane=resolved,
+                    workbook_bytes=raw_bytes,
+                    filename=str(file.filename or ""),
+                    owner_sub=user.sub,
+                )
+            finally:
+                worker_db.close()
+
+        # Everything after the awaited read is blocking: parsing the uploaded
+        # workbook, re-rendering BOTH workbooks, staging file IO, two commits
+        # and a Node subprocess for KaTeX validation. On the event loop, with
+        # one worker deployed, that stalls every other request for the whole
+        # duration. The response payload is plain JSON-safe dicts, so nothing
+        # in it outlives the worker session.
+        return await run_in_threadpool(apply_reviewed_master)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — mapped to readable HTTP errors
+        error = _master_review_http_error(exc)
+        if error.status_code == 500:
+            progress.log(
+                f"Master review submit failed for upload {job_id}: "
+                f"{type(exc).__name__}",
+                level="error",
+            )
+        raise error from exc
+
+
+@router.post("/uploads/{job_id}/master-review/publish")
+def publish_reviewed_master_file(
+    job_id: int,
+    lane: str = PUBLISH_LANE_QUERY,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Write the lane's live Master to the database and the CMS workbook.
+
+    Requires the same lane's Concept file to be published first (its groups
+    and questions attach to those concepts). Idempotent: repeating returns
+    the recorded receipt.
+    """
+
+    from ..services import master_review
+
+    resolved = _publish_lane(lane)
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts",
+        )
+        return master_review.publish_reviewed_master(
+            db, job, lane=resolved, owner_sub=user.sub,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — mapped to readable HTTP errors
+        error = _master_review_http_error(exc)
+        if error.status_code == 500:
+            progress.log(
+                f"Master review publish failed for upload {job_id}: "
+                f"{type(exc).__name__}",
+                level="error",
+            )
+        raise error from exc
+
+
+# --------------------------------------------------------------------------- #
 # Post-run reviewer revisions
 #
 # The reviewer downloads the released workbook (``release.xlsx`` above), reads
@@ -679,6 +881,12 @@ def submit_concept_revision(
     # A revision is a provider-backed post-run mutation. Refuse before even
     # recording a round, so no durable reviewer action falsely appears to have
     # been attempted and no provider can be called.
+    _require_legacy_review_job(
+        job,
+        action=(
+            "a reviewer instruction round against the live database concepts"
+        ),
+    )
     _require_recovery_mutation(job, operation="request a Concept revision")
 
     try:
@@ -773,6 +981,9 @@ def apply_release_manual_edit(
     """Apply the reviewer's verbatim field edits as one recorded round."""
 
     job = _review_job(db, job_id, user.sub)
+    _require_legacy_review_job(
+        job, action="editing the staged release in place"
+    )
     _require_recovery_mutation(job, operation="edit the staged release")
     try:
         return review_svc.apply_manual_edits(
@@ -810,6 +1021,12 @@ def apply_release_instruction(
     """
 
     job = _review_job(db, job_id, user.sub)
+    # This is the route that re-reads ``job.mmd_text`` as model evidence
+    # (release_review._instruction_source); Step 01 source text is not an
+    # input after the reviewed file became the authority.
+    _require_legacy_review_job(
+        job, action="applying an instruction to the staged release"
+    )
     _require_recovery_mutation(
         job, operation="apply an instruction to the staged release"
     )

@@ -25,8 +25,26 @@ directory selection.
 
 ### 2 · Build Concepts
 
-**Post Learning** — upload a document (any format) → convert to MMD → parse
-concepts → deposit under a chapter.
+One run, three explicit steps (register Q51, 11 September 2026):
+
+1. **Step 01 · Generate Concept Files** — upload a document → convert → extract
+   topics, concepts and every source question *as it is* under its Types/Cases
+   → stage the Pre and Post Concept files and pause for review. No question
+   polishing and no Pre question generation happen here.
+2. **Step 02 · Review Concept files and generate Masters** — the team edits the
+   Concept files (remove, add, move concepts, topics, questions) and uploads
+   them. Aegis extracts the reviewed files independently, polishes the reviewed
+   Post questions once (author + independent critic, reviewed file as the only
+   evidence), generates new Pre questions from the accepted Pre concepts and
+   builds both Master files. Nothing from the Step 01 source artifacts enters
+   Step 02.
+3. **Step 03 · Review Master files and publish** — the team edits the Master
+   files and uploads them; the edits become a new immutable release version
+   (rendered, read back, validated), then each lane publishes to the database
+   and is appended to the shared CMS output workbook, Concept file first.
+
+See `docs/three-step-workflow-review-2026-09-11.md` for the stage-by-stage
+disposition and the decisions still open for the owner.
 
 ### Post-generation pipeline
 

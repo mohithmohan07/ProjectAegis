@@ -7,6 +7,10 @@ import type { UploadJob } from "../types";
 import MmdViewer from "./MmdViewer";
 import SourceBookInput from "./SourceBookInput";
 import { isConceptReviewWaiting } from "./ConceptReviewWorkflow";
+import {
+  hasReviewWorkflowMarker,
+  reviewWorkflowStatus,
+} from "../lib/workflowSteps";
 
 type Module = "assessments" | "concepts";
 type MasterLane = "post" | "pre";
@@ -49,6 +53,70 @@ function masterIsAvailable(job: UploadJob, lane: MasterLane): boolean {
     (candidate) => candidate.kind === MASTER_KIND[lane],
   );
   return Boolean(artifact && !artifact.disabled && artifact.download_url);
+}
+
+const PUBLISH_KINDS = new Set(["database_upload", "pre_database_upload"]);
+
+/**
+ * Whether the run manifest records a Concept publication for either lane.
+ * The publish entries are `disabled` once uploaded; a `disabled_reason`
+ * instead explains a lane that was never staged, which is not a publication.
+ */
+function manifestRecordsPublication(job: UploadJob): boolean {
+  return Boolean(job.source_artifacts?.files?.some((file) =>
+    PUBLISH_KINDS.has(file.kind) && file.disabled && !file.disabled_reason));
+}
+
+/**
+ * Whether the durable review marker records a published Master lane.
+ */
+function markerRecordsPublication(job: UploadJob): boolean {
+  if (reviewWorkflowStatus(job) === "published") return true;
+  const lanes = job.review_workflow?.master_review;
+  return Boolean(lanes && Object.values(lanes).some((lane) =>
+    lane && typeof lane === "object" && Boolean(lane.published)));
+}
+
+/**
+ * The intake badge. "uploaded to database" is a claim about a publication
+ * and is only made when the manifest or the review marker records one:
+ * a `generated` status alone does not, because release-first runs reach it
+ * with nothing written to the database.
+ */
+export function intakeStatusBadge(
+  job: UploadJob,
+  module: Module,
+): { label: string; tone: "red" | "green" | "yellow" | "accent" } {
+  const nonResumable = job.generation_recovery?.resume_allowed === false;
+  if (nonResumable) return { label: "generation incomplete", tone: "red" };
+  const generated = job.status === "generated";
+  const released = job.status === "released";
+  const converted = job.status === "converted"
+    || generated
+    || released
+    || Boolean(job.mmd_text)
+    || Boolean(job.checkpoint_available);
+  if (module === "concepts") {
+    const workflow = reviewWorkflowStatus(job);
+    const publishedSomething = manifestRecordsPublication(job)
+      || markerRecordsPublication(job);
+    if (workflow === "published") return { label: "published", tone: "green" };
+    if (workflow === "master_ready") {
+      return publishedSomething
+        ? { label: "Master files ready · partly published", tone: "green" }
+        : { label: "Master files ready", tone: "green" };
+    }
+    if (hasReviewWorkflowMarker(job) || job.status === "concept_review") {
+      return { label: "Concept review", tone: "yellow" };
+    }
+    if ((generated || released) && publishedSomething) {
+      return { label: "uploaded to database", tone: "green" };
+    }
+  }
+  if (generated) return { label: "generated · not published", tone: "green" };
+  if (released) return { label: "output released for review", tone: "green" };
+  if (converted) return { label: "parsed", tone: "green" };
+  return { label: "uploaded (not parsed)", tone: "accent" };
 }
 
 function readableError(error: unknown): string {
@@ -734,6 +802,11 @@ export default function DocumentUpload({
   );
   const conceptReviewWaiting = module === "concepts"
     && isConceptReviewWaiting(job);
+  // Concept-first jobs publish from Step 03 (MasterReviewWorkflow); the
+  // historical publish row and Master rebuild wording belong to legacy runs.
+  const reviewWorkflowJob = module === "concepts"
+    && (hasReviewWorkflowMarker(job) || job.status === "concept_review");
+  const badge = intakeStatusBadge(job, module);
 
   // Step 3 — uploaded (and maybe converted). The run-outputs and
   // source-details cards render as SIBLINGS of the upload card: the four
@@ -742,16 +815,8 @@ export default function DocumentUpload({
     <>
       <div className="card">
       <div className="row">
-        <span className={`badge ${nonResumable ? "red" : converted ? "green" : "accent"}`}>
-          {nonResumable
-            ? "generation incomplete"
-            : generated
-            ? "uploaded to database"
-            : released
-              ? "output released for review"
-              : converted
-                ? "parsed"
-                : "uploaded (not parsed)"}
+        <span className={`badge ${badge.tone}`} data-testid="intake-status-badge">
+          {badge.label}
         </span>
         <span className="muted mono">{job.filename}</span>
         {job.source_book && <span className="badge accent">{job.source_book}</span>}
@@ -921,6 +986,7 @@ export default function DocumentUpload({
           // input controls in ConceptReviewWorkflow. Legacy generated and
           // released jobs keep the historical four-output/publish surface.
           showRunOutputs={module === "concepts" && !conceptReviewWaiting}
+          reviewWorkflowJob={reviewWorkflowJob}
           generationBlocked={nonResumable}
           onPublished={(freshJob) => {
             // Child actions may finish after Start new upload or after a
@@ -942,6 +1008,7 @@ function SourceArtifactsCard({
   jobId,
   jobRunning,
   showRunOutputs,
+  reviewWorkflowJob = false,
   generationBlocked,
   onPublished,
 }: {
@@ -950,6 +1017,10 @@ function SourceArtifactsCard({
   jobId: number;
   jobRunning: boolean;
   showRunOutputs: boolean;
+  /** Concept-first (Q49) job: Concept edits belong to Step 02 and every
+   * publication to Step 03, so the legacy publish row is not offered and a
+   * Master rebuild is presented as a Step 02 retry for that lane. */
+  reviewWorkflowJob?: boolean;
   generationBlocked: boolean;
   onPublished: (job: UploadJob) => void;
 }) {
@@ -1149,7 +1220,11 @@ function SourceArtifactsCard({
     (raw) => raw as ActionableArtifact,
   );
   const outputs = files.filter((f) => f.kind in OUTPUT_META);
-  const publishActions = files.filter((f) => f.action === "post");
+  // A review-workflow job publishes its Concept and Master files from
+  // Step 03; its manifest publish entries are state, not controls, here.
+  const publishActions = reviewWorkflowJob
+    ? []
+    : files.filter((f) => f.action === "post");
   const evidence = files.filter(
     (f) => !(f.kind in OUTPUT_META) && f.action !== "post",
   );
@@ -1278,13 +1353,18 @@ function SourceArtifactsCard({
               not a detail folded into the upload card (owner report,
               2026-08-30: the outputs were invisible after a run). */}
           <div className="section-title" id="run-outputs">
-            3 · Run outputs
+            Run outputs
           </div>
           <div className="card">
           <div className="row">
             <span className="muted">
-              The four output slots for this run. Available files download
-              here; database publication stays a separate, explicit act.
+              {reviewWorkflowJob
+                ? "The four output slots for this run. Available files "
+                  + "download here; reviewed uploads and every publication "
+                  + "happen in Steps 02 and 03 above."
+                : "The four output slots for this run. Available files "
+                  + "download here; database publication stays a separate, "
+                  + "explicit act."}
             </span>
             <div className="spacer" />
             <button
@@ -1369,7 +1449,9 @@ function SourceArtifactsCard({
                           >
                             {laneBusy
                               ? <><span className="spinner" aria-hidden="true" /> Rebuilding…</>
-                              : "Rebuild Master"}
+                              : reviewWorkflowJob
+                                ? "Retry Step 02 for this lane"
+                                : "Rebuild Master"}
                           </button>
                         </>
                       )}

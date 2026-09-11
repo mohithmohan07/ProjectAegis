@@ -171,3 +171,72 @@ test("stages corrected Concept workbooks and keeps Master continuation explicit"
   );
   expect(fetchMock.mock.calls[0][0]).not.toContain("upload-edited-workbook");
 });
+
+test("stores a reviewed Master file on its lane's master-review route without publishing", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({ lane: "post", version: 2, issues: [] }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await api.uploadReviewedMaster(
+    42,
+    "post",
+    new File(["xlsx"], "post-master-reviewed.xlsx"),
+  );
+
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/build-concepts/uploads/42/master-review/submit?lane=post",
+    ),
+    expect.objectContaining({
+      method: "POST",
+      credentials: "include",
+      body: expect.any(FormData),
+    }),
+  );
+  // Multipart: the browser sets the boundary, so no JSON content type.
+  expect(fetchMock.mock.calls[0][1].headers).not.toHaveProperty("Content-Type");
+  expect(fetchMock.mock.calls[0][0]).not.toContain("publish");
+  expect(fetchMock.mock.calls[0][0]).not.toContain("upload-edited-workbook");
+});
+
+test("publishes a reviewed Master on its lane's master-review publish route", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    status: 200,
+    json: async () => ({
+      lane: "pre",
+      database: { groups_created: 1, questions_created: 2, labels_reissued: 0 },
+    }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const receipt = await api.publishReviewedMaster(42, "pre");
+
+  expect(receipt.database?.questions_created).toBe(2);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining(
+      "/build-concepts/uploads/42/master-review/publish?lane=pre",
+    ),
+    expect.objectContaining({ method: "POST", credentials: "include" }),
+  );
+});
+
+test("a refused Master publication surfaces the server's readable detail", async () => {
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: false,
+    status: 409,
+    statusText: "Conflict",
+    json: async () => ({ detail: "Publish the post Concept file first" }),
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  await expect(api.publishReviewedMaster(42, "post")).rejects.toMatchObject({
+    message: "Publish the post Concept file first",
+    status: 409,
+  });
+});

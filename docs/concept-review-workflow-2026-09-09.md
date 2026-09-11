@@ -1,5 +1,12 @@
 # Concept review and complete question capture — 9 September 2026
 
+> **Superseded in part by Q51 (11 September 2026).** New runs freeze workflow
+> policy v2: Step 01 extracts questions as is (no polishing before the Concept
+> files), Step 02 polishes the reviewed Post questions and generates Pre
+> questions, and Step 03 publishes reviewed Master files. The "Gemini-only
+> authoring" sentence below records the Q40 era; Q50 routes every stage to
+> GPT-5.6 Luna. See `docs/three-step-workflow-review-2026-09-11.md`.
+
 Q41 builds on the Q39 source-preservation and Q40 model/accounting changes.
 The owner's follow-ups authorize reviewed Post question additions, omissions
 and moves; uploads of the same edited Pre/Post Concept Excel files; removal

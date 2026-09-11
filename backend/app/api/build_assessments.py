@@ -480,6 +480,115 @@ def upload_release_master_to_database(
         raise HTTPException(409, str(e))
 
 
+def _persist_rebuild_accounting(db, job_id: int, *, owner_sub: str, error=None) -> None:
+    """Persist the rebuild's usage ledger and run log; keep a failure's cause."""
+    try:
+        uploads.persist_current_openai_usage(db, job_id, owner_sub=owner_sub)
+    except Exception:
+        db.rollback()
+        if error is None:
+            raise
+    try:
+        uploads.persist_current_generation_log(
+            db, job_id, error=error, owner_sub=owner_sub,
+        )
+    except Exception:
+        db.rollback()
+        if error is None:
+            raise
+
+
+def _rebuild_work_started(usage, history: list, events_before: int) -> bool:
+    """Did the rebuild get past its pre-spend guards, or reach the provider?
+
+    Mechanical counters only — never the refusal's wording. ``rebuild_lane_master``
+    refuses ahead of any work in exactly two places: the job-operation lock an
+    explicit rebuild claims (a live run legitimately holding it is a 409) and
+    ``_require_terminal_concept_release`` (a non-terminal Concept release is a
+    400). Neither emits a progress event nor schedules a provider request, so
+    a refusal that spent nothing leaves both counters at their entry values.
+    Everything the rebuild does afterwards — its storage preflight line, its
+    stages, its author/critic calls — moves at least one of them.
+
+    A zero-spend refusal therefore records no failure: ``persist_current_generation_log``
+    overwrites ``job.detail`` with "Generation failed: …" whenever it is handed
+    an error, and nothing resets that on a later success, so a refusal that
+    changed nothing would replace the reviewer's "Concept files are ready for
+    review…" detail in Step 03 with a failure that never happened.
+    """
+    from ..services import openai_usage
+
+    summary = (usage or openai_usage.UsageAccumulator()).summary(
+        include_attempts=False,
+    )
+    if any(int(summary.get(key) or 0) > 0 for key in (
+        "request_count", "attempt_count", "provider_request_count",
+    )):
+        return True
+    return len(history) > events_before
+
+
+def _rebuild_lane_master_with_accounting(db, job_id: int, lane: str, *, owner_sub: str):
+    """Run an explicit Master rebuild with the job's usage and log accounting.
+
+    The from-job routes call ``rebuild_lane_master`` directly, outside
+    ``uploads.run_with_openai_usage`` — which refuses ``generated`` jobs and
+    claims the job lock the rebuild claims itself — so their author/critic
+    receipts and log lines never reached the job (the Q41/Q43 cumulative
+    accounting gap). This wrapper opens the same usage accumulator and event
+    history, binds the job's recorded model routing before the rebuild
+    claims its lock, and persists both on success and on failure. The
+    rebuild keeps owning the ownership refusal and the lock.
+    """
+    import contextlib
+
+    from ..services import build_concepts_release_contract as release_contract
+    from ..services import model_routing_run, openai_usage
+
+    try:
+        job = uploads.get_job(db, job_id, owner_sub=owner_sub, module="build_concepts")
+    except uploads.UploadJobNotFound:
+        # Nothing to account for; the rebuild reports the missing job itself.
+        job = None
+    with progress.capture_history() as history, openai_usage.track() as usage:
+        if job is not None:
+            cumulative = openai_usage.bind_persisted_summary(
+                f"upload-job:{job.id}",
+                job.openai_usage if isinstance(job.openai_usage, dict) else {},
+            )
+            if cumulative.get("request_count"):
+                progress.usage(cumulative)
+        routing = (
+            model_routing_run.bind_job(job, require_pre=False)
+            if job is not None else contextlib.nullcontext()
+        )
+        events_before = len(history)
+        try:
+            with routing:
+                result = release_contract.rebuild_lane_master(
+                    db,
+                    job_id,
+                    lane,
+                    owner_sub=owner_sub,
+                    claim_job_lock=True,
+                )
+        except Exception as exc:
+            # Receipts for provider responses already received (and billed)
+            # survive the failed rebuild transaction, as does its diagnostic.
+            # A refusal from the two pre-spend guards recorded nothing and
+            # spent nothing: it neither writes a failure over the job's
+            # user-visible detail nor rewrites the ledger a live run owns.
+            db.rollback()
+            if job is not None and _rebuild_work_started(
+                usage, history, events_before,
+            ):
+                _persist_rebuild_accounting(db, job_id, owner_sub=owner_sub, error=exc)
+            raise
+        if job is not None:
+            _persist_rebuild_accounting(db, job_id, owner_sub=owner_sub)
+        return result
+
+
 @router.post("/releases/from-job/{job_id}")
 def run_release_from_job(
     job_id: int,
@@ -493,16 +602,14 @@ def run_release_from_job(
     from ..services import assessment_release_service as release_svc
     from ..services import generation_recovery
     from ..services import build_concepts_release as bc_release
-    from ..services import build_concepts_release_contract as release_contract
     from ..services.phase3 import envelope, kernel, premap
 
     try:
-        release = release_contract.rebuild_lane_master(
+        release = _rebuild_lane_master_with_accounting(
             db,
             job_id,
             bc_release.LANE_POST,
             owner_sub=user.sub,
-            claim_job_lock=True,
         )
     except assessment_release_run.SourceQuestionLeak as e:
         raise HTTPException(409, str(e))
@@ -572,17 +679,15 @@ def run_pre_release_from_job(
     from ..services import assessment_release_run
     from ..services import assessment_release_service as release_svc
     from ..services import build_concepts_release as bc_release
-    from ..services import build_concepts_release_contract as release_contract
     from ..services import generation_recovery
     from ..services.phase3 import envelope, kernel, premap
 
     try:
-        release = release_contract.rebuild_lane_master(
+        release = _rebuild_lane_master_with_accounting(
             db,
             job_id,
             bc_release.LANE_PRE,
             owner_sub=user.sub,
-            claim_job_lock=True,
         )
     except assessment_release_run.SourceQuestionLeak as e:
         raise HTTPException(409, str(e))

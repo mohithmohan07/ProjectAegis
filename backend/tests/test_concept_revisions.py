@@ -671,3 +671,129 @@ def test_deletion_is_not_offered(db, job):
     assert "delete" not in "".join(
         concept_revisions.EDITABLE_FIELDS + concept_revisions.ADDABLE_FIELDS
     )
+
+
+# --------------------------------------------------------------------------- #
+# Q51 / review decision D7 — reviewer instruction rounds are closed for jobs
+# that run the owner's three-step workflow.
+#
+# A round here rewrites the LIVE database concepts and spends a provider call,
+# which is Step 02's act on the reviewed Concept file. The gate reads the
+# durable Concept-review marker, so a historical job (no marker) keeps the
+# route exactly as it is today, and the read-only history stays open for both.
+# --------------------------------------------------------------------------- #
+
+def _mark_three_step(db, upload):
+    """Write the durable Concept-review marker the routes consult."""
+
+    from app.services import build_concepts_release as release
+
+    inventory = dict(upload.question_inventory or {})
+    inventory[release.CONCEPT_REVIEW_KEY] = {
+        "version": release.CONCEPT_REVIEW_VERSION,
+        "status": release.CONCEPT_REVIEW_PENDING,
+        "available_lanes": [release.LANE_POST],
+        "required_lanes": [release.LANE_POST],
+        "optional_lanes": [],
+        "reviewed_lanes": [],
+        "concept_versions": {},
+        "concept_release_uids": {},
+        "corrected_inputs": {},
+    }
+    upload.question_inventory = inventory
+    db.commit()
+    db.refresh(upload)
+    assert release.concept_review_state(upload), "the marker is the gate"
+
+
+def test_three_step_job_cannot_open_a_revision_round(
+    client, db, job, monkeypatch,
+):
+    """409 naming Step 02; no round recorded and no provider called."""
+
+    upload, concept, _topics = job
+    _mark_three_step(db, upload)
+    topic_before = db.get(models.Concept, concept.id).topic_id
+
+    def forbidden_record(*_args, **_kwargs):
+        raise AssertionError("a gated route recorded a revision round")
+
+    def forbidden_apply(*_args, **_kwargs):
+        raise AssertionError("a gated route entered the revision provider")
+
+    def forbidden_provider(**_kwargs):
+        raise AssertionError("a gated route spent on the provider")
+
+    monkeypatch.setattr(
+        concept_revisions, "record_instruction", forbidden_record,
+    )
+    monkeypatch.setattr(
+        concept_revisions, "apply_instruction", forbidden_apply,
+    )
+    monkeypatch.setattr(
+        concept_revisions, "_default_provider", forbidden_provider,
+    )
+
+    response = client.post(
+        f"/build-concepts/uploads/{upload.id}/revisions",
+        json={"instruction": "This belongs under Sum of First n Terms."},
+    )
+
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert "reviewer instruction round" in detail
+    assert "Step 02" in detail and "Step 03" in detail, detail
+    assert "three-step review workflow" in detail
+
+    db.expire_all()
+    assert concept_revisions.list_revisions(db, upload.id) == []
+    assert db.get(models.Concept, concept.id).topic_id == topic_before
+
+
+def test_three_step_job_can_still_read_its_revision_history(
+    client, db, job,
+):
+    """The listing is a read-only projection; it stays available."""
+
+    upload, _concept, _topics = job
+    concept_revisions.record_instruction(db, upload, "An earlier round.")
+    _mark_three_step(db, upload)
+
+    listed = client.get(f"/build-concepts/uploads/{upload.id}/revisions")
+    assert listed.status_code == 200, listed.text
+    history = listed.json()["revisions"]
+    assert [row["instruction"] for row in history] == ["An earlier round."]
+
+
+def test_a_historical_job_keeps_the_revision_route(client, db, job, monkeypatch):
+    """The same fixture without the marker: today's behaviour, unchanged."""
+
+    upload, concept, topics = job
+    from app.services import build_concepts_release as release
+
+    assert release.concept_review_state(upload) == {}
+
+    monkeypatch.setattr(
+        concept_revisions,
+        "_default_provider",
+        lambda **_kwargs: {
+            "change_summary": "Moved to the later topic.",
+            "changes": [{
+                "concept_id": concept.id,
+                "field": "topic",
+                "after": "Sum of First n Terms",
+                "reason": "Reviewer: this needs Sn.",
+            }],
+        },
+    )
+    posted = client.post(
+        f"/build-concepts/uploads/{upload.id}/revisions",
+        json={"instruction": "This belongs under Sum of First n Terms."},
+    )
+    assert posted.status_code == 200, posted.text
+    assert posted.json()["status"] == "applied"
+
+    db.expire_all()
+    assert db.get(models.Concept, concept.id).topic_id == (
+        topics["Sum of First n Terms"].id
+    )

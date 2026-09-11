@@ -265,17 +265,28 @@ def _polish_is_usable(item: dict[str, Any], polished: str) -> str:
     Only mechanical defects revert a polish: an empty rewrite, a dropped
     MCQ option, or a dropped inline image URL. Whether wording is usable is a judgment
     the polish model and its critic own — no length check second-guesses it.
+
+    Retention is measured against the wording the item actually carries, the
+    same rule the inline image URLs below use. A Step 1 item's options are
+    spliced into its ``raw_task`` by ``generation._sanitize_inventory_item``,
+    so every one of them is in the source text and this check fires exactly
+    as it always has. A Q51 Step 2 reviewed item keeps its extracted
+    ``options`` beside a ``raw_task`` that is only the reviewed question
+    spans (``reviewed_file_input.prepare``): an option the reviewed wording
+    never contained cannot have been "dropped" by a rewrite of that wording,
+    and reverting on it discarded the whole paid Step 2 polish. An option the
+    source text DOES carry must still survive, character for character.
     """
     if not str(polished or "").strip():
         return "empty polished wording"
+    source_text = _item_source_text(item)
     options = item.get("options") or []
     for option in options if isinstance(options, list) else []:
         # Structured/image options are verified from full evidence by the
         # critic; stringifying a dictionary is not its learner-visible text.
         text = option.strip() if isinstance(option, str) else ""
-        if text and text not in polished:
+        if text and text in source_text and text not in polished:
             return f"dropped MCQ option {text[:60]!r}"
-    source_text = _item_source_text(item)
     for image_url in item.get("image_urls") or []:
         url = str(image_url or "")
         if url and url in source_text and url not in polished:
@@ -296,10 +307,32 @@ def _cache_key(items: list[dict[str, Any]], meta: dict | None = None) -> str:
     return _sha256_text(payload)[:32]
 
 
+def _reviewed_step_rules(payload: dict[str, Any], *, review: bool = False) -> str:
+    """Q51 Step 2 rule block, appended only for a reviewed-file polishing batch.
+
+    Additive and versioned: an unstamped (Step 1 / historical) payload gets
+    the empty string, so the v1 prompt texts and their decision identities
+    are byte-identical. The reviewed-file policy owns the text and stamp.
+    """
+    from . import reviewed_question_polishing as reviewed_step
+
+    return (
+        reviewed_step.review_rules(payload) if review
+        else reviewed_step.author_rules(payload)
+    )
+
+
+def _reviewed_step_fields(payload: dict[str, Any]) -> dict[str, str]:
+    from . import reviewed_question_polishing as reviewed_step
+
+    return reviewed_step.fields(payload)
+
+
 def _author_system(payload: dict[str, Any]) -> str:
     return (
         prompts.get_text("concepts.question_polishing.system")
         + source_format.context_polish_rules(payload)
+        + _reviewed_step_rules(payload)
     )
 
 
@@ -307,6 +340,7 @@ def _critic_system(payload: dict[str, Any]) -> str:
     return (
         prompts.get_text("concepts.question_polishing.critic")
         + ("\n" + source_format.CONTEXT_REVIEW_RULES if quality.active(payload) else "")
+        + _reviewed_step_rules(payload, review=True)
     )
 
 
@@ -352,6 +386,9 @@ def _quota_stop(exc: Exception) -> bool:
 def _batch_payload(meta: dict, batch: list[dict[str, Any]]) -> str:
     payload = {
         **({quality.KEY: quality.VERSION} if quality.active(meta) else {}),
+        # A Step 2 reviewed-file batch carries its own policy stamp, so its
+        # cache identity and prompts are distinct from a Step 1 batch.
+        **_reviewed_step_fields(meta),
         "chapter": {
             key: str(meta.get(key) or "")
             for key in ("subject", "board", "grade", "chapter_title")

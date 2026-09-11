@@ -1728,7 +1728,7 @@ def _validate_payload(payload: Any) -> tuple[dict, str, str]:
         and payload[generation_quality_policy.KEY] != generation_quality_policy.VERSION
     ):
         raise ValueError("Unknown saved generation quality policy")
-    if reviewed_file_workflow_policy.KEY in payload and payload[reviewed_file_workflow_policy.KEY] != reviewed_file_workflow_policy.VERSION:
+    if reviewed_file_workflow_policy.KEY in payload and payload[reviewed_file_workflow_policy.KEY] not in reviewed_file_workflow_policy.VERSIONS:
         raise ValueError("Unknown saved reviewed-file workflow policy")
     if (
         generation_repair_policy.KEY in payload

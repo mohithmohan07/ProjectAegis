@@ -7,11 +7,20 @@ and OR relationships, options and source answers, shared context, ordered
 images, and Type/Case route evidence.
 
 Everything here is deterministic mechanics: transformation, identity, and
-accounting. A narrowly shaped governing response instruction may be retained
-as shared context for its immediately following option-bearing questions
-instead of becoming a question by itself. Its QID receives an explicit
-context disposition, so no source occurrence disappears from the zero-loss
-accounting (spec §14).
+accounting. In a SOURCE-EXTRACTED bank a narrowly shaped governing response
+instruction may be retained as shared context for its immediately following
+option-bearing questions instead of becoming a question by itself. Its QID
+receives an explicit context disposition, so no source occurrence disappears
+from the zero-loss accounting (spec §14).
+
+That fold never applies to a row extracted from a team-REVIEWED Concept file
+(Q51 §7 decision D5, owner-approved): the reviewed-file author already
+returned each row's explicit ``placement_section`` and separated its
+``question_spans`` from its ``context_spans``, and the team fixed that set by
+hand, so a wording/adjacency match here could silently demote a question the
+reviewer deliberately kept. The exemption is decided from the row's own
+recorded ``source_kind`` provenance -- never from its content -- and every
+exempt row is named in ``reviewed_placement_retained``.
 """
 from __future__ import annotations
 
@@ -90,6 +99,26 @@ _POSITION_FIELDS = frozenset({
 })
 
 
+REVIEWED_SOURCE_KIND = "reviewed_file"
+"""Recorded provenance stamped on every row ``reviewed_file_input.prepare``
+extracts from a team-reviewed Concept workbook (Q49 hand-off, Q51 Step 02)."""
+
+REVIEWED_PLACEMENT_AUTHORITY = "reviewed-file-placement-authority-1"
+"""Versioned marker for the reviewed-file placement exemption (Q51 §7 D5)."""
+
+
+def from_reviewed_file(item: Mapping) -> bool:
+    """Whether this row's RECORDED provenance is a reviewed Concept file.
+
+    Provenance only: ``source_kind`` is written by
+    ``reviewed_file_input.prepare`` when it extracts the reviewed workbook.
+    Nothing about the row's wording, shape or neighbours is inspected, so this
+    makes no judgment about what the row means.
+    """
+
+    return str(item.get("source_kind") or "").strip() == REVIEWED_SOURCE_KIND
+
+
 _GOVERNING_MCQ_INSTRUCTION_RE = re.compile(
     r"^read the following questions? and "
     r"(?:tick|mark|select|choose)(?: [☑✓✔])? the correct "
@@ -134,20 +163,48 @@ def _has_objective_option_block(item: Mapping) -> bool:
 
 def _assessment_items(
     items: list[Mapping],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     """Partition question obligations from shared response instructions.
 
     A directive is context-only only when two or more immediately following
     inventory rows each carry a mechanically visible option block. This
     adjacency/cardinality guard prevents a free-standing learner instruction
     or ordinary imperative prose from being reclassified by wording alone.
+
+    A row whose recorded provenance is a reviewed file is exempt from the fold
+    in BOTH roles (Q51 D5): it is never demoted to context-only, and it never
+    absorbs a neighbouring directive into the context its own author wrote for
+    it. The decision is per row, so a mixed inventory folds only its
+    source-extracted rows. Returns ``(assessment_items, dispositions,
+    reviewed_placement_retained)``.
     """
 
     context_for_index: dict[int, list[str]] = {}
     context_only_indices: set[int] = set()
     dispositions: list[dict[str, Any]] = []
+    reviewed_indices = {
+        index for index, item in enumerate(items) if from_reviewed_file(item)
+    }
+    reviewed_retained = [
+        {
+            "source_qid": str(items[index].get("qid") or "").strip(),
+            "source_kind": REVIEWED_SOURCE_KIND,
+            "role": "reviewed_file_placement",
+            "policy": REVIEWED_PLACEMENT_AUTHORITY,
+            "reason": (
+                "the reviewed-file author decided this row's placement "
+                "(explicit placement_section, question spans separated from "
+                "context spans); the governing response instruction fold was "
+                "not applied to it"
+            ),
+        }
+        for index in sorted(reviewed_indices)
+    ]
 
     for index, item in enumerate(items):
+        if index in reviewed_indices:
+            # Exempt by recorded provenance, before any wording is read.
+            continue
         instruction = _governing_mcq_instruction(item)
         if not instruction:
             continue
@@ -159,7 +216,11 @@ def _assessment_items(
             continue
         child_indices: list[int] = []
         cursor = index + 1
-        while cursor < len(items) and _has_objective_option_block(items[cursor]):
+        while (
+            cursor < len(items)
+            and cursor not in reviewed_indices
+            and _has_objective_option_block(items[cursor])
+        ):
             child_indices.append(cursor)
             cursor += 1
         if len(child_indices) < 2:
@@ -198,7 +259,7 @@ def _assessment_items(
             row["shared_context"] = "\n\n".join(parts)
             row["requires_context"] = True
         assessment_items.append(row)
-    return assessment_items, dispositions
+    return assessment_items, dispositions, reviewed_retained
 
 
 def _semantic_evidence(value: Any) -> Any:
@@ -411,6 +472,11 @@ def build_source_atoms(
     Every assessment-obligation QID maps to exactly one atom and back; every
     context-only QID is named in ``context_only``. Any other break stops the
     run with the exact identities named.
+
+    Reviewed-file rows are exempt from the governing-instruction fold (Q51 D5)
+    and are named in ``reviewed_placement_retained`` with the reason; they stay
+    ordinary assessment obligations, so the zero-loss report accounts for them
+    in ``accepted`` exactly as for any other kept row.
     """
     inventory = question_inventory or {}
     raw_items = inventory.get("items") or []
@@ -423,7 +489,7 @@ def build_source_atoms(
                 f"source inventory item {position} is not an object"
             )
         items.append(item)
-    assessment_items, context_only = _assessment_items(items)
+    assessment_items, context_only, reviewed_retained = _assessment_items(items)
     mined_types = inventory.get("mined_types")
     type_case_rows = inventory.get("type_case_rows")
     atoms: list[dict] = []
@@ -463,6 +529,7 @@ def build_source_atoms(
         "ledger": ledger,
         "sha256": rel.sha256_json(atoms),
         "context_only": context_only,
+        "reviewed_placement_retained": reviewed_retained,
         "zero_loss": report,
     }
 
