@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 
-DEFAULT_OPENAI_MODEL: Final = "gpt-5.4-mini"
+DEFAULT_OPENAI_MODEL: Final = "gpt-5.6-luna"
 OPENAI_MODEL_ENV: Final = "AEGIS_OPENAI_MODEL"
 OPENAI_PROVIDER_MAX_TOKENS_ENV: Final = "AEGIS_OPENAI_PROVIDER_MAX_TOKENS"
 OPENAI_CONTEXT_WINDOW_ENV: Final = "AEGIS_OPENAI_CONTEXT_WINDOW_TOKENS"

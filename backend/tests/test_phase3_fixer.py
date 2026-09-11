@@ -851,7 +851,7 @@ def test_the_fixer_may_never_pick_replace_source(monkeypatch):
 
 
 @pytest.mark.parametrize(("profile_kind", "configured_model", "expected_model"), [
-    ("current", "gpt-5.6-luna", "gpt-5.4-mini"),
+    ("current", "gpt-5.4-mini", "gpt-5.6-luna"),
     ("legacy", "gpt-5.4-mini", "gpt-5.6-luna"),
     ("unprofiled", "gpt-5.6-luna", "gpt-5.6-luna"),
 ])

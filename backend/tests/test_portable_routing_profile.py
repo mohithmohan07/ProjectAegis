@@ -17,7 +17,7 @@ from tests.test_concept_checkpoint_bundles import _job, _resign
 
 @pytest.mark.parametrize("internal_backup", [False, True])
 @pytest.mark.parametrize("profile_name,expected_model", [
-    ("new_profile", "gpt-5.4-mini"),
+    ("new_profile", "gpt-5.6-luna"),
     ("legacy_profile", "gemini-3.8-flash"),
 ])
 def test_versioned_profile_roundtrips_before_phase3_and_drives_restored_metadata(db, internal_backup, profile_name, expected_model):

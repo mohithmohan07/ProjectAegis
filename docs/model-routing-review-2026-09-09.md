@@ -1,3 +1,8 @@
+> Current policy (Q50, 11 September 2026): every stage in new runs and new
+> reviewed-file revisions uses `gpt-5.6-luna`, with the existing stage reasoning
+> efforts. Version 3 supersedes the mini-only v2 policy below; recorded v1/v2
+> profiles remain valid for historical replay.
+
 # Q40 implementation and verification — 9 September 2026
 
 **11 September update:** [Q46](aegis-restructure.md#q46--decided--gpt-54-mini-for-every-model-stage)

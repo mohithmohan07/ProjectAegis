@@ -1,6 +1,6 @@
 """Frozen per-run routing with per-call provider snapshots.
 
-The current profile uses GPT-5.4 mini for every stage. ContextVar binding
+The current profile uses GPT-5.6 Luna for every stage. ContextVar binding
 prevents simultaneous runs and copied worker contexts from changing one
 another's model. Recorded v1 profiles and explicit ``bind_profile(None)``
 preserve historical routing; new unbound work uses the current profile. No
@@ -24,16 +24,17 @@ GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 PROFILE_KEY = "model_routing_policy"
 LEGACY_PROFILE_VERSION = "owner-stage-model-routing-2026-09-09-v1"
-PROFILE_VERSION = "owner-stage-model-routing-2026-09-11-v2"
+MINI_PROFILE_VERSION = "owner-stage-model-routing-2026-09-11-v2"
+PROFILE_VERSION = "owner-stage-model-routing-2026-09-11-v3"
 _UNBOUND = object()
 _profile: ContextVar[object] = ContextVar("aegis_model_routing_profile", default=_UNBOUND)
 _call_route: ContextVar[object] = ContextVar("aegis_model_call_route", default=None)
 
 
-def new_profile() -> dict[str, Any]:
-    """Return the complete serializable policy to freeze before first spend."""
+def mini_profile() -> dict[str, Any]:
+    """Return the exact v2 profile for previously recorded mini runs."""
     return {
-        "version": PROFILE_VERSION,
+        "version": MINI_PROFILE_VERSION,
         "routes": {
             "default": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "xhigh"},
             "narrow": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "high"},
@@ -45,6 +46,16 @@ def new_profile() -> dict[str, Any]:
         "default_stages": ["concepts.refine", "concepts.polish"],
         "capacity_policy": "complete-input-mini-only-provider-limit-v2",
     }
+
+
+def new_profile() -> dict[str, Any]:
+    """Freeze Luna for every stage without changing its reasoning effort."""
+    profile = mini_profile()
+    profile["version"] = PROFILE_VERSION
+    for route in profile["routes"].values():
+        route["model"] = "gpt-5.6-luna"
+    profile["capacity_policy"] = "complete-input-luna-only-provider-limit-v3"
+    return profile
 
 
 def legacy_profile() -> dict[str, Any]:
@@ -65,7 +76,7 @@ def legacy_profile() -> dict[str, Any]:
 
 
 def validate_profile(value: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or dict(value) not in (new_profile(), legacy_profile()):
+    if not isinstance(value, Mapping) or dict(value) not in (new_profile(), mini_profile(), legacy_profile()):
         raise ValueError("Unknown or altered model routing profile; retain the recorded policy or start a new run.")
     return copy.deepcopy(dict(value))
 
@@ -198,8 +209,8 @@ def resolve_route(
     selected = dict(routes[name])
     if model is not None:
         requested = str(model)
-        if profile["version"] == PROFILE_VERSION and requested != selected["model"]:
-            raise ValueError("All stages in this run require OpenAI gpt-5.4-mini; the explicit model conflicts with its frozen routing profile.")
+        if profile["version"] in {PROFILE_VERSION, MINI_PROFILE_VERSION} and requested != selected["model"]:
+            raise ValueError(f"All stages in this run require OpenAI {selected['model']}; the explicit model conflicts with its frozen routing profile.")
         # The recorded v1 policy permits OpenAI work to request Luna capacity.
         # Keep that historical contract without widening the current policy.
         if requested.startswith("gemini") and stage != "prequestions.author":
@@ -221,7 +232,7 @@ def resolve_route(
         if image_count or upper_bound + limit > capacity.context_window:
             fallback = "visual_capacity_requires_luna" if image_count else "complete_input_exceeds_mini_safe_capacity"
             selected = dict(routes["default"])
-    # Current mini-only requests retain the COMPLETE text, schema and visuals.
+    # Current single-model requests retain the COMPLETE text, schema and visuals.
     # A UTF-8 byte upper bound is not a token count and cannot justify rejecting
     # a valid request. Existing upstream batching and the provider's hard
     # context limit enforce capacity; never truncate evidence or change models.
@@ -258,7 +269,7 @@ def set_active_provider(provider: str) -> dict:
     value = str(provider or "").strip().lower()
     if value not in PROVIDERS:
         raise ValueError(f"unknown model provider {provider!r}")
-    raise ValueError("Provider selection is fixed per run. All stages in new runs use OpenAI GPT-5.4 mini; global provider switching is disabled.")
+    raise ValueError("Provider selection is fixed per run. All stages in new runs use OpenAI GPT-5.6 Luna; global provider switching is disabled.")
 
 
 def describe() -> dict[str, Any]:
@@ -280,5 +291,5 @@ def describe() -> dict[str, Any]:
         "ready": not missing, "openai_available": openai_ready,
         "gemini_available": gemini_ready, "gemini_model": DEFAULT_GEMINI_MODEL,
         "openai_model": profile["routes"]["default"]["model"],
-        "note": ("Configure " + " and ".join(missing) + " before a new full generation run.") if missing else "All stages use GPT-5.4 mini and retain complete evidence, including images.",
+        "note": ("Configure " + " and ".join(missing) + " before a new full generation run.") if missing else "All stages use GPT-5.6 Luna and retain complete evidence, including images.",
     }

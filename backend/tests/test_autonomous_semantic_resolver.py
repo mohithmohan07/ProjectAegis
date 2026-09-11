@@ -112,7 +112,7 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
     assert call["purpose"] == "semantic_resolution"
     assert call["pages"] == []
     assert call["max_tokens"] == resolver.config.OPENAI_MAX_OUTPUT_TOKENS
-    assert call["model"] == "gpt-5.4-mini"
+    assert call["model"] == "gpt-5.6-luna"
     assert call["response_schema"]["strict"] is True
     schema = call["response_schema"]["schema"]
     assert schema["additionalProperties"] is False
@@ -274,7 +274,7 @@ def test_current_resolver_keeps_mini_despite_stale_model_overrides(
             checkpoint={},
         )
 
-    assert [call["model"] for call in calls] == ["gpt-5.4-mini"]
+    assert [call["model"] for call in calls] == ["gpt-5.6-luna"]
     assert result.status == ("unavailable" if unavailable else "resolved")
 
 
@@ -1749,3 +1749,9 @@ def test_source_topology_and_new_concepts_use_source_critical_confidence(
             "source_critical" in flag and "flagged for review" in flag
             for flag in result.review_flags
         )
+
+
+def test_recorded_v2_resolver_still_ignores_deployment_override(monkeypatch):
+    monkeypatch.setenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-luna")
+    with model_provider.bind_profile(model_provider.mini_profile()):
+        assert resolver.resolution_model() == "gpt-5.4-mini"

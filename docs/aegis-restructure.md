@@ -2910,3 +2910,15 @@ and attaches to active Master work after refresh. Running, waiting, interrupted
 and failed states are distinct. Historical journal terminal events cannot stop
 watching a later active segment. Verify the new handoff with offline tests and
 normal CI, then continue the already authorized merge and Fly deployment.
+
+
+### Q50 — DECIDED — all API stages return to GPT-5.6 Luna
+
+The owner requests all APIs back on `gpt-5.6-luna`. New routing profile v3
+uses OpenAI Luna for every stage, including Pre question authoring, narrow
+validation, independent critics, metadata, refiners and the Fixer. Preserve
+existing stage reasoning efforts and full evidence, use the existing Luna
+capacity policy, and keep v1/v2 records valid without rewriting historical
+receipts or cache identities. New reviewed-file revisions use v3 as well.
+No output rules, CMS lists, review stages or publication gates change.
+Verify offline and complete the authorized CI, merge and deployment flow.

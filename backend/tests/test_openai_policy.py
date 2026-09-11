@@ -73,7 +73,7 @@ def test_default_model_and_complete_reasoning_policy(monkeypatch):
     monkeypatch.delenv(openai_policy.OPENAI_MODEL_ENV, raising=False)
     monkeypatch.delenv(openai_policy.REASONING_PROFILE_ENV, raising=False)
 
-    assert openai_policy.configured_openai_model() == "gpt-5.4-mini"
+    assert openai_policy.configured_openai_model() == "gpt-5.6-luna"
     assert openai_policy.configured_reasoning_profile() == "uniform-xhigh"
     assert openai_policy.UNIFORM_REASONING_EFFORT == "xhigh"
     # The registry still names every purpose (with the cost tiers as values).

@@ -1,5 +1,15 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q50 (all APIs back to 5.6 Luna).**
+The owner instructs: “Change all apis to 5.6 Luna back.” All stages in new
+runs and new reviewed-file revisions use OpenAI `gpt-5.6-luna`: source and
+visual reading, Pre/Post generation, critics, refiners, metadata and the Fixer.
+Retain each stage’s reasoning effort, the closed CMS lists, the independent
+reviewed-file workflow and every validation/publication gate. Version the new
+profile; keep recorded v1/v2 profiles and existing receipts valid for historical
+replay. Update deployed defaults and readiness labels. Verify offline, then
+continue the authorized PR, CI, merge and Fly deployment workflow.
+
 **Latest owner amendment: Q49 (reviewed-file handoff and visible progress).**
 Treat generation as two steps: source to Concept files, then reviewed files to
 Master files. Reviewed uploads may change layout, row counts, titles and IDs,
