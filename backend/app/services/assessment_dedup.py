@@ -17,6 +17,13 @@ under two labels; an umbrella whose parts were already standalone rows).
 survivor, never lost — keeping Rule C's exactly-once accounting through
 the disposition record rather than through a second physical row.
 
+Q51/D4 (owner approval, 2026-09-11) bounds when ``decide_source_duplicates``
+is asked for, never how it decides: a Post bank extracted from the team's
+reviewed Concept file is the reviewer's authoritative question set (Q41),
+so the release run skips this fold for it and records the skip on the
+payload. ``decide_generated_duplicates`` is untouched — it judges freshly
+generated Pre questions, which are the pipeline's own, not the reviewer's.
+
 The verdict runs per pre-learning concept group BEFORE the cell
 verdicts, so a removed question costs nothing downstream. String
 similarity is not consulted anywhere — sameness is the model's judgment

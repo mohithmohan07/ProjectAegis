@@ -1546,6 +1546,36 @@ def run_pre_release_for_job(
     )
 
 
+# Q51/D4 (owner approval, 2026-09-11) — the policy a Post Master runs under
+# when its question set came from the team's reviewed Concept file. Q41 makes
+# that set authoritative: "the API must not invent additional Post questions or
+# restore deliberately removed ones", and the two chapter-wide membership
+# verdicts below (Q18's pre-learning claim, P3's source-duplicate fold) can
+# only ever REMOVE a question the reviewer deliberately kept. On a reviewed
+# bank they are therefore not judged at all — and the run says so, per decision,
+# on the payload and in the log. Never a silent zero: "no claim was made" and
+# "the claim found nothing" are different facts and are recorded differently.
+REVIEWED_SET_AUTHORITY_POLICY = "reviewed-set-authoritative-2026-09-11-v1"
+
+
+def _reviewed_authority_disposition(
+    decision: str, *, register_entry: str, question_count: int, detail: str,
+) -> dict:
+    """One recorded "not judged" disposition for a skipped chapter verdict."""
+    return {
+        "decision": decision,
+        "register_entry": register_entry,
+        "policy": REVIEWED_SET_AUTHORITY_POLICY,
+        "authority": "Q51/D4",
+        "judged": False,
+        "reviewed_question_count": int(question_count),
+        "reason": (
+            "the reviewed Concept file is the authoritative Post question "
+            "set (Q41), so this run made no " + detail + " judgment over it"
+        ),
+    }
+
+
 def _with_revised_lane_model_profile(function):
     """An explicit repaired lane revision owns routing independently of source."""
     @wraps(function)
@@ -1862,6 +1892,15 @@ def run_release_for_job(
     source_context_dispositions: list[dict] = []
     compound_parents_represented: list[dict] = []
     source_duplicates_represented: list[dict] = []
+    # Q51/D4: did this Post bank come from the team's reviewed Concept file?
+    # Read from the staged payload with the SAME mechanical predicate the rest
+    # of Step 2 uses — ``reviewed_file_input.active``, the one that decides the
+    # mutation gate above, the leak barrier's source-qid set and the reviewed
+    # decision store. Never a content heuristic, and never the job's status.
+    reviewed_post_inventory = (
+        not generate_lane and reviewed_file_input.active(staged_release)
+    )
+    reviewed_set_authoritative: list[dict] = []
     source_teaching_order: dict = {}
     if generate_lane:
         # Stages 1-3, generated lane — SKIPPED, not widened. No source atom
@@ -2074,7 +2113,30 @@ def run_release_for_job(
                 level="success",
             )
 
-        if blueprint_cells is None and atoms:
+        if blueprint_cells is None and atoms and reviewed_post_inventory:
+            # Q51/D4 (owner approval, 2026-09-11) — NOT JUDGED. This bank is
+            # the reviewer's own set (Q41), so no chapter-wide verdict reopens
+            # which of its questions belong in this Post Master: a claim here
+            # could only remove a question the reviewer deliberately kept.
+            # Recorded as an explicit disposition on the payload and logged;
+            # ``pre_learning_claimed`` stays empty because nothing was claimed
+            # AND nothing was asked — the two facts are never conflated.
+            reviewed_set_authoritative.append(
+                _reviewed_authority_disposition(
+                    "pre_learning_claim",
+                    register_entry="Q18",
+                    question_count=len(atoms),
+                    detail="pre-learning claim",
+                )
+            )
+            progress.log(
+                "Master file: the Q18 pre-learning claim is NOT judged on "
+                "this Master — the reviewed Concept file is the "
+                "authoritative Post question set (Q51/D4), so every one of "
+                f"the {len(atoms)} reviewed question(s) stays; the skip is "
+                "recorded on the release."
+            )
+        elif blueprint_cells is None and atoms:
             # Q18 (owner ruling b, 2026-08-21) — one recorded per-chapter
             # claim verdict BEFORE any cell verdict is paid for: source
             # questions that belong to prerequisite-recap material are
@@ -2150,7 +2212,29 @@ def run_release_for_job(
                     level="warning",
                 )
 
-        if blueprint_cells is None and len(atoms) > 1:
+        if blueprint_cells is None and atoms and reviewed_post_inventory:
+            # Q51/D4 (owner approval, 2026-09-11) — NOT JUDGED, for the same
+            # reason as the claim above: a duplicate fold over the reviewer's
+            # own set can only drop a question the reviewer kept, and the
+            # reviewed file — not this run — decides what ships once.
+            # ``source_duplicates_represented`` stays empty because no fold
+            # verdict was asked for; the disposition below says exactly that.
+            reviewed_set_authoritative.append(
+                _reviewed_authority_disposition(
+                    "source_duplicates",
+                    register_entry="P3",
+                    question_count=len(atoms),
+                    detail="source-duplicate",
+                )
+            )
+            progress.log(
+                "Master file: the P3 source-duplicate verdict is NOT judged "
+                "on this Master — the reviewed Concept file is the "
+                "authoritative Post question set (Q51/D4), so every one of "
+                f"the {len(atoms)} reviewed question(s) ships as the "
+                "reviewer left it; the skip is recorded on the release."
+            )
+        elif blueprint_cells is None and len(atoms) > 1:
             # P3 (owner audit + approval, 2026-08-29): one recorded model
             # verdict over the WHOLE remaining source set, before any
             # cell spend. The compound fold above works recorded identity;
@@ -3215,6 +3299,17 @@ def run_release_for_job(
         # reviewable the same way as the dispositions above.
         "source_duplicates_represented": source_duplicates_represented,
     }
+    if reviewed_set_authoritative:
+        # Q51/D4: the chapter-wide membership verdicts this run did NOT make,
+        # because the reviewed Concept file owns the question set (Q41). One
+        # record per skipped decision, named with its register entry and the
+        # reviewed question count it covers, so a reader never mistakes an
+        # empty ``pre_learning_claimed`` / ``source_duplicates_represented``
+        # for a verdict that ran and found nothing. It is not a flag: nothing
+        # was dropped, so the release's readiness is untouched.
+        payload["reviewed_question_set_authoritative"] = (
+            reviewed_set_authoritative
+        )
     if source_teaching_order:
         payload["source_teaching_order"] = {
             **copy.deepcopy(source_teaching_order),
