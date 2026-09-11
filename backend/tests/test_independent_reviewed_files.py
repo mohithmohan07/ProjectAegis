@@ -216,16 +216,14 @@ def test_workflow_marker_roundtrips_before_source_generation_finishes(db):
 
 
 def test_document_readers_preserve_table_cells_and_pdf_evidence(tmp_path):
-    from docx import Document
+    from zipfile import ZipFile
     import fitz
     path = tmp_path / "review.docx"
-    document = Document()
-    document.add_paragraph("Use this frequency table.")
-    table = document.add_table(rows=2, cols=2)
-    for row, values in zip(table.rows, [("Value", "Frequency"), ("0", "5")]):
-        for cell, value in zip(row.cells, values):
-            cell.text = value
-    document.save(path)
+    # A minimal valid Word package uses only the runtime's standard library.
+    with ZipFile(path, "w") as package:
+        package.writestr("[Content_Types].xml", '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>')
+        package.writestr("_rels/.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>')
+        package.writestr("word/document.xml", '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Use this frequency table.</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>Value</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>Frequency</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>0</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>5</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>')
     parsed = reviewed.read_document(path, path.name)
     assert parsed["blocks"][-1]["cells"] == ["0", "5"]
     pdf_path = tmp_path / "review.pdf"
