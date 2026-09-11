@@ -58,11 +58,16 @@ FIXER_POLICY_VERSION = "fixer-1"
 def fixer_model() -> str:
     """Use the same active model as every other live Aegis decision.
 
-    The Fixer deliberately has no private model or environment override: when
-    OpenAI is active this is GPT-5.6 Luna, and a provider switch remains one
-    process-wide choice instead of creating a hidden mixed-model run.
+    The Fixer has no private model or environment override. Current runs use
+    GPT-5.4 mini and recorded profiles retain their original default model.
+    Explicitly unprofiled historical calls keep their configured model.
     """
 
+    from .. import model_provider
+
+    profile = model_provider.bound_profile()
+    if profile is not None:
+        return str(profile["routes"]["default"]["model"])
     return str(config.OPENAI_MODEL)
 
 

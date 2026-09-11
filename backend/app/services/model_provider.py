@@ -1,9 +1,10 @@
 """Frozen per-run routing with per-call provider snapshots.
 
-The current profile keeps Gemini exclusive to Pre question authors. ContextVar
-binding prevents simultaneous runs and copied worker contexts from changing one
-another's model. Explicit ``bind_profile(None)`` preserves historical routing;
-new unbound work uses the current profile. No selector mutates process config.
+The current profile uses GPT-5.4 mini for every stage. ContextVar binding
+prevents simultaneous runs and copied worker contexts from changing one
+another's model. Recorded v1 profiles and explicit ``bind_profile(None)``
+preserve historical routing; new unbound work uses the current profile. No
+selector mutates process config.
 """
 from __future__ import annotations
 
@@ -22,7 +23,8 @@ PROVIDERS = ("openai", "gemini")
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 PROFILE_KEY = "model_routing_policy"
-PROFILE_VERSION = "owner-stage-model-routing-2026-09-09-v1"
+LEGACY_PROFILE_VERSION = "owner-stage-model-routing-2026-09-09-v1"
+PROFILE_VERSION = "owner-stage-model-routing-2026-09-11-v2"
 _UNBOUND = object()
 _profile: ContextVar[object] = ContextVar("aegis_model_routing_profile", default=_UNBOUND)
 _call_route: ContextVar[object] = ContextVar("aegis_model_call_route", default=None)
@@ -32,6 +34,23 @@ def new_profile() -> dict[str, Any]:
     """Return the complete serializable policy to freeze before first spend."""
     return {
         "version": PROFILE_VERSION,
+        "routes": {
+            "default": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "xhigh"},
+            "narrow": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "high"},
+            "critic": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "medium"},
+            "metadata": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "low"},
+            "pre_question_author": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "high"},
+        },
+        "narrow_purposes": ["concept_validation", "page_transcription", "chapter_outline"],
+        "default_stages": ["concepts.refine", "concepts.polish"],
+        "capacity_policy": "complete-input-mini-only-provider-limit-v2",
+    }
+
+
+def legacy_profile() -> dict[str, Any]:
+    """Return the exact v1 policy for recorded runs; never mint it for new work."""
+    return {
+        "version": LEGACY_PROFILE_VERSION,
         "routes": {
             "default": {"provider": "openai", "model": "gpt-5.6-luna", "reasoning_effort": "xhigh"},
             "narrow": {"provider": "openai", "model": "gpt-5.4-mini", "reasoning_effort": "high"},
@@ -46,7 +65,7 @@ def new_profile() -> dict[str, Any]:
 
 
 def validate_profile(value: Mapping[str, Any]) -> dict[str, Any]:
-    if not isinstance(value, Mapping) or dict(value) != new_profile():
+    if not isinstance(value, Mapping) or dict(value) not in (new_profile(), legacy_profile()):
         raise ValueError("Unknown or altered model routing profile; retain the recorded policy or start a new run.")
     return copy.deepcopy(dict(value))
 
@@ -88,7 +107,7 @@ def gemini_available() -> bool:
 
 def gemini_model() -> str:
     # Old envelopes may have been executed under the legacy global provider.
-    # Its original default stays distinct from the new frozen Pre-only model.
+    # Its original default stays distinct from the recorded v1 Pre-only model.
     if bound_profile() is None:
         return os.environ.get("AEGIS_GEMINI_MODEL", "gemini-3.6-flash").strip() or "gemini-3.6-flash"
     return DEFAULT_GEMINI_MODEL
@@ -111,6 +130,16 @@ def active_model() -> str:
     if profile is not None:
         return str(profile["routes"]["default"]["model"])
     return gemini_model() if active_provider() == "gemini" else openai_policy.configured_openai_model()
+
+
+def source_model_identity() -> str:
+    """Keep source cache identity and receipts tied to their frozen policy.
+
+    Unprofiled source caches historically recorded ``config.OPENAI_MODEL``;
+    preserve that exact path instead of reinterpreting their provider choice.
+    """
+    profile = bound_profile()
+    return str(profile["routes"]["default"]["model"] if profile is not None else config.OPENAI_MODEL)
 
 
 @dataclass(frozen=True)
@@ -156,7 +185,7 @@ def resolve_route(
         if purpose != "pre_learning":
             raise ValueError("The Pre question author stage requires purpose pre_learning.")
         name = "pre_question_author"
-    elif stage in profile["luna_stages"]:
+    elif stage in profile.get("default_stages", profile.get("luna_stages", [])):
         name = "default"
     elif purpose == "advisory_critic":
         name = "critic"
@@ -168,10 +197,11 @@ def resolve_route(
         name = "default"
     selected = dict(routes[name])
     if model is not None:
-        # A requested model must agree with the frozen stage route. The sole
-        # widening allowed is OpenAI work requesting Luna capacity explicitly
-        # (including the existing Fixer); never silently ignore an override.
         requested = str(model)
+        if profile["version"] == PROFILE_VERSION and requested != selected["model"]:
+            raise ValueError("All stages in this run require OpenAI gpt-5.4-mini; the explicit model conflicts with its frozen routing profile.")
+        # The recorded v1 policy permits OpenAI work to request Luna capacity.
+        # Keep that historical contract without widening the current policy.
         if requested.startswith("gemini") and stage != "prequestions.author":
             raise ValueError("Gemini is authorized only for prequestions.author in this routing profile.")
         if requested != selected["model"]:
@@ -182,7 +212,7 @@ def resolve_route(
             else:
                 raise ValueError("Explicit model conflicts with this run's frozen stage route; only an OpenAI call may request Luna capacity.")
     fallback = ""
-    if selected["model"] == routes["narrow"]["model"]:
+    if profile["version"] == LEGACY_PROFILE_VERSION and selected["model"] == routes["narrow"]["model"]:
         limit = openai_policy.effective_completion_tokens(max_output_tokens, model=selected["model"])
         # UTF-8 bytes safely bound byte-BPE text tokens. Reserve wire framing;
         # count the COMPLETE prompt/schema, never trim to make mini fit.
@@ -191,6 +221,10 @@ def resolve_route(
         if image_count or upper_bound + limit > capacity.context_window:
             fallback = "visual_capacity_requires_luna" if image_count else "complete_input_exceeds_mini_safe_capacity"
             selected = dict(routes["default"])
+    # Current mini-only requests retain the COMPLETE text, schema and visuals.
+    # A UTF-8 byte upper bound is not a token count and cannot justify rejecting
+    # a valid request. Existing upstream batching and the provider's hard
+    # context limit enforce capacity; never truncate evidence or change models.
     return ModelRoute(**selected, profile_version=str(profile["version"]), stage=stage, capacity_fallback=fallback)
 
 
@@ -224,7 +258,7 @@ def set_active_provider(provider: str) -> dict:
     value = str(provider or "").strip().lower()
     if value not in PROVIDERS:
         raise ValueError(f"unknown model provider {provider!r}")
-    raise ValueError("Provider selection is fixed per run. Gemini is used only for Pre question authoring; global provider switching is disabled.")
+    raise ValueError("Provider selection is fixed per run. All stages in new runs use OpenAI GPT-5.4 mini; global provider switching is disabled.")
 
 
 def describe() -> dict[str, Any]:
@@ -238,13 +272,13 @@ def describe() -> dict[str, Any]:
     )
     openai_ready = bool(os.environ.get("OPENAI_API_KEY"))
     gemini_ready = gemini_available()
-    missing = [name for name, ready in (("OPENAI_API_KEY", openai_ready), ("GEMINI_API_KEY", gemini_ready)) if not ready]
+    missing = [] if openai_ready else ["OPENAI_API_KEY"]
     return {
-        "provider": "mixed", "model": profile["routes"]["default"]["model"],
+        "provider": "openai", "model": profile["routes"]["default"]["model"],
         "routing_profile": PROFILE_VERSION,
         "stages": [{"stage": stage, "label": label, **profile["routes"][key]} for stage, label, key in labels],
         "ready": not missing, "openai_available": openai_ready,
         "gemini_available": gemini_ready, "gemini_model": DEFAULT_GEMINI_MODEL,
         "openai_model": profile["routes"]["default"]["model"],
-        "note": ("Configure " + " and ".join(missing) + " before a new full generation run.") if missing else "Mini calls retain complete evidence and use Luna when its capacity is needed.",
+        "note": ("Configure " + " and ".join(missing) + " before a new full generation run.") if missing else "All stages use GPT-5.4 mini and retain complete evidence, including images.",
     }

@@ -684,7 +684,7 @@ def _write_cache_entry(key: str, value: dict[str, Any]) -> None:
         cache.setdefault("entries", {})[key] = {
             **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
             "created_at": time.time(),
-            "model": str(config.OPENAI_MODEL),
+            "model": model_provider.source_model_identity(),
             "result": copy.deepcopy(value),
         }
         phase3._atomic_write(
@@ -705,7 +705,7 @@ def _cache_key(
         **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
         "version": _TURNOVER_VERSION,
         "compiler": phase3.COMPILER_VERSION,
-        "model": str(config.OPENAI_MODEL),
+        "model": model_provider.source_model_identity(),
         "kind": kind,
         "payload_sha256": phase3._sha256_json(payload),
         "target_ids": list(target_ids),

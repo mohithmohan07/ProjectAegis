@@ -14,9 +14,13 @@ from tests.test_concept_checkpoint_bundles import _job, _resign
 
 
 @pytest.mark.parametrize("internal_backup", [False, True])
-def test_new_profile_roundtrips_before_phase3_and_drives_restored_metadata(db, internal_backup):
+@pytest.mark.parametrize("profile_name,expected_model", [
+    ("new_profile", "gpt-5.4-mini"),
+    ("legacy_profile", "gemini-3.8-flash"),
+])
+def test_versioned_profile_roundtrips_before_phase3_and_drives_restored_metadata(db, internal_backup, profile_name, expected_model):
     original = _job(db)
-    profile = model_provider.new_profile()
+    profile = getattr(model_provider, profile_name)()
     model_routing_run.save_profile_for_job(original, profile)
     exporter = checkpoints.export_bundle_for_internal_backup if internal_backup else checkpoints.export_bundle
     # Drive exports run in an independent worker; the saved run record wins
@@ -31,7 +35,7 @@ def test_new_profile_roundtrips_before_phase3_and_drives_restored_metadata(db, i
     assert model_routing_run.recorded_profile_for_job(restored) == profile
     with model_routing_run.bind_job(restored):
         assert generation._metadata()[model_provider.PROFILE_KEY] == profile
-        assert model_provider.resolve_route("pre_learning", stage="prequestions.author").model == "gemini-3.8-flash"
+        assert model_provider.resolve_route("pre_learning", stage="prequestions.author").model == expected_model
     _, reexported = checkpoints.export_bundle(db, restored.id)
     assert json.loads(reexported)["payload"][model_provider.PROFILE_KEY] == profile
 

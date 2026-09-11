@@ -10,6 +10,7 @@ import pytest
 
 from app.services import build_concepts
 from app.services import generation as g
+from app.services import model_provider
 from app.services.phase3 import envelope as envelope_mod
 from app.services.phase3 import fixer as fixer_mod
 from app.services.phase3 import kernel, settle
@@ -849,20 +850,37 @@ def test_the_fixer_may_never_pick_replace_source(monkeypatch):
 # The Fixer shares the run's active model
 
 
-def test_live_fixer_requests_the_fixer_model(monkeypatch):
-    """Every live Fixer decision uses the same Luna identity as the run."""
+@pytest.mark.parametrize(("profile_kind", "configured_model", "expected_model"), [
+    ("current", "gpt-5.6-luna", "gpt-5.4-mini"),
+    ("legacy", "gpt-5.4-mini", "gpt-5.6-luna"),
+    ("unprofiled", "gpt-5.6-luna", "gpt-5.6-luna"),
+])
+def test_live_fixer_requests_the_fixer_model(
+    monkeypatch, profile_kind, configured_model, expected_model,
+):
+    """The Fixer preserves the run's route despite deployment model changes."""
 
     captured: list[dict] = []
 
     def fake_openai_json(system, user, *args, **kwargs):
+        route = model_provider.resolve_route(
+            kwargs["purpose"], model=kwargs["model"],
+        )
+        assert route.model == expected_model
         captured.append({"system": system, "user": user, **kwargs})
         return {"decision": "recorded"}
 
     monkeypatch.setattr(g, "_openai_json", fake_openai_json)
-    monkeypatch.setattr(g.config, "OPENAI_MODEL", "gpt-5.6-luna")
+    monkeypatch.setattr(g.config, "OPENAI_MODEL", configured_model)
+    profile = {
+        "current": model_provider.new_profile(),
+        "legacy": model_provider.legacy_profile(),
+        "unprofiled": None,
+    }[profile_kind]
 
-    assert fixer_mod.fixer_model() == "gpt-5.6-luna"
-    fixer_mod.live_fixer(_payload())
-    assert captured[-1]["model"] == "gpt-5.6-luna"
+    with model_provider.bind_profile(profile):
+        assert fixer_mod.fixer_model() == expected_model
+        fixer_mod.live_fixer(_payload())
+    assert captured[-1]["model"] == expected_model
     # The Fixer is a semantic resolution priced as authoring (register Q26).
     assert captured[-1]["purpose"] == "semantic_resolution"

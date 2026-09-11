@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 
-DEFAULT_OPENAI_MODEL: Final = "gpt-5.6-luna"
+DEFAULT_OPENAI_MODEL: Final = "gpt-5.4-mini"
 OPENAI_MODEL_ENV: Final = "AEGIS_OPENAI_MODEL"
 OPENAI_PROVIDER_MAX_TOKENS_ENV: Final = "AEGIS_OPENAI_PROVIDER_MAX_TOKENS"
 OPENAI_CONTEXT_WINDOW_ENV: Final = "AEGIS_OPENAI_CONTEXT_WINDOW_TOKENS"
@@ -430,7 +430,7 @@ def supports_reasoning_effort(model: str) -> bool:
 
     Operators may still point the legacy CLI at an older model or a third-party
     OpenAI-compatible endpoint. Those overrides keep working without receiving
-    GPT-5.6-only request parameters.
+    unsupported model-specific request parameters.
     """
     return model.strip().lower().startswith(("gpt-5.6", "gpt-5.4-mini", "gemini-3.8-flash"))
 

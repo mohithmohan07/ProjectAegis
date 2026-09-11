@@ -530,7 +530,7 @@ def test_workbook_library_recovers_usage_from_sidecar(tmp_path, monkeypatch):
 
 
 def test_requested_model_is_the_default():
-    assert config.OPENAI_MODEL == "gpt-5.6-luna"
+    assert config.OPENAI_MODEL == "gpt-5.4-mini"
 
 
 def _provider_receipt(provider: str, model: str):

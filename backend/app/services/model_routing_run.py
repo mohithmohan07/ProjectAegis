@@ -72,15 +72,20 @@ def bind_job(job, *, require_pre: bool = False):
     profile = profile_for_job(job)
     with model_provider.bind_profile(profile):
         if profile is not None and not config.allow_dry() and not config._live_disabled():
+            providers = {
+                route["provider"] for name, route in profile["routes"].items()
+                if require_pre or name != "pre_question_author"
+            }
             missing = []
-            if not os.environ.get("OPENAI_API_KEY"):
+            if "openai" in providers and not os.environ.get("OPENAI_API_KEY"):
                 missing.append("OPENAI_API_KEY")
-            if require_pre and not os.environ.get("GEMINI_API_KEY"):
+            if "gemini" in providers and not os.environ.get("GEMINI_API_KEY"):
                 missing.append("GEMINI_API_KEY")
             if missing:
                 raise config.LiveRequiredError(
                     "This run requires " + " and ".join(missing)
                     + ". Configure the missing server credential before starting. "
-                    "Gemini 3.8 Flash is reserved for Pre question authoring."
+                    + ("Its recorded v1 policy uses Gemini 3.8 Flash for Pre question authoring."
+                       if "gemini" in providers else "All stages in this run use OpenAI GPT-5.4 mini.")
                 )
         yield profile

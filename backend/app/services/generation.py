@@ -3040,18 +3040,17 @@ def _openai_json(
 ) -> dict:
     """One JSON-mode chat call; returns the parsed object.
 
-    New runs use their frozen routing profile: ``purpose`` selects the
-    declared OpenAI stage role, and only ``stage="prequestions.author"`` with
-    purpose ``pre_learning`` selects Gemini. Provider, model, effort, token
-    limits and credentials are snapshotted for this call without changing
-    process configuration. Complete evidence that cannot safely fit a mini
-    call uses Luna capacity; no source text is trimmed.
+    New runs use GPT-5.4 mini for every stage in their frozen routing profile.
+    ``purpose`` selects the stage's reasoning effort; provider, model, effort,
+    token limits and credentials are snapshotted without changing process
+    configuration. Complete evidence must fit mini's documented capacity;
+    source text is never trimmed to make a request fit.
 
-    An explicit ``model`` must match that stage's route, or request Luna for
-    OpenAI work (as the Fixer does). Conflicting overrides are rejected rather
-    than ignored. Historical runs bound without a routing profile retain their
-    legacy per-call model overrides. All requests retain the existing effort
-    negotiation, bounded retries, queueing and usage accounting.
+    An explicit ``model`` must match the current frozen route. Recorded v1
+    profiles retain their original stage routes and capacity fallback, while
+    explicitly unprofiled historical runs retain legacy per-call overrides.
+    All requests retain the existing effort negotiation, bounded retries,
+    queueing and usage accounting.
 
     Concurrency-safe for multiple simultaneous users on one shared API key:
     calls queue on a process-wide gate (never stampede the API), and

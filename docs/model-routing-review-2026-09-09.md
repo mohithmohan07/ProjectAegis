@@ -1,5 +1,11 @@
 # Q40 implementation and verification — 9 September 2026
 
+**11 September update:** [Q46](aegis-restructure.md#q46--decided--gpt-54-mini-for-every-model-stage)
+supersedes the model assignments below for new runs: every stage now uses
+`gpt-5.4-mini`, retaining the stage reasoning efforts, complete evidence and
+all review stages. The mixed routing described here remains the historical
+v1 contract for already sealed runs.
+
 New runs use the owner's stage model choices and adaptive Pre coverage. The
 production API credentials already exist according to the owner. All work in
 this review is local; no production generation, push, merge, deployment,

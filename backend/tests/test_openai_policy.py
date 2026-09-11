@@ -73,7 +73,7 @@ def test_default_model_and_complete_reasoning_policy(monkeypatch):
     monkeypatch.delenv(openai_policy.OPENAI_MODEL_ENV, raising=False)
     monkeypatch.delenv(openai_policy.REASONING_PROFILE_ENV, raising=False)
 
-    assert openai_policy.configured_openai_model() == "gpt-5.6-luna"
+    assert openai_policy.configured_openai_model() == "gpt-5.4-mini"
     assert openai_policy.configured_reasoning_profile() == "uniform-xhigh"
     assert openai_policy.UNIFORM_REASONING_EFFORT == "xhigh"
     # The registry still names every purpose (with the cost tiers as values).
@@ -191,6 +191,7 @@ def test_generation_call_sends_model_reasoning_and_json_mode(monkeypatch):
         "user",
         max_tokens=321,
         purpose="concept_validation",
+        model="gpt-5.6-luna",
     )
 
     assert result == {"ok": True}
@@ -308,6 +309,7 @@ def test_generation_uses_explicit_only_cache_for_gpt56_prefix(monkeypatch):
         '"candidate":"CAND-2"}',
         max_tokens=321,
         purpose="concept_validation",
+        model="gpt-5.6-luna",
         prompt_cache_prefix='{"stage":"assessment.materialize",',
         prompt_cache_key="aegis-assessment-materialize-critic-v6",
     )
@@ -715,7 +717,8 @@ def test_generation_negotiates_effort_instead_of_replaying_the_same_request(
     generation._openai_gate = None
 
     result = generation._openai_json(
-        "system", "user", max_tokens=321, purpose="concept_mapping"
+        "system", "user", max_tokens=321, purpose="concept_mapping",
+        model="gpt-5.6-luna",
     )
 
     assert result == {"ok": True}
@@ -754,6 +757,7 @@ def test_single_attempt_records_the_ceiling_without_a_second_request(monkeypatch
             max_tokens=321,
             purpose="concept_mapping",
             single_attempt=True,
+            model="gpt-5.6-luna",
         )
 
     # single_attempt promises exactly one physical request...
