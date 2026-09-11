@@ -2922,3 +2922,95 @@ capacity policy, and keep v1/v2 records valid without rewriting historical
 receipts or cache identities. New reviewed-file revisions use v3 as well.
 No output rules, CMS lists, review stages or publication gates change.
 Verify offline and complete the authorized CI, merge and deployment flow.
+
+### Q51 — DECIDED — three-step workflow: as-is Concept questions, Step 2 polishing and reviewed Master publication
+
+**Owner instruction (11 September 2026).** The whole run is three explicit
+parts. Step 01 generates the Concept files and "extracts all the questions as
+it is under types, cases". Step 02: the team reviews the Concept files, makes
+its changes (remove, add, move concepts, topics and questions) and uploads the
+same files; Aegis generates the Post Masters from the reviewed file and NEW Pre
+assessments instead of extraction. Step 03: the team reviews and edits the
+Master files and uploads them to the CMS and to the database. Work that only
+serves later steps ("the polishing of question, or writing output files")
+leaves Step 01. After the reviewed upload the Step 01 source artifacts are
+"completely invalid" and "nowhere connected to the second step". Nothing
+repetitive may run. Every detail is conserved; only ordering changes, with a
+few deletions and additions the owner is consulted on. The evidence and the
+disposition of every stage are in
+`docs/three-step-workflow-review-2026-09-11.md`.
+
+**Step 01.** New uploads freeze `concepts-then-reviewed-masters-2026-09-11-v2`.
+Under v2 the source-question polishing pass no longer runs before the Concept
+files are staged: inventory items carry the source wording, the Example lines
+under each Type/Case show that wording with its necessary shared context and
+images, and the inventory records an explicit `question_polishing_deferred`
+marker. Every other Step 01 stage is unchanged: source reading and
+verification, task-membership ledger, skeleton, topics, descriptions,
+inventory, Type mining, culminations, Phase 3 (Settle, Host, coherence, Place,
+Analyse, Polish, prerequisite captures and merge, Assemble, Pre map with
+related concepts and Pre analysis), final validation, the Concept Refiner over
+both lanes, release QC, KaTeX render validation and the Concept files. Pre
+question generation stays deferred (Q49). Step 01 writes no Master output;
+release.json, inventory.csv and the diagnostics archive remain download-time
+projections. Recorded v1 runs, envelopes, payloads and checkpoints keep v1
+behaviour: the policy echoes the recorded version and never upgrades it.
+
+**Step 02.** Reviewed uploads stay transport only (Q49). Generate Master Files
+extracts concepts and questions from each reviewed file with the independent
+author, critic and Fixer, then — for v2 runs — polishes the reviewed **Post**
+questions once with the existing polishing author and independent critic,
+using the reviewed file blocks as the complete evidence under a versioned
+Step 2 rule (`reviewed-question-polishing-2026-09-11-v1`): make each reviewed
+question a standalone Aegis task, keep every demand, option, table, image,
+ordered part and response mode, never add, remove, merge, split or reorder
+questions, never restore removed content. The polished wording is the frozen
+Master task; the reviewed quote stays as source evidence. File-supplied Pre
+questions are the reviewer's own and are not polished; missing Pre questions
+are generated from the accepted Pre concepts only. Every Step 2 payload records
+the run's workflow version. Each reviewed concept records the reviewed order of
+its questions, so the teaching-order projection maps every reviewed question
+instead of flagging it. Explicit per-lane Master retries now persist their
+provider receipts and run log on the job like the review handoff does. Step 2
+reads from Step 01 only the chapter and publication selection, database
+identities, the artifact directory as a path, and images the reviewed file
+itself cites; the audit list is in the review document §4.
+
+**Step 03.** Two acts per lane, both model-free. Upload reviewed Master file:
+the edited Master workbook (same layout as the download) is parsed with the
+existing read-back parser, rows are matched by `question_label`, every changed
+question-band cell is applied verbatim as the reviewer's decision, absent rows
+are omissions, unknown rows are reviewer additions under an existing group, and
+a new immutable release version is rendered, read back and validated exactly
+like the Step 2 version (a value outside the closed CMS vocabulary blocks
+publication with the issue named; the reviewer's value is retained in the
+receipt). Publish: the lane's Concept file publishes first through the
+existing database-and-CMS act; the Master then publishes through the existing
+hash-verified database upload and its questions are appended to the shared
+Bulk Import output workbook under the same lock and outbox discipline the
+Concept act uses. Receipts ride the review marker, which reads `published`
+when every available lane's Master is published. Concept editing is not
+reopened in Step 03 because a new Concept identity stales the Step 2 Master.
+
+**Frontend.** One page shows Step 01 · Generate Concept Files, Step 02 ·
+Review Concept files and generate Masters, Step 03 · Review Master files and
+publish, with the current step highlighted from the review marker. The Step 02
+component is retained; a Step 03 component adds per-lane Master download,
+reviewed Master upload, Concept publication and Master publication with
+receipts; the badge that read "uploaded to database" before anything was
+published is corrected. Historical jobs without the review marker keep their
+existing surface. Backend progress labels are unchanged so stage cards keep
+their cost attribution.
+
+**Not changed — owner approval requested (review document §7).** Skipping the
+Q18 pre-learning claim and the P3 source-duplicate verdict on reviewed Post
+sets (D4); trusting the reviewed-file author's placement instead of the regex
+governing-instruction fold on reviewed items (D5); gating the legacy
+force-release, revisions and release-review routes for review-workflow jobs
+(D7); the unchanged-lane re-extraction mandated by Q49 (D3, default kept);
+the Q31 critic stack and per-row Concept Refiner (D6, kept); mechanical
+display rendering of file-supplied Pre questions (D8, kept). No stage is
+removed by this entry. Q39/Q41 wording "polished before Type/Case mining" and
+the Q49 sentence that Step 1 still ran polishing are superseded for v2 runs;
+their sealed decisions stand. Verify offline and continue the authorized push,
+CI, merge and Fly deployment workflow.

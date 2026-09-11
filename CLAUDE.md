@@ -1,6 +1,24 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q50 (all APIs back to 5.6 Luna).**
+**Latest owner amendment: Q51 (three-step workflow, 11 September 2026).**
+The owner instructs three explicit parts. Step 01 generates the Concept files
+and extracts every question as it is under its Types/Cases: new runs freeze
+workflow policy v2, under which the question-polishing pass no longer runs
+before the Concept files are staged. Step 02: the team edits and uploads the
+reviewed Concept files; Aegis extracts them independently, polishes the
+reviewed Post questions once (existing author and independent critic, reviewed
+file as the only evidence), generates new Pre questions from the accepted Pre
+concepts and builds the Masters. Step 02 reads nothing semantic from Step 01.
+Step 03: the team edits the Master files and uploads them; edits are applied
+verbatim into a new immutable release version, then published to the database
+and appended to the shared CMS output workbook, Concept file first. No stage
+is removed. Proposed deletions (Q18 claim and P3 dedup on reviewed sets, the
+regex governing-instruction fold on reviewed items, legacy review routes) wait
+for the owner's approval in `docs/three-step-workflow-review-2026-09-11.md` §7.
+Historical v1 runs replay unchanged. Verify offline, then continue the
+authorized PR, CI, merge and Fly deployment workflow.
+
+**Previous owner amendment: Q50 (all APIs back to 5.6 Luna).**
 The owner instructs: “Change all apis to 5.6 Luna back.” All stages in new
 runs and new reviewed-file revisions use OpenAI `gpt-5.6-luna`: source and
 visual reading, Pre/Post generation, critics, refiners, metadata and the Fixer.
