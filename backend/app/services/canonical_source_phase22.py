@@ -1023,6 +1023,8 @@ def _cache_key(
     source_path: Path,
     packet: dict[str, Any],
 ) -> str:
+    from . import model_provider
+
     source_sha = str(
         (canonical.get("source_contract") or {}).get("source_sha256")
         or (canonical.get("document") or {}).get("source_sha256")
@@ -1030,12 +1032,11 @@ def _cache_key(
     )
     material = "\u241f".join([
         ADJUDICATION_VERSION,
-        config.OPENAI_MODEL,
+        model_provider.source_model_identity(),
         source_sha,
         _pdf_sha256(source_path),
         str(packet.get("fingerprint") or ""),
     ])
-    from . import model_provider
     profile = model_provider.bound_profile()
     if profile is not None:
         material += "\u241f" + json.dumps(profile, sort_keys=True, separators=(",", ":"))
@@ -1400,13 +1401,15 @@ def apply_verified_decision(
     cache_key: str,
     source_path: Path,
 ) -> dict[str, Any]:
+    from . import model_provider
+
     repair_id = f"REPAIR-{packet['fingerprint'][:16]}"
     provenance = {
         "repair_id": repair_id,
         "issue_id": packet["issue_id"],
         "issue_type": packet["issue_type"],
         "adjudication_version": ADJUDICATION_VERSION,
-        "model": config.OPENAI_MODEL,
+        "model": model_provider.source_model_identity(),
         "page_number": int(decision.get("page_number") or 0),
         "confidence": float(decision.get("confidence") or 0.0),
         "verification": copy.deepcopy(decision.get("verification") or {}),
@@ -1564,7 +1567,7 @@ def adjudicate_job_source(
     decision_provider: DecisionProvider | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], bool]:
     """Attempt every eligible packet, persist provenance, and return readiness."""
-    from . import uploads
+    from . import model_provider, uploads
 
     source_path = uploads.upload_file_path(job)
     if not source_path.exists():
@@ -1633,7 +1636,7 @@ def adjudicate_job_source(
                 "created_at": time.time(),
                 "packet_fingerprint": packet["fingerprint"],
                 "source_file_sha256": _pdf_sha256(source_path),
-                "model": config.OPENAI_MODEL,
+                "model": model_provider.source_model_identity(),
                 "result": result,
             }
             _write_cache(cache_key, cache_payload)

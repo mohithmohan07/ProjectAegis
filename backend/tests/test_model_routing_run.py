@@ -45,14 +45,40 @@ def test_replacement_has_a_distinct_profile_record():
     assert model_routing_run._record_path(old) != model_routing_run._record_path(replacement)
 
 
-def test_full_run_checks_gemini_before_work_but_conversion_only_needs_openai(monkeypatch):
+def test_current_full_run_and_conversion_need_only_openai(monkeypatch):
     monkeypatch.setenv("AEGIS_ALLOW_DRY", "0")
     monkeypatch.delenv("AEGIS_USE_LIVE", raising=False)
     monkeypatch.setenv("OPENAI_API_KEY", "test-only")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     job = _job()
     with model_routing_run.bind_job(job):
-        pass
+        assert model_provider.bound_profile() == model_provider.new_profile()
+    with model_routing_run.bind_job(job, require_pre=True):
+        assert model_provider.bound_profile() == model_provider.new_profile()
+
+
+def test_current_run_refuses_before_work_without_openai_even_with_gemini(monkeypatch):
+    monkeypatch.setenv("AEGIS_ALLOW_DRY", "0")
+    monkeypatch.delenv("AEGIS_USE_LIVE", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-only")
+    reached_work = []
+    with pytest.raises(config.LiveRequiredError, match="OPENAI_API_KEY"):
+        with model_routing_run.bind_job(_job(), require_pre=True):
+            reached_work.append(True)
+    assert not reached_work
+
+
+def test_recorded_v1_full_run_still_requires_its_gemini_credential(monkeypatch):
+    monkeypatch.setenv("AEGIS_ALLOW_DRY", "0")
+    monkeypatch.delenv("AEGIS_USE_LIVE", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-only")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    job = _job(mmd_text="existing converted source")
+    model_routing_run.save_profile_for_job(job, model_provider.legacy_profile())
+    saved = model_routing_run._record_path(job).read_bytes()
+    with model_routing_run.bind_job(job):
+        assert model_provider.bound_profile() == model_provider.legacy_profile()
     reached_work = []
     with pytest.raises(config.LiveRequiredError, match="GEMINI_API_KEY"):
         with model_routing_run.bind_job(job, require_pre=True):
@@ -60,7 +86,8 @@ def test_full_run_checks_gemini_before_work_but_conversion_only_needs_openai(mon
     assert not reached_work
     monkeypatch.setenv("GEMINI_API_KEY", "test-only")
     with model_routing_run.bind_job(job, require_pre=True):
-        assert model_provider.bound_profile() == model_provider.new_profile()
+        assert model_provider.bound_profile() == model_provider.legacy_profile()
+    assert model_routing_run._record_path(job).read_bytes() == saved
 
 
 def test_altered_record_is_rejected_before_any_request():
@@ -83,7 +110,13 @@ def test_profile_changes_source_identity_but_historical_hash_stays_stable():
     assert model_provider.PROFILE_KEY not in legacy
     fresh = generation._metadata(subject="English", chapter_title="The Mother Bird")
     assert fresh[model_provider.PROFILE_KEY] == model_provider.new_profile()
+    with model_provider.bind_profile(model_provider.legacy_profile()):
+        v1 = generation._metadata(subject="English", chapter_title="The Mother Bird")
     old_hash = canonical_source_phase3.semantic_context_hash(legacy)
-    assert canonical_source_phase3.semantic_context_hash(fresh) != old_hash
+    assert len({
+        old_hash,
+        canonical_source_phase3.semantic_context_hash(v1),
+        canonical_source_phase3.semantic_context_hash(fresh),
+    }) == 3
     fresh.pop(model_provider.PROFILE_KEY)
     assert canonical_source_phase3.semantic_context_hash(fresh) == old_hash

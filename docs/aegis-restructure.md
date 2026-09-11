@@ -2723,3 +2723,37 @@ but do not pass publication with unresolved vocabulary errors, including under
 Fixer acceptance. Historical sealed policies and existing artifacts retain
 their recorded contract. No other field vocabulary, question wording, model
 route, review stage or upload boundary is changed by this decision.
+
+### Q46 — DECIDED — GPT-5.4 mini for every model stage
+
+**Owner instruction (11 September 2026):** “Change all models to 5.4 mini.”
+This supersedes Q40's mixed model assignments for new runs. Freeze
+`owner-stage-model-routing-2026-09-11-v2` before the first request, with
+OpenAI `gpt-5.4-mini` for every route: source and image reading, concepts,
+Pre/Post questions, independent reviews, refiners, metadata and the Fixer.
+
+Keep the existing effort assignments: default/concept/semantic work `xhigh`,
+Pre authoring and narrow passes `high`, independent critics `medium`, and
+metadata `low`. Preserve all pipeline stages, API-owned judgments, source
+evidence, assessment wording, approved CMS lists and output/publication gates.
+
+Mini's documented context is 400,000 tokens with at most 128,000 output
+tokens. Existing capacity-aware lossless batching uses these limits. Complete
+text, schemas and images reach the selected model; do not trim evidence or
+silently promote an oversized/visual request to Luna or Gemini. Provider
+capacity errors remain explicit. The conservative byte-bound promotion used
+by the previous mixed profile applies only to that historical profile.
+
+New runs need only `OPENAI_API_KEY`. Current resolver overrides cannot select
+another model or trigger a cross-model fallback. Deployment and standalone
+tool defaults use mini. Explicit diagnostic CLI model comparisons remain
+available separately from the application's frozen stage policy.
+
+Exact v1 model profiles, historical unprofiled transport, completed decisions,
+usage receipts and replay identities retain their recorded contracts. Do not
+rewrite past provider attribution. The authorized push-through-deployment
+workflow continues after targeted offline tests and all normal CI checks pass.
+No paid generation is needed for this migration's verification.
+
+Capability reference: [OpenAI GPT-5.4 mini model documentation](https://developers.openai.com/api/docs/models/gpt-5.4-mini),
+checked 11 September 2026.

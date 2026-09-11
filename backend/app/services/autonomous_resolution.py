@@ -143,22 +143,24 @@ def maximum_pathway_turns() -> int:
 def resolution_model() -> str:
     """Return the planner/solver model used for semantic discrepancies.
 
-    The deployment's configured Aegis model is the default, so the resolver
-    request and the token budget it sends (``config.OPENAI_MAX_OUTPUT_TOKENS``,
-    derived from that same model) always describe one model. A second hardcoded
-    slug silently decoupled the two: changing ``AEGIS_OPENAI_MODEL`` moved the
-    whole pipeline except this call, and the capacity clamp kept describing the
-    model that was no longer being asked.
-
-    An operator may still point only the resolver at a different model with
-    ``AEGIS_AUTONOMOUS_RESOLUTION_MODEL``. That stays an explicit opt-in rather
-    than the default, and the transport layer clamps such a request to the
-    documented capacity of the model actually requested.
+    Current runs use their frozen GPT-5.4 mini route, including when an old
+    deployment environment still contains a resolver-specific override.
+    Recorded v1 runs retain their explicit environment override and otherwise
+    use their frozen default. Explicitly unprofiled runs retain their historical
+    configured-model behavior. The transport clamps completion allowances to
+    the model actually requested.
     """
 
+    from . import model_provider
+
+    profile = model_provider.bound_profile()
+    if profile is not None and profile["version"] == model_provider.PROFILE_VERSION:
+        return str(profile["routes"]["default"]["model"])
     override = os.environ.get(_RESOLUTION_MODEL_ENV, "").strip()
     if override:
         return override
+    if profile is not None:
+        return str(profile["routes"]["default"]["model"])
     return str(config.OPENAI_MODEL or "").strip() or DEFAULT_OPENAI_MODEL
 
 
@@ -2113,6 +2115,14 @@ def _provider_call(
     except Exception as exc:
         message = str(exc).casefold()
         primary_model = str(config.OPENAI_MODEL or "").strip()
+        from . import model_provider
+
+        profile = model_provider.bound_profile()
+        if profile is not None:
+            # A process-level model change must not replace a recorded run's
+            # primary model. For current runs this equals requested_model,
+            # so an unavailable mini never triggers a cross-model fallback.
+            primary_model = str(profile["routes"]["default"]["model"])
         unavailable_model = any(marker in message for marker in (
             "model_not_found",
             "model not found",

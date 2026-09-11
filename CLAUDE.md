@@ -1,5 +1,18 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q46 (11 September 2026).**
+The owner instructs: “Change all models to 5.4 mini.” All stages in new runs
+use OpenAI `gpt-5.4-mini`, including source/visual reading, concept writing,
+Pre/Post questions, independent critics, refiners, metadata and the Fixer.
+Preserve existing stage reasoning efforts and every review/output contract.
+New profiles cannot fall back to Luna or Gemini, and require only OpenAI
+credentials. Use mini's documented 400,000-token context and 128,000-token
+output maximum; never trim complete evidence to force a request to fit.
+Version the model policy; preserve already sealed profiles, receipts and
+replay identities. This supersedes Q40's model assignments for new work.
+Continue the authorized push, CI, merge and deployment workflow. No paid
+generation is required for verification.
+
 **Q45 publishing authorization (11 September 2026).**
 The owner explicitly instructs: “Please go ahead push it till deploy.” Push
 the approved-vocabulary implementation to `mohithmohan07/ProjectAegis`, open

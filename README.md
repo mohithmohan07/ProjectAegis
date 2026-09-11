@@ -67,17 +67,18 @@ frontend/             React + Vite + TypeScript UI (the two modules + Database)
 
 ## Model workflow and cost logs
 
-New Build Concepts runs use Gemini 3.8 Flash only to author Pre questions,
-Luna at xhigh for concept writing and semantic decisions, and GPT-5.4 mini for
-narrow passes. Contextual Pre coverage replaces the fixed 5+5 quota. Every
-existing review/refinement stage remains. The full model profile is recorded
-before the first request and carried into the sealed envelope; replay retains
-its recorded decisions.
+New runs use `gpt-5.4-mini` for every stage: source and image reading, concept
+writing, Pre/Post questions, independent reviews, refiners, metadata and the
+Fixer. Existing stage-specific reasoning efforts and contextual Pre coverage
+remain. The full model profile is recorded before the first request and carried
+into the sealed envelope; historical profiles retain their recorded routes and
+decisions. New runs never switch to Luna or Gemini for larger inputs.
 
-Production needs both `OPENAI_API_KEY` and `GEMINI_API_KEY`; they remain server
-secrets. Conversion needs OpenAI, and the complete Concept run checks both
-credentials before generation. The UI shows the stage assignments and readiness.
-There is no application-wide switch that can send Post work to Gemini.
+Production needs `OPENAI_API_KEY`, kept as a server secret. `GEMINI_API_KEY` is
+needed only for historical profiles that recorded Gemini. The UI shows the
+stage assignments and readiness. GPT-5.4 mini has a 400,000-token context and
+128,000-token maximum output; existing lossless batching uses its capacity.
+Complete evidence is preserved, and provider context errors remain explicit.
 
 Logs and usage panels show per-request and cumulative estimated charges in INR.
 The provider's USD ledger remains available for reconciliation. Each request
@@ -88,7 +89,8 @@ instead. Missing provider usage or historical conversion is shown as incomplete.
 
 Dry stubs require `AEGIS_ALLOW_DRY=1` and are for tests only. Details, exact API
 endpoints, model routing, pricing dates and verification limits are recorded in
-[the workflow review](docs/model-routing-review-2026-09-09.md).
+[the workflow review](docs/model-routing-review-2026-09-09.md), with current
+model selection recorded in [Q46](docs/aegis-restructure.md#q46--decided--gpt-54-mini-for-every-model-stage).
 
 ## Run locally
 

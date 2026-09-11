@@ -7,6 +7,7 @@ import json
 import pytest
 
 from app.services import autonomous_resolution as resolver
+from app.services import model_provider
 from app.services import semantic_confidence_policy as confidence_policy
 
 
@@ -111,7 +112,7 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
     assert call["purpose"] == "semantic_resolution"
     assert call["pages"] == []
     assert call["max_tokens"] == resolver.config.OPENAI_MAX_OUTPUT_TOKENS
-    assert call["model"] == "gpt-5.6-luna" == resolver.config.OPENAI_MODEL
+    assert call["model"] == "gpt-5.4-mini"
     assert call["response_schema"]["strict"] is True
     schema = call["response_schema"]["schema"]
     assert schema["additionalProperties"] is False
@@ -137,10 +138,10 @@ def test_resolves_one_high_confidence_offered_action_with_one_provider_call(
     ] is True
 
 
-def test_resolver_follows_the_configured_aegis_model(
+def test_unprofiled_resolver_follows_the_configured_aegis_model(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """No second hardcoded slug: moving the pipeline moves the resolver."""
+    """Explicitly unprofiled runs preserve their configured model contract."""
 
     calls: list[dict] = []
     monkeypatch.delenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", raising=False)
@@ -151,17 +152,18 @@ def test_resolver_follows_the_configured_aegis_model(
         lambda **kwargs: calls.append(kwargs) or _response(),
     )
 
-    result = resolver.resolve_pending(
-        _pending(),
-        source_text="TYPE-0001 is supported by the canonical source.",
-        checkpoint={},
-    )
+    with model_provider.bind_profile(None):
+        result = resolver.resolve_pending(
+            _pending(),
+            source_text="TYPE-0001 is supported by the canonical source.",
+            checkpoint={},
+        )
 
     assert result.resolved is True
     assert [call["model"] for call in calls] == ["gpt-5.6-relocated"]
 
 
-def test_resolution_model_is_configurable_and_keeps_provider_max_output(
+def test_unprofiled_resolution_model_is_configurable_and_keeps_provider_max_output(
     monkeypatch: pytest.MonkeyPatch,
 ):
     calls: list[dict] = []
@@ -174,11 +176,12 @@ def test_resolution_model_is_configurable_and_keeps_provider_max_output(
         lambda **kwargs: calls.append(kwargs) or _response(),
     )
 
-    result = resolver.resolve_pending(
-        _pending(),
-        source_text="TYPE-0001 is supported by the canonical source.",
-        checkpoint={},
-    )
+    with model_provider.bind_profile(None):
+        result = resolver.resolve_pending(
+            _pending(),
+            source_text="TYPE-0001 is supported by the canonical source.",
+            checkpoint={},
+        )
 
     assert result.resolved is True
     assert len(calls) == 1
@@ -187,7 +190,7 @@ def test_resolution_model_is_configurable_and_keeps_provider_max_output(
     assert calls[0]["purpose"] == "semantic_resolution"
 
 
-def test_unavailable_override_model_falls_back_once_to_primary(monkeypatch):
+def test_unprofiled_unavailable_override_model_falls_back_once_to_primary(monkeypatch):
     calls: list[dict] = []
 
     def provider(**kwargs):
@@ -205,11 +208,12 @@ def test_unavailable_override_model_falls_back_once_to_primary(monkeypatch):
     monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.6-luna")
     monkeypatch.setattr(resolver.phase22, "_openai_multimodal_json", provider)
 
-    result = resolver.resolve_pending(
-        _pending(),
-        source_text="TYPE-0001 is supported by the canonical source.",
-        checkpoint={},
-    )
+    with model_provider.bind_profile(None):
+        result = resolver.resolve_pending(
+            _pending(),
+            source_text="TYPE-0001 is supported by the canonical source.",
+            checkpoint={},
+        )
 
     assert result.resolved is True
     assert [call["model"] for call in calls] == [
@@ -224,7 +228,7 @@ def test_unavailable_override_model_falls_back_once_to_primary(monkeypatch):
     }
 
 
-def test_unavailable_default_model_is_not_retried_against_itself(monkeypatch):
+def test_unprofiled_unavailable_default_model_is_not_retried_against_itself(monkeypatch):
     calls: list[dict] = []
 
     def provider(**kwargs):
@@ -237,13 +241,66 @@ def test_unavailable_default_model_is_not_retried_against_itself(monkeypatch):
     monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.6-luna")
     monkeypatch.setattr(resolver.phase22, "_openai_multimodal_json", provider)
 
-    result = resolver.resolve_pending(
-        _pending(),
-        source_text="TYPE-0001 is supported by the canonical source.",
-        checkpoint={},
-    )
+    with model_provider.bind_profile(None):
+        result = resolver.resolve_pending(
+            _pending(),
+            source_text="TYPE-0001 is supported by the canonical source.",
+            checkpoint={},
+        )
 
     assert result.status == "unavailable"
+    assert [call["model"] for call in calls] == ["gpt-5.6-luna"]
+
+
+@pytest.mark.parametrize("unavailable", [False, True])
+def test_current_resolver_keeps_mini_despite_stale_model_overrides(
+    monkeypatch: pytest.MonkeyPatch, unavailable: bool,
+):
+    calls: list[dict] = []
+    monkeypatch.setenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-retired")
+    monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.6-luna")
+
+    def provider(**kwargs):
+        calls.append(kwargs)
+        if unavailable:
+            raise RuntimeError("model_not_found: requested model unavailable")
+        return _response()
+
+    monkeypatch.setattr(resolver.phase22, "_openai_multimodal_json", provider)
+    with model_provider.bind_profile(model_provider.new_profile()):
+        result = resolver.resolve_pending(
+            _pending(),
+            source_text="TYPE-0001 is supported by the canonical source.",
+            checkpoint={},
+        )
+
+    assert [call["model"] for call in calls] == ["gpt-5.4-mini"]
+    assert result.status == ("unavailable" if unavailable else "resolved")
+
+
+def test_recorded_v1_resolver_retains_explicit_model_override(monkeypatch):
+    monkeypatch.setenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", "gpt-5.6-luna")
+    with model_provider.bind_profile(model_provider.legacy_profile()):
+        assert resolver.resolution_model() == "gpt-5.6-luna"
+
+
+def test_recorded_v1_resolver_keeps_frozen_default_after_deployment_change(monkeypatch):
+    calls: list[dict] = []
+    monkeypatch.delenv("AEGIS_AUTONOMOUS_RESOLUTION_MODEL", raising=False)
+    monkeypatch.setattr(resolver.config, "OPENAI_MODEL", "gpt-5.4-mini")
+    monkeypatch.setattr(
+        resolver.phase22,
+        "_openai_multimodal_json",
+        lambda **kwargs: calls.append(kwargs) or _response(),
+    )
+    with model_provider.bind_profile(model_provider.legacy_profile()):
+        result = resolver.resolve_pending(
+            _pending(),
+            source_text="TYPE-0001 is supported by the canonical source.",
+            checkpoint={},
+        )
+
+    assert result.resolved is True
     assert [call["model"] for call in calls] == ["gpt-5.6-luna"]
 
 
