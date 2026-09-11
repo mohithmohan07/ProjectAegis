@@ -255,3 +255,25 @@ def test_upload_route_accepts_reorganized_text_at_review_or_after_interruption(d
     assert response["extraction_status"] == "pending_master_generation"
     assert job.question_inventory[reviewed.INPUTS]["post"]["blocks"][0]["text"] == "My replacement concept and question"
     assert release.release_payload(job) == previous
+
+
+def test_reviewed_upload_opts_unchanged_sibling_into_file_only_handoff(db, tmp_path):
+    job = setup_job(db)
+    path = document(tmp_path)
+    reviewed.queue(db, job, lane="post", path=path, filename=path.name, owner_sub="local:default")
+    seen = []
+    def author(payload):
+        seen.append(payload)
+        assert payload["lane"] == "pre"
+        assert payload["document"]["filename"] == "reviewed-pre-concepts.xlsx"
+        assert "What is DNA" not in str(payload["document"])
+        assert "Old description" in str(payload["document"])
+        parsed = result(False)
+        parsed["dispositions"] = [{"source_ref": block["ref"], "disposition": "concept",
+            "rationale": "The unchanged Pre workbook is the reviewed input."}
+            for block in payload["document"]["blocks"]]
+        return parsed
+    current = reviewed.prepare(db, job, lane="pre", provider=author, critic=critic, store=kernel.DecisionStore())
+    assert reviewed.active(current)
+    assert len(seen) == 1
+    assert current["question_task_inventory"]["items"] == []

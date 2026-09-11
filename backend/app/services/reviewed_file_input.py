@@ -316,7 +316,8 @@ def prepare(db, job, *, lane, owner_sub="", provider=None, critic=None, fixer=No
     document = copy.deepcopy(((job.question_inventory or {}).get(INPUTS) or {}).get(lane))
     previous = release.release_payload(job, lane=lane)
     from . import reviewed_file_workflow_policy as workflow
-    if not document and workflow.active(previous) and not active(previous):
+    independent_handoff = bool((job.question_inventory or {}).get(INPUTS)) or workflow.active(previous)
+    if not document and previous is not None and independent_handoff and not active(previous):
         # Unchanged-file acceptance consumes exactly the generated workbook
         # the reviewer downloaded, not private Step 1 semantic inventories.
         from . import build_concepts_release_files

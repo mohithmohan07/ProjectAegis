@@ -1350,7 +1350,7 @@ def build_review_masters(
         from . import reviewed_file_input
         for reviewed_lane in (release.LANE_POST, release.LANE_PRE):
             from . import reviewed_file_workflow_policy as workflow
-            if (((job.question_inventory or {}).get(reviewed_file_input.INPUTS) or {}).get(reviewed_lane)
+            if ((job.question_inventory or {}).get(reviewed_file_input.INPUTS)
                     or workflow.active(release.release_payload(job, lane=reviewed_lane))):
                 with storage_capacity.reserve_master_capacity(job_id=job_id, lane=reviewed_lane):
                     reviewed_file_input.prepare(db, job, lane=reviewed_lane, owner_sub=owner_sub)
