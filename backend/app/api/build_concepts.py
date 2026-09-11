@@ -651,6 +651,125 @@ async def upload_edited_workbook_to_cms(
 
 
 # --------------------------------------------------------------------------- #
+# Step 03 — the reviewed Master file (owner's three-step workflow).
+#
+# ``submit`` applies the reviewer's edited Master workbook verbatim as a new
+# release version and computes its readiness; ``publish`` writes the lane's
+# live Master to the database and appends its questions to the shared CMS
+# workbook. Both are explicit, authenticated, lane-named acts on a job that
+# reached the Concept review gate; legacy jobs without the marker are refused
+# and keep their existing routes. Neither route calls a model.
+# --------------------------------------------------------------------------- #
+
+def _master_review_http_error(exc: Exception) -> HTTPException:
+    """One readable HTTP mapping for both Step 03 routes."""
+
+    from ..services import master_review
+
+    if isinstance(exc, (uploads.UploadJobNotFound, release_svc.ReleaseUnavailableError,
+                        master_review.MasterReviewNotFound)):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, (master_review.MasterReviewConflict,
+                        uploads.JobAlreadyRunningError,
+                        generation_recovery.NonResumableRunError)):
+        return HTTPException(409, str(exc))
+    if isinstance(exc, master_review.MasterReviewRefused):
+        return HTTPException(422, str(exc))
+    if isinstance(exc, master_review.MasterReviewError):
+        return HTTPException(500, str(exc))
+    return HTTPException(
+        500,
+        "the Master review act failed before anything was published "
+        f"({type(exc).__name__}); the current Master version is unchanged",
+    )
+
+
+@router.post("/uploads/{job_id}/master-review/submit")
+async def submit_reviewed_master_file(
+    job_id: int,
+    lane: str = PUBLISH_LANE_QUERY,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Apply the team's edited Master workbook as a new release version.
+
+    The file is the lane's downloaded Master (same layout). Cell edits are
+    reversed through the exact render projection and applied verbatim;
+    omitted rows are recorded omissions; unknown rows are refused with the
+    Step 02 path named. The new version is rendered, read back and its
+    readiness computed — a blocked readiness is reported, never hidden, and
+    is what the publish act refuses on.
+    """
+
+    from ..services import master_review
+
+    resolved = _publish_lane(lane)
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts",
+        )
+        raw_bytes = await read_limited_upload(
+            file, description="reviewed Master workbook",
+        )
+        return master_review.submit_reviewed_master(
+            db, job,
+            lane=resolved,
+            workbook_bytes=raw_bytes,
+            filename=str(file.filename or ""),
+            owner_sub=user.sub,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — mapped to readable HTTP errors
+        error = _master_review_http_error(exc)
+        if error.status_code == 500:
+            progress.log(
+                f"Master review submit failed for upload {job_id}: "
+                f"{type(exc).__name__}",
+                level="error",
+            )
+        raise error from exc
+
+
+@router.post("/uploads/{job_id}/master-review/publish")
+def publish_reviewed_master_file(
+    job_id: int,
+    lane: str = PUBLISH_LANE_QUERY,
+    db: Session = Depends(get_db),
+    user: auth.Principal = Depends(auth.require_user),
+):
+    """Write the lane's live Master to the database and the CMS workbook.
+
+    Requires the same lane's Concept file to be published first (its groups
+    and questions attach to those concepts). Idempotent: repeating returns
+    the recorded receipt.
+    """
+
+    from ..services import master_review
+
+    resolved = _publish_lane(lane)
+    try:
+        job = uploads.get_job(
+            db, job_id, owner_sub=user.sub, module="build_concepts",
+        )
+        return master_review.publish_reviewed_master(
+            db, job, lane=resolved, owner_sub=user.sub,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — mapped to readable HTTP errors
+        error = _master_review_http_error(exc)
+        if error.status_code == 500:
+            progress.log(
+                f"Master review publish failed for upload {job_id}: "
+                f"{type(exc).__name__}",
+                level="error",
+            )
+        raise error from exc
+
+
+# --------------------------------------------------------------------------- #
 # Post-run reviewer revisions
 #
 # The reviewer downloads the released workbook (``release.xlsx`` above), reads
