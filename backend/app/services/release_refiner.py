@@ -453,13 +453,17 @@ def _live_call(payload: dict[str, Any], *, critic: bool) -> dict[str, Any]:
     from . import generation
     from .phase3 import prompts
     from . import assessment_visual_evidence
+    from . import prelearning_capture_policy
+    from . import generation_repair_policy as repair
 
     prefix, suffix = generation._json_prompt_cache_parts(
         payload, stable_keys=("stage", "output_kind", "prompt_sha256", "rules", "metadata", "chapter_evidence"),
     )
     rows = payload.get("rows") or []
     return generation._openai_json(
-        prompts.CRITIC_SYSTEM if critic else prompts.REFINER_SYSTEM,
+        (prompts.CRITIC_SYSTEM if critic else prompts.REFINER_SYSTEM)
+        + prelearning_capture_policy.assessment_instruction(payload)
+        + repair.grouped_source_instruction(payload),
         suffix,
         image_urls=assessment_visual_evidence.image_inputs(payload),
         purpose="advisory_critic" if critic else "concept_validation",
@@ -796,6 +800,11 @@ def _refine(
 
         rules += prelearning_foundation_policy.instruction(metadata)
     from . import generation_quality_policy as quality, prelearning_capture_policy
+    from . import generation_repair_policy as repair
+    repair_instruction = prelearning_capture_policy.assessment_instruction({
+        "metadata": metadata, "output_kind": output_kind,
+    })
+    rules += repair_instruction
     if quality.active(metadata):
         rules += "\n" + (
             prelearning_capture_policy.QUALITY_INSTRUCTION
@@ -820,6 +829,7 @@ def _refine(
     }
     meta_block["pre_post_learning"] = _pre_post(metadata)
     meta_block.update(quality.fields(metadata))
+    meta_block.update(repair.fields(metadata))
     chapter_evidence = _chapter_evidence(metadata, original)
 
     refined = copy.deepcopy(original)
@@ -866,6 +876,9 @@ def _refine(
                 }
             ],
         }
+        grouped_instruction = repair.grouped_source_instruction(payload)
+        if grouped_instruction:
+            payload["rules"] += grouped_instruction
         from . import assessment_visual_evidence
 
         assessment_visual_evidence.bind(
@@ -880,7 +893,8 @@ def _refine(
             checker=_checker(unit_id),
             critic=critic,
             store=store,
-            policy_version=REFINER_POLICY_VERSION + quality.suffix(metadata),
+            policy_version=REFINER_POLICY_VERSION + quality.suffix(metadata)
+            + (repair.suffix(metadata) if repair_instruction or grouped_instruction else ""),
         )
         decision = copy.deepcopy(decision)
         decision.setdefault("review_flags", []).extend(

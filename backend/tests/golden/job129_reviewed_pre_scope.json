@@ -1,0 +1,374 @@
+{
+  "_comment": "Sanitized regression from owner-supplied job129 diagnostics: two rewritten and six added accepted Pre concepts; original plans silently chose zero for all eight. Editor identities and timestamps omitted.",
+  "records": [
+    {
+      "_pre_concept_id": "PRC-0001",
+      "concept_title": "Chronological and Causal Structure in a Biographical Narrative",
+      "concept_details": "Description: A biography traces a real person's life, usually moving forward through time from childhood through later stages, and it often shows how one experience leads to the next rather than presenting isolated, unconnected events. Recognising this chronological, cause-and-effect structure helps a reader follow how an early interest can lead, step by step, to a much larger achievement described later in the same account.<br>Achieving Mastery: Explain, in general terms, how a biography typically moves forward in time and connects one stage of a person's life to a later one through cause and effect.<br>Misconception/ Error Analysis: Misconceptions: A biography simply lists a person's achievements in any convenient order, without needing to connect earlier events to later ones.; Error Analysis: When reading a biography, treat an early event and a later achievement as separate facts about the same person rather than looking for how the earlier event contributed to the later one.",
+      "keywords": "biography|chronological order|cause and effect|life stages",
+      "topic": "Foundations for Reading a Scientific Biography",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [
+        {
+          "prerequisite_id": "PR-0001",
+          "text": "Recall introductory prior study of cells sufficient to relate Ebright’s cell research to earlier science learning."
+        }
+      ],
+      "_aegis_needed_for": [
+        {
+          "post_concept_id": "CONCEPT-0012",
+          "post_concept_title": "Hormone Evidence Explains Monarch Wing-Cell Development"
+        },
+        {
+          "post_concept_id": "CONCEPT-0013",
+          "post_concept_title": "From Hormone Structure to a Theory of Cell Life"
+        },
+        {
+          "post_concept_id": "CONCEPT-0014",
+          "post_concept_title": "Testing the Theory’s Wider Promise"
+        },
+        {
+          "post_concept_id": "CONCEPT-0019",
+          "post_concept_title": "Main Idea and Supporting Evidence: Curiosity Makes Inquiry Possible"
+        },
+        {
+          "post_concept_id": "CONCEPT-0020",
+          "post_concept_title": "Development of Ideas: from Collecting to Cell Theory"
+        },
+        {
+          "post_concept_id": "CONCEPT-0022",
+          "post_concept_title": "Informative and Figurative Language: Explaining Science Through Biography"
+        }
+      ],
+      "_aegis_analysis_allotments": [
+        "PLA-0002"
+      ],
+      "_semantic_topic_id": "PRT-0001",
+      "_source_grounding_contract": "derived-from-prerequisite-capture",
+      "_source_grounding_record_sha256": "9e133caad007e5b005c8067626fd30a731c709c5d488ab7e017907d279954c5b",
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "critic: {'pre_concept_id': 'PRC-0001', 'problem': 'post_concept_ids overreach the prerequisite boundary', 'details': 'CONCEPT-0019, CONCEPT-0020, and CONCEPT-0022 are not genuinely required before the chapter: CONCEPT-0019 is a whole-chapter main-idea/ მხარდაჭ evidence analysis, CONCEPT-0020 is a whole-chapter chronology-and-cause structure analysis, and CONCEPT-0022 explains DNA and the blueprint metaphor inside the chapter itself. Linking them as prerequisites promotes chapter-taught science language and analysis into Pre instead of keeping only the earlier cell idea needed for CONCEPT-0012 and part of CONCEPT-0013.'}",
+        "independent critic verdict 'rejected' with confidence 0.830 (band: rejected); decision stands under decide-once and this dissent is recorded for review",
+        "critic verified at sub-floor confidence 0.880 (band: rejected); decision stands, audit recorded as unreliable",
+        "Pre validator [repeated_sibling_opener]: repeated leading phrase: introductory study",
+        "manual reviewer edit: concept_details replaced in place",
+        "manual reviewer edit: concept_title replaced in place",
+        "manual reviewer edit: keywords replaced in place",
+        "manual reviewer edit: topic replaced in place"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "field": "concept_details"
+        },
+        {
+          "field": "concept_title"
+        },
+        {
+          "field": "keywords"
+        },
+        {
+          "field": "topic"
+        }
+      ]
+    },
+    {
+      "_pre_concept_id": "PRC-0002",
+      "concept_title": "Using Quoted Testimony as Evidence in Biography",
+      "concept_details": "Description: Biographers often support their portrait of a person by quoting the subject's own words alongside the words of people who know that person well, such as a parent, teacher, or colleague. Each quotation serves as a piece of evidence for a particular quality or claim, so a reader who wants to understand what a biography says about someone should notice who is speaking and what that testimony is meant to show, rather than treating a quotation as mere decoration.<br>Achieving Mastery: Identify a quotation from a biography and explain what quality or claim about the subject it is being used as evidence for.<br>Misconception/ Error Analysis: Misconceptions: A quotation from a parent, teacher, or friend in a biography is included only to add colour to the writing, rather than to provide evidence for a claim about the subject.; Error Analysis: When reading a quoted comment, note who is speaking without connecting the comment to the specific quality or claim it supports.",
+      "keywords": "quoted testimony|biography|evidence|character",
+      "topic": "Foundations for Reading a Scientific Biography",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [
+        {
+          "prerequisite_id": "PR-0002",
+          "text": "Recall introductory prior study of DNA sufficient to relate Ebright’s research to earlier science learning."
+        }
+      ],
+      "_aegis_needed_for": [
+        {
+          "post_concept_id": "CONCEPT-0013",
+          "post_concept_title": "From Hormone Structure to a Theory of Cell Life"
+        },
+        {
+          "post_concept_id": "CONCEPT-0019",
+          "post_concept_title": "Main Idea and Supporting Evidence: Curiosity Makes Inquiry Possible"
+        },
+        {
+          "post_concept_id": "CONCEPT-0020",
+          "post_concept_title": "Development of Ideas: from Collecting to Cell Theory"
+        },
+        {
+          "post_concept_id": "CONCEPT-0022",
+          "post_concept_title": "Informative and Figurative Language: Explaining Science Through Biography"
+        }
+      ],
+      "_aegis_analysis_allotments": [
+        "PLA-0001"
+      ],
+      "_semantic_topic_id": "PRT-0001",
+      "_source_grounding_contract": "derived-from-prerequisite-capture",
+      "_source_grounding_record_sha256": "0e3ca69abc744eb408e2c47ec6342a14f505152bfb2c4d4dfb14f3b48fe6a5f1",
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "critic: {'pre_concept_id': 'PRC-0002', 'problem': 'post_concept_ids include chapter-internal analysis concepts that do not require prior DNA study', 'details': 'CONCEPT-0019, CONCEPT-0020, and CONCEPT-0022 can be followed from the biography’s own explanations, because CONCEPT-0022 already defines DNA and the blueprint comparison in the text and CONCEPT-0019/CONCEPT-0020 are English comprehension and structure concepts about the chapter’s argument. The link set therefore leaks new chapter content into Pre and is not limited to what must already have been learned before this chapter.'}",
+        "independent critic verdict 'rejected' with confidence 0.830 (band: rejected); decision stands under decide-once and this dissent is recorded for review",
+        "critic verified at sub-floor confidence 0.880 (band: rejected); decision stands, audit recorded as unreliable",
+        "Pre validator [repeated_sibling_opener]: repeated leading phrase: introductory study",
+        "refiner[[\"introductory study of dna\", \"the making of a scientist\", \"introductory knowledge of cells and dna\", \"pre\"]]: critic verified at sub-floor confidence 0.830 (band: rejected); decision stands, audit recorded as unreliable",
+        "manual reviewer edit: concept_details replaced in place",
+        "manual reviewer edit: concept_title replaced in place",
+        "manual reviewer edit: keywords replaced in place",
+        "manual reviewer edit: topic replaced in place"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "field": "concept_details"
+        },
+        {
+          "field": "concept_title"
+        },
+        {
+          "field": "keywords"
+        },
+        {
+          "field": "topic"
+        }
+      ]
+    },
+    {
+      "_pre_concept_id": "PRC-0003",
+      "concept_title": "Distinguishing Established Facts from Hedged, Conditional Claims",
+      "concept_details": "Description: Writers sometimes mark a claim as uncertain or still being tested by using words such as \"might,\" \"could,\" or a phrase like \"if it proves correct,\" rather than stating it as a settled fact. Recognising this hedging language lets a reader tell the difference between what a text presents as already demonstrated and what it presents as a possibility that still depends on further evidence.<br>Achieving Mastery: Identify hedging words or phrases such as \"might,\" \"could,\" or \"if it proves correct\" in a passage, and explain how they mark a claim as uncertain rather than settled.<br>Misconception/ Error Analysis: Misconceptions: Any claim printed in a serious or factual-sounding text must already be an established, proven fact.; Error Analysis: When reading a claim introduced by a word such as \"might\" or \"could,\" treat it as equivalent in certainty to a claim stated as plain fact.",
+      "keywords": "hedging language|conditional claim|established fact|uncertainty",
+      "topic": "Foundations for Reading a Scientific Biography",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [],
+      "_aegis_needed_for": [],
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "manual reviewer addition: Pre concept added from corrected workbook"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "kind": "addition",
+          "pre_concept_id": "PRC-0003"
+        }
+      ]
+    },
+    {
+      "_pre_concept_id": "PRC-0004",
+      "concept_title": "The Structure of School and Community Science Fairs",
+      "concept_details": "Description: A science fair is an event at which students present investigative projects — often display boards, models, or experiment results — which judges then rank against one another at a local, county, or wider level. Some entries mainly display information attractively, while others test a specific idea through an actual experiment, and judges typically favour the latter. Knowing this structure helps a reader understand why a student's project might win or lose at such a fair.<br>Achieving Mastery: Explain, in general terms, what a science fair involves and why a project that tests an idea through experiment is usually judged differently from one that only displays information.<br>Misconception/ Error Analysis: Misconceptions: A science fair entry that is neatly presented and informative is the same, in a judge's eyes, as one that tests an idea through an actual experiment.; Error Analysis: When reading about a science fair result, assume that a more attractive or detailed display should automatically win over a plainer entry that tests a real question.",
+      "keywords": "science fair|project|judging|competition",
+      "topic": "Everyday Knowledge Behind the Chapter's Comparisons",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [],
+      "_aegis_needed_for": [],
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "manual reviewer addition: Pre concept added from corrected workbook"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "kind": "addition",
+          "pre_concept_id": "PRC-0004"
+        }
+      ]
+    },
+    {
+      "_pre_concept_id": "PRC-0005",
+      "concept_title": "The Idiom \"Eureka!\" and the Idea of a Sudden Discovery",
+      "concept_details": "Description: \"Eureka!\" is a well-known exclamation, traditionally associated with the ancient scientist Archimedes, that people use to mark a moment of sudden discovery or realisation. A writer may refer to this exclamation, or to the absence of it, to comment on whether a discovery came as a single dramatic instant or through a slower, more gradual process.<br>Achieving Mastery: Explain what the exclamation \"Eureka!\" traditionally represents, and recognise that a writer may mention it to comment on whether a discovery felt sudden or gradual.<br>Misconception/ Error Analysis: Misconceptions: \"Eureka!\" is simply an ordinary word for happiness, without any specific association with a moment of scientific discovery.; Error Analysis: When a text says someone did not shout \"Eureka!\", read this only as a literal description of the person's volume or mood rather than as a comment on how the discovery came about.",
+      "keywords": "Eureka|idiom|sudden discovery|allusion",
+      "topic": "Everyday Knowledge Behind the Chapter's Comparisons",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [],
+      "_aegis_needed_for": [],
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "manual reviewer addition: Pre concept added from corrected workbook"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "kind": "addition",
+          "pre_concept_id": "PRC-0005"
+        }
+      ]
+    },
+    {
+      "_pre_concept_id": "PRC-0006",
+      "concept_title": "Major and Minor Leagues in Baseball, and What a \"Home Run\" Means",
+      "concept_details": "Description: In baseball, players usually progress through minor leagues before reaching the major leagues, which are considered the highest and most competitive level of the sport, and hitting a \"home run\" is one of the most celebrated achievements a batter can produce. A comparison to \"entering the major leagues and hitting a home run on the first try\" is therefore a way of describing an achievement that is both highly advanced and remarkably successful on the very first attempt.<br>Achieving Mastery: Explain what it would mean, in baseball, to enter the major leagues and hit a home run on a first attempt, and why this image suggests an unusually impressive and immediate achievement.<br>Misconception/ Error Analysis: Misconceptions: The \"major leagues\" and \"minor leagues\" in baseball are simply two equally ranked groups, rather than different levels of competitive advancement.; Error Analysis: When reading a comparison built on \"hitting a home run on the first try,\" miss that the comparison emphasises both a high level of skill and an unusually early success, focusing only on one of the two.",
+      "keywords": "baseball|major league|minor league|home run",
+      "topic": "Everyday Knowledge Behind the Chapter's Comparisons",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [],
+      "_aegis_needed_for": [],
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "manual reviewer addition: Pre concept added from corrected workbook"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "kind": "addition",
+          "pre_concept_id": "PRC-0006"
+        }
+      ]
+    },
+    {
+      "_pre_concept_id": "PRC-0007",
+      "concept_title": "Metamorphosis and the Life Stages of Insects",
+      "concept_details": "Description: Many insects develop through a series of distinct life stages — typically egg, larva, pupa, and adult — a process called metamorphosis, in which the insect's body changes considerably between each stage. Knowing this general life cycle helps a reader follow an account that describes an insect being raised or observed through more than one of these stages.<br>Achieving Mastery: Name the typical stages of insect metamorphosis in order and explain, in general terms, how the insect's body changes between them.<br>Misconception/ Error Analysis: Misconceptions: An insect looks essentially the same throughout its life, so its egg, larval, pupal, and adult forms would be easily recognised as the same creature without being told.; Error Analysis: When reading about an insect at one life stage, such as a pupa, confuse it with a different stage, such as a larva or an adult, since the terms may be unfamiliar.",
+      "keywords": "metamorphosis|egg|larva|pupa|adult insect",
+      "topic": "General Science Foundations for the Chapter",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [],
+      "_aegis_needed_for": [],
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "manual reviewer addition: Pre concept added from corrected workbook"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "kind": "addition",
+          "pre_concept_id": "PRC-0007"
+        }
+      ]
+    },
+    {
+      "_pre_concept_id": "PRC-0008",
+      "concept_title": "What a Scientific Journal Is and Why Publishing in One Is Notable",
+      "concept_details": "Description: A scientific journal is a periodical in which researchers publish their findings, usually after other scientists review the work for quality and soundness. Because this review process and the standard of accepted work are demanding, having research accepted for publication is considered a significant achievement, and it is especially notable when the author is very young or has not yet finished formal training.<br>Achieving Mastery: Explain what a scientific journal is and why having research accepted for publication in one is considered a significant achievement, particularly for a very young researcher.<br>Misconception/ Error Analysis: Misconceptions: A scientific journal will publish any article a researcher submits, regardless of the work's quality or the researcher's age or experience.; Error Analysis: When reading that someone's work was published in a scientific journal, treat this as an ordinary, unremarkable event rather than as a mark of a notable achievement.",
+      "keywords": "scientific journal|publication|peer review|researcher",
+      "topic": "General Science Foundations for the Chapter",
+      "parent_concept": "",
+      "_aegis_pre_prerequisites": [],
+      "_aegis_needed_for": [],
+      "_aegis_pre_generated_questions": [],
+      "review_flags": [
+        "manual reviewer addition: Pre concept added from corrected workbook"
+      ],
+      "_aegis_manual_edit_rounds": [
+        {
+          "kind": "addition",
+          "pre_concept_id": "PRC-0008"
+        }
+      ]
+    }
+  ],
+  "analysis": {
+    "allotments": {
+      "PLA-0001": "PRC-0002",
+      "PLA-0002": "PRC-0001"
+    },
+    "inventory": [
+      {
+        "evidence": "['PR-0002', 'PRC-0002']",
+        "item_id": "PLA-0001",
+        "kind": "misconception",
+        "rationale": "The prerequisite identifies DNA as a biological subject connected with the study of living cells. Denying that connection would prevent the learner from relating earlier DNA learning to a new scientific account. This is an incorrect belief about the prerequisite itself.",
+        "text": "DNA has no connection with the study of living cells."
+      },
+      {
+        "evidence": "['PR-0001', 'PRC-0001']",
+        "item_id": "PLA-0002",
+        "kind": "error_analysis",
+        "rationale": "The cell prerequisite is limited to basic recall that living things are made of cells and that their structures and functions can be studied. Extending that limited recall into a detailed explanation is a specific reasoning error while applying the prerequisite, not a second belief about what cells are.",
+        "text": "When applying introductory cell knowledge, treating the general idea that living things are made of cells as a detailed explanation of cell structures and functions."
+      }
+    ],
+    "rationales": {
+      "PLA-0001": "The misconception directly distorts the introductory teaching that identifies DNA as a biological subject connected with the study of living cells.",
+      "PLA-0002": "The error directly derails application of the introductory cell concept by confusing its general idea with detailed knowledge of cell structures and functions."
+    },
+    "review_flags": {
+      "PLA-0001": [
+        "critic verified at sub-floor confidence 0.880 (band: rejected); decision stands, audit recorded as unreliable"
+      ],
+      "PLA-0002": [
+        "critic verified at sub-floor confidence 0.880 (band: rejected); decision stands, audit recorded as unreliable"
+      ]
+    }
+  },
+  "needed_for": {
+    "PRC-0001": [
+      "CONCEPT-0012",
+      "CONCEPT-0013",
+      "CONCEPT-0014",
+      "CONCEPT-0019",
+      "CONCEPT-0020",
+      "CONCEPT-0022"
+    ],
+    "PRC-0002": [
+      "CONCEPT-0013",
+      "CONCEPT-0019",
+      "CONCEPT-0020",
+      "CONCEPT-0022"
+    ]
+  },
+  "pre_topics": [
+    {
+      "pre_concept_ids": [
+        "PRC-0001",
+        "PRC-0002"
+      ],
+      "pre_topic_id": "PRT-0001",
+      "title": "Introductory Knowledge of Cells and DNA"
+    }
+  ],
+  "generated_question_plans": {
+    "PRC-0001": {
+      "rationale": "Source demand: the biography requires the learner to follow events in time and connect earlier experiences to later outcomes. Need: this would support coherent reading of the chapter. Prior-learning support: none is supplied for this English reading-analysis capability; the attached prerequisite statement concerns cells, while the chapter itself develops the chronological and causal analysis. Under the prior-only boundary, this is not retained as a Pre capability. The zero plan is a drop request, so no tier split is warranted.",
+      "split": [],
+      "total": 0
+    },
+    "PRC-0002": {
+      "rationale": "Source demand: the biography uses maternal and teacher testimony to support claims about its subject. Need: the learner would need to connect a speaker's words with the quality or claim they support. Prior-learning support: none is supplied for this biographical-analysis capability; the attached prerequisite statement concerns DNA, and the chapter itself introduces testimony as evidence. Under the prior-only boundary, this is not retained as Pre. The zero plan records that decision.",
+      "split": [],
+      "total": 0
+    },
+    "PRC-0003": {
+      "rationale": "Source demand: the chapter distinguishes findings from a theory that remains under testing and from possible future applications. Need: the learner would need to preserve those different levels of certainty. No earlier-grade curriculum record or genuine recap supports hedging analysis as previously acquired; the distinction is part of the chapter's current research account. It is therefore not eligible for Pre coverage, and the zero plan is a drop request.",
+      "split": [],
+      "total": 0
+    },
+    "PRC-0004": {
+      "rationale": "Source demand: the science-fair episode depends on understanding the contrast between an attractive display and an experiment that tests an idea. Need: this would help the learner follow the reason for the result in that episode. No prior-learning or earlier-grade curriculum evidence is supplied, and the current chapter establishes the distinction through its own account. The concept is not retained as a prior foundation; total 0 records that disposition.",
+      "split": [],
+      "total": 0
+    },
+    "PRC-0005": {
+      "rationale": "Source demand: the learner needs to interpret the reference to “Eureka!” and its contrast with a gradual discovery. Need: this supports understanding the chapter's explanatory language. The chapter glossary itself supplies the meaning, making this new chapter vocabulary rather than supported prior learning. It is therefore Post content, not Pre coverage; the zero plan is a drop request.",
+      "split": [],
+      "total": 0
+    },
+    "PRC-0006": {
+      "rationale": "Source demand: the learner needs to understand the baseball comparison describing an unusually advanced and immediately successful achievement. Need: this supports interpretation of the chapter's analogy. The footnote and glossary supply the sports meanings in this chapter, and no earlier-grade evidence is provided. This chapter-specific explanatory language is not retained as a prerequisite, so total 0 is appropriate.",
+      "split": [],
+      "total": 0
+    },
+    "PRC-0007": {
+      "rationale": "Source demand: the account refers to caterpillar, pupa and raising butterflies through life stages. Need: some life-stage knowledge could help the learner follow that account. However, no supplied earlier-grade science record or recap supports the full metamorphosis capability, and the requested mastery of naming and explaining all stages extends beyond the source-supported prior scope. The uncertainty is resolved conservatively by dropping it from Pre; no tier split is warranted.",
+      "split": [],
+      "total": 0
+    },
+    "PRC-0008": {
+      "rationale": "Source demand: the opening presents publication of research as a notable achievement. Need: understanding the general role and significance of a scientific journal could clarify that frame. No earlier-grade curriculum evidence or recap is supplied, while the chapter introduces the publication context itself; the added peer-review claim is not supported as prior knowledge by the source. The concept is therefore not retained for Pre assessment, and total 0 records that decision.",
+      "split": [],
+      "total": 0
+    }
+  },
+  "generated_questions": [],
+  "_reviewed_pre_input": {
+    "version": "reviewed-pre-input-1",
+    "added_pre_concept_ids": [
+      "PRC-0003",
+      "PRC-0004",
+      "PRC-0005",
+      "PRC-0006",
+      "PRC-0007",
+      "PRC-0008"
+    ]
+  }
+}

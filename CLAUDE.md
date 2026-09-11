@@ -1,5 +1,22 @@
 # Aegis — working rules
 
+**Latest owner amendment: Q48 (11 September 2026, job 129).**
+Repair missing Pre questions and weak concepts using the attached diagnostics.
+The API may infer supported foundations from grade, subject and source task
+assumptions without requiring a separate prior-curriculum record. Teach concrete
+knowledge and transferable skills, not awareness that a topic was studied.
+Accepted Pre concepts are the assessment scope: coverage planning must not
+reopen eligibility or assign zero to drop them. Counts and tiers remain adaptive.
+Current corrected prose takes authority over superseded prerequisite metadata;
+archive stale derived scope instead of carrying it into new questions. Explicit
+Continue/Pre retry must recover empty or partial banks with a separate mini
+revision, preserving source/Post history and never recording false success.
+Keep dependent subquestions together. Corrected Post grouping is an explicit
+API decision with exact original identity accounting and preserved dependencies;
+retain only essential learner context and keep removed excerpts in audit.
+Preserve historical replay, Q44 boundaries, closed CMS lists and all independent
+review/Fixer stages. Verify offline and continue the authorized CI/deploy flow.
+
 **Latest owner amendment: Q47 (11 September 2026).**
 Refine question classification using the complete required response: descriptive
 work must not become Objective or Subjective simply because its final answer is

@@ -2602,12 +2602,13 @@ def _metadata(
     instruction_set_sha256: str = "",
     instruction_slots: dict | None = None,
 ) -> dict:
-    from . import model_provider, generation_quality_policy
+    from . import model_provider, generation_quality_policy, generation_repair_policy
 
     profile = model_provider.bound_profile()
     return {
         **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
         **generation_quality_policy.run_fields(),
+        **generation_repair_policy.run_fields(),
         "subject": subject or "",
         "board": board or "",
         "grade": grade or "",

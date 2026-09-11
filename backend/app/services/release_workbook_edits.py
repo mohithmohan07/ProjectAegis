@@ -168,6 +168,110 @@ def _new_pre_record(
     }
 
 
+def prepare_reviewed_pre_scope(
+    payload: dict[str, Any],
+    changed_ids: set[str],
+    *,
+    previous_records: list[Any] | None = None,
+) -> None:
+    """Invalidate derived meaning only at an explicit corrected-input boundary.
+
+    Changed authored cells invalidate their old capture links and certificates.
+    This is dependency invalidation, not a local judgment about the new text.
+    Complete previous values remain in the revision audit and release history.
+    Every accepted row supplies its exact authored scope to the question author.
+    """
+    from . import generation_repair_policy as repair, generation_quality_policy
+
+    original_by_id = {
+        str(row.get("_pre_concept_id") or ""): row
+        for row in previous_records or [] if isinstance(row, Mapping)
+    }
+    derived_fields = {
+        "_aegis_pre_prerequisites", "_aegis_needed_for",
+        "_aegis_pre_related_concepts", "_aegis_pre_related_concepts_unresolved",
+        "_aegis_analysis_allotments", "_aegis_pre_generated_questions",
+        "_semantic_topic_id", "_source_block_ids",
+        "_aegis_release_block_ids", "_aegis_release_qids",
+        "_aegis_release_type_case_routes", "_aegis_release_refined",
+    }
+    authored_fields = ("topic", "parent_concept", "concept_title", "concept_details", "keywords")
+    detached: dict[str, Any] = {}
+    for row in payload.get("records") or []:
+        if not isinstance(row, dict):
+            continue
+        concept_id = str(row.get("_pre_concept_id") or "")
+        if concept_id in changed_ids:
+            prior = copy.deepcopy(dict(original_by_id.get(concept_id) or row))
+            detached[concept_id] = prior
+            for field in list(row):
+                if field in derived_fields or field.startswith("_source_grounding_"):
+                    row.pop(field, None)
+            row["_aegis_pre_prerequisites"] = []
+            row["_aegis_needed_for"] = []
+            row["_aegis_pre_related_concepts"] = ""
+            row["_aegis_pre_related_concepts_unresolved"] = []
+            # The previous review evaluated previous text. Preserve its complete
+            # receipt above and retain only newly authored edit receipts here.
+            old_flags = list(prior.get("review_flags") or [])
+            row["review_flags"] = [
+                flag for flag in row.get("review_flags") or [] if flag not in old_flags
+            ]
+            row[bcr.RELEASE_ROW_ERRORS_FIELD] = []
+            row[bcr.RELEASE_ROW_STATUS_FIELD] = "ready"
+        row[repair.REVIEWED_PRE_SCOPE_FIELD] = {
+            "version": repair.VERSION,
+            "authority": "reviewer_accepted_concept",
+            "pre_concept_id": concept_id,
+            "authored_scope": {field: copy.deepcopy(row.get(field, "")) for field in authored_fields},
+        }
+    if detached:
+        superseded = copy.deepcopy(dict(payload.get("_reviewed_pre_superseded") or {}))
+        revisions = list(superseded.get("scope_revisions") or [])
+        revisions.append({
+            "version": repair.VERSION,
+            "reason": "Authored Pre Concept scope supersedes its earlier derived capture.",
+            "rows": detached,
+            "needed_for": copy.deepcopy(payload.get("needed_for") or {}),
+            "analysis": copy.deepcopy(payload.get("analysis") or {}),
+            "pre_topics": copy.deepcopy(payload.get("pre_topics") or []),
+        })
+        superseded["scope_revisions"] = revisions
+        payload["_reviewed_pre_superseded"] = superseded
+        payload["needed_for"] = {
+            key: value for key, value in (payload.get("needed_for") or {}).items()
+            if str(key) not in changed_ids
+        }
+        analysis = copy.deepcopy(dict(payload.get("analysis") or {}))
+        retired_analysis_ids = {
+            str(key) for key, value in (analysis.get("allotments") or {}).items()
+            if str(value) in changed_ids
+        }
+        for field in ("allotments", "rationales", "review_flags"):
+            if isinstance(analysis.get(field), Mapping):
+                analysis[field] = {
+                    key: value for key, value in analysis[field].items()
+                    if str(key) not in retired_analysis_ids
+                }
+        if isinstance(analysis.get("inventory"), list):
+            analysis["inventory"] = [
+                row for row in analysis["inventory"]
+                if not isinstance(row, Mapping) or str(row.get("item_id") or "") not in retired_analysis_ids
+            ]
+        payload["analysis"] = analysis
+        topics = []
+        for original in payload.get("pre_topics") or []:
+            topic = copy.deepcopy(dict(original))
+            topic["pre_concept_ids"] = [
+                value for value in topic.get("pre_concept_ids") or [] if str(value) not in changed_ids
+            ]
+            if topic["pre_concept_ids"]:
+                topics.append(topic)
+        payload["pre_topics"] = topics
+    payload[repair.KEY] = repair.VERSION
+    payload[generation_quality_policy.KEY] = generation_quality_policy.VERSION
+
+
 def _refresh_edited_validation_reports(
     candidate: dict[str, Any],
 ) -> None:
@@ -381,6 +485,7 @@ _QUESTION_AUDIT_FIELDS = _QUESTION_FIELDS + (
     "compound_subparts", "sub_questions", "requires_visual", "requires_context",
     "_image_captions", "reviewed_context", "learner_context",
     "generation_quality_policy", "source_task_polishing_policy",
+    "generation_repair_policy", "reviewed_source_qids", "source_dependency_reviews",
 )
 
 
@@ -596,6 +701,13 @@ def _canonical_review_route_rows(
         kind = "reviewer_added" if str(row.get("kind") or "").strip().lower() == "reviewer_added" else "example"
         rows.append({
             "row_kind": kind,
+            **({"source_qids": copy.deepcopy(row["source_qids"]),
+                "source_dependency_reviews": copy.deepcopy(row.get("source_dependency_reviews") or []),
+                "context_review": copy.deepcopy(row.get("context_review") or {}),
+                "shared_context": str(row.get("shared_context") or ""),
+                "removed_dependencies": copy.deepcopy(row.get("removed_dependencies") or []),
+                "generation_repair_policy": row.get("generation_repair_policy")}
+               if "source_qids" in row else {}),
             "type_id": str(row.get("type_id") or "").strip(),
             "type_title": str(row.get("type_title") or ""),
             "type_definition": str(row.get("type_definition") or ""),
@@ -673,6 +785,8 @@ def _apply_question_review(
         )
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
+    represented_sources: set[str] = set()
+    grouped_sources: list[dict[str, Any]] = []
     operations: list[dict[str, Any]] = []
     omitted: list[str] = []
     added: list[str] = []
@@ -687,6 +801,14 @@ def _apply_question_review(
         source_qid = str(row.get("source_qid") or "").strip()
         identity = source_qid or question_id
         kind = str(row.get("kind") or "source").strip().lower()
+        from .concept_review_context import source_group_ids, apply_source_group
+        members = source_group_ids(row) if lane == bcr.LANE_POST and (
+            "source_qids" in row or kind != "reviewer_added"
+        ) else []
+        if any(member in represented_sources for member in members):
+            raise WorkbookEditError("a reviewed source question belongs to more than one accepted question")
+        if any(member not in original_by_id for member in members):
+            raise WorkbookEditError("a reviewed source group names an unknown source question")
         if kind == "reviewer_added" or (not identity and row.get("question_text")):
             if canonical_reconciled is not None and canonical_added_index < len(canonical_added_ids):
                 identity = str(canonical_added_ids[canonical_added_index])
@@ -739,6 +861,16 @@ def _apply_question_review(
         before_values = {
             key: copy.deepcopy(current.get(key)) for key in _QUESTION_AUDIT_FIELDS
         }
+        if lane == bcr.LANE_POST:
+            apply_source_group(current, row, original_by_id)
+        represented_sources.update(members)
+        if len(members) > 1:
+            grouped_sources.append({
+                "identity": identity,
+                "source_qids": copy.deepcopy(members),
+                "source_dependency_reviews": copy.deepcopy(row.get("source_dependency_reviews") or []),
+                "source_evidence": [copy.deepcopy(original_by_id[member]) for member in members],
+            })
         from . import generation_quality_policy as quality
         from . import source_task_polishing_policy as source_format
         if lane == bcr.LANE_POST and quality.active(row):
@@ -829,6 +961,9 @@ def _apply_question_review(
             "case_id": str(row.get("case_id") or ""),
             "case_definition": str(row.get("case_definition") or ""),
             "preserve_source_dependencies": preserve_dependencies,
+            **({"source_qids": copy.deepcopy(members),
+                "source_dependency_reviews": copy.deepcopy(row.get("source_dependency_reviews") or [])}
+               if "source_qids" in row else {}),
             **({
                 "context_review": copy.deepcopy(row["context_review"]),
                 "removed_dependencies": copy.deepcopy(row.get("removed_dependencies") or []),
@@ -898,7 +1033,7 @@ def _apply_question_review(
         current["_review_identity"] = identity
         selected.append(current)
         seen.add(identity)
-    omitted = [identity for identity in original_by_id if identity not in seen]
+    omitted = [identity for identity in original_by_id if identity not in seen | represented_sources]
     if lane == bcr.LANE_POST:
         inventory = copy.deepcopy(dict(payload.get("question_task_inventory") or {}))
         inventory["items"] = selected
@@ -935,6 +1070,7 @@ def _apply_question_review(
         "added": added,
         "moved": moved,
         "edited": edited,
+        **({"grouped": grouped_sources} if grouped_sources else {}),
         "integrity_conflicts": integrity_conflicts,
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -943,7 +1079,7 @@ def _apply_question_review(
         # The helper owns route membership/dispositions; retain the richer
         # field-level audit assembled above and attach the complete author /
         # critic receipt, including the explicit all-omitted case.
-        for key in ("original_ids", "reviewed_ids", "omitted", "added", "moved"):
+        for key in ("original_ids", "reviewed_ids", "omitted", "added", "moved", "grouped"):
             if key in helper_audit:
                 payload["review_question_audit"][key] = copy.deepcopy(helper_audit[key])
         payload["review_question_audit"]["model_review_receipt"] = copy.deepcopy(
@@ -1292,8 +1428,17 @@ def apply_workbook_for_review(
     # staged record index used by the immutable Master snapshot, so row order
     # changes in Excel cannot shift a reviewed question onto another Concept.
     try:
+        # This is an explicit, newly requested correction after validating the
+        # uploaded workbook. Stamp only its working copy; saved source and
+        # already accepted review receipts retain their historical policy.
+        review_payload = payload
+        if lane == bcr.LANE_POST:
+            from . import generation_repair_policy, generation_quality_policy
+            review_payload = copy.deepcopy(payload)
+            review_payload[generation_repair_policy.KEY] = generation_repair_policy.VERSION
+            review_payload[generation_quality_policy.KEY] = generation_quality_policy.VERSION
         question_rows = _question_workbook_rows(
-            workbook_path, payload=payload, concept_rows=parsed, lane=lane
+            workbook_path, payload=review_payload, concept_rows=parsed, lane=lane
         )
     except WorkbookEditError:
         raise
@@ -1313,6 +1458,11 @@ def apply_workbook_for_review(
     # corrections and preserves the current set for compatibility with older
     # review workbooks.
     candidate = copy.deepcopy(payload)
+    if lane == bcr.LANE_POST and question_rows is not None:
+        from . import model_provider
+        candidate.update(generation_repair_policy.fields(review_payload))
+        candidate.update(generation_quality_policy.fields(review_payload))
+        candidate[model_provider.PROFILE_KEY] = model_provider.new_profile()
     # ``records`` is a validated working copy.  In particular, assigning it
     # here matters for an empty staged list: ``payload.get('records') or []``
     # would otherwise append additions to a detached temporary list.
@@ -1390,6 +1540,15 @@ def apply_workbook_for_review(
     if lane == bcr.LANE_PRE and (concept_edits or additions):
         from . import prelearning_foundation_policy
 
+        changed_pre_ids = {
+            str(candidate["records"][int(edit["record_index"])].get("_pre_concept_id") or "")
+            for edit in concept_edits
+        } | {str(item.get("pre_concept_id") or "") for item in additions}
+        prepare_reviewed_pre_scope(
+            candidate, changed_pre_ids,
+            previous_records=list(payload.get("records") or []),
+        )
+
         try:
             workbook_sha256 = hashlib.sha256(
                 workbook_path.read_bytes()
@@ -1413,6 +1572,7 @@ def apply_workbook_for_review(
                 str(item.get("pre_concept_id") or "")
                 for item in additions
             ],
+            "changed_pre_concept_ids": sorted(changed_pre_ids),
             "workbook_identity_tags": [
                 str(item.get("workbook_identity_tag") or "")
                 for item in additions

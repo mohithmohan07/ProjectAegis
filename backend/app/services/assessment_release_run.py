@@ -27,6 +27,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -1213,6 +1214,9 @@ _LEAK_GUARD_SKIPPED_KEYS = frozenset({
     "flags",
     "refinements",
     "review_flags",
+    # Corrected Pre scope retains the complete prior derived receipts only
+    # for audit. The paired redactor keeps source identities out of Pre files.
+    "_reviewed_pre_superseded",
 })
 
 
@@ -1488,24 +1492,25 @@ def run_pre_release_for_job(
     owner_sub: str,
     **kwargs,
 ) -> models.AssessmentRelease:
-    """Output 04 — the Pre Master, from this job's staged Pre release.
+    """Output 02 — the Pre Master, from this job's staged Pre release.
 
     The one supported way to run the Pre lane: it reads the GENERATED
-    questions out of the staged Output-03 payload (where
+    questions out of the staged Output-01 payload (where
     ``build_concepts_release.stage_pre_release`` put them, projected from
-    the same accepted snapshot as Output 03 itself) and hands them to the
+    the same accepted snapshot as Output 01 itself) and hands them to the
     generated lane. No path here can reach the chapter's own questions.
 
-    Refuses when the job has no staged Pre release at all. It does NOT
-    refuse a Pre release that authored zero questions, and the two states
-    are kept distinguishable rather than collapsed: a Pre release with
-    concept rows and no generated question runs here and ships an empty
-    Output 04.
+    Refuses when the job has no staged Pre release at all. Under Q48,
+    ``run_release_for_job`` also refuses a nonempty accepted Concept map
+    with missing generated questions before Master authoring starts.
+    Continue and the explicit Pre retry recover those missing questions;
+    the Concept file and failure evidence remain available. Unstamped
+    historical releases retain their recorded empty-bank behavior.
 
     Zero ROWS runs too, since spec-step8 S9 — and the illustration that
     used to sit here ("the export refuses it") is gone with the raise it
     described. A chapter that assumes NOTHING stages a Pre release with no
-    rows, and [measured] that now builds a real, empty Output 04 in state
+    rows, and [measured] that now builds a real, empty Output 02 in state
     ``ready_for_upload``: ``transient_release_hierarchy`` records instead
     of raising, so nothing between here and the Master takes the artefact
     away. Whether that empty release may be WRITTEN is a separate question
@@ -1540,6 +1545,27 @@ def run_pre_release_for_job(
     )
 
 
+def _with_revised_lane_model_profile(function):
+    """An explicit repaired lane revision owns routing independently of source."""
+    @wraps(function)
+    def bound(db, job_id, *args, **kwargs):
+        from . import generation_repair_policy as repair, model_provider
+
+        lane = build_concepts_release.normalize_lane(kwargs.get("lane"))
+        job = uploads.get_job(
+            db, job_id, owner_sub=kwargs.get("owner_sub"), module="build_concepts"
+        )
+        staged = build_concepts_release.release_payload(job, lane=lane) or {}
+        recorded = staged.get(model_provider.PROFILE_KEY)
+        if repair.active(staged) and isinstance(recorded, Mapping):
+            with model_provider.bind_profile(recorded):
+                return function(db, job_id, *args, **kwargs)
+        return function(db, job_id, *args, **kwargs)
+
+    return bound
+
+
+@_with_revised_lane_model_profile
 def run_release_for_job(
     db: Session,
     job_id: int,
@@ -1628,6 +1654,21 @@ def run_release_for_job(
             "source inventory; generated_questions is permitted only for "
             "the Pre-Learning lane"
         )
+    if generate_lane and staged_lane == build_concepts_release.LANE_PRE:
+        from . import generation_repair_policy as repair
+        from . import build_concepts_release_contract as concept_contract
+
+        if repair.active(staged_release):
+            missing = concept_contract._reviewed_pre_missing_question_ids({
+                "records": staged_release.get("records") or [],
+                "generated_questions": list(generated_questions or []),
+            })
+            if missing:
+                raise ReleaseRunError(
+                    "Pre Master requires generated questions for every accepted Concept. "
+                    "Missing: " + ", ".join(missing)
+                    + ". Continue or retry the Pre Master to recover the missing questions."
+                )
     try:
         with db.no_autoflush:
             bridge = release_snapshot.build(db, job, staged_release)

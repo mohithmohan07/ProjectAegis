@@ -1284,7 +1284,11 @@ OUTLINE_REVIEW_VERSION = "chapter-outline-review-1"
 # separate from OUTLINE_VERSION: the latter is stamped into rendered MMD, so
 # changing it would make accepted historical source replay stale. This token
 # is used only for fresh outline decisions and their review/cache identity.
-OUTLINE_DECISION_VERSION = "chapter-outline-decision-11"
+# 12: keep dependent follow-up demands inside their complete question, and
+# distinguish directions/references from additional learner assessments.
+# Only fresh decisions change; accepted source-reader and bundle identities
+# stay stable so sealed historical outlines replay without rejudgment.
+OUTLINE_DECISION_VERSION = "chapter-outline-decision-12"
 # Q41 also makes the page transcriber explicitly inspect learner-directed
 # prompts embedded in prose, activities, and info hubs. This identity applies
 # to unsealed page-batch decisions; the sealed complete-bundle key deliberately
@@ -1606,19 +1610,39 @@ name the page/block and uncertainty in notes; do not invent a repair.
      shared material or on one another's answers. Independent asks about one
      picture or one passage remain separate questions, with the shared source
      relationship preserved on each part.
+   - Judge the complete response unit before splitting its sentences. A
+     definition followed by its uses, a claim followed by its justification,
+     or an answer followed by the evidence/reason for that answer can be one
+     question with dependent demands. Keep such demands together when the
+     later wording depends on an antecedent, response, or purpose established
+     by the first demand. A follow-up that loses what 'it', 'its', 'this', or
+     'why' refers to is not independently complete. Do not invent a stem or
+     duplicate the first demand merely to make a dependent fragment look
+     independent. These are semantic checks, not keyword or numbering rules:
+     genuinely independent questions about the same subject still separate.
    - A printed marker is NOT required. A task block that lists several
      separate prompts as bullets, dashes, or plain successive sentences —
      "What will happen if…" scenario lists, a set of unrelated observation
      questions under one banner — partitions exactly like a lettered one.
      Judge independence by the content; leave label "" when nothing is
      printed.
+   - A direction to answer the listed questions, an invitation to discuss
+     them, or a sentence saying where their answers can be found does not
+     automatically add another assessment question. Decide whether it asks
+     for a distinct learner response or only governs/refers to the existing
+     set. Keep required directions with the governed task(s), and retain
+     editorial/reference material in source evidence and notes; never mint
+     an extra independent part just because such a sentence has a question
+     mark. Genuine separate discussion or reflection tasks remain included.
    - Each part: label = the printed item marker ("(i)", "2)", "b.") or "" if
      the book prints none; text = the part's complete wording COPIED VERBATIM
      from the task block; stem = any shared instruction that the part needs to
      stand alone (for example "Select the correct option."), also verbatim, or
      "" if none.
-   - Never rewrite, complete, or merge wording. Every part text must be a
-     contiguous passage of the task block's text.
+   - Never rewrite, complete, or combine non-contiguous wording. Every part
+     text must be a contiguous passage of the task block's text. Keeping
+     consecutive dependent demands together preserves their original wording;
+     it does not authorize combining otherwise independent source questions.
    - Do not partition a task that is a single question, an activity's
      numbered steps (steps are one procedure, not questions), or a table to
      complete.
@@ -1630,6 +1654,9 @@ name the page/block and uncertainty in notes; do not invent a repair.
    question the chapter silently loses, so walk the digest and rule on each
    one. A task that is a single question, an activity, or a table to
    complete belongs here.
+   Coverage is the UNION of whole_tasks and task_partitions, with each source
+   task block in exactly one list. A whole task is fully accounted for without
+   any partition. Do not split a complete question just to populate partitions.
    For each whole task, also rule its task_kind from the content itself
    (a partitioned task is always a set of questions):
    - "question" — something the learner answers or completes for
@@ -2080,6 +2107,24 @@ questions or dependent steps/subparts. Shared use of a passage, poem, data
 set, scenario, or figure alone does not make a multipart task: parts are
 multipart only when they share meaningful necessary context AND depend on that
 context or on one another's answers.
+Audit each proposed part as a complete response unit: dependent definition-and-
+uses, answer-and-reason, claim-and-evidence, or similar follow-up demands stay
+together when their meaning or required response depends on the preceding
+demand. Check referents and response dependencies rather than counting sentences,
+question marks, labels, or repeated subject words. A fragment whose antecedent
+was left in another part is not independent; supplying an invented stem or
+duplicating the earlier demand is not a valid reason to split it. Independent
+questions remain separate even when numbered together or about one subject.
+Check that directions governing a listed set and answer-location references
+have not become extra assessment questions. Preserve genuine separate learner
+tasks and all source evidence; distinguish their purpose using the full block.
+Task coverage is the UNION of whole_tasks and task_partitions, exactly once.
+The normalized outline stores whole-task decisions in ruled_task_kinds rather
+than a whole_tasks list; the task_coverage payload projects these identities
+explicitly. A source task listed as whole is accounted for without a partition.
+Check omissions against source_task_refs and unruled_task_refs, not merely the
+absence of an entry in task_partitions; check the author attempts for duplicate
+whole/partition rulings. Do not demand partitions for valid whole questions.
 Check the normalized outline that will actually be applied, including anything
 normalization changed or left unruled. Every original task and teaching passage
 must remain available. Never justify omission by its size, typography, cue word,
@@ -2180,10 +2225,28 @@ def _review_chapter_outline(
     author_attempts: list[dict[str, Any]],
 ) -> None:
     """Independent advisory review: no rewrite, replay, gate or manual step."""
+    partition_refs = {
+        (str(part.get("page_id") or ""), int(part.get("reading_order") or 0))
+        for part in outline.get("task_partitions") or []
+    }
+    # The normalized outline uses a common kind ledger for whole and split
+    # tasks. Expose its exact identity projection so the critic cannot mistake
+    # absence from partitions for an omitted whole task. No text is classified.
+    whole_refs = [
+        [page_id, reading_order]
+        for page_id, reading_order, _kind in outline.get("ruled_task_kinds") or []
+        if (page_id, reading_order) not in partition_refs
+    ]
     payload = {
         "source_pages": page_acsd.get("pages") or [],
         "author_attempts": author_attempts,
         "outline_to_apply": copy.deepcopy(outline),
+        "task_coverage": {
+            "source_task_refs": [list(ref) for ref in _task_block_refs(page_acsd)],
+            "whole_task_refs": whole_refs,
+            "partitioned_task_refs": [list(ref) for ref in sorted(partition_refs)],
+            "unruled_task_refs": copy.deepcopy(outline.get("unruled_task_refs") or []),
+        },
     }
     record = {
         "version": OUTLINE_REVIEW_VERSION,

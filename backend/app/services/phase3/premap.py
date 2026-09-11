@@ -164,6 +164,7 @@ from .. import progress
 from .. import prelearning_capture_policy as capture_policy
 from .. import prelearning_foundation_policy as foundation_policy
 from .. import generation_quality_policy as quality
+from .. import generation_repair_policy as repair
 from . import evidence as visual_evidence
 
 # The run the map belongs to, stamped on the map itself (register Q29).
@@ -1008,7 +1009,7 @@ def empty_capture_verdict(
     # Keep the legacy empty payload byte-identical when this policy is absent;
     # fresh envelopes carry both its stamp and the boundary instruction.
     foundation_fields = foundation_policy.fields(env)
-    if foundation_fields or quality.active(env):
+    if foundation_fields or quality.active(env) or repair.active(env):
         boundary_fields = capture_policy.boundary_fields(env)
         payload.update(boundary_fields)
         boundary_suffix = capture_policy.boundary_instruction(boundary_fields)
@@ -1037,7 +1038,8 @@ def empty_capture_verdict(
         store=store,
         policy_version=EMPTY_CAPTURE_POLICY_VERSION
         + (";" + foundation_policy.VERSION if foundation_fields else "")
-        + (";" + quality.VERSION if quality.active(env) else ""),
+        + (";" + quality.VERSION if quality.active(env) else "")
+        + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )
     response = decision.get("response") or {}
@@ -1231,6 +1233,7 @@ def build(
         RUN_IDENTITY_FIELD: run_identity(env),
         **foundation_policy.fields(env),
         **quality.fields(env),
+        **repair.fields(env),
     }
     if not captured:
         # D8.3 / S9 — ONE verdict, not an inference. This branch used to
@@ -1361,6 +1364,7 @@ def build(
         payload["capture_policy"] = capture_policy.VERSION
     if quality.active(env):
         payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
+    payload["rules"] += capture_policy.repair_instruction(payload)
     # The model is never SHOWN a source question's identity: the
     # capture's citations are filtered to block ids and its free text is
     # redacted (``_redact_ids`` records why redaction, not refusal, is
@@ -1384,7 +1388,8 @@ def build(
         policy_version=_policy_version("PREMAP_SYSTEM")
         + (";" + capture_policy.VERSION if enhanced else "")
         + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
-        + (";" + quality.VERSION if quality.active(env) else ""),
+        + (";" + quality.VERSION if quality.active(env) else "")
+        + (";" + repair.VERSION if repair.active(env) else ""),
         fixer=fixer,
     )
     map_flags = list(decision.get("review_flags") or [])
@@ -1564,7 +1569,8 @@ def build(
                 ),
                 critic=critic,
                 store=store,
-                policy_version=_policy_version("PREMAP_NEEDED_FOR_SYSTEM"),
+                policy_version=_policy_version("PREMAP_NEEDED_FOR_SYSTEM")
+                + (";" + repair.VERSION if repair.active(env) else ""),
                 fixer=fixer,
             )
             decided = {
@@ -1750,6 +1756,7 @@ def build(
         RUN_IDENTITY_FIELD: run_identity(env),
         **foundation_policy.fields(env),
         **quality.fields(env),
+        **repair.fields(env),
     }
 
 

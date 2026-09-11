@@ -18,7 +18,7 @@ from . import assessment_release as rel
 from . import build_concepts_release_files
 from . import directory
 from . import identity
-from . import generation_quality_policy
+from . import generation_quality_policy, generation_repair_policy, model_provider
 
 
 class SnapshotError(ValueError):
@@ -323,6 +323,10 @@ def build(
             row["_aegis_pre_prerequisites"] = copy.deepcopy(
                 record.get("_aegis_pre_prerequisites") or []
             )
+        if generation_repair_policy.active(release) and release.get("learning_kind") == "pre":
+            row[generation_repair_policy.REVIEWED_PRE_SCOPE_FIELD] = copy.deepcopy(
+                record.get(generation_repair_policy.REVIEWED_PRE_SCOPE_FIELD) or {}
+            )
         concept_rows.append(row)
         carried.append(concept)
         route_row = {
@@ -445,7 +449,12 @@ def build(
     from . import prelearning_foundation_policy
 
     metadata.update(generation_quality_policy.fields(release))
+    metadata.update(generation_repair_policy.fields(release))
+    if generation_repair_policy.active(release) and release.get(model_provider.PROFILE_KEY) is not None:
+        metadata[model_provider.PROFILE_KEY] = model_provider.validate_profile(release[model_provider.PROFILE_KEY])
     if release.get("learning_kind") == "pre":
+        if generation_repair_policy.active(release):
+            metadata["learning_kind"] = "pre"
         metadata.update(prelearning_foundation_policy.fields({"metadata": release}))
         if generation_quality_policy.active(release):
             # Cell, materialization and advisory-critic payloads all carry
@@ -455,6 +464,8 @@ def build(
                 "concept_key": row["concept_key"],
                 "pre_concept_id": row["pre_concept_id"],
                 "prerequisites": copy.deepcopy(row["_aegis_pre_prerequisites"]),
+                **({"reviewed_scope": copy.deepcopy(row.get(generation_repair_policy.REVIEWED_PRE_SCOPE_FIELD) or {})}
+                   if generation_repair_policy.active(release) else {}),
             } for row in concept_rows]
     question_task_inventory = copy.deepcopy(
         release.get("question_task_inventory") or {}

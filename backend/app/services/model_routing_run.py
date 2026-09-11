@@ -14,7 +14,12 @@ import tempfile
 from contextlib import contextmanager
 
 from .. import config
-from . import canonical_source_contract, model_provider, generation_quality_policy as quality
+from . import (
+    canonical_source_contract,
+    model_provider,
+    generation_quality_policy as quality,
+    generation_repair_policy as repair,
+)
 
 
 def _record_path(job):
@@ -33,11 +38,13 @@ def recorded_profile_for_job(job):
     record = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(record, dict) or record.get("version") != 1 or "profile" not in record:
         raise ValueError("invalid saved model routing record")
+    if repair.KEY in record and record[repair.KEY] != repair.VERSION:
+        raise ValueError("Unknown saved generation repair policy")
     profile = record["profile"]
     return None if profile is None else model_provider.validate_profile(profile)
 
 
-def save_profile_for_job(job, profile, *, quality_version=None):
+def save_profile_for_job(job, profile, *, quality_version=None, repair_version=None):
     """Persist an explicit run profile, including None for historical restore."""
     profile = None if profile is None else model_provider.validate_profile(profile)
     path = _record_path(job)
@@ -46,6 +53,10 @@ def save_profile_for_job(job, profile, *, quality_version=None):
         if quality_version != quality.VERSION:
             raise ValueError("Unknown saved generation quality policy")
         record[quality.KEY] = quality_version
+    if repair_version is not None:
+        if repair_version != repair.VERSION:
+            raise ValueError("Unknown saved generation repair policy")
+        record[repair.KEY] = repair_version
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temp_path = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
     try:
@@ -71,6 +82,7 @@ def profile_for_job(job):
     return save_profile_for_job(
         job, None if historical else model_provider.new_profile(),
         quality_version=None if historical else quality.VERSION,
+        repair_version=None if historical else repair.VERSION,
     )
 
 
@@ -78,7 +90,11 @@ def profile_for_job(job):
 def bind_job(job, *, require_pre: bool = False):
     profile = profile_for_job(job)
     record = json.loads(_record_path(job).read_text(encoding="utf-8"))
-    with model_provider.bind_profile(profile), quality.bind_run(record.get(quality.KEY)):
+    with (
+        model_provider.bind_profile(profile),
+        quality.bind_run(record.get(quality.KEY)),
+        repair.bind_run(record.get(repair.KEY)),
+    ):
         if profile is not None and not config.allow_dry() and not config._live_disabled():
             providers = {
                 route["provider"] for name, route in profile["routes"].items()

@@ -175,12 +175,11 @@ def test_reviewed_pre_regeneration_preserves_policy_without_mutating_source_enve
     monkeypatch.setattr(prequestions, "build", build)
     result = contract._regenerate_pre_questions_after_review(db, job)
     assert result is not None
-    assert quality.active(seen[0][0]) is current
-    assert quality.active(seen[0][1]) is current
-    assert quality.active(release.release_payload(job, lane=release.LANE_PRE)) is current
+    assert quality.active(seen[0][0])
+    assert quality.active(seen[0][1])
+    assert quality.active(release.release_payload(job, lane=release.LANE_PRE))
     assert source_path.read_text(encoding="utf-8") == original
-    if current:
-        assert seen[0][0]["envelope_sha256"] != env["envelope_sha256"]
-        assert seen[0][0]["metadata"]["_reviewed_pre_input"]["source_envelope_sha256"] == env["envelope_sha256"]
-    else:
-        assert seen[0][0] == env
+    # An explicit corrected Pre revision adopts the current repair/quality
+    # policy, independently of the immutable historical source envelope.
+    assert seen[0][0]["envelope_sha256"] != env["envelope_sha256"]
+    assert seen[0][0]["metadata"]["_reviewed_pre_input"]["source_envelope_sha256"] == env["envelope_sha256"]

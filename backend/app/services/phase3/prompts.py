@@ -795,7 +795,7 @@ def instruction_rules_suffix(
     metadata = env.get("metadata") if isinstance(env, Mapping) else None
     # Only new, explicitly policy-bound envelopes adopt the owner amendment.
     # Keep absent-key historical suffixes and decision identities unchanged.
-    from .. import source_topic_policy, prelearning_capture_policy, prelearning_foundation_policy, generation_quality_policy
+    from .. import source_topic_policy, prelearning_capture_policy, prelearning_foundation_policy, generation_quality_policy, generation_repair_policy
 
     policy_suffix = ""
     if isinstance(metadata, Mapping):
@@ -812,7 +812,7 @@ def instruction_rules_suffix(
         if slots not in (PRE_LEARNING_SLOTS, PRE_QUESTION_SLOTS):
             boundary_metadata = {
                 key: value for key, value in metadata.items()
-                if key not in (prelearning_foundation_policy.KEY, generation_quality_policy.KEY)
+                if key not in (prelearning_foundation_policy.KEY, generation_quality_policy.KEY, generation_repair_policy.KEY)
             }
             if generation_quality_policy.active(metadata):
                 policy_suffix += "\n" + source_topic_policy.POST_COHERENCE_INSTRUCTION

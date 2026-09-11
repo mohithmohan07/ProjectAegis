@@ -1,6 +1,11 @@
 """Pass 2.9c — Prequestions: the Pre-Learning coverage plan and its questions.
 
-Latest owner amendment (9 September 2026): fresh envelopes carry an explicit
+Latest owner amendment (11 September 2026): accepted Pre concepts require
+diagnostic coverage. Coverage planning cannot reopen upstream eligibility;
+a zero plan is a contract defect repaired through the existing bounded path.
+Historical sealed policies retain the zero-plan behavior documented below.
+
+The 9 September amendment gives fresh envelopes an explicit
 adaptive coverage policy. The API chooses each prerequisite's sufficient
 total and tier split with no fixed or per-tier quota and no scope expansion.
 The accepted split is carried on authored questions. Historical sealed Q30
@@ -139,6 +144,7 @@ from __future__ import annotations
 
 from .. import prelearning_capture_policy as capture_policy
 from .. import generation_quality_policy as quality
+from .. import generation_repair_policy as repair
 
 import copy
 import re
@@ -188,7 +194,7 @@ def _foundation_policy_suffix(payload: Mapping[str, Any]) -> str:
         if payload.get(prelearning_foundation_policy.KEY)
         == prelearning_foundation_policy.VERSION
         else ""
-    ) + quality.suffix(payload)
+    ) + quality.suffix(payload) + repair.suffix(payload)
 
 
 # The generated questions ride their OWN carry channel (the runner's
@@ -286,6 +292,8 @@ def concept_evidence(
             for item in row.get(premap_mod.NEEDED_FOR_FIELD) or []
             if isinstance(item, Mapping)
         ],
+        **({repair.REVIEWED_PRE_SCOPE_FIELD: copy.deepcopy(row[repair.REVIEWED_PRE_SCOPE_FIELD])}
+           if isinstance(row.get(repair.REVIEWED_PRE_SCOPE_FIELD), Mapping) else {}),
     }
 
 
@@ -330,6 +338,7 @@ def _rule_plan_defects(
 def _plan_checker(
     pre_concept_ids: list[str],
     rule: Mapping[str, Any] | None = None,
+    *, require_assessment: bool = False,
 ) -> Callable[[Mapping[str, Any]], list[str]]:
     """Mechanics only: every concept planned once, the plan self-consistent.
 
@@ -384,6 +393,13 @@ def _plan_checker(
             elif total < 0:
                 defects.append(f"{concept_id} total {total} is negative")
                 total = None
+            elif require_assessment and total == 0:
+                # Contract 8.6: this ID is already in the accepted map.
+                # Planning assesses that scope; it cannot silently drop it.
+                defects.append(
+                    f"{concept_id} is an accepted Pre concept and requires at "
+                    "least one diagnostic question; zero cannot drop its accepted scope"
+                )
             split = row.get("split")
             if not isinstance(split, list):
                 defects.append(
@@ -549,6 +565,17 @@ def _author_checker(
 def _plan_system(payload: Mapping[str, Any]) -> str:
     from . import prompts
 
+    if repair.active(payload):
+        return (
+            prompts._SHARED
+            + " Task: author the diagnostic coverage plan for every accepted Pre concept. "
+            + "Return JSON with a plans array; each object has pre_concept_id, total, "
+            + "split (objects with tier and count), and rationale. Follow the recorded "
+            + "coverage rule; adaptive totals and tier splits are your judgments. "
+            + "Decide each exact ID once. Totals are positive integers; split counts "
+            + "are nonnegative integers and sum to their own total. "
+            + repair.PRE_ASSESSMENT_INSTRUCTION
+        )
     if not pre_coverage.is_adaptive(payload.get("coverage_rule")):
         return prompts.PREQUESTIONS_PLAN_SYSTEM
     return prompts._SHARED + (
@@ -634,7 +661,8 @@ def _live_plan(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         _plan_system(payload)
         + capture_policy.boundary_instruction(payload)
-        + _foundation_instruction(payload),
+        + _foundation_instruction(payload)
+        + ("\n" + repair.PRE_ASSESSMENT_INSTRUCTION if repair.active(payload) else ""),
         prompts.render(payload),
         purpose="pre_learning",
     )
@@ -648,7 +676,8 @@ def _live_author(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         _author_system(payload)
         + capture_policy.boundary_instruction(payload)
-        + _foundation_instruction(payload),
+        + _foundation_instruction(payload)
+        + ("\n" + repair.PRE_ASSESSMENT_INSTRUCTION if repair.active(payload) else ""),
         prompts.render(payload),
         purpose="pre_learning", stage="prequestions.author",
         **({"response_schema": pre_question_author_schema()} if model_provider.bound_profile() is not None else {}),
@@ -662,7 +691,8 @@ def _live_critic(payload: dict[str, Any]) -> dict[str, Any]:
     return generation._openai_json(
         _critic_system(payload)
         + capture_policy.boundary_instruction(payload)
-        + _foundation_instruction(payload),
+        + _foundation_instruction(payload)
+        + ("\n" + repair.PRE_ASSESSMENT_INSTRUCTION if repair.active(payload) else ""),
         prompts.render(payload),
         purpose="advisory_critic",
     )
@@ -726,7 +756,22 @@ def _rule_plan_rules(rules_suffix: str, rule: Mapping[str, Any]) -> str:
 
 def _plan_rules(
     rules_suffix: str, rule: Mapping[str, Any] | None = None,
+    *, accepted_scope: bool = False,
 ) -> str:
+    if accepted_scope:
+        coverage = (
+            "Choose an adaptive total and any appropriate subset of Basic, Intermediate "
+            "and Advanced tiers; no target count or tier balancing."
+            if rule is None or pre_coverage.is_adaptive(rule)
+            else "Preserve the recorded coverage rule: " + pre_coverage.describe(rule) + "."
+        )
+        return (
+            "Phase 03: plan diagnostic coverage for every accepted Pre concept. "
+            + coverage + " Give a rationale for each exact ID, explaining which "
+            "accepted capability each question checks. Count each ID once; split "
+            "counts sum to the positive total. "
+            + repair.PRE_ASSESSMENT_INSTRUCTION + rules_suffix
+        )
     if pre_coverage.is_adaptive(rule):
         return (
             "Phase 03: author the context-sufficient diagnostic coverage plan "
@@ -944,7 +989,10 @@ def build(
     "review_flags": {pre_concept_id: [flags]}, "decision_flags":
     {decision: [flags]}}``.
 
-    An empty Pre map returns without spending a decision, and so does a
+    An empty Pre map returns without spending a decision. Under the current
+    repair policy every accepted concept needs a positive plan; invalid plans
+    use the existing correction/Fixer path and named blocking findings.
+    Under historical policies, no authoring decision is spent for a
     pre-concept the model planned at zero — a chapter whose prerequisites
     the evidence supports thinly is never padded. A zero plan is the
     model's recorded request to drop that concept (register Q29): nothing
@@ -998,7 +1046,7 @@ def build(
     )
     calibration = premap_mod.chapter_calibration(env)
     evidence = [
-        concept_evidence(row, complete_scope=quality.active(env)) for row in rows
+        concept_evidence(row, complete_scope=quality.active(env) or repair.active(env)) for row in rows
     ]
     concept_ids = [entry["pre_concept_id"] for entry in evidence]
 
@@ -1038,7 +1086,7 @@ def build(
     plan_payload = {
         "stage": "prequestions.plan",
         **capture_policy.boundary_fields(env),
-        "rules": _plan_rules(rules_suffix, rule),
+        "rules": _plan_rules(rules_suffix, rule, accepted_scope=repair.active(env)),
         "chapter": calibration,
         "pre_concepts": evidence,
     }
@@ -1079,7 +1127,7 @@ def build(
             envelope_sha256=envelope_sha,
             payload=plan_payload,
             provider=provider,
-            checker=_plan_checker(concept_ids, rule),
+            checker=_plan_checker(concept_ids, rule, require_assessment=repair.active(env)),
             critic=critic,
             store=store,
             policy_version=(
@@ -1196,6 +1244,8 @@ def build(
         }
         if quality.active(env):
             payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
+        if repair.active(env):
+            payload["rules"] += "\n" + repair.PRE_ASSESSMENT_INSTRUCTION
         if rule is not None:
             payload["coverage_rule"] = copy.deepcopy(rule)
         premap_mod._refuse_source_qids(

@@ -504,6 +504,13 @@ def rebuild_lane_master(
                     f"before provider spend ({capacity.available_bytes} "
                     "bytes available)."
                 )
+                if lane == release.LANE_PRE:
+                    reviewed_job = uploads.get_job(
+                        db, job_id, owner_sub=owner_sub, module="build_concepts"
+                    )
+                    _regenerate_pre_questions_after_review(
+                        db, reviewed_job, owner_sub=owner_sub,
+                    )
                 return runner(
                     db,
                     job_id,
@@ -974,13 +981,41 @@ def _run_generation_release(
     return result
 
 
+def _reviewed_pre_missing_question_ids(payload: Mapping[str, Any]) -> list[str]:
+    """Exact retained-row to question membership, with no content judgment."""
+    bank_ids = {
+        str(row.get("pre_question_id") or "")
+        for row in payload.get("generated_questions") or [] if isinstance(row, Mapping)
+    }
+    owners = {
+        str(row.get("pre_concept_id") or "")
+        for row in payload.get("generated_questions") or [] if isinstance(row, Mapping)
+    }
+    return [
+        str(row.get("_pre_concept_id") or "")
+        for row in payload.get("records") or []
+        if isinstance(row, Mapping)
+        and str(row.get("_pre_concept_id") or "") not in owners
+        and not (set(row.get("_aegis_pre_generated_questions") or []) & bank_ids)
+    ]
+
+
+def _reviewed_pre_recovery_needed(job, state: Mapping[str, Any]) -> bool:
+    from . import generation_repair_policy as repair
+
+    corrected = (state.get("corrected_inputs") or {}).get(release.LANE_PRE)
+    payload = release.release_payload(job, lane=release.LANE_PRE) or {}
+    changed = isinstance(corrected, Mapping) and corrected.get("changed")
+    return bool((changed or repair.active(payload)) and _reviewed_pre_missing_question_ids(payload))
+
+
 def _regenerate_pre_questions_after_review(
     db,
     job: models.UploadJob,
     *,
     owner_sub: str | None = None,
 ) -> dict[str, Any] | None:
-    """Regenerate the Pre question bank when its reviewed concepts changed.
+    """Recover a changed Pre bank or missing questions in accepted Q48 scope.
 
     Pre questions are generated from the accepted Pre concept map by the
     existing Phase 03 ``prequestions.build`` path.  A corrected Pre workbook
@@ -991,16 +1026,18 @@ def _regenerate_pre_questions_after_review(
 
     state = release.concept_review_state(job)
     pre_input = (state.get("corrected_inputs") or {}).get(release.LANE_PRE)
-    if not isinstance(pre_input, Mapping) or not pre_input.get("changed"):
-        return None
+    corrected_changed = isinstance(pre_input, Mapping) and bool(pre_input.get("changed"))
     pre_payload = release.release_payload(job, lane=release.LANE_PRE)
     if pre_payload is None:
+        return None
+    if not corrected_changed and not _reviewed_pre_recovery_needed(job, state):
         return None
     current_uid = str(pre_payload.get(release.STAGED_RELEASE_UID_FIELD) or "")
     if (
         current_uid
         and str(state.get("pre_questions_regenerated_for_uid") or "")
         == current_uid
+        and not _reviewed_pre_missing_question_ids(pre_payload)
     ):
         return None
 
@@ -1034,12 +1071,45 @@ def _regenerate_pre_questions_after_review(
         ) from exc
 
     from . import prelearning_foundation_policy, generation_quality_policy
+    from . import generation_repair_policy as repair, model_provider
+    from . import release_workbook_edits
+    from .phase3 import pre_coverage
 
-    reviewed_input = pre_payload.get("_reviewed_pre_input")
+    # Continue is an explicit new Pre revision. A prior empty-bank success is
+    # recoverable here; no passive read upgrades sealed history or Post.
+    pre_payload = copy.deepcopy(pre_payload)
+    source_rows = list(pre_payload.get("records") or [])
+    reviewed_input = copy.deepcopy(dict(pre_payload.get("_reviewed_pre_input") or {}))
+    changed_ids = set(reviewed_input.get("changed_pre_concept_ids") or [])
+    if not repair.active(pre_payload):
+        changed_ids.update(reviewed_input.get("added_pre_concept_ids") or [])
+        changed_ids.update(
+            str(row.get("_pre_concept_id") or "")
+            for row in source_rows if isinstance(row, Mapping)
+            and row.get(release.MANUAL_EDIT_TRAIL_FIELD)
+        )
+        release_workbook_edits.prepare_reviewed_pre_scope(pre_payload, changed_ids)
+    else:
+        # Scope was already invalidated on upload; record acceptance without
+        # archiving it again or erasing evidence belonging to unchanged rows.
+        release_workbook_edits.prepare_reviewed_pre_scope(pre_payload, set())
+    reviewed_input.update({
+        "generation_repair_policy": repair.VERSION,
+        "accepted_pre_concept_ids": [
+            str(row.get("_pre_concept_id") or "") for row in source_rows if isinstance(row, Mapping)
+        ],
+    })
+    pre_payload["_reviewed_pre_input"] = reviewed_input
+    revised_profile = model_provider.new_profile()
+    pre_payload[model_provider.PROFILE_KEY] = revised_profile
+
     reviewed_generation: dict[str, Any] = {}
     reviewed_policies = {
         **prelearning_foundation_policy.fields({"metadata": pre_payload}),
         **generation_quality_policy.fields(pre_payload),
+        repair.KEY: repair.VERSION,
+        model_provider.PROFILE_KEY: revised_profile,
+        pre_coverage.RULE_FIELD: pre_coverage.owner_rule(),
     }
     if (
         isinstance(reviewed_input, Mapping)
@@ -1063,11 +1133,15 @@ def _regenerate_pre_questions_after_review(
             "reviewed_release_uid": current_uid,
             "source_envelope_sha256": source_seal,
             "generation_envelope_sha256": env["envelope_sha256"],
+            repair.KEY: repair.VERSION,
+            model_provider.PROFILE_KEY: copy.deepcopy(revised_profile),
         }
 
     pre_map = {
         **prelearning_foundation_policy.fields({"metadata": pre_payload}),
         **generation_quality_policy.fields(pre_payload),
+        repair.KEY: repair.VERSION,
+        model_provider.PROFILE_KEY: copy.deepcopy(revised_profile),
         "rows": [
             copy.deepcopy(dict(row))
             for row in pre_payload.get("records") or []
@@ -1095,12 +1169,70 @@ def _regenerate_pre_questions_after_review(
     progress.log(
         "Pre Concept corrections changed the prerequisite base; regenerating "
         "the Pre question bank from the reviewed concepts."
+        if corrected_changed else
+        "The accepted Pre question bank is incomplete; recovering missing "
+        "questions while retaining completed concept questions."
     )
-    regenerated = prequestions.build(
-        env,
-        pre_map,
-        store=decision_store,
-    )
+    generation_map = pre_map
+    preserved_questions: dict[str, list[dict[str, Any]]] = {}
+    if not corrected_changed:
+        # An unchanged accepted Q48 bank may have completed some authors before
+        # another failed. Preserve those exact records and recover only missing
+        # identities; retry does not reauthor already successful questions.
+        missing_ids = set(_reviewed_pre_missing_question_ids(pre_payload))
+        for row in pre_map["rows"]:
+            cid = str(row.get("_pre_concept_id") or "")
+            if cid in missing_ids:
+                continue
+            question_ids = set(row.get("_aegis_pre_generated_questions") or [])
+            preserved_questions[cid] = [
+                copy.deepcopy(dict(question)) for question in pre_payload.get("generated_questions") or []
+                if isinstance(question, Mapping) and (
+                    str(question.get("pre_concept_id") or "") == cid
+                    or str(question.get("pre_question_id") or "") in question_ids
+                )
+            ]
+        generation_map = {**pre_map, "rows": [
+            row for row in pre_map["rows"] if str(row.get("_pre_concept_id") or "") in missing_ids
+        ]}
+    with model_provider.bind_profile(revised_profile):
+        regenerated = prequestions.build(env, generation_map, store=decision_store)
+    if preserved_questions:
+        regenerated = copy.deepcopy(dict(regenerated))
+        regenerated["questions"] = {**preserved_questions, **dict(regenerated.get("questions") or {})}
+        regenerated["plans"] = {
+            **{key: copy.deepcopy(value) for key, value in (pre_payload.get("generated_question_plans") or {}).items()
+               if str(key) in preserved_questions},
+            **dict(regenerated.get("plans") or {}),
+        }
+    questions_by_id = regenerated.get("questions") or {}
+    missing = [
+        str(row.get("_pre_concept_id") or "") for row in pre_map["rows"]
+        if not questions_by_id.get(str(row.get("_pre_concept_id") or ""))
+    ]
+    if missing:
+        # Preserve paid/partial output for inspection, but never call an empty
+        # or incomplete accepted bank a successful regeneration. Repeating
+        # Continue reuses this same derived decision identity.
+        marker = copy.deepcopy(release.concept_review_state(job))
+        marker.pop("pre_questions_regenerated_for_uid", None)
+        marker["pre_questions_regeneration_failure"] = {
+            "release_uid": current_uid,
+            "generation": reviewed_generation,
+            "missing_pre_concept_ids": missing,
+            "questions": copy.deepcopy(dict(regenerated)),
+        }
+        marker["status"] = release.CONCEPT_REVIEW_MASTER_FAILED
+        durable = copy.deepcopy(dict(job.question_inventory or {}))
+        durable[release.CONCEPT_REVIEW_KEY] = marker
+        job.question_inventory = durable
+        db.commit()
+        db.refresh(job)
+        raise ValueError(
+            "Pre question generation is incomplete for accepted concepts: "
+            + ", ".join(missing)
+            + ". The accepted Concept file and recovery details are retained; retry Continue."
+        )
     post_payload = release.release_payload(job, lane=release.LANE_POST) or {}
     release.stage_pre_release(
         db,
@@ -1109,7 +1241,11 @@ def _regenerate_pre_questions_after_review(
         pre_map=pre_map,
         pre_questions=regenerated,
         inventory=copy.deepcopy(post_payload.get("question_task_inventory") or {}),
-        reason="The reviewed Pre Concept base changed; its generated questions were regenerated before Master authoring.",
+        reason=(
+            "The reviewed Pre Concept base changed; its generated questions were regenerated before Master authoring."
+            if corrected_changed else
+            "Missing questions were recovered for the accepted Pre Concept base before Master authoring."
+        ),
     )
     db.refresh(job)
     regenerated_payload = release.release_payload(job, lane=release.LANE_PRE) or {}
@@ -1117,6 +1253,7 @@ def _regenerate_pre_questions_after_review(
         regenerated_payload.get(release.STAGED_RELEASE_UID_FIELD) or ""
     )
     marker = copy.deepcopy(release.concept_review_state(job))
+    marker.pop("pre_questions_regeneration_failure", None)
     marker["pre_questions_regenerated_for_uid"] = regenerated_uid
     marker["pre_questions_regenerated_at"] = datetime.now(timezone.utc).isoformat()
     marker["pre_questions_count"] = sum(
@@ -1157,7 +1294,10 @@ def build_review_masters(
             "this upload is not paused for Concept review; use the legacy "
             "release or Master workflow"
         )
-    if state.get("status") == release.CONCEPT_REVIEW_MASTER_READY:
+    if (
+        state.get("status") == release.CONCEPT_REVIEW_MASTER_READY
+        and not _reviewed_pre_recovery_needed(job, state)
+    ):
         return {
             "job_id": int(job_id),
             "concept_review": state,
@@ -1195,7 +1335,7 @@ def build_review_masters(
     # owns its generated question bank. Re-enter the existing Phase 03
     # prequestions path once per corrected Pre release UID before Master
     # authoring; Post's reviewed source bank is left untouched.
-    if (
+    if _reviewed_pre_recovery_needed(job, state) or (
         isinstance(state.get("corrected_inputs"), Mapping)
         and isinstance(
             (state.get("corrected_inputs") or {}).get(release.LANE_PRE),

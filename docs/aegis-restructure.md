@@ -2821,3 +2821,54 @@ every established author, critic, refiner and Fixer; downloads remain available
 with visible findings and publication retains its existing gates. Validate with
 offline scripted API regressions and normal CI, then continue the authorized
 push, merge and Fly deployment. No paid generation is required.
+
+### Q48 — DECIDED — job 129 Pre recovery and dependent Post questions
+
+**Owner follow-up (11 September 2026):** Pre has no questions and a poor Concept
+file. Post is acceptable apart from large contextual excerpts and splitting one
+question's subquestions. Use the supplied job 129 diagnostics to fix these paths.
+
+The archive records two original Pre concepts reduced to awareness of studying
+cells and DNA. After reviewer correction it has eight accepted concepts but
+eight zero-question plans. The planner reopened eligibility and demanded an
+external prior-curriculum record; edited rows retained superseded cell/DNA scope,
+and an empty bank was recorded as successful. These are separate failure causes.
+
+Fresh work freezes `owner-generation-repair-2026-09-11-v1`. The API evaluates
+concrete prerequisite knowledge and transferable skills using complete source
+evidence and supplied grade/subject. It may explicitly infer prior foundations
+from task assumptions without inventing a curriculum record or acquisition year.
+Q44's Grade 01 boundary remains. Concept prose must state the actual foundation
+and observable mastery, rather than remembering that the topic was studied.
+
+Once a Pre map is accepted, planning assesses that scope. Each accepted identity
+requires at least one diagnostic question; the API chooses sufficient totals and
+tier splits without fixed quotas. Eligibility concerns remain advisory evidence,
+not authority to silently drop accepted concepts. Independent reviewers and the
+existing bounded correction/Fixer path apply the same scope through Master.
+
+On explicit corrected Pre work, changed reviewer prose supersedes old derived
+prerequisites, links, analysis and questions. Preserve those originals in revision
+audit. Continue and explicit Pre retry can repair legacy empty or partial banks
+in a separate policy-stamped, GPT-5.4-mini revision. Validate complete accepted-ID
+coverage before recording success; preserve downloadable concepts and visible
+findings on failure. Repeated successful continuation reuses saved decisions.
+Do not rewrite the original source envelope, original model profile or Post lane.
+Passive reads and historical replays do not opt into the new policy.
+
+Fresh source outlining asks the API to keep dependent definition/use/reason and
+other subquestions in their parent task, while permitting genuinely independent
+questions to remain separate. The critic sees the union of whole-task and
+partition coverage. Page directions and answer-location notices are not tasks.
+New corrected Post review supports explicit ordered source-ID groups with one
+accepted primary identity and exact-once coverage. Preserve each member's tables,
+media, options, answers and children as addressed evidence for that one question.
+Question wording remains an exact accepted quote or ordered exact spans; context
+inheritance/replacement/removal remains API-owned. Removed chapter exposition is
+kept in audit and must not return through Master supporting context. Scoring uses
+the accepted combined ask, without concatenating incompatible answer sets.
+
+Keep Q45 vocabulary, Q46 mini routing, frozen question contracts, independent
+reviewers, refiners, Fixer and publication gates. Regression coverage uses the
+sanitized eight-concept job 129 shape and scripted APIs, plus normal CI; no paid
+generation is required. The already authorized merge/deployment flow continues.
