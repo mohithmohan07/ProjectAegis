@@ -136,8 +136,12 @@ test("renders topics, concept cards, flags and the rendered details", async () =
   expect(cards[0].textContent).toContain("placed by best reading");
 
   // Actual KaTeX HTML+MathML and source images reach the review page.
-  expect(cards[0].querySelector(".katex")).not.toBeNull();
-  expect(cards[0].querySelector("math annotation")!.textContent).toBe("d = a_{n+1} - a_n");
+  // MathExpression typesets in an effect after the asynchronously loaded
+  // concept cards mount; finding a card does not mean that effect has run.
+  await waitFor(() => {
+    expect(cards[0].querySelector(".katex")).not.toBeNull();
+    expect(cards[0].querySelector("math annotation")!.textContent).toBe("d = a_{n+1} - a_n");
+  });
   const img = screen.getByAltText("AP number line");
   expect(img.getAttribute("src")).toBe("https://cdn.example/ap.png");
   const anchor = cards[2].querySelector("a");
