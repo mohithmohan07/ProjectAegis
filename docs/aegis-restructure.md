@@ -3004,6 +3004,16 @@ published is corrected. Historical jobs without the review marker keep their
 existing surface. Backend progress labels are unchanged so stage cards keep
 their cost attribution.
 
+**Verification and review.** The change was reviewed adversarially across the
+policy, Step 2, Step 3 and frontend surfaces with every finding independently
+verified; one blocker (a second reviewed Master round reaching neither the
+database nor the CMS while reporting success), two major and four minor defects
+were fixed, and one report was refuted. Review outcome and the offline suite
+results are recorded in `docs/three-step-workflow-review-2026-09-11.md` §8.
+A second reviewed round updates the published database rows; the shared CMS
+output workbook stays append-only by contract, so its existing row keeps the
+earlier wording until re-export, and the publication receipt says so (D14).
+
 **Not changed — owner approval requested (review document §7).** Skipping the
 Q18 pre-learning claim and the P3 source-duplicate verdict on reviewed Post
 sets (D4); trusting the reviewed-file author's placement instead of the regex

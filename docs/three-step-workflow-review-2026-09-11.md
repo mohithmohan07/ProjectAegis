@@ -245,3 +245,32 @@ otherwise. Items marked *approval required* are **not** implemented.
 | D11 | Explicit per-lane Master retry spend and logs are persisted on the job. | Implemented (accounting fix). |
 | D12 | Teaching-order receipt recorded on reviewed concepts. | Implemented (mechanical fix). |
 | D13 | Orphaned frontend surfaces (ReleaseReview page, ConceptReviewPanel) and their unused client methods are dead code; their backend routes remain. | Left in place; removal is dead-code cleanup the owner may approve with D7. |
+| D14 | A **second** reviewed Master round for a lane already published updates the database rows, but the shared CMS output workbook is append-only by contract (`writer.append_questions` never overwrites an existing `question_label` row), so that row keeps the earlier wording until the workbook is re-exported. | Implemented as described, and the publication receipt says so explicitly. Changing the append-only contract so a re-published question rewrites its workbook row needs the owner's approval; say the word and it becomes a versioned change. |
+
+## 8. Verification
+
+Offline only; no paid generation and no live deployment check.
+
+| Check | Result |
+|---|---|
+| Backend suite, isolated database and data directory | 4742 passed before the review fixes; re-run on the final state after them |
+| Frontend suite and type-checked build | 196 tests passed; `tsc -b && vite build` clean |
+| Adversarial review | Four dimensions (Step 1 policy, Step 2 polishing and accounting, Step 3 publication, frontend contract), every finding independently verified by a second pass |
+
+Running two pytest processes against the shared `backend/aegis_test.db` produces
+spurious failures; every suite result above used its own `AEGIS_DB_URL` and
+`AEGIS_DATA_DIR`.
+
+### What the review found and what was done
+
+| Finding | Verdict | Outcome |
+|---|---|---|
+| A second reviewed Master round after publication reached neither the database nor the CMS and still reported success | confirmed, blocker | Fixed: the upload applies the new version's content to the rows that release already published, refuses rather than reports success when a row can be neither created nor updated, and records created/updated/reissued/skipped/retained labels. The CMS half is D14. |
+| The Step 03 receipt counted edits and omissions as numbers while the backend sends records | confirmed, major | Fixed: counts come from the records. |
+| A CMS append left queued after the database commit was shown and logged as a completed publication, with its retry disabled | confirmed, major | Fixed: the lane stays publishable, the queued reason is visible, and the log line is a warning. |
+| Step 2 polishing was mechanically reverted for every reviewed multiple-choice question | confirmed after narrowing, minor | Fixed: option retention is measured against the item's own source text, so Step 1 behaviour is unchanged. |
+| An explicit Master rebuild refusal overwrote the job's visible detail with "Generation failed" | confirmed after narrowing, minor | Fixed: a diagnostic is persisted only once the rebuild is under way, decided from usage and event counters. |
+| A lane published without any reviewed upload rendered a fabricated accepted-file receipt | confirmed, minor | Fixed: the receipt requires a real uploaded file. |
+| Two release groups of one tier collapsed onto a single blank database shell | confirmed, minor | Fixed (pre-existing defect, newly reachable from Step 03). |
+| The reviewed Master upload route blocked the event loop through render, validation and publication | confirmed after narrowing, minor | Fixed: the blocking work runs off the loop. |
+| The Step 1 deferral gate lets a bound run override an explicitly stamped metadata | refuted | No change: no caller can construct that state, and the precedence is the documented rule. |
