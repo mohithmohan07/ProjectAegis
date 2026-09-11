@@ -348,7 +348,10 @@ def prepare(db, job, *, lane, owner_sub="", provider=None, critic=None, fixer=No
     result = decision["response"]
     candidate = {key: copy.deepcopy(previous[key]) for key in
                  ("version", "target_chapter_id", "source_book", "directory_metadata", "target_identity") if key in previous}
-    candidate.update({**_policies(), "learning_kind": lane, "filename": document["filename"],
+    # The reviewed payload records exactly the workflow version its Step 1
+    # payload recorded (V1 or V2); it never mints the current version, so a
+    # historical run's Step 2 keeps that run's polishing placement.
+    candidate.update({**_policies(), **workflow.fields(previous), "learning_kind": lane, "filename": document["filename"],
         "terminal_generation_complete": True, release.RELEASE_LANE_FIELD: lane,
         "source_document_hash": "sha256:" + document["sha256"],
         KEY: {"version": VERSION, "sha256": document["sha256"], "filename": document["filename"], "status": "extracted"},
@@ -405,6 +408,14 @@ def prepare(db, job, *, lane, owner_sub="", provider=None, critic=None, fixer=No
             concept.setdefault("_aegis_pre_generated_questions", []).append(item["pre_question_id"])
         else:
             items.append(item)
+    if lane != "pre":
+        # The accepted Concept question-order receipt for the Master teaching
+        # order: each reviewed record owns its reviewed questions in reviewed
+        # order. Mechanical projection of the API's concept_index decisions.
+        for index, row in enumerate(candidate["records"]):
+            row[release.RELEASE_ROW_QIDS_FIELD] = [
+                item["qid"] for item in items
+                if item["_aegis_reviewed_target"]["concept_row_index"] == index]
     candidate["question_task_inventory"] = {"items": items, "reviewed_source_questions": {
         "version": "reviewed-source-questions-1", "original_ids": [], "reviewed_ids": [i["qid"] for i in items], "omitted": []}}
     candidate["reviewed_file_receipt"] = {"document": document, "decision": copy.deepcopy(result), "flags": list(decision["review_flags"])}
