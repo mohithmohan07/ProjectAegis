@@ -1012,6 +1012,18 @@ def _question_values(
         "route_audit": {
             "release_uid": release.release_uid,
             "version": release.version,
+            # Q51/Step 03: a question the reviewer wrote into the Master
+            # workbook says so on its own row, so an auditor reading the
+            # published question never has to reach the release to learn it
+            # came from a person rather than the chapter source. Both values
+            # are constants carried on the candidate, so they are identical
+            # on every later version of the same uid and cannot make
+            # ``_audit_content`` report a change that did not happen.
+            **({
+                "authored_by": str(candidate.get("authored_by") or ""),
+                "authoring_policy_version": str(
+                    candidate.get("authoring_policy_version") or ""),
+            } if candidate.get("authored_by") else {}),
             **({
                 output_vocabulary.POLICY_KEY: copy.deepcopy(
                     run_profile[output_vocabulary.POLICY_KEY]

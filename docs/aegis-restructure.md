@@ -3026,3 +3026,64 @@ removed by this entry. Q39/Q41 wording "polished before Type/Case mining" and
 the Q49 sentence that Step 1 still ran polishing are superseded for v2 runs;
 their sealed decisions stand. Verify offline and continue the authorized push,
 CI, merge and Fly deployment workflow.
+
+### Q52 — DECIDED — the reviewed set is authoritative, and Step 03 reaches the CMS
+
+**Owner ruling (11 September 2026).** Answering the decisions Q51 left open in
+`docs/three-step-workflow-review-2026-09-11.md` §7, the owner approved: the two
+chapter-wide membership verdicts stop judging a reviewed Post set; the
+governing-instruction pattern match stops judging reviewed items; a
+re-published question rewrites its row in the shared CMS output workbook; the
+legacy review acts close for three-step jobs; Step 03 accepts a brand-new
+Master row; and an unchanged lane keeps the Q49 re-extraction.
+
+**Reviewed membership (D4).** When the Post inventory came from a reviewed
+file, the Q18 pre-learning claim and the P3 source-duplicate verdict are not
+asked for: the team fixed that set in Step 02 and Q41 makes it authoritative,
+while either verdict could drop a question the reviewer deliberately kept. The
+skip is recorded as an explicit disposition on the release with a log line
+naming the reason, so it can never read as a verdict that found nothing. A
+source-extracted bank keeps both decisions, and the Pre lane's generated
+question dedup is untouched.
+
+**Reviewed placement (D5).** A row carrying reviewed-file provenance keeps the
+placement its extraction author decided. The governing-instruction pattern is
+never applied to it, and a neighbouring source directive cannot absorb it into
+shared context. Each exemption is recorded and the zero-loss accounting is
+unchanged; source-extracted rows fold exactly as before. This removes a
+deterministic judgment of meaning from the reviewed path (Rule 1).
+
+**CMS row refresh (D14).** The shared Bulk Import output workbook was strictly
+append-only, so a question re-published with edited content kept its earlier
+wording there. The writer now accepts an explicit set of labels a caller may
+rewrite and re-projects only those rows' question band in place, at their own
+coordinates, under the same lock and durable outbox as the append; a caller
+that names nothing keeps the append-only behaviour byte for byte. The Master
+publication names the labels its database upload reported as updated, and the
+receipt states what was appended, rewritten, already current or skipped.
+
+**Reviewer-authored Master rows (D9 addition).** A row the reviewer writes into
+the Master workbook under an existing group is accepted: its cells are applied
+verbatim through the same projection an edit uses, it is minted a durable label
+under Q36, and it is recorded as reviewer-authored on the release, on its
+blueprint cell and on the published row's own audit, with no invented source
+provenance. Every contract gate runs normally, so a value outside the closed
+vocabulary or unbalanced marks blocks readiness with the issue named. A row
+naming no resolvable group is refused readably.
+
+**Legacy acts (D7).** A job carrying the Concept review marker refuses staging
+another release by hand, publishing an edited Concept workbook, a reviewer
+instruction round against the live database concepts, and the two
+release-review edit paths, each with a message naming the step that owns the
+correction. One of them re-read the Step 01 source text after Step 02 had made
+the reviewed file the only authority. The read-only history projections stay
+open and historical jobs keep every route unchanged.
+
+**Unchanged lanes (D3).** A lane the team did not edit keeps the Q49 handoff:
+the generated workbook is re-read by the same independent author and critic, so
+Step 02 has one authority path and Step 01 rows never re-enter it.
+
+Nothing else changes: the Q31 critic stack, the per-row Concept Refiner, the
+mechanical display rendering of file-supplied Pre questions and the orphaned
+frontend surfaces stand as recorded. Historical runs replay unchanged. Verify
+offline and continue the authorized PR, CI, merge and Fly deployment workflow.

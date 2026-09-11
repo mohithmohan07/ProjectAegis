@@ -1,6 +1,23 @@
 # Aegis — working rules
 
-**Latest owner amendment: Q51 (three-step workflow, 11 September 2026).**
+**Latest owner amendment: Q52 (11 September 2026).**
+The owner decided everything Q51 left open. A reviewed Post set is
+authoritative: the Q18 pre-learning claim and the P3 duplicate verdict are not
+asked for on it, and the governing-instruction pattern no longer judges
+reviewed rows — both skips are recorded, and source-extracted banks keep their
+decisions. A question re-published with edited content now rewrites its row in
+the shared CMS output workbook: the writer takes an explicit set of labels a
+caller may rewrite, and a caller naming none stays append-only. Step 03 accepts
+a brand-new Master row under an existing group, minted a durable label and
+recorded as reviewer-authored with no invented source provenance. The legacy
+force-release, revisions and release-review acts refuse for three-step jobs,
+naming the step that owns the correction; read-only history stays open and
+historical jobs are unchanged. An unchanged lane keeps the Q49 re-extraction.
+The Q31 critic stack, the per-row Concept Refiner and file-supplied Pre
+question rendering stand. Verify offline, then continue the authorized PR, CI,
+merge and Fly deployment workflow.
+
+**Previous owner amendment: Q51 (three-step workflow, 11 September 2026).**
 The owner instructs three explicit parts. Step 01 generates the Concept files
 and extracts every question as it is under its Types/Cases: new runs freeze
 workflow policy v2, under which the question-polishing pass no longer runs
