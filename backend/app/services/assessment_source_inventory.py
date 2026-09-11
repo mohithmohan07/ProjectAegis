@@ -21,6 +21,7 @@ from typing import Any, Mapping
 
 from . import assessment_release as rel
 from . import source_task_polishing_policy as source_format
+from . import generation_quality_policy as quality
 
 
 class SourceInventoryError(ValueError):
@@ -62,6 +63,7 @@ def source_task_evidence(atom: Mapping) -> dict[str, Any]:
             "source_context", "compound_subparts", "assets", "image_urls",
             "image_manifest", "images", "requires_visual", "requires_context",
             "source_task_polishing_policy", "frozen_task_text", "normalized_source_text",
+            quality.KEY, "learner_context", "reviewed_context",
         )
         if key in atom
     }
@@ -362,6 +364,12 @@ def source_atom_from_item(
         "route_evidence": route_evidence,
         **({
             source_format.FIELD: source_format.VERSION,
+            **({quality.KEY: quality.VERSION,
+                **({"learner_context": copy.deepcopy(item["learner_context"])}
+                   if "learner_context" in item else {}),
+                **({"reviewed_context": copy.deepcopy(item["reviewed_context"])}
+                   if "reviewed_context" in item else {})}
+               if quality.active(item) else {}),
             "frozen_task_text": copy.deepcopy(item.get("frozen_task_text")),
             "normalized_source_text": copy.deepcopy(item.get("normalized_task")),
             "polish_audit": copy.deepcopy(item.get("polish_audit")),

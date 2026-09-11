@@ -202,6 +202,7 @@ _RELEASE_AUDIT_FIELDS = frozenset({
     "_aegis_source_evidence",
     "_aegis_structure_original",
     "_aegis_polish_repairs",
+    "_aegis_concept_coherence",
     # The Phase 03 Pre-Learning map's row-private records (doc §4,
     # phase3/premap.py): the captured prerequisites a pre-concept teaches,
     # and its explicit needed-for links to the Post concepts that require
@@ -441,6 +442,55 @@ def _newest_checkpoint_material(
     )
     mined_types = copy.deepcopy(newest.get("mined_types") or {})
     return records, inventory, mined_types, copy.deepcopy(newest)
+
+
+def generation_quality_fields(
+    source: Mapping[str, Any] | None, *, chapter_id: int | None = None,
+) -> dict[str, str]:
+    """Carry only the policy explicitly recorded by this run's authority.
+
+    A terminal capture owns its Phase 3 bundle; a checkpoint resume owns its
+    newest compatible entry. An authored empty Pre map still carries the
+    source envelope's policy, while an unstamped historical run stays legacy.
+    """
+    from . import generation_quality_policy
+
+    if not isinstance(source, Mapping):
+        return {}
+    direct = generation_quality_policy.fields(source)
+    if direct:
+        return direct
+    bundle = source.get(generation.PHASE3_PRE_RELEASE_FIELD)
+    if isinstance(bundle, Mapping) and not generation.pre_release_identity_defect(
+        bundle, chapter_id=chapter_id,
+    ):
+        carried = generation_quality_policy.fields(bundle)
+        if not carried:
+            carried = generation_quality_policy.fields(bundle.get("pre_map"))
+        if carried:
+            return carried
+    checkpoint = source.get("checkpoint")
+    if isinstance(checkpoint, Mapping):
+        direct = generation_quality_policy.fields(checkpoint)
+        newest = _newest_checkpoint_material(checkpoint)[3]
+    else:
+        newest = _newest_checkpoint_material(source)[3]
+    if direct:
+        return direct
+    if newest and newest != source:
+        # Inspect only this selected entry, never search older history for a
+        # policy a later checkpoint did not carry.
+        direct = generation_quality_policy.fields(newest)
+        bundle = newest.get(generation.PHASE3_PRE_RELEASE_FIELD)
+        if (
+            not direct and isinstance(bundle, Mapping)
+            and not generation.pre_release_identity_defect(bundle, chapter_id=chapter_id)
+        ):
+            direct = (
+                generation_quality_policy.fields(bundle)
+                or generation_quality_policy.fields(bundle.get("pre_map"))
+            )
+    return direct
 
 
 def normalize_lane(lane: object) -> str:
@@ -3165,6 +3215,7 @@ def stage_release(
     refinements: Mapping[str, Any] | None = None,
     snapshot_defects: Sequence[str] = (),
     live_example_adjudication: bool = True,
+    generation_policy: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Persist one release payload and clear every manual decision gate.
 
@@ -3390,6 +3441,8 @@ def stage_release(
     released_at = datetime.now(timezone.utc).isoformat()
     payload = {
         "version": RELEASE_VERSION,
+        **(generation_quality_fields(generation_policy, chapter_id=target)
+           or generation_quality_fields(checkpoint_value, chapter_id=target)),
         # The SCHEMA version above; the DRAFT version here. Minted, not
         # overwritten (spec-step8 T2/S6) — read the constant's note.
         STAGED_VERSION_FIELD: next_staged_version(job, lane=LANE_POST),
@@ -3569,7 +3622,7 @@ def _refine_pre_records(
     stages the UNREFINED rows with an availability flag.
     """
 
-    from . import release_refiner, prelearning_foundation_policy
+    from . import release_refiner, prelearning_foundation_policy, generation_quality_policy
 
     records = [
         copy.deepcopy(dict(row))
@@ -3591,6 +3644,7 @@ def _refine_pre_records(
         )
         metadata = {
             **prelearning_foundation_policy.fields({"metadata": pre_map}),
+            **generation_quality_policy.fields(pre_map),
             "board": chapter.board if chapter else "",
             "grade": chapter.grade if chapter else "",
             "subject": chapter.subject if chapter else "",
@@ -4374,7 +4428,7 @@ def stage_pre_release(
     if pre_map is None:
         return None
     source = copy.deepcopy(dict(pre_map))
-    from . import prelearning_foundation_policy
+    from . import prelearning_foundation_policy, generation_quality_policy
 
     foundation_fields = prelearning_foundation_policy.fields({"metadata": source})
     questions_source = copy.deepcopy(dict(pre_questions or {}))
@@ -4505,6 +4559,7 @@ def stage_pre_release(
         # the lane's authority — the slot is (spec T3).
         "learning_kind": LANE_PRE,
         **foundation_fields,
+        **generation_quality_policy.fields(source),
         "source_book": job.source_book,
         "filename": job.filename,
         "source_document_hash": source_document_hash,

@@ -18,6 +18,7 @@ from . import assessment_release as rel
 from . import build_concepts_release_files
 from . import directory
 from . import identity
+from . import generation_quality_policy
 
 
 class SnapshotError(ValueError):
@@ -315,6 +316,13 @@ def build(
             # ``concept_source`` and ``question_source`` cell of the run.
             "concept_source": str(release.get("source_book") or ""),
         }
+        if generation_quality_policy.active(release) and release.get("learning_kind") == "pre":
+            # This is the reviewed Pre map's task-free accepted scope. Keep
+            # its atomic capabilities available to Master authors without
+            # importing the current chapter's source questions or inventory.
+            row["_aegis_pre_prerequisites"] = copy.deepcopy(
+                record.get("_aegis_pre_prerequisites") or []
+            )
         concept_rows.append(row)
         carried.append(concept)
         route_row = {
@@ -436,8 +444,18 @@ def build(
     # Master author/reviewer. An unstamped historical release stays unstamped.
     from . import prelearning_foundation_policy
 
+    metadata.update(generation_quality_policy.fields(release))
     if release.get("learning_kind") == "pre":
         metadata.update(prelearning_foundation_policy.fields({"metadata": release}))
+        if generation_quality_policy.active(release):
+            # Cell, materialization and advisory-critic payloads all carry
+            # metadata verbatim, so the full accepted scope survives their
+            # narrower concept projections as well.
+            metadata["prerequisite_evidence"] = [{
+                "concept_key": row["concept_key"],
+                "pre_concept_id": row["pre_concept_id"],
+                "prerequisites": copy.deepcopy(row["_aegis_pre_prerequisites"]),
+            } for row in concept_rows]
     question_task_inventory = copy.deepcopy(
         release.get("question_task_inventory") or {}
     )

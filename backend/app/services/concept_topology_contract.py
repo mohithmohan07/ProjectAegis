@@ -421,7 +421,7 @@ def _run_rewritten_phase3(
     if env is None:
         from .phase3 import pre_coverage as p3_coverage
         from . import prelearning_capture_policy, prelearning_foundation_policy
-        from . import source_topic_policy
+        from . import source_topic_policy, generation_quality_policy
 
         env = p3_envelope.build(
             graph=graph,
@@ -435,6 +435,7 @@ def _run_rewritten_phase3(
             # rule (or the absence) it was sealed with — decide-once.
             metadata={
                 **p3_coverage.stamp(kwargs.get("meta") or {}),
+                **generation_quality_policy.fields(kwargs.get("meta") or {}),
                 **({model_provider.PROFILE_KEY: model_provider.bound_profile()}
                    if model_provider.bound_profile() is not None else {}),
                 # New Phase 3 boundaries adopt the complete-evidence/atomic

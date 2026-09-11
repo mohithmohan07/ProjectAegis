@@ -103,7 +103,7 @@ def test_altered_record_is_rejected_before_any_request():
 
 
 def test_profile_changes_source_identity_but_historical_hash_stays_stable():
-    from app.services import canonical_source_phase3, generation
+    from app.services import canonical_source_phase3, generation, generation_quality_policy
 
     with model_provider.bind_profile(None):
         legacy = generation._metadata(subject="English", chapter_title="The Mother Bird")
@@ -119,4 +119,6 @@ def test_profile_changes_source_identity_but_historical_hash_stays_stable():
         canonical_source_phase3.semantic_context_hash(fresh),
     }) == 3
     fresh.pop(model_provider.PROFILE_KEY)
+    assert canonical_source_phase3.semantic_context_hash(fresh) != old_hash
+    fresh.pop(generation_quality_policy.KEY)
     assert canonical_source_phase3.semantic_context_hash(fresh) == old_hash

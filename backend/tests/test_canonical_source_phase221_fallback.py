@@ -559,8 +559,9 @@ def test_required_table_context_is_linked_without_moving_source_blocks(
 
     task = result["canonical"]["tasks"][0]
     assert task["requires_context"] is True
-    assert "Term | Value" in task["shared_context"]
-    assert "First | 1" in task["shared_context"]
+    assert r"\text{Term} & \text{Value}" in task["shared_context"]
+    assert r"\text{First} & \text{1}" in task["shared_context"]
+    assert task["shared_context"].count(r"\begin{array}") == 1
     assert task["content_objects"]["shared_context_blocks"][0]["kind"] == "table"
     assert task["content_objects"]["shared_context_blocks"][0]["block_id"]
     assert task["source_start"] > 0

@@ -26,6 +26,7 @@ from typing import Any, Mapping
 
 from . import analyse as analyse_mod
 from . import assemble as assemble_mod
+from . import coherence as coherence_mod
 from . import envelope as envelope_mod
 from . import host as host_mod
 from . import kernel
@@ -271,7 +272,7 @@ def _run_bound(
     stage, but both are joined before Place begins.
 
     ``providers`` is test-only injection ({"topology", "grounding",
-    "analysis", "host", "place", "analyse", "analyse_allot", "prelearn",
+    "analysis", "host", "coherence", "coherence_critic", "place", "analyse", "analyse_allot", "prelearn",
     "prelearn_merge", "premap", "premap_links", "preanalyse",
     "preanalyse_allot", "prequestions", "prequestions_author", "critic",
     "fixer"} — "analysis" is Settle's
@@ -388,6 +389,17 @@ def _run_bound(
             store=store,
             fixer=injected.get("fixer"),
         )
+        # Only newly policy-bound runs decide chapter-wide duplicate
+        # capabilities and teaching progression. Do this before Place/Analyse
+        # mint positional IDs, and include concepts created by Host itself.
+        settled, hosts = coherence_mod.consolidate(
+            env, settled, hosts,
+            provider=injected.get("coherence"),
+            critic=injected.get("coherence_critic") or injected.get("critic"),
+            store=store,
+            fixer=injected.get("fixer"),
+        )
+        _snapshot_settled_rows(env, settled, store_dir)
         host_capture = _schedule_capture(rider_pool, "host")
         # Phase 2.2 places Container-02 chapter-wide, Phase 2.4 + 4.3 (Q1)
         # builds the misconception/error-analysis inventory, and the
@@ -650,11 +662,18 @@ def _run_bound(
             level="warning",
         )
     flagged = sum(1 for row in rows if row.get("review_flags"))
+    from .. import generation_quality_policy
+
     return {
+        **generation_quality_policy.fields(env),
         "records": rows,
         "host_map": hosts["host_map"],
         "qid_map": hosts["qid_map"],
         "new_concepts": hosts["new_concepts"],
+        **({
+            "coherence_order": copy.deepcopy(hosts["coherence_order"]),
+            "coherence_original_routes": copy.deepcopy(hosts.get("coherence_original_routes") or {}),
+        } if hosts.get("coherence_order") is not None else {}),
         "analysis": analysis,
         "prerequisites": prerequisites,
         "pre_map": pre_map,

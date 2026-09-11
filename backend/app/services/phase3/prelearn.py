@@ -81,6 +81,7 @@ from . import kernel
 from .. import progress
 from .. import prelearning_capture_policy as capture_policy
 from .. import prelearning_foundation_policy as foundation_policy
+from .. import generation_quality_policy as quality
 from . import evidence as visual_evidence
 
 POLICY_VERSION = "prelearn-1"
@@ -345,6 +346,21 @@ def stage_evidence(
             str(row.get("block_id") or ""): row
             for row in env["canonical"]["blocks"] if isinstance(row, Mapping)
         }
+        if quality.active(env):
+            projected = {row["block_id"] for row in packet["source_blocks"]}
+            # Canonical evidence belongs to this sealed chapter even when a
+            # downstream topology omitted its ownership. Do not silently make
+            # that omission an eligibility decision for prior learning.
+            packet["source_blocks"].extend(
+                {
+                    "block_id": block_id,
+                    "topic_id": str(row.get("topic_id") or ""),
+                    "kind": str(row.get("kind") or ""),
+                    "text": visual_evidence.block_text(row),
+                }
+                for block_id, row in blocks.items()
+                if block_id and block_id not in projected
+            )
         for row in packet["source_blocks"]:
             original = blocks.get(row["block_id"], {})
             row["text"] = visual_evidence.block_text(original)
@@ -777,6 +793,8 @@ def capture_stage(
     if enhanced:
         payload["capture_policy"] = capture_policy.VERSION
         payload["rules"] += " " + capture_policy.CAPTURE_INSTRUCTION
+    if quality.active(env):
+        payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
     decide = visual_evidence.decide_with_visual_evidence if enhanced else kernel.decide
     decision = decide(
         kind="prelearn.capture",
@@ -789,7 +807,8 @@ def capture_stage(
         store=store,
         policy_version=POLICY_VERSION
         + (";" + capture_policy.VERSION if enhanced else "")
-        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else ""),
+        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
+        + (";" + quality.VERSION if quality.active(env) else ""),
         fixer=fixer,
     )
     items: list[dict[str, Any]] = []
@@ -928,6 +947,8 @@ def merge(
     }
     if foundation_policy.fields(env):
         payload["chapter"] = _chapter_calibration(env)
+    if quality.active(env):
+        payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
     if enhanced:
         payload["capture_policy"] = capture_policy.VERSION
         payload["prior_review_flags"] = copy.deepcopy(decision_flags)
@@ -952,7 +973,8 @@ def merge(
         store=store,
         policy_version=POLICY_VERSION
         + (";" + capture_policy.VERSION if enhanced else "")
-        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else ""),
+        + (";" + foundation_policy.VERSION if foundation_policy.fields(env) else "")
+        + (";" + quality.VERSION if quality.active(env) else ""),
         fixer=fixer,
     )
     by_ref = {row["capture_ref"]: row for row in capture_rows}

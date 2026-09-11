@@ -13,6 +13,8 @@ from typing import Any, Literal, Mapping
 
 from pydantic import BaseModel, ConfigDict
 
+from . import generation_quality_policy as quality
+
 
 class ContextSource(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -81,6 +83,10 @@ def validate_context(question: Mapping[str, Any], rows: list[dict],
 
 
 def inherited_context(original: Mapping[str, Any]) -> str:
+    # Current question polishing has already resolved broad raw evidence
+    # into its accepted learner context. Empty is a recorded decision too.
+    if quality.active(original) and "learner_context" in original:
+        return str(original["learner_context"] or "")
     # Historical inventories can carry an empty top-level placeholder while
     # the actual stimulus lives in source_context. The author explicitly chose
     # inheritance; a removal is a separate action that clears both projections.
@@ -114,6 +120,9 @@ def apply_support_decisions(current: dict, row: Mapping[str, Any]) -> None:
     if not isinstance(decision, Mapping):
         return  # Historical and dedicated-question-sheet contracts are separate.
     current["shared_context"] = str(row.get("shared_context") or "")
+    if quality.active(current) or quality.active(row):
+        current.update(quality.fields(current) or quality.fields(row))
+        current["learner_context"] = current["shared_context"]
     nested = current.get("source_context")
     context = copy.deepcopy(dict(nested)) if isinstance(nested, Mapping) else {}
     # Some older inventories stored untouched answers/options only in the
@@ -148,6 +157,8 @@ def apply_support_decisions(current: dict, row: Mapping[str, Any]) -> None:
         "shared_context": current["shared_context"],
         "source_answer": copy.deepcopy(current.get("raw_solution_or_answer") or ""),
         "options": copy.deepcopy(current.get("options") or []),
+        **({"learner_context": current["learner_context"]}
+           if quality.active(current) else {}),
     })
     # Mirror known aliases only where they already exist. Do not fabricate
     # alternate schemas or discard source IDs, page refs, visuals or tables.

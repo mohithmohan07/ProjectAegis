@@ -25,6 +25,7 @@ from . import assessment_output_vocabulary as output_vocabulary
 from . import assessment_response_policy as response_policy
 from . import column_spec
 from . import source_task_polishing_policy as source_format
+from . import generation_quality_policy as quality
 from .response_schemas import advisory_critic_schema
 from . import assessment_visual_evidence as visual_evidence
 from . import assessment_release as rel
@@ -1055,7 +1056,7 @@ def _assemble(
         "route_evidence": copy.deepcopy(source.get("route_evidence") or {}),
         **({key: copy.deepcopy(source[key]) for key in (
             source_format.FIELD, "frozen_task_text", "normalized_source_text",
-            "polish_audit", "polish_review_required",
+            "polish_audit", "polish_review_required", quality.KEY, "learner_context", "reviewed_context",
         ) if key in source} if source_format.applies(source) else {}),
         "assessment_gist": copy.deepcopy(source.get("assessment_gist")),
         "assessment_eligibility": (
@@ -1102,6 +1103,12 @@ def _source_wording_authority(atom: Mapping | None) -> dict[str, Any] | None:
             "frozen_task_text": copy.deepcopy(atom.get("frozen_task_text")),
             "normalized_source_text": copy.deepcopy(atom.get("normalized_source_text")),
             "polish_audit": copy.deepcopy(atom.get("polish_audit")),
+            **({quality.KEY: quality.VERSION,
+                **({"learner_context": copy.deepcopy(atom["learner_context"])}
+                   if "learner_context" in atom else {}),
+                **({"reviewed_context": copy.deepcopy(atom["reviewed_context"])}
+                   if "reviewed_context" in atom else {})}
+               if quality.active(atom) else {}),
         })
         authority.pop("derived_context_only", None)
     return authority
@@ -1126,11 +1133,20 @@ def _decision_payload(
              if source_format.applies(atom) else MATERIALIZE_SYSTEM)
     critic_rules = (SOURCE_FORMAT_CRITIC_SYSTEM
                     if source_format.applies(atom) else MATERIALIZE_CRITIC_SYSTEM)
+    # The new context choice was made upstream before Type/Case ownership.
+    # Complete evidence remains visible, but cannot reopen frozen wording or
+    # silently restore the source exposition the author judged unnecessary.
+    context_rules = source_format.context_review_rules(atom)
+    if context_rules:
+        rules += context_rules
+        critic_rules += context_rules
     payload: dict[str, Any] = {
         "stage": "assessment.materialize",
         "critic_response_schema": advisory_critic_schema().identity(),
         "rules": rules,
         **foundation_fields,
+        **quality.fields(meta),
+        **quality.fields(atom),
         "candidate_id": candidate_id,
         "metadata": copy.deepcopy(dict(meta)),
         "workbook_capacities": {
@@ -1156,6 +1172,8 @@ def _decision_payload(
     # add it only for the versioned foundation lane so old payloads remain
     # byte-for-byte compatible while both model passes receive the policy.
     foundation_suffix = _foundation_instruction(payload)
+    if context_rules:
+        payload["critic_rules"] = critic_rules
     if foundation_suffix:
         payload["rules"] += foundation_suffix
         payload["critic_rules"] = critic_rules + foundation_suffix
@@ -1167,6 +1185,14 @@ def _decision_payload(
         payload["critic_rules"] = (
             str(payload.get("critic_rules") or critic_rules)
             + "\n" + vocabulary_instruction
+        )
+    response_instruction = response_policy.quality_instruction(payload)
+    response_review = response_policy.quality_review_instruction(payload)
+    if response_instruction:
+        payload["rules"] += response_instruction
+    if response_review:
+        payload["critic_rules"] = (
+            str(payload.get("critic_rules") or critic_rules) + response_review
         )
     return visual_evidence.bind(payload, atom if atom is not None else cell)
 
@@ -1214,6 +1240,7 @@ def _materialize_prepared(
              if source_format.applies(atom) else MATERIALIZE_POLICY_VERSION)
             + ((";" + str(payload["output_vocabulary"]["version"]))
                if "output_vocabulary" in payload else "")
+            + quality.suffix(payload)
         ),
         fixer=fixer,
     )

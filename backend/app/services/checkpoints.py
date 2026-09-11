@@ -18,6 +18,7 @@ from .. import models, schemas
 from . import (
     autonomous_resolution,
     generation,
+    generation_quality_policy,
     grounding_certificate,
     model_provider,
     model_routing_run,
@@ -85,7 +86,9 @@ _PAYLOAD_KEYS = {
     "job", "generation_checkpoint", "question_inventory",
     "openai_usage", "generation_log",
 }
-_OPTIONAL_PAYLOAD_KEYS = {model_provider.PROFILE_KEY, "run_state"}
+_OPTIONAL_PAYLOAD_KEYS = {
+    model_provider.PROFILE_KEY, generation_quality_policy.KEY, "run_state",
+}
 _JOB_KEYS = {
     "module", "upload_type", "learning_kind", "source_book", "filename",
     "mmd_text", "deposit_scope_type", "deposit_scope_ids",
@@ -1718,6 +1721,11 @@ def _validate_payload(payload: Any) -> tuple[dict, str, str]:
     profile = payload.get(model_provider.PROFILE_KEY)
     if profile is not None:
         model_provider.validate_profile(profile)
+    if (
+        generation_quality_policy.KEY in payload
+        and payload[generation_quality_policy.KEY] != generation_quality_policy.VERSION
+    ):
+        raise ValueError("Unknown saved generation quality policy")
     job, kind_and_text = payload["job"], _validate_job(
         payload["job"], "payload.job")
     kind, mmd_text = kind_and_text
@@ -1746,8 +1754,17 @@ def _validate_payload(payload: Any) -> tuple[dict, str, str]:
 
 def _portable_payload(job: models.UploadJob) -> dict:
     profile = model_routing_run.recorded_profile_for_job(job)
+    routing_path = model_routing_run._record_path(job)
+    routing_record = (
+        json.loads(routing_path.read_text(encoding="utf-8"))
+        if routing_path.exists() else {}
+    )
     return {
         **({model_provider.PROFILE_KEY: profile} if profile is not None else {}),
+        # Read the saved source identity, never the exporting worker's bound
+        # policy. Absence stays explicit historical behavior after restore.
+        **({generation_quality_policy.KEY: routing_record[generation_quality_policy.KEY]}
+           if generation_quality_policy.KEY in routing_record else {}),
         "job": {
             "module": job.module,
             "upload_type": job.upload_type,
@@ -1980,7 +1997,8 @@ def import_bundle(
         # Restore the run policy before it can resume under its new job/source
         # identity. Pre-policy bundles deliberately freeze the legacy None.
         model_routing_run.save_profile_for_job(
-            imported, payload.get(model_provider.PROFILE_KEY)
+            imported, payload.get(model_provider.PROFILE_KEY),
+            quality_version=payload.get(generation_quality_policy.KEY),
         )
         routing_record_path = model_routing_run._record_path(imported)
         db.commit()

@@ -306,6 +306,14 @@ def _copy_reviewed_wording(item: dict[str, Any], prompt: str) -> None:
     prompt = str(prompt)
     if not prompt.strip():
         raise ReviewedQuestionSetError("every retained Example must have a prompt")
+    from . import generation_quality_policy as quality
+    prior_wording = str(item.get("frozen_task_text") or item.get("polished_task")
+                        or item.get("normalized_task") or item.get("raw_task") or "")
+    if quality.active(item) and prior_wording != prompt:
+        # This direct surface edits the complete Example; no separate context
+        # decision was provided. Do not retain a stale context projection from
+        # before that explicit wording edit. The full old item is in the audit.
+        item["learner_context"] = ""
     # These are the fields used by the source inventory and the freeze seam in
     # different historical payloads.  Keeping them synchronized prevents the
     # Master from resurrecting a stale polished/frozen value.
@@ -434,6 +442,7 @@ def reconcile_post_review(
             before = {field: copy.deepcopy(item.get(field)) for field in (
                 "raw_task", "normalized_task", "polished_task", "frozen_task_text",
                 "normalized_public_text", "question_text",
+                "learner_context", "generation_quality_policy",
             )}
             _copy_reviewed_wording(item, prompt)
             after = {field: copy.deepcopy(item.get(field)) for field in before}

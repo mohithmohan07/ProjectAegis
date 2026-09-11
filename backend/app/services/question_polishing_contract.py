@@ -128,6 +128,13 @@ def install(generation: ModuleType | None = None) -> None:
             )
             if not polished.strip():
                 return original_task_text(item)
+            if source_format.applies(item) and source_format.context_applies(item):
+                # Corrected Concept review may separately author a grounded
+                # context while its question remains an exact edited quote.
+                # Display that accepted context once; no raw-context fallback.
+                accepted_context = str(item.get("learner_context") or "")
+                if item.get("reviewed_context") and accepted_context and accepted_context not in polished:
+                    polished = accepted_context + "<br>" + polished
             # The polished wording rides the same rendering pipeline (image
             # tags, solution stripping, rich-text canonicalization) as the
             # source wording it replaces. The ACSD source contract pins the
@@ -142,6 +149,15 @@ def install(generation: ModuleType | None = None) -> None:
                 "normalized_task": polished,
                 "_acsd_source_contract": "",
                 "_acsd_display_prompt": "",
+                # Current upstream wording already embeds the API-selected
+                # learner_context. The historical formatter would prepend the
+                # complete raw shared_context merely because its substring is
+                # absent, resurrecting intentionally omitted chapter extracts.
+                # This is an explicit authority projection, not local pruning;
+                # the original item and all source evidence stay unchanged.
+                **({"requires_context": False}
+                   if source_format.applies(item) and source_format.context_applies(item)
+                   else {}),
             })
 
         _inventory_task_text._question_polishing_installed = True

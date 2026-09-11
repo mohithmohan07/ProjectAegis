@@ -2511,7 +2511,7 @@ def validate_page_extraction(
             scrubbed_text = _scrub_literal_escape_artifacts(text).strip()
             scrubbed_label = _scrub_literal_escape_artifacts(source_label).strip()
             scrubbed_rows = [
-                [_scrub_literal_escape_artifacts(str(cell or "")) for cell in table_row]
+                [_scrub_literal_escape_artifacts(str(cell if cell is not None else "")) for cell in table_row]
                 if isinstance(table_row, list) else table_row
                 for table_row in rows_value
             ] if isinstance(rows_value, list) else rows_value
@@ -2546,7 +2546,7 @@ def validate_page_extraction(
             canonical_text = kr.normalize_supported_text_atoms(text)
             canonical_rows = [
                 [
-                    kr.normalize_supported_text_atoms(str(cell or ""))
+                    kr.normalize_supported_text_atoms(str(cell if cell is not None else ""))
                     for cell in table_row
                 ]
                 if isinstance(table_row, list) else table_row
@@ -3366,7 +3366,7 @@ def pin_existing_job_assets() -> int:
 
 
 def _escape_latex_cell(value: object) -> str:
-    text = str(value or "")
+    text = str(value if value is not None else "")
     replacements = {
         "\\": r"\textbackslash{}",
         "{": r"\{",
@@ -3382,13 +3382,38 @@ def _escape_latex_cell(value: object) -> str:
     return "".join(replacements.get(character, character) for character in text)
 
 
+def _render_source_table_cell(value: object) -> str:
+    """Escape plain cell text while retaining explicitly marked rich tokens.
+
+    The page ledger declares these cell boundaries. Body math and owned image
+    tokens must survive the intermediate tabular syntax, including URL bytes;
+    escaping their backslashes or underscores would change the stimulus.
+    Unmarked content remains plain text, without inferring mathematical meaning.
+    """
+    text = kr.canonicalize_rich_text(str(value if value is not None else ""))
+    tokens = sorted(
+        [*kr._KATEX_TAG_RE.finditer(text), *kr._IMAGE_TAG_RE.finditer(text)],
+        key=lambda match: match.start(),
+    )
+    pieces: list[str] = []
+    cursor = 0
+    for match in tokens:
+        if match.start() < cursor:
+            continue
+        pieces.extend((_escape_latex_cell(text[cursor:match.start()]), match[0]))
+        cursor = match.end()
+    pieces.append(_escape_latex_cell(text[cursor:]))
+    return "".join(pieces)
+
+
 def _render_table(rows: list[list[str]]) -> str:
     width = max((len(row) for row in rows), default=1)
     spec = "|" + "|".join("l" for _ in range(width)) + "|"
     lines = [f"\\begin{{tabular}}{{{spec}}}", "\\hline"]
     for row in rows:
-        padded = list(row) + [""] * (width - len(row))
-        lines.append(" & ".join(_escape_latex_cell(cell) for cell in padded) + r" \\")
+        # Unequal row lengths are source defects, not permission to invent
+        # missing cells. The canonical array gate keeps this table for repair.
+        lines.append(" & ".join(_render_source_table_cell(cell) for cell in row) + r" \\")
         lines.append("\\hline")
     lines.append("\\end{tabular}")
     return "\n".join(lines)
@@ -3986,7 +4011,7 @@ def _page_context_text(
         full_table = _full_table_tag(block)
         if full_table:
             return full_table
-        cells = [[str(cell or "").strip() for cell in row] for row in block.get("table_rows") or [] if isinstance(row, list)]
+        cells = [[str(cell if cell is not None else "").strip() for cell in row] for row in block.get("table_rows") or [] if isinstance(row, list)]
         for row, column, _ref, figure in _table_cell_figures(block, block_index or {}):
             url = str(figure.get("asset_url") or "")
             if url:
@@ -3995,12 +4020,12 @@ def _page_context_text(
                     cells[row][column] = " ".join(value for value in (cells[row][column], tag) if value)
                 except ValueError:
                     pass  # Source URL/record survives for named publication checks.
-        rows = [
-            " | ".join(str(cell or "").strip() for cell in row)
-            for row in cells
-            if isinstance(row, list)
-        ]
-        return "\n".join(row for row in rows if row.strip()).strip()
+        # Linked task context is a learner-facing table, not a text matching
+        # key. Preserve every row and column as one complete bordered array.
+        # Visual, ragged or otherwise unsupported grids retain their complete
+        # tabular source for the existing API repair/full-table crop pathway.
+        rendered = kr._table_array(cells, "l" * len(cells[0])) if cells else None
+        return rendered if rendered is not None else _render_table(cells)
     if kind == "math":
         latex = str(block.get("latex") or "").strip()
         return kr.katex(latex) if latex else ""

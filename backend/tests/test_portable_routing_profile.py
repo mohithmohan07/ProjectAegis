@@ -9,6 +9,7 @@ import pytest
 
 from app import models
 from app.services import checkpoints, generation, model_provider, model_routing_run
+from app.services import generation_quality_policy as quality
 from app.services import build_concepts_release_files as release_files
 from tests.test_concept_checkpoint_bundles import _job, _resign
 
@@ -29,12 +30,14 @@ def test_versioned_profile_roundtrips_before_phase3_and_drives_restored_metadata
         _, raw = exporter(db, original.id)
     payload = json.loads(raw)["payload"]
     assert payload[model_provider.PROFILE_KEY] == profile
+    assert quality.KEY not in payload
     assert "envelope" not in payload["generation_checkpoint"]
     restored = checkpoints.import_bundle(db, raw)
     assert restored.id != original.id
     assert model_routing_run.recorded_profile_for_job(restored) == profile
     with model_routing_run.bind_job(restored):
         assert generation._metadata()[model_provider.PROFILE_KEY] == profile
+        assert quality.KEY not in generation._metadata()
         assert model_provider.resolve_route("pre_learning", stage="prequestions.author").model == expected_model
     _, reexported = checkpoints.export_bundle(db, restored.id)
     assert json.loads(reexported)["payload"][model_provider.PROFILE_KEY] == profile
@@ -75,8 +78,8 @@ def test_failed_import_commit_does_not_leave_a_profile_for_reused_job_id(db, mon
     saved_paths = []
     save = model_routing_run.save_profile_for_job
 
-    def record_save(job, profile):
-        result = save(job, profile)
+    def record_save(job, profile, **kwargs):
+        result = save(job, profile, **kwargs)
         saved_paths.append(model_routing_run._record_path(job))
         return result
 
@@ -104,3 +107,46 @@ def test_diagnostics_contains_only_active_routing_record_among_upload_siblings(d
             "version": 1, "profile": profile,
         }
         assert not any("obsolete" in name or "unrelated-sibling" in name for name in archive.namelist())
+
+
+@pytest.mark.parametrize("internal_backup", [False, True])
+def test_current_quality_stamp_roundtrips_and_drives_restored_metadata(db, internal_backup):
+    original = _job(db)
+    profile = model_provider.new_profile()
+    model_routing_run.save_profile_for_job(original, profile, quality_version=quality.VERSION)
+    with model_routing_run.bind_job(original):
+        original_metadata = generation._metadata()
+    exporter = checkpoints.export_bundle_for_internal_backup if internal_backup else checkpoints.export_bundle
+    # Export may run in a worker bound to an unrelated historical job.
+    with model_provider.bind_profile(None), quality.bind_run(None):
+        _, raw = exporter(db, original.id)
+    payload = json.loads(raw)["payload"]
+    assert payload[quality.KEY] == quality.VERSION
+    assert payload[model_provider.PROFILE_KEY] == profile
+
+    restored = checkpoints.import_bundle(db, raw)
+    record = json.loads(model_routing_run._record_path(restored).read_text())
+    assert record == {"version": 1, "profile": profile, quality.KEY: quality.VERSION}
+    with model_routing_run.bind_job(restored):
+        assert generation._metadata() == original_metadata
+        assert quality.run_fields() == {quality.KEY: quality.VERSION}
+    _, reexported = checkpoints.export_bundle(db, restored.id)
+    assert json.loads(reexported)["payload"][quality.KEY] == quality.VERSION
+
+
+@pytest.mark.parametrize("invalid", [None, "unknown", {}, True, 1])
+def test_invalid_portable_quality_stamp_is_rejected_before_any_write(db, monkeypatch, invalid):
+    original = _job(db)
+    _, raw = checkpoints.export_bundle(db, original.id)
+    bundle = json.loads(raw)
+    bundle["payload"][quality.KEY] = invalid
+    _resign(bundle)
+    count = db.query(models.UploadJob).count()
+
+    def unexpected_write(*args, **kwargs):
+        pytest.fail("invalid quality policy reached a routing-record write")
+
+    monkeypatch.setattr(model_routing_run, "save_profile_for_job", unexpected_write)
+    with pytest.raises(ValueError, match="generation quality policy"):
+        checkpoints.import_bundle(db, checkpoints._json_bytes(bundle))
+    assert db.query(models.UploadJob).count() == count

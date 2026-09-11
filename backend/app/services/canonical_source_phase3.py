@@ -540,6 +540,8 @@ def semantic_context_hash(metadata: dict[str, Any] | None) -> str:
         identity["model_routing_policy"] = copy.deepcopy(
             metadata["model_routing_policy"]
         )
+    from . import generation_quality_policy
+    identity.update(generation_quality_policy.fields(metadata))
     return _sha256_json(identity)
 
 
@@ -1004,6 +1006,7 @@ def _classification_payload(
     baseline: dict[str, str],
     page_bundle: dict[str, Any] | None,
 ) -> dict[str, Any]:
+    from . import generation_quality_policy
     blocks_by_id = {
         str(block.get("block_id") or ""): block
         for block in canonical.get("blocks") or []
@@ -1024,6 +1027,7 @@ def _classification_payload(
     ]
     return {
         "metadata": {
+            **generation_quality_policy.fields(metadata),
             "board": str(metadata.get("board") or ""),
             "grade": str(metadata.get("grade") or ""),
             "subject": str(metadata.get("subject") or ""),
@@ -2727,7 +2731,7 @@ def _render_page_visual_marker(page: dict[str, Any], order: int) -> str:
 
 
 def _render_page_cell(value: object, page: dict[str, Any]) -> str:
-    text = str(value or "")
+    text = str(value if value is not None else "")
     return _VISUAL_MARKER_RE.sub(
         lambda match: _render_page_visual_marker(page, int(match.group(1))),
         text,

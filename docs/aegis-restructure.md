@@ -2757,3 +2757,67 @@ No paid generation is needed for this migration's verification.
 
 Capability reference: [OpenAI GPT-5.4 mini model documentation](https://developers.openai.com/api/docs/models/gpt-5.4-mini),
 checked 11 September 2026.
+
+### Q47 — DECIDED — complete evidence, faithful question demand and coherent outputs
+
+**Owner instruction (11 September 2026):** Refine question type classification;
+Descriptive questions are being turned into Objective/Subjective. Improve Pre
+Concept and Master coverage of the source book. Reword in-text questions enough
+to stand alone without large repeated chapter extracts in concept descriptions.
+Remove repeating concepts, follow source teaching order through Post Types,
+Cases and questions, and handle statistics tables correctly in KaTeX.
+
+New uploads freeze `owner-generation-quality-2026-09-11-v1` before source work.
+The stamp travels through source semantics, polishing, the sealed Phase 3
+envelope, staged Pre/Post releases, assessment profiles, authors and reviewers.
+An existing upload's saved model record without this quality stamp retains its
+old policy, including current-mini uploads begun before this amendment. Replay
+does not upgrade recorded decisions. Explicit corrected inputs preserve their
+accepted question/context decisions and full source provenance.
+
+The classification author and independent critic judge the complete work
+required for full credit, including multipart demands and structured evidence.
+A fixed numeric final answer can still require Descriptive construction or
+reasoning. Supplied datasets, lists and table rows are not automatically answer
+choices. Do not manufacture options, blanks or reduced demands to fit a lane.
+Q41's response mechanisms and Q45's closed category/source/skill lists remain
+binding; no local keyword or answer-length classifier is introduced.
+
+Pre authority audits every source block, individual task, Type/Case, hub, figure
+and analysis item, including evidence not attached to an existing Post concept.
+Evidence addresses are not mandatory prerequisites. The API explicitly decides
+which supported prior capabilities are necessary, with the independent critic
+checking omissions and eligibility. Retained capability IDs and text reach Pre
+mapping, question planning and authorship without importing current-chapter
+questions. No target counts or inflated difficulty fill coverage gaps; Q44's
+simple Grade 01 boundary and the supported earlier-learning scope remain.
+
+Question polishing records the minimum sufficient `learner_context` before the
+complete task becomes immutable. An explicit empty context means referents were
+resolved within the question; downstream display must not prepend raw chapter
+extracts again. Preserve all essential passages being tested, givens, images,
+tables and subparts. Original extracts remain intact in source evidence/audit.
+Concept descriptions teach the capability without duplicating question-only
+context. Corrected questions keep their exact accepted quotes and the existing
+API-owned inherit/replace/remove context decisions.
+
+After Host, one chapter-wide API author/independent critic/Fixer decision groups
+duplicate capabilities and chooses teaching order. Exact identity checks require
+every concept candidate and original question occurrence to remain represented;
+recorded literary-plan identities and culminations stay distinct. Merge teaching
+prose through the API while retaining all original rows, evidence and routes in
+audit. Apply explicit Concept/Type/Case/QID order to both Post outputs without
+lexicographic sorting or local semantic deduplication.
+
+Table transport preserves complete grids under their owning question, marked
+mathematics, units, interval boundaries, frequencies, totals, zero and blank
+cells. Keep adjacent tables separate and malformed rows visible instead of
+inventing missing data. Verify the serialized Concept and Master cells with the
+locked KaTeX renderer. These are mechanical representation repairs, not changes
+to source meaning.
+
+All new-run stages still use GPT-5.4 mini with existing reasoning efforts. Keep
+every established author, critic, refiner and Fixer; downloads remain available
+with visible findings and publication retains its existing gates. Validate with
+offline scripted API regressions and normal CI, then continue the authorized
+push, merge and Fly deployment. No paid generation is required.

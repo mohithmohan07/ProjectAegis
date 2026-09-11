@@ -26,6 +26,7 @@ from typing import Any, Mapping
 
 from . import column_spec
 from . import assessment_output_vocabulary as output_vocabulary
+from . import assessment_response_policy as response_policy
 from . import katex_rules as kr
 from . import prompts
 
@@ -561,6 +562,20 @@ def build_prompt(
         parts.append(
             "Echo question_category and cognitive_skills exactly from the "
             "recorded blueprint cell. Do not return an alias or a new label."
+        )
+    quality_instruction = response_policy.quality_instruction(policy_metadata)
+    if quality_instruction:
+        parts.append(quality_instruction)
+        parts.append(
+            "Apply the recorded lane to the complete required response. "
+            "For an already supplied source/generated question, preserve its "
+            "accepted demand instead of inventing options or placeholders to "
+            "fit the type block. Descriptive questions may require a short "
+            "calculation, interpretation, drawing or construction; they do "
+            "not need an essay verb or an artificially extended answer. "
+            "A new question authored for a concept must genuinely test that "
+            "concept through the requested response mechanism, without "
+            "inflating its scope or prerequisite complexity."
         )
     return "\n\n".join(parts)
 

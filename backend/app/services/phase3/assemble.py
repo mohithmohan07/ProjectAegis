@@ -50,7 +50,9 @@ def _host_key(entry: Mapping[str, Any]) -> tuple[str, str]:
     )
 
 
-def _type_catalog(env: Mapping[str, Any]) -> tuple[dict, dict]:
+def _type_catalog(
+    env: Mapping[str, Any], *, question_order: list[str] | None = None,
+) -> tuple[dict, dict]:
     types: dict[str, dict[str, str]] = {}
     cases: dict[tuple[str, str], dict[str, Any]] = {}
     for mined in env["mined_types"].get("types") or []:
@@ -75,6 +77,9 @@ def _type_catalog(env: Mapping[str, Any]) -> tuple[dict, dict]:
                     "qid": str(row.get("source_question_id") or ""),
                     "prompt": prompt,
                 })
+            if question_order is not None:
+                question_rank = {qid: index for index, qid in enumerate(question_order)}
+                examples.sort(key=lambda row: question_rank.get(row["qid"], len(question_rank)))
             cases[(type_id, str(case.get("case_id") or ""))] = {
                 "title": _normal(case.get("case_title")),
                 "examples": examples,
@@ -87,6 +92,8 @@ def render_types_section(
     *,
     types: Mapping[str, Mapping[str, str]],
     cases: Mapping[tuple[str, str], Mapping[str, Any]],
+    type_order: list[str] | None = None,
+    case_order: list[str] | None = None,
 ) -> str:
     """Render the Types section for one concept's hosted case examples.
 
@@ -108,7 +115,13 @@ def render_types_section(
             )
 
     pieces: list[str] = []
-    for type_id in sorted(hosted):
+    type_rank = {value: index for index, value in enumerate(type_order or [])}
+    case_rank = {value: index for index, value in enumerate(case_order or [])}
+    ordered_types = (
+        sorted(hosted, key=lambda value: type_rank.get(value, len(type_rank)))
+        if type_order is not None else sorted(hosted)
+    )
+    for type_id in ordered_types:
         mined = types.get(type_id)
         if mined is None:
             raise AssemblyError(
@@ -122,7 +135,12 @@ def render_types_section(
         # model-authored shape — a bare space made deterministic markers
         # run on inside the preceding Example's sentence. The structural
         # parsers are whitespace-agnostic.
-        for case_id in sorted(hosted[type_id]):
+        ordered_cases = (
+            sorted(hosted[type_id], key=lambda value: case_rank.get(
+                type_id + "::" + value, len(case_rank)
+            )) if case_order is not None else sorted(hosted[type_id])
+        )
+        for case_id in ordered_cases:
             if not case_id:
                 for example in hosted[type_id][case_id]:
                     piece += f"\nExample: {example}"
@@ -566,7 +584,15 @@ def assemble(
     from . import place as place_mod
     from .. import concept_refiner as cr
 
-    types, cases = _type_catalog(env)
+    from .. import generation_quality_policy
+
+    # Order is an explicit API permutation from the coherence decision.
+    # Historical sealed envelopes retain their original ID-sorted rendering.
+    ordering = (
+        copy.deepcopy(dict(host_result.get("coherence_order") or {}))
+        if generation_quality_policy.is_current(env) else {}
+    )
+    types, cases = _type_catalog(env, question_order=ordering.get("question_order"))
     rows = [copy.deepcopy(dict(row)) for row in settled_rows]
     new_rows = [
         copy.deepcopy(dict(new_row))
@@ -818,6 +844,14 @@ def assemble(
                         if example.get("prompt") in prompt_set
                     ],
                 }
+                if ordering.get("case_order") is not None:
+                    original_identity = type_id + "::" + case_id
+                    # A split inherits its decided parent's position; it is
+                    # not a new semantic Case-order judgment.
+                    at = ordering["case_order"].index(original_identity)
+                    ordering["case_order"].insert(
+                        at + ordinal - 1, type_id + "::" + rendered_case_id
+                    )
                 routes = routes_by_key.setdefault(dest_key, set())
                 for route_id in sorted(routes):
                     route_parts = str(route_id).split("::")
@@ -866,7 +900,11 @@ def assemble(
 
     for key, hosted in sections_by_key.items():
         row = row_by_key[key]
-        section = render_types_section(hosted, types=types, cases=cases)
+        section = render_types_section(
+            hosted, types=types, cases=cases,
+            type_order=ordering.get("type_order"),
+            case_order=ordering.get("case_order"),
+        )
         # Mined Type/Case titles can carry bare TeX tokens (a_n, S_n) that
         # the taxonomy miner failed to wrap; the deterministic repair wraps
         # only unambiguous math and never rewrites wrapped content, so the
@@ -900,7 +938,11 @@ def assemble(
             qids.append(qid)
     for row in rows:
         if row.get("_aegis_release_qids"):
-            row["_aegis_release_qids"] = sorted(row["_aegis_release_qids"])
+            if ordering.get("question_order") is not None:
+                rank = {qid: i for i, qid in enumerate(ordering["question_order"])}
+                row["_aegis_release_qids"].sort(key=lambda qid: rank[qid])
+            else:
+                row["_aegis_release_qids"] = sorted(row["_aegis_release_qids"])
 
     routed: list[str] = []
     unrouted: list[dict[str, str]] = []

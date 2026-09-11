@@ -85,6 +85,9 @@ def _capture_deposit(original, args, kwargs) -> tuple[list[int], list[int], dict
         else None
     )
     _RELEASE_CAPTURE.set({
+        **release.generation_quality_fields({
+            "phase3_pre_release": phase3_pre_release, "checkpoint": checkpoint,
+        }, chapter_id=int(values.get("chapter_id") or 0)),
         "records": records,
         "inventory": inventory,
         "mined_types": mined_types,
@@ -130,6 +133,7 @@ def _refine_captured_records(
     try:
         chapter = db.get(models.Chapter, int(target_chapter_id or 0))
         metadata = {
+            **release.generation_quality_fields(captured, chapter_id=target_chapter_id),
             "board": chapter.board if chapter else "",
             "grade": chapter.grade if chapter else "",
             "subject": chapter.subject if chapter else "",
@@ -280,6 +284,9 @@ def _release_after_result(
                     "uploaded to the database."
                 ),
                 refinements=refinements,
+                generation_policy=release.generation_quality_fields(
+                    captured, chapter_id=target_chapter_id,
+                ),
             )
         finally:
             release.TERMINAL_DEPOSIT_STAGING.reset(deposit_token)
@@ -1026,14 +1033,17 @@ def _regenerate_pre_questions_after_review(
             + str(exc)
         ) from exc
 
-    from . import prelearning_foundation_policy
+    from . import prelearning_foundation_policy, generation_quality_policy
 
     reviewed_input = pre_payload.get("_reviewed_pre_input")
     reviewed_generation: dict[str, Any] = {}
+    reviewed_policies = {
+        **prelearning_foundation_policy.fields({"metadata": pre_payload}),
+        **generation_quality_policy.fields(pre_payload),
+    }
     if (
         isinstance(reviewed_input, Mapping)
-        and pre_payload.get(prelearning_foundation_policy.KEY)
-        == prelearning_foundation_policy.VERSION
+        and reviewed_policies
     ):
         # An explicit corrected workbook is a new Pre authority, including
         # when its original run predates the foundational-readiness policy.
@@ -1041,9 +1051,7 @@ def _regenerate_pre_questions_after_review(
         # envelope or change already paid Post decisions/model policies.
         source_seal = str(env.get("envelope_sha256") or "")
         env["metadata"] = copy.deepcopy(dict(env.get("metadata") or {}))
-        env["metadata"][prelearning_foundation_policy.KEY] = (
-            prelearning_foundation_policy.VERSION
-        )
+        env["metadata"].update(reviewed_policies)
         env["metadata"]["_reviewed_pre_input"] = {
             **copy.deepcopy(dict(reviewed_input)),
             "release_uid": current_uid,
@@ -1059,6 +1067,7 @@ def _regenerate_pre_questions_after_review(
 
     pre_map = {
         **prelearning_foundation_policy.fields({"metadata": pre_payload}),
+        **generation_quality_policy.fields(pre_payload),
         "rows": [
             copy.deepcopy(dict(row))
             for row in pre_payload.get("records") or []
@@ -1426,6 +1435,9 @@ def _stage_generation_release(
                         or job.generation_checkpoint
                     ),
                     error=exc,
+                    generation_policy=release.generation_quality_fields(
+                        captured, chapter_id=target_chapter_id,
+                    ),
                     reason=(
                         "Generation failed after its final rows were "
                         "materialized. Aegis released those captured rows "

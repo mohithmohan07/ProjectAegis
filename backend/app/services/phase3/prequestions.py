@@ -138,6 +138,7 @@ hat.
 from __future__ import annotations
 
 from .. import prelearning_capture_policy as capture_policy
+from .. import generation_quality_policy as quality
 
 import copy
 import re
@@ -187,7 +188,7 @@ def _foundation_policy_suffix(payload: Mapping[str, Any]) -> str:
         if payload.get(prelearning_foundation_policy.KEY)
         == prelearning_foundation_policy.VERSION
         else ""
-    )
+    ) + quality.suffix(payload)
 
 
 # The generated questions ride their OWN carry channel (the runner's
@@ -250,7 +251,9 @@ def pre_question_id(pre_concept_id: str, question_id: str) -> str:
 # evidence
 
 
-def concept_evidence(row: Mapping[str, Any]) -> dict[str, Any]:
+def concept_evidence(
+    row: Mapping[str, Any], *, complete_scope: bool = False,
+) -> dict[str, Any]:
     """One pre-concept's own teaching, as evidence for its questions.
 
     Everything here was AUTHORED by the Pre lane and has already passed
@@ -271,6 +274,9 @@ def concept_evidence(row: Mapping[str, Any]) -> dict[str, Any]:
             {
                 "prerequisite_id": str(item.get("prerequisite_id") or ""),
                 "text": _normal(item.get("text")),
+                **({"retained_atoms": copy.deepcopy(
+                    item.get("retained_atoms") or []
+                )} if complete_scope else {}),
             }
             for item in row.get(premap_mod.PREREQUISITES_FIELD) or []
             if isinstance(item, Mapping)
@@ -991,7 +997,9 @@ def build(
         qids,
     )
     calibration = premap_mod.chapter_calibration(env)
-    evidence = [concept_evidence(row) for row in rows]
+    evidence = [
+        concept_evidence(row, complete_scope=quality.active(env)) for row in rows
+    ]
     concept_ids = [entry["pre_concept_id"] for entry in evidence]
 
     # Register Q30: which coverage posture this run executes under is a
@@ -1034,6 +1042,8 @@ def build(
         "chapter": calibration,
         "pre_concepts": evidence,
     }
+    if quality.active(env):
+        plan_payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
     if rule is not None:
         plan_payload["coverage_rule"] = copy.deepcopy(rule)
     # The pre-spend post-condition of the Pre lane's redaction discipline
@@ -1184,6 +1194,8 @@ def build(
             "coverage_plan": plan,
             "pre_concept": evidence_by_id[concept_id],
         }
+        if quality.active(env):
+            payload["rules"] += "\n" + capture_policy.QUALITY_INSTRUCTION
         if rule is not None:
             payload["coverage_rule"] = copy.deepcopy(rule)
         premap_mod._refuse_source_qids(

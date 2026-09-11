@@ -23,6 +23,7 @@ from . import assessment_profile
 from . import assessment_output_vocabulary as output_vocabulary
 from . import assessment_response_policy as response_policy
 from . import assessment_visual_evidence as visual_evidence
+from . import generation_quality_policy
 from .phase3 import kernel
 from .response_schemas import assessment_cell_schema, ResponseSchema
 
@@ -251,6 +252,9 @@ def _profile_payload(
     vocabulary = run_profile.get(output_vocabulary.POLICY_KEY)
     if output_vocabulary.is_current(vocabulary):
         evidence["output_vocabulary"] = copy.deepcopy(vocabulary)
+    evidence.update(generation_quality_policy.fields({
+        "profile": profile, "metadata": meta,
+    }))
     return evidence
 
 
@@ -530,12 +534,20 @@ def _bind_vocabulary_rules(payload: dict[str, Any]) -> None:
         payload["response_schema_contract"] = schema.identity()
 
 
+def _bind_quality_rules(payload: dict[str, Any]) -> None:
+    """Carry the new demand contract without changing historical payloads."""
+    payload.update(generation_quality_policy.fields(payload))
+    instruction = response_policy.quality_instruction(payload)
+    if instruction:
+        payload["rules"] += "\n" + instruction
+
+
 def _cell_policy_version(base: str, payload: Mapping[str, Any]) -> str:
     vocabulary = (payload.get("profile") or {}).get("output_vocabulary")
     return base + (
         ";" + str(vocabulary["version"])
         if output_vocabulary.is_current(vocabulary) else ""
-    )
+    ) + generation_quality_policy.suffix(payload)
 
 
 def _live_cell(payload: dict[str, Any]) -> dict[str, Any]:
@@ -558,7 +570,8 @@ def _live_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
         (payload.get("profile") or {}).get("output_vocabulary")
     )
     return generation._openai_json(
-        CELL_CRITIC_SYSTEM + ("\n" + instruction if instruction else ""),
+        CELL_CRITIC_SYSTEM + ("\n" + instruction if instruction else "")
+        + response_policy.quality_review_instruction(payload),
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
         image_urls=visual_evidence.image_inputs(payload),
@@ -586,7 +599,8 @@ def _live_generated_cell_critic(payload: dict[str, Any]) -> dict[str, Any]:
     )
     return generation._openai_json(
         GENERATED_CELL_CRITIC_SYSTEM + _foundation_instruction(payload)
-        + ("\n" + instruction if instruction else ""),
+        + ("\n" + instruction if instruction else "")
+        + response_policy.quality_review_instruction(payload),
         json.dumps(payload, ensure_ascii=False),
         purpose="advisory_critic",
         image_urls=visual_evidence.image_inputs(payload),
@@ -687,6 +701,7 @@ def decide_cells(
         }
         visual_evidence.bind(payload, source_atom)
         _bind_vocabulary_rules(payload)
+        _bind_quality_rules(payload)
         decision = kernel.decide(
             kind="assessment.cell",
             unit_id=source_qid,
@@ -897,6 +912,15 @@ def decide_generated_cells(
         }
         visual_evidence.bind(payload, question, payload["pre_concept"])
         _bind_vocabulary_rules(payload)
+        _bind_quality_rules(payload)
+        if generation_quality_policy.is_current(payload):
+            # Generated questions may own structured tables, options or
+            # children outside question_text. Supply the full accepted task
+            # to both authorities; do not make them classify a lossy excerpt.
+            payload["generated_question"] = {
+                **_content_evidence(question),
+                **payload["generated_question"],
+            }
         decision = kernel.decide(
             kind="assessment.generated_cell",
             unit_id=pre_question_id,
