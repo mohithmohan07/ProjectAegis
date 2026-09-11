@@ -624,7 +624,9 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
     const stage = job.run_state?.stage || (workflow === "master_building"
       ? "Step 2 · Generating Master files" : workflow === "master_failed"
         ? "Step 2 · Master generation needs attention" : workflow === "master_ready"
-          ? "Master files ready" : workflow ? "Step 1 complete · Waiting for reviewed files" : job.detail);
+          ? "Master files ready" : workflow === "published"
+            ? "Published to database and CMS"
+            : workflow ? "Step 1 complete · Waiting for reviewed files" : job.detail);
     const lines: RunLine[] = (job.generation_log ?? []).flatMap((event) => {
       const message = event.message || event.label;
       return message ? [{level: event.type === "step" ? "step" : event.level || "info", message, ts: event.ts ?? Date.now() / 1000}] : [];
@@ -636,7 +638,8 @@ export function RunConsoleProvider({ children }: { children: React.ReactNode }) 
       progress: job.run_state?.progress ?? job.checkpoint_progress ?? 0,
       progressLabel: stage || "Saved run loaded", active: false,
       status: running ? "running" : workflow === "master_failed" ? "error"
-        : workflow === "master_ready" ? "done" : workflow ? "paused" : "idle"};
+        : workflow === "master_ready" || workflow === "published" ? "done"
+          : workflow ? "paused" : "idle"};
     stateRef.current = restored;
     setState(restored);
   }, []);

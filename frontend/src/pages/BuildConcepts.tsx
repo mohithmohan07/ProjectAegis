@@ -15,6 +15,11 @@ import SyllabusUploader from "../components/SyllabusUploader";
 import ConceptReviewWorkflow, {
   isConceptReviewWaiting,
 } from "../components/ConceptReviewWorkflow";
+import MasterReviewWorkflow, {
+  isMasterReviewStage,
+} from "../components/MasterReviewWorkflow";
+import WorkflowStepStrip from "../components/WorkflowStepStrip";
+import { hasReviewWorkflowMarker } from "../lib/workflowSteps";
 import ApiUsageSummary from "../components/ApiUsageSummary";
 import {
   fourOutputCompletionFromManifest,
@@ -169,6 +174,9 @@ export default function BuildConcepts() {
         if (
           fullJob.status === "generated"
           || fullJob.status === "released"
+          // A Concept-first run that paused for review (Step 02) or built
+          // its Masters (Step 03) has a page to land on as well.
+          || hasReviewWorkflowMarker(fullJob)
         ) {
           setResumeJob(fullJob);
           setPath("post");
@@ -471,20 +479,29 @@ function PostLearningFlow({
   // parse in flight, a converted-but-ungenerated job — because
   // unmounting it between "uploaded" and "converted" made the whole page
   // visibly reset twice per run (owner report, 2026-08-30: "this page
-  // loads again"). It collapses only once generation has produced output.
+  // loads again"). It collapses only once generation has produced output —
+  // for a Concept-first run, that is the moment Step 01 staged its Concept
+  // files and the durable review marker appeared.
   const parameterPanelOpen = !job
-    || (job.status !== "generated" && job.status !== "released");
+    || (job.status !== "generated"
+      && job.status !== "released"
+      && !hasReviewWorkflowMarker(job));
   const oneShotReady = !job && Boolean(scope);
   const resultIncomplete = result
     ? incompleteGenerationRecovery(result)
     : null;
   const generationIncomplete = Boolean(resultIncomplete)
     || job?.generation_recovery?.resume_allowed === false;
+  const reviewWorkflowJob = Boolean(job && hasReviewWorkflowMarker(job));
   return (
     <>
+      <WorkflowStepStrip job={job} />
+      <div className="section-title" id="step-01">
+        Step 01 · Generate Concept Files
+      </div>
       {parameterPanelOpen ? (
         <>
-          <div className="section-title">1 · Choose the run parameters</div>
+          <div className="step-subtitle">a · Choose the run parameters</div>
           <div className="card">
             <DirectoryPicker
               onScope={setScope}
@@ -548,7 +565,7 @@ function PostLearningFlow({
         </>
       ) : (
         <>
-          <div className="section-title">1 · Run parameters</div>
+          <div className="step-subtitle">a · Run parameters</div>
           <div className="run-summary" role="status">
             {job?.checkpoint_target_identity
               && Object.keys(job.checkpoint_target_identity).length > 0 && (
@@ -569,7 +586,7 @@ function PostLearningFlow({
         </>
       )}
 
-      <div className="section-title">2 · Upload document</div>
+      <div className="step-subtitle">b · Upload document</div>
       <DocumentUpload
         module="concepts"
         conceptKind="post"
@@ -611,8 +628,15 @@ function PostLearningFlow({
           onJob={handleJob}
         />
       )}
+      {job && isMasterReviewStage(job) && (
+        <MasterReviewWorkflow
+          job={job}
+          disabled={busy}
+          onJob={handleJob}
+        />
+      )}
       {job
-        && !isConceptReviewWaiting(job)
+        && !reviewWorkflowJob
         && !generationIncomplete
         && (result || job.status === "generated" || job.status === "released")
         && (
@@ -954,7 +978,7 @@ function ConceptResult({
           {incomplete
             ? "Generation incomplete — the four-output set was not created"
             : reviewWaiting
-              ? "Concept Files are ready for review"
+              ? "Step 01 complete · Concept Files are ready for review"
             : outputSetIncomplete && outputCompletion
               ? `Output set incomplete — ${outputCompletion.readyCount}/4 files ready`
               : outputCompletion?.allReady
@@ -982,12 +1006,13 @@ function ConceptResult({
       )}
         {reviewWaiting && (
           <div className="review-wait-card mt-12" role="status">
-            Review the downloaded Concept Files before continuing. The Post-
-            Learning file contains the complete source question set with its
-            Types and Cases; you may omit, add or move questions in a
-            corrected workbook. Pre-Learning questions are generated after you
-            continue. Master Files remain paused until the explicit Generate
-            Master Files action.
+            Continue in Step 02 below. Review the downloaded Concept Files
+            first. The Post-Learning file contains the complete source
+            question set, extracted as is, with its Types and Cases; you may
+            omit, add or move questions in a reviewed workbook. Pre-Learning
+            questions are generated in Step 02 from the reviewed concepts.
+            Master Files remain paused until the explicit Generate Master
+            Files action.
           </div>
         )}
         {outputSetIncomplete && outputCompletion && (
@@ -1023,12 +1048,12 @@ function ConceptResult({
       {!incomplete && !outputSetIncomplete && (
         <div className="muted mt-12">
           {reviewWaiting
-            ? "Download both Concept Files below, review the complete question set, "
-              + "then optionally upload corrections before continuing to Master generation."
+            ? "Download both Concept Files in Step 02, review the complete question set, "
+              + "then optionally upload reviewed files before generating the Master Files."
             : <>The four run outputs (Concept and Master Files for both lanes)
               download from the{" "}
               {outputsVisible
-                ? <a href="#run-outputs">3 · Run outputs section</a>
+                ? <a href="#run-outputs">Run outputs section</a>
                 : "Run outputs section (use Refresh outputs if it has not appeared)"}
               ; review and publishing stay separate, explicit acts.</>}
         </div>

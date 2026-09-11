@@ -464,6 +464,12 @@ export interface SourceArtifactFile {
    */
   note?: string;
   requires_confirmation?: boolean;
+  /** Publication entries (`database_upload` / `pre_database_upload`) carry
+   * the staged release's recorded state; `disabled` there means the lane's
+   * Concept file is already uploaded, unless a `disabled_reason` explains
+   * that the lane was never staged. */
+  release_state?: string;
+  structural_defects?: unknown;
 }
 
 export interface SourceArtifactManifest {
@@ -527,7 +533,8 @@ export type ConceptReviewStatus =
   | "reviewed"
   | "master_building"
   | "master_ready"
-  | "master_failed";
+  | "master_failed"
+  | "published";
 
 export interface CorrectedConceptInput {
   lane: "post" | "pre";
@@ -535,6 +542,40 @@ export interface CorrectedConceptInput {
   uploaded_at?: string;
   status?: string;
   accepted?: boolean;
+  [key: string]: unknown;
+}
+
+/** Counts the backend records when one lane's Master is published. */
+export interface MasterReviewDatabaseReceipt {
+  groups_created?: number;
+  questions_created?: number;
+  labels_reissued?: number;
+  [key: string]: unknown;
+}
+
+export interface MasterReviewPublication {
+  uploaded_at?: string;
+  database?: MasterReviewDatabaseReceipt | null;
+  cms_workbook?: Record<string, unknown> | null;
+  [key: string]: unknown;
+}
+
+/** Step 03 state for one lane: the accepted reviewed Master file (if any)
+ * and, once published, the database/CMS receipt. */
+export interface MasterReviewLaneState {
+  filename?: string;
+  sha256?: string;
+  uploaded_at?: string;
+  release_id?: number;
+  release_uid?: string;
+  version?: number;
+  changed_fields?: number;
+  omitted?: number;
+  added?: number;
+  readiness?: string;
+  issues?: string[];
+  status?: string;
+  published?: MasterReviewPublication | null;
   [key: string]: unknown;
 }
 
@@ -546,9 +587,43 @@ export interface ReviewWorkflow {
   progress?: number;
   corrected_inputs?: Partial<Record<"post" | "pre", CorrectedConceptInput | boolean | string>>;
   concept_files?: Partial<Record<"post" | "pre", SourceArtifactFile>>;
+  master_review?: Partial<Record<"post" | "pre", MasterReviewLaneState>>;
   reviewed_at?: string;
   master_started_at?: string;
   master_completed_at?: string;
+  [key: string]: unknown;
+}
+
+/** Acknowledgement for a reviewed Master file (Step 03 upload). */
+export interface MasterReviewSubmitResult {
+  lane: "post" | "pre";
+  filename?: string;
+  input_sha256?: string;
+  release_id?: number;
+  release_uid?: string;
+  version?: number;
+  round_recorded?: boolean;
+  changed_fields?: number;
+  omitted_questions?: number;
+  added_questions?: number;
+  readiness?: string;
+  issues?: string[];
+  master_review?: MasterReviewLaneState;
+  review_workflow?: ReviewWorkflow;
+  [key: string]: unknown;
+}
+
+/** Receipt for one lane's Master publication to the database and CMS. */
+export interface MasterReviewPublishResult {
+  lane: "post" | "pre";
+  release_id?: number;
+  release_uid?: string;
+  version?: number;
+  database?: MasterReviewDatabaseReceipt | null;
+  cms_workbook?: Record<string, unknown> | null;
+  publication_status?: string;
+  master_review?: MasterReviewLaneState;
+  review_workflow?: ReviewWorkflow;
   [key: string]: unknown;
 }
 

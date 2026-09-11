@@ -269,8 +269,8 @@ export default function ConceptReviewWorkflow({
       }
       onMasterGenerated?.(fresh);
       const status = fresh.review_workflow?.status ?? fresh.status;
-      setNotice(status === "released" || fresh.status === "released"
-        ? "Master Files are ready. Review and publish each released Master explicitly."
+      setNotice(status === "master_ready" || status === "released" || fresh.status === "released"
+        ? "Master Files are ready. Continue in Step 03 to review and publish each lane explicitly."
         : "Master generation finished. Refresh the output cards to download the files.");
     } catch (generationError) {
       let fresh: UploadJob | null = null;
@@ -295,15 +295,18 @@ export default function ConceptReviewWorkflow({
       <div className="row">
         <div>
           <div className="section-title" id="concept-review-workflow-title">
-            Step 2 · Generate Masters from reviewed files
+            Step 02 · Generate Master Files from reviewed Concept files
           </div>
           <p className="muted mt-8">
-            Step 1 is complete: your Concept files are ready for review.
-            You may add, remove, combine, rename or reorder content and change
-            the layout. Original concept IDs and row counts are not required.
-            Upload your reviewed files below, or keep a generated file unchanged.
-            The next step reads those files, extracts their questions and builds
-            the Masters. Include all context, tables and images the questions need.
+            Step 1 is complete: it extracted the source questions as is and
+            staged both Concept files for your review. You may add, remove,
+            combine, rename or reorder content and change the layout; original
+            concept IDs and row counts are not required. Upload your reviewed
+            files below, or keep a generated file unchanged. The reviewed file
+            is the only input to Step 2: it reads that file, extracts its
+            concepts and questions, polishes the reviewed Post-Learning
+            questions, generates the Pre-Learning questions and builds the
+            Masters. Include all context, tables and images the questions need.
           </p>
         </div>
         <div className="spacer" />
@@ -383,9 +386,11 @@ export default function ConceptReviewWorkflow({
         <div>
           <strong>Continue only when both Concept Files are reviewed</strong>
           <div className="hint mt-4">
-            Read reviewed files → extract questions → generate Master files.
-            Missing Pre diagnostic questions are generated from the reviewed
-            concepts. Existing source-book rows are not required to match.
+            Read reviewed files → extract concepts and questions → polish the
+            reviewed Post questions → generate Pre questions → build Master
+            files. Pre questions absent from the reviewed file are generated
+            from its accepted concepts. Existing source-book rows are not
+            required to match. Publication follows in Step 03.
           </div>
         </div>
         <button

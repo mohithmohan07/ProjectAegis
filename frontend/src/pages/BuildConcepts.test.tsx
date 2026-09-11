@@ -44,6 +44,10 @@ const apiMock = vi.hoisted(() => ({
   inventoryCsvUrl: vi.fn((id: number) => `/inventory/${id}.csv`),
   listConceptRevisions: vi.fn(),
   submitConceptRevision: vi.fn(),
+  conceptFileUrl: vi.fn((id: number, lane: string) => `/concepts/${id}?lane=${lane}`),
+  uploadReviewedMaster: vi.fn(),
+  publishReviewedMaster: vi.fn(),
+  uploadConceptRelease: vi.fn(),
   paths: {
     postLearningGenerate: vi.fn((id: number) => `/post/${id}`),
   },
@@ -395,9 +399,14 @@ test("the parameters panel stays mounted for a not-yet-parsed upload", async () 
   // The panel and the upload card coexist for an uploaded job (the parse
   // button itself is DocumentUpload's, pinned in its own test file).
   expect(
-    await screen.findByText("1 · Choose the run parameters"),
+    await screen.findByText("a · Choose the run parameters"),
   ).toBeDefined();
-  expect(screen.getByText("2 · Upload document")).toBeDefined();
+  expect(screen.getByText("b · Upload document")).toBeDefined();
+  expect(screen.getByText("Step 01 · Generate Concept Files")).toBeDefined();
+  expect(screen.getByTestId("workflow-step-01").getAttribute("data-state"))
+    .toBe("current");
+  expect(screen.getByTestId("workflow-step-02").getAttribute("data-state"))
+    .toBe("upcoming");
 });
 
 test("Keep for later acknowledges this checkpoint durably across visits", async () => {
@@ -493,6 +502,10 @@ test("Watch live lands on the download-and-review page when the run completes", 
   expect(
     await screen.findByText("Review and correct the output"),
   ).toBeDefined();
+  // A legacy run carries no workflow marker: the step strip says so and
+  // highlights no step, and Step 03 is not mounted.
+  expect(screen.getByTestId("workflow-steps-legacy")).toBeDefined();
+  expect(screen.queryByText("Step 03 · Review Master files & publish")).toBeNull();
   expect(apiMock.getRunEvents).toHaveBeenCalledWith("concepts", 42, 0);
   expect(apiMock.getUploadJob).toHaveBeenCalledWith("concepts", 42);
   // Watching is attach-only: nothing was POSTed, nothing resumed.
@@ -860,4 +873,174 @@ test("a stale pending decision never blocks starting a run", async () => {
   expect(screen.getByRole("button", {
     name: "Resume from 91% checkpoint",
   })).toBeDefined();
+});
+
+// --------------------------------------------------------------------------
+// Q49: the three-step presentation. Step 03 mounts for a Concept-first job
+// whose Masters are ready; the legacy historical card is for runs without
+// the durable workflow marker only.
+// --------------------------------------------------------------------------
+
+function masterReadyJob(overrides: Partial<UploadJob> = {}): UploadJob {
+  const xlsx = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  return savedJob({
+    status: "generated",
+    checkpoint_available: false,
+    review_workflow: { status: "master_ready", corrected_inputs: {}, master_review: {} },
+    source_artifacts: {
+      available: true,
+      shadow_mode: false,
+      used_for_generation: true,
+      schema_version: "1",
+      compiler_version: "1",
+      status: "passed",
+      ready_for_future_cutover: false,
+      source_sha256: "abc",
+      manifest_url: "/manifest",
+      summary: {},
+      files: [
+        {
+          kind: "release_bulk_import",
+          label: "Download the Post-Learning Concept File",
+          filename: "post_concepts.xlsx",
+          media_type: xlsx,
+          size_bytes: 10,
+          download_url: "/build-concepts/uploads/42/release-bulk-import.xlsx",
+          action: "download",
+        },
+        {
+          kind: "release_master",
+          label: "Download the Post-Learning Master File",
+          filename: "post_master.xlsx",
+          media_type: xlsx,
+          size_bytes: 20,
+          download_url: "/build-assessments/releases/22/master.xlsx",
+          action: "download",
+        },
+        {
+          kind: "pre_release_bulk_import",
+          label: "Download the Pre-Learning Concept File",
+          filename: "pre_concepts.xlsx",
+          media_type: xlsx,
+          size_bytes: 10,
+          download_url: "/build-concepts/uploads/42/release-bulk-import.xlsx?lane=pre",
+          action: "download",
+        },
+        {
+          kind: "pre_release_master",
+          label: "Download the Pre-Learning Master File",
+          filename: "pre_master.xlsx",
+          media_type: xlsx,
+          size_bytes: 20,
+          download_url: "/build-assessments/releases/21/master.xlsx",
+          action: "download",
+        },
+        {
+          kind: "database_upload",
+          label: "Upload released output to database",
+          filename: "",
+          media_type: "application/json",
+          size_bytes: 0,
+          download_url: "/build-concepts/uploads/42/upload-release?lane=post",
+          action: "post",
+          requires_confirmation: true,
+        },
+        {
+          kind: "pre_database_upload",
+          label: "Upload released Pre-Learning output to database",
+          filename: "",
+          media_type: "application/json",
+          size_bytes: 0,
+          download_url: "/build-concepts/uploads/42/upload-release?lane=pre",
+          action: "post",
+          requires_confirmation: true,
+        },
+      ],
+    },
+    ...overrides,
+  });
+}
+
+test("a Concept-first job with Masters ready lands on Step 03, not the historical card", async () => {
+  apiMock.getUploadJob.mockImplementation(
+    async (_module: string, id: number) => masterReadyJob({ id }),
+  );
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+
+  expect(await screen.findByText("Loaded electricity.pdf")).toBeDefined();
+  expect(
+    await screen.findByText("Step 03 · Review Master files & publish"),
+  ).toBeDefined();
+  expect(screen.queryByText("Review and correct the output")).toBeNull();
+  expect(screen.queryByText("Generate Master Files")).toBeNull();
+  // Step 01 collapses to its summary once the marker exists.
+  expect(screen.getByText("Step 01 · Generate Concept Files")).toBeDefined();
+  expect(screen.getByText("a · Run parameters")).toBeDefined();
+  expect(screen.queryByText("a · Choose the run parameters")).toBeNull();
+  expect(screen.getByTestId("workflow-step-01").getAttribute("data-state")).toBe("complete");
+  expect(screen.getByTestId("workflow-step-02").getAttribute("data-state")).toBe("complete");
+  expect(screen.getByTestId("workflow-step-03").getAttribute("data-state")).toBe("current");
+  expect(screen.getByTestId("workflow-step-03").getAttribute("aria-current")).toBe("step");
+  expect(screen.getByRole("link", { name: "Download the Post-Learning Master File" }).getAttribute("href"))
+    .toBe("/build-assessments/releases/22/master.xlsx");
+  expect(screen.getByTestId("upload-reviewed-master-pre")).toBeDefined();
+  expect(streamMock).not.toHaveBeenCalled();
+});
+
+test("a published Concept-first job marks all three steps complete and keeps Step 03 receipts", async () => {
+  apiMock.getUploadJob.mockImplementation(
+    async (_module: string, id: number) => masterReadyJob({
+      id,
+      review_workflow: {
+        status: "published",
+        corrected_inputs: {},
+        master_review: {
+          post: {
+            filename: "post-master-reviewed.xlsx",
+            version: 2,
+            published: {
+              uploaded_at: "2026-09-11T10:05:00Z",
+              database: { groups_created: 1, questions_created: 3, labels_reissued: 0 },
+            },
+          },
+        },
+      },
+    }),
+  );
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+
+  expect(
+    await screen.findByText("Step 03 · Review Master files & publish"),
+  ).toBeDefined();
+  expect(screen.getByTestId("workflow-steps-done")).toBeDefined();
+  for (const step of ["01", "02", "03"]) {
+    expect(screen.getByTestId(`workflow-step-${step}`).getAttribute("data-state")).toBe("complete");
+  }
+  expect(screen.getByTestId("master-publication-post").textContent).toContain("3 questions");
+  expect(screen.queryByText("Review and correct the output")).toBeNull();
+});
+
+test("a Concept-first job waiting for review shows Step 02 and no Step 03", async () => {
+  apiMock.getUploadJob.mockImplementation(
+    async (_module: string, id: number) => masterReadyJob({
+      id,
+      status: "concept_review",
+      review_workflow: { status: "pending_review", corrected_inputs: {} },
+    }),
+  );
+  renderPage();
+
+  fireEvent.click(await screen.findByRole("button", { name: "Resume" }));
+
+  expect(
+    await screen.findByText("Step 02 · Generate Master Files from reviewed Concept files"),
+  ).toBeDefined();
+  expect(screen.queryByText("Step 03 · Review Master files & publish")).toBeNull();
+  expect(screen.queryByText("Review and correct the output")).toBeNull();
+  expect(screen.getByTestId("workflow-step-02").getAttribute("data-state")).toBe("current");
+  expect(screen.getByTestId("workflow-step-03").getAttribute("data-state")).toBe("upcoming");
 });

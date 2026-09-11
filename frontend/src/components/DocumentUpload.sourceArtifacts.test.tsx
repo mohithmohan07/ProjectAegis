@@ -191,7 +191,7 @@ test("assessment intake keeps source evidence without concept OD4 controls", () 
 
   expect(screen.getByText("Phase 2 canonical-source inventory")).toBeDefined();
   expect(screen.getByRole("link", { name: "Immutable raw MMD" })).toBeDefined();
-  expect(screen.queryByText("3 · Run outputs")).toBeNull();
+  expect(screen.queryByText("Run outputs")).toBeNull();
   expect(screen.queryByRole("button", { name: "Refresh outputs" })).toBeNull();
   expect(screen.queryByText(/No output entries are available/i)).toBeNull();
 });
@@ -968,7 +968,7 @@ test("a stale zero-output manifest still exposes Run outputs recovery", async ()
     </RunConsoleProvider>,
   );
 
-  expect(screen.getByText("3 · Run outputs")).toBeDefined();
+  expect(screen.getByText("Run outputs")).toBeDefined();
   expect(screen.getByText(/No output entries are available/i)).toBeDefined();
   fireEvent.click(screen.getByRole("button", { name: "Refresh outputs" }));
 
@@ -1006,7 +1006,7 @@ test("a delayed outputs refresh cannot resurrect a run after Start over", async 
   );
   fireEvent.click(screen.getByRole("button", { name: "Start over" }));
   expect(onJob).toHaveBeenLastCalledWith(null);
-  expect(screen.queryByText("3 · Run outputs")).toBeNull();
+  expect(screen.queryByText("Run outputs")).toBeNull();
 
   await act(async () => {
     finishRefresh?.(failedMastersJob());
@@ -1015,5 +1015,183 @@ test("a delayed outputs refresh cannot resurrect a run after Start over", async 
 
   expect(onJob).toHaveBeenLastCalledWith(null);
   expect(onJob).toHaveBeenCalledTimes(1);
-  expect(screen.queryByText("3 · Run outputs")).toBeNull();
+  expect(screen.queryByText("Run outputs")).toBeNull();
+});
+
+// --------------------------------------------------------------------------- #
+// Q49 three-step presentation. A Concept-first job publishes from Step 03,
+// so the Run outputs grid offers downloads and evidence only: no legacy
+// same-act "upload edited Excel to CMS" control, and a Master rebuild reads
+// as a Step 02 retry for that lane. The intake badge may only claim
+// "uploaded to database" when the manifest or the marker records a
+// publication.
+// --------------------------------------------------------------------------- #
+
+function reviewWorkflowJob(status: "pending_review" | "master_ready" | "published"): UploadJob {
+  const job = failedMastersJob();
+  job.status = "generated";
+  job.review_workflow = { status, corrected_inputs: {}, master_review: {} };
+  job.source_artifacts?.files.push(
+    {
+      kind: "database_upload",
+      label: "Upload released output to database",
+      filename: "",
+      media_type: "application/json",
+      size_bytes: 0,
+      download_url: "/build-concepts/uploads/81/upload-release?lane=post",
+      action: "post",
+      requires_confirmation: true,
+    },
+    {
+      kind: "pre_database_upload",
+      label: "Upload released Pre-Learning output to database",
+      filename: "",
+      media_type: "application/json",
+      size_bytes: 0,
+      download_url: "/build-concepts/uploads/81/upload-release?lane=pre",
+      action: "post",
+      requires_confirmation: true,
+    },
+  );
+  return job;
+}
+
+test("a Concept-first job at Step 03 keeps downloads and Refresh but offers no legacy CMS upload", () => {
+  render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={reviewWorkflowJob("master_ready")}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+
+  expect(screen.getByText("Run outputs")).toBeDefined();
+  expect(screen.getByRole("button", { name: "Refresh outputs" })).toBeDefined();
+  expect(screen.getByRole("link", {
+    name: "Download the Post-Learning Concept File",
+  })).toBeDefined();
+  expect(screen.queryByRole("button", {
+    name: /Upload edited .* Excel to CMS/,
+  })).toBeNull();
+  expect(screen.queryByText("Publish reviewed workbooks:")).toBeNull();
+  // The lane rebuild control survives, presented as a Step 02 retry.
+  const rebuild = screen.getByRole("button", {
+    name: "Rebuild Post-Learning Master File",
+  });
+  expect(rebuild.textContent).toBe("Retry Step 02 for this lane");
+  expect(screen.getByText(/publication happen in Steps 02 and 03 above/i)).toBeDefined();
+  expect(screen.getByTestId("intake-status-badge").textContent).toBe("Master files ready");
+});
+
+test("the intake badge names the Concept-first stage instead of claiming a database upload", () => {
+  const view = render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={{ ...reviewWorkflowJob("pending_review"), status: "concept_review" }}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+  expect(screen.getByTestId("intake-status-badge").textContent).toBe("Concept review");
+
+  view.rerender(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={reviewWorkflowJob("published")}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+  const badge = screen.getByTestId("intake-status-badge");
+  expect(badge.textContent).toBe("published");
+  expect(badge.classList).toContain("green");
+});
+
+test("a legacy generated job is called uploaded to database only when the manifest records it", () => {
+  const notPublished = convertedJob();
+  notPublished.status = "generated";
+  notPublished.source_artifacts?.files.push({
+    kind: "database_upload",
+    label: "Upload released output to database",
+    filename: "",
+    media_type: "application/json",
+    size_bytes: 0,
+    download_url: "/build-concepts/uploads/81/upload-release?lane=post",
+    action: "post",
+    requires_confirmation: true,
+  });
+  const view = render(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={notPublished}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+  expect(screen.getByTestId("intake-status-badge").textContent).toBe("generated · not published");
+  // The legacy publish control itself is unchanged for historical runs.
+  expect(screen.getByRole("button", {
+    name: "Upload edited Post-Learning Excel to CMS",
+  })).toBeDefined();
+
+  const published = convertedJob();
+  published.status = "generated";
+  published.source_artifacts?.files.push({
+    kind: "database_upload",
+    label: "Already uploaded to database",
+    filename: "",
+    media_type: "application/json",
+    size_bytes: 0,
+    download_url: "/build-concepts/uploads/81/upload-release?lane=post",
+    action: "post",
+    disabled: true,
+    requires_confirmation: true,
+  });
+  view.rerender(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={published}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+  expect(screen.getByTestId("intake-status-badge").textContent).toBe("uploaded to database");
+
+  // A disabled entry WITH a reason is an unstaged lane, not a publication.
+  const unstagedPre = convertedJob();
+  unstagedPre.status = "generated";
+  unstagedPre.source_artifacts?.files.push({
+    kind: "pre_database_upload",
+    label: "Upload released Pre-Learning output to database",
+    filename: "",
+    media_type: "application/json",
+    size_bytes: 0,
+    download_url: "/build-concepts/uploads/81/upload-release?lane=pre",
+    action: "post",
+    disabled: true,
+    disabled_reason: "This run staged no Pre-Learning release.",
+    requires_confirmation: true,
+  });
+  view.rerender(
+    <RunConsoleProvider>
+      <DocumentUpload
+        module="concepts"
+        conceptKind="post"
+        externalJob={unstagedPre}
+        onJob={vi.fn()}
+      />
+    </RunConsoleProvider>,
+  );
+  expect(screen.getByTestId("intake-status-badge").textContent).toBe("generated · not published");
 });
