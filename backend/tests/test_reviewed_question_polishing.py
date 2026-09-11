@@ -285,3 +285,107 @@ def test_polishing_failure_is_recorded_as_a_master_failure(db, tmp_path, monkeyp
     db.expire_all()
     issue = release.assessment_lane_issue(release.release_payload(uploads.get_job(db, job.id), lane="post"))
     assert issue and "insufficient_quota" in str(issue.get("message") or issue)
+
+
+MCQ_FILE = (
+    "Definition and uses\n"
+    "Which molecule carries genetic information?\n"
+    "(a) DNA\n"
+    "(b) RNA\n"
+)
+MCQ_REVIEWED = "Which molecule carries genetic information?"
+MCQ_POLISHED = "Which molecule carries the genetic information of a cell?"
+
+
+def mcq_result():
+    parsed = result()
+    question = parsed["questions"][0]
+    question.update({
+        "question_spans": [MCQ_REVIEWED],
+        "options": ["(a) DNA", "(b) RNA"],
+        "tables": [{"headers": ["Molecule", "Role"], "rows": [["DNA", "Stores information"]]}],
+    })
+    return parsed
+
+
+def mcq_api(calls):
+    def api(system, user, **kwargs):
+        request = json.loads(user)
+        calls.append({"system": system, "request": request, "purpose": kwargs.get("purpose")})
+        if kwargs.get("purpose") == "advisory_critic":
+            return {"items": [{"qid": q["qid"], "verdict": "verified", "issues": []}
+                              for q in request["questions"]]}
+        # The polished wording keeps the reviewed ask; the reviewed file
+        # prints its options on their own lines, outside the question span.
+        return {"items": [{"qid": q["qid"], "polished_task": MCQ_POLISHED,
+                           "learner_context": "", "note": ""}
+                          for q in request["questions"]]}
+    return api
+
+
+def test_reviewed_mcq_polish_survives_options_the_question_spans_never_carried(db, tmp_path):
+    """The Step 2 pass must actually apply to reviewed multiple-choice questions.
+
+    ``reviewed_file_input.prepare`` sets ``raw_task`` to the joined question
+    spans and keeps ``options`` as an independent extracted field, so Step 1's
+    "the options are inside the source text" invariant does not hold here.
+    Measuring option retention against the item's own source text keeps the
+    polish instead of reverting it as a dropped option.
+    """
+    with workflow.bind_run(workflow.V2):
+        job = setup_job(db)
+    path = document(tmp_path, MCQ_FILE)
+    reviewed.queue(db, job, lane="post", path=path, filename=path.name, owner_sub="local:default")
+    current = reviewed.prepare(db, job, lane="post", owner_sub="local:default",
+                               provider=lambda _: mcq_result(), critic=critic,
+                               store=kernel.DecisionStore(tmp_path / "decisions"))
+    item = current["question_task_inventory"]["items"][0]
+    assert item["raw_task"] == MCQ_REVIEWED
+    assert item["options"] == ["(a) DNA", "(b) RNA"]
+    assert all(option not in item["raw_task"] for option in item["options"])
+
+    calls = []
+    with workflow.bind_run(workflow.V2):
+        updated = polishing.polish_reviewed_post_questions(
+            db, job, payload=current, owner_sub="local:default", api_call=mcq_api(calls))
+
+    polished_item = updated["question_task_inventory"]["items"][0]
+    assert polished_item["polish_flag"] == question_polishing.FLAG_POLISHED
+    assert polished_item["polished_task"] == polished_item["frozen_task_text"] == MCQ_POLISHED
+    assert "polish_note" not in polished_item or "dropped MCQ option" not in polished_item["polish_note"]
+    assert polished_item["options"] == ["(a) DNA", "(b) RNA"]
+    assert polished_item["raw_task"] == MCQ_REVIEWED
+    assert updated[polishing.RECEIPT_KEY]["polished"] == 1
+    assert updated[polishing.RECEIPT_KEY]["kept"] == 0
+
+
+def test_reviewed_options_tables_and_cited_blocks_reach_the_author_and_the_critic(db, tmp_path):
+    """Both Step 2 models see the evidence the reviewed item carries."""
+    with workflow.bind_run(workflow.V2):
+        job = setup_job(db)
+    path = document(tmp_path, MCQ_FILE)
+    reviewed.queue(db, job, lane="post", path=path, filename=path.name, owner_sub="local:default")
+    current = reviewed.prepare(db, job, lane="post", owner_sub="local:default",
+                               provider=lambda _: mcq_result(), critic=critic,
+                               store=kernel.DecisionStore(tmp_path / "decisions"))
+    item = current["question_task_inventory"]["items"][0]
+    calls = []
+    with workflow.bind_run(workflow.V2):
+        polishing.polish_reviewed_post_questions(
+            db, job, payload=current, owner_sub="local:default", api_call=mcq_api(calls))
+
+    assert [call["purpose"] for call in calls] == ["source_extraction", "advisory_critic"]
+    for call in calls:
+        question = call["request"]["questions"][0]
+        evidence = question["source_evidence"]
+        assert question["options"] == item["options"]
+        assert question["image_urls"] == item["image_urls"]
+        assert question["has_images"] is bool(item["image_urls"])
+        assert evidence["tables"] == item["tables"]
+        assert evidence["source_context"]["options"] == item["options"]
+        assert evidence["source_context"]["tables"] == item["tables"]
+        assert evidence["source_context"]["image_urls"] == item["image_urls"]
+        assert evidence["source_context"]["reviewed_file_blocks"] == \
+            current["reviewed_file_receipt"]["document"]["blocks"]
+        assert evidence["raw_task"] == MCQ_REVIEWED
+        assert call["request"]["visual_evidence"]["version"]

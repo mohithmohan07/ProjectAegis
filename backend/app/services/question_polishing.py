@@ -265,17 +265,28 @@ def _polish_is_usable(item: dict[str, Any], polished: str) -> str:
     Only mechanical defects revert a polish: an empty rewrite, a dropped
     MCQ option, or a dropped inline image URL. Whether wording is usable is a judgment
     the polish model and its critic own — no length check second-guesses it.
+
+    Retention is measured against the wording the item actually carries, the
+    same rule the inline image URLs below use. A Step 1 item's options are
+    spliced into its ``raw_task`` by ``generation._sanitize_inventory_item``,
+    so every one of them is in the source text and this check fires exactly
+    as it always has. A Q51 Step 2 reviewed item keeps its extracted
+    ``options`` beside a ``raw_task`` that is only the reviewed question
+    spans (``reviewed_file_input.prepare``): an option the reviewed wording
+    never contained cannot have been "dropped" by a rewrite of that wording,
+    and reverting on it discarded the whole paid Step 2 polish. An option the
+    source text DOES carry must still survive, character for character.
     """
     if not str(polished or "").strip():
         return "empty polished wording"
+    source_text = _item_source_text(item)
     options = item.get("options") or []
     for option in options if isinstance(options, list) else []:
         # Structured/image options are verified from full evidence by the
         # critic; stringifying a dictionary is not its learner-visible text.
         text = option.strip() if isinstance(option, str) else ""
-        if text and text not in polished:
+        if text and text in source_text and text not in polished:
             return f"dropped MCQ option {text[:60]!r}"
-    source_text = _item_source_text(item)
     for image_url in item.get("image_urls") or []:
         url = str(image_url or "")
         if url and url in source_text and url not in polished:

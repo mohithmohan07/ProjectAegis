@@ -112,3 +112,82 @@ def test_unknown_job_still_reaches_the_rebuild_refusal_without_accounting(db, mo
         api.run_release_from_job(880404, db=db, user=auth.LOCAL_PRINCIPAL)
     assert raised.value.status_code == 404
     assert claims == [True]
+
+
+READY_DETAIL = "Concept files are ready for review. Upload your reviewed file to continue."
+
+
+def _pre_spend_refusals():
+    return [
+        # The non-terminal Concept release guard (400) …
+        (
+            master_run.ReleaseRunError(
+                "The post Master file cannot be built: the staged Concept "
+                "release records a non-terminal generation run. Resume "
+                "Concept generation first."
+            ),
+            400,
+        ),
+        # … and the job-operation lock a live run legitimately holds (409).
+        (
+            uploads.JobAlreadyRunningError(
+                "generation is already running for this upload; wait for the "
+                "active run to finish before changing or resuming it"
+            ),
+            409,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("refusal,status", _pre_spend_refusals())
+def test_pre_spend_rebuild_refusal_records_no_failure_over_the_visible_detail(
+    db, generated_job, monkeypatch, refusal, status,
+):
+    """A rebuild refused before its pre-spend guards spent nothing to record.
+
+    ``persist_current_generation_log`` overwrites ``job.detail`` with
+    "Generation failed: …" for any error it is handed, and nothing resets it
+    on a later success — so a zero-spend refusal must not be handed one.
+    """
+    job = generated_job
+    job.detail = READY_DETAIL
+    job.openai_usage = {}
+    job.generation_log = []
+    db.commit()
+
+    def rebuild(*_args, **_kwargs):
+        # The two guards run before any progress event or provider request.
+        raise refusal
+
+    monkeypatch.setattr(release_contract, "rebuild_lane_master", rebuild)
+    with pytest.raises(HTTPException) as raised:
+        api.run_release_from_job(job.id, db=db, user=auth.LOCAL_PRINCIPAL)
+    assert raised.value.status_code == status
+    assert str(refusal) in str(raised.value.detail)
+    db.expire_all()
+    saved = uploads.get_job(db, job.id)
+    assert saved.detail == READY_DETAIL
+    assert saved.generation_log in (None, [])
+    assert saved.openai_usage in (None, {})
+
+
+def test_rebuild_that_started_work_records_its_diagnostic_without_provider_usage(
+    db, generated_job, monkeypatch,
+):
+    """Past the guards, a failure keeps its diagnostic even before the first call."""
+    job = generated_job
+    job.detail = READY_DETAIL
+    db.commit()
+
+    def rebuild(*_args, **_kwargs):
+        progress.log("Master storage preflight passed for the post lane.")
+        raise master_run.ReleaseRunError("the post Master file cannot be built: no disk")
+
+    monkeypatch.setattr(release_contract, "rebuild_lane_master", rebuild)
+    with pytest.raises(HTTPException) as raised:
+        api.run_release_from_job(job.id, db=db, user=auth.LOCAL_PRINCIPAL)
+    assert raised.value.status_code == 400
+    db.expire_all()
+    saved = uploads.get_job(db, job.id)
+    assert saved.detail.startswith("Generation failed: ")
+    assert any("no disk" in event.get("message", "") for event in saved.generation_log)

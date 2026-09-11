@@ -498,6 +498,36 @@ def _persist_rebuild_accounting(db, job_id: int, *, owner_sub: str, error=None) 
             raise
 
 
+def _rebuild_work_started(usage, history: list, events_before: int) -> bool:
+    """Did the rebuild get past its pre-spend guards, or reach the provider?
+
+    Mechanical counters only — never the refusal's wording. ``rebuild_lane_master``
+    refuses ahead of any work in exactly two places: the job-operation lock an
+    explicit rebuild claims (a live run legitimately holding it is a 409) and
+    ``_require_terminal_concept_release`` (a non-terminal Concept release is a
+    400). Neither emits a progress event nor schedules a provider request, so
+    a refusal that spent nothing leaves both counters at their entry values.
+    Everything the rebuild does afterwards — its storage preflight line, its
+    stages, its author/critic calls — moves at least one of them.
+
+    A zero-spend refusal therefore records no failure: ``persist_current_generation_log``
+    overwrites ``job.detail`` with "Generation failed: …" whenever it is handed
+    an error, and nothing resets that on a later success, so a refusal that
+    changed nothing would replace the reviewer's "Concept files are ready for
+    review…" detail in Step 03 with a failure that never happened.
+    """
+    from ..services import openai_usage
+
+    summary = (usage or openai_usage.UsageAccumulator()).summary(
+        include_attempts=False,
+    )
+    if any(int(summary.get(key) or 0) > 0 for key in (
+        "request_count", "attempt_count", "provider_request_count",
+    )):
+        return True
+    return len(history) > events_before
+
+
 def _rebuild_lane_master_with_accounting(db, job_id: int, lane: str, *, owner_sub: str):
     """Run an explicit Master rebuild with the job's usage and log accounting.
 
@@ -520,7 +550,7 @@ def _rebuild_lane_master_with_accounting(db, job_id: int, lane: str, *, owner_su
     except uploads.UploadJobNotFound:
         # Nothing to account for; the rebuild reports the missing job itself.
         job = None
-    with progress.capture_history(), openai_usage.track():
+    with progress.capture_history() as history, openai_usage.track() as usage:
         if job is not None:
             cumulative = openai_usage.bind_persisted_summary(
                 f"upload-job:{job.id}",
@@ -532,6 +562,7 @@ def _rebuild_lane_master_with_accounting(db, job_id: int, lane: str, *, owner_su
             model_routing_run.bind_job(job, require_pre=False)
             if job is not None else contextlib.nullcontext()
         )
+        events_before = len(history)
         try:
             with routing:
                 result = release_contract.rebuild_lane_master(
@@ -544,8 +575,13 @@ def _rebuild_lane_master_with_accounting(db, job_id: int, lane: str, *, owner_su
         except Exception as exc:
             # Receipts for provider responses already received (and billed)
             # survive the failed rebuild transaction, as does its diagnostic.
+            # A refusal from the two pre-spend guards recorded nothing and
+            # spent nothing: it neither writes a failure over the job's
+            # user-visible detail nor rewrites the ledger a live run owns.
             db.rollback()
-            if job is not None:
+            if job is not None and _rebuild_work_started(
+                usage, history, events_before,
+            ):
                 _persist_rebuild_accounting(db, job_id, owner_sub=owner_sub, error=exc)
             raise
         if job is not None:
