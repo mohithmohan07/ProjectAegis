@@ -109,7 +109,7 @@ def test_owned_stimulus_reaches_author_critic_and_serialized_candidate(monkeypat
         assert payload["source_atom"] == seen[0]["source_atom"]
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
 
-    cell = _cell(sheet_kind="descriptive", question_category="Long Answer", marks=4) if multipart else _cell()
+    cell = _cell(sheet_kind="descriptive", question_category="Long Answer Type (4 Marks)", marks=4) if multipart else _cell()
     candidate = materialization.materialize_candidate(
         atom, cell, meta={"subject": "Mathematics", "grade": "6"}, context={},
         envelope_sha256="e" * 64, provider=author, critic=critic, store=kernel.DecisionStore(),

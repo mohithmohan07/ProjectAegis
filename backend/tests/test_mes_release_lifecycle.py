@@ -77,7 +77,7 @@ def _payload(
         "group_key": f"({concept_machine_id}) BG01",
         "flags": list(flags or []),
     }
-    return {"groups": groups, "candidates": [candidate]}
+    return {"source_book": PUBLICATION, "groups": groups, "candidates": [candidate]}
 
 
 def _fresh_release(db, *, flags=None, mutate=None, provider_identity=None):
@@ -302,7 +302,7 @@ def test_subjective_release_upload_generic_export_strict_roundtrip(
         candidate = payload["candidates"][0]
         candidate.update({
             "sheet_kind": "subjective",
-            "question_category": "Fill in the blanks",
+            "question_category": "Fill in the Blanks",
             "question": "A cube is a $$a$$.",
             "question_text": "A cube is a $$a$$.",
             "marks": 1,
@@ -324,6 +324,7 @@ def test_subjective_release_upload_generic_export_strict_roundtrip(
         mutate=make_subjective,
         provider_identity={"assessment_profile": profile},
     )
+    assert release.concept_snapshot["source_book"] == PUBLICATION
     published = svc.publish_release(db, release)
     result = svc.upload_master_to_database(db, published, owner_sub=OWNER)
     assert result["questions_created"] == 1

@@ -390,7 +390,7 @@ def test_materialize_candidates_returns_a_blocked_marker_in_place():
     cell = {
         "cell_id": "CELL-x",
         "sheet_kind": "descriptive",
-        "question_category": "Short Answer",
+        "question_category": "Short Answer Type (2 Marks)",
         "cognitive_skill": "Remember",
         "difficulty": "Less",
         "marks": 2,

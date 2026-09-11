@@ -217,6 +217,12 @@ def snapshot_from_chapter(
         "groups": [dict(g) for g in payload.get("groups") or []],
         "candidates": [dict(c) for c in payload.get("candidates") or []],
     }
+    # The compatibility create_release path can carry the same explicit
+    # publication as a staged Concept release. Preserve that provenance
+    # before the strict Master projection checks its Question Source cells.
+    # Unstamped historical payloads retain their original snapshot shape.
+    if "source_book" in payload:
+        snapshot["source_book"] = copy.deepcopy(payload["source_book"])
     _complete_required_shells(snapshot)
     return snapshot
 

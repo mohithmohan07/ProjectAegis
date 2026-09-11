@@ -196,7 +196,7 @@ def test_frozen_task_reaches_materialization_and_joint_review_with_source_audit(
     def critic(request):
         assert request["source_wording_authority"] == requests[0]["source_wording_authority"]
         return {"verdict": "verified", "confidence": 1.0, "issues": []}
-    cell = _cell(sheet_kind="descriptive", question_category="ShortAnswer", marks=2)
+    cell = _cell(sheet_kind="descriptive", question_category="Short Answer Type (2 Marks)", marks=2)
     store = kernel.DecisionStore()
     kwargs = dict(meta={"subject": "Mathematics", "grade": "1"},
                   envelope_sha256="e" * 64, provider=author, critic=critic, store=store)

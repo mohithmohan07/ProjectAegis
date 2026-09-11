@@ -6,6 +6,7 @@ import copy
 import pytest
 
 from app.services import assessment_cells as cells
+from app.services import assessment_output_vocabulary as output_vocabulary
 from app.services.phase3 import kernel
 
 
@@ -21,6 +22,10 @@ PROFILE = {
     "appears_in": "Pre/Post-Worksheet/Test",
     "sheet_kinds": ("objective", "descriptive"),
 }
+CURRENT_CELL_POLICY = (
+    "assessment-cell-4-response-mechanism-sop-2026-09-09;"
+    + output_vocabulary.VERSION
+)
 
 
 def _atom(source_qid: str = "QINV-0001") -> dict:
@@ -64,7 +69,7 @@ def _valid_response(request: dict, **overrides) -> dict:
     response = {
         "source_qid": request["source_atom"]["source_qid"],
         "sheet_kind": "descriptive",
-        "question_category": "Long Answer",
+        "question_category": "Short Answer Type (3 Marks)",
         "cognitive_skill": "Understand",
         "difficulty": "Moderate",
         "marks": 3,
@@ -143,7 +148,7 @@ def test_cell_decision_carries_complete_content_without_print_position(
 
     cell = result[0]
     assert cell["sheet_kind"] == "descriptive"
-    assert cell["question_category"] == "Long Answer"
+    assert cell["question_category"] == "Short Answer Type (3 Marks)"
     assert cell["cognitive_skill"] == "Understand"
     assert cell["difficulty"] == "Moderate"
     assert cell["marks"] == 3.0
@@ -157,7 +162,7 @@ def test_cell_decision_carries_complete_content_without_print_position(
         "(not_an_authorized_pinned_source_asset)"
     ]
     authority = cell["authority"]
-    assert authority["policy_version"] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
+    assert authority["policy_version"] == CURRENT_CELL_POLICY
     assert authority["review_flags"] == []
     assert "created_at" not in authority
     assert "provider" not in authority
@@ -350,7 +355,7 @@ def test_mechanical_exhaustion_routes_to_recorded_fixer(monkeypatch) -> None:
     assert fixer_calls[0]["contract"] == {
         "kind": "assessment.cell",
         "unit_id": "QINV-0001",
-        "policy_version": "assessment-cell-4-response-mechanism-sop-2026-09-09",
+        "policy_version": CURRENT_CELL_POLICY,
     }
     assert cell["sheet_kind"] == "descriptive"
     assert cell["authority"]["fixer"] is True
@@ -460,7 +465,7 @@ def test_a_widened_profile_widens_the_cells_wire_contract(monkeypatch) -> None:
     def provider(request: dict) -> dict:
         requests.append(copy.deepcopy(request))
         return _valid_response(
-            request, sheet_kind="subjective", question_category="Short Answer",
+            request, sheet_kind="subjective", question_category="Short Answer Type (2 Marks)",
             marks=2,
         )
 
@@ -580,7 +585,7 @@ def test_per_subpoint_marks_reject_fractional_basis(monkeypatch) -> None:
         return _valid_response(
             request,
             sheet_kind="subjective",
-            question_category="Fill in the blanks",
+            question_category="Fill in the Blanks",
             marks=1.5 if len(requests) == 1 else 2,
         )
 

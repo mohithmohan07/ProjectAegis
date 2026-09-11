@@ -522,10 +522,16 @@ def test_full_pipeline_publishes_a_ready_release(db):
         assert "provider" not in authority
         assert candidate["_aegis_assessment_cell_verdict"]["authority"][
             "policy_version"
-        ] == "assessment-cell-4-response-mechanism-sop-2026-09-09"
+        ] == (
+            "assessment-cell-4-response-mechanism-sop-2026-09-09;"
+            "assessment-output-vocabulary-2026-09-11-v2"
+        )
         assert candidate["_aegis_assessment_materialization"]["authority"][
             "policy_version"
-        ] == "assessment-materialize-16-selection-mode"
+        ] == (
+            "assessment-materialize-16-selection-mode;"
+            "assessment-output-vocabulary-2026-09-11-v2"
+        )
         restriction_authority = candidate[
             "_aegis_assessment_answer_restriction"
         ]["authority"]
